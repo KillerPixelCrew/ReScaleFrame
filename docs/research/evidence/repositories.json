@@ -1,0 +1,375 @@
+[
+  {
+    "name": "3Dmigoto",
+    "remote": "https://github.com/bo3b/3Dmigoto.git",
+    "commit": "8f329bd94fecc9bbcb9211ffd42a95dd7fe6b43e",
+    "branch": "master",
+    "commitDate": "2026-08-19T16:53:10-07:00",
+    "sparse": [
+      "DirectX11",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "ac7-ultrawide",
+    "remote": "https://github.com/massimilianodelliubaldini/ac7-ultrawide.git",
+    "commit": "a7048d34b83cf98dd4858d620b8e7d19d0eff811",
+    "branch": "master",
+    "commitDate": "2021-01-22T14:05:25-05:00",
+    "sparse": [
+      "Mods",
+      "ShaderFixes"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "ace-combat-uevr",
+    "remote": "https://github.com/keton/ace-combat-uevr.git",
+    "commit": "e4b26acdb98c3c01d33a58fa53c719f1b93b9f5b",
+    "branch": "master",
+    "commitDate": "2024-03-28T06:46:40+01:00",
+    "sparse": [
+      "DirectX11",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "dxvk-remix",
+    "remote": "https://github.com/NVIDIAGameWorks/dxvk-remix.git",
+    "commit": "e876135b37295dc203ccdb7b20a8089629588201",
+    "branch": "main",
+    "commitDate": "2026-08-28T14:22:00-07:00",
+    "sparse": [
+      "bridge/src",
+      "documentation",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "egui",
+    "remote": "https://github.com/emilk/egui.git",
+    "commit": "f08c4ff4048ede30412ce6b3d57b415b5c043fe3",
+    "branch": "main",
+    "commitDate": "2026-09-05T14:47:03Z",
+    "sparse": [
+      "crates/egui",
+      "crates/epaint"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "egui-directx11",
+    "remote": "https://github.com/NekomaruQwQ/egui-directx11.git",
+    "commit": "38201f9b9620a26c3e3740775fcaf24487f1dde1",
+    "branch": "main",
+    "commitDate": "2026-07-17T12:14:46-04:00",
+    "sparse": "*",
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "fallout4-community-shaders",
+    "remote": "https://github.com/northaxosky/fallout4-community-shaders.git",
+    "commit": "c256c11d4024b9c95b15019b769d52bc3363470a",
+    "branch": "main",
+    "commitDate": "2026-09-04T01:35:04-07:00",
+    "sparse": [
+      "docs",
+      "features/Upscaling",
+      "src",
+      "tests"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "FidelityFX-SDK",
+    "remote": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
+    "commit": "60f4ea81909200d8542eca14dccb2628b763a9a3",
+    "branch": "main",
+    "commitDate": "2026-06-24T11:20:22+01:00",
+    "sparse": [
+      "Kits/FidelityFX/api/include",
+      "Kits/FidelityFX/docs",
+      "Samples/Upscaling"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "Luma-Framework",
+    "remote": "https://github.com/Filoppi/Luma-Framework.git",
+    "commit": "64bb9954d13e67873a1060466d4d54c8ad567751",
+    "branch": "main",
+    "commitDate": "2026-09-05T07:03:15+02:00",
+    "sparse": [
+      "Shaders/Unreal Engine",
+      "Source"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "OptiScaler",
+    "remote": "https://github.com/optiscaler/OptiScaler.git",
+    "commit": "da70e61e1542a0b99adcb24168ff941e42109567",
+    "branch": "master",
+    "commitDate": "2026-09-05T02:04:34+03:00",
+    "sparse": "OptiScaler",
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "patternsleuth",
+    "remote": "https://github.com/trumank/patternsleuth.git",
+    "commit": "1d90b02c7610b595f940af04ce97e0f6feb06923",
+    "branch": "master",
+    "commitDate": "2026-09-01T18:14:20-05:00",
+    "sparse": [
+      "patternsleuth",
+      "patternsleuth_cli"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "reshade",
+    "remote": "https://github.com/crosire/reshade.git",
+    "commit": "358c345ca2fe64f86e67c694f8379c356627adcb",
+    "branch": "main",
+    "commitDate": "2026-09-03T00:35:18+02:00",
+    "sparse": [
+      "include",
+      "source",
+      "tools"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "rtx-remix",
+    "remote": "https://github.com/NVIDIAGameWorks/rtx-remix.git",
+    "commit": "61b49807a1fa92812ae5791bdeced84f91a0007f",
+    "branch": "main",
+    "commitDate": "2026-06-24T22:52:59+02:00",
+    "sparse": null,
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "SKIF",
+    "remote": "https://github.com/SpecialKO/SKIF.git",
+    "commit": "3957f32c6d7a938537a45e9f662a5f02ca93780a",
+    "branch": "master",
+    "commitDate": "2026-09-01T23:09:51+02:00",
+    "sparse": [
+      "DirectX11",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "skyrim-community-shaders",
+    "remote": "https://github.com/community-shaders/skyrim-community-shaders.git",
+    "commit": "09ea74f66e12bad462b9ae4f16a9f6cacc02993d",
+    "branch": "dev",
+    "commitDate": "2026-09-04T23:53:47+10:00",
+    "sparse": [
+      "cmake",
+      "features/Upscaling",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "skyrim-community-shaders-vulkan",
+    "remote": "https://github.com/community-shaders/skyrim-community-shaders.git",
+    "commit": "eeb28dda597d220b54e65b4a1007fbd638b5e63a",
+    "branch": "codex/vulkan-clean",
+    "commitDate": "2026-09-05T15:41:36+01:00",
+    "sparse": [
+      "cmake",
+      "docs",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "SpecialK",
+    "remote": "https://github.com/SpecialKO/SpecialK.git",
+    "commit": "5e0c979e5a2a3d6168114cb5b6a531faffedf338",
+    "branch": "main",
+    "commitDate": "2026-08-31T18:39:45-04:00",
+    "sparse": [
+      "DirectX11",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "Streamline",
+    "remote": "https://github.com/NVIDIA-RTX/Streamline.git",
+    "commit": "e8aaa6eaac968711fb62473d4ae8256dde20919b",
+    "branch": "main",
+    "commitDate": "2026-06-23T08:51:59-07:00",
+    "sparse": [
+      "docs",
+      "include",
+      "source"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "Streamline-CS",
+    "remote": "https://github.com/doodlum/Streamline.git",
+    "commit": "579442cb54615dddb8f34a78def6f5ca7d4ec659",
+    "branch": null,
+    "commitDate": "2026-09-05T14:25:37+01:00",
+    "sparse": [
+      "docs",
+      "include",
+      "source/plugins"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "UE-Modding-Tools",
+    "remote": "https://github.com/Buckminsterfullerene02/UE-Modding-Tools.git",
+    "commit": "9b3efa4ad72afb06c582b1095c0757cf022b0e9c",
+    "branch": "main",
+    "commitDate": "2026-08-08T14:52:28+01:00",
+    "sparse": null,
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "UE4SS",
+    "remote": "https://github.com/UE4SS-RE/RE-UE4SS.git",
+    "commit": "24b126628ea99671e592cd76048655b2313d7c19",
+    "branch": "main",
+    "commitDate": "2026-09-03T16:29:58-04:00",
+    "sparse": [
+      "UE4SS",
+      "deps",
+      "docs"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "UESDK",
+    "remote": "https://github.com/praydog/UESDK.git",
+    "commit": "ef3984803c6d481346650a4cec587343b5e53409",
+    "branch": "main",
+    "commitDate": "2026-08-31T02:04:37-07:00",
+    "sparse": [
+      "Plugins",
+      "Shaders",
+      "Source",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "UEVR",
+    "remote": "https://github.com/praydog/UEVR.git",
+    "commit": "4ee5c6b6162dee2291fc75f9dfc57667f6d45a2d",
+    "branch": "master",
+    "commitDate": "2026-08-29T21:27:00-07:00",
+    "sparse": [
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "UnrealEngine-4.18",
+    "remote": "https://github.com/EpicGames/UnrealEngine.git",
+    "commit": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+    "branch": null,
+    "commitDate": "2018-01-17T10:43:40-05:00",
+    "sparse": [
+      "Engine/Shaders/Private",
+      "Engine/Source/Runtime/ApplicationCore/Private/Windows",
+      "Engine/Source/Runtime/Engine/Classes",
+      "Engine/Source/Runtime/Engine/Private",
+      "Engine/Source/Runtime/Engine/Public",
+      "Engine/Source/Runtime/Launch/Private",
+      "Engine/Source/Runtime/RHI",
+      "Engine/Source/Runtime/RenderCore",
+      "Engine/Source/Runtime/Renderer",
+      "Engine/Source/Runtime/Slate",
+      "Engine/Source/Runtime/SlateRHIRenderer",
+      "Engine/Source/Runtime/Windows/D3D11RHI"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "xess",
+    "remote": "https://github.com/intel/xess.git",
+    "commit": "8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0",
+    "branch": "main",
+    "commitDate": "2026-07-23T18:02:52-07:00",
+    "sparse": [
+      "doc",
+      "inc",
+      "samples"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "XeSSInspector",
+    "remote": "https://github.com/GameTechDev/XeSSInspector.git",
+    "commit": "e72902915e95ce4b1782582297b1e9d65d6273ec",
+    "branch": "main",
+    "commitDate": "2026-08-19T15:41:24+08:00",
+    "sparse": [
+      "Plugins",
+      "Shaders",
+      "Source",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  },
+  {
+    "name": "XeSSUnrealPlugin",
+    "remote": "https://github.com/GameTechDev/XeSSUnrealPlugin.git",
+    "commit": "ff24958095288eff63a9ff0f88a4a88855b94d77",
+    "branch": "main",
+    "commitDate": "2026-08-31T20:43:12-07:00",
+    "sparse": [
+      "Plugins",
+      "Shaders",
+      "Source",
+      "include",
+      "src"
+    ],
+    "clean": true,
+    "submodulesFetched": false
+  }
+]

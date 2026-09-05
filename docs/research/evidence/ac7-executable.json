@@ -1,0 +1,1693 @@
+{
+  "path": "Ace7Game.exe",
+  "size_bytes": 65331992,
+  "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "machine": "0x8664",
+  "pe_timestamp_raw": 1667396750,
+  "image_base": "0x140000000",
+  "entry_point_rva": "0x43e7310",
+  "sections": [
+    {
+      "name": ".text",
+      "rva": 4096,
+      "virtual_size": 38857296,
+      "raw_offset": 1536,
+      "raw_size": 38857728
+    },
+    {
+      "name": ".rdata",
+      "rva": 38862848,
+      "virtual_size": 17074486,
+      "raw_offset": 38859264,
+      "raw_size": 17074688
+    },
+    {
+      "name": ".data",
+      "rva": 55939072,
+      "virtual_size": 11235952,
+      "raw_offset": 55933952,
+      "raw_size": 5182464
+    },
+    {
+      "name": ".pdata",
+      "rva": 67178496,
+      "virtual_size": 2446980,
+      "raw_offset": 61116416,
+      "raw_size": 2447360
+    },
+    {
+      "name": ".tls",
+      "rva": 69627904,
+      "virtual_size": 29,
+      "raw_offset": 63563776,
+      "raw_size": 512
+    },
+    {
+      "name": ".gfids",
+      "rva": 69632000,
+      "virtual_size": 56,
+      "raw_offset": 63564288,
+      "raw_size": 512
+    },
+    {
+      "name": "_RDATA",
+      "rva": 69636096,
+      "virtual_size": 34528,
+      "raw_offset": 63564800,
+      "raw_size": 34816
+    },
+    {
+      "name": ".rsrc",
+      "rva": 69672960,
+      "virtual_size": 285532,
+      "raw_offset": 63599616,
+      "raw_size": 285696
+    },
+    {
+      "name": ".reloc",
+      "rva": 69959680,
+      "virtual_size": 1239556,
+      "raw_offset": 63885312,
+      "raw_size": 1240064
+    },
+    {
+      "name": ".bind",
+      "rva": 71200768,
+      "virtual_size": 206616,
+      "raw_offset": 65125376,
+      "raw_size": 206616
+    }
+  ],
+  "imports": [
+    {
+      "dll": "WININET.dll",
+      "functions": [
+        "InternetSetStatusCallbackW",
+        "InternetSetOptionW",
+        "HttpSendRequestW",
+        "HttpQueryInfoW",
+        "InternetAttemptConnect",
+        "InternetGetConnectedState",
+        "InternetQueryOptionW",
+        "InternetReadFile",
+        "InternetConnectW",
+        "InternetCloseHandle",
+        "InternetOpenW",
+        "InternetCrackUrlW",
+        "HttpOpenRequestW"
+      ]
+    },
+    {
+      "dll": "WS2_32.dll",
+      "functions": [
+        "ordinal:22",
+        "ordinal:52",
+        "ordinal:11",
+        "ordinal:1",
+        "ordinal:2",
+        "ordinal:3",
+        "ordinal:4",
+        "ordinal:112",
+        "ordinal:5",
+        "ordinal:6",
+        "ordinal:7",
+        "ordinal:8",
+        "ordinal:9",
+        "ordinal:13",
+        "ordinal:14",
+        "ordinal:15",
+        "ordinal:16",
+        "ordinal:17",
+        "ordinal:18",
+        "ordinal:19",
+        "ordinal:20",
+        "ordinal:21",
+        "ordinal:23",
+        "ordinal:57",
+        "ordinal:115",
+        "ordinal:116",
+        "ordinal:111",
+        "getaddrinfo",
+        "freeaddrinfo",
+        "inet_pton",
+        "WSAIoctl",
+        "ordinal:10",
+        "ordinal:151"
+      ]
+    },
+    {
+      "dll": "dbghelp.dll",
+      "functions": [
+        "SymGetModuleBase64",
+        "SymGetModuleInfo64",
+        "SymGetLineFromAddr64",
+        "SymInitializeW",
+        "MiniDumpWriteDump",
+        "SymGetSymFromAddr64",
+        "SymRefreshModuleList",
+        "StackWalk64",
+        "SymSetOptions",
+        "SymGetOptions",
+        "SymFunctionTableAccess64"
+      ]
+    },
+    {
+      "dll": "WINMM.dll",
+      "functions": [
+        "timeBeginPeriod"
+      ]
+    },
+    {
+      "dll": "KERNEL32.dll",
+      "functions": [
+        "TlsSetValue",
+        "GetCommandLineW",
+        "GetLastError",
+        "ReleaseMutex",
+        "CreateMutexW",
+        "Sleep",
+        "GetUserDefaultLocaleName",
+        "InitializeCriticalSection",
+        "SetCriticalSectionSpinCount",
+        "GetCurrentProcessId",
+        "TlsAlloc",
+        "TlsFree",
+        "SetHandleInformation",
+        "GetOverlappedResult",
+        "WriteFile",
+        "ReadFile",
+        "RtlCaptureStackBackTrace",
+        "VerSetConditionMask",
+        "GetStdHandle",
+        "GetEnvironmentVariableW",
+        "SetEnvironmentVariableW",
+        "SetCurrentDirectoryW",
+        "GetCurrentDirectoryW",
+        "CreateDirectoryW",
+        "CreateFileW",
+        "DeleteFileW",
+        "FindClose",
+        "FindFirstFileW",
+        "FindNextFileW",
+        "FlushFileBuffers",
+        "GetDiskFreeSpaceExW",
+        "GetFileAttributesW",
+        "GetFileAttributesExW",
+        "GetFileSizeEx",
+        "GetFullPathNameW",
+        "GetLongPathNameW",
+        "RemoveDirectoryW",
+        "SetFileAttributesW",
+        "SetFileTime",
+        "GetTempPathW",
+        "OutputDebugStringW",
+        "CloseHandle",
+        "RaiseException",
+        "PeekNamedPipe",
+        "QueryPerformanceFrequency",
+        "SetEvent",
+        "ResetEvent",
+        "ReleaseSemaphore",
+        "WaitForSingleObject",
+        "CreateEventW",
+        "GetProcessTimes",
+        "GetCurrentProcess",
+        "TerminateProcess",
+        "SwitchToThread",
+        "CreateThread",
+        "GetCurrentThread",
+        "OpenThread",
+        "SetThreadPriority",
+        "SuspendThread",
+        "ResumeThread",
+        "LocalAlloc",
+        "GetThreadContext",
+        "GlobalMemoryStatusEx",
+        "GetSystemTime",
+        "GetSystemTimeAsFileTime",
+        "GetLocalTime",
+        "IsDebuggerPresent",
+        "GetSystemDirectoryW",
+        "GetVersionExW",
+        "GetLogicalProcessorInformation",
+        "GetNativeSystemInfo",
+        "VirtualAlloc",
+        "VirtualFree",
+        "VirtualProtect",
+        "CreateFileMappingW",
+        "TlsGetValue",
+        "MapViewOfFile",
+        "UnmapViewOfFile",
+        "DeleteCriticalSection",
+        "GetModuleFileNameW",
+        "GetModuleHandleW",
+        "GetModuleHandleExW",
+        "GetProcAddress",
+        "LoadLibraryExW",
+        "LoadResource",
+        "LockResource",
+        "SizeofResource",
+        "SetThreadAffinityMask",
+        "SetThreadErrorMode",
+        "FormatMessageW",
+        "CreateSemaphoreW",
+        "LoadLibraryW",
+        "FindResourceW",
+        "SetDllDirectoryW",
+        "MoveFileW",
+        "GetComputerNameW",
+        "VerifyVersionInfoW",
+        "FileTimeToSystemTime",
+        "SystemTimeToFileTime",
+        "GetUserPreferredUILanguages",
+        "SetConsoleCtrlHandler",
+        "K32GetProcessMemoryInfo",
+        "CreateToolhelp32Snapshot",
+        "SetLastError",
+        "Process32NextW",
+        "GetProcessHandleCount",
+        "GetVersion",
+        "GlobalAlloc",
+        "GlobalLock",
+        "GlobalUnlock",
+        "GetLocaleInfoW",
+        "GetSystemDefaultLCID",
+        "GetConsoleScreenBufferInfo",
+        "SetConsoleScreenBufferSize",
+        "SetConsoleWindowInfo",
+        "SetConsoleTextAttribute",
+        "FreeConsole",
+        "AttachConsole",
+        "AllocConsole",
+        "WriteConsoleW",
+        "GetConsoleWindow",
+        "InitializeSRWLock",
+        "AcquireSRWLockShared",
+        "ReleaseSRWLockShared",
+        "AcquireSRWLockExclusive",
+        "ReleaseSRWLockExclusive",
+        "InitializeCriticalSectionAndSpinCount",
+        "GetFileSize",
+        "HeapAlloc",
+        "HeapFree",
+        "GetProcessHeap",
+        "WaitForSingleObjectEx",
+        "GetTickCount64",
+        "FlushViewOfFile",
+        "LoadLibraryA",
+        "DebugBreak",
+        "RtlCaptureContext",
+        "RtlLookupFunctionEntry",
+        "UnhandledExceptionFilter",
+        "SetUnhandledExceptionFilter",
+        "IsProcessorFeaturePresent",
+        "InitializeSListHead",
+        "GetStartupInfoW",
+        "VirtualQuery",
+        "LoadLibraryExA",
+        "lstrlenA",
+        "ExitProcess",
+        "GetProcessAffinityMask",
+        "GetExitCodeThread",
+        "GetThreadPriority",
+        "CreateEventA",
+        "MoveFileA",
+        "WaitForMultipleObjectsEx",
+        "CreateDirectoryA",
+        "DeleteFileA",
+        "GetTimeFormatW",
+        "GetDateFormatW",
+        "SystemTimeToTzSpecificLocalTime",
+        "GetCurrentThreadId",
+        "QueryPerformanceCounter",
+        "GetCurrencyFormatW",
+        "GetNumberFormatW",
+        "GetUserGeoID",
+        "GetGeoInfoA",
+        "GetTimeZoneInformation",
+        "LeaveCriticalSection",
+        "EnterCriticalSection",
+        "TryEnterCriticalSection",
+        "RtlVirtualUnwind",
+        "FlushConsoleInputBuffer",
+        "GlobalMemoryStatus",
+        "WideCharToMultiByte",
+        "InitializeCriticalSectionEx",
+        "SleepEx",
+        "VerifyVersionInfoA",
+        "WaitForMultipleObjects",
+        "FreeLibrary",
+        "ExpandEnvironmentStringsA",
+        "GetFileAttributesA",
+        "SetEndOfFile",
+        "GetSystemInfo",
+        "SetFilePointer",
+        "MultiByteToWideChar",
+        "GetFileType",
+        "GetModuleHandleA",
+        "GetModuleFileNameA",
+        "CreateProcessW",
+        "Process32FirstW",
+        "GetLocaleInfoA",
+        "CreateFileMappingA",
+        "CreateFileA",
+        "GetThreadLocale",
+        "GetACP",
+        "LocalFree",
+        "FormatMessageA",
+        "CreateSemaphoreA",
+        "OutputDebugStringA",
+        "GetTickCount",
+        "GetCommandLineA",
+        "GetModuleHandleExA"
+      ]
+    },
+    {
+      "dll": "USER32.dll",
+      "functions": [
+        "LoadCursorW",
+        "SetWindowLongW",
+        "GetWindowLongW",
+        "WindowFromPoint",
+        "ClientToScreen",
+        "ClipCursor",
+        "GetCursorPos",
+        "SetCursor",
+        "SetCursorPos",
+        "ShowCursor",
+        "AdjustWindowRectEx",
+        "GetClientRect",
+        "SetWindowRgn",
+        "EndPaint",
+        "BeginPaint",
+        "ReleaseDC",
+        "GetDC",
+        "GetForegroundWindow",
+        "SetActiveWindow",
+        "UpdateWindow",
+        "DrawStateW",
+        "IsWindowEnabled",
+        "MonitorFromRect",
+        "MonitorFromWindow",
+        "GetMonitorInfoW",
+        "EnumDisplayMonitors",
+        "GetWindowInfo",
+        "GetRawInputData",
+        "GetRawInputDeviceInfoA",
+        "EnableWindow",
+        "ReleaseCapture",
+        "SetCapture",
+        "GetCapture",
+        "MapVirtualKeyW",
+        "RegisterRawInputDevices",
+        "CloseTouchInputHandle",
+        "GetTouchInputInfo",
+        "SendInput",
+        "EnumDisplayDevicesA",
+        "GetAsyncKeyState",
+        "GetKeyState",
+        "GetProcessWindowStation",
+        "GetUserObjectInformationW",
+        "GetFocus",
+        "GetActiveWindow",
+        "SetFocus",
+        "EmptyClipboard",
+        "GetClipboardData",
+        "CloseClipboard",
+        "LoadCursorFromFileW",
+        "IsZoomed",
+        "IsIconic",
+        "SetWindowPlacement",
+        "GetWindowPlacement",
+        "SetLayeredWindowAttributes",
+        "ShowWindow",
+        "DestroyWindow",
+        "IsWindow",
+        "CreateWindowExW",
+        "UnregisterClassW",
+        "RegisterClassW",
+        "DefWindowProcW",
+        "PostMessageW",
+        "PeekMessageW",
+        "GetRawInputDeviceList",
+        "DestroyCursor",
+        "DispatchMessageW",
+        "LoadImageW",
+        "TranslateMessage",
+        "DisableProcessWindowsGhosting",
+        "GetKeyboardLayout",
+        "EnumDisplayDevicesW",
+        "GetWindowThreadProcessId",
+        "GetTopWindow",
+        "ScreenToClient",
+        "MessageBoxW",
+        "GetWindowRect",
+        "SetWindowTextW",
+        "SetForegroundWindow",
+        "SetDlgItemTextW",
+        "GetDlgItem",
+        "EndDialog",
+        "DialogBoxParamW",
+        "SetWindowPos",
+        "PostQuitMessage",
+        "UnregisterHotKey",
+        "RegisterHotKey",
+        "GetSystemMetrics",
+        "GetKeyboardState",
+        "RegisterDeviceNotificationW",
+        "UnregisterDeviceNotification",
+        "CallWindowProcW",
+        "GetWindowLongPtrW",
+        "SetWindowLongPtrW",
+        "CreateIconIndirect",
+        "ChangeDisplaySettingsW",
+        "ChangeDisplaySettingsExW",
+        "EnumDisplaySettingsW",
+        "LoadIconW",
+        "OpenClipboard",
+        "SystemParametersInfoW",
+        "RegisterTouchWindow",
+        "SetClipboardData"
+      ]
+    },
+    {
+      "dll": "GDI32.dll",
+      "functions": [
+        "CreateDCW",
+        "CreateCompatibleDC",
+        "DeleteDC",
+        "GetTextExtentPoint32W",
+        "CreateFontIndirectW",
+        "CreateRectRgn",
+        "CreateRoundRectRgn",
+        "DeleteObject",
+        "SwapBuffers",
+        "SetPixelFormat",
+        "GetStockObject",
+        "PtInRegion",
+        "SelectObject",
+        "SetBkColor",
+        "SetBkMode",
+        "SetTextColor",
+        "SetTextAlign",
+        "CreateDIBSection",
+        "GetObjectW",
+        "TextOutW",
+        "CreateBitmap",
+        "ChoosePixelFormat",
+        "ExtEscape"
+      ]
+    },
+    {
+      "dll": "ADVAPI32.dll",
+      "functions": [
+        "RegQueryValueExW",
+        "GetUserNameW",
+        "InitializeSecurityDescriptor",
+        "SetSecurityDescriptorDacl",
+        "RegOpenKeyExA",
+        "RegQueryValueExA",
+        "ReportEventW",
+        "RegisterEventSourceW",
+        "DeregisterEventSource",
+        "RegCreateKeyExW",
+        "RegSetValueExW",
+        "RegCloseKey",
+        "RegOpenKeyExW",
+        "RegEnumValueW",
+        "RegEnumKeyExW",
+        "RegDeleteValueW",
+        "RegDeleteKeyW"
+      ]
+    },
+    {
+      "dll": "SHELL32.dll",
+      "functions": [
+        "ShellExecuteW",
+        "SHGetFolderPathW"
+      ]
+    },
+    {
+      "dll": "ole32.dll",
+      "functions": [
+        "CoTaskMemFree",
+        "IIDFromString",
+        "ReleaseStgMedium",
+        "RevokeDragDrop",
+        "RegisterDragDrop",
+        "OleUninitialize",
+        "OleInitialize",
+        "CoInitialize",
+        "CoCreateGuid",
+        "CoInitializeEx",
+        "PropVariantClear",
+        "StringFromGUID2",
+        "CoCreateInstance",
+        "CoUninitialize",
+        "CoTaskMemAlloc"
+      ]
+    },
+    {
+      "dll": "OLEAUT32.dll",
+      "functions": [
+        "ordinal:2",
+        "ordinal:10",
+        "ordinal:6"
+      ]
+    },
+    {
+      "dll": "IPHLPAPI.DLL",
+      "functions": [
+        "GetAdaptersInfo",
+        "GetAdaptersAddresses"
+      ]
+    },
+    {
+      "dll": "SETUPAPI.dll",
+      "functions": [
+        "SetupDiGetClassDevsExW",
+        "SetupDiOpenDevRegKey",
+        "CM_Get_Device_IDW",
+        "SetupDiDestroyDeviceInfoList",
+        "SetupDiEnumDeviceInterfaces",
+        "SetupDiEnumDeviceInfo",
+        "SetupDiGetDeviceInterfaceDetailW",
+        "SetupDiGetClassDevsW",
+        "SetupDiGetDeviceInstanceIdW"
+      ]
+    },
+    {
+      "dll": "dwmapi.dll",
+      "functions": [
+        "DwmGetCompositionTimingInfo",
+        "DwmIsCompositionEnabled",
+        "DwmFlush",
+        "DwmSetWindowAttribute"
+      ]
+    },
+    {
+      "dll": "IMM32.dll",
+      "functions": [
+        "ImmSetCompositionWindow",
+        "ImmNotifyIME",
+        "ImmGetCompositionStringW",
+        "ImmAssociateContext",
+        "ImmReleaseContext",
+        "ImmGetContext",
+        "ImmDestroyContext",
+        "ImmCreateContext",
+        "ImmGetProperty",
+        "ImmGetIMEFileNameW",
+        "ImmGetDescriptionW",
+        "ImmSetCandidateWindow"
+      ]
+    },
+    {
+      "dll": "DSOUND.dll",
+      "functions": [
+        "ordinal:8",
+        "ordinal:11",
+        "ordinal:12"
+      ]
+    },
+    {
+      "dll": "XINPUT1_3.dll",
+      "functions": [
+        "ordinal:3",
+        "ordinal:2"
+      ]
+    },
+    {
+      "dll": "dxgi.dll",
+      "functions": [
+        "CreateDXGIFactory",
+        "CreateDXGIFactory1"
+      ]
+    },
+    {
+      "dll": "d3d9.dll",
+      "functions": [
+        "D3DPERF_EndEvent",
+        "D3DPERF_BeginEvent"
+      ]
+    },
+    {
+      "dll": "d3d11.dll",
+      "functions": [
+        "D3D11CreateDevice"
+      ]
+    },
+    {
+      "dll": "X3DAudio1_7.dll",
+      "functions": [
+        "X3DAudioInitialize",
+        "X3DAudioCalculate"
+      ]
+    },
+    {
+      "dll": "XAPOFX1_5.dll",
+      "functions": [
+        "CreateFX"
+      ]
+    },
+    {
+      "dll": "OPENGL32.dll",
+      "functions": [
+        "wglMakeCurrent",
+        "wglGetCurrentDC",
+        "wglGetCurrentContext",
+        "wglDeleteContext",
+        "wglCreateContext",
+        "wglGetProcAddress"
+      ]
+    },
+    {
+      "dll": "WINHTTP.dll",
+      "functions": [
+        "WinHttpGetIEProxyConfigForCurrentUser",
+        "WinHttpGetDefaultProxyConfiguration"
+      ]
+    },
+    {
+      "dll": "WLDAP32.dll",
+      "functions": [
+        "ordinal:200",
+        "ordinal:30",
+        "ordinal:79",
+        "ordinal:35",
+        "ordinal:33",
+        "ordinal:32",
+        "ordinal:27",
+        "ordinal:301",
+        "ordinal:22",
+        "ordinal:41",
+        "ordinal:50",
+        "ordinal:60",
+        "ordinal:211",
+        "ordinal:46",
+        "ordinal:143",
+        "ordinal:26"
+      ]
+    },
+    {
+      "dll": "Normaliz.dll",
+      "functions": [
+        "IdnToAscii"
+      ]
+    },
+    {
+      "dll": "MSVCP140.dll",
+      "functions": [
+        "?tolower@?$ctype@D@std@@QEBADD@Z",
+        "?is@?$ctype@D@std@@QEBA_NFD@Z",
+        "?_Init@locale@std@@CAPEAV_Locimp@12@_N@Z",
+        "??1facet@locale@std@@MEAA@XZ",
+        "??0facet@locale@std@@IEAA@_K@Z",
+        "?c_str@?$_Yarn@D@std@@QEBAPEBDXZ",
+        "?_Getcoll@_Locinfo@std@@QEBA?AU_Collvec@@XZ",
+        "??1_Locinfo@std@@QEAA@XZ",
+        "??0_Locinfo@std@@QEAA@PEBD@Z",
+        "_Strxfrm",
+        "_Strcoll",
+        "?out@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z",
+        "??_7?$basic_istream@DU?$char_traits@D@std@@@std@@6B@",
+        "?id@?$codecvt@DDU_Mbstatet@@@std@@2V0locale@2@A",
+        "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z",
+        "?tellg@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAA?AV?$fpos@U_Mbstatet@@@2@XZ",
+        "?seekg@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@V?$fpos@U_Mbstatet@@@2@@Z",
+        "?read@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEAD_J@Z",
+        "??1?$basic_istream@DU?$char_traits@D@std@@@std@@UEAA@XZ",
+        "??0?$basic_istream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z",
+        "?tellp@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAA?AV?$fpos@U_Mbstatet@@@2@XZ",
+        "?seekp@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@V?$fpos@U_Mbstatet@@@2@@Z",
+        "?write@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEBD_J@Z",
+        "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@_J@Z",
+        "??1?$basic_ostream@DU?$char_traits@D@std@@@std@@UEAA@XZ",
+        "??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z",
+        "?clear@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAXH_N@Z",
+        "?_Init@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXXZ",
+        "?getloc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEBA?AVlocale@2@XZ",
+        "?_Getcat@?$codecvt@DDU_Mbstatet@@@std@@SA_KPEAPEBVfacet@locale@2@PEBV42@@Z",
+        "?_Xbad_alloc@std@@YAXXZ",
+        "?_Xlength_error@std@@YAXPEBD@Z",
+        "?_Xout_of_range@std@@YAXPEBD@Z",
+        "?uncaught_exception@std@@YA_NXZ",
+        "?_Ios_base_dtor@ios_base@std@@CAXPEAV12@@Z",
+        "??0?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAA@XZ",
+        "??1?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAA@XZ",
+        "?sputc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHD@Z",
+        "?sputn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAA_JPEBD_J@Z",
+        "?_Pninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAPEADXZ",
+        "??1?$basic_ios@DU?$char_traits@D@std@@@std@@UEAA@XZ",
+        "?setstate@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAXH_N@Z",
+        "?_Osfx@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAXXZ",
+        "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ",
+        "??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z",
+        "??1?$basic_iostream@DU?$char_traits@D@std@@@std@@UEAA@XZ",
+        "?_Lock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAAXXZ",
+        "?_Unlock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAAXXZ",
+        "?imbue@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAXAEBVlocale@2@@Z",
+        "?setbuf@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAPEAV12@PEAD_J@Z",
+        "?showmanyc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JXZ",
+        "?sync@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHXZ",
+        "?uflow@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHXZ",
+        "?xsgetn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JPEAD_J@Z",
+        "?xsputn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JPEBD_J@Z",
+        "?_BADOFF@std@@3_JB",
+        "??_7ios_base@std@@6B@",
+        "??_7?$basic_ios@DU?$char_traits@D@std@@@std@@6B@",
+        "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IEAA@XZ",
+        "_FExp",
+        "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@H@Z",
+        "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@_K@Z",
+        "??_7?$basic_ostream@DU?$char_traits@D@std@@@std@@6B@",
+        "??0_Lockit@std@@QEAA@H@Z",
+        "?tolower@?$ctype@D@std@@QEBAPEBDPEADPEBD@Z",
+        "?_Getcat@?$ctype@D@std@@SA_KPEAPEBVfacet@locale@2@PEBV42@@Z",
+        "?_Xregex_error@std@@YAXW4error_type@regex_constants@1@@Z",
+        "?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ",
+        "?_Incref@facet@locale@std@@UEAAXXZ",
+        "?id@?$ctype@D@std@@2V0locale@2@A",
+        "?id@?$collate@D@std@@2V0locale@2@A",
+        "_Inf",
+        "??1_Lockit@std@@QEAA@XZ",
+        "??Bid@locale@std@@QEAA_KXZ",
+        "?_Getgloballocale@locale@std@@CAPEAV_Locimp@12@XZ",
+        "?always_noconv@codecvt_base@std@@QEBA_NXZ",
+        "?in@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z",
+        "?unshift@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z"
+      ]
+    },
+    {
+      "dll": "VERSION.dll",
+      "functions": [
+        "GetFileVersionInfoSizeW",
+        "VerQueryValueW",
+        "GetFileVersionInfoW"
+      ]
+    },
+    {
+      "dll": "POWRPROF.dll",
+      "functions": [
+        "CallNtPowerInformation"
+      ]
+    },
+    {
+      "dll": "VCRUNTIME140.dll",
+      "functions": [
+        "memcpy",
+        "memset",
+        "wcsstr",
+        "memcmp",
+        "strrchr",
+        "wcsrchr",
+        "wcschr",
+        "_set_purecall_handler",
+        "__std_terminate",
+        "longjmp",
+        "_CxxThrowException",
+        "__CxxFrameHandler3",
+        "strstr",
+        "strchr",
+        "__std_exception_copy",
+        "__std_exception_destroy",
+        "__RTDynamicCast",
+        "__std_type_info_name",
+        "memmove",
+        "memchr",
+        "__RTtypeid",
+        "__std_type_info_compare",
+        "__vcrt_InitializeCriticalSectionEx",
+        "_purecall",
+        "__C_specific_handler",
+        "__intrinsic_setjmp"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-runtime-l1-1-0.dll",
+      "functions": [
+        "_register_onexit_function",
+        "_crt_atexit",
+        "_initialize_onexit_table",
+        "_set_invalid_parameter_handler",
+        "exit",
+        "_cexit",
+        "terminate",
+        "_seh_filter_exe",
+        "_set_app_type",
+        "_endthreadex",
+        "_beginthreadex",
+        "_initialize_narrow_environment",
+        "_get_narrow_winmain_command_line",
+        "_configure_narrow_argv",
+        "_invalid_parameter_noinfo_noreturn",
+        "_initterm",
+        "_initterm_e",
+        "_c_exit",
+        "_getpid",
+        "_invalid_parameter_noinfo",
+        "__sys_nerr",
+        "_exit",
+        "raise",
+        "strerror",
+        "_errno",
+        "abort",
+        "_register_thread_local_exe_atexit_callback",
+        "signal"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-utility-l1-1-0.dll",
+      "functions": [
+        "rand",
+        "srand",
+        "bsearch",
+        "qsort",
+        "div"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-string-l1-1-0.dll",
+      "functions": [
+        "wcsncpy",
+        "strtok",
+        "strcpy",
+        "isspace",
+        "strncmp",
+        "strcmp",
+        "strnlen",
+        "_wcsnicmp",
+        "strlen",
+        "strcat",
+        "wcslen",
+        "strncat",
+        "isdigit",
+        "_strdup",
+        "towupper",
+        "isalpha",
+        "wcscpy_s",
+        "wcscat_s",
+        "wcsncpy_s",
+        "isgraph",
+        "isprint",
+        "islower",
+        "_wcsicmp",
+        "wcsncmp",
+        "_stricmp",
+        "strncpy_s",
+        "strcpy_s",
+        "strncat_s",
+        "strcat_s",
+        "isalnum",
+        "wcsncat_s",
+        "iswupper",
+        "tolower",
+        "iswlower",
+        "toupper",
+        "iswxdigit",
+        "iswalpha",
+        "iswalnum",
+        "strncpy",
+        "strpbrk",
+        "_strnicmp",
+        "isupper",
+        "iswspace",
+        "iswdigit",
+        "isxdigit",
+        "towlower",
+        "_wcsupr"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-stdio-l1-1-0.dll",
+      "functions": [
+        "ftell",
+        "_wfopen",
+        "feof",
+        "__stdio_common_vsprintf",
+        "__stdio_common_vfwprintf",
+        "__acrt_iob_func",
+        "__stdio_common_vsscanf",
+        "__stdio_common_vfprintf",
+        "_fileno",
+        "_lseeki64",
+        "_setmode",
+        "_open",
+        "fgets",
+        "fopen_s",
+        "__stdio_common_vswprintf_s",
+        "setvbuf",
+        "fflush",
+        "fopen",
+        "fclose",
+        "ferror",
+        "fread",
+        "fwrite",
+        "_fseeki64",
+        "fputs",
+        "fseek",
+        "ungetc",
+        "fsetpos",
+        "fputc",
+        "_set_fmode",
+        "fgetpos",
+        "fgetc",
+        "_get_stream_buffer_pointers",
+        "__stdio_common_vsprintf_s",
+        "__p__commode",
+        "_read",
+        "_write",
+        "_close",
+        "__stdio_common_vswprintf"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-convert-l1-1-0.dll",
+      "functions": [
+        "strtod",
+        "wcstombs",
+        "strtoll",
+        "strtoul",
+        "wcstoul",
+        "strtol",
+        "atol",
+        "wcstod",
+        "atoi",
+        "_wtoi",
+        "_wtoi64",
+        "_strtoui64",
+        "_wcstoui64",
+        "_strtoi64",
+        "_wtof"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-math-l1-1-0.dll",
+      "functions": [
+        "_fpclass",
+        "sqrtf",
+        "exp2",
+        "atan2f",
+        "log10f",
+        "exp",
+        "expf",
+        "log10",
+        "sinhf",
+        "pow",
+        "frexp",
+        "roundf",
+        "log2f",
+        "ldexp",
+        "powf",
+        "sinf",
+        "acosf",
+        "modff",
+        "ceil",
+        "tan",
+        "sqrt",
+        "tanf",
+        "atanf",
+        "__setusermatherr",
+        "sin",
+        "ceilf",
+        "floorf",
+        "_finite",
+        "cosf",
+        "cos",
+        "atan2",
+        "atan",
+        "fabs",
+        "fmod",
+        "log",
+        "floor",
+        "asinf",
+        "modf",
+        "asin",
+        "_isnan",
+        "sinh",
+        "fmodf",
+        "logf"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-heap-l1-1-0.dll",
+      "functions": [
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "_set_new_mode"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-filesystem-l1-1-0.dll",
+      "functions": [
+        "_unlock_file",
+        "_lock_file",
+        "_stat64",
+        "_stat64i32",
+        "_fstat64"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-environment-l1-1-0.dll",
+      "functions": [
+        "getenv"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-time-l1-1-0.dll",
+      "functions": [
+        "_time64",
+        "_gmtime64",
+        "_tzset",
+        "__tzname",
+        "__timezone"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-locale-l1-1-0.dll",
+      "functions": [
+        "_configthreadlocale"
+      ]
+    },
+    {
+      "dll": "api-ms-win-crt-conio-l1-1-0.dll",
+      "functions": [
+        "_getch"
+      ]
+    },
+    {
+      "dll": "DINPUT8.dll",
+      "functions": [
+        "DirectInput8Create"
+      ]
+    }
+  ],
+  "exact_string_anchors": {
+    "t.IdleWhenNotForeground": {
+      "utf-16-le": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2577758",
+            "section": ".rdata",
+            "rva": "0x2578558"
+          },
+          {
+            "file_offset": "0x290e6b8",
+            "section": ".rdata",
+            "rva": "0x290f4b8"
+          }
+        ]
+      }
+    },
+    "r.OneFrameThreadLag": {
+      "utf-16-le": {
+        "count": 3,
+        "first_locations": [
+          {
+            "file_offset": "0x2573ab8",
+            "section": ".rdata",
+            "rva": "0x25748b8"
+          },
+          {
+            "file_offset": "0x2bc6908",
+            "section": ".rdata",
+            "rva": "0x2bc7708"
+          },
+          {
+            "file_offset": "0x2e6c868",
+            "section": ".rdata",
+            "rva": "0x2e6d668"
+          }
+        ]
+      }
+    },
+    "r.ScreenPercentage": {
+      "ascii": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x25cfbf8",
+            "section": ".rdata",
+            "rva": "0x25d09f8"
+          },
+          {
+            "file_offset": "0x265bdd8",
+            "section": ".rdata",
+            "rva": "0x265cbd8"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 10,
+        "first_locations": [
+          {
+            "file_offset": "0x2909d78",
+            "section": ".rdata",
+            "rva": "0x290ab78"
+          },
+          {
+            "file_offset": "0x2ac2af6",
+            "section": ".rdata",
+            "rva": "0x2ac38f6"
+          },
+          {
+            "file_offset": "0x2ad1d52",
+            "section": ".rdata",
+            "rva": "0x2ad2b52"
+          },
+          {
+            "file_offset": "0x2afc7b0",
+            "section": ".rdata",
+            "rva": "0x2afd5b0"
+          },
+          {
+            "file_offset": "0x2afc7d8",
+            "section": ".rdata",
+            "rva": "0x2afd5d8"
+          },
+          {
+            "file_offset": "0x2afe200",
+            "section": ".rdata",
+            "rva": "0x2aff000"
+          },
+          {
+            "file_offset": "0x2afe3b8",
+            "section": ".rdata",
+            "rva": "0x2aff1b8"
+          },
+          {
+            "file_offset": "0x2e1a988",
+            "section": ".rdata",
+            "rva": "0x2e1b788"
+          }
+        ]
+      }
+    },
+    "r.PostProcessAAQuality": {
+      "utf-16-le": {
+        "count": 4,
+        "first_locations": [
+          {
+            "file_offset": "0x290bb28",
+            "section": ".rdata",
+            "rva": "0x290c928"
+          },
+          {
+            "file_offset": "0x2abf418",
+            "section": ".rdata",
+            "rva": "0x2ac0218"
+          },
+          {
+            "file_offset": "0x2acdfa8",
+            "section": ".rdata",
+            "rva": "0x2aceda8"
+          },
+          {
+            "file_offset": "0x2e1c7e0",
+            "section": ".rdata",
+            "rva": "0x2e1d5e0"
+          }
+        ]
+      }
+    },
+    "r.TemporalAASamples": {
+      "utf-16-le": {
+        "count": 1,
+        "first_locations": [
+          {
+            "file_offset": "0x2ae2b68",
+            "section": ".rdata",
+            "rva": "0x2ae3968"
+          }
+        ]
+      }
+    },
+    "r.Tonemapper.MergeWithUpscale.Mode": {
+      "utf-16-le": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2ac2740",
+            "section": ".rdata",
+            "rva": "0x2ac3540"
+          },
+          {
+            "file_offset": "0x2ac2826",
+            "section": ".rdata",
+            "rva": "0x2ac3626"
+          }
+        ]
+      }
+    },
+    "TemporalAA": {
+      "ascii": {
+        "count": 4,
+        "first_locations": [
+          {
+            "file_offset": "0x2e2f3f8",
+            "section": ".rdata",
+            "rva": "0x2e301f8"
+          },
+          {
+            "file_offset": "0x2e30ee8",
+            "section": ".rdata",
+            "rva": "0x2e31ce8"
+          },
+          {
+            "file_offset": "0x2e40988",
+            "section": ".rdata",
+            "rva": "0x2e41788"
+          },
+          {
+            "file_offset": "0x2f95f2c",
+            "section": ".rdata",
+            "rva": "0x2f96d2c"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 58,
+        "first_locations": [
+          {
+            "file_offset": "0x290c912",
+            "section": ".rdata",
+            "rva": "0x290d712"
+          },
+          {
+            "file_offset": "0x290c94c",
+            "section": ".rdata",
+            "rva": "0x290d74c"
+          },
+          {
+            "file_offset": "0x290f52e",
+            "section": ".rdata",
+            "rva": "0x291032e"
+          },
+          {
+            "file_offset": "0x2aaa63c",
+            "section": ".rdata",
+            "rva": "0x2aab43c"
+          },
+          {
+            "file_offset": "0x2ac6ff4",
+            "section": ".rdata",
+            "rva": "0x2ac7df4"
+          },
+          {
+            "file_offset": "0x2ac7034",
+            "section": ".rdata",
+            "rva": "0x2ac7e34"
+          },
+          {
+            "file_offset": "0x2ac76f0",
+            "section": ".rdata",
+            "rva": "0x2ac84f0"
+          },
+          {
+            "file_offset": "0x2ac7796",
+            "section": ".rdata",
+            "rva": "0x2ac8596"
+          }
+        ]
+      }
+    },
+    "SceneDepthZ": {
+      "utf-16-le": {
+        "count": 3,
+        "first_locations": [
+          {
+            "file_offset": "0x2aca838",
+            "section": ".rdata",
+            "rva": "0x2acb638"
+          },
+          {
+            "file_offset": "0x2acabaa",
+            "section": ".rdata",
+            "rva": "0x2acb9aa"
+          },
+          {
+            "file_offset": "0x2ad2286",
+            "section": ".rdata",
+            "rva": "0x2ad3086"
+          }
+        ]
+      }
+    },
+    "Velocity": {
+      "ascii": {
+        "count": 271,
+        "first_locations": [
+          {
+            "file_offset": "0x25801c0",
+            "section": ".rdata",
+            "rva": "0x2580fc0"
+          },
+          {
+            "file_offset": "0x27155d0",
+            "section": ".rdata",
+            "rva": "0x27163d0"
+          },
+          {
+            "file_offset": "0x2719170",
+            "section": ".rdata",
+            "rva": "0x2719f70"
+          },
+          {
+            "file_offset": "0x278faa6",
+            "section": ".rdata",
+            "rva": "0x27908a6"
+          },
+          {
+            "file_offset": "0x27b4937",
+            "section": ".rdata",
+            "rva": "0x27b5737"
+          },
+          {
+            "file_offset": "0x27b4977",
+            "section": ".rdata",
+            "rva": "0x27b5777"
+          },
+          {
+            "file_offset": "0x27c9348",
+            "section": ".rdata",
+            "rva": "0x27ca148"
+          },
+          {
+            "file_offset": "0x27cb94e",
+            "section": ".rdata",
+            "rva": "0x27cc74e"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 118,
+        "first_locations": [
+          {
+            "file_offset": "0x298720a",
+            "section": ".rdata",
+            "rva": "0x298800a"
+          },
+          {
+            "file_offset": "0x299acd0",
+            "section": ".rdata",
+            "rva": "0x299bad0"
+          },
+          {
+            "file_offset": "0x29a154a",
+            "section": ".rdata",
+            "rva": "0x29a234a"
+          },
+          {
+            "file_offset": "0x29a1658",
+            "section": ".rdata",
+            "rva": "0x29a2458"
+          },
+          {
+            "file_offset": "0x29a1c5e",
+            "section": ".rdata",
+            "rva": "0x29a2a5e"
+          },
+          {
+            "file_offset": "0x29a1d6a",
+            "section": ".rdata",
+            "rva": "0x29a2b6a"
+          },
+          {
+            "file_offset": "0x29a1e28",
+            "section": ".rdata",
+            "rva": "0x29a2c28"
+          },
+          {
+            "file_offset": "0x29a1eee",
+            "section": ".rdata",
+            "rva": "0x29a2cee"
+          }
+        ]
+      }
+    },
+    "PostProcessUpscale": {
+      "utf-16-le": {
+        "count": 9,
+        "first_locations": [
+          {
+            "file_offset": "0x2ac6c2a",
+            "section": ".rdata",
+            "rva": "0x2ac7a2a"
+          },
+          {
+            "file_offset": "0x2ac78ca",
+            "section": ".rdata",
+            "rva": "0x2ac86ca"
+          },
+          {
+            "file_offset": "0x2ac7f82",
+            "section": ".rdata",
+            "rva": "0x2ac8d82"
+          },
+          {
+            "file_offset": "0x2ac8a12",
+            "section": ".rdata",
+            "rva": "0x2ac9812"
+          },
+          {
+            "file_offset": "0x2ac9352",
+            "section": ".rdata",
+            "rva": "0x2aca152"
+          },
+          {
+            "file_offset": "0x2aca15a",
+            "section": ".rdata",
+            "rva": "0x2acaf5a"
+          },
+          {
+            "file_offset": "0x2ad3fd0",
+            "section": ".rdata",
+            "rva": "0x2ad4dd0"
+          },
+          {
+            "file_offset": "0x2ad4002",
+            "section": ".rdata",
+            "rva": "0x2ad4e02"
+          }
+        ]
+      }
+    },
+    "FEngineLoop::Tick": {},
+    "UGameEngine::Tick": {},
+    "UEngine::Tick": {
+      "utf-16-le": {
+        "count": 8,
+        "first_locations": [
+          {
+            "file_offset": "0x2d4dea0",
+            "section": ".rdata",
+            "rva": "0x2d4eca0"
+          },
+          {
+            "file_offset": "0x2e63f90",
+            "section": ".rdata",
+            "rva": "0x2e64d90"
+          },
+          {
+            "file_offset": "0x2e64090",
+            "section": ".rdata",
+            "rva": "0x2e64e90"
+          },
+          {
+            "file_offset": "0x2e73e70",
+            "section": ".rdata",
+            "rva": "0x2e74c70"
+          },
+          {
+            "file_offset": "0x2e73fc0",
+            "section": ".rdata",
+            "rva": "0x2e74dc0"
+          },
+          {
+            "file_offset": "0x2e77610",
+            "section": ".rdata",
+            "rva": "0x2e78410"
+          },
+          {
+            "file_offset": "0x2e77710",
+            "section": ".rdata",
+            "rva": "0x2e78510"
+          },
+          {
+            "file_offset": "0x2e77810",
+            "section": ".rdata",
+            "rva": "0x2e78610"
+          }
+        ]
+      }
+    },
+    "causeevent": {
+      "utf-16-le": {
+        "count": 1,
+        "first_locations": [
+          {
+            "file_offset": "0x2d462f8",
+            "section": ".rdata",
+            "rva": "0x2d470f8"
+          }
+        ]
+      }
+    },
+    "DrawHUD": {
+      "ascii": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2ef5457",
+            "section": ".rdata",
+            "rva": "0x2ef6257"
+          },
+          {
+            "file_offset": "0x2ef66ff",
+            "section": ".rdata",
+            "rva": "0x2ef74ff"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2d6a898",
+            "section": ".rdata",
+            "rva": "0x2d6b698"
+          },
+          {
+            "file_offset": "0x2ef80e6",
+            "section": ".rdata",
+            "rva": "0x2ef8ee6"
+          }
+        ]
+      }
+    },
+    "SlateUI": {
+      "ascii": {
+        "count": 7,
+        "first_locations": [
+          {
+            "file_offset": "0x2bcda48",
+            "section": ".rdata",
+            "rva": "0x2bce848"
+          },
+          {
+            "file_offset": "0x2bcdb98",
+            "section": ".rdata",
+            "rva": "0x2bce998"
+          },
+          {
+            "file_offset": "0x2bcdc08",
+            "section": ".rdata",
+            "rva": "0x2bcea08"
+          },
+          {
+            "file_offset": "0x2bcf508",
+            "section": ".rdata",
+            "rva": "0x2bd0308"
+          },
+          {
+            "file_offset": "0x2bcf928",
+            "section": ".rdata",
+            "rva": "0x2bd0728"
+          },
+          {
+            "file_offset": "0x2bcf970",
+            "section": ".rdata",
+            "rva": "0x2bd0770"
+          },
+          {
+            "file_offset": "0x2bcf980",
+            "section": ".rdata",
+            "rva": "0x2bd0780"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2a0bb24",
+            "section": ".rdata",
+            "rva": "0x2a0c924"
+          },
+          {
+            "file_offset": "0x2bceb8c",
+            "section": ".rdata",
+            "rva": "0x2bcf98c"
+          }
+        ]
+      }
+    },
+    "++UE4+Release-4.18": {
+      "ascii": {
+        "count": 34,
+        "first_locations": [
+          {
+            "file_offset": "0x293c918",
+            "section": ".rdata",
+            "rva": "0x293d718"
+          },
+          {
+            "file_offset": "0x293cbc8",
+            "section": ".rdata",
+            "rva": "0x293d9c8"
+          },
+          {
+            "file_offset": "0x30476a9",
+            "section": ".rdata",
+            "rva": "0x30484a9"
+          },
+          {
+            "file_offset": "0x3047cf9",
+            "section": ".rdata",
+            "rva": "0x3048af9"
+          },
+          {
+            "file_offset": "0x3047ef9",
+            "section": ".rdata",
+            "rva": "0x3048cf9"
+          },
+          {
+            "file_offset": "0x3048199",
+            "section": ".rdata",
+            "rva": "0x3048f99"
+          },
+          {
+            "file_offset": "0x30482a9",
+            "section": ".rdata",
+            "rva": "0x30490a9"
+          },
+          {
+            "file_offset": "0x3048859",
+            "section": ".rdata",
+            "rva": "0x3049659"
+          }
+        ]
+      },
+      "utf-16-le": {
+        "count": 2,
+        "first_locations": [
+          {
+            "file_offset": "0x2934150",
+            "section": ".rdata",
+            "rva": "0x2934f50"
+          },
+          {
+            "file_offset": "0x2934238",
+            "section": ".rdata",
+            "rva": "0x2935038"
+          }
+        ]
+      }
+    },
+    "4.18.3": {}
+  },
+  "limits": "File-only inspection. String matches are not resolved functions, live addresses, or proof of executed rendering paths. Delay-loaded and dynamically resolved imports are not enumerated."
+}

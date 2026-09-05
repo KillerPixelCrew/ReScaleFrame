@@ -1,0 +1,16 @@
+/build/
+/target/
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
+*.pdb
+*.ilk
+*.log
+__pycache__/
+*.pyc
+/.local/
+/references/
+/vendor/
+/captures/
+/dumps/

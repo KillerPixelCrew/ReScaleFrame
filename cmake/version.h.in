@@ -1,0 +1,2 @@
+#pragma once
+#define RSF_VERSION_STRING "@PROJECT_VERSION@"
