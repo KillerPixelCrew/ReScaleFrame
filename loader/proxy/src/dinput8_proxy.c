@@ -145,7 +145,10 @@ static void start_observer(void)
     options.abi_version = RSF_OBSERVER_ABI_VERSION;
     /* 35 is DXGI_FORMAT_R16G16_UNORM, the format Unreal uses for scene velocity. */
     options.format = read_number("RSF_OBSERVE_FORMAT", 35);
-    options.minimum_width = read_number("RSF_OBSERVE_MIN_WIDTH", 1024);
+    /* 512 rather than 1024: at half screen percentage the velocity target lands at exactly 1024
+       wide, sitting on the old boundary, and a target that is filtered out looks identical to one
+       that was never allocated. */
+    options.minimum_width = read_number("RSF_OBSERVE_MIN_WIDTH", 512);
     options.capacity = read_number("RSF_OBSERVE_CAPACITY", 8);
     /* A range rather than the stock size: AC7 runs a vendor branch, and the first run showed no
        buffer of the stock 2640 bytes at all. Everything in range is retained per distinct size,
