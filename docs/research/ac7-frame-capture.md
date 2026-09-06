@@ -69,6 +69,46 @@ Resource 2111 at `R10G10B10A2_UNORM` matches `PF_A2B10G10R10`, UE4's GBuffer wor
 The resource identifiers are stable across captures, so these are allocated once during startup
 rather than per frame.
 
+## Frame timeline
+
+`tools/parse-capture.py --timeline` reconstructs the frame's passes without a replay device, by
+following render target bindings and counting the draws between them. The shipping build emits no
+debug markers, so a pass here means a run of draws sharing one output binding. 106 such passes do
+work in the sampled in-flight frame.
+
+The recognisable structure, with chunk indices from `ac7_frame52376`:
+
+| Chunk | Work | Output | Reading |
+| --- | --- | --- | --- |
+| 1317 | 42 draws | 1920x1080 `B8G8R8A8` #1208 | a target at a different resolution to everything else, role unresolved |
+| 2016 | 10 draws | six targets at 2048x1152 plus depth | the GBuffer base pass: scene colour `R11G11B10` #56121, normals `R10G10B10A2` #2111, four `B8G8R8A8` |
+| 2278 to 2413 | 10 + 7 draws | depth only, 1024x1024 and 2048x2048 | shadow map cascades |
+| **2518** | **10 draws** | **`R16G16_UNORM` #2163 plus depth** | **the velocity pass** |
+| 2651 | 39 draws | 2048x1152 `B8G8R8A8` #2178 plus depth | |
+| 3939 | 25 draws | scene colour plus depth | |
+| 4448 | 1 draw | 1x1 `R32G32_FLOAT` #1628 | eye adaptation, the exposure value a backend needs |
+| 4460 to 4650 | 1 draw each | 1024x576 down to 16x18 and back up | the bloom ladder, descending then ascending |
+| 4864 | 1 draw | #268 | the swap chain back buffer, named `Swap Chain Backbuffer` in the capture |
+
+Two things follow directly.
+
+**Velocity is its own pass, not GBuffer packed.** Ten draws render into #2163 with depth bound.
+Ten draws is a small number against the base pass, so only moving objects write velocity, which
+means camera motion has to be reconstructed from matrices rather than read from the target. That
+is the question `ue418-hook-map.md` raised about object motion coverage, and it is now answered
+for this frame.
+
+**The frame ends in a single draw into the back buffer.** Everything before it composites into
+intermediate targets. That single draw is the natural boundary for anything that needs the
+finished image.
+
+Unresolved: target #1208 at 1920x1080 takes 42 draws at the start of the captured frame while
+everything else runs at 2048x1152. A capture spans present to present, so work that the game
+performs at the end of its frame appears at the beginning of the capture, which fits Slate
+rendering the interface. That would make it the interface layer at display resolution, separate
+from the scene, which would matter a great deal for supplying a HUD-less image. It is a
+hypothesis: confirming it needs the shader resource bindings that a replay provides.
+
 ## What is established and what is not
 
 Established: the formats, sizes, bind flags, resource identities, and which scenes allocate

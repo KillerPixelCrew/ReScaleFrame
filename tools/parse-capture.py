@@ -47,6 +47,60 @@ def describe_binds(value):
     return [BIND_LABELS.get(part.strip(), part.strip()) for part in value.split("|")]
 
 
+DRAW_CHUNKS = ("Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced",
+               "DrawAuto", "DrawInstancedIndirect", "DrawIndexedInstancedIndirect")
+DISPATCH_CHUNKS = ("Dispatch", "DispatchIndirect")
+
+
+def resource_id(node, name):
+    child = node.find(f"./ResourceId[@name='{name}']")
+    return child.text if child is not None else None
+
+
+def build_timeline(root, textures):
+    """Reconstruct the frame's passes from render target bindings and the draws between them.
+
+    The shipping build emits no debug markers, so a pass is defined here as a run of draws
+    sharing one output binding. That is enough to separate the scene pass from the post chain
+    and to find the point where the swap chain back buffer is first drawn into.
+    """
+    views = {}
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name", "")
+        if name in ("ID3D11Device::CreateRenderTargetView",
+                    "ID3D11Device::CreateDepthStencilView",
+                    "ID3D11Device::CreateUnorderedAccessView"):
+            source = resource_id(chunk, "pResource")
+            view = resource_id(chunk, "pView")
+            if source and view:
+                views[view] = source
+
+    passes = []
+    current = None
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name", "")
+        short = name.split("::")[-1]
+        if name == "ID3D11DeviceContext::OMSetRenderTargets":
+            bound = [node.text for node in chunk.iter("ResourceId")
+                     if node.get("name") is None and node.text and node.text != "0"]
+            depth = resource_id(chunk, "pDepthStencilView")
+            current = {
+                "chunk": int(chunk.get("chunkIndex", 0)),
+                "targets": [textures.get(views.get(view), {"id": views.get(view)})
+                            for view in bound],
+                "depth": textures.get(views.get(depth)) if depth and depth != "0" else None,
+                "draws": 0,
+                "dispatches": 0,
+            }
+            passes.append(current)
+        elif current is not None:
+            if short in DRAW_CHUNKS:
+                current["draws"] += 1
+            elif short in DISPATCH_CHUNKS:
+                current["dispatches"] += 1
+    return [entry for entry in passes if entry["draws"] or entry["dispatches"]]
+
+
 def parse(path):
     tree = ElementTree.parse(path)
     root = tree.getroot()
@@ -86,7 +140,37 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture_xml", type=Path)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--timeline", action="store_true",
+                        help="print the frame's passes in order instead of the target summary")
     args = parser.parse_args()
+
+    if args.timeline:
+        tree = ElementTree.parse(args.capture_xml)
+        root = tree.getroot()
+        _, textures, _, _ = parse(args.capture_xml)
+        passes = build_timeline(root, textures)
+        print(f"{len(passes)} passes with work\n")
+        for entry in passes:
+            described = []
+            for target in entry["targets"]:
+                if target.get("width"):
+                    described.append(f"{target['width']}x{target['height']} "
+                                     f"{(target.get('format') or '').replace('DXGI_FORMAT_', '')}"
+                                     f" #{target['id']}")
+                else:
+                    described.append(f"#{target.get('id')}")
+            depth = entry["depth"]
+            depth_text = ""
+            if depth and depth.get("width"):
+                depth_text = (f"  depth {depth['width']}x{depth['height']} "
+                              f"{(depth.get('format') or '').replace('DXGI_FORMAT_', '')}")
+            work = f"{entry['draws']} draws"
+            if entry["dispatches"]:
+                work += f", {entry['dispatches']} dispatches"
+            print(f"  [{entry['chunk']:>5}] {work:<22} -> {', '.join(described) or 'none'}{depth_text}")
+        if args.output:
+            args.output.write_text(json.dumps(passes, indent=2) + "\n", encoding="utf-8")
+        return
 
     thumbnail, textures, order, counts = parse(args.capture_xml)
     if thumbnail is not None:
