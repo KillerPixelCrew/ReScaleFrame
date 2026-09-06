@@ -238,6 +238,10 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
+    /* What the tap judges sizes against. The presented size, not a size derived from the bound
+       set: deriving it there made the render size an exact requirement and nothing ever matched. */
+    tap.output_width = (uint32_t)output_width;
+    tap.output_height = (uint32_t)output_height;
 
     tapped = rsf_frame_tap_install(bridge.context, &tap);
     if (tapped != RSF_FRAME_TAP_OK) {
@@ -262,6 +266,9 @@ void rsf_bridge_report(void)
         say("frame tap: %lu calls seen, %lu changed a binding, %lu passes matched, render %ux%u",
             (unsigned long)tap.calls_seen, (unsigned long)tap.calls_inspected,
             (unsigned long)tap.passes_seen, tap.render_width, tap.render_height);
+        say("roles recognised: motion %lu, depth %lu, exposure %lu (a pass needs all three at once)",
+            (unsigned long)tap.motion_seen, (unsigned long)tap.depth_seen,
+            (unsigned long)tap.exposure_seen);
     }
 
     say("bridge: %lu passes, %lu view reads failed, %lu not the main view, %lu without jitter, "

@@ -73,6 +73,9 @@ struct Tap {
     // different problems with the same symptom.
     std::atomic<uint32_t> calls_seen{0};
     std::atomic<uint32_t> calls_inspected{0};
+    std::atomic<uint32_t> motion_seen{0};
+    std::atomic<uint32_t> depth_seen{0};
+    std::atomic<uint32_t> exposure_seen{0};
     std::atomic<uint32_t> passes{0};
     std::atomic<uint32_t> render_width{0};
     std::atomic<uint32_t> render_height{0};
@@ -216,28 +219,15 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     }
     self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
 
-    // Classification wants the frame's shape, and it comes from the bound set for the same reason
-    // as before: this module knows nothing about the swap chain.
-    uint32_t largest_width = 0;
-    uint32_t largest_height = 0;
-    for (const Tap::Slot& slot : self.slots) {
-        if (slot.texture && slot.description.Width > largest_width) {
-            largest_width = slot.description.Width;
-            largest_height = slot.description.Height;
-        }
-    }
-
-    // Classification wants to know what the frame's shape is, and this module deliberately knows
-    // nothing about the swap chain, so the shape comes from the call itself: every input in this
-    // set except the 1x1 exposure target is at render resolution, so the largest bound texture is
-    // that resolution. Output resolution is reported as the same value because none is available
-    // here, not as a claim that the two are equal.
+    // Judged against the presented size the caller supplied, with the render size left unknown so
+    // the classifier accepts anything from half of it upwards that keeps the frame's aspect. The
+    // first version took the largest bound texture as the render size, which makes it an exact
+    // requirement: one full resolution texture bound alongside the half resolution scene targets
+    // then rejects every one of them, and nothing ever matched.
     rsf_frame_shape shape{};
     shape.struct_size = sizeof(shape);
-    shape.output_width = largest_width;
-    shape.output_height = largest_height;
-    shape.render_width = largest_width;
-    shape.render_height = largest_height;
+    shape.output_width = self.options.output_width;
+    shape.output_height = self.options.output_height;
 
     ID3D11Texture2D* scene_color = nullptr;
     ID3D11Texture2D* history = nullptr;
@@ -267,10 +257,13 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
             motion = entry.texture;
             motion_width = entry.description.Width;
             motion_height = entry.description.Height;
+            self.motion_seen.fetch_add(1, std::memory_order_relaxed);
         } else if (role == RSF_ROLE_DEPTH && !depth) {
             depth = entry.texture;
+            self.depth_seen.fetch_add(1, std::memory_order_relaxed);
         } else if (role == RSF_ROLE_EXPOSURE && !exposure) {
             exposure = entry.texture;
+            self.exposure_seen.fetch_add(1, std::memory_order_relaxed);
         } else if (role == RSF_ROLE_SCENE_COLOR && !history) {
             // The second target with scene colour's shape. Which of the two holds the accumulated
             // history is not decidable from a descriptor, so this is the remaining candidate and
@@ -503,6 +496,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->installed = self.installed ? 1u : 0u;
     status->calls_seen = self.calls_seen.load(std::memory_order_relaxed);
     status->calls_inspected = self.calls_inspected.load(std::memory_order_relaxed);
+    status->motion_seen = self.motion_seen.load(std::memory_order_relaxed);
+    status->depth_seen = self.depth_seen.load(std::memory_order_relaxed);
+    status->exposure_seen = self.exposure_seen.load(std::memory_order_relaxed);
     status->passes_seen = self.passes.load(std::memory_order_relaxed);
     status->render_width = self.render_width.load(std::memory_order_relaxed);
     status->render_height = self.render_height.load(std::memory_order_relaxed);

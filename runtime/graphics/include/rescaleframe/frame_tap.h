@@ -30,7 +30,7 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 1u
+#define RSF_FRAME_TAP_ABI_VERSION 2u
 
 typedef int32_t rsf_frame_tap_result;
 #define RSF_FRAME_TAP_OK ((rsf_frame_tap_result)0)
@@ -101,6 +101,19 @@ typedef struct rsf_frame_tap_options {
        a parameter because which buffer carries view data belongs to the game and its engine
        version, not to this module. */
     uint32_t view_constant_bytes;
+    /* The presented resolution, which is what sizes are judged against.
+
+       Deriving it from the bound set instead does not work, and failing to do so is what made the
+       first version of this recognise nothing at all. Taking the largest bound texture as the
+       render size makes it an exact requirement, so a single full resolution texture bound
+       alongside the half resolution scene targets rejects every one of them. Judging against the
+       presented size lets the classifier accept anything from half of it upwards that keeps the
+       frame's aspect ratio, which is what a scaled render target is.
+
+       Zero leaves this module unable to judge a size, and the classifier refuses rather than
+       guessing, so a caller that does not know the presented size yet will see no passes. */
+    uint32_t output_width;
+    uint32_t output_height;
 } rsf_frame_tap_options;
 
 typedef struct rsf_frame_tap_status {
@@ -116,6 +129,12 @@ typedef struct rsf_frame_tap_status {
     uint32_t calls_seen;
     uint32_t calls_inspected;
     uint32_t passes_seen;
+    /* How many times each role has been recognised in a binding. When no pass ever matches, these
+       say which of the three the signature is waiting for, which is otherwise indistinguishable
+       from the hook not working at all. */
+    uint32_t motion_seen;
+    uint32_t depth_seen;
+    uint32_t exposure_seen;
     /* From the most recent qualifying pass. Zero until one is seen. */
     uint32_t render_width;
     uint32_t render_height;
