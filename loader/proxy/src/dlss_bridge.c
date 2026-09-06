@@ -259,9 +259,9 @@ void rsf_bridge_report(void)
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
-        say("frame tap: %lu calls inspected, %lu passes matched, render %ux%u",
-            (unsigned long)tap.calls_inspected, (unsigned long)tap.passes_seen, tap.render_width,
-            tap.render_height);
+        say("frame tap: %lu calls seen, %lu changed a binding, %lu passes matched, render %ux%u",
+            (unsigned long)tap.calls_seen, (unsigned long)tap.calls_inspected,
+            (unsigned long)tap.passes_seen, tap.render_width, tap.render_height);
     }
 
     say("bridge: %lu passes, %lu view reads failed, %lu not the main view, %lu without jitter, "

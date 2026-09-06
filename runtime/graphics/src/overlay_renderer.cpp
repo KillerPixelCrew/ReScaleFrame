@@ -107,6 +107,10 @@ struct Texture {
 // Everything this pass touches on the context. The game did not ask for any of it to change, and
 // what is left changed corrupts the game's own rendering after we return, which presents as the
 // game breaking rather than as the overlay breaking.
+//
+// The list matches what the draw below sets, one for one, by reading. That is the only check it
+// has had: none of this has been run against a device, so it is not evidence that a game renders
+// correctly after the overlay returns.
 struct SavedState {
     ID3D11InputLayout* input_layout;
     D3D11_PRIMITIVE_TOPOLOGY topology;
@@ -553,11 +557,25 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
 
     // The overlay sits on top of a finished image. It reads no depth and writes none, so whatever
     // depth buffer the game has is neither consulted nor damaged.
+    //
+    // The stencil fields are filled in even though stencil is off. Zero is not a member of
+    // D3D11_STENCIL_OP or D3D11_COMPARISON_FUNC, and D3D11 range checks the descriptor it is
+    // handed: there are message ids for an invalid FrontFace.StencilFailOp and friends, and the
+    // CD3D11_DEPTH_STENCIL_DESC default in d3d11.h writes all of these with StencilEnable FALSE.
+    // Whether the runtime really rejects a zeroed pair here could not be tried without a device,
+    // so these are set to the documented defaults, which is correct either way.
+    const D3D11_DEPTH_STENCILOP_DESC stencil_unused = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP,
+                                                       D3D11_STENCIL_OP_KEEP,
+                                                       D3D11_COMPARISON_ALWAYS};
     D3D11_DEPTH_STENCIL_DESC depth_stencil{};
     depth_stencil.DepthEnable = FALSE;
     depth_stencil.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
     depth_stencil.DepthFunc = D3D11_COMPARISON_ALWAYS;
     depth_stencil.StencilEnable = FALSE;
+    depth_stencil.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
+    depth_stencil.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
+    depth_stencil.FrontFace = stencil_unused;
+    depth_stencil.BackFace = stencil_unused;
     if (FAILED(device->CreateDepthStencilState(&depth_stencil, &renderer->depth_stencil)) ||
         !renderer->depth_stencil) {
         say(renderer, "overlay depth stencil state could not be created");

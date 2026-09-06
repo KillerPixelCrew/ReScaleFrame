@@ -109,6 +109,11 @@ typedef struct rsf_frame_tap_status {
     /* Calls that reached the hook with enough views bound to be worth examining. Calls rejected by
        the view count early out are not counted, since counting them would put an atomic write on
        the game's hottest binding path for nothing. */
+    /* Every intercepted binding call, and the subset that actually changed what was bound.
+       Separating them matters: a zero in the first says the hook never ran, a zero in the second
+       with a non-zero first says it ran and never saw a change, and those are different faults
+       with the same symptom of nothing happening. */
+    uint32_t calls_seen;
     uint32_t calls_inspected;
     uint32_t passes_seen;
     /* From the most recent qualifying pass. Zero until one is seen. */

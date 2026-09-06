@@ -44,8 +44,34 @@ struct Tap {
     // survives being unbound before a callback reads it.
     ID3D11Buffer* view_constants = nullptr;
 
+    // What the pixel stage currently has bound, as far as this module has seen it.
+    //
+    // The set does not arrive in one call. Unreal's D3D11 backend binds shader resources a slot at
+    // a time, so every call carries one view and a rule expecting four in one call never fires. The
+    // resources are still bound together at the draw, they just got there separately, so the state
+    // has to be shadowed across calls and the signature looked for in the shadow.
+    //
+    // Nothing here is retained. A view the runtime has bound is kept alive by the runtime, and this
+    // mirrors exactly what is bound, so an entry is live for as long as it is in the table. Slots
+    // are cleared when unbound, which is what keeps that true.
+    struct Slot {
+        ID3D11ShaderResourceView* view = nullptr;
+        ID3D11Texture2D* texture = nullptr;
+        D3D11_TEXTURE2D_DESC description{};
+        rsf_resource_role role = RSF_ROLE_UNKNOWN;
+    };
+    Slot slots[max_examined_views];
+    // Edge trigger. The signature stays complete across the draws that use it, and firing per call
+    // would run a backend several times on one frame.
+    bool signature_complete = false;
+
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
+    //
+    // `calls_seen` counts every call and `calls_inspected` only those that changed a slot. The pair
+    // separates a hook that never runs from one that runs and never recognises anything, which are
+    // different problems with the same symptom.
+    std::atomic<uint32_t> calls_seen{0};
     std::atomic<uint32_t> calls_inspected{0};
     std::atomic<uint32_t> passes{0};
     std::atomic<uint32_t> render_width{0};
@@ -149,33 +175,55 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     }
     forward(context, start_slot, count, views);
 
-    // The whole point of the early out. Five views make the set, so anything binding fewer than
-    // four cannot be it, and the great majority of bindings in the frame are one or two.
-    if (inside_hook || !views || count < 4) {
+    if (inside_hook) {
         return;
     }
     const ReentryGuard guard;
-    self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
+    self.calls_seen.fetch_add(1, std::memory_order_relaxed);
 
-    const UINT examined = count < max_examined_views ? count : max_examined_views;
-    ID3D11Texture2D* textures[max_examined_views] = {};
-    D3D11_TEXTURE2D_DESC descriptions[max_examined_views] = {};
-    uint32_t largest_width = 0;
-    uint32_t largest_height = 0;
-
-    for (UINT index = 0; index < examined; ++index) {
-        if (!views[index]) {
+    // Update the shadow of what is bound. Only a slot whose view actually changed costs anything:
+    // a pointer compare rejects the rebinding of the same texture, which is most of what a frame
+    // does, and only a genuine change pays for the resource query and the classification.
+    bool changed = false;
+    for (UINT index = 0; index < count; ++index) {
+        const UINT slot_index = start_slot + index;
+        if (slot_index >= max_examined_views) {
+            break;
+        }
+        ID3D11ShaderResourceView* view = views ? views[index] : nullptr;
+        Tap::Slot& slot = self.slots[slot_index];
+        if (slot.view == view) {
             continue;
         }
-        ID3D11Texture2D* texture = texture_behind(views[index]);
-        if (!texture) {
+        changed = true;
+
+        if (slot.texture) {
+            slot.texture->Release();
+        }
+        slot = Tap::Slot{};
+        slot.view = view;
+        if (!view) {
+            continue;  // unbound, and the slot is now empty, which is what keeps the shadow honest
+        }
+        slot.texture = texture_behind(view);
+        if (!slot.texture) {
             continue;  // a buffer or a 3D texture, neither of which is in this set
         }
-        texture->GetDesc(&descriptions[index]);
-        textures[index] = texture;
-        if (descriptions[index].Width > largest_width) {
-            largest_width = descriptions[index].Width;
-            largest_height = descriptions[index].Height;
+        slot.texture->GetDesc(&slot.description);
+    }
+    if (!changed) {
+        return;
+    }
+    self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
+
+    // Classification wants the frame's shape, and it comes from the bound set for the same reason
+    // as before: this module knows nothing about the swap chain.
+    uint32_t largest_width = 0;
+    uint32_t largest_height = 0;
+    for (const Tap::Slot& slot : self.slots) {
+        if (slot.texture && slot.description.Width > largest_width) {
+            largest_width = slot.description.Width;
+            largest_height = slot.description.Height;
         }
     }
 
@@ -201,38 +249,45 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     uint32_t motion_width = 0;
     uint32_t motion_height = 0;
 
-    for (UINT index = 0; index < examined; ++index) {
-        if (!textures[index]) {
+    for (UINT index = 0; index < max_examined_views; ++index) {
+        Tap::Slot& entry = self.slots[index];
+        if (!entry.texture) {
             continue;
         }
+        entry.role = role_of(entry.description, shape);
         // Slot 0 is taken to be scene colour, which is what Unreal's post process input convention
         // gives, and several full resolution targets in this frame share its descriptor so nothing
         // in the binding distinguishes it. This cannot be checked without the running game.
-        if (start_slot + index == 0) {
-            scene_color = textures[index];
+        if (index == 0) {
+            scene_color = entry.texture;
             continue;
         }
-        const rsf_resource_role role = role_of(descriptions[index], shape);
+        const rsf_resource_role role = entry.role;
         if (role == RSF_ROLE_MOTION && !motion) {
-            motion = textures[index];
-            motion_width = descriptions[index].Width;
-            motion_height = descriptions[index].Height;
+            motion = entry.texture;
+            motion_width = entry.description.Width;
+            motion_height = entry.description.Height;
         } else if (role == RSF_ROLE_DEPTH && !depth) {
-            depth = textures[index];
+            depth = entry.texture;
         } else if (role == RSF_ROLE_EXPOSURE && !exposure) {
-            exposure = textures[index];
+            exposure = entry.texture;
         } else if (role == RSF_ROLE_SCENE_COLOR && !history) {
             // The second target with scene colour's shape. Which of the two holds the accumulated
             // history is not decidable from a descriptor, so this is the remaining candidate and
             // not a demonstrated history buffer.
-            history = textures[index];
+            history = entry.texture;
         }
     }
 
-    // Velocity, a 1x1 target and depth in one call is the signature. Format rules for each live in
-    // resource_roles.cpp so that this module and the classifier cannot drift apart.
+    // Velocity, a 1x1 target and depth bound at the same time is the signature. Format rules for
+    // each live in resource_roles.cpp so that this module and the classifier cannot drift apart.
+    //
+    // Edge triggered: the set stays bound across the draws that use it, and firing on every call
+    // while it does would run a backend several times over one frame.
     const bool qualifies = motion && depth && exposure;
-    if (qualifies) {
+    const bool was_complete = self.signature_complete;
+    self.signature_complete = qualifies;
+    if (qualifies && !was_complete) {
         const uint32_t frame_index = self.passes.fetch_add(1, std::memory_order_relaxed) + 1;
 
         rsf_frame_tap_pass pass{};
@@ -294,13 +349,10 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
         }
     }
 
-    // Every reference this call obtained is dropped here, qualifying or not. The textures handed to
-    // the callback were borrowed for its duration and are not retained past it.
-    for (UINT index = 0; index < examined; ++index) {
-        if (textures[index]) {
-            textures[index]->Release();
-        }
-    }
+    // Nothing is released here. The shadow now owns one reference per occupied slot, taken when the
+    // slot changed and dropped when it changes again or when the tap is uninstalled. Releasing per
+    // call was right while the set had to arrive in one call, and would be a use after free now
+    // that the entries have to survive until the slot is rebound.
 }
 
 void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* context, UINT start_slot,
@@ -427,6 +479,17 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     if (constants) {
         constants->Release();
     }
+
+    // The shadow holds one reference per occupied slot. Released after the vtable is restored, so a
+    // hook still in flight cannot find a slot emptied underneath it, which narrows the same window
+    // uninstall already has rather than opening a new one.
+    for (Tap::Slot& slot : self.slots) {
+        if (slot.texture) {
+            slot.texture->Release();
+        }
+        slot = Tap::Slot{};
+    }
+    self.signature_complete = false;
     return RSF_FRAME_TAP_OK;
 }
 
@@ -438,6 +501,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     Tap& self = tap();
     std::lock_guard<std::mutex> lock(self.guard);
     status->installed = self.installed ? 1u : 0u;
+    status->calls_seen = self.calls_seen.load(std::memory_order_relaxed);
     status->calls_inspected = self.calls_inspected.load(std::memory_order_relaxed);
     status->passes_seen = self.passes.load(std::memory_order_relaxed);
     status->render_width = self.render_width.load(std::memory_order_relaxed);
