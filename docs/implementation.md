@@ -52,6 +52,16 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       dispatch. Cross-built and tested under Wine on DXVK against values encoded with the engine's
       own constants, including the sentinel and an axis flip. Wired into the F10 dump so it can be
       checked against the game's buffer, which has not been done yet.
+- [x] View uniform buffer reader in the AC7 plugin: matrices, camera basis, projection, sizes, and
+      `ClipToPrevClip` read rather than composed, with `PrevClipToClip` inverted from it. Refuses
+      rather than guesses, by checking the relationships that hold in a view buffer and nowhere
+      else. Run against the captured buffers it recognises all 50 as view buffers, accepts 10 as
+      perspective, and marks the 1016x1016 and 128x93 ones as secondary views. Jitter is not read:
+      its offset is still unknown, see below.
+- [ ] Locate `TemporalAAJitter` in the buffer. Every captured buffer predates the jitter patch, so
+      the field is zero in all of them and cannot be told from any other zero. A capture taken with
+      the patch on identifies it as the region that changes every frame and stays sub-pixel, which
+      `tools/analyze-view-buffers.py` already looks for.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

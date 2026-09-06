@@ -28,6 +28,10 @@ add_executable(rsf_texture_dump texture_dump.cpp)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(rsf_ac7_view_test ac7_view.cpp)
+target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
+add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
+
 add_executable(rsf_motion_decode motion_decode.cpp)
 target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_decode COMMAND rsf_motion_decode)

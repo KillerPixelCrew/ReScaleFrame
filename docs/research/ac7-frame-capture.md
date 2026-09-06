@@ -489,6 +489,24 @@ describe a view the player is not looking through.
 The test is in the buffer: the main view is the one whose `ViewSizeAndInvSize` matches
 `BufferSizeAndInvSize`. Anything selecting a view buffer at runtime has to apply it.
 
+`games/ac7` implements the reader, and it refuses rather than guesses: at runtime nothing labels a
+constant buffer, so the same relationships that established the offsets are what decide whether a
+buffer is the view buffer at all. Run over the captured set it recognises all fifty as view
+buffers, accepts ten as perspective views, refuses the rest as orthographic, which is what the
+interface renders through, and marks the 1016x1016 and 128x93 ones as secondary. That agrees with
+the Python analysis on the same data, which is the point of having both.
+
+### The jitter is not located yet
+
+Every buffer captured so far predates the jitter patch, so `TemporalAAJitter` is zero in all of
+them and cannot be told apart from any other zero region. Scanning for a sixteen byte region that
+is zero everywhere finds five candidates and no way to choose between them.
+
+The method that does work needs a capture with the patch on, and already exists:
+`tools/analyze-view-buffers.py` looks for slots that change every frame and stay sub-pixel, which
+is a description only the jitter fits. One run of the game with `RSF_ENABLE_JITTER=1` and F10 in
+flight settles it.
+
 ### The motion vectors need a pass after all, for a different reason
 
 Earlier this document concluded that DLSS needs no composition pass for AC7, because
