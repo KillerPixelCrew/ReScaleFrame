@@ -33,15 +33,11 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       to pixels, and the jitter sequence length a render scale calls for. Unit-tested against the
       offsets and the largest motion recorded from the running game. The vertical sign follows
       engine source and has not been checked against a rendered result.
-- [ ] Jitter sequence length set in the game alongside the render scale. Written and cross-built,
-      refused rather than guessed when the object does not hold the engine default. Not yet run in
-      the game.
-- [ ] DLSS through Streamline: load, device handover, support query, render size planning, resource
-      tags and per frame constants, behind the C ABI in `runtime/backends/dlss`. Cross-built
-      against the real SDK headers with warnings as errors and contract-tested. Runs under Wine in
-      the game's Proton prefix: DLSS reports supported on the RTX 4070 Laptop and returns 1024x576
-      for a 2048x1152 output at performance quality. Initialisation and queries only, no upscaled
-      pixel yet, and nothing built with MSVC.
+- [x] Jitter sequence length set in the game alongside the render scale, and the render scale holds
+      itself: loading a mission puts the game's own screen percentage back, so it is re-applied on a
+      timer, which does nothing while the scale is already ours. Game-tested through a full mission.
+- [x] DLSS through Streamline: load, device handover, support query, render size planning, resource
+      tags and per frame constants, behind the C ABI in `runtime/backends/dlss`. Runs in the game.
 - [x] View uniform buffer mapped, including `ClipToPrevClip`, the camera basis and the projection.
       Offsets are checked by an identity that ties five of them together rather than fitted to one
       buffer, and `tools/verify-view-layout.py` re-runs that check over the captured buffers: 11
@@ -50,8 +46,9 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       camera motion: they take a scale factor and Unreal's storage carries a bias. A D3D11 compute
       pass with the encoding as parameters, saving and restoring the compute state around its
       dispatch. Cross-built and tested under Wine on DXVK against values encoded with the engine's
-      own constants, including the sentinel and an axis flip. Wired into the F10 dump so it can be
-      checked against the game's buffer, which has not been done yet.
+      own constants, including the sentinel and an axis flip. Checked against the game's own
+      velocity target too: the raw dump decoded by the reference path and the target this pass
+      produced report the same range and the same unwritten fraction.
 - [x] View uniform buffer reader in the AC7 plugin: matrices, camera basis, projection, sizes, and
       `ClipToPrevClip` read rather than composed, with `PrevClipToClip` inverted from it. Refuses
       rather than guesses, by checking the relationships that hold in a view buffer and nowhere
@@ -75,11 +72,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       smearing, which is the first real test of the decoded velocity and of `ClipToPrevClip`.
       What is not done: the result is drawn over the game's frame rather than reinserted into its
       pipeline, so it is ungraded and carries no interface. That is the remaining structural piece.
-- [ ] Reinsert the result. A debug view exists behind F7: a full screen draw over the back buffer
-      from inside the Present hook, with a rough tonemap so linear scene colour is viewable. It
-      shows the reconstruction moving, which is the only way ghosting and motion vector sign can be
-      judged. Cross-built and deployed, not yet run in the game. It is not the real path, which
-      reinserts the reconstructed scene before the game's own composite so the interface stays.
+- [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
+      the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
+      viewable. It is what showed the reconstruction moving, which is the only way ghosting and a
+      motion vector's sign can be judged. It is not the real path, which reinserts the reconstructed
+      scene before the game's own composite so the grade and the interface survive. That is the
+      remaining structural piece and the reason the picture is ungraded and has no HUD.
 - [ ] In-game overlay. The egui crate builds as a Windows DLL exporting its five entry points, the
       D3D11 renderer and the window procedure hook compile, and the observer now offers the Present
       callback they need. Nothing loads or draws them yet.

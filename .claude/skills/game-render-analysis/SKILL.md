@@ -172,6 +172,46 @@ and stay quiet while nothing moves.
 Edge trigger on the condition, not on the identity of what satisfied it. Keying on the textures
 involved fired once for a whole session, because a game binds the same targets every frame.
 
+## Where to take the colour, and when
+
+The pass that identifies the resources is not necessarily the pass whose contents you want. In this
+game the set that binds colour, depth and velocity together is the lighting, and more than twenty
+draws afterwards add the sky, the clouds and the translucency to that same colour target. Taking the
+colour when the set is recognised produced a reconstruction of a world with a black sky.
+
+Preferring a later pass is often not available: those later draws bind neither velocity nor depth,
+so exactly one set qualifies in a frame. A per frame counter is what establishes that, and it is
+worth having before designing around a choice that does not exist.
+
+What works instead is to separate identification from collection. Recognise the resources where they
+are named together, hold them with a reference rather than borrowing them, and evaluate at Present.
+Read the capture's action list first to confirm the premise that makes it safe: that none of the
+inputs is written again once the colour is finished, so what is in them at Present is the finished
+frame. In this game the post chain only reads them, so it holds.
+
+## Reading a replay to answer a runtime question
+
+A capture replay answers "where does this get written" faster than any amount of hooking. Export the
+action list and the texture table, join them, and collapse the draws into runs by render target: the
+frame's structure falls out in twenty lines of output. Resource identifiers do not exist at runtime,
+but formats and sizes do, so a target identified in a replay can be recognised live by its shape.
+
+Expect no pass names. A shipping build strips the annotations, so structure and formats are all
+there is, and they are enough.
+
+## What resets when a level loads
+
+A console variable set from outside is not a setting. Loading a level re-applies the game's own
+graphics options, and the render scale goes back with them. A backend then reconstructs from the
+presented size, which is antialiasing rather than upscaling, and the result looks like a success
+because it is sharp precisely to the extent that nothing was reconstructed from less. A whole
+mission was watched that way.
+
+Re-apply on a timer rather than on a key, and make it idempotent: a setter that writes only where it
+finds the value it expects does nothing while the setting is already yours and restores it the
+moment the game takes it back. Report the case in the status line too, by comparing the render size
+against the presented size, because it is not visible in the picture.
+
 ## Seeing it, not just counting it
 
 A reconstruction that only writes into a texture cannot be judged. Counters say it ran and a dumped
@@ -209,6 +249,12 @@ Know which of the two a given scene is testing.
 - **Reading a backend's log for the reason.** Two dead ends were one line each in a vendor log: a
   required preference flag not set, and an environment missing an entry point. Read the whole log
   before theorising about the code.
+- **Trusting a texture you did not clear.** A reconstruction does not promise to write every pixel
+  of its output. The unwritten part holds whatever was in that memory and reads as blocks, which
+  look like an artifact of the reconstruction rather than the absence of one. Clear it once.
+- **Taking a still scene as proof.** A camera orbiting a static world exercises the reprojection
+  matrices thoroughly and object motion not at all. Know which one a scene tests before believing
+  what it shows.
 
 ## Checking the target SDK first
 
