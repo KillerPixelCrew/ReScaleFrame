@@ -48,6 +48,12 @@ rsf_dlss_setup make_setup(const char* interposer)
     setup.struct_size = sizeof(setup);
     setup.abi_version = RSF_DLSS_ABI_VERSION;
     setup.interposer_path_utf8 = interposer;
+    // Ace Combat 7 is a UE4.18 title and this is the identity NGX is given for it. Without an
+    // identity the DLSS plugin loads and then refuses, which is a failure that looks like
+    // unsupported hardware and is not.
+    setup.engine = RSF_DLSS_ENGINE_UNREAL;
+    setup.engine_version_utf8 = "4.18";
+    setup.project_id_utf8 = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
     setup.log = collect;
     return setup;
 }

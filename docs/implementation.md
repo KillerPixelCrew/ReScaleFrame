@@ -38,9 +38,10 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       the game.
 - [ ] DLSS through Streamline: load, device handover, support query, render size planning, resource
       tags and per frame constants, behind the C ABI in `runtime/backends/dlss`. Cross-built
-      against the real SDK headers with warnings as errors and contract-tested; Streamline
-      initialises under Wine and accepts a device, but NVAPI does not, so `sl.dlss` is dropped as
-      unsupported and nothing past the support query has run. No upscaled pixel yet.
+      against the real SDK headers with warnings as errors and contract-tested. Under Wine in the
+      game's Proton prefix it reaches NGX, loads `nvngx_dlss.dll` 310.7.0 and loads the DLSS plugin
+      for this adapter, then stops at `NvAPI_D3D11_CreateCubinComputeShaderExV2`, which DXVK-NVAPI
+      does not implement. No upscaled pixel yet.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

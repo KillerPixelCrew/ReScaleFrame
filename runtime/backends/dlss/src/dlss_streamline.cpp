@@ -269,8 +269,24 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     if (widen(setup->log_directory_utf8, self.log_directory)) {
         preferences.pathToLogsAndData = self.log_directory.c_str();
     }
+    // NGX will not start without an identity, and DLSS is an NGX feature, so getting this wrong
+    // costs the whole thing: the plugin loads and then reports "Missing NGX context". An injected
+    // integration has no application id of its own, since that belongs to the game's publisher, so
+    // the engine route is the one available. For a UE4 title it is also just true.
     preferences.applicationId = setup->application_id;
-    preferences.engine = sl::EngineType::eCustom;
+    switch (setup->engine) {
+    case RSF_DLSS_ENGINE_UNREAL:
+        preferences.engine = sl::EngineType::eUnreal;
+        break;
+    case RSF_DLSS_ENGINE_UNITY:
+        preferences.engine = sl::EngineType::eUnity;
+        break;
+    default:
+        preferences.engine = sl::EngineType::eCustom;
+        break;
+    }
+    preferences.engineVersion = setup->engine_version_utf8;
+    preferences.projectId = setup->project_id_utf8;
 
     const sl::Result result = self.sl.init(preferences, sl::kSDKVersion);
     if (result != sl::Result::eOk) {

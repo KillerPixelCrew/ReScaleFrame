@@ -24,7 +24,15 @@
 extern "C" {
 #endif
 
-#define RSF_DLSS_ABI_VERSION 1u
+#define RSF_DLSS_ABI_VERSION 2u
+
+/* Which engine the host is. Streamline wants an identity before it will start NGX, and NGX is what
+   DLSS runs on, so this is not optional decoration: with none of it supplied the DLSS plugin loads
+   and then refuses with "Missing NGX context". */
+typedef uint32_t rsf_dlss_engine;
+#define RSF_DLSS_ENGINE_CUSTOM ((rsf_dlss_engine)0)
+#define RSF_DLSS_ENGINE_UNREAL ((rsf_dlss_engine)1)
+#define RSF_DLSS_ENGINE_UNITY ((rsf_dlss_engine)2)
 
 typedef int32_t rsf_dlss_result;
 #define RSF_DLSS_OK ((rsf_dlss_result)0)
@@ -62,8 +70,17 @@ typedef struct rsf_dlss_setup {
     const char* plugin_directory_utf8;
     /* Optional. Where Streamline writes its own log. Null disables that. */
     const char* log_directory_utf8;
-    /* Optional application id issued by NVIDIA. Zero identifies as a custom engine instead. */
+    /* Application id issued by NVIDIA, when there is one. Zero means identify by engine instead,
+       which is the route an injected integration has: the id belongs to the game's publisher, not
+       to us. */
     uint32_t application_id;
+    /* Engine identity, used when `application_id` is zero. Streamline needs one or the other
+       before NGX will start, and for a UE4 title `RSF_DLSS_ENGINE_UNREAL` is simply true. */
+    rsf_dlss_engine engine;
+    /* Engine version, e.g. "4.18". Required alongside the engine type. */
+    const char* engine_version_utf8;
+    /* GUID identifying this project, e.g. "a3ed1f08-3542-4698-b85c-e1a9908e861a". */
+    const char* project_id_utf8;
     /* Refuse to load an interposer without a valid embedded signature. Recommended: this code
        loads a DLL into a game process, and the path comes from configuration. */
     uint32_t require_signature;

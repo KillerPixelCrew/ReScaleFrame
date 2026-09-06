@@ -75,13 +75,55 @@ asks for at a quality level, the five resource tags, and the per frame constants
 carry the pair that makes AC7's motion buffer usable directly, `cameraMotionIncluded` false with
 `motionVectorsInvalidValue` at the clear value, which is why AC7 needs no composition pass here.
 
-What is not settled: none of it has produced an upscaled pixel. Streamline initialises under Wine
-on this machine and accepts the device, but NVAPI does not initialise there, so NGX cannot report
-its requirements and `sl.dlss` is dropped as unsupported before it ever loads. That is a property
-of the environment rather than of this code, and it means the support query and everything past it
-need Windows, or a full Proton launch, to be answered. The matrices are the other open piece: they
-come from the view uniform buffer, which the loader reads but whose layout is only partly mapped
-for this engine branch.
+### How far this gets under Wine, and where it stops
+
+Run inside the game's own Proton prefix, with DXVK and DXVK-NVAPI selected:
+
+```bash
+WINEPREFIX=~/.local/share/Steam/steamapps/compatdata/502500/pfx \
+WINEDLLOVERRIDES="d3d11,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n" \
+RSF_STREAMLINE_BIN='Z:\...\vendor\streamline\bin\x64' \
+prime-run /usr/share/steam/compatibilitytools.d/proton-cachyos-slr/files/bin/wine \
+    build/linux-cross-x64/bin/rsf_dlss_backend.exe
+```
+
+Both halves of that matter. `prime-run` puts the work on the discrete GPU, and the overrides select
+DXVK for `d3d11`/`dxgi`, which DXVK-NVAPI needs underneath it. With plain Wine's own D3D11 the
+whole chain fails early at "NVAPI failed to initialize", which reads like a driver problem and is
+not one.
+
+With those in place the integration gets a long way. NVAPI reports the RTX 4070 Laptop and driver
+610.57 against a required 512.15, NGX starts, and it loads `nvngx_dlss.dll` version 310.7.0. The
+DLSS plugin loads for adapter mask 0x1 on Ada, architecture 0x190 against a required 0x160.
+
+It stops in one specific place:
+
+```
+NGXCubinD3D11::CreateKernel: error: NvAPI_D3D11_CreateCubinComputeShaderEx failed - nvapi status -3
+nvapi_QueryInterface (NvAPI_D3D11_CreateCubinComputeShaderExV2): Not implemented method
+```
+
+DLSS on D3D11 launches its kernels through an NVAPI extension rather than through D3D11 compute.
+DXVK enables the Vulkan extensions it is built on, `VK_NVX_binary_import` and
+`VK_NVX_image_view_handle`, and DXVK-NVAPI implements `CreateCubinComputeShaderEx` and
+`CreateCubinComputeShaderWithName`. It does not implement the `ExV2` variant, which is the one this
+NGX version calls. `slSetD3DDevice` then fails with an exception inside Streamline.
+
+So the gap is one unimplemented entry point in DXVK-NVAPI, not this code, not the driver, and not
+the hardware. Three ways past it, in order of cost: an older `nvngx_dlss.dll` that calls the
+non-V2 entry point, a DXVK-NVAPI that implements `ExV2`, or Windows. Nothing here has produced an
+upscaled pixel yet.
+
+The matrices are the other open piece. They come from the view uniform buffer, which the loader
+reads but whose layout is only partly mapped for this engine branch.
+
+### An identity is not optional
+
+Streamline will not start NGX without one, and DLSS is an NGX feature. With none supplied the
+plugin loads and then refuses with "Missing NGX context - DLSSContext cannot run", which reads
+exactly like unsupported hardware. An injected integration has no NVIDIA-issued application id of
+its own, since that belongs to the game's publisher, so it identifies by engine instead. For Ace
+Combat 7 that is Unreal 4.18, which is simply true.
 
 The honesty rule from `AGENTS.md` applies to this crate the same way it applies to
 `rsf_game_info.rendering_ready`: a backend reports what it can do, and a pairing that is not viable
