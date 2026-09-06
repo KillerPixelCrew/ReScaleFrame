@@ -16,7 +16,9 @@ Use natural, concise language in documentation, code comments, issues, commits, 
 
 ## Delivery
 
-- Use a dedicated branch and PR for changes after the initial repository bootstrap.
+- While the project is still scaffolding, commit to `main` directly. Rapid iteration matters more
+  than review ceremony at this stage. Move to branches and pull requests once there is a working
+  pipeline worth protecting.
 - Preserve unrelated work. Do not edit game installations or run injection as part of routine build verification.
 - Track implementation in `docs/implementation.md`. Distinguish built, synthetic-tested, game-tested, and device-tested results.
 - Run `eng/verify.ps1` for native/SDK/Rust changes. Use focused checks for documentation-only edits.

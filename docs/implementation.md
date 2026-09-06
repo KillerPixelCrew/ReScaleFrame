@@ -23,6 +23,8 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] Temporal jitter revived by patching the anti-aliasing gate, verified in the running game:
       every perspective view now carries a sub-pixel offset where all fifty earlier captures were
       zero. Game-tested, not yet built with MSVC.
+- [x] Console variables set in the running game, and render scale confirmed working through
+      `r.ScreenPercentage`. Game-tested, not yet built with MSVC.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.
