@@ -120,6 +120,13 @@ pub enum Unusable {
     /// The backend needs a complete motion field and the game supplies object motion only, so a
     /// composition pass has to exist before this pairing is viable.
     MotionNeedsComposition,
+    /// The motion is stored in an encoding no backend can undo for itself.
+    ///
+    /// Backends offer a scale factor and nothing else. Unreal's storage carries a bias as well, so
+    /// a backend handed the raw target reads a large constant motion where there is none. This is
+    /// separate from [`Unusable::MotionNeedsComposition`]: a backend that reconstructs camera
+    /// motion still cannot subtract a bias.
+    MotionNeedsDecode,
 }
 
 /// A backend the orchestrator can drive.
@@ -150,6 +157,9 @@ pub fn check(inputs: &GameInputs, capabilities: &Capabilities) -> Result<(), Rea
     {
         reasons.push(Unusable::MotionNeedsComposition);
     }
+    if inputs.motion.needs_decode() {
+        reasons.push(Unusable::MotionNeedsDecode);
+    }
     if reasons.is_empty() {
         Ok(())
     } else {
@@ -161,7 +171,7 @@ pub fn check(inputs: &GameInputs, capabilities: &Capabilities) -> Result<(), Rea
 /// allocates on a path that may already be failing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Reasons {
-    entries: [Option<Unusable>; 4],
+    entries: [Option<Unusable>; 5],
     count: usize,
 }
 
@@ -222,8 +232,22 @@ mod tests {
     }
 
     #[test]
-    fn ac7_can_drive_streamline() {
-        assert!(check(&ac7(), &streamline()).is_ok());
+    fn ac7_needs_its_motion_decoded_even_for_streamline() {
+        // Streamline handles the missing camera motion, which was the blocker everyone expects.
+        // It cannot handle the bias in the storage, which is the one that was missed: sl::Constants
+        // offers a scale and nothing to subtract with.
+        let reasons = check(&ac7(), &streamline()).expect_err("the raw target carries a bias");
+        assert!(reasons.contains(Unusable::MotionNeedsDecode));
+        assert!(!reasons.contains(Unusable::MotionNeedsComposition));
+    }
+
+    #[test]
+    fn ac7_can_drive_streamline_once_a_pass_has_decoded_the_motion() {
+        let inputs = GameInputs {
+            motion: MotionVectors::unreal_object_only().decoded(),
+            ..ac7()
+        };
+        assert!(check(&inputs, &streamline()).is_ok());
     }
 
     #[test]
@@ -257,7 +281,8 @@ mod tests {
         assert!(reasons.contains(Unusable::NoJitter));
         assert!(reasons.contains(Unusable::NoDepth));
         assert!(reasons.contains(Unusable::MotionNeedsComposition));
-        assert_eq!(reasons.iter().count(), 3);
+        assert!(reasons.contains(Unusable::MotionNeedsDecode));
+        assert_eq!(reasons.iter().count(), 4);
     }
 
     #[test]
@@ -267,6 +292,7 @@ mod tests {
         // documentation on Quality::Native.
         let inputs = GameInputs {
             render: Extent::new(2048, 1152),
+            motion: MotionVectors::unreal_object_only().decoded(),
             ..ac7()
         };
         assert!(check(&inputs, &streamline()).is_ok());

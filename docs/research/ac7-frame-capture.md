@@ -422,3 +422,85 @@ That places the insertion point. Handing a backend the final composite would mea
 interface that is already soft. The scene has to be upscaled before the interface is composited
 onto it, which means intervening at the composite rather than at the last draw, and having the
 composite run at output resolution with the reconstructed scene as its input.
+
+## The view uniform buffer, mapped
+
+The camera data no backend can substitute for lives in one 4096 byte constant buffer, and the
+loader retains it. Its layout is stock 4.18 with one difference: `ViewToClipNoAA` does not exist in
+this engine version, so every field after `ViewToClip` sits 0x40 earlier than a later engine would
+put it. That single shift is what made the stock layout stop predicting the buffer partway through.
+
+The offsets are not read off engine source, which is not available here, and not fitted to one
+buffer, which is how a plausible wrong answer gets written down. They come from relationships that
+have to hold between fields, checked across every captured buffer by
+[`tools/verify-view-layout.py`](../../tools/verify-view-layout.py). The strongest is
+
+```
+ClipToPrevClip == ClipToTranslatedWorld
+                * T(PrevPreViewTranslation - PreViewTranslation)
+                * PrevTranslatedWorldToClip
+```
+
+which ties five offsets together at once and cannot survive any one of them being wrong. It holds
+to a millionth across captures where the camera moved as much as 43 units. The translation term is
+the part that is easy to miss: translated world is world shifted so the camera sits at the origin,
+and that shift is different in the two frames, so composing the two matrices without the delta
+agrees only while the camera is still. It did agree on the two still captures, which is exactly the
+kind of near miss that gets written down as a result.
+
+| Offset | Field | Wanted for |
+| --- | --- | --- |
+| `0x180` | `ViewToClip` | `cameraViewToClip`, and the field of view |
+| `0x1C0` | `ClipToView` | `clipToCameraView` |
+| `0x200` | `ClipToTranslatedWorld` | deriving the above identity |
+| `0x300` | `ViewForward` | `cameraFwd` |
+| `0x310` | `ViewUp` | `cameraUp` |
+| `0x320` | `ViewRight` | `cameraRight` |
+| `0x350` | `InvDeviceZToWorldZTransform` | depth linearisation |
+| `0x370` | `WorldCameraOrigin` | `cameraPos` |
+| `0x3A0` | `PreViewTranslation` | the identity above |
+| `0x4F0` | `PrevTranslatedWorldToClip` | the identity above |
+| `0x650` | `PrevPreViewTranslation` | the identity above |
+| `0x6E0` | `ClipToPrevClip` | `clipToPrevClip`, read rather than computed |
+| `0x7E0` | `ViewRectMin` | picking the main view |
+| `0x7F0` | `ViewSizeAndInvSize` | picking the main view |
+| `0x800` | `BufferSizeAndInvSize` | picking the main view |
+
+`ClipToPrevClip` being a field of the buffer rather than something to derive is the useful part:
+Streamline asks for exactly that matrix, and the engine already computes it.
+
+The camera basis is confirmed twice over. `ViewForward`, `ViewUp` and `ViewRight` each equal a row
+of `ViewToTranslatedWorld`, in Unreal's view space order where Z is forward, and each is a unit
+vector. Reading the basis out of the projection instead gives a different vector that looks equally
+plausible, so the agreement between two independent places is what settles it.
+
+Near is 1.0 with an infinite far plane, in the reversed-Z form, and `InvDeviceZToWorldZTransform`
+of `(0, 0, 1, 0)` agrees with that independently. Vertical field of view is 38.0 degrees in flight,
+with 58.7 and 33.4 seen in other captures, so it is a per-frame value and not a constant.
+
+### Not every view buffer is the main view
+
+The loader keeps the most recently created buffer of each size, which is not necessarily the one
+the scene was rendered with. Of eleven perspective views captured, three describe viewports of
+1016x1016, 128x93 and 128x111 inside the same 2048x1152 buffer, all carrying the main 16:9
+projection aspect. Whatever those are, reading per frame camera data from one of them would
+describe a view the player is not looking through.
+
+The test is in the buffer: the main view is the one whose `ViewSizeAndInvSize` matches
+`BufferSizeAndInvSize`. Anything selecting a view buffer at runtime has to apply it.
+
+### The motion vectors need a pass after all, for a different reason
+
+Earlier this document concluded that DLSS needs no composition pass for AC7, because
+`cameraMotionIncluded` false plus `motionVectorsInvalidValue` covers object-only motion against a
+zero clear. That part stands. What it missed is the encoding.
+
+Unreal stores velocity biased, `In * (0.499 * 0.5) + 32767/65535`, and `sl::Constants` offers
+`mvecScale`, a multiply, with nothing to subtract a bias with. Handing the raw target to DLSS gives
+every static pixel a large constant motion rather than none. So a conversion pass is required:
+decode into a float target, and write unwritten pixels as a sentinel that
+`motionVectorsInvalidValue` is then set to, since a decoded zero is a real zero motion and can no
+longer serve as the sentinel the way a raw zero does.
+
+That pass is small, and once it exists adding camera motion to it is the composition pass that XeSS
+and FSR need, so the two stop being separate pieces of work.

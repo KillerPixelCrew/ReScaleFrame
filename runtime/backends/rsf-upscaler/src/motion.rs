@@ -78,12 +78,35 @@ impl MotionVectors {
         }
     }
 
+    /// The same convention once a pass has decoded it into plain screen space values.
+    ///
+    /// Camera motion is untouched by that pass, so it stays absent, and the sentinel has to change:
+    /// a decoded zero is a real zero motion, where a stored zero could not be.
+    #[must_use]
+    pub fn decoded(self) -> Self {
+        Self {
+            encoding: Encoding::DIRECT,
+            clear: ClearBehaviour::RealMotion,
+            ..self
+        }
+    }
+
     /// Whether the integration has to build a combined field before handing these over.
     ///
     /// A backend that cannot reconstruct camera motion needs one that already contains it.
     #[must_use]
     pub fn needs_composition_for(self, backend_reconstructs_camera_motion: bool) -> bool {
         !self.camera_motion_included && !backend_reconstructs_camera_motion
+    }
+
+    /// Whether a pass has to decode these before any backend can read them.
+    ///
+    /// Backends take a scale factor and nothing else, so an encoding that is a pure scale can be
+    /// folded into that factor and one carrying a bias cannot. Unreal's carries a bias, and a
+    /// backend handed the raw target reads a large constant motion across a still image.
+    #[must_use]
+    pub fn needs_decode(self) -> bool {
+        self.encoding.bias != 0.0
     }
 }
 

@@ -42,6 +42,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       the game's Proton prefix: DLSS reports supported on the RTX 4070 Laptop and returns 1024x576
       for a 2048x1152 output at performance quality. Initialisation and queries only, no upscaled
       pixel yet, and nothing built with MSVC.
+- [x] View uniform buffer mapped, including `ClipToPrevClip`, the camera basis and the projection.
+      Offsets are checked by an identity that ties five of them together rather than fitted to one
+      buffer, and `tools/verify-view-layout.py` re-runs that check over the captured buffers: 11
+      perspective views, 0 failures. Game-tested data, offline analysis.
+- [ ] Motion vector decode pass. Required for every backend, not just the ones that want camera
+      motion: they take a scale factor and Unreal's storage carries a bias. Not written.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

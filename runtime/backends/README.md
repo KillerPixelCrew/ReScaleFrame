@@ -44,9 +44,15 @@ looking entirely plausible. There is a test pinning that.
 
 **Can this backend be driven from those inputs?** `check` says so, and returns every reason it
 cannot rather than the first. A backend that reconstructs camera motion from depth (Streamline,
-given `cameraMotionIncluded` and an invalid value) accepts AC7's object-only field directly. One
-that wants a complete field (XeSS, FSR) needs a composition pass that does not exist yet, and
-`check` says exactly that instead of producing a smeared image at runtime.
+given `cameraMotionIncluded` and an invalid value) needs no composition pass for AC7's object-only
+field. One that wants a complete field (XeSS, FSR) does, and `check` says exactly that instead of
+producing a smeared image at runtime.
+
+No backend, Streamline included, can read the raw target though, and that took a second look to
+see. They all offer a scale factor for motion and nothing to subtract a bias with, and Unreal's
+storage is biased, so the raw target reads as a large constant motion across a still image. A
+decode pass is required whichever backend is used. Once it exists, adding camera motion to it is
+the composition pass XeSS and FSR want, so the two stop being separate work.
 
 **What are this frame's numbers, in the units a backend wants?** `frame.rs` does the conversions.
 Unreal keeps jitter in clip space and motion in a screen space that spans two units across the
