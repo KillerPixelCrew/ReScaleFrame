@@ -131,9 +131,18 @@ which is also why the menu does not present it as an anti-aliasing mode.
 Two consequences for super resolution, and they pull in opposite directions.
 
 Against: every super resolution backend needs a jittered projection, and this engine does not
-jitter. Jitter has to be introduced, either by turning Unreal's own temporal AA on properly or by
-modifying the projection ourselves. The cvars for the first are compiled in
-(`r.DefaultFeature.AntiAliasing`, `r.TemporalAASamples`, `r.PostProcessAAQuality`) but not exposed.
+jitter as shipped. That has since been fixed. `PreVisibilityFrameSetup` computes a jitter only
+behind `View.AntiAliasingMethod == AAM_TemporalAA`, and stepping over that one conditional jump at
+RVA `0x112b1f3` runs it whatever the menu says. Unreal then applies the offset itself through
+`HackAddTemporalAAProjectionJitter`, so every derived matrix and the velocity buffer stay
+consistent, which editing matrices afterwards would not achieve.
+
+Measured after the patch, in the view buffer read from the running game: every perspective view
+carries a jitter, where every one before the patch was exactly zero. Converting back through
+Unreal's own formula gives offsets of -0.147, 0.065 and -0.430 pixels horizontally, all inside the
+plus or minus half pixel the sample patterns produce, and the previous-frame slots of one capture
+hold exactly the current values of another, so the four floats are a coherent sequence rather than
+noise.
 
 In favour, and it is a large point: **every input a backend needs is already bound at one place.**
 Scene colour, depth, velocity and a 1x1 exposure target all arrive together at this pass, which is
