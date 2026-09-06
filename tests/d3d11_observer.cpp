@@ -60,7 +60,8 @@ int main(int argc, char* argv[])
     options.format = DXGI_FORMAT_R16G16_UNORM;
     options.minimum_width = 64;
     options.capacity = 8;
-    options.constant_buffer_bytes = 2640;  // the size stock 4.18 view uniform data occupies
+    options.constant_buffer_min_bytes = 2640;  // stock 4.18 view uniform size
+    options.constant_buffer_max_bytes = 2640;
 
     options.abi_version = RSF_OBSERVER_ABI_VERSION + 1u;
     check(rsf_observer_install(&options) == RSF_OBSERVER_ERROR_ABI_MISMATCH,
@@ -194,32 +195,39 @@ int main(int argc, char* argv[])
 
     char prefix[1024];
     std::snprintf(prefix, sizeof(prefix), "%s\\observed", argv[1]);
-    stage("dumping matches");
-    uint32_t written = 0;
-    check(rsf_observer_dump_matches(prefix, RSF_DUMP_VIEW_VELOCITY, &written) == RSF_OBSERVER_OK,
-          "Dumping the matches must succeed.");
-    check(written == 1u, "The one retained target must be dumped.");
+    stage("requesting dump");
+    check(rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY) == RSF_OBSERVER_OK,
+          "Requesting a dump must succeed.");
+    // The request is carried out inside a present, so one more present performs it.
+    check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must carry out the dump.");
 
-    stage("dumping constants");
-    check(status.constant_buffers_matched == 1u,
-          "Only the constant buffer of the configured size must be retained.");
+    rsf_observer_status after{};
+    after.struct_size = sizeof(after);
+    check(rsf_observer_get_status(&after) == RSF_OBSERVER_OK, "Status must be readable.");
+    check(after.dumps_completed == 1u, "The dump must have run inside the present.");
+    check(after.textures_written == 1u, "The one retained target must be written.");
+    check(after.constant_bytes_written == 2640u, "The retained constant buffer must be written.");
+
     char constants_path[1024];
-    std::snprintf(constants_path, sizeof(constants_path), "%s\\view_constants.bin", argv[1]);
-    uint32_t constant_bytes = 0;
-    check(rsf_observer_dump_constants(constants_path, &constant_bytes) == RSF_OBSERVER_OK,
-          "Dumping the retained constant buffer must succeed.");
-    check(constant_bytes == 2640u, "The dump must be the full buffer.");
+    std::snprintf(constants_path, sizeof(constants_path), "%s\\observed_cb2640.bin", argv[1]);
     if (std::FILE* stream = std::fopen(constants_path, "rb")) {
         std::vector<float> read_back(2640 / sizeof(float), 0.0f);
         const size_t got = std::fread(read_back.data(), 1, 2640, stream);
         std::fclose(stream);
         check(got == 2640, "The dumped file must hold the whole buffer.");
-        // Reading the payload back proves the copy path, which is what the offset checking in
-        // tools/ue4-view-layout.py will rely on.
         check(read_back[0] == 1.5f && read_back[1] == -2.25f &&
                   read_back[(2640 / sizeof(float)) - 1] == 9.75f,
               "The dumped contents must match what was uploaded.");
+    } else {
+        check(false, "The constant buffer dump must exist.");
     }
+
+    char sizes_path[1024];
+    std::snprintf(sizes_path, sizeof(sizes_path), "%s\\sizes.csv", argv[1]);
+    check(rsf_observer_write_buffer_sizes(sizes_path) == RSF_OBSERVER_OK,
+          "Writing the size histogram must succeed.");
+    check(after.distinct_buffer_sizes >= 2u,
+          "Both constant buffer sizes must appear in the histogram.");
 
     stage("uninstalling");
     check(rsf_observer_uninstall() == RSF_OBSERVER_OK, "Uninstalling must succeed.");

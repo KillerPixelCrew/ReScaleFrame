@@ -44,8 +44,22 @@ struct Observer {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
     std::vector<ID3D11Texture2D*> matches;
-    ID3D11Buffer* constants = nullptr;
+
+    struct SizedBuffer {
+        uint32_t bytes;
+        ID3D11Buffer* buffer;
+    };
+    std::vector<SizedBuffer> constants;
+    std::vector<std::pair<uint32_t, uint32_t>> buffer_sizes;  // size, times created
     uint32_t constant_matches = 0;
+
+    // A dump requested from another thread, performed inside the next present.
+    bool dump_pending = false;
+    std::string dump_prefix;
+    uint32_t dump_view = 0;
+    uint32_t dumps_completed = 0;
+    uint32_t textures_written = 0;
+    uint32_t constant_bytes_written = 0;
 
     uint32_t frames = 0;
     uint32_t created = 0;
@@ -124,21 +138,58 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
     if (FAILED(result) || !desc || !out || !*out) {
         return result;
     }
-    if (self.options.constant_buffer_bytes == 0 ||
-        (desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0 ||
-        desc->ByteWidth != self.options.constant_buffer_bytes) {
+    if (self.options.constant_buffer_max_bytes == 0 ||
+        (desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0) {
         return result;
     }
+    const uint32_t bytes = desc->ByteWidth;
 
-    // Keep only the most recent match. The contents change every frame, so an old one would
-    // describe a frame nobody asked about. Same rule as the other hooks: no D3D11 under the lock.
     ID3D11Buffer* previous = nullptr;
-    (*out)->AddRef();
+    bool retain = bytes >= self.options.constant_buffer_min_bytes &&
+                  bytes <= self.options.constant_buffer_max_bytes;
+    if (retain) {
+        (*out)->AddRef();
+    }
     {
         std::lock_guard<std::mutex> lock(self.guard);
-        previous = self.constants;
-        self.constants = *out;
-        ++self.constant_matches;
+        // Every size is counted, whether retained or not. When the stock size does not match,
+        // this histogram is what identifies the right buffer for the next run.
+        bool counted = false;
+        for (auto& entry : self.buffer_sizes) {
+            if (entry.first == bytes) {
+                ++entry.second;
+                counted = true;
+                break;
+            }
+        }
+        if (!counted && self.buffer_sizes.size() < 128) {
+            self.buffer_sizes.emplace_back(bytes, 1u);
+        }
+
+        if (retain) {
+            // Keep the most recent buffer of each distinct size. Contents change every frame, so
+            // an older one would describe a frame nobody asked about.
+            bool replaced = false;
+            for (auto& entry : self.constants) {
+                if (entry.bytes == bytes) {
+                    previous = entry.buffer;
+                    entry.buffer = *out;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                if (self.constants.size() < 16) {
+                    self.constants.push_back({bytes, *out});
+                } else {
+                    previous = *out;  // nothing left to hold it in
+                    retain = false;
+                }
+            }
+            if (retain) {
+                ++self.constant_matches;
+            }
+        }
         if (!self.device) {
             self.device = device;
             self.device->AddRef();
@@ -148,6 +199,108 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
         previous->Release();
     }
     return result;
+}
+
+// Performed on the presenting thread, where using the immediate context is safe.
+void perform_pending_dump(Observer& self)
+{
+    std::string prefix;
+    uint32_t view = 0;
+    std::vector<ID3D11Texture2D*> textures;
+    std::vector<Observer::SizedBuffer> buffers;
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        if (!self.dump_pending || !self.device) {
+            return;
+        }
+        self.dump_pending = false;
+        prefix = self.dump_prefix;
+        view = self.dump_view;
+        textures = self.matches;
+        buffers = self.constants;
+        device = self.device;
+        device->AddRef();
+        context = self.context;
+        if (context) {
+            context->AddRef();
+        }
+        for (ID3D11Texture2D* texture : textures) {
+            texture->AddRef();
+        }
+        for (auto& entry : buffers) {
+            entry.buffer->AddRef();
+        }
+    }
+
+    if (!context) {
+        device->GetImmediateContext(&context);
+        if (context) {
+            std::lock_guard<std::mutex> lock(self.guard);
+            if (!self.context) {
+                self.context = context;
+                self.context->AddRef();
+            }
+        }
+    }
+
+    uint32_t written = 0;
+    uint32_t constant_bytes = 0;
+    if (context) {
+        for (size_t index = 0; index < textures.size(); ++index) {
+            char path[1024];
+            std::snprintf(path, sizeof(path), "%s_%zu", prefix.c_str(), index);
+            rsf_texture_dump_options dump{};
+            dump.struct_size = sizeof(dump);
+            dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+            dump.output_prefix_utf8 = path;
+            dump.view = view;
+            if (rsf_dump_texture(device, context, textures[index], &dump, nullptr) ==
+                RSF_TEXTURE_OK) {
+                ++written;
+            }
+        }
+
+        for (const auto& entry : buffers) {
+            D3D11_BUFFER_DESC staging{};
+            entry.buffer->GetDesc(&staging);
+            staging.Usage = D3D11_USAGE_STAGING;
+            staging.BindFlags = 0;
+            staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            staging.MiscFlags = 0;
+            ID3D11Buffer* readable = nullptr;
+            if (SUCCEEDED(device->CreateBuffer(&staging, nullptr, &readable)) && readable) {
+                context->CopyResource(readable, entry.buffer);
+                D3D11_MAPPED_SUBRESOURCE mapped{};
+                if (SUCCEEDED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped))) {
+                    char path[1024];
+                    std::snprintf(path, sizeof(path), "%s_cb%u.bin", prefix.c_str(), entry.bytes);
+                    if (std::FILE* stream = std::fopen(path, "wb")) {
+                        std::fwrite(mapped.pData, 1, entry.bytes, stream);
+                        std::fclose(stream);
+                        constant_bytes += entry.bytes;
+                    }
+                    context->Unmap(readable, 0);
+                }
+                readable->Release();
+            }
+        }
+        context->Release();
+    }
+
+    for (ID3D11Texture2D* texture : textures) {
+        texture->Release();
+    }
+    for (auto& entry : buffers) {
+        entry.buffer->Release();
+    }
+    device->Release();
+
+    std::lock_guard<std::mutex> lock(self.guard);
+    ++self.dumps_completed;
+    self.textures_written = written;
+    self.constant_bytes_written = constant_bytes;
 }
 
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interval, UINT flags)
@@ -182,6 +335,7 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
             }
         }
     }
+    perform_pending_dump(self);
     return self.original_present(swapchain, interval, flags);
 }
 
@@ -272,7 +426,7 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
                     reinterpret_cast<void**>(&self.original_create))) {
         return RSF_OBSERVER_ERROR_PATCH_FAILED;
     }
-    if (self.options.constant_buffer_bytes != 0 &&
+    if (self.options.constant_buffer_max_bytes != 0 &&
         !patch_slot(self.device_vtable, slot_create_buffer,
                     reinterpret_cast<void*>(&hooked_create_buffer),
                     reinterpret_cast<void**>(&self.original_create_buffer))) {
@@ -312,10 +466,10 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
         texture->Release();
     }
     self.matches.clear();
-    if (self.constants) {
-        self.constants->Release();
-        self.constants = nullptr;
+    for (auto& entry : self.constants) {
+        entry.buffer->Release();
     }
+    self.constants.clear();
     if (self.context) {
         self.context->Release();
         self.context = nullptr;
@@ -343,146 +497,50 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
     status->present_width = self.present_width;
     status->present_height = self.present_height;
     status->constant_buffers_matched = self.constant_matches;
+    status->distinct_buffer_sizes = static_cast<uint32_t>(self.buffer_sizes.size());
+    status->dumps_completed = self.dumps_completed;
+    status->textures_written = self.textures_written;
+    status->constant_bytes_written = self.constant_bytes_written;
     return RSF_OBSERVER_OK;
 }
 
-extern "C" rsf_observer_result rsf_observer_dump_constants(const char* output_path_utf8,
-                                                           uint32_t* bytes)
-{
-    if (!output_path_utf8) {
-        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
-    }
-    Observer& self = observer();
 
-    ID3D11Device* device = nullptr;
-    ID3D11DeviceContext* context = nullptr;
-    ID3D11Buffer* buffer = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        if (!self.device || !self.constants) {
-            return RSF_OBSERVER_ERROR_NOT_READY;
-        }
-        device = self.device;
-        device->AddRef();
-        buffer = self.constants;
-        buffer->AddRef();
-        context = self.context;
-        if (context) {
-            context->AddRef();
-        }
-    }
-    if (!context) {
-        device->GetImmediateContext(&context);
-    }
-
-    rsf_observer_result outcome = RSF_OBSERVER_ERROR_NOT_READY;
-    if (context) {
-        D3D11_BUFFER_DESC desc{};
-        buffer->GetDesc(&desc);
-
-        D3D11_BUFFER_DESC staging = desc;
-        staging.Usage = D3D11_USAGE_STAGING;
-        staging.BindFlags = 0;
-        staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        staging.MiscFlags = 0;
-
-        ID3D11Buffer* readable = nullptr;
-        if (SUCCEEDED(device->CreateBuffer(&staging, nullptr, &readable)) && readable) {
-            context->CopyResource(readable, buffer);
-            D3D11_MAPPED_SUBRESOURCE mapped{};
-            if (SUCCEEDED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped))) {
-                if (std::FILE* stream = std::fopen(output_path_utf8, "wb")) {
-                    std::fwrite(mapped.pData, 1, desc.ByteWidth, stream);
-                    std::fclose(stream);
-                    if (bytes) {
-                        *bytes = desc.ByteWidth;
-                    }
-                    outcome = RSF_OBSERVER_OK;
-                }
-                context->Unmap(readable, 0);
-            }
-            readable->Release();
-        }
-        context->Release();
-    }
-    buffer->Release();
-    device->Release();
-    return outcome;
-}
-
-extern "C" rsf_observer_result rsf_observer_dump_matches(const char* output_prefix_utf8,
-                                                         uint32_t view, uint32_t* written)
+extern "C" rsf_observer_result rsf_observer_request_dump(const char* output_prefix_utf8,
+                                                        uint32_t view)
 {
     if (!output_prefix_utf8) {
         return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
     }
     Observer& self = observer();
-
-    // Take a snapshot and let the lock go before touching D3D11. Dumping creates a staging
-    // texture, which runs through this observer's own creation hook, and that hook takes the same
-    // lock. Holding it across the dump deadlocks the caller against itself.
-    ID3D11Device* device = nullptr;
-    ID3D11DeviceContext* context = nullptr;
-    std::vector<ID3D11Texture2D*> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        if (!self.device) {
-            return RSF_OBSERVER_ERROR_NOT_READY;
-        }
-        device = self.device;
-        device->AddRef();
-        context = self.context;
-        if (context) {
-            context->AddRef();
-        }
-        snapshot = self.matches;
-        for (ID3D11Texture2D* texture : snapshot) {
-            texture->AddRef();
-        }
-    }
-
-    if (!context) {
-        // Resolved outside the lock for the same reason.
-        device->GetImmediateContext(&context);
-        if (context) {
-            std::lock_guard<std::mutex> lock(self.guard);
-            if (!self.context) {
-                self.context = context;
-                self.context->AddRef();
-            }
-        }
-    }
-    if (!context) {
-        device->Release();
-        for (ID3D11Texture2D* texture : snapshot) {
-            texture->Release();
-        }
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (!self.installed) {
         return RSF_OBSERVER_ERROR_NOT_READY;
     }
+    self.dump_prefix = output_prefix_utf8;
+    self.dump_view = view;
+    self.dump_pending = true;
+    return RSF_OBSERVER_OK;
+}
 
-    uint32_t count = 0;
-    for (size_t index = 0; index < snapshot.size(); ++index) {
-        char prefix[1024];
-        std::snprintf(prefix, sizeof(prefix), "%s_%zu", output_prefix_utf8, index);
-
-        rsf_texture_dump_options dump{};
-        dump.struct_size = sizeof(dump);
-        dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
-        dump.output_prefix_utf8 = prefix;
-        dump.view = view;
-        if (rsf_dump_texture(device, context, snapshot[index], &dump, nullptr) == RSF_TEXTURE_OK) {
-            ++count;
-        }
+extern "C" rsf_observer_result rsf_observer_write_buffer_sizes(const char* output_path_utf8)
+{
+    if (!output_path_utf8) {
+        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
     }
-
-    for (ID3D11Texture2D* texture : snapshot) {
-        texture->Release();
+    Observer& self = observer();
+    std::vector<std::pair<uint32_t, uint32_t>> sizes;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        sizes = self.buffer_sizes;
     }
-    context->Release();
-    device->Release();
-
-    if (written) {
-        *written = count;
+    std::FILE* stream = std::fopen(output_path_utf8, "wb");
+    if (!stream) {
+        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
     }
+    std::fprintf(stream, "bytes,created\n");
+    for (const auto& entry : sizes) {
+        std::fprintf(stream, "%u,%u\n", entry.first, entry.second);
+    }
+    std::fclose(stream);
     return RSF_OBSERVER_OK;
 }

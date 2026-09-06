@@ -7,6 +7,9 @@
 
 #include <rescaleframe/module_dump.h>
 
+#include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/texture_dump.h>
+
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
 #endif
@@ -114,6 +117,90 @@ static DWORD WINAPI capture_worker(LPVOID parameter)
 }
 #endif
 
+static char observe_directory[MAX_PATH];
+
+static DWORD read_number(const char* name, DWORD fallback)
+{
+    char text[64];
+    if (GetEnvironmentVariableA(name, text, sizeof(text)) == 0) {
+        return fallback;
+    }
+    const long value = strtol(text, NULL, 10);
+    return value > 0 ? (DWORD)value : fallback;
+}
+
+/* Installed before the module dump rather than after it. The creation hook only sees textures
+   made after it is in place, and the target we are after is allocated during engine startup. */
+static void start_observer(void)
+{
+    if (read_number("RSF_OBSERVE", 0) == 0) {
+        note("observer disabled, set RSF_OBSERVE=1 to enable");
+        return;
+    }
+
+    rsf_observer_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.abi_version = RSF_OBSERVER_ABI_VERSION;
+    /* 35 is DXGI_FORMAT_R16G16_UNORM, the format Unreal uses for scene velocity. */
+    options.format = read_number("RSF_OBSERVE_FORMAT", 35);
+    options.minimum_width = read_number("RSF_OBSERVE_MIN_WIDTH", 1024);
+    options.capacity = read_number("RSF_OBSERVE_CAPACITY", 8);
+    /* A range rather than the stock size: AC7 runs a vendor branch, and the first run showed no
+       buffer of the stock 2640 bytes at all. Everything in range is retained per distinct size,
+       and every size seen is counted, which is what identifies the right one. */
+    options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
+    options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
+
+    const rsf_observer_result result = rsf_observer_install(&options);
+    note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",
+         (int)result, (unsigned long)options.format, (unsigned long)options.minimum_width,
+         (unsigned long)options.constant_buffer_min_bytes,
+         (unsigned long)options.constant_buffer_max_bytes);
+}
+
+static void report_and_dump(void)
+{
+    rsf_observer_status status;
+    memset(&status, 0, sizeof(status));
+    status.struct_size = sizeof(status);
+    if (rsf_observer_get_status(&status) != RSF_OBSERVER_OK) {
+        note("observer status unavailable");
+        return;
+    }
+    note("observer: %u frames, %u textures created, %u matched, %u view buffers, present %ux%u",
+         status.frames_presented, status.textures_created, status.textures_matched,
+         status.constant_buffers_matched, status.present_width, status.present_height);
+
+    char prefix[MAX_PATH * 2];
+    snprintf(prefix, sizeof(prefix), "%s\\observed", observe_directory);
+    /* The work happens inside the next present. Reading a resource from this thread would race
+       the game's own rendering, which is what took the process down the first time. */
+    const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY);
+
+    char sizes[MAX_PATH * 2];
+    snprintf(sizes, sizeof(sizes), "%s\\constant-buffer-sizes.csv", observe_directory);
+    rsf_observer_write_buffer_sizes(sizes);
+
+    note("dump requested (result %d), %u distinct constant buffer sizes seen", (int)requested,
+         status.distinct_buffer_sizes);
+
+    /* Wait briefly for a frame to carry it out, then report what it produced. */
+    for (int waited = 0; waited < 100; ++waited) {
+        rsf_observer_status after;
+        memset(&after, 0, sizeof(after));
+        after.struct_size = sizeof(after);
+        if (rsf_observer_get_status(&after) == RSF_OBSERVER_OK &&
+            after.dumps_completed > status.dumps_completed) {
+            note("dump finished: %u textures, %u constant bytes", after.textures_written,
+                 after.constant_bytes_written);
+            return;
+        }
+        Sleep(50);
+    }
+    note("dump did not complete within five seconds");
+}
+
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -129,6 +216,10 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
 
     MultiByteToWideChar(CP_ACP, 0, directory, -1, log_path, MAX_PATH);
     wcscat(log_path, L"\\rsf-dump.log");
+
+    strncpy(observe_directory, directory, MAX_PATH - 1);
+    observe_directory[MAX_PATH - 1] = '\0';
+    start_observer();
 
     double entropy = 0.0;
     rsf_measure_module_code(NULL, &entropy);
@@ -167,6 +258,26 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
         rsf_write_module_list(modules_path, label);
     }
     note("module sampling finished");
+
+    /* One automatic report once the game is certainly rendering, so a run that never reaches a
+       key press still produces something. F10 repeats it on demand. */
+    report_and_dump();
+    return 0;
+}
+
+static DWORD WINAPI observe_worker(LPVOID parameter)
+{
+    (void)parameter;
+    int was_down = 0;
+    int running = 1;
+    while (running) {
+        const int down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+        if (down && !was_down && observe_directory[0]) {
+            report_and_dump();
+        }
+        was_down = down;
+        Sleep(50);
+    }
     return 0;
 }
 
@@ -191,6 +302,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
             CloseHandle(thread);
         }
 #endif
+        thread = CreateThread(NULL, 0, observe_worker, NULL, 0, NULL);
+        if (thread) {
+            CloseHandle(thread);
+        }
     }
     return TRUE;
 }
