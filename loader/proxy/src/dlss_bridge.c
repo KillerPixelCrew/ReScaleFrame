@@ -25,6 +25,7 @@
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/present_blit.h>
+#include <rescaleframe/resource_ref.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -74,7 +75,40 @@ static struct {
        and what colour each carries, which is what choosing between them needs. */
     unsigned long pass_in_frame;
     unsigned long frames_described;
+
+    /* The frame's inputs, held from the pass that identifies them until Present.
+
+       The evaluate cannot happen where the set is recognised. That pass is the lighting, and a
+       capture replay puts twenty seven draws after it that add the sky, the clouds and the
+       translucency to the very colour target it binds, which is why the reconstruction came out
+       with a black sky. Those later passes do not bind velocity and depth, so they never qualify
+       and there is no later set to prefer.
+
+       What the replay also shows is that none of the three targets is written again once the
+       colour is finished: the post chain only reads them. So the contents at Present are the
+       finished frame, and Present is where this evaluates. */
+    void* held_color;
+    void* held_depth;
+    void* held_motion;
+    void* held_exposure;
+    rsf_camera_frame held_camera;
+    unsigned long held_width;
+    unsigned long held_height;
+    int have_held;
 } bridge;
+
+static void release_held(void)
+{
+    rsf_resource_release(bridge.held_color);
+    rsf_resource_release(bridge.held_depth);
+    rsf_resource_release(bridge.held_motion);
+    rsf_resource_release(bridge.held_exposure);
+    bridge.held_color = NULL;
+    bridge.held_depth = NULL;
+    bridge.held_motion = NULL;
+    bridge.held_exposure = NULL;
+    bridge.have_held = 0;
+}
 
 static void say(const char* format, ...)
 {
@@ -178,31 +212,68 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
 
     ++bridge.pass_in_frame;
     if (bridge.frames_described < 4) {
-        say("  pass %lu of this frame: colour %ux%u, motion %ux%u, %s exposure",
-            bridge.pass_in_frame, pass->render_width, pass->render_height, pass->render_width,
-            pass->render_height, pass->exposure ? "with" : "no");
+        /* The colour pointer as well as its format. The frame binds this set more than once and
+           the passes differ in what their colour holds, so which one is being taken is the
+           question: a capture replay puts the sky twenty seven draws after the lighting, and a
+           colour taken before those has no sky in it. */
+        say("  pass %lu of this frame: colour %p format %lu at %ux%u, %s exposure",
+            bridge.pass_in_frame, pass->scene_color, (unsigned long)pass->scene_color_format,
+            pass->render_width, pass->render_height, pass->exposure ? "with" : "no");
     }
 
     fill_camera(&view, &camera);
 
+    /* Held rather than evaluated. The camera is a plain structure and is copied; the textures are
+       borrowed for this callback only, so keeping them past it means taking a reference. One set
+       per frame: if a second pass somehow qualifies, the first is dropped rather than leaked. */
+    if (bridge.have_held) {
+        release_held();
+    }
+    bridge.held_color = pass->scene_color;
+    bridge.held_depth = pass->depth;
+    bridge.held_motion = pass->motion;
+    bridge.held_exposure = pass->exposure;
+    rsf_resource_retain(bridge.held_color);
+    rsf_resource_retain(bridge.held_depth);
+    rsf_resource_retain(bridge.held_motion);
+    rsf_resource_retain(bridge.held_exposure);
+    bridge.held_camera = camera;
+    bridge.held_width = pass->render_width;
+    bridge.held_height = pass->render_height;
+    bridge.have_held = 1;
+    (void)frame;
+    (void)result;
+}
+
+/* Run the frame that was held, now that the game has finished drawing it. */
+static void evaluate_held(void* context)
+{
+    rsf_dlss_pipeline_frame frame;
+    rsf_dlss_pipeline_result result;
+
+    if (!bridge.have_held) {
+        return;
+    }
+
     memset(&frame, 0, sizeof(frame));
     frame.struct_size = sizeof(frame);
     frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    frame.scene_color = pass->scene_color;
-    frame.depth = pass->depth;
-    frame.game_motion = pass->motion;
-    frame.exposure = pass->exposure;
-    frame.render_width = pass->render_width;
-    frame.render_height = pass->render_height;
-    frame.camera = &camera;
+    frame.scene_color = bridge.held_color;
+    frame.depth = bridge.held_depth;
+    frame.game_motion = bridge.held_motion;
+    frame.exposure = bridge.held_exposure;
+    frame.render_width = (uint32_t)bridge.held_width;
+    frame.render_height = (uint32_t)bridge.held_height;
+    frame.camera = &bridge.held_camera;
 
-    result = rsf_dlss_pipeline_on_frame(pass->context, &frame);
+    result = rsf_dlss_pipeline_on_frame(context, &frame);
     bridge.last_result = (long)result;
     if (result == RSF_DLSS_PIPELINE_OK) {
         ++bridge.evaluated;
     } else {
         ++bridge.refused;
     }
+    release_held();
 }
 
 /* Called before the game's own Present, from the observer.
@@ -221,6 +292,11 @@ static void on_present(void* user, void* swapchain)
         ++bridge.frames_described;
     }
     bridge.pass_in_frame = 0;
+
+    /* The frame is finished here, which is the whole reason the evaluate waits for it. */
+    if (bridge.started) {
+        evaluate_held(bridge.context);
+    }
 
     if (!bridge.started || !bridge.show || !bridge.blit) {
         return;
