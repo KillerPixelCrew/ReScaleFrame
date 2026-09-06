@@ -3,6 +3,10 @@
 First game target: Windows x64, D3D11, a vendor branch of UE4.18, Steam application 502500, build
 9855922. The plugin recognizes that build by executable name, PE machine and SHA-256.
 
+[`engine.json`](engine.json) records what was established about this game and how each claim was
+established, since no public database records an engine's minor version. That file is the summary;
+this one is the reasoning.
+
 `rsf_game_info.rendering_ready` is still `0`, and the contract test asserts it. Nothing here renders
 anything yet. What follows is what the plugin knows, what has been established about the game, and
 what is still guessed at.

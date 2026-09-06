@@ -256,6 +256,26 @@ Know which of the two a given scene is testing.
   matrices thoroughly and object motion not at all. Know which one a scene tests before believing
   what it shows.
 
+## Write down what the game is, because nobody else has
+
+No public database records an engine's minor version. PCGamingWiki holds 1727 Unreal Engine 4 games
+and gives the family for all of them and the build for none, so the fact that predicts a game's
+temporal machinery cannot be looked up. Its antialiasing notes narrow it a little, and only for the
+third of games that document them at all.
+
+So record it per game, and record how each claim was established: measured in the running game,
+inferred from something measured, or assumed and unconfirmed. Writing `assumed` is the point of the
+exercise, since every wrong turn in this project began with an assumption written down as a fact.
+
+Three ways to date an engine build, cheapest first:
+
+1. **Strings in the executable**, `++UE4+Release-4.18` and similar. Free, unless the binary is
+   encrypted, which it often is.
+2. **The shape of the view uniform buffer.** Members were added over time, so which ones are present
+   dates the build. `ViewToClipNoAA` arrived after 4.18, and noticing its absence both placed Ace
+   Combat 7 and explained why the stock layout stopped predicting its buffer partway through.
+3. **Asset and package versions** in the game's own archives, which move with the engine.
+
 ## When a game appears to have no motion vectors
 
 Absent is not the same as impossible, and the search has an order. Ask them in this order, because
