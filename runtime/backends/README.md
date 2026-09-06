@@ -19,9 +19,17 @@ When a backend does need to reach a vendor SDK, the boundary is a C ABI in the s
 foreign code, and a thread-local last error rather than a returned string. No STL, no Rust types,
 no ambiguous ownership across the line.
 
-| Crate | Contents |
+| Component | Contents |
 | --- | --- |
-| `rsf-upscaler` | Vendor-neutral model: quality levels, motion vector conventions, viability checks |
+| `rsf-upscaler` (Rust) | Vendor-neutral model: quality levels, motion vector conventions, viability checks |
+| `dlss` (C++) | Streamline: load, device, support query, resource tags, per frame evaluate |
+
+The DLSS side is C++ rather than Rust, and deliberately. Streamline's structures are versioned,
+GUID tagged, and in one case abstract with a virtual operator; `FrameToken` cannot be expressed as
+a `#[repr(C)]` struct at all. Hand transcribing those layouts is silent corruption waiting for a
+version bump, so the vendor side stays where the vendor's own headers define it and
+`rescaleframe/dlss.h` is the narrow C surface the rest of the project sees. The rules above the
+line stay in Rust, which is where deciding what to do belongs.
 
 ## `rsf-upscaler`
 
@@ -52,6 +60,28 @@ again at each call site.
 The same module carries the jitter sequence length a backend wants, which is eight samples scaled
 by the area ratio. Unreal 4.18 takes that count from `r.TemporalAASamples` and does not move it
 with screen percentage, so the loader sets it alongside the render scale.
+
+## `dlss`
+
+Streamline, reached through `sl.interposer.dll` loaded by absolute path at runtime. Manual hooking
+is what makes this integration possible: the regular mode expects to be in place before the swap
+chain exists, while manual hooking allows the D3D11 device to already exist, which is the only
+option when attaching to a game that is already rendering. D3D11 has no device proxy in Streamline
+at all, so the game keeps rendering on its own device.
+
+What is settled, checked by cross-building against the real headers with warnings as errors:
+initialisation, handing over the game's device, the adapter support query, the render size DLSS
+asks for at a quality level, the five resource tags, and the per frame constants. The constants
+carry the pair that makes AC7's motion buffer usable directly, `cameraMotionIncluded` false with
+`motionVectorsInvalidValue` at the clear value, which is why AC7 needs no composition pass here.
+
+What is not settled: none of it has produced an upscaled pixel. Streamline initialises under Wine
+on this machine and accepts the device, but NVAPI does not initialise there, so NGX cannot report
+its requirements and `sl.dlss` is dropped as unsupported before it ever loads. That is a property
+of the environment rather than of this code, and it means the support query and everything past it
+need Windows, or a full Proton launch, to be answered. The matrices are the other open piece: they
+come from the view uniform buffer, which the loader reads but whose layout is only partly mapped
+for this engine branch.
 
 The honesty rule from `AGENTS.md` applies to this crate the same way it applies to
 `rsf_game_info.rendering_ready`: a backend reports what it can do, and a pairing that is not viable

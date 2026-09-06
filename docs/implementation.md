@@ -36,6 +36,11 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [ ] Jitter sequence length set in the game alongside the render scale. Written and cross-built,
       refused rather than guessed when the object does not hold the engine default. Not yet run in
       the game.
+- [ ] DLSS through Streamline: load, device handover, support query, render size planning, resource
+      tags and per frame constants, behind the C ABI in `runtime/backends/dlss`. Cross-built
+      against the real SDK headers with warnings as errors and contract-tested; Streamline
+      initialises under Wine and accepts a device, but NVAPI does not, so `sl.dlss` is dropped as
+      unsupported and nothing past the support query has run. No upscaled pixel yet.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

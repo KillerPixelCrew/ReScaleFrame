@@ -35,5 +35,11 @@ add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_
 # a couple of minutes rather than hanging the suite.
 set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
+add_executable(rsf_dlss_backend dlss_backend.cpp)
+target_link_libraries(rsf_dlss_backend PRIVATE ReScaleFrame::DLSS rsf_build_options)
+add_test(NAME dlss_backend COMMAND rsf_dlss_backend)
+# Loading a vendor runtime that talks to a driver is another place a hang is plausible.
+set_tests_properties(dlss_backend PROPERTIES TIMEOUT 120)
+
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")

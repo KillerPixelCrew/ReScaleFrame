@@ -16,8 +16,22 @@ These support research and are not part of any shipped artifact. Nothing here is
 | --- | --- | --- | --- |
 | `renderdoc_app.h` | `baldurk/renderdoc`, tag `v1.45` | MIT | `loader/diagnostics/src/frame_capture.c` |
 | `renderdoc.dll` (x64) | `renderdoc.org/stable/1.45/RenderDoc_1.45_64.zip` | MIT | loaded at runtime by the research proxy |
+| Streamline SDK headers | `NVIDIA-RTX/Streamline`, tag `v2.12.0` | MIT | `runtime/backends/dlss` |
+| `sl.*.dll`, `nvngx_dlss.dll` (x64) | `streamline-sdk-v2.12.0.zip` release asset | NVIDIA RTX SDKs License | loaded at runtime by the DLSS backend |
 
 Fetch both into `vendor/renderdoc/`. Capture support compiles only when the header is present, so a checkout without it still builds and tests. The DLL is never loaded from the search path, only from the explicit path in `RSF_RENDERDOC_DLL`.
+
+Streamline is the DLSS SDK; there has been no separate one since DLSS 2. Fetch the release asset
+and extract it into `vendor/streamline/`, so that `vendor/streamline/include/sl.h` and
+`vendor/streamline/bin/x64/sl.interposer.dll` exist. The build compiles the DLSS backend only when
+the header is present, and a checkout without it still builds and tests: the entry points remain
+and report that this build has no DLSS in it, which is a different statement from DLSS failing.
+
+The two licenses differ and the difference matters. Streamline's own source and headers are MIT.
+The NGX runtime binaries next to them, `nvngx_dlss.dll` in particular, are under the NVIDIA RTX
+SDKs License and are redistributable only on its terms. Neither is committed here and neither is
+shipped by this project. The backend loads them from a path given at runtime, so deploying them is
+the user's action under NVIDIA's license, not a redistribution by ReScaleFrame.
 
 The in-application capture approach, and specifically the need to allow NVIDIA vendor extensions so that RenderDoc does not cause device removal on hybrid graphics, follow Skyrim Community Shaders' `src/Features/RenderDoc.cpp`. That is a studied approach, not copied code.
 
