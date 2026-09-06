@@ -17,12 +17,16 @@ namespace {
 // ID3D11DeviceContext vtable slots, counting the three IUnknown and four ID3D11DeviceChild entries
 // first. Same source as the observer's slots, tools/ghidra/build-directx-types.py.
 constexpr size_t slot_ps_set_shader_resources = 8;
+constexpr size_t slot_draw_indexed = 12;
+constexpr size_t slot_draw = 13;
 constexpr size_t slot_ps_set_constant_buffers = 16;
 
 using ps_set_shader_resources_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
                                                             ID3D11ShaderResourceView* const*);
 using ps_set_constant_buffers_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
                                                             ID3D11Buffer* const*);
+using draw_indexed_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
+using draw_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 
 // The set that identifies this pass is five views. A pixel shader may bind far more, so the
 // examined window is bounded to keep the stack frame and the loop fixed on a path that runs
@@ -37,6 +41,8 @@ struct Tap {
     void** vtable = nullptr;
     ps_set_shader_resources_fn original_set_views = nullptr;
     ps_set_constant_buffers_fn original_set_constants = nullptr;
+    draw_indexed_fn original_draw_indexed = nullptr;
+    draw_fn original_draw = nullptr;
 
     rsf_frame_tap_options options{};
 
@@ -61,9 +67,15 @@ struct Tap {
         rsf_resource_role role = RSF_ROLE_UNKNOWN;
     };
     Slot slots[max_examined_views];
-    // Edge trigger. The signature stays complete across the draws that use it, and firing per call
-    // would run a backend several times on one frame.
-    bool signature_complete = false;
+    // Set when a binding changed, cleared when the set has been looked at. The look happens at the
+    // draw rather than at the binding, so this is what keeps a run of draws with unchanged state
+    // from rescanning the slots each time.
+    bool shadow_dirty = false;
+    // Edge trigger, on the identity of the three textures that make the signature rather than on
+    // completeness alone. A pass draws more than once with the same inputs bound, and firing per
+    // draw would run a backend several times over one frame.
+    ID3D11Texture2D* last_fired_motion = nullptr;
+    ID3D11Texture2D* last_fired_depth = nullptr;
 
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
@@ -218,6 +230,22 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
         return;
     }
     self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
+    self.shadow_dirty = true;
+}
+
+// Look at what is bound now and, if it is the set, hand it to the caller.
+//
+// Called from the draw hooks rather than from the binding hooks. Evaluating at the binding was the
+// second thing that made this recognise nothing: Unreal binds a slot at a time, so the set is
+// incomplete at every individual binding and complete only once the pass is ready to draw. Both
+// halves of the earlier assumption were wrong in the same direction, that the state can be judged
+// at the moment it is written rather than at the moment it is used.
+void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
+{
+    if (!self.shadow_dirty) {
+        return;
+    }
+    self.shadow_dirty = false;
 
     // Judged against the presented size the caller supplied, with the render size left unknown so
     // the classifier accepts anything from half of it upwards that keeps the frame's aspect. The
@@ -278,9 +306,11 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     // Edge triggered: the set stays bound across the draws that use it, and firing on every call
     // while it does would run a backend several times over one frame.
     const bool qualifies = motion && depth && exposure;
-    const bool was_complete = self.signature_complete;
-    self.signature_complete = qualifies;
-    if (qualifies && !was_complete) {
+    const bool already_fired =
+        motion == self.last_fired_motion && depth == self.last_fired_depth;
+    if (qualifies && !already_fired) {
+        self.last_fired_motion = motion;
+        self.last_fired_depth = depth;
         const uint32_t frame_index = self.passes.fetch_add(1, std::memory_order_relaxed) + 1;
 
         rsf_frame_tap_pass pass{};
@@ -342,10 +372,42 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
         }
     }
 
-    // Nothing is released here. The shadow now owns one reference per occupied slot, taken when the
+    // Nothing is released here. The shadow owns one reference per occupied slot, taken when the
     // slot changed and dropped when it changes again or when the tap is uninstalled. Releasing per
     // call was right while the set had to arrive in one call, and would be a use after free now
     // that the entries have to survive until the slot is rebound.
+}
+
+void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT index_count,
+                                           UINT start_index, INT base_vertex)
+{
+    Tap& self = tap();
+    const draw_indexed_fn forward = self.original_draw_indexed;
+    if (!forward) {
+        return;
+    }
+    forward(context, index_count, start_index, base_vertex);
+    if (inside_hook) {
+        return;
+    }
+    const ReentryGuard guard;
+    consider_bound_set(self, context);
+}
+
+void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_count,
+                                   UINT start_vertex)
+{
+    Tap& self = tap();
+    const draw_fn forward = self.original_draw;
+    if (!forward) {
+        return;
+    }
+    forward(context, vertex_count, start_vertex);
+    if (inside_hook) {
+        return;
+    }
+    const ReentryGuard guard;
+    consider_bound_set(self, context);
 }
 
 void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* context, UINT start_slot,
@@ -444,6 +506,28 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
         return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
     }
 
+    // The draws are where the set is judged. Failing to patch either one leaves the bindings hooked
+    // and nothing looking at them, which would be a tap that runs and never recognises anything, so
+    // both are undone rather than left half installed.
+    if (!patch_slot(self.vtable, slot_draw_indexed,
+                    reinterpret_cast<void*>(&hooked_draw_indexed),
+                    reinterpret_cast<void**>(&self.original_draw_indexed)) ||
+        !patch_slot(self.vtable, slot_draw, reinterpret_cast<void*>(&hooked_draw),
+                    reinterpret_cast<void**>(&self.original_draw))) {
+        if (self.original_draw_indexed) {
+            patch_slot(self.vtable, slot_draw_indexed,
+                       reinterpret_cast<void*>(self.original_draw_indexed), nullptr);
+        }
+        patch_slot(self.vtable, slot_ps_set_constant_buffers,
+                   reinterpret_cast<void*>(self.original_set_constants), nullptr);
+        patch_slot(self.vtable, slot_ps_set_shader_resources,
+                   reinterpret_cast<void*>(self.original_set_views), nullptr);
+        self.original_set_views = nullptr;
+        self.original_set_constants = nullptr;
+        self.original_draw_indexed = nullptr;
+        return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
+    }
+
     self.installed = true;
     return RSF_FRAME_TAP_OK;
 }
@@ -461,6 +545,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
                    reinterpret_cast<void*>(self.original_set_views), nullptr);
         patch_slot(self.vtable, slot_ps_set_constant_buffers,
                    reinterpret_cast<void*>(self.original_set_constants), nullptr);
+        patch_slot(self.vtable, slot_draw_indexed,
+                   reinterpret_cast<void*>(self.original_draw_indexed), nullptr);
+        patch_slot(self.vtable, slot_draw, reinterpret_cast<void*>(self.original_draw), nullptr);
         // The originals are deliberately kept. A call that entered a hook before the vtable was
         // restored still has to forward, and clearing them turns that race from a stale hook into a
         // null call. They stay valid for as long as the runtime is loaded, and a later install
@@ -482,7 +569,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         }
         slot = Tap::Slot{};
     }
-    self.signature_complete = false;
+    self.shadow_dirty = false;
+    self.last_fired_motion = nullptr;
+    self.last_fired_depth = nullptr;
     return RSF_FRAME_TAP_OK;
 }
 
