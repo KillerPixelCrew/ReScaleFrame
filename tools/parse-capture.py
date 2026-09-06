@@ -1,0 +1,229 @@
+"""Summarise the render targets and pass structure of a RenderDoc capture.
+
+Takes the XML that `renderdoccmd convert -c xml` produces, which is structured data only and
+needs no replay device. On Linux the conversion itself has to run through the Windows
+renderdoccmd under Wine, because only the Windows build can parse D3D11 chunks.
+
+This reports what the frame allocated and how it was bound. It does not read pixels, so it can
+say a target is a two channel float at render resolution, but not what convention its contents
+follow. That still needs looking at the image.
+"""
+
+import argparse
+import json
+from collections import Counter, defaultdict
+from pathlib import Path
+from xml.etree import ElementTree
+
+# Formats that a velocity target plausibly uses, kept separate from the general report so the
+# motion vector question has a direct answer.
+VELOCITY_FORMATS = {"DXGI_FORMAT_R16G16_FLOAT", "DXGI_FORMAT_R16G16_UNORM",
+                    "DXGI_FORMAT_R16G16_SNORM", "DXGI_FORMAT_R32G32_FLOAT",
+                    "DXGI_FORMAT_R10G10B10A2_UNORM"}
+DEPTH_FORMATS = {"DXGI_FORMAT_R24G8_TYPELESS", "DXGI_FORMAT_D24_UNORM_S8_UINT",
+                 "DXGI_FORMAT_R32_TYPELESS", "DXGI_FORMAT_D32_FLOAT",
+                 "DXGI_FORMAT_R32G8X24_TYPELESS", "DXGI_FORMAT_D32_FLOAT_S8X24_UINT"}
+
+# RenderDoc already renders the flags as text, so use its spelling rather than re-deriving it.
+BIND_LABELS = {"D3D11_BIND_SHADER_RESOURCE": "SRV", "D3D11_BIND_RENDER_TARGET": "RTV",
+               "D3D11_BIND_DEPTH_STENCIL": "DSV", "D3D11_BIND_UNORDERED_ACCESS": "UAV",
+               "D3D11_BIND_VERTEX_BUFFER": "VERTEX", "D3D11_BIND_INDEX_BUFFER": "INDEX",
+               "D3D11_BIND_CONSTANT_BUFFER": "CONSTANT", "D3D11_BIND_STREAM_OUTPUT": "SO"}
+
+
+def text_of(node, name):
+    child = node.find(f"./*[@name='{name}']")
+    return child.text if child is not None else None
+
+
+def enum_of(node, name):
+    child = node.find(f"./*[@name='{name}']")
+    return child.get("string") if child is not None else None
+
+
+def describe_binds(value):
+    if not value:
+        return []
+    return [BIND_LABELS.get(part.strip(), part.strip()) for part in value.split("|")]
+
+
+DRAW_CHUNKS = ("Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced",
+               "DrawAuto", "DrawInstancedIndirect", "DrawIndexedInstancedIndirect")
+DISPATCH_CHUNKS = ("Dispatch", "DispatchIndirect")
+
+
+def resource_id(node, name):
+    child = node.find(f"./ResourceId[@name='{name}']")
+    return child.text if child is not None else None
+
+
+def build_timeline(root, textures):
+    """Reconstruct the frame's passes from render target bindings and the draws between them.
+
+    The shipping build emits no debug markers, so a pass is defined here as a run of draws
+    sharing one output binding. That is enough to separate the scene pass from the post chain
+    and to find the point where the swap chain back buffer is first drawn into.
+    """
+    views = {}
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name", "")
+        if name in ("ID3D11Device::CreateRenderTargetView",
+                    "ID3D11Device::CreateDepthStencilView",
+                    "ID3D11Device::CreateUnorderedAccessView"):
+            source = resource_id(chunk, "pResource")
+            view = resource_id(chunk, "pView")
+            if source and view:
+                views[view] = source
+
+    # Shader resource views resolve to the same textures, which is how a pass that reads velocity
+    # can be told from one that writes it. Pass identity in a build with no debug markers comes
+    # from what is bound, and inputs say as much as outputs.
+    for chunk in root.iter("chunk"):
+        if chunk.get("name") == "ID3D11Device::CreateShaderResourceView":
+            source = resource_id(chunk, "pResource")
+            view = resource_id(chunk, "pSRView") or resource_id(chunk, "pView")
+            if source and view:
+                views[view] = source
+
+    passes = []
+    current = None
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name", "")
+        short = name.split("::")[-1]
+        if short.endswith("SetShaderResources") and current is not None:
+            for node in chunk.iter("ResourceId"):
+                if node.get("name") is None and node.text and node.text != "0":
+                    resource = views.get(node.text)
+                    if resource:
+                        current["reads"].add(resource)
+        if name == "ID3D11DeviceContext::OMSetRenderTargets":
+            bound = [node.text for node in chunk.iter("ResourceId")
+                     if node.get("name") is None and node.text and node.text != "0"]
+            depth = resource_id(chunk, "pDepthStencilView")
+            current = {
+                "chunk": int(chunk.get("chunkIndex", 0)),
+                "targets": [textures.get(views.get(view), {"id": views.get(view)})
+                            for view in bound],
+                "depth": textures.get(views.get(depth)) if depth and depth != "0" else None,
+                "draws": 0,
+                "dispatches": 0,
+                "reads": set(),
+            }
+            passes.append(current)
+        elif current is not None:
+            if short in DRAW_CHUNKS:
+                current["draws"] += 1
+            elif short in DISPATCH_CHUNKS:
+                current["dispatches"] += 1
+    return [entry for entry in passes if entry["draws"] or entry["dispatches"]]
+
+
+def parse(path):
+    tree = ElementTree.parse(path)
+    root = tree.getroot()
+    header = root.find("header")
+    thumbnail = header.find("thumbnail") if header is not None else None
+
+    textures = {}
+    order = []
+    counts = Counter()
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name", "")
+        counts[name] += 1
+        if name == "ID3D11Device::CreateTexture2D":
+            desc = chunk.find("./*[@name='Descriptor']")
+            if desc is None:
+                continue
+            identifier = text_of(chunk, "pTexture")
+            sample = desc.find("./*[@name='SampleDesc']")
+            textures[identifier] = {
+                "id": identifier,
+                "width": text_of(desc, "Width"),
+                "height": text_of(desc, "Height"),
+                "mips": text_of(desc, "MipLevels"),
+                "array": text_of(desc, "ArraySize"),
+                "format": enum_of(desc, "Format"),
+                "samples": text_of(sample, "Count") if sample is not None else None,
+                "usage": enum_of(desc, "Usage"),
+                "bind": describe_binds(enum_of(desc, "BindFlags")),
+            }
+        elif name == "ID3D11DeviceContext::OMSetRenderTargets":
+            targets = [node.text for node in chunk.iter() if node.get("name") == "ppRenderTargetViews"]
+            order.append({"views": targets})
+    return thumbnail, textures, order, counts
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("capture_xml", type=Path)
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--timeline", action="store_true",
+                        help="print the frame's passes in order instead of the target summary")
+    parser.add_argument("--reads", default=None,
+                        help="only show passes that sample this resource id")
+    args = parser.parse_args()
+
+    if args.timeline:
+        tree = ElementTree.parse(args.capture_xml)
+        root = tree.getroot()
+        _, textures, _, _ = parse(args.capture_xml)
+        passes = build_timeline(root, textures)
+        if args.reads:
+            passes = [entry for entry in passes if args.reads in entry["reads"]]
+            print(f"{len(passes)} passes sample resource #{args.reads}\n")
+        else:
+            print(f"{len(passes)} passes with work\n")
+        for entry in passes:
+            described = []
+            for target in entry["targets"]:
+                if target.get("width"):
+                    described.append(f"{target['width']}x{target['height']} "
+                                     f"{(target.get('format') or '').replace('DXGI_FORMAT_', '')}"
+                                     f" #{target['id']}")
+                else:
+                    described.append(f"#{target.get('id')}")
+            depth = entry["depth"]
+            depth_text = ""
+            if depth and depth.get("width"):
+                depth_text = (f"  depth {depth['width']}x{depth['height']} "
+                              f"{(depth.get('format') or '').replace('DXGI_FORMAT_', '')}")
+            work = f"{entry['draws']} draws"
+            if entry["dispatches"]:
+                work += f", {entry['dispatches']} dispatches"
+            print(f"  [{entry['chunk']:>5}] {work:<22} -> {', '.join(described) or 'none'}{depth_text}")
+        if args.output:
+            args.output.write_text(json.dumps([{k: (sorted(v) if isinstance(v, set) else v) for k, v in p.items()} for p in passes], indent=2) + "\n", encoding="utf-8")
+        return
+
+    thumbnail, textures, order, counts = parse(args.capture_xml)
+    if thumbnail is not None:
+        print(f"presented size: {thumbnail.get('width')}x{thumbnail.get('height')}")
+    print(f"{len(textures)} textures created, {sum(counts.values())} chunks, "
+          f"{counts['ID3D11DeviceContext::OMSetRenderTargets']} render target bindings")
+
+    by_size = defaultdict(list)
+    for texture in textures.values():
+        if "RTV" in texture["bind"] or "DSV" in texture["bind"] or "UAV" in texture["bind"]:
+            by_size[(texture["width"], texture["height"])].append(texture)
+
+    print("\nrender targets by resolution:")
+    for (width, height), group in sorted(by_size.items(),
+                                         key=lambda item: -(int(item[0][0] or 0) * int(item[0][1] or 0))):
+        formats = Counter(texture["format"] for texture in group)
+        print(f"  {width}x{height}: {len(group)} targets")
+        for format_name, count in formats.most_common(8):
+            marker = ""
+            if format_name in VELOCITY_FORMATS:
+                marker = "   <- velocity candidate"
+            elif format_name in DEPTH_FORMATS:
+                marker = "   <- depth"
+            print(f"      {count:>3}  {format_name}{marker}")
+
+    if args.output:
+        args.output.write_text(json.dumps(
+            {"textures": list(textures.values()), "chunk_counts": counts,
+             "render_target_bindings": len(order)}, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

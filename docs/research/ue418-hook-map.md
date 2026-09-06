@@ -22,6 +22,10 @@ The inspected installation contains `Ace7Game.exe` at the root of Steam's `ACE C
 
 The executable has no populated file/product version in the inspected Windows version metadata. The branch marker supports using UE4.18 as the reference; it does not prove the game uses stock 4.18.3. Static imports also do not enumerate dynamically resolved or delay-loaded APIs.
 
+The executable's `.text` is encrypted on disk and the entry point sits in a Steam DRM `.bind`
+section, so none of the hook leads below can be resolved to addresses from the shipped file. The
+string and import evidence comes from the plaintext `.rdata`. See [ghidra-tooling.md](ghidra-tooling.md).
+
 The read-only [fingerprint](evidence/ac7-executable.json) records sections, imports, and candidate string locations. It found `t.IdleWhenNotForeground`, `r.OneFrameThreadLag`, `r.ScreenPercentage`, `r.PostProcessAAQuality`, `r.TemporalAASamples`, `r.Tonemapper.MergeWithUpscale.Mode`, `SceneDepthZ`, and other source leads in the file. Several have multiple occurrences. These are substring matches in file data, not resolved functions or validated hooks.
 
 ## Engine boundaries to investigate

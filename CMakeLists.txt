@@ -7,6 +7,13 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "The initial ReScaleFrame target is Windows x64.")
 endif()
 
+if(NOT MSVC)
+    # mingw would otherwise emit libReScaleFrame.Bootstrap.dll. Windows DLL names are exact, and
+    # a forwarder has to match the name the game imports, so the cross build keeps MSVC's naming.
+    set(CMAKE_SHARED_LIBRARY_PREFIX "")
+    set(CMAKE_SHARED_MODULE_PREFIX "")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -22,11 +29,17 @@ target_include_directories(rsf_build_options INTERFACE "${CMAKE_BINARY_DIR}/gene
 target_compile_definitions(rsf_build_options INTERFACE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(MSVC)
     target_compile_options(rsf_build_options INTERFACE /W4 /WX /utf-8)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # The mingw cross build enforces the same warnings-are-errors rule as the MSVC reference build.
+    target_compile_options(rsf_build_options INTERFACE -Wall -Wextra -Werror)
+    # Nothing supplies the mingw runtime DLLs in a Wine prefix or a game process, so link them in.
+    target_link_options(rsf_build_options INTERFACE -static -static-libgcc -static-libstdc++)
 endif()
 
 include(CTest)
 add_subdirectory(sdk/game)
 add_subdirectory(loader)
+add_subdirectory(runtime/graphics)
 add_subdirectory(runtime/orchestrator)
 add_subdirectory(games/ac7)
 add_subdirectory(apps/launcher)
