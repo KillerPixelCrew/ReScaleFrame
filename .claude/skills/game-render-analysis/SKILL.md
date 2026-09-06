@@ -256,6 +256,27 @@ Know which of the two a given scene is testing.
   matrices thoroughly and object motion not at all. Know which one a scene tests before believing
   what it shows.
 
+## When a game appears to have no motion vectors
+
+Absent is not the same as impossible, and the search has an order. Ask them in this order, because
+each is much cheaper than the next:
+
+1. **Is it there and not exposed?** Look for the buffer before concluding anything: a two channel
+   target at render resolution, written by few draws, mostly at its clear value while the camera
+   pans. Ace Combat 7's exists and its shipped settings never present it.
+2. **Can the engine be made to write it?** A velocity pass usually sits behind a flag, because
+   motion blur needs velocity and so does temporal antialiasing. Turning on an effect you do not
+   want, to get the buffer it requires, is a real technique, and patching the gate is the same move
+   as reviving a jitter: six bytes, and the engine keeps everything derived from it consistent.
+3. **Camera motion only.** Depth and a current-to-previous clip transform reproject the static world
+   correctly, which is most of most frames, and backends will do this themselves given the right
+   constants. Independently moving objects ghost. Mods ship this and it is accepted, so treat it as
+   a usable tier rather than a failure, while being honest about what it costs.
+4. **Nothing at all** is the wall, and it is rarer than it looks from step one.
+
+The same order applies to a missing jitter, and for the same reason: re-enabling the engine's own
+path beats reimplementing it beside the engine, every time.
+
 ## Checking the target SDK first
 
 Read what the backend expects before building anything to feed it. Streamline's `sl::Constants`
