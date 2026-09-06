@@ -102,28 +102,43 @@ for this frame.
 intermediate targets. That single draw is the natural boundary for anything that needs the
 finished image.
 
-### Correction: those passes are probably motion blur, not temporal AA
+### Temporal AA runs, and it runs without jitter
 
-The section below identified two passes as temporal AA. Later evidence undermines it and the
-identification should not be relied on.
+Two facts sit together here that look contradictory and are not.
 
-AC7's graphics options offer only FXAA and none. There is no temporal AA setting. Unreal sets
-`TemporalAAJitter` only when the anti-aliasing method is temporal AA, and the view uniform buffer
-read from the running game has that field at exactly zero across every in-flight capture, thirty
-two bytes of zeros with nothing resembling jitter anywhere else in the buffer.
+The options menu offers only FXAA and none, motion blur was off during these captures, and
+`TemporalAAJitter` in the view uniform buffer read from the running game is exactly zero in every
+in-flight capture, thirty two bytes of zeros with nothing resembling jitter anywhere else.
 
-If temporal AA never runs, the two full resolution `RGBA16F` passes that read velocity are
-something else, and motion blur fits every signal that was used: it reads velocity, it runs at
-full resolution, its output descriptor inherits the input, and it sits in the same place in the
-chain. The three signals below distinguish "reads velocity and writes a float target" from
-everything else in the frame. They do not distinguish temporal AA from motion blur.
+And yet temporal AA is running. What settles it is not the output format, which motion blur shares,
+but what the second pass reads:
 
-A cheap test settles it: turn motion blur off in the game options and capture again. If the two
-passes disappear, they were motion blur.
+| Input | Resource |
+| --- | --- |
+| previous pass output | `#1732`, full resolution `RGBA16F` |
+| history | `#2172`, full resolution `RGBA16F` |
+| velocity | `#2163` |
+| depth | `#2052` |
+| **eye adaptation** | `#62725`, 1x1 `R32G32_FLOAT` |
 
-The engine still contains the temporal AA code. `r.DefaultFeature.AntiAliasing`,
-`r.TemporalAASamples` and `r.PostProcessAAQuality` are all present in the binary. It is the
-options menu that does not expose it.
+Colour plus history plus velocity plus depth plus exposure is `FRCPassPostProcessTemporalAA` and
+nothing else. Motion blur binds neither a history buffer nor exposure.
+
+So AC7 runs temporal AA as a temporal filter with no subpixel jitter. That is a coherent choice:
+the accumulation still stabilises specular and the cloud rendering, it simply gains no resolution,
+which is also why the menu does not present it as an anti-aliasing mode.
+
+Two consequences for super resolution, and they pull in opposite directions.
+
+Against: every super resolution backend needs a jittered projection, and this engine does not
+jitter. Jitter has to be introduced, either by turning Unreal's own temporal AA on properly or by
+modifying the projection ourselves. The cvars for the first are compiled in
+(`r.DefaultFeature.AntiAliasing`, `r.TemporalAASamples`, `r.PostProcessAAQuality`) but not exposed.
+
+In favour, and it is a large point: **every input a backend needs is already bound at one place.**
+Scene colour, depth, velocity and a 1x1 exposure target all arrive together at this pass, which is
+exactly Streamline's tag list. The integration point is not something that has to be constructed.
+It already exists and this is it.
 
 ### Locating temporal AA
 
