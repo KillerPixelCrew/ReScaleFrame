@@ -25,6 +25,10 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       zero. Game-tested, not yet built with MSVC.
 - [x] Console variables set in the running game, and render scale confirmed working through
       `r.ScreenPercentage`. Game-tested, not yet built with MSVC.
+- [x] Vendor-neutral upscaler model in Rust: quality levels, AC7's motion vector encoding taken
+      from engine source, and a viability check that reports every blocker rather than the first.
+      Unit-tested only. No vendor SDK is vendored and nothing here touches a GPU.
+      See [runtime/backends/README.md](../runtime/backends/README.md).
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.
