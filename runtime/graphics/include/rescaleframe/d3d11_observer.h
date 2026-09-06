@@ -42,6 +42,10 @@ typedef struct rsf_observer_options {
     uint32_t minimum_width;
     /* Upper bound on retained textures, so a misconfigured filter cannot hold the whole frame. */
     uint32_t capacity;
+    /* Retain the most recently created constant buffer of exactly this size, so the view uniform
+       data can be read back and its layout checked against what engine source predicts. Zero
+       disables it. Creation is watched rather than binding for the same reason as textures. */
+    uint32_t constant_buffer_bytes;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {
@@ -53,6 +57,7 @@ typedef struct rsf_observer_status {
     uint32_t textures_created;
     uint32_t present_width;
     uint32_t present_height;
+    uint32_t constant_buffers_matched;
 } rsf_observer_status;
 
 /* Patch the shared vtables. Safe to call from a worker thread; not from DllMain, because it
@@ -68,6 +73,11 @@ rsf_observer_result rsf_observer_get_status(rsf_observer_status* status);
    `view` is an rsf_dump_view from texture_dump.h. */
 rsf_observer_result rsf_observer_dump_matches(const char* output_prefix_utf8, uint32_t view,
                                               uint32_t* written);
+
+/* Write the retained constant buffer's bytes to a file, so its layout can be checked against the
+   offsets tools/ue4-view-layout.py derives from engine source. Raw bytes only: interpreting them
+   is the tool's job, and putting the interpretation here would bake a guess into the runtime. */
+rsf_observer_result rsf_observer_dump_constants(const char* output_path_utf8, uint32_t* bytes);
 
 #ifdef __cplusplus
 } /* extern "C" */

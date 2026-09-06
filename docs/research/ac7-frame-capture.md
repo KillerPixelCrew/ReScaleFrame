@@ -185,18 +185,30 @@ reconstructs camera motion per pixel from `View.ClipToPrevClip` and only overrid
 object actually drew. That is why the capture shows ten draws into a full resolution target: the
 rest of the screen is left at the clear value on purpose.
 
-### What the plugin has to build
+### What the plugin has to build, and what it does not
 
-Composing a motion vector field is ordinary work for this kind of integration, since games not
-built for super resolution rarely hand over one ready to use. What matters here is the specifics,
-which are now exact rather than assumed.
+An earlier draft of this section claimed the plugin must compose the combined motion field itself.
+For the Streamline path that is wrong. `sl::Constants` carries
 
-The plugin needs its own pass producing the combined field: decode the target where `x > 0` using
-`(value - 32767/65535) / 0.2495`, compute camera motion from `ClipToPrevClip` everywhere else,
-and convert to the units the selected backend wants. Two consequences follow. The pass needs
-`View.ClipToPrevClip` at runtime, which is a struct layout question a frame capture cannot answer.
-And the sentinel test is `x > 0` on the raw value, not a comparison against the bias, so the
-decode has to run after the test rather than being folded into it.
+```cpp
+Boolean cameraMotionIncluded;      // set to false for AC7
+float motionVectorsInvalidValue;   // set to 0, matching the clear value
+```
+
+With those set, Streamline reconstructs camera motion from `clipToPrevClip` and depth and uses the
+invalid value to tell which pixels carry object motion. AC7's convention, object velocity against a
+zero clear, is precisely the case that pair exists for. So the composition pass is not needed for
+DLSS.
+
+It may still be needed for other backends. XeSS and FSR expect a complete motion field, so the same
+decode has to exist somewhere for those. Where it does, the decode is
+`(value - 32767/65535) / 0.2495` applied only where the raw value is non-zero, and the sentinel
+test runs before the decode rather than folded into it.
+
+What no backend can substitute for is the per-frame camera data. Streamline requires matrices
+without jitter, the jitter offset separately in pixel space, camera basis vectors, near and far
+planes, field of view, aspect ratio, a motion vector scale, and a reset flag for cuts. All of it
+lives in the view uniform data, which is the one thing a frame capture cannot supply.
 
 Velocity units are screen space as the shader uses them, where `BackN * ViewportSize` gives an
 offset in units of two pixels per viewport width. Backend conversion has to account for that

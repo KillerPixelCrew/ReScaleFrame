@@ -60,6 +60,7 @@ int main(int argc, char* argv[])
     options.format = DXGI_FORMAT_R16G16_UNORM;
     options.minimum_width = 64;
     options.capacity = 8;
+    options.constant_buffer_bytes = 2640;  // the size stock 4.18 view uniform data occupies
 
     options.abi_version = RSF_OBSERVER_ABI_VERSION + 1u;
     check(rsf_observer_install(&options) == RSF_OBSERVER_ERROR_ABI_MISMATCH,
@@ -149,6 +150,31 @@ int main(int argc, char* argv[])
     ID3D11Texture2D* not_a_target = nullptr;
     device->CreateTexture2D(&staging, nullptr, &not_a_target);
 
+    // A constant buffer of the size the view uniform data occupies, with a recognisable payload,
+    // plus one of a different size that must be ignored.
+    stage("creating constant buffers");
+    std::vector<float> constants(2640 / sizeof(float), 0.0f);
+    constants[0] = 1.5f;
+    constants[1] = -2.25f;
+    constants[(2640 / sizeof(float)) - 1] = 9.75f;
+
+    auto make_constant_buffer = [&](UINT bytes, const void* payload) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = bytes;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA initial{};
+        initial.pSysMem = payload;
+        ID3D11Buffer* buffer = nullptr;
+        device->CreateBuffer(&desc, payload ? &initial : nullptr, &buffer);
+        return buffer;
+    };
+
+    std::vector<float> decoy(512 / sizeof(float), 3.0f);
+    ID3D11Buffer* wrong_size = make_constant_buffer(512, decoy.data());
+    ID3D11Buffer* view_like = make_constant_buffer(2640, constants.data());
+    check(view_like != nullptr, "The view sized constant buffer must be created.");
+
     stage("presenting");
     check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must still work with hooks installed.");
     check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must keep working.");
@@ -174,6 +200,27 @@ int main(int argc, char* argv[])
           "Dumping the matches must succeed.");
     check(written == 1u, "The one retained target must be dumped.");
 
+    stage("dumping constants");
+    check(status.constant_buffers_matched == 1u,
+          "Only the constant buffer of the configured size must be retained.");
+    char constants_path[1024];
+    std::snprintf(constants_path, sizeof(constants_path), "%s\\view_constants.bin", argv[1]);
+    uint32_t constant_bytes = 0;
+    check(rsf_observer_dump_constants(constants_path, &constant_bytes) == RSF_OBSERVER_OK,
+          "Dumping the retained constant buffer must succeed.");
+    check(constant_bytes == 2640u, "The dump must be the full buffer.");
+    if (std::FILE* stream = std::fopen(constants_path, "rb")) {
+        std::vector<float> read_back(2640 / sizeof(float), 0.0f);
+        const size_t got = std::fread(read_back.data(), 1, 2640, stream);
+        std::fclose(stream);
+        check(got == 2640, "The dumped file must hold the whole buffer.");
+        // Reading the payload back proves the copy path, which is what the offset checking in
+        // tools/ue4-view-layout.py will rely on.
+        check(read_back[0] == 1.5f && read_back[1] == -2.25f &&
+                  read_back[(2640 / sizeof(float)) - 1] == 9.75f,
+              "The dumped contents must match what was uploaded.");
+    }
+
     stage("uninstalling");
     check(rsf_observer_uninstall() == RSF_OBSERVER_OK, "Uninstalling must succeed.");
     check(rsf_observer_uninstall() == RSF_OBSERVER_ERROR_NOT_READY,
@@ -181,6 +228,8 @@ int main(int argc, char* argv[])
     // Presenting after the vtable is restored proves the entries were put back intact.
     check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must work after uninstalling.");
 
+    if (view_like) view_like->Release();
+    if (wrong_size) wrong_size->Release();
     if (not_a_target) not_a_target->Release();
     if (too_small) too_small->Release();
     if (wrong_format) wrong_format->Release();
