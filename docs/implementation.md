@@ -17,6 +17,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       it performs no interception and touches no graphics object. Cross-built with mingw-w64 and
       tested under Wine, and run against the installed game on 6 September 2026. Results are in
       [ghidra-tooling.md](research/ghidra-tooling.md). Not yet built with MSVC.
+- [x] Render analysis of the installed game: frame timeline, both velocity targets, the temporal
+      AA pass identified by its inputs, and the view uniform buffer read live with offsets
+      confirmed against engine source. Game-tested. See [ac7-frame-capture.md](research/ac7-frame-capture.md).
+- [x] Temporal jitter revived by patching the anti-aliasing gate, verified in the running game:
+      every perspective view now carries a sub-pixel offset where all fifty earlier captures were
+      zero. Game-tested, not yet built with MSVC.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

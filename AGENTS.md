@@ -132,6 +132,11 @@ stay untracked. `.local/`, `references/`, `vendor/`, `captures/`, and `dumps/` a
 the executable name and hash appear in published research. See `docs/dependencies.md` before adding
 any third-party code or binary.
 
+The procedure this project uses to analyse a game is written down in
+[docs/research/methodology.md](docs/research/methodology.md), with the operational version as a
+skill at `.claude/skills/game-render-analysis/`. Read one of them before starting on a new game or
+a new render question; both record failures worth not repeating.
+
 `tools/inspect-game.py` is read-only PE inspection; a string match is a lead, not a verified hook
 site. `.mcp.json` wires up a Ghidra MCP bridge for binary analysis. It is a development tool, not a
 runtime dependency.

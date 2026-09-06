@@ -10,7 +10,7 @@ Read [architecture.md](architecture.md) for the design and its reasoning, [valid
 
 The follow-up [UE4.18 hook map](ue418-hook-map.md) uses the authorized Epic source checkout and the installed AC7 executable. [Vulkan versus DX12](presentation-backends.md) compares the presentation options and Community Shaders' current Vulkan work.
 
-[Binary analysis tooling](ghidra-tooling.md) covers the Ghidra tooling this project had to write and records why the shipped executable cannot be analysed statically. [Frame capture](ac7-frame-capture.md) records the render targets the game actually allocates, including the two velocity textures.
+[Methodology](methodology.md) is the reusable procedure the AC7 work produced, and is the place to start on a new game. [Binary analysis tooling](ghidra-tooling.md) covers the Ghidra tooling this project had to write and records why the shipped executable cannot be analysed statically. [Frame capture](ac7-frame-capture.md) records the render targets the game actually allocates, including the two velocity textures.
 
 ## What the research established
 
