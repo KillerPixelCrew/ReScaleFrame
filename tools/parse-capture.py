@@ -75,11 +75,27 @@ def build_timeline(root, textures):
             if source and view:
                 views[view] = source
 
+    # Shader resource views resolve to the same textures, which is how a pass that reads velocity
+    # can be told from one that writes it. Pass identity in a build with no debug markers comes
+    # from what is bound, and inputs say as much as outputs.
+    for chunk in root.iter("chunk"):
+        if chunk.get("name") == "ID3D11Device::CreateShaderResourceView":
+            source = resource_id(chunk, "pResource")
+            view = resource_id(chunk, "pSRView") or resource_id(chunk, "pView")
+            if source and view:
+                views[view] = source
+
     passes = []
     current = None
     for chunk in root.iter("chunk"):
         name = chunk.get("name", "")
         short = name.split("::")[-1]
+        if short.endswith("SetShaderResources") and current is not None:
+            for node in chunk.iter("ResourceId"):
+                if node.get("name") is None and node.text and node.text != "0":
+                    resource = views.get(node.text)
+                    if resource:
+                        current["reads"].add(resource)
         if name == "ID3D11DeviceContext::OMSetRenderTargets":
             bound = [node.text for node in chunk.iter("ResourceId")
                      if node.get("name") is None and node.text and node.text != "0"]
@@ -91,6 +107,7 @@ def build_timeline(root, textures):
                 "depth": textures.get(views.get(depth)) if depth and depth != "0" else None,
                 "draws": 0,
                 "dispatches": 0,
+                "reads": set(),
             }
             passes.append(current)
         elif current is not None:
@@ -142,6 +159,8 @@ def main():
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--timeline", action="store_true",
                         help="print the frame's passes in order instead of the target summary")
+    parser.add_argument("--reads", default=None,
+                        help="only show passes that sample this resource id")
     args = parser.parse_args()
 
     if args.timeline:
@@ -149,7 +168,11 @@ def main():
         root = tree.getroot()
         _, textures, _, _ = parse(args.capture_xml)
         passes = build_timeline(root, textures)
-        print(f"{len(passes)} passes with work\n")
+        if args.reads:
+            passes = [entry for entry in passes if args.reads in entry["reads"]]
+            print(f"{len(passes)} passes sample resource #{args.reads}\n")
+        else:
+            print(f"{len(passes)} passes with work\n")
         for entry in passes:
             described = []
             for target in entry["targets"]:
@@ -169,7 +192,7 @@ def main():
                 work += f", {entry['dispatches']} dispatches"
             print(f"  [{entry['chunk']:>5}] {work:<22} -> {', '.join(described) or 'none'}{depth_text}")
         if args.output:
-            args.output.write_text(json.dumps(passes, indent=2) + "\n", encoding="utf-8")
+            args.output.write_text(json.dumps([{k: (sorted(v) if isinstance(v, set) else v) for k, v in p.items()} for p in passes], indent=2) + "\n", encoding="utf-8")
         return
 
     thumbnail, textures, order, counts = parse(args.capture_xml)

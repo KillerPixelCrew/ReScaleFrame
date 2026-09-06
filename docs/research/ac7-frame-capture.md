@@ -102,6 +102,38 @@ for this frame.
 intermediate targets. That single draw is the natural boundary for anything that needs the
 finished image.
 
+### Locating temporal AA
+
+Three independent signals agree, without any debug marker being present.
+
+Only two passes in the frame sample the velocity target #2163:
+
+```
+[ 3257] 1 draws -> 2048x1152 R16G16B16A16_FLOAT #1732
+[ 3275] 1 draws -> 2048x1152 R16G16B16A16_FLOAT #2168
+```
+
+`FRCPassPostProcessTemporalAA::ComputeOutputDesc` in 4.18.3 forces `PF_FloatRGBA` regardless of
+its input format, which is `R16G16B16A16_FLOAT`, and both passes match. They are single full
+screen draws, they sit immediately before the post process downsample chain begins at chunk 3323,
+and nothing else in the frame reads velocity. That places temporal AA at chunks 3257 and 3275.
+
+The same function settles the reinsertion problem the hook map raised:
+
+```cpp
+FPooledRenderTargetDesc Ret = GetInput(ePId_Input0)->GetOutput()->RenderTargetDesc;
+Ret.Format = PF_FloatRGBA;
+```
+
+The output descriptor is copied from the input and only its format and flags are overridden, so
+the extent is inherited. A larger reconstruction result cannot be returned by swapping a texture
+pointer, because the allocation the graph makes is input sized. That confirms from source what
+`ue418-hook-map.md` predicted.
+
+One limitation of the timeline worth stating: a pass boundary is a render target binding, so
+compute work that binds no render target is attributed to whichever draw pass preceded it. The
+motion blur velocity flatten is compute, which is why it does not appear here as its own pass.
+
 Unresolved: target #1208 at 1920x1080 takes 42 draws at the start of the captured frame while
 everything else, including the back buffer, runs at 2048x1152. A capture spans present to present,
 so work the game performs at the end of its frame appears at the beginning of the capture, which
@@ -153,18 +185,18 @@ reconstructs camera motion per pixel from `View.ClipToPrevClip` and only overrid
 object actually drew. That is why the capture shows ten draws into a full resolution target: the
 rest of the screen is left at the clear value on purpose.
 
-### Consequence for super resolution
+### What the plugin has to build
 
-XeSS, DLSS and FSR all expect a complete motion vector field including camera motion. AC7's
-velocity target is not that, and handing it over directly would leave every static pixel with a
-zero vector while the camera moves, which is precisely the input that produces smeared
-reconstruction.
+Composing a motion vector field is ordinary work for this kind of integration, since games not
+built for super resolution rarely hand over one ready to use. What matters here is the specifics,
+which are now exact rather than assumed.
 
-The plugin therefore has to produce the combined field itself: for each pixel, decode the target
-where `x > 0` and compute camera motion from `ClipToPrevClip` everywhere else, then convert to
-whatever units the selected backend wants. That is a required pass, not an optimisation, and it
-means the plugin needs `View.ClipToPrevClip` at runtime. Reading that from the view uniform buffer
-is the one thing a frame capture cannot supply and engine struct layout can.
+The plugin needs its own pass producing the combined field: decode the target where `x > 0` using
+`(value - 32767/65535) / 0.2495`, compute camera motion from `ClipToPrevClip` everywhere else,
+and convert to the units the selected backend wants. Two consequences follow. The pass needs
+`View.ClipToPrevClip` at runtime, which is a struct layout question a frame capture cannot answer.
+And the sentinel test is `x > 0` on the raw value, not a comparison against the bias, so the
+decode has to run after the test rather than being folded into it.
 
 Velocity units are screen space as the shader uses them, where `BackN * ViewportSize` gives an
 offset in units of two pixels per viewport width. Backend conversion has to account for that
