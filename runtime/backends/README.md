@@ -75,47 +75,52 @@ asks for at a quality level, the five resource tags, and the per frame constants
 carry the pair that makes AC7's motion buffer usable directly, `cameraMotionIncluded` false with
 `motionVectorsInvalidValue` at the clear value, which is why AC7 needs no composition pass here.
 
-### How far this gets under Wine, and where it stops
+### Running it under Wine
 
-Run inside the game's own Proton prefix, with DXVK and DXVK-NVAPI selected:
+DLSS reports supported and returns render sizes on this machine, under Wine, in the game's own
+Proton prefix:
 
 ```bash
 WINEPREFIX=~/.local/share/Steam/steamapps/compatdata/502500/pfx \
-WINEDLLOVERRIDES="d3d11,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n" \
+WINEDLLOVERRIDES="d3d11,d3d12,d3d12core,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n" \
 RSF_STREAMLINE_BIN='Z:\...\vendor\streamline\bin\x64' \
 prime-run /usr/share/steam/compatibilitytools.d/proton-cachyos-slr/files/bin/wine \
     build/linux-cross-x64/bin/rsf_dlss_backend.exe
 ```
 
-Both halves of that matter. `prime-run` puts the work on the discrete GPU, and the overrides select
-DXVK for `d3d11`/`dxgi`, which DXVK-NVAPI needs underneath it. With plain Wine's own D3D11 the
-whole chain fails early at "NVAPI failed to initialize", which reads like a driver problem and is
-not one.
+Every part of that line earns its place, and each one was a dead end first:
 
-With those in place the integration gets a long way. NVAPI reports the RTX 4070 Laptop and driver
-610.57 against a required 512.15, NGX starts, and it loads `nvngx_dlss.dll` version 310.7.0. The
-DLSS plugin loads for adapter mask 0x1 on Ada, architecture 0x190 against a required 0x160.
+- **`prime-run`** puts the work on the discrete GPU.
+- **`d3d11,dxgi=n`** selects DXVK. DXVK-NVAPI sits on top of it, so with Wine's own D3D11 the chain
+  dies at "NVAPI failed to initialize", which reads like a driver problem and is not one.
+- **`d3d12,d3d12core=n`** selects vkd3d-proton, and this is the one that is easy to miss in a D3D11
+  integration. Streamline runs its own compute through a DX11-on-12 device, so without it
+  `D3D12CreateDevice` fails, `computeDX11On12->init` fails after it, and DLSS ends up unsupported
+  for a reason that has nothing to do with D3D12 being wanted by anything the game does.
+- **`nvngx,_nvngx=n`** reaches the driver's NGX rather than a stub.
 
-It stops in one specific place:
+With those, on an RTX 4070 Laptop with driver 610.57 against a required 512.15:
 
 ```
-NGXCubinD3D11::CreateKernel: error: NvAPI_D3D11_CreateCubinComputeShaderEx failed - nvapi status -3
-nvapi_QueryInterface (NvAPI_D3D11_CreateCubinComputeShaderExV2): Not implemented method
+DLSS supported: 1 (result 0)
+performance quality renders 1024x576 for 2048x1152
 ```
 
-DLSS on D3D11 launches its kernels through an NVAPI extension rather than through D3D11 compute.
-DXVK enables the Vulkan extensions it is built on, `VK_NVX_binary_import` and
-`VK_NVX_image_view_handle`, and DXVK-NVAPI implements `CreateCubinComputeShaderEx` and
-`CreateCubinComputeShaderWithName`. It does not implement the `ExV2` variant, which is the one this
-NGX version calls. `slSetD3DDevice` then fails with an exception inside Streamline.
+That render size is the same 1024x576 the game was measured at under `r.ScreenPercentage 50`, which
+is a useful coincidence rather than a result: it means the size DLSS asks for at performance quality
+is one AC7 can already be made to render at.
 
-So the gap is one unimplemented entry point in DXVK-NVAPI, not this code, not the driver, and not
-the hardware. Three ways past it, in order of cost: an older `nvngx_dlss.dll` that calls the
-non-V2 entry point, a DXVK-NVAPI that implements `ExV2`, or Windows. Nothing here has produced an
-upscaled pixel yet.
+Two things in the log are worth knowing about and neither is fatal. NGX reports
+`NvAPI_D3D11_CreateCubinComputeShaderEx failed - nvapi status -3`, and `CreateCubinComputeShaderExV2`
+comes back as not implemented: DXVK-NVAPI implements the plain and `WithName` cubin entry points but
+neither `Ex` variant, and NGX falls back. Every DLSS snippet on this machine takes that path, from
+2.3.11 to 310.7.0, so it is the NGX core rather than the snippet version. Separately, DXVK logs
+`waitForIdle: Operation failed` twice while the test tears its device down after `slShutdown`; in a
+game the device outlives us, so this may never come up, but it has not been explained.
 
-The matrices are the other open piece. They come from the view uniform buffer, which the loader
-reads but whose layout is only partly mapped for this engine branch.
+Still no upscaled pixel: everything above is initialisation and queries. The matrices are the piece
+that stands between this and one. They come from the view uniform buffer, which the loader reads but
+whose layout is only partly mapped for this engine branch.
 
 ### An identity is not optional
 

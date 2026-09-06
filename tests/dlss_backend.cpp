@@ -8,6 +8,14 @@
 // performs a real load and asks the driver whether DLSS is supported. That path is skipped, not
 // failed, when the variable is unset or the load does not succeed, since a machine without the
 // SDK deployed is not a broken one.
+//
+// Under Wine that run needs DXVK, vkd3d-proton and DXVK-NVAPI selected together:
+//
+//   WINEDLLOVERRIDES="d3d11,d3d12,d3d12core,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n"
+//
+// d3d12 belongs in that list even though nothing here wants D3D12: Streamline runs its own compute
+// through a DX11-on-12 device, and without it DLSS reports unsupported for a reason that looks
+// nothing like the cause. See runtime/backends/README.md.
 
 #include <rescaleframe/dlss.h>
 
