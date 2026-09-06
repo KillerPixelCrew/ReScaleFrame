@@ -84,6 +84,11 @@ int main(int argc, char* argv[])
     options.constant_buffer_min_bytes = 2640;  // stock 4.18 view uniform size
     options.constant_buffer_max_bytes = 2640;
     options.log = collect;
+    // Unreal's encoding, so the decode written beside each dump is the one a backend would get.
+    options.decode_motion = 1;
+    options.motion_scale = 1.0f / (0.499f * 0.5f);
+    options.motion_bias = 32767.0f / 65535.0f;
+    options.motion_invalid_value = -1000.0f;
 
     options.abi_version = RSF_OBSERVER_ABI_VERSION + 1u;
     check(rsf_observer_install(&options) == RSF_OBSERVER_ERROR_ABI_MISMATCH,
@@ -237,6 +242,18 @@ int main(int argc, char* argv[])
     check(logged("256x128"), "The descriptor must be logged before the copy.");
     check(logged("constant buffer of 2640 bytes"), "Each constant buffer must be named.");
     check(logged("dump end: 1 textures"), "Completion must be distinguishable from a crash.");
+
+    // The decode has to reach the game's own targets, not only a test's made up values, so the
+    // dump path runs it and writes the result beside the raw one.
+    char decoded_path[1024];
+    std::snprintf(decoded_path, sizeof(decoded_path), "%s\\observed_0_decoded.tga", argv[1]);
+    if (std::FILE* stream = std::fopen(decoded_path, "rb")) {
+        std::fclose(stream);
+    } else if (logged("motion decode unavailable")) {
+        std::fprintf(stderr, "no shader compiler here, decode skipped\n");
+    } else {
+        check(false, "A decoded motion dump must be written beside the raw one.");
+    }
 
     char constants_path[1024];
     std::snprintf(constants_path, sizeof(constants_path), "%s\\observed_cb2640.bin", argv[1]);

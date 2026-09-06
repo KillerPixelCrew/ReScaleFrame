@@ -46,6 +46,13 @@ typedef uint32_t rsf_dump_view;
 /* Treat the texture as Unreal velocity: decode, then centre zero motion at mid grey so that
    direction and magnitude are both readable, and mark unwritten pixels. */
 #define RSF_DUMP_VIEW_VELOCITY ((rsf_dump_view)1)
+/* Motion that a pass has already decoded. Centred the same way as the velocity view so the two can
+   be compared side by side, but without decoding again, and marking the sentinel rather than a
+   stored zero: after a decode, zero is a real motion of zero and cannot serve as the marker. */
+#define RSF_DUMP_VIEW_DECODED_MOTION ((rsf_dump_view)2)
+/* Anything at or below this is the sentinel a decode pass wrote, not motion. Real screen space
+   motion is a fraction of the [-1,1] range, so the gap is several orders of magnitude wide. */
+#define RSF_DUMP_DECODED_SENTINEL_THRESHOLD (-100.0f)
 
 typedef struct rsf_texture_dump_options {
     uint32_t struct_size;

@@ -46,8 +46,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       Offsets are checked by an identity that ties five of them together rather than fitted to one
       buffer, and `tools/verify-view-layout.py` re-runs that check over the captured buffers: 11
       perspective views, 0 failures. Game-tested data, offline analysis.
-- [ ] Motion vector decode pass. Required for every backend, not just the ones that want camera
-      motion: they take a scale factor and Unreal's storage carries a bias. Not written.
+- [x] Motion vector decode pass, required for every backend rather than only the ones that want
+      camera motion: they take a scale factor and Unreal's storage carries a bias. A D3D11 compute
+      pass with the encoding as parameters, saving and restoring the compute state around its
+      dispatch. Cross-built and tested under Wine on DXVK against values encoded with the engine's
+      own constants, including the sentinel and an axis flip. Wired into the F10 dump so it can be
+      checked against the game's buffer, which has not been done yet.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

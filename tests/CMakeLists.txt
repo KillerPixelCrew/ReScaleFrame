@@ -28,6 +28,11 @@ add_executable(rsf_texture_dump texture_dump.cpp)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(rsf_motion_decode motion_decode.cpp)
+target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME motion_decode COMMAND rsf_motion_decode)
+set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
+
 add_executable(rsf_d3d11_observer d3d11_observer.cpp)
 target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")

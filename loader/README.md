@@ -47,11 +47,19 @@ It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
 | Key | Action |
 | --- | --- |
 | F9 | Set `r.ScreenPercentage`, and `r.TemporalAASamples` to match |
-| F10 | Dump velocity targets, view constant buffers, and a buffer size histogram |
+| F10 | Dump velocity targets raw and decoded, view constant buffers, and a buffer size histogram |
 | F11 | Trigger a RenderDoc capture |
 
 Each F10 writes its own `captureNN_*` set. The index resets per process, so a short run overwrites
 the low numbered files of a longer earlier one.
+
+Alongside each raw target it writes a `_decoded` pair, produced by running the motion decode pass a
+backend depends on. That pass exists because no backend can read Unreal's storage directly: they
+take a scale factor for motion and nothing to subtract a bias with. Comparing the two images is how
+the decode gets checked against the game's own buffer rather than only against values a test made
+up. In the decoded image, blue marks the sentinel the pass wrote where the source held its clear
+value, and mid grey is zero motion, the same convention the raw velocity view uses.
+`RSF_DECODE_MOTION=0` turns it off.
 
 F9 sets the jitter sequence length as well as the render scale, because 4.18 does not tie the two
 together and a reconstruction wants the sequence to grow with the area ratio: 8 samples at full

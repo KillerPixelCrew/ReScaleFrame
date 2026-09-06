@@ -241,6 +241,19 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
             }
             float red = sample.x;
             float green = sample.y;
+            if (options->view == RSF_DUMP_VIEW_DECODED_MOTION) {
+                // Already decoded, so the only thing to recognise is the sentinel a decode pass
+                // wrote where the source held its clear value.
+                if (red <= RSF_DUMP_DECODED_SENTINEL_THRESHOLD) {
+                    ++unwritten;
+                    uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
+                    pixel[0] = 220;  // blue, the same marker the velocity view uses
+                    pixel[1] = 0;
+                    pixel[2] = 0;
+                    pixel[3] = 255;
+                    continue;
+                }
+            }
             if (options->view == RSF_DUMP_VIEW_VELOCITY) {
                 if (!sample.written) {
                     ++unwritten;
@@ -264,7 +277,8 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
             if (green > max_y) max_y = green;
 
             uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
-            if (options->view == RSF_DUMP_VIEW_VELOCITY) {
+            if (options->view == RSF_DUMP_VIEW_VELOCITY ||
+                options->view == RSF_DUMP_VIEW_DECODED_MOTION) {
                 // Zero motion sits at mid grey so sign is readable at a glance.
                 pixel[2] = clamp_byte(128.0f + red * scale * 127.0f);
                 pixel[1] = clamp_byte(128.0f + green * scale * 127.0f);
@@ -280,6 +294,12 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
 
     context->Unmap(readable, 0);
     readable->Release();
+
+    // Nothing contributed a value, so the running extremes are still their starting sentinels.
+    // Reporting those as a range would read as an enormous motion rather than as no data.
+    if (min_x > max_x) {
+        min_x = max_x = min_y = max_y = 0.0f;
+    }
 
     const std::string prefix = options->output_prefix_utf8;
     say(*options, "dump: writing %s.tga", prefix.c_str());

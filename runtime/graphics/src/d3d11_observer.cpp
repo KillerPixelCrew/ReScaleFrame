@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/motion_decode.h>
 #include <rescaleframe/texture_dump.h>
 
 #include <windows.h>
@@ -217,6 +218,63 @@ void say(const Observer& self, const char* format, ...)
     self.options.log(self.options.log_user, message);
 }
 
+// Decode one target the way a backend needs it, and write the result beside the raw dump.
+//
+// The pass is built and thrown away per texture rather than kept. This runs on a key press a few
+// times a session, so the cost does not matter, and a cached pass would have to be invalidated
+// whenever the render size changed, which is exactly what this project makes happen.
+void decode_and_dump(Observer& self, ID3D11Device* device, ID3D11DeviceContext* context,
+                     ID3D11Texture2D* source, const char* prefix)
+{
+    D3D11_TEXTURE2D_DESC description{};
+    source->GetDesc(&description);
+
+    rsf_motion_decode_setup setup{};
+    setup.struct_size = sizeof(setup);
+    setup.abi_version = RSF_MOTION_DECODE_ABI_VERSION;
+    setup.width = description.Width;
+    setup.height = description.Height;
+    setup.log = self.options.log;
+    setup.log_user = self.options.log_user;
+
+    rsf_motion_decode* pass = nullptr;
+    const rsf_motion_decode_result made = rsf_motion_decode_create(device, &setup, &pass);
+    if (made != RSF_MOTION_DECODE_OK || !pass) {
+        say(self, "motion decode unavailable, result %d", int(made));
+        return;
+    }
+
+    rsf_motion_decode_params params{};
+    params.struct_size = sizeof(params);
+    params.scale_x = self.options.motion_scale;
+    params.scale_y = self.options.motion_scale;
+    params.bias_x = self.options.motion_bias;
+    params.bias_y = self.options.motion_bias;
+    params.output_scale_x = 1.0f;
+    params.output_scale_y = 1.0f;
+    params.invalid_value = self.options.motion_invalid_value;
+    params.zero_means_unwritten = 1;
+
+    const rsf_motion_decode_result ran = rsf_motion_decode_run(pass, context, source, &params);
+    if (ran != RSF_MOTION_DECODE_OK) {
+        say(self, "motion decode refused, result %d", int(ran));
+        rsf_motion_decode_destroy(pass);
+        return;
+    }
+
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s_decoded", prefix);
+    rsf_texture_dump_options dump{};
+    dump.struct_size = sizeof(dump);
+    dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+    dump.output_prefix_utf8 = path;
+    dump.view = RSF_DUMP_VIEW_DECODED_MOTION;
+    dump.log = self.options.log;
+    dump.log_user = self.options.log_user;
+    rsf_dump_texture(device, context, rsf_motion_decode_texture(pass), &dump, nullptr);
+    rsf_motion_decode_destroy(pass);
+}
+
 // Performed on the presenting thread, where using the immediate context is safe.
 void perform_pending_dump(Observer& self)
 {
@@ -282,6 +340,10 @@ void perform_pending_dump(Observer& self)
                 ++written;
             } else {
                 say(self, "texture %zu refused, result %d", index + 1, int(result));
+            }
+
+            if (self.options.decode_motion) {
+                decode_and_dump(self, device, context, textures[index], path);
             }
         }
 

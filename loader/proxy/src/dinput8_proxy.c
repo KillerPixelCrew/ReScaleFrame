@@ -164,6 +164,13 @@ static void start_observer(void)
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
     options.log = observer_note;
+    /* Unreal's encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written out as the
+       decode a backend needs, which is the reciprocal of that scale and the same bias. The
+       sentinel is far outside any real screen space motion and still representable in half. */
+    options.decode_motion = read_number("RSF_DECODE_MOTION", 1);
+    options.motion_scale = 1.0f / (0.499f * 0.5f);
+    options.motion_bias = 32767.0f / 65535.0f;
+    options.motion_invalid_value = -1000.0f;
 
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",

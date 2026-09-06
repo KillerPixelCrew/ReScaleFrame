@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define RSF_OBSERVER_ABI_VERSION 2u
+#define RSF_OBSERVER_ABI_VERSION 3u
 
 typedef int32_t rsf_observer_result;
 #define RSF_OBSERVER_OK ((rsf_observer_result)0)
@@ -55,6 +55,16 @@ typedef struct rsf_observer_options {
        Optional, and passed on to every texture dump the observer performs. */
     rsf_dump_log_fn log;
     void* log_user;
+    /* Also run the motion decode pass over each dumped target and write the result beside it.
+       This is how the pass every backend depends on gets checked against the game's own buffer
+       rather than only against values a test made up. Zero disables it. */
+    uint32_t decode_motion;
+    /* The game's encoding, as `(stored - bias) * scale`, and the value written where the source
+       held its clear value. Passed in rather than assumed, because the encoding belongs to the
+       game and this code does not know which game it is in. */
+    float motion_scale;
+    float motion_bias;
+    float motion_invalid_value;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {
