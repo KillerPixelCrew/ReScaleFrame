@@ -7,6 +7,10 @@
 
 #include <rescaleframe/module_dump.h>
 
+#if RSF_HAVE_FRAME_CAPTURE
+#include <rescaleframe/frame_capture.h>
+#endif
+
 #include <windows.h>
 
 #include <stdio.h>
@@ -73,6 +77,43 @@ __declspec(dllexport) HRESULT WINAPI DirectInput8Create(HINSTANCE instance, DWOR
     return original(instance, version, interface_id, out, outer);
 }
 
+#if RSF_HAVE_FRAME_CAPTURE
+/* RenderDoc has to be loaded before the graphics device exists, so this runs on the carrier's own
+   attach rather than on the worker thread. It only loads a library and reads two variables. */
+static void start_capture_support(void)
+{
+    char library[MAX_PATH];
+    if (GetEnvironmentVariableA("RSF_RENDERDOC_DLL", library, MAX_PATH) == 0) {
+        return;
+    }
+    char prefix[MAX_PATH];
+    if (GetEnvironmentVariableA("RSF_CAPTURE_PREFIX", prefix, MAX_PATH) == 0) {
+        prefix[0] = '\0';
+    }
+    rsf_capture_initialise(library, prefix[0] ? prefix : NULL);
+}
+
+/* Watch for the capture key without touching the game's input. A polled key state cannot disturb
+   the message loop or the input ordering the project cares about. */
+static DWORD WINAPI capture_worker(LPVOID parameter)
+{
+    (void)parameter;
+    int was_down = 0;
+    int running = 1;
+    while (running) {
+        const int down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+        if (down && !was_down) {
+            const rsf_capture_result result = rsf_capture_trigger(1);
+            note("capture triggered, result %d, captures so far %u", (int)result,
+                 rsf_capture_count());
+        }
+        was_down = down;
+        Sleep(50);
+    }
+    return 0;
+}
+#endif
+
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -134,11 +175,22 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
-        /* Everything real happens on the worker. DllMain only starts it. */
-        const HANDLE thread = CreateThread(NULL, 0, dump_worker, NULL, 0, NULL);
+#if RSF_HAVE_FRAME_CAPTURE
+        /* Loading a library is allowed here and the timing requirement leaves no alternative:
+           RenderDoc must be in before the game creates its device. */
+        start_capture_support();
+#endif
+        /* Everything else happens on workers. DllMain only starts them. */
+        HANDLE thread = CreateThread(NULL, 0, dump_worker, NULL, 0, NULL);
         if (thread) {
             CloseHandle(thread);
         }
+#if RSF_HAVE_FRAME_CAPTURE
+        thread = CreateThread(NULL, 0, capture_worker, NULL, 0, NULL);
+        if (thread) {
+            CloseHandle(thread);
+        }
+#endif
     }
     return TRUE;
 }
