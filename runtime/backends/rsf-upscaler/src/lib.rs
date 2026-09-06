@@ -9,8 +9,10 @@
 //! re-enabled, and an exposure value in a one-by-one texture. Every one of those is a fact a
 //! backend has to be told, and every one of them was initially assumed wrong.
 
+pub mod frame;
 pub mod motion;
 
+pub use frame::{Jitter, MotionToPixels, recommended_phase_count};
 pub use motion::{ClearBehaviour, Encoding, MotionVectors};
 
 /// A vendor's reconstruction family.

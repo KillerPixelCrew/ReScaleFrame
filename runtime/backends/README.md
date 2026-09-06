@@ -25,7 +25,7 @@ no ambiguous ownership across the line.
 
 ## `rsf-upscaler`
 
-Two questions, answered without any vendor SDK present.
+Three questions, answered without any vendor SDK present.
 
 **What are this game's motion vectors, really?** `motion.rs` carries the answer as data rather than
 as an assumption. Ace Combat 7 writes object motion only, biased into a sixteen bit unsigned target
@@ -39,6 +39,19 @@ cannot rather than the first. A backend that reconstructs camera motion from dep
 given `cameraMotionIncluded` and an invalid value) accepts AC7's object-only field directly. One
 that wants a complete field (XeSS, FSR) needs a composition pass that does not exist yet, and
 `check` says exactly that instead of producing a smeared image at runtime.
+
+**What are this frame's numbers, in the units a backend wants?** `frame.rs` does the conversions.
+Unreal keeps jitter in clip space and motion in a screen space that spans two units across the
+viewport, and every backend wants pixels. Each conversion carries a factor that comes out wrong by
+two or four if it is guessed at, and the storage encoding already contains one such factor, so
+getting one right and the other wrong produces motion that points the right way and is twice as
+long as it should be. That reads as a slightly eager reconstruction rather than as a bug, which is
+why the conversions live here with their reasoning and their tests rather than being written out
+again at each call site.
+
+The same module carries the jitter sequence length a backend wants, which is eight samples scaled
+by the area ratio. Unreal 4.18 takes that count from `r.TemporalAASamples` and does not move it
+with screen percentage, so the loader sets it alongside the render scale.
 
 The honesty rule from `AGENTS.md` applies to this crate the same way it applies to
 `rsf_game_info.rendering_ready`: a backend reports what it can do, and a pairing that is not viable

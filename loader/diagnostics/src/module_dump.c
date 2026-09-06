@@ -650,6 +650,74 @@ rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t coun
     return RSF_DUMP_OK;
 }
 
+/* Reach a console variable object the way the engine's own code does. The float path above
+   predates this and does the same thing inline; it is left alone rather than reworked, because it
+   is the one console path that has been confirmed in the running game. */
+static rsf_dump_result find_console_variable(const char* name_utf8, uint32_t singleton_rva,
+                                             uint32_t find_slot, void** variable_out)
+{
+    if (!name_utf8 || singleton_rva == 0 || !variable_out) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    unsigned char* base = (unsigned char*)resolve_base(NULL);
+    const IMAGE_NT_HEADERS64* headers = nt_headers(base);
+    if (!headers || singleton_rva + sizeof(void*) > headers->OptionalHeader.SizeOfImage) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    void* manager = *(void**)(base + singleton_rva);
+    if (!manager) {
+        return RSF_DUMP_ERROR_ABI_MISMATCH;
+    }
+
+    wchar_t name[256];
+    if (MultiByteToWideChar(CP_UTF8, 0, name_utf8, -1, name, 256) == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    typedef void*(*find_console_variable_fn)(void*, const wchar_t*, int);
+    void** vtable = *(void***)manager;
+    find_console_variable_fn find = (find_console_variable_fn)vtable[find_slot / sizeof(void*)];
+    void* variable = find(manager, name, 1);
+    if (!variable) {
+        return RSF_DUMP_ERROR_NOT_A_PE;
+    }
+    *variable_out = variable;
+    return RSF_DUMP_OK;
+}
+
+rsf_dump_result rsf_console_set_int(const char* name_utf8, int32_t expected_current,
+                                    int32_t new_value, uint32_t value_offset,
+                                    uint32_t singleton_rva, uint32_t find_slot)
+{
+    void* variable = NULL;
+    const rsf_dump_result found =
+        find_console_variable(name_utf8, singleton_rva, find_slot, &variable);
+    if (found != RSF_DUMP_OK) {
+        return found;
+    }
+
+    /* Both thread copies are checked before either is written. An offset that is wrong for this
+       build almost certainly fails the check, and a half-written pair would leave the game thread
+       and the render thread disagreeing about the value, which is worse than not setting it. */
+    unsigned char* slots = (unsigned char*)variable + value_offset;
+    int32_t current[2];
+    memcpy(current, slots, sizeof(current));
+    if (current[0] != expected_current || current[1] != expected_current) {
+        return RSF_DUMP_ERROR_STILL_ENCRYPTED;
+    }
+
+    DWORD protection = 0;
+    if (!VirtualProtect(slots, sizeof(current), PAGE_READWRITE, &protection)) {
+        return RSF_DUMP_ERROR_WRITE_FAILED;
+    }
+    const int32_t replacement[2] = {new_value, new_value};
+    memcpy(slots, replacement, sizeof(replacement));
+    DWORD restored = 0;
+    VirtualProtect(slots, sizeof(current), protection, &restored);
+    return RSF_DUMP_OK;
+}
+
 rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_current,
                                       float new_value, uint32_t singleton_rva, uint32_t find_slot,
                                       uint32_t* found_offset)

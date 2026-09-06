@@ -29,6 +29,13 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       from engine source, and a viability check that reports every blocker rather than the first.
       Unit-tested only. No vendor SDK is vendored and nothing here touches a GPU.
       See [runtime/backends/README.md](../runtime/backends/README.md).
+- [x] Per-frame conversions out of Unreal's units: clip space jitter to pixels, screen space motion
+      to pixels, and the jitter sequence length a render scale calls for. Unit-tested against the
+      offsets and the largest motion recorded from the running game. The vertical sign follows
+      engine source and has not been checked against a rendered result.
+- [ ] Jitter sequence length set in the game alongside the render scale. Written and cross-built,
+      refused rather than guessed when the object does not hold the engine default. Not yet run in
+      the game.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

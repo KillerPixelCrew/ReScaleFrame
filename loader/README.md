@@ -46,12 +46,19 @@ It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
 
 | Key | Action |
 | --- | --- |
-| F9 | Set `r.ScreenPercentage` |
+| F9 | Set `r.ScreenPercentage`, and `r.TemporalAASamples` to match |
 | F10 | Dump velocity targets, view constant buffers, and a buffer size histogram |
 | F11 | Trigger a RenderDoc capture |
 
 Each F10 writes its own `captureNN_*` set. The index resets per process, so a short run overwrites
 the low numbered files of a longer earlier one.
+
+F9 sets the jitter sequence length as well as the render scale, because 4.18 does not tie the two
+together and a reconstruction wants the sequence to grow with the area ratio: 8 samples at full
+scale, 32 at half. The count is written at the offset the screen percentage variable reported,
+since `TConsoleVariableData` puts its two thread copies in the same place for every variable of the
+same element size, and only when both copies already hold the engine default of 8. Untested in the
+game so far; the log line says which way it went.
 
 The dump runs inside `Present`, on the game's own render thread, so a fault there is a closed game
 and no result code. Every step is written to `rsf-dump.log` before it is taken, one line at a time

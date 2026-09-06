@@ -103,6 +103,25 @@ rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_curr
                                       float new_value, uint32_t singleton_rva, uint32_t find_slot,
                                       uint32_t* found_offset);
 
+/* Set an integer console variable in a running Unreal game.
+
+   Deliberately not the float function with a different type. Searching the object for a matching
+   value works for a float because 100.0 appears once in it; an integer of 8 appears in flags,
+   counters and string lengths, and replacing every match would corrupt the object rather than set
+   the variable.
+
+   So this writes at a known offset instead, and earns the right to do so by checking first.
+   TConsoleVariableData<T> keeps Values[2], one for the game thread and one for the render thread,
+   and the layout is the same for every variable of a given element size, so the offset the float
+   path reports is the offset to use here. Both slots must already hold `expected_current` or
+   nothing is written: that check is what distinguishes the right object from a wrong offset.
+
+   Returns RSF_DUMP_ERROR_STILL_ENCRYPTED when the check fails, the same way the float path
+   reports finding nothing to replace. */
+rsf_dump_result rsf_console_set_int(const char* name_utf8, int32_t expected_current,
+                                    int32_t new_value, uint32_t value_offset,
+                                    uint32_t singleton_rva, uint32_t find_slot);
+
 /* Look up a console variable and report what the object actually contains, without writing.
 
    Guessing a struct offset for a vendor branch does not work, and the first attempt failed with

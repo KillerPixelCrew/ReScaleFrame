@@ -330,6 +330,44 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     return 0;
 }
 
+/* Lengthen the jitter sequence to match the render scale.
+
+   A reconstruction wants each output pixel covered by about the same number of distinct samples
+   however many render pixels sit behind it, so the sequence has to grow with the area ratio: eight
+   at full scale, thirty two at half. Unreal 4.18 will not do that by itself. It takes the count
+   from r.TemporalAASamples and that value does not move with screen percentage, so halving the
+   scale without this leaves the sequence a quarter as long as it should be.
+
+   The offset comes from the float variable that was just set, because TConsoleVariableData keeps
+   its two thread copies at the same place for every variable of the same element size. Searching
+   for the value the way the float path does would not work here: an integer 8 occurs all over the
+   object, and replacing every match would corrupt it. */
+static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
+{
+    if (percentage <= 0.0f) {
+        return;
+    }
+    const float ratio = 100.0f / percentage;
+    int32_t samples = (int32_t)(8.0f * ratio * ratio + 0.5f);
+    if (samples < 8) {
+        samples = 8;
+    }
+
+    const rsf_dump_result result =
+        rsf_console_set_int("r.TemporalAASamples", 8, samples, value_offset,
+                            read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                            read_number("RSF_CONSOLE_FIND_SLOT", 0x90));
+    if (result == RSF_DUMP_OK) {
+        note("jitter sequence length set to %d at object offset 0x%lx", (int)samples,
+             (unsigned long)value_offset);
+    } else {
+        /* Refusing is the designed outcome when the object does not hold 8 in both slots, which
+           covers a different default, a different layout, and the wrong object. */
+        note("jitter sequence length NOT set (result %d), offset 0x%lx did not hold 8 twice",
+             (int)result, (unsigned long)value_offset);
+    }
+}
+
 /* Halve the render resolution, the way the engine's own screen percentage does.
 
    In 4.18 that one cvar is the whole mechanism: it shrinks the scene buffers, makes ViewRect
@@ -347,6 +385,7 @@ static void set_screen_percentage(float value)
     if (result == RSF_DUMP_OK) {
         note("screen percentage set to %d, value found at object offset 0x%lx", (int)value,
              (unsigned long)offset);
+        set_jitter_sequence_length(value, offset);
         return;
     }
 
