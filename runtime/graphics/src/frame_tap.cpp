@@ -276,6 +276,7 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     // qualifying path adds no D3D call of its own.
     uint32_t motion_width = 0;
     uint32_t motion_height = 0;
+    uint32_t scene_color_format = 0;
 
     for (UINT index = 0; index < max_examined_views; ++index) {
         Tap::Slot& entry = self.slots[index];
@@ -328,6 +329,7 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
                 continue;
             }
             scene_color = entry.texture;
+            scene_color_format = uint32_t(entry.description.Format);
             break;
         }
     }
@@ -382,6 +384,7 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         pass.depth = depth;
         pass.exposure = exposure;
         pass.frame_index = frame_index;
+        pass.scene_color_format = scene_color_format;
 
         pass.render_width = motion_width;
         pass.render_height = motion_height;

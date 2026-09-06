@@ -443,6 +443,14 @@ static void start_dlss(void)
     char directory[MAX_PATH * 2];
     DWORD width, height;
 
+    /* The render scale first, and on every press rather than only the first.
+       Loading a mission re-applies the game's own graphics settings, which puts the screen
+       percentage back to 100 and leaves the backend running at the presented size. That is
+       antialiasing rather than upscaling, and it is not obvious from the picture: a mission was
+       watched that way and read as a successful upscale. Re-applying costs nothing when it is
+       already set. */
+    set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
+
     if (rsf_bridge_running()) {
         rsf_bridge_report();
         return;
@@ -451,13 +459,6 @@ static void start_dlss(void)
         note("RSF_STREAMLINE_BIN is not set, so there is nothing to load DLSS from");
         return;
     }
-
-    /* The render scale first, and from here rather than from a second key.
-       Reconstruction needs the game rendering smaller than it presents and needs the projection
-       jittered, and both come from the same console variables, so making them a separate key only
-       created an order to get wrong. Setting them here also means the presented size read below is
-       the one DLSS will be asked to produce. */
-    set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
 
     /* The presented size, from the observer, so this does not have to be told what the game is
        rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
@@ -479,6 +480,33 @@ static void start_dlss(void)
     rsf_bridge_start(directory, width, height, read_number("RSF_DLSS_QUALITY", 3), observer_note,
                      NULL);
     rsf_bridge_report();
+}
+
+/* Put the render scale back when the game takes it away.
+
+   Loading a mission re-applies the game's own graphics settings, which sets the screen percentage
+   back to 100 and leaves a backend reconstructing from the presented size. That is antialiasing
+   rather than upscaling and it does not look like a fault: the picture is clean and sharp precisely
+   because nothing was reconstructed from less. A mission was watched that way and read as a
+   successful upscale, which is why this is not a key press.
+
+   Nothing here has to detect anything. `rsf_console_set_float` writes only where it finds the value
+   it was told to expect, so asking it to replace 100 with our scale does exactly nothing while the
+   scale is already ours, and restores it the moment the game puts 100 back. Silent in the ordinary
+   case, and it says so on the rare occasion it acts. */
+static void keep_render_scale(void)
+{
+    uint32_t offset = 0;
+    const float value = (float)read_number("RSF_SCREEN_PERCENTAGE", 50);
+    if (value >= 100.0f) {
+        return;
+    }
+    if (rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
+                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset) == RSF_DUMP_OK) {
+        note("the game had reset the render scale, put back to %d", (int)value);
+        set_jitter_sequence_length(value, offset);
+    }
 }
 
 static DWORD WINAPI observe_worker(LPVOID parameter)
@@ -509,8 +537,12 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
            taken the instant the tap is installed and therefore says nothing. Reading it as a result
            cost a whole run. The report stays quiet while the numbers do not move, so a session that
            reaches a steady state stops writing. */
-        if (++ticks >= 100 && rsf_bridge_running()) {
+        if (++ticks >= 20 && rsf_bridge_running()) {
             ticks = 0;
+            /* Every second, because a mission load puts the game's own screen percentage back and
+               a backend then reconstructs from the presented size without anything looking wrong.
+               This does nothing at all while the scale is already ours. */
+            keep_render_scale();
             rsf_bridge_report();
         }
 

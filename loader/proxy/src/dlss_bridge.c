@@ -66,6 +66,14 @@ static struct {
     rsf_present_blit* blit;
     int show;
     unsigned long frames_shown;
+
+    /* Which pass within the current frame, and how many frames have been described.
+       The set is recognised more than once per frame and this integration takes the first, which
+       is how a reconstruction ended up with no sky in it: the sky is composited later than the
+       pass being tapped. Describing each qualifying pass of a few frames says how many there are
+       and what colour each carries, which is what choosing between them needs. */
+    unsigned long pass_in_frame;
+    unsigned long frames_described;
 } bridge;
 
 static void say(const char* format, ...)
@@ -168,6 +176,13 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         return;
     }
 
+    ++bridge.pass_in_frame;
+    if (bridge.frames_described < 4) {
+        say("  pass %lu of this frame: colour %ux%u, motion %ux%u, %s exposure",
+            bridge.pass_in_frame, pass->render_width, pass->render_height, pass->render_width,
+            pass->render_height, pass->exposure ? "with" : "no");
+    }
+
     fill_camera(&view, &camera);
 
     memset(&frame, 0, sizeof(frame));
@@ -201,6 +216,12 @@ static void on_present(void* user, void* swapchain)
     void* output;
 
     (void)user;
+    if (bridge.frames_described < 4 && bridge.pass_in_frame > 0) {
+        say("frame ended after %lu qualifying passes", bridge.pass_in_frame);
+        ++bridge.frames_described;
+    }
+    bridge.pass_in_frame = 0;
+
     if (!bridge.started || !bridge.show || !bridge.blit) {
         return;
     }
@@ -362,6 +383,17 @@ void rsf_bridge_report(void)
             status.output_width, status.output_height,
             (unsigned long long)status.frames_evaluated,
             (unsigned long long)status.frames_refused);
+
+        /* Whether this is upscaling at all. The game puts its screen percentage back when a
+           mission loads, and a backend fed the presented size is doing antialiasing instead. That
+           is not visible in the result, which looks clean and sharp precisely because nothing was
+           reconstructed from less, so it has to be said rather than seen. A mission was watched
+           this way and read as a successful upscale. */
+        if (tap.render_width != 0 && status.output_width != 0 &&
+            tap.render_width >= status.output_width) {
+            say("note: the game is rendering at the presented size, so this is antialiasing at "
+                "native resolution and not upscaling. Press F8 to put the render scale back");
+        }
     }
 }
 

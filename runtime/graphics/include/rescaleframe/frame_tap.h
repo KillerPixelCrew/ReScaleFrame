@@ -83,6 +83,10 @@ typedef struct rsf_frame_tap_pass {
        captures show more than one qualifying binding in a frame, so treat this as a sequence
        number for correlating callbacks rather than as a frame count. */
     uint32_t frame_index;
+    /* The DXGI format of the colour that was picked. The set is recognised more than once in a
+       frame and the passes differ in what their colour holds, so this is how a caller tells them
+       apart without querying the texture again. */
+    uint32_t scene_color_format;
 } rsf_frame_tap_pass;
 
 /* Called on the render thread, inside the hook, with the game's own bindings still in place.

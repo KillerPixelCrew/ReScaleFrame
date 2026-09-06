@@ -340,6 +340,26 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
     }
 
+    // Cleared once, because a fresh texture holds whatever was in that memory and there is no
+    // promise that a reconstruction writes every pixel of it. It does not: a frame whose render
+    // size differs from the one the feature was built for left a corner of this target untouched,
+    // and the previous tenant of that memory showed through as blocks. Black there is honest,
+    // where blocks read as an artifact of the reconstruction rather than as an absence of one.
+    {
+        ID3D11DeviceContext* context = nullptr;
+        ID3D11RenderTargetView* target = nullptr;
+        device->GetImmediateContext(&context);
+        if (context && SUCCEEDED(device->CreateRenderTargetView(self.output, nullptr, &target)) &&
+            target) {
+            const FLOAT black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            context->ClearRenderTargetView(target, black);
+            target->Release();
+        }
+        if (context) {
+            context->Release();
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(self.guard);
         self.supported = true;
