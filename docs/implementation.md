@@ -62,6 +62,9 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       anti-aliasing gate was patched against those taken after. Confirmed against the two elements
       of `ViewToClip` the engine writes the same values into, and against the pixel offsets
       recorded from a live read.
+- [x] Frame assembly in the orchestrator: a plugin fills an engine-neutral camera frame and the
+      orchestrator turns it into a backend's structure, refusing a pairing that cannot work rather
+      than producing an image that is quietly wrong. Unit-tested only, no GPU involved.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

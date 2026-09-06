@@ -32,7 +32,7 @@
 extern "C" {
 #endif
 
-#define RSF_AC7_VIEW_ABI_VERSION 2u
+#define RSF_AC7_VIEW_ABI_VERSION 3u
 
 /* The engine binds the view uniform data at exactly this size. A buffer of any other size is not
    one, which is the cheapest test available and the first one applied. */
@@ -60,6 +60,10 @@ typedef struct rsf_ac7_view {
     float view_to_clip[16];
     float view_to_clip_no_jitter[16];
     float clip_to_view[16];
+    /* The inverse of `view_to_clip_no_jitter`. The buffer's own `ClipToView` inverts the jittered
+       projection, which is not what a backend asks for, and inverting here keeps the matrix work
+       in one place rather than in every caller. */
+    float clip_to_view_no_jitter[16];
     /* Read from the buffer rather than composed: the engine computes exactly the matrix a backend
        asks for. */
     float clip_to_prev_clip[16];

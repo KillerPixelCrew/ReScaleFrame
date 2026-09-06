@@ -262,6 +262,9 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
     std::memcpy(out->view_to_clip_no_jitter, out->view_to_clip, sizeof(out->view_to_clip));
     out->view_to_clip_no_jitter[2 * 4 + 0] -= clip_x;
     out->view_to_clip_no_jitter[2 * 4 + 1] -= clip_y;
+    if (!invert(out->view_to_clip_no_jitter, out->clip_to_view_no_jitter)) {
+        return RSF_AC7_VIEW_ERROR_NOT_A_VIEW_BUFFER;
+    }
 
     // The main view fills its target. The smaller ones the engine renders into the same target do
     // not, and their camera describes something the player is not looking through.
