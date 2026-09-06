@@ -18,6 +18,10 @@ constexpr uint32_t offset_view_right = 0x320;
 constexpr uint32_t offset_world_camera_origin = 0x370;
 constexpr uint32_t offset_pre_view_translation = 0x3A0;
 constexpr uint32_t offset_clip_to_prev_clip = 0x6E0;
+// TemporalAAJitter: current x, current y, previous x, previous y, all in clip space. Located by
+// differencing a run with the anti-aliasing gate patched against one without it, then confirmed
+// against the two elements of ViewToClip the engine writes the same values into.
+constexpr uint32_t offset_temporal_aa_jitter = 0x720;
 constexpr uint32_t offset_view_rect_min = 0x7E0;
 constexpr uint32_t offset_view_size = 0x7F0;
 constexpr uint32_t offset_buffer_size = 0x800;
@@ -237,6 +241,27 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
     out->buffer_height = static_cast<uint32_t>(at(values, offset_buffer_size, 1) + 0.5f);
     out->view_rect_x = static_cast<uint32_t>(at(values, offset_view_rect_min, 0) + 0.5f);
     out->view_rect_y = static_cast<uint32_t>(at(values, offset_view_rect_min, 1) + 0.5f);
+
+    // Clip space to pixels, dividing by the view rect rather than the buffer. Those differ once
+    // the render scale moves, and using the buffer would scale every offset by the render scale
+    // without ever looking wrong.
+    const float clip_x = at(values, offset_temporal_aa_jitter, 0);
+    const float clip_y = at(values, offset_temporal_aa_jitter, 1);
+    const float previous_clip_x = at(values, offset_temporal_aa_jitter, 2);
+    const float previous_clip_y = at(values, offset_temporal_aa_jitter, 3);
+    const float half_width = float(out->view_width) * 0.5f;
+    const float half_height = float(out->view_height) * 0.5f;
+    out->jitter_pixels[0] = clip_x * half_width;
+    out->jitter_pixels[1] = clip_y * -half_height;
+    out->previous_jitter_pixels[0] = previous_clip_x * half_width;
+    out->previous_jitter_pixels[1] = previous_clip_y * -half_height;
+    out->has_jitter = (clip_x != 0.0f || clip_y != 0.0f) ? 1u : 0u;
+
+    // The engine adds the jitter to these two elements of the projection and keeps no copy without
+    // it, so taking it back out is how a backend gets the matrix it requires.
+    std::memcpy(out->view_to_clip_no_jitter, out->view_to_clip, sizeof(out->view_to_clip));
+    out->view_to_clip_no_jitter[2 * 4 + 0] -= clip_x;
+    out->view_to_clip_no_jitter[2 * 4 + 1] -= clip_y;
 
     // The main view fills its target. The smaller ones the engine renders into the same target do
     // not, and their camera describes something the player is not looking through.

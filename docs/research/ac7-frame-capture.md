@@ -462,6 +462,7 @@ kind of near miss that gets written down as a result.
 | `0x4F0` | `PrevTranslatedWorldToClip` | the identity above |
 | `0x650` | `PrevPreViewTranslation` | the identity above |
 | `0x6E0` | `ClipToPrevClip` | `clipToPrevClip`, read rather than computed |
+| `0x720` | `TemporalAAJitter` | `jitterOffset`, and un-jittering the projection |
 | `0x7E0` | `ViewRectMin` | picking the main view |
 | `0x7F0` | `ViewSizeAndInvSize` | picking the main view |
 | `0x800` | `BufferSizeAndInvSize` | picking the main view |
@@ -496,16 +497,31 @@ buffers, accepts ten as perspective views, refuses the rest as orthographic, whi
 interface renders through, and marks the 1016x1016 and 128x93 ones as secondary. That agrees with
 the Python analysis on the same data, which is the point of having both.
 
-### The jitter is not located yet
+### The jitter, at 0x720
 
-Every buffer captured so far predates the jitter patch, so `TemporalAAJitter` is zero in all of
-them and cannot be told apart from any other zero region. Scanning for a sixteen byte region that
-is zero everywhere finds five candidates and no way to choose between them.
+`TemporalAAJitter` holds four floats in clip space: the current offset's x and y, then the previous
+frame's. So a backend that wants the previous jitter does not have to remember it.
 
-The method that does work needs a capture with the patch on, and already exists:
-`tools/analyze-view-buffers.py` looks for slots that change every frame and stay sub-pixel, which
-is a description only the jitter fits. One run of the game with `RSF_ENABLE_JITTER=1` and F10 in
-flight settles it.
+It was found by differencing two runs rather than by pattern matching. The capture directory holds
+two: thirty buffers from before the anti-aliasing gate was patched, and twenty from after, the
+later run having overwritten the low numbered files of the earlier one exactly as the loader
+documentation warns. Of the thousand and twenty four float slots, twelve are zero throughout the
+earlier run and small but non-zero in the later one. Four of them sit together at 0x720. The other
+eight are inside `ViewToClip`, `PrevProjection` and `PrevViewToClip`, at row 2 columns 0 and 1 of
+each, which is exactly where `HackAddTemporalAAProjectionJitter` writes. The values at 0x720 equal
+those in `ViewToClip` to the bit.
+
+Converted through the engine's own construction, dividing by the view rect rather than the buffer,
+the three jittered captures give -0.147, +0.065 and -0.430 pixels horizontally. Those are the same
+three numbers recorded earlier in this document from a live read, so the field and the conversion
+confirm each other. Every offset is inside the plus or minus half pixel a sample pattern produces,
+and the previous-frame slots of one capture hold the current values of another, so the sequence is
+coherent rather than noise.
+
+Two consequences. Reading the layout across both runs at once is what hid this: pooling the
+buffers made the field look zero everywhere, like the four other regions that genuinely are.
+And since 4.18 applies the offset to the projection itself and keeps no un-jittered copy,
+subtracting these two numbers from `ViewToClip` is how a backend gets the matrix it requires.
 
 ### The motion vectors need a pass after all, for a different reason
 

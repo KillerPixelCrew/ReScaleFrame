@@ -49,6 +49,7 @@ constexpr uint32_t kViewRight = 0x320;
 constexpr uint32_t kWorldCameraOrigin = 0x370;
 constexpr uint32_t kPreViewTranslation = 0x3A0;
 constexpr uint32_t kClipToPrevClip = 0x6E0;
+constexpr uint32_t kTemporalAAJitter = 0x720;
 constexpr uint32_t kViewRectMin = 0x7E0;
 constexpr uint32_t kViewSize = 0x7F0;
 constexpr uint32_t kBufferSize = 0x800;
@@ -173,11 +174,21 @@ int read_directory(const char* directory)
         }
         ++accepted;
         main_views += view.is_main_view;
-        std::printf("capture%02d: %ux%u in %ux%u, fov %.1f deg, aspect %.4f, near %.2f, %s\n",
+        char jitter[128];
+        if (view.has_jitter) {
+            std::snprintf(jitter, sizeof(jitter), "jitter (%+.3f, %+.3f) px",
+                          double(view.jitter_pixels[0]), double(view.jitter_pixels[1]));
+            check(std::fabs(view.jitter_pixels[0]) <= 0.5f &&
+                      std::fabs(view.jitter_pixels[1]) <= 0.5f,
+                  "A jitter read from the game must stay inside half a pixel.");
+        } else {
+            std::snprintf(jitter, sizeof(jitter), "no jitter");
+        }
+        std::printf("capture%02d: %ux%u in %ux%u, fov %.1f deg, aspect %.4f, near %.2f, %s, %s\n",
                     index, view.view_width, view.view_height, view.buffer_width,
                     view.buffer_height, double(view.vertical_fov) * 57.29578,
                     double(view.aspect_ratio), double(view.near_plane),
-                    view.is_main_view ? "main view" : "secondary view");
+                    view.is_main_view ? "main view" : "secondary view", jitter);
         check_inverse(view);
     }
     std::printf("\n%d buffers read, %d accepted as perspective views, %d of those the main view\n",
@@ -211,6 +222,37 @@ int main(int argc, char* argv[])
     check(view.is_main_view == 1u, "A view filling its target is the main view.");
     check_near(view.clip_to_prev_clip[11], 17.49332f, 1e-4f, "ClipToPrevClip is read as stored.");
     check_inverse(view);
+    check(view.has_jitter == 0u, "A buffer without a jitter must not claim one.");
+
+    // The jitter as the running game produced it, from capture10: the engine writes the same clip
+    // space offset into TemporalAAJitter and into two elements of the projection.
+    Buffer jittered = good;
+    const float clip_x = -0.00042f, clip_y = 0.00027f;
+    jittered.put(kTemporalAAJitter, {clip_x, clip_y, 0.000168f, 0.00025f});
+    jittered.put(kViewToClip + 8 * 4, {clip_x, clip_y});
+    view = read(jittered, &result);
+    check(result == RSF_AC7_VIEW_OK, "A jittered view buffer must be accepted.");
+    check(view.has_jitter == 1u, "A jittered projection must be reported as such.");
+
+    // Clip space divided by the view rect, not the buffer. Those differ once the render scale
+    // moves, and using the buffer would scale every offset without ever looking wrong.
+    check_near(view.jitter_pixels[0], clip_x * 2048.0f * 0.5f, 1e-4f,
+               "The horizontal jitter comes back in pixels.");
+    check_near(view.jitter_pixels[1], clip_y * 1152.0f * -0.5f, 1e-4f,
+               "The vertical jitter comes back in pixels, with the engine's sign flip.");
+    check(std::fabs(view.jitter_pixels[0]) <= 0.5f && std::fabs(view.jitter_pixels[1]) <= 0.5f,
+          "A real jitter stays inside half a pixel.");
+    check_near(view.previous_jitter_pixels[0], 0.000168f * 2048.0f * 0.5f, 1e-4f,
+               "The previous frame's jitter sits beside the current one.");
+
+    // 4.18 keeps no un-jittered projection, so the two elements it wrote have to come back out.
+    check_near(view.view_to_clip[8], clip_x, 1e-6f, "The projection keeps the jitter as stored.");
+    check_near(view.view_to_clip_no_jitter[8], 0.0f, 1e-6f,
+               "The un-jittered projection has the offset removed.");
+    check_near(view.view_to_clip_no_jitter[9], 0.0f, 1e-6f,
+               "Both elements of the offset are removed.");
+    check_near(view.view_to_clip_no_jitter[0], view.view_to_clip[0], 1e-6f,
+               "Removing the jitter must leave the rest of the projection alone.");
 
     // A view that does not fill its target is one of the smaller ones the engine also renders, and
     // its camera describes something the player is not looking through.

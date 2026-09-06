@@ -56,12 +56,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       `ClipToPrevClip` read rather than composed, with `PrevClipToClip` inverted from it. Refuses
       rather than guesses, by checking the relationships that hold in a view buffer and nowhere
       else. Run against the captured buffers it recognises all 50 as view buffers, accepts 10 as
-      perspective, and marks the 1016x1016 and 128x93 ones as secondary views. Jitter is not read:
-      its offset is still unknown, see below.
-- [ ] Locate `TemporalAAJitter` in the buffer. Every captured buffer predates the jitter patch, so
-      the field is zero in all of them and cannot be told from any other zero. A capture taken with
-      the patch on identifies it as the region that changes every frame and stays sub-pixel, which
-      `tools/analyze-view-buffers.py` already looks for.
+      perspective, and marks the 1016x1016 and 128x93 ones as secondary views. Reads the jitter in
+      pixels and hands back the projection with it removed, which 4.18 keeps no copy of.
+- [x] `TemporalAAJitter` located at `0x720`, by differencing the captures taken before the
+      anti-aliasing gate was patched against those taken after. Confirmed against the two elements
+      of `ViewToClip` the engine writes the same values into, and against the pixel offsets
+      recorded from a live read.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

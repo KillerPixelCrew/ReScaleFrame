@@ -62,7 +62,11 @@ LAYOUT = {
     "PrevInvViewProj": 0x660,
     "PrevScreenToTranslatedWorld": 0x6A0,
     "ClipToPrevClip": 0x6E0,
-    "GlobalClippingPlane": 0x720,
+    # Current x, current y, previous x, previous y, in clip space. Located by differencing a run
+    # with the anti-aliasing gate patched against one without it: it is the only region that was
+    # zero throughout the earlier run and small but non-zero in the later one, and it holds the
+    # same values the engine writes into ViewToClip.
+    "TemporalAAJitter": 0x720,
     "ViewRectMin": 0x7E0,
     "ViewSizeAndInvSize": 0x7F0,
     "BufferSizeAndInvSize": 0x800,
@@ -152,6 +156,20 @@ def check(values):
     if worst_difference(product, identity) > 0.01:
         failures.append("ViewToClip and ClipToView are not inverses")
 
+    # The jitter, where there is one, has to be the same two numbers the engine wrote into the
+    # projection, and has to stay inside the half pixel a sample pattern can produce.
+    jitter = vector(values, LAYOUT["TemporalAAJitter"], 4)
+    view_to_clip = matrix(values, LAYOUT["ViewToClip"])
+    if jitter[0] != 0.0 or jitter[1] != 0.0:
+        if abs(view_to_clip[2][0] - jitter[0]) > 1e-9 or abs(view_to_clip[2][1] - jitter[1]) > 1e-9:
+            failures.append("TemporalAAJitter does not match the offset written into ViewToClip")
+        size = vector(values, LAYOUT["ViewSizeAndInvSize"], 4)
+        pixels_x = jitter[0] * size[0] * 0.5
+        pixels_y = jitter[1] * size[1] * -0.5
+        if abs(pixels_x) > 0.5 or abs(pixels_y) > 0.5:
+            failures.append(
+                f"jitter of ({pixels_x:.3f}, {pixels_y:.3f}) pixels is outside half a pixel")
+
     # Sizes come in a value and its reciprocal.
     for name in ("ViewSizeAndInvSize", "BufferSizeAndInvSize"):
         size = vector(values, LAYOUT[name], 4)
@@ -168,10 +186,16 @@ def describe(values):
     aspect = view_to_clip[1][1] / view_to_clip[0][0] if view_to_clip[0][0] else 0.0
     view_size = vector(values, LAYOUT["ViewSizeAndInvSize"], 4)
     buffer_size = vector(values, LAYOUT["BufferSizeAndInvSize"], 4)
+    jitter = vector(values, LAYOUT["TemporalAAJitter"], 4)
+    if jitter[0] != 0.0 or jitter[1] != 0.0:
+        jitter_text = (f", jitter ({jitter[0] * view_size[0] * 0.5:+.3f}, "
+                       f"{jitter[1] * view_size[1] * -0.5:+.3f}) px")
+    else:
+        jitter_text = ", no jitter"
     return (f"view {view_size[0]:.0f}x{view_size[1]:.0f} in buffer "
             f"{buffer_size[0]:.0f}x{buffer_size[1]:.0f}, "
             f"vertical fov {math.degrees(vertical_fov):.1f} deg, aspect {aspect:.4f}, "
-            f"near {view_to_clip[3][2]:.3f}")
+            f"near {view_to_clip[3][2]:.3f}{jitter_text}")
 
 
 def main():

@@ -32,7 +32,7 @@
 extern "C" {
 #endif
 
-#define RSF_AC7_VIEW_ABI_VERSION 1u
+#define RSF_AC7_VIEW_ABI_VERSION 2u
 
 /* The engine binds the view uniform data at exactly this size. A buffer of any other size is not
    one, which is the cheapest test available and the first one applied. */
@@ -53,10 +53,12 @@ typedef struct rsf_ac7_view {
     /* Row major, the convention both Unreal and Streamline use, so these are copies rather than
        transposes.
 
-       These carry the projection jitter when it is enabled, because 4.18 applies it to the
-       projection itself and has no un-jittered copy to offer. A backend wants them without it, so
-       whoever fills a backend's constants has to remove the jitter from `view_to_clip` first. */
+       `view_to_clip` carries the projection jitter when it is enabled, because 4.18 applies the
+       offset to the projection itself and keeps no un-jittered copy: `ViewToClipNoAA` arrived in a
+       later engine version. Backends require the matrix without it, so `view_to_clip_no_jitter` is
+       the same matrix with the two elements the engine wrote taken back out. */
     float view_to_clip[16];
+    float view_to_clip_no_jitter[16];
     float clip_to_view[16];
     /* Read from the buffer rather than composed: the engine computes exactly the matrix a backend
        asks for. */
@@ -87,6 +89,22 @@ typedef struct rsf_ac7_view {
     /* Whether this is the view the player is looking through, rather than one of the smaller ones
        the engine renders into the same target. */
     uint32_t is_main_view;
+
+    /* Sub-pixel projection offset, in pixels at the view's own resolution, which is the convention
+       every backend takes it in. The engine stores it in clip space and divides by the view rect
+       rather than by the buffer, so this is that construction run backwards.
+
+       Zero unless the anti-aliasing gate has been patched: 4.18 computes a jitter only for a view
+       asking for temporal AA, and Ace Combat 7 never asks. See loader/README.md.
+
+       The previous frame's offset sits beside the current one in the buffer, and a backend that
+       wants it does not have to remember the last frame. */
+    float jitter_pixels[2];
+    float previous_jitter_pixels[2];
+    /* Whether the projection carries a jitter at all this frame. A backend handed an unjittered
+       projection can sharpen but cannot recover detail, so this is worth reporting rather than
+       leaving a caller to compare two floats against zero. */
+    uint32_t has_jitter;
 } rsf_ac7_view;
 
 /* Read `bytes` of constant buffer into `out`, or refuse.
