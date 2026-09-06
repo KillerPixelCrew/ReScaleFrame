@@ -280,13 +280,6 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
             continue;
         }
         entry.role = role_of(entry.description, shape);
-        // Slot 0 is taken to be scene colour, which is what Unreal's post process input convention
-        // gives, and several full resolution targets in this frame share its descriptor so nothing
-        // in the binding distinguishes it. This cannot be checked without the running game.
-        if (index == 0) {
-            scene_color = entry.texture;
-            continue;
-        }
         const rsf_resource_role role = entry.role;
         if (role == RSF_ROLE_MOTION && !motion) {
             motion = entry.texture;
@@ -307,6 +300,35 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
+    // Scene colour is chosen by what it is and by matching the motion target's size, in a second
+    // pass because the render resolution is not known until the motion target has been found.
+    //
+    // It used to be taken as slot 0, on Unreal's post process input convention. The game says
+    // otherwise: in the set it actually binds, slot 0 holds R10G10B10A2, which is the GBuffer's
+    // normals, and the colour is a floating point target further along. Taking slot 0 would have
+    // handed a backend the normal buffer, and produced an image that was wrong rather than absent.
+    //
+    // So: a floating point colour format, rendered into, at exactly the motion target's size.
+    // R11G11B10 is what this frame uses and RGBA16F is what the full resolution captures showed,
+    // so both are accepted. R10G10B10A2 deliberately is not, because that is the normals.
+    if (motion) {
+        for (UINT index = 0; index < max_examined_views; ++index) {
+            const Tap::Slot& entry = self.slots[index];
+            if (!entry.texture || entry.role != RSF_ROLE_UNKNOWN) {
+                continue;
+            }
+            if ((entry.description.Format != DXGI_FORMAT_R11G11B10_FLOAT &&
+                 entry.description.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) ||
+                (entry.description.BindFlags & D3D11_BIND_RENDER_TARGET) == 0 ||
+                entry.description.Width != motion_width ||
+                entry.description.Height != motion_height) {
+                continue;
+            }
+            scene_color = entry.texture;
+            break;
+        }
+    }
+
     // Velocity, a 1x1 target and depth bound at the same time is the signature. Format rules for
     // each live in resource_roles.cpp so that this module and the classifier cannot drift apart.
     //
@@ -318,11 +340,12 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     // combinations do occur, and describing the whole bound set at that moment says what is in the
     // slots instead of the third. Bounded, because this writes a line per slot on the render
     // thread and its job is to answer one question, not to run forever.
-    const uint32_t present = (motion ? 1u : 0u) + (depth ? 1u : 0u) + (exposure ? 1u : 0u);
-    if (present >= 2 && self.described < 12) {
+    const uint32_t present = (motion ? 1u : 0u) + (depth ? 1u : 0u) + (scene_color ? 1u : 0u);
+    if (present == 2 && self.described < 12) {
         ++self.described;
-        say(self, "near miss %u: motion %s, depth %s, exposure %s. bound set follows",
-            self.described, motion ? "yes" : "no", depth ? "yes" : "no", exposure ? "yes" : "no");
+        say(self, "near miss %u: motion %s, depth %s, colour %s, exposure %s. bound set follows",
+            self.described, motion ? "yes" : "no", depth ? "yes" : "no",
+            scene_color ? "yes" : "no", exposure ? "yes" : "no");
         for (UINT index = 0; index < max_examined_views; ++index) {
             const Tap::Slot& entry = self.slots[index];
             if (!entry.texture) {
@@ -336,7 +359,12 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
-    const bool qualifies = motion && depth && exposure;
+    // Exposure is not part of the signature, because the game does not bind it here. The set this
+    // frame actually presents is colour, depth and motion at render resolution, with the 1x1
+    // exposure target bound somewhere else, presumably the tonemapper. Requiring it meant waiting
+    // for a set that never arrives, and it was never a requirement in the first place: a backend
+    // handed no exposure derives its own, at some cost to quality and none to running at all.
+    const bool qualifies = motion && depth && scene_color;
     const bool already_fired =
         motion == self.last_fired_motion && depth == self.last_fired_depth;
     if (qualifies && !already_fired) {
