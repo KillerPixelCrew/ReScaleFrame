@@ -388,3 +388,37 @@ value sits at `0x68`, well past the help string, flags and delegate that a first
 missed entirely, and Unreal keeps `TConsoleVariableData<float>::Values[2]`, one read on the game
 thread and one on the render thread. Setting only the first leaves the renderer on the old number.
 That layout is the same for every float console variable in the engine.
+
+## What changes at reduced render scale
+
+Captured at 50 screen percentage, which is the first capture where render and output resolution
+differ. Everything before this was taken at 100, so nothing in it could show which targets follow
+which.
+
+The scene pipeline genuinely moves to render resolution. At 1024x576 there are 18 targets
+including scene colour, depth, normals and velocity, while the presented size stays 2048x1152.
+`ComputeDesiredSize` resizes the buffers rather than cropping within them, so this is a real
+resolution change and not a viewport trick.
+
+The frame ends differently from what the full resolution captures suggested:
+
+```
+[6714] composite scene + HUD + glow chain  ->  1024x576  #64091
+[6732] one draw                            ->  2048x1152 #306, the swap chain back buffer
+```
+
+The final draw reads exactly one resource, the 1024x576 composite, and writes the full resolution
+back buffer. So the upscale is not a separate pass; it is folded into that last draw, which is
+consistent with `bDoScreenPercentageInTonemapper` rather than a standalone
+`FRCPassPostProcessUpscale`.
+
+**The interface is composited at render resolution and upscaled with the scene.** An earlier
+reading of the full resolution captures concluded the interface needed no exclusion work, while
+noting that equal resolutions could not show which targets would follow which. That caveat was
+correct and this is the answer: the interface follows render resolution, so at reduced scale it is
+upscaled along with everything else.
+
+That places the insertion point. Handing a backend the final composite would mean upscaling an
+interface that is already soft. The scene has to be upscaled before the interface is composited
+onto it, which means intervening at the composite rather than at the last draw, and having the
+composite run at output resolution with the reconstructed scene as its input.
