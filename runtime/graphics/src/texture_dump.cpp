@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -20,8 +21,62 @@ constexpr float velocity_bias = 32767.0f / 65535.0f;
 struct Sample {
     float x;
     float y;
+    // Third channel, for the colour formats. Zero for the two channel motion formats, which is
+    // what the velocity views expect and what they had before this existed.
+    float z;
     bool written;
 };
+
+// One of the small unsigned floats R11G11B10 packs: five exponent bits, `mantissa_bits` of
+// mantissa, bias 15, no sign. Written as arithmetic rather than as bit assembly because there is no
+// standard type to assemble into.
+float small_float_to_float(uint32_t value, uint32_t mantissa_bits)
+{
+    const uint32_t mantissa_mask = (1u << mantissa_bits) - 1u;
+    const uint32_t mantissa = value & mantissa_mask;
+    const uint32_t exponent = value >> mantissa_bits;
+    const float scale = float(1u << mantissa_bits);
+    if (exponent == 0) {
+        // Subnormal, which is where the small values in a dark scene live.
+        return std::ldexp(float(mantissa) / scale, -14);
+    }
+    if (exponent == 31) {
+        // Infinity or not a number. Neither is meaningful in an image, and a huge value would
+        // dominate the range this dump reports, so it is clamped to something visible instead.
+        return mantissa == 0 ? 65504.0f : 0.0f;
+    }
+    return std::ldexp(1.0f + float(mantissa) / scale, int(exponent) - 15);
+}
+
+// Half precision to float, written out rather than pulled in, because this file is compiled by two
+// toolchains and neither is guaranteed a conversion intrinsic.
+float half_to_float(uint16_t value)
+{
+    const uint32_t sign = (value & 0x8000u) << 16;
+    uint32_t exponent = (value >> 10) & 0x1fu;
+    uint32_t mantissa = value & 0x3ffu;
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            exponent = 0;
+        } else {
+            exponent = 1;
+            while ((mantissa & 0x400u) == 0) {
+                mantissa <<= 1;
+                --exponent;
+            }
+            mantissa &= 0x3ffu;
+            exponent += 112;
+        }
+    } else if (exponent == 31) {
+        exponent = 255;
+    } else {
+        exponent += 112;
+    }
+    const uint32_t bits = sign | (exponent << 23) | (mantissa << 13);
+    float result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
 
 // Only the formats the project actually needs to look at. Anything else is refused rather than
 // guessed at, because a wrong decode looks plausible and would mislead.
@@ -78,6 +133,31 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
         out.written = raw[0] != 0.0f || raw[1] != 0.0f;
         return true;
     }
+    case DXGI_FORMAT_R11G11B10_FLOAT: {
+        // What this game renders its scene colour into, so this is the input side of a comparison
+        // with an upscaled result. Three unsigned floats packed into a word: red and green with
+        // five exponent bits and six mantissa bits, blue with five of each, all biased by 15 and
+        // with no sign bit, which is why the usual half conversion cannot be reused.
+        uint32_t raw = 0;
+        std::memcpy(&raw, pixel, sizeof(raw));
+        out.x = small_float_to_float((raw >> 0) & 0x7ffu, 6);
+        out.y = small_float_to_float((raw >> 11) & 0x7ffu, 6);
+        out.z = small_float_to_float((raw >> 22) & 0x3ffu, 5);
+        out.written = raw != 0;
+        return true;
+    }
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: {
+        // The format a reconstruction writes its result in, so this is what makes an upscaled
+        // frame something that can be looked at rather than only counted. Alpha is dropped: this
+        // exists to show an image, not to preserve one.
+        uint16_t raw[4];
+        std::memcpy(raw, pixel, sizeof(raw));
+        out.x = half_to_float(raw[0]);
+        out.y = half_to_float(raw[1]);
+        out.z = half_to_float(raw[2]);
+        out.written = raw[0] != 0 || raw[1] != 0 || raw[2] != 0;
+        return true;
+    }
     default:
         return false;
     }
@@ -91,6 +171,10 @@ uint32_t bytes_per_pixel(DXGI_FORMAT format)
         return 4;
     case DXGI_FORMAT_R32G32_FLOAT:
         return 8;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        return 8;
+    case DXGI_FORMAT_R11G11B10_FLOAT:
+        return 4;
     default:
         return 0;
     }
@@ -284,9 +368,12 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
                 pixel[1] = clamp_byte(128.0f + green * scale * 127.0f);
                 pixel[0] = 128;
             } else {
+                // Scene colour is linear and can exceed one, so this clips rather than tonemaps.
+                // Good enough to see whether an upscaled frame is the scene at all, which is the
+                // question being asked, and not a judgement of its brightness.
                 pixel[2] = clamp_byte(red * scale * 255.0f);
                 pixel[1] = clamp_byte(green * scale * 255.0f);
-                pixel[0] = 0;
+                pixel[0] = clamp_byte(sample.z * scale * 255.0f);
             }
             pixel[3] = 255;
         }

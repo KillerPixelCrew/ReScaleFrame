@@ -585,27 +585,36 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
     }
     if (!prefix.empty()) {
-        say(self, "writing the output target to %s", prefix.c_str());
-        rsf_texture_dump_options options{};
-        options.struct_size = uint32_t(sizeof(options));
-        options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
-        options.output_prefix_utf8 = prefix.c_str();
-        options.view = RSF_DUMP_VIEW_RAW;
-        options.scale = 1.0f;
-        options.log = from_dump;
-        rsf_texture_dump_report report{};
-        report.struct_size = uint32_t(sizeof(report));
-        const rsf_dump_texture_result written =
-            rsf_dump_texture(self.device, context_pointer, self.output, &options, &report);
-        if (written == RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT) {
-            // Honest as of writing: texture_dump decodes two channel targets, which is what it was
-            // built to look at, and the output here is four channel float. So this reports a
-            // refusal rather than an image until that gains a colour view. The request is still
-            // consumed, because retrying it every frame would say the same thing every frame.
-            say(self, "the dump refused R16G16B16A16_FLOAT: texture_dump reads two channel "
-                      "targets only, so there is no image to look at yet");
-        } else if (written != RSF_TEXTURE_OK) {
-            say(self, "the dump failed (result %d)", int(written));
+        // Both sides of the comparison, from the same frame. An upscaled image on its own says
+        // nothing: the question is whether it is this scene, sharper, and that needs the input it
+        // was made from rather than a different frame's.
+        const std::string input_prefix = prefix + "_input";
+        const std::string output_prefix = prefix + "_output";
+        const struct {
+            const char* what;
+            const std::string& path;
+            void* texture;
+        } targets[] = {
+            {"the scene colour it was given", input_prefix, frame->scene_color},
+            {"the upscaled result", output_prefix, self.output},
+        };
+
+        for (const auto& target : targets) {
+            say(self, "writing %s to %s", target.what, target.path.c_str());
+            rsf_texture_dump_options options{};
+            options.struct_size = uint32_t(sizeof(options));
+            options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+            options.output_prefix_utf8 = target.path.c_str();
+            options.view = RSF_DUMP_VIEW_RAW;
+            options.scale = 1.0f;
+            options.log = from_dump;
+            rsf_texture_dump_report report{};
+            report.struct_size = uint32_t(sizeof(report));
+            const rsf_dump_texture_result written =
+                rsf_dump_texture(self.device, context_pointer, target.texture, &options, &report);
+            if (written != RSF_TEXTURE_OK) {
+                say(self, "writing %s failed (result %d)", target.what, int(written));
+            }
         }
         // A failed dump is diagnostic only and does not change the frame's outcome.
     }
