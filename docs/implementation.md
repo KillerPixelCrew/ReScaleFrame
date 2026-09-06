@@ -69,12 +69,20 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       evaluated, none refused. The result is the scene, reconstructed: at 1:1 against its own input,
       aircraft stencil text is legible where the source is pixelated and panel lines resolve where
       the source stair-steps, so this is reconstruction rather than a smooth rescale.
-      Two things it does not show. The scene was a hangar with a nearly static camera, so the motion
-      vectors were near zero throughout and remain unverified by this. And the colour handed over is
-      the lighting pass output rather than the pre-tonemap image the full resolution captures
-      described, which is a question of insertion point rather than of the backend.
-- [ ] Reinsert the result. Evaluating is not the same as being visible, and the game still presents
-      its own upscale.
+      The camera orbited the aircraft, so the reprojection held: `ClipToPrevClip`, depth and the
+      backend's reconstruction of camera motion from them produced a stable image. Nothing in the
+      scene moved, though, and this engine writes object motion only, so the decoded velocity's sign
+      and axis direction still need a mission to test. The colour handed over is also the lighting
+      pass output rather than the pre-tonemap image the captures described, which is a question of
+      insertion point rather than of the backend.
+- [ ] Reinsert the result. A debug view exists behind F7: a full screen draw over the back buffer
+      from inside the Present hook, with a rough tonemap so linear scene colour is viewable. It
+      shows the reconstruction moving, which is the only way ghosting and motion vector sign can be
+      judged. Cross-built and deployed, not yet run in the game. It is not the real path, which
+      reinserts the reconstructed scene before the game's own composite so the interface stays.
+- [ ] In-game overlay. The egui crate builds as a Windows DLL exporting its five entry points, the
+      D3D11 renderer and the window procedure hook compile, and the observer now offers the Present
+      callback they need. Nothing loads or draws them yet.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

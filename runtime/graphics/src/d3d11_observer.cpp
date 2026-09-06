@@ -438,6 +438,13 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
         }
     }
     perform_pending_dump(self);
+
+    // Before the game's own Present, which is the one moment the finished frame exists and nothing
+    // has been shown yet. No lock is held: this calls into D3D and back into the caller, and
+    // holding one across that is how this project deadlocked twice.
+    if (self.options.on_present) {
+        self.options.on_present(self.options.on_present_user, swapchain);
+    }
     return self.original_present(swapchain, interval, flags);
 }
 

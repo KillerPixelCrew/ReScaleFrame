@@ -23,7 +23,15 @@
 extern "C" {
 #endif
 
-#define RSF_OBSERVER_ABI_VERSION 3u
+#define RSF_OBSERVER_ABI_VERSION 4u
+
+/* Called on the game's render thread, immediately before its own Present.
+
+   That is the one place in a frame where the finished image exists and nothing has been shown yet,
+   which is what anything drawing over the game needs. `swapchain` is an `IDXGISwapChain*`, borrowed
+   for the duration of the call. Anything this does to the device context it must put back: the game
+   is between its own draws and did not ask for its state to change. */
+typedef void (*rsf_observer_present_fn)(void* user, void* swapchain);
 
 typedef int32_t rsf_observer_result;
 #define RSF_OBSERVER_OK ((rsf_observer_result)0)
@@ -65,6 +73,9 @@ typedef struct rsf_observer_options {
     float motion_scale;
     float motion_bias;
     float motion_invalid_value;
+    /* Optional. Invoked before every Present, which is where an overlay draws. */
+    rsf_observer_present_fn on_present;
+    void* on_present_user;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {

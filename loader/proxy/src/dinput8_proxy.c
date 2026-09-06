@@ -173,6 +173,9 @@ static void start_observer(void)
     options.motion_scale = 1.0f / (0.499f * 0.5f);
     options.motion_bias = 32767.0f / 65535.0f;
     options.motion_invalid_value = -1000.0f;
+    /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
+       observer's options are written once, and harmless until something turns the display on. */
+    options.on_present = rsf_bridge_present_hook();
 
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",
@@ -484,6 +487,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int was_down = 0;
     int scale_down = 0;
     int dlss_down = 0;
+    int show_down = 0;
     int ticks = 0;
     int running = 1;
     while (running) {
@@ -492,6 +496,14 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             start_dlss();
         }
         dlss_down = dlss;
+
+        {
+            const int show = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+            if (show && !show_down) {
+                rsf_bridge_toggle_display();
+            }
+            show_down = show;
+        }
 
         /* Report on a timer as well as on the key, because the report a key press produces is
            taken the instant the tap is installed and therefore says nothing. Reading it as a result

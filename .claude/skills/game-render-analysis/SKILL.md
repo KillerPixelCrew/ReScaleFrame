@@ -119,6 +119,76 @@ everything derived from the change consistent, which a later patch cannot.
 `rsf_patch_code` requires the bytes already present to match what is expected and refuses
 otherwise. Always supply them. Patch only after the code is decrypted.
 
+## Finding the pass that has the inputs
+
+A backend needs colour, depth and motion together. Finding where they are together is most of the
+work, and it is the part that took the most wrong turns here.
+
+Recognise a pass by the set it binds, not by a name. Naming it invites reasoning from what that pass
+does in stock engine source, which is how three separate assumptions got made about a game running a
+vendor branch.
+
+Judge the set at the draw, never at the binding. Unreal's D3D11 backend binds shader resources one
+slot at a time, so the state is always partway through being written when a binding changes. Shadow
+what is bound across calls and look at the shadow from a hooked `Draw` and `DrawIndexed`: that is
+the moment it is complete by definition, because the runtime is about to use it.
+
+Watch every slot D3D11 allows, not as many as the set needs. An engine binds its scene textures
+structure alongside the post process inputs, and that alone reaches past slot 16, so a small window
+watches a pass read depth and never sees it.
+
+Judge sizes against the presented size with the render size left unknown, accepting anything from
+half of it upwards that keeps the frame's aspect ratio. Deriving a render size from the largest
+bound texture makes it an exact requirement, and one full resolution texture in the set then rejects
+every other member of it.
+
+Pick each resource by what it is. Slot order is an engine convention and does not survive contact
+with a vendor branch: in this game slot 0 of the set holds the GBuffer's normals, and taking it as
+scene colour would have handed a backend the normal buffer and produced a wrong image rather than no
+image. Prefer failing to recognise over recognising the wrong thing.
+
+Require only what the backend requires. An exposure target is optional to any backend that can
+derive its own, and requiring it meant waiting for a set that never arrives.
+
+## Instrumenting a search like this
+
+The counters are the tool, and how they are split decides whether a run answers anything.
+
+Split a counter the moment it cannot distinguish two failures. One counter read zero for two
+sessions while meaning both "the hook never ran" and "it ran and rejected everything", which are
+opposite problems. Count every call and the subset that survives each filter.
+
+Count each precondition separately. Motion, depth and exposure recognised tens of thousands of times
+each and never together said, in one line, that the format rules were right and the moment was
+wrong. No amount of reasoning had reached that.
+
+When a guess fails twice, stop guessing and print the data. Describing the bound set on a near miss,
+slot by slot with sizes and formats, answered in one run what three rounds of inference had not.
+
+Never trust a counter read immediately after the thing starts. A report on the key press that
+installs a hook describes microseconds of runtime and reads as a result. Report on a timer as well,
+and stay quiet while nothing moves.
+
+Edge trigger on the condition, not on the identity of what satisfied it. Keying on the textures
+involved fired once for a whole session, because a game binds the same targets every frame.
+
+## Seeing it, not just counting it
+
+A reconstruction that only writes into a texture cannot be judged. Counters say it ran and a dumped
+frame says the geometry is right; neither shows ghosting, a smear behind a moving object, or an
+inverted motion vector, because those are temporal and a still image has no time in it. Draw the
+result over the game's own frame from inside a Present hook.
+
+Expect that debug view to look wrong. The image is scene colour from partway through the frame:
+linear rather than graded, with no interface on it. Say so rather than reading the darkness as a
+fault. A copy will not do it either, since the result and the swap chain rarely share a format, so
+it is a full screen draw with every piece of touched state saved and restored.
+
+A still scene proves less than it appears to. A camera orbiting a static world exercises the
+reprojection matrices and the depth buffer thoroughly and object motion not at all, because an
+engine that writes object motion only leaves the velocity buffer at its clear value throughout.
+Know which of the two a given scene is testing.
+
 ## Failure modes that have actually happened here
 
 - **Using a device context off the render thread.** It races the game's rendering, returns
@@ -130,7 +200,15 @@ otherwise. Always supply them. Patch only after the code is decrypted.
 - **Using capture resource identifiers at runtime.** They do not exist there; match by signature.
 - **Marker colours sharing channels with data.** An unwritten-pixel marker in the red channel read
   as strong motion for several sessions.
-- **Believing a menu over the frame.** AC7 offers no temporal AA setting and runs temporal AA.
+- **Believing a menu over the frame.** AC7 offers no temporal AA setting, and a pass with temporal
+  AA's inputs runs anyway. Note what the frame does; do not name it after the engine feature it
+  resembles.
+- **Analysing two runs as one set.** A capture directory held one run that overwrote the low
+  numbered files of an earlier one. Pooled, the field being searched for looked absent in all of
+  them; differenced, it was obvious. Check timestamps before treating a directory as one dataset.
+- **Reading a backend's log for the reason.** Two dead ends were one line each in a vendor log: a
+  required preference flag not set, and an environment missing an entry point. Read the whole log
+  before theorising about the code.
 
 ## Checking the target SDK first
 

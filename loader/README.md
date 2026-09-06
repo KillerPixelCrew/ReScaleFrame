@@ -63,6 +63,7 @@ folder is written to, and no game file is modified.
 
 | Key | Action |
 | --- | --- |
+| F7 | Show the reconstruction over the game's frame, or stop showing it |
 | F8 | Start DLSS, or report its counters if it is already running |
 | F9 | Set `r.ScreenPercentage`, and `r.TemporalAASamples` to match |
 | F10 | Dump velocity targets raw and decoded, view constant buffers, and a buffer size histogram |
@@ -86,9 +87,19 @@ be somewhere in particular.
 
 | Step | Key | Why then |
 | --- | --- | --- |
-| 1 | F9, in flight | Revives the jitter path and halves the render scale. Without a jitter there are no extra sub-pixel samples, and the pipeline refuses the frame rather than producing something quietly soft. |
-| 2 | F8 | Starts DLSS. The game's device has to exist, and by the time you can press a key it does. |
-| 3 | F10 | Writes the inputs and, when DLSS is running, its output beside them. |
+| 1 | F8, in the game | Sets the render scale and the jitter sequence length, then starts DLSS. The game's device has to exist, and by the time you can press a key it does. |
+| 2 | F8 again | Reports the counters. The first press reports a tap that has existed for microseconds, which says nothing. |
+| 3 | F7 | Draws the reconstruction over the frame, so it can be watched rather than counted. |
+| 4 | F10 | Writes the scene colour DLSS was given and the result it produced, from the same frame. |
+
+F7 is how the questions that matter actually get answered. Counters say a reconstruction ran and a
+dumped frame says its geometry is right, but ghosting, a smear trailing a moving object, and a
+motion vector with the wrong sign are all temporal, and a still image has no time in it.
+
+What it draws is a debug view and looks like one. The image handed over is scene colour from partway
+through the frame: linear rather than graded, and with no interface composited onto it. So it is
+darker than the game's own picture even with the rough tonemap applied, and the HUD disappears while
+it is on. That is the cost of seeing the reconstruction move, not a fault in it.
 
 As Steam launch options, with the deployed layout above:
 

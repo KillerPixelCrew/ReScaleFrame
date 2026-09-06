@@ -4,6 +4,7 @@ add_library(rsf_graphics STATIC
     src/resource_roles.cpp
     src/constant_buffer_read.cpp
     src/frame_tap.cpp
+    src/present_blit.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
     src/d3d11_observer.cpp)

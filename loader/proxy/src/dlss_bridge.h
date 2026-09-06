@@ -8,6 +8,8 @@
 #ifndef RSF_DLSS_BRIDGE_H
 #define RSF_DLSS_BRIDGE_H
 
+#include <rescaleframe/d3d11_observer.h>
+
 typedef void (*rsf_bridge_log_fn)(void* user, const char* message);
 
 /* Acquire the game's device, start the backend, and begin watching frames.
@@ -25,6 +27,17 @@ void rsf_bridge_report(void);
 
 /* Ask for the next evaluated frame's output to be written out. */
 void rsf_bridge_request_dump(const char* prefix);
+
+/* Show the reconstruction over the game's own frame, or stop showing it.
+
+   The counters say it ran and a dumped frame says the geometry is right, but the faults that matter
+   most in an upscaler are temporal: ghosting, a smear behind a moving object, a motion vector whose
+   sign is inverted. None of those exist in a still image. This is how they get looked at, and it is
+   a debug view: the image is ungraded scene colour with no interface on it. */
+void rsf_bridge_toggle_display(void);
+
+/* The Present callback the observer should be given, so the display above has a place to draw. */
+rsf_observer_present_fn rsf_bridge_present_hook(void);
 
 int rsf_bridge_running(void);
 

@@ -24,6 +24,7 @@
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/present_blit.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -58,6 +59,13 @@ static struct {
     unsigned long reported_calls;
     unsigned long reported_passes;
     unsigned long reported_evaluated;
+
+    /* Showing the result on screen. The counters and a dumped frame cannot answer the questions
+       that matter most about an upscaler, because ghosting and a smear behind a moving object are
+       temporal and a still image has no time in it. */
+    rsf_present_blit* blit;
+    int show;
+    unsigned long frames_shown;
 } bridge;
 
 static void say(const char* format, ...)
@@ -180,6 +188,59 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     } else {
         ++bridge.refused;
     }
+}
+
+/* Called before the game's own Present, from the observer.
+
+   Drawing the reconstruction over the finished frame replaces a graded image that has an interface
+   on it with an ungraded one that does not, so it looks wrong in brightness and has no HUD even
+   when the reconstruction is perfect. That is the price of being able to see motion at all, and it
+   is a debug view rather than a step towards how this should work. */
+static void on_present(void* user, void* swapchain)
+{
+    void* output;
+
+    (void)user;
+    if (!bridge.started || !bridge.show || !bridge.blit) {
+        return;
+    }
+    output = rsf_dlss_pipeline_output_texture();
+    if (!output || bridge.evaluated == 0) {
+        return;
+    }
+    if (rsf_present_blit_draw(bridge.blit, bridge.context, swapchain, output, 1u) ==
+        RSF_PRESENT_BLIT_OK) {
+        ++bridge.frames_shown;
+    }
+}
+
+void rsf_bridge_toggle_display(void)
+{
+    if (!bridge.started) {
+        say("dlss bridge: nothing to show, the backend is not running");
+        return;
+    }
+    if (!bridge.blit) {
+        rsf_present_blit_setup setup;
+        memset(&setup, 0, sizeof(setup));
+        setup.struct_size = sizeof(setup);
+        setup.abi_version = RSF_PRESENT_BLIT_ABI_VERSION;
+        setup.log = bridge.log;
+        setup.log_user = bridge.log_user;
+        if (rsf_present_blit_create(bridge.device, &setup, &bridge.blit) != RSF_PRESENT_BLIT_OK) {
+            say("dlss bridge: cannot show the result, the blit would not build");
+            return;
+        }
+    }
+    bridge.show = !bridge.show;
+    say("dlss bridge: showing the reconstruction is now %s. It is scene colour from partway "
+        "through the frame, so it is ungraded and has no interface on it",
+        bridge.show ? "on" : "off");
+}
+
+rsf_observer_present_fn rsf_bridge_present_hook(void)
+{
+    return on_present;
 }
 
 int rsf_bridge_start(const char* streamline_directory, unsigned long output_width,

@@ -133,10 +133,14 @@ legible in the result, and panel lines that stair-step in the source resolve int
 
 What that run does not establish, and it matters:
 
-- The scene was a hangar with a nearly static camera, so the motion vectors were near zero
-  throughout. Everything about them, the sign, the axis direction and the sentinel, is still
-  unverified by a rendered result. A moving camera is what tests those, and a wrong sign survives a
-  still scene and smears under motion.
+- The camera orbited the aircraft, so the reprojection path was exercised and did hold:
+  `clipToPrevClip`, the depth buffer and Streamline's reconstruction of camera motion from them all
+  produced a stable image, and a wrong matrix among those smears in a way this run would have shown.
+  What did not move is the scene. Ace Combat 7 writes object motion only, and with nothing moving in
+  the world the velocity buffer stayed at its clear value across most of the frame, exactly as the
+  capture research measured for a panning camera. So the decoded velocity's sign and axis direction
+  are still unverified: they need something moving through the world, which is a mission rather than
+  a hangar.
 - The colour handed over is the output of the pass that binds depth and velocity together, which is
   the lighting or composite pass, not the pre-tonemap image the full resolution captures described.
   Whether that is the right input is a question about the insertion point.
