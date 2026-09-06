@@ -87,6 +87,32 @@ rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t coun
                                const uint8_t* expected, uint32_t expected_count,
                                uint8_t* previous);
 
+/* Set a float console variable in a running Unreal game.
+
+   Reaches the console manager the way the engine's own code does: read the singleton pointer,
+   call FindConsoleVariable through its vtable, and work on the object that comes back.
+
+   The value is not written at an assumed struct offset. The object is searched for a float
+   matching `expected_current` and only that one is replaced, so a layout that differs from what
+   was expected fails to find anything rather than corrupting a neighbouring field. Passing the
+   value the variable is known to hold is what makes that check meaningful.
+
+   `singleton_rva` and `find_slot` locate the manager. `found_offset` returns where the value was,
+   which is worth logging. */
+rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_current,
+                                      float new_value, uint32_t singleton_rva, uint32_t find_slot,
+                                      uint32_t* found_offset);
+
+/* Look up a console variable and report what the object actually contains, without writing.
+
+   Guessing a struct offset for a vendor branch does not work, and the first attempt failed with
+   nothing to say about why. This reports whether the manager existed, whether the lookup
+   succeeded, and the leading floats of the object, so the value can be recognised rather than
+   assumed. `floats` receives up to `float_count` values read from the object. */
+rsf_dump_result rsf_console_probe(const char* name_utf8, uint32_t singleton_rva,
+                                  uint32_t find_slot, uint64_t* manager_out,
+                                  uint64_t* variable_out, float* floats, uint32_t float_count);
+
 /* Append the currently loaded modules to a text file. Which graphics runtime a game selects is
    only visible well after startup, so this has to be sampled late and repeatedly. Modules loaded
    before the dump prove nothing: static imports are mapped whichever renderer is later chosen. */

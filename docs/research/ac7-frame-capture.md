@@ -361,3 +361,30 @@ of their own and would not reproject. They belong after upscaling.
 Every capture was taken at 100 screen percentage, so render resolution and output resolution are
 equal throughout. Nothing here shows which targets follow render resolution and which follow
 output resolution once the two diverge, which is exactly what inserting super resolution does.
+
+## Render scale
+
+`r.ScreenPercentage` works, confirmed visually in the running game at 50.
+
+In 4.18 that one variable is the whole mechanism. It shrinks the scene buffers through
+`ComputeDesiredSize`, makes `View.ViewRect` differ from `View.UnscaledViewRect` so
+`bDoScreenPercentage` becomes true and the upscale pass appears, and the jitter formula divides by
+`ViewRect` rather than the buffer, so the offset rescales to render resolution on its own. The
+cvar multiplies the post process setting rather than replacing it, so it composes with whatever
+the game sets.
+
+Two alternatives were considered and rejected. Resizing render targets by intercepting texture
+creation leaves `BufferSizeAndInvSize` and `ScreenPositionScaleBias` describing a buffer that no
+longer exists, and every shader does its UV maths with those. `FSceneViewFamily::SecondaryViewRect`
+does not exist in 4.18; secondary screen percentage arrived in 4.19, and `r.SecondaryScreenPercentage`
+is absent from this binary, consistent with that.
+
+Reaching the variable took the console manager, which the disassembly of the jitter block supplied:
+the singleton pointer at RVA `0x3a8b290`, and `FindConsoleVariable` at vtable offset `0x90`.
+
+The value is not written at an assumed offset. The object is searched for a float holding the
+value the variable is known to have, and every copy is replaced. That matters twice over: the
+value sits at `0x68`, well past the help string, flags and delegate that a first guess of `0x40`
+missed entirely, and Unreal keeps `TConsoleVariableData<float>::Values[2]`, one read on the game
+thread and one on the render thread. Setting only the first leaves the renderer on the old number.
+That layout is the same for every float console variable in the engine.

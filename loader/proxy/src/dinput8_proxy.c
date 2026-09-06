@@ -318,10 +318,51 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     return 0;
 }
 
+/* Halve the render resolution, the way the engine's own screen percentage does.
+
+   In 4.18 that one cvar is the whole mechanism: it shrinks the scene buffers, makes ViewRect
+   differ from UnscaledViewRect so the upscale pass appears, and the jitter formula divides by
+   ViewRect so the offset rescales to render resolution by itself. Resizing render targets behind
+   the engine's back would instead leave BufferSizeAndInvSize and ScreenPositionScaleBias
+   describing a buffer that no longer exists, and every shader does its UV maths with those. */
+static void set_screen_percentage(float value)
+{
+    uint32_t offset = 0;
+    const rsf_dump_result result =
+        rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
+                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset);
+    if (result == RSF_DUMP_OK) {
+        note("screen percentage set to %d, value found at object offset 0x%lx", (int)value,
+             (unsigned long)offset);
+        return;
+    }
+
+    /* Say what actually went wrong rather than leaving one code to mean several things, and show
+       the object, because guessing a layout for a vendor branch is what failed the first time. */
+    uint64_t manager = 0, variable = 0;
+    float floats[32];
+    memset(floats, 0, sizeof(floats));
+    const rsf_dump_result probed =
+        rsf_console_probe("r.ScreenPercentage", read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                          read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &manager, &variable, floats,
+                          32);
+    note("screen percentage not set (set result %d, probe result %d): manager=0x%llx "
+         "variable=0x%llx", (int)result, (int)probed, (unsigned long long)manager,
+         (unsigned long long)variable);
+    if (probed == RSF_DUMP_OK) {
+        for (int row = 0; row < 8; ++row) {
+            note("  +0x%02x: %12.5f %12.5f %12.5f %12.5f", row * 16, floats[row * 4],
+                 floats[row * 4 + 1], floats[row * 4 + 2], floats[row * 4 + 3]);
+        }
+    }
+}
+
 static DWORD WINAPI observe_worker(LPVOID parameter)
 {
     (void)parameter;
     int was_down = 0;
+    int scale_down = 0;
     int running = 1;
     while (running) {
         const int down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
@@ -329,6 +370,12 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             report_and_dump();
         }
         was_down = down;
+
+        const int scale = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+        if (scale && !scale_down) {
+            set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
+        }
+        scale_down = scale;
         Sleep(50);
     }
     return 0;

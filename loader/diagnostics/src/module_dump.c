@@ -650,6 +650,116 @@ rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t coun
     return RSF_DUMP_OK;
 }
 
+rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_current,
+                                      float new_value, uint32_t singleton_rva, uint32_t find_slot,
+                                      uint32_t* found_offset)
+{
+    if (!name_utf8 || singleton_rva == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    unsigned char* base = (unsigned char*)resolve_base(NULL);
+    const IMAGE_NT_HEADERS64* headers = nt_headers(base);
+    if (!headers || singleton_rva + sizeof(void*) > headers->OptionalHeader.SizeOfImage) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    void* manager = *(void**)(base + singleton_rva);
+    if (!manager) {
+        /* Nothing has asked the engine for a console variable yet, so the manager does not exist.
+           Creating it here would run engine code at a moment of our choosing, which is worse than
+           waiting for the game to do it. */
+        return RSF_DUMP_ERROR_ABI_MISMATCH;
+    }
+
+    wchar_t name[256];
+    if (MultiByteToWideChar(CP_UTF8, 0, name_utf8, -1, name, 256) == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* An extra register argument is harmless in this calling convention, so passing the tracking
+       flag works whether or not this build's signature declares it. */
+    typedef void*(*find_console_variable_fn)(void*, const wchar_t*, int);
+    void** vtable = *(void***)manager;
+    find_console_variable_fn find = (find_console_variable_fn)vtable[find_slot / sizeof(void*)];
+    void* variable = find(manager, name, 1);
+    if (!variable) {
+        return RSF_DUMP_ERROR_NOT_A_PE;
+    }
+
+    /* Search the object for the value rather than trusting an offset, and replace every copy.
+       Unreal keeps TConsoleVariableData<T>::Values[2], one read on the game thread and one on the
+       render thread, so setting only the first leaves the renderer using the old number. The
+       value sits well past the help string, flags and delegate that precede it, which is why the
+       window has to be generous. */
+    unsigned char* bytes = (unsigned char*)variable;
+    uint32_t replaced = 0;
+    for (uint32_t offset = 0; offset <= 0x100; offset += 4) {
+        float current;
+        memcpy(&current, bytes + offset, sizeof(current));
+        const float difference = current > expected_current ? current - expected_current
+                                                            : expected_current - current;
+        if (difference > 0.0001f) {
+            continue;
+        }
+        DWORD protection = 0;
+        if (!VirtualProtect(bytes + offset, sizeof(float), PAGE_READWRITE, &protection)) {
+            continue;
+        }
+        memcpy(bytes + offset, &new_value, sizeof(new_value));
+        DWORD restored = 0;
+        VirtualProtect(bytes + offset, sizeof(float), protection, &restored);
+        if (found_offset && replaced == 0) {
+            *found_offset = offset;
+        }
+        ++replaced;
+    }
+    if (replaced) {
+        return RSF_DUMP_OK;
+    }
+    return RSF_DUMP_ERROR_STILL_ENCRYPTED;
+}
+
+rsf_dump_result rsf_console_probe(const char* name_utf8, uint32_t singleton_rva,
+                                  uint32_t find_slot, uint64_t* manager_out,
+                                  uint64_t* variable_out, float* floats, uint32_t float_count)
+{
+    if (!name_utf8 || singleton_rva == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    unsigned char* base = (unsigned char*)resolve_base(NULL);
+    const IMAGE_NT_HEADERS64* headers = nt_headers(base);
+    if (!headers || singleton_rva + sizeof(void*) > headers->OptionalHeader.SizeOfImage) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    void* manager = *(void**)(base + singleton_rva);
+    if (manager_out) {
+        *manager_out = (uint64_t)(uintptr_t)manager;
+    }
+    if (!manager) {
+        return RSF_DUMP_ERROR_ABI_MISMATCH;
+    }
+
+    wchar_t name[256];
+    if (MultiByteToWideChar(CP_UTF8, 0, name_utf8, -1, name, 256) == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    typedef void*(*find_console_variable_fn)(void*, const wchar_t*, int);
+    void** vtable = *(void***)manager;
+    find_console_variable_fn find = (find_console_variable_fn)vtable[find_slot / sizeof(void*)];
+    void* variable = find(manager, name, 1);
+    if (variable_out) {
+        *variable_out = (uint64_t)(uintptr_t)variable;
+    }
+    if (!variable) {
+        return RSF_DUMP_ERROR_NOT_A_PE;
+    }
+    if (floats && float_count) {
+        memcpy(floats, variable, (size_t)float_count * sizeof(float));
+    }
+    return RSF_DUMP_OK;
+}
+
 rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
 {
     if (!path_utf8) {
