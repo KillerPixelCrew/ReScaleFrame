@@ -103,13 +103,72 @@ intermediate targets. That single draw is the natural boundary for anything that
 finished image.
 
 Unresolved: target #1208 at 1920x1080 takes 42 draws at the start of the captured frame while
-everything else runs at 2048x1152. A capture spans present to present, so work that the game
-performs at the end of its frame appears at the beginning of the capture, which fits Slate
-rendering the interface. That would make it the interface layer at display resolution, separate
-from the scene, which would matter a great deal for supplying a HUD-less image. It is a
-hypothesis: confirming it needs the shader resource bindings that a replay provides.
+everything else, including the back buffer, runs at 2048x1152. A capture spans present to present,
+so work the game performs at the end of its frame appears at the beginning of the capture, which
+fits Slate rendering the interface.
 
-## What is established and what is not
+These captures were taken in windowed mode, so 1920x1080 is not a display mode the game was
+presenting at. A fixed 1920x1080 layer inside a 2048x1152 back buffer is consistent with a user
+interface authored against a reference resolution and scaled to the window, which is ordinary
+practice. If that is what it is, the interface is already composited from its own target rather
+than drawn over the scene, which would matter a great deal for supplying a HUD-less image to
+frame generation.
+
+It remains a hypothesis. Confirming it needs the shader resource bindings a replay provides:
+specifically whether #1208 is sampled by the final draw into the back buffer.
+
+## The velocity encoding, from engine source
+
+Read from the authorized 4.18.3-release checkout, `Engine/Shaders/Private/Common.ush`:
+
+```hlsl
+// velocity needs to support -2..2 screen space range for x and y
+// texture is 16bit 0..1 range per channel
+float2 EncodeVelocityToTexture(float2 In)
+{
+    // 0.499f is a value smaller than 0.5f to avoid using the full range to use the clear color (0,0) as special value
+    return In * (0.499f * 0.5f) + 32767.0f / 65535.0f;
+}
+```
+
+So the scale is `0.499 * 0.5 = 0.2495`, the bias is raw 32767 rather than 32768, and the encodable
+range is -2 to 2 in screen space rather than -1 to 1. Decoding is
+`(value - 32767/65535) / 0.2495`.
+
+The detail that matters most is the reason for 0.499 rather than 0.5: it keeps the encoded range
+clear of zero so that **raw zero is reserved as a sentinel meaning "nothing wrote velocity here"**.
+`PostProcessTemporalCommon.ush` relies on exactly that:
+
+```hlsl
+float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
+float2 PrevScreen = PrevClip.xy / PrevClip.w;
+float2 BackN = PosN.xy - PrevScreen;          // camera motion, computed per pixel
+...
+bool DynamicN = VelocityN.x > 0.0;            // was anything written here
+if (DynamicN) { BackN = DecodeVelocityFromTexture(VelocityN); }
+```
+
+**The velocity target holds object motion only. Camera motion is never stored in it.** Temporal AA
+reconstructs camera motion per pixel from `View.ClipToPrevClip` and only overrides it where an
+object actually drew. That is why the capture shows ten draws into a full resolution target: the
+rest of the screen is left at the clear value on purpose.
+
+### Consequence for super resolution
+
+XeSS, DLSS and FSR all expect a complete motion vector field including camera motion. AC7's
+velocity target is not that, and handing it over directly would leave every static pixel with a
+zero vector while the camera moves, which is precisely the input that produces smeared
+reconstruction.
+
+The plugin therefore has to produce the combined field itself: for each pixel, decode the target
+where `x > 0` and compute camera motion from `ClipToPrevClip` everywhere else, then convert to
+whatever units the selected backend wants. That is a required pass, not an optimisation, and it
+means the plugin needs `View.ClipToPrevClip` at runtime. Reading that from the view uniform buffer
+is the one thing a frame capture cannot supply and engine struct layout can.
+
+Velocity units are screen space as the shader uses them, where `BackN * ViewportSize` gives an
+offset in units of two pixels per viewport width. Backend conversion has to account for that
+factor, and for the y direction convention, before anything is passed along.
 
 Established: the formats, sizes, bind flags, resource identities, and which scenes allocate
 which targets. Those come from the capture and are not inferences.
