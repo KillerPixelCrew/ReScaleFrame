@@ -102,6 +102,29 @@ for this frame.
 intermediate targets. That single draw is the natural boundary for anything that needs the
 finished image.
 
+### Correction: those passes are probably motion blur, not temporal AA
+
+The section below identified two passes as temporal AA. Later evidence undermines it and the
+identification should not be relied on.
+
+AC7's graphics options offer only FXAA and none. There is no temporal AA setting. Unreal sets
+`TemporalAAJitter` only when the anti-aliasing method is temporal AA, and the view uniform buffer
+read from the running game has that field at exactly zero across every in-flight capture, thirty
+two bytes of zeros with nothing resembling jitter anywhere else in the buffer.
+
+If temporal AA never runs, the two full resolution `RGBA16F` passes that read velocity are
+something else, and motion blur fits every signal that was used: it reads velocity, it runs at
+full resolution, its output descriptor inherits the input, and it sits in the same place in the
+chain. The three signals below distinguish "reads velocity and writes a float target" from
+everything else in the frame. They do not distinguish temporal AA from motion blur.
+
+A cheap test settles it: turn motion blur off in the game options and capture again. If the two
+passes disappear, they were motion blur.
+
+The engine still contains the temporal AA code. `r.DefaultFeature.AntiAliasing`,
+`r.TemporalAASamples` and `r.PostProcessAAQuality` are all present in the binary. It is the
+options menu that does not expose it.
+
 ### Locating temporal AA
 
 Three independent signals agree, without any debug marker being present.

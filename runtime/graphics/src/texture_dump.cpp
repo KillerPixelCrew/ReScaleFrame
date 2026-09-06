@@ -199,11 +199,13 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
                 if (!sample.written) {
                     ++unwritten;
                     // Unwritten pixels are marked rather than drawn as motion, so the sentinel is
-                    // visible instead of reading as a large negative velocity.
+                    // visible instead of reading as a large negative velocity. Blue, because the
+                    // motion channels are red and green and a marker sharing them reads as
+                    // motion that is not there.
                     uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
-                    pixel[0] = 0;
+                    pixel[0] = 220;  // blue
                     pixel[1] = 0;
-                    pixel[2] = 96;
+                    pixel[2] = 0;
                     pixel[3] = 255;
                     continue;
                 }

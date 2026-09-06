@@ -172,18 +172,24 @@ static void report_and_dump(void)
          status.frames_presented, status.textures_created, status.textures_matched,
          status.constant_buffers_matched, status.present_width, status.present_height);
 
+    /* Each press writes its own set. Comparing a menu, a briefing and a mission is how fields
+       that the stock layout does not predict get identified: what changes between them says what
+       a field is far better than any single snapshot does. */
+    static unsigned capture_index = 0;
+    const unsigned index = capture_index++;
+
     char prefix[MAX_PATH * 2];
-    snprintf(prefix, sizeof(prefix), "%s\\observed", observe_directory);
+    snprintf(prefix, sizeof(prefix), "%s\\capture%02u", observe_directory, index);
     /* The work happens inside the next present. Reading a resource from this thread would race
        the game's own rendering, which is what took the process down the first time. */
     const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY);
 
     char sizes[MAX_PATH * 2];
-    snprintf(sizes, sizeof(sizes), "%s\\constant-buffer-sizes.csv", observe_directory);
+    snprintf(sizes, sizeof(sizes), "%s\\capture%02u-buffer-sizes.csv", observe_directory, index);
     rsf_observer_write_buffer_sizes(sizes);
 
-    note("dump requested (result %d), %u distinct constant buffer sizes seen", (int)requested,
-         status.distinct_buffer_sizes);
+    note("capture %u requested (result %d), %u distinct constant buffer sizes seen", index,
+         (int)requested, status.distinct_buffer_sizes);
 
     /* Wait briefly for a frame to carry it out, then report what it produced. */
     for (int waited = 0; waited < 100; ++waited) {
@@ -192,8 +198,8 @@ static void report_and_dump(void)
         after.struct_size = sizeof(after);
         if (rsf_observer_get_status(&after) == RSF_OBSERVER_OK &&
             after.dumps_completed > status.dumps_completed) {
-            note("dump finished: %u textures, %u constant bytes", after.textures_written,
-                 after.constant_bytes_written);
+            note("capture %u finished: %u textures, %u constant bytes", index,
+                 after.textures_written, after.constant_bytes_written);
             return;
         }
         Sleep(50);
