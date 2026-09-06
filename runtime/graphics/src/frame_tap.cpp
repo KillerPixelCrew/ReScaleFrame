@@ -28,11 +28,15 @@ using ps_set_constant_buffers_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*
 using draw_indexed_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
 using draw_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 
-// The set that identifies this pass is five views. A pixel shader may bind far more, so the
-// examined window is bounded to keep the stack frame and the loop fixed on a path that runs
-// hundreds of times a frame. Chosen rather than measured: no capture shows the set bound above
-// slot 15, but nothing guarantees a later one will not.
-constexpr UINT max_examined_views = 16;
+// Every slot D3D11 allows a stage, rather than a guess at how many are used.
+//
+// This was 16, which was reasoning from what the set needs rather than from what the engine does.
+// Unreal binds its scene textures structure, depth and the GBuffer among them, alongside the post
+// process inputs, and that alone can reach past slot 16, so a window of 16 can watch a pass read
+// depth and never see it. The cost of the full range is a larger shadow and a longer scan, both of
+// which are cheap: only a slot that actually changed pays for a resource query, and a scan is a
+// pointer test per slot.
+constexpr UINT max_examined_views = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
 
 struct Tap {
     std::mutex guard;
@@ -76,6 +80,9 @@ struct Tap {
     // draw would run a backend several times over one frame.
     ID3D11Texture2D* last_fired_motion = nullptr;
     ID3D11Texture2D* last_fired_depth = nullptr;
+    // How many near misses have been described. Bounded so this diagnostic cannot become the
+    // reason the game runs badly.
+    uint32_t described = 0;
 
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
@@ -305,6 +312,30 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     //
     // Edge triggered: the set stays bound across the draws that use it, and firing on every call
     // while it does would run a backend several times over one frame.
+    // Three roles are each recognised tens of thousands of times and never together, so the
+    // question is no longer whether the rules work but what the pass that uses them looks like.
+    // A near miss, two of the three, is the most informative thing available: it says which
+    // combinations do occur, and describing the whole bound set at that moment says what is in the
+    // slots instead of the third. Bounded, because this writes a line per slot on the render
+    // thread and its job is to answer one question, not to run forever.
+    const uint32_t present = (motion ? 1u : 0u) + (depth ? 1u : 0u) + (exposure ? 1u : 0u);
+    if (present >= 2 && self.described < 12) {
+        ++self.described;
+        say(self, "near miss %u: motion %s, depth %s, exposure %s. bound set follows",
+            self.described, motion ? "yes" : "no", depth ? "yes" : "no", exposure ? "yes" : "no");
+        for (UINT index = 0; index < max_examined_views; ++index) {
+            const Tap::Slot& entry = self.slots[index];
+            if (!entry.texture) {
+                continue;
+            }
+            say(self, "  slot %u: %ux%u format %u binds 0x%x mips %u samples %u role %u", index,
+                entry.description.Width, entry.description.Height,
+                unsigned(entry.description.Format), unsigned(entry.description.BindFlags),
+                entry.description.MipLevels, entry.description.SampleDesc.Count,
+                unsigned(entry.role));
+        }
+    }
+
     const bool qualifies = motion && depth && exposure;
     const bool already_fired =
         motion == self.last_fired_motion && depth == self.last_fired_depth;

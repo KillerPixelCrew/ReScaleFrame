@@ -477,6 +477,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int was_down = 0;
     int scale_down = 0;
     int dlss_down = 0;
+    int ticks = 0;
     int running = 1;
     while (running) {
         const int dlss = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
@@ -484,6 +485,15 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             start_dlss();
         }
         dlss_down = dlss;
+
+        /* Report on a timer as well as on the key, because the report a key press produces is
+           taken the instant the tap is installed and therefore says nothing. Reading it as a result
+           cost a whole run. The report stays quiet while the numbers do not move, so a session that
+           reaches a steady state stops writing. */
+        if (++ticks >= 100 && rsf_bridge_running()) {
+            ticks = 0;
+            rsf_bridge_report();
+        }
 
         const int down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (down && !was_down && observe_directory[0]) {

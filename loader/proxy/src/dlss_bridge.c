@@ -53,6 +53,11 @@ static struct {
     unsigned long evaluated;
     unsigned long refused;
     long last_result;
+
+    /* What the last report said, so a report on a timer stays quiet while nothing moves. */
+    unsigned long reported_calls;
+    unsigned long reported_passes;
+    unsigned long reported_evaluated;
 } bridge;
 
 static void say(const char* format, ...)
@@ -263,6 +268,17 @@ void rsf_bridge_report(void)
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
+        /* Nothing has moved since the last report, so there is nothing to say. This is what makes
+           it safe to call on a timer: a report every few seconds is what turns one key press into
+           an answer, and repeating identical numbers would bury the run's real events. */
+        if (tap.calls_seen == bridge.reported_calls && tap.passes_seen == bridge.reported_passes &&
+            bridge.evaluated == bridge.reported_evaluated) {
+            return;
+        }
+        bridge.reported_calls = tap.calls_seen;
+        bridge.reported_passes = tap.passes_seen;
+        bridge.reported_evaluated = bridge.evaluated;
+
         say("frame tap: %lu calls seen, %lu changed a binding, %lu passes matched, render %ux%u",
             (unsigned long)tap.calls_seen, (unsigned long)tap.calls_inspected,
             (unsigned long)tap.passes_seen, tap.render_width, tap.render_height);
