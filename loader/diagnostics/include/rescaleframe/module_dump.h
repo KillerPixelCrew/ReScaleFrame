@@ -73,6 +73,11 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
 /* Measure the entropy of the code section of a loaded module without writing anything. */
 rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy);
 
+/* Append the currently loaded modules to a text file. Which graphics runtime a game selects is
+   only visible well after startup, so this has to be sampled late and repeatedly. Modules loaded
+   before the dump prove nothing: static imports are mapped whichever renderer is later chosen. */
+rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label);
+
 /* Poll until the code section falls below the threshold, then dump. Intended for a worker thread,
    never for DllMain. Returns RSF_DUMP_ERROR_STILL_ENCRYPTED if the timeout expires first. */
 rsf_dump_result rsf_dump_when_decrypted(const rsf_dump_options* options, uint32_t poll_interval_ms,

@@ -608,6 +608,39 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     return sidecar;
 }
 
+rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
+{
+    if (!path_utf8) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    wchar_t path[MAX_PATH * 2];
+    if (MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, path, MAX_PATH * 2) == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    FILE* stream = _wfopen(path, L"ab");
+    if (!stream) {
+        return RSF_DUMP_ERROR_WRITE_FAILED;
+    }
+
+    rsf_module_entry* modules =
+        (rsf_module_entry*)calloc(RSF_MAX_MODULES, sizeof(rsf_module_entry));
+    if (!modules) {
+        fclose(stream);
+        return RSF_DUMP_ERROR_WRITE_FAILED;
+    }
+    size_t count = 0;
+    collect_modules(modules, RSF_MAX_MODULES, &count);
+    fprintf(stream, "[%s] %llu modules\n", label ? label : "sample", (unsigned long long)count);
+    for (size_t index = 0; index < count; ++index) {
+        const wchar_t* leaf = wcsrchr(modules[index].path, L'\\');
+        fprintf(stream, "  %ls\n", leaf ? leaf + 1 : modules[index].path);
+    }
+    free(modules);
+    const int failed = ferror(stream);
+    fclose(stream);
+    return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
+}
+
 rsf_dump_result rsf_dump_when_decrypted(const rsf_dump_options* options, uint32_t poll_interval_ms,
                                         uint32_t timeout_ms, uint32_t stable_samples,
                                         rsf_dump_report* report)

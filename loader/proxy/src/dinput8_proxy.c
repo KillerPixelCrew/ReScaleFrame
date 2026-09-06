@@ -82,6 +82,10 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
         note("RSF_DUMP_DIR is not set, nothing to do");
         return 0;
     }
+    /* Create it rather than failing silently when it is missing. A run of the game is expensive
+       enough that losing one to a typo in a path is not acceptable. */
+    CreateDirectoryA(directory, NULL);
+
     MultiByteToWideChar(CP_ACP, 0, directory, -1, log_path, MAX_PATH);
     wcscat(log_path, L"\\rsf-dump.log");
 
@@ -107,6 +111,21 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
          (int)((report.code_entropy - (int)report.code_entropy) * 1000),
          report.sections_written, report.imports_described, report.iat_references,
          (unsigned long long)report.bytes_written);
+
+    /* Which renderer the game actually chose is only visible once it has initialised one, which
+       is long after the code has decrypted. Sample the module list on a schedule instead. */
+    char modules_path[MAX_PATH * 2];
+    snprintf(modules_path, sizeof(modules_path), "%s\\rsf-modules.log", directory);
+    static const DWORD marks[] = {5000, 15000, 30000, 60000, 120000};
+    DWORD waited = 0;
+    for (size_t index = 0; index < sizeof(marks) / sizeof(marks[0]); ++index) {
+        Sleep(marks[index] - waited);
+        waited = marks[index];
+        char label[64];
+        snprintf(label, sizeof(label), "t+%lus", (unsigned long)(waited / 1000));
+        rsf_write_module_list(modules_path, label);
+    }
+    note("module sampling finished");
     return 0;
 }
 
