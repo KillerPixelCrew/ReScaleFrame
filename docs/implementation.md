@@ -13,6 +13,10 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 
 ## First working target
 
+- [x] Decrypted AC7 module capture and import map for offline analysis. Loader diagnostic only:
+      it performs no interception and touches no graphics object. Cross-built with mingw-w64 and
+      tested under Wine, and run against the installed game on 6 September 2026. Results are in
+      [ghidra-tooling.md](research/ghidra-tooling.md). Not yet built with MSVC.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

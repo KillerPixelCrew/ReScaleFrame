@@ -89,6 +89,47 @@ early answer.
 `.pdata` is also plaintext. Its 2.4 MB exception directory enumerates every function's bounds,
 which stays useful for annotating a dump later.
 
+## The runtime capture
+
+Taken 6 September 2026 on a Linux machine running the game under Proton. The game was played to
+an in-game state with the diagnostic loaded and behaved normally.
+
+A research proxy `dinput8.dll` is placed next to `Ace7Game.exe` and selected with
+`WINEDLLOVERRIDES="dinput8=n,b"`. AC7 imports exactly one function from that DLL and nothing else
+in the process imports from it, so the forwarding surface is a single export and DXVK is left
+alone. It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
+
+Because it is a static import, its `DllMain` runs before the executable's entry point, which lets
+the diagnostic measure the code section before the DRM stub has touched it. A worker thread then
+samples entropy every 250 ms and writes the dump once it falls below 7.0.
+
+| Measurement | Value |
+| --- | --- |
+| `.text` entropy when the proxy loaded | 7.997, matching the on-disk file exactly |
+| `.text` entropy when the dump was taken | 6.267 |
+| `.text` entropy sampled across the dump afterwards | 6.107 to 6.467 |
+| Sections captured | 10 of 10 |
+| Bytes written | 71,385,127 |
+| Imports described | 789 |
+| Rip-relative calls through the import table | 19,888 |
+
+That last row is the decisive one. The shipped file contains **zero** such references because its
+code is ciphertext. The capture contains 19,888, which is direct evidence that it holds real code
+rather than an inference from an entropy score. The three graphics imports that could not be
+located at all in the shipped file now resolve to call sites, all within one function:
+
+| Import | Call site |
+| --- | --- |
+| `dxgi.dll!CreateDXGIFactory1` | `0x141fcb2a0` |
+| `dxgi.dll!CreateDXGIFactory` | `0x141fcb2a6` |
+| `d3d11.dll!D3D11CreateDevice` | `0x141fcb2b8` |
+
+The dump's section raw offsets equal their virtual addresses and its recorded image base is the
+address the module actually occupied, so an analysis tool's addresses match the running process.
+It is not runnable: the entry point still points at the DRM stub and no import table was rebuilt.
+Dumps stay in `.local/`; they are a decrypted copy of a licensed game and only offsets and
+observations belong in published research.
+
 ## Consequences for the plan
 
 1. Code analysis moves to a runtime image. The project's own bootstrap DLL is already in the

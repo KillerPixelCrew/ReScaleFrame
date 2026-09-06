@@ -9,14 +9,25 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-x64",
       "cacheVariables": { "BUILD_TESTING": "ON" }
+    },
+    {
+      "name": "linux-cross-x64",
+      "displayName": "Windows x64 cross build (mingw-w64)",
+      "description": "Development convenience for Linux checkouts. MSVC on Windows stays the reference build.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-cross-x64",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64-x64.cmake",
+      "cacheVariables": { "BUILD_TESTING": "ON", "CMAKE_BUILD_TYPE": "Debug" }
     }
   ],
   "buildPresets": [
     { "name": "windows-debug", "configurePreset": "windows-x64", "configuration": "Debug" },
-    { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release" }
+    { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release" },
+    { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64" }
   ],
   "testPresets": [
     { "name": "windows-debug", "configurePreset": "windows-x64", "configuration": "Debug", "output": { "outputOnFailure": true } },
-    { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release", "output": { "outputOnFailure": true } }
+    { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64", "output": { "outputOnFailure": true } }
   ]
 }
