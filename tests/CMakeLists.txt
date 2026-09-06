@@ -28,5 +28,12 @@ add_executable(rsf_texture_dump texture_dump.cpp)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(rsf_d3d11_observer d3d11_observer.cpp)
+target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")
+# These touch a graphics runtime and patch vtables, so a deadlock is a plausible failure. Fail in
+# a couple of minutes rather than hanging the suite.
+set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
+
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")

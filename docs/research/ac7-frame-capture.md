@@ -208,5 +208,97 @@ which targets. Those come from the capture and are not inferences.
 Not established: that resource 2163 carries the encoding a super resolution backend needs. Its
 format and lifetime match stock UE4.18 velocity, but sign, range, whether camera motion is
 included, jitter treatment, and dilation state are properties of the contents. Reading contents
-means replaying the capture, which needs Windows or a remote replay host. Until then the
-identification is a strong lead, not a validated input.
+means replaying the capture, which needs Windows or a remote replay host.
+
+## Replay results
+
+All 22 captures were replayed on Windows on 6 September 2026. Pixel contents settle what the
+structured data could only suggest, and correct two claims made earlier in this document.
+
+### The encoding is confirmed, and one constant here was wrong
+
+Written pixels in #2163 average 0.4999928 normalised in every capture. The bias in `Common.ush`
+is `32767/65535 = 0.4999924`. Those agree to seven decimal places, so the encoding is stock
+Unreal and the bias is 32767 rather than 32768.
+
+The Windows instructions carried a decode of `(value - 0.5) * 2`, inherited from an early draft of
+this research before the source was read. Both terms are wrong. The correct decode is
+
+```
+velocity = (value - 32767.0/65535.0) / 0.2495
+```
+
+a multiplier of 4.008, not 2. The measurements cannot distinguish the two because every velocity
+in these frames is small, which is exactly why the constant has to come from source rather than be
+fitted to data. `runtime/graphics` implements the source form.
+
+For scale: the largest raw value anywhere is 32813, in a frame with ground in view, decoding to
+0.0028 in screen space or roughly 2.9 pixels. In the camera-panning menu capture the largest is
+32768, which is 0.06 of a pixel. Where the camera tracks the aircraft the object is nearly static
+relative to it, so almost all apparent motion lives in the reprojection term rather than here.
+
+### Camera motion is absent, now measured rather than inferred
+
+| Capture | Written | Scene |
+| --- | --- | --- |
+| `ac7_frame32137` | 16.4% | menu, camera panning |
+| in-flight, clear sky | 4.7% to 8.3% | aircraft only |
+| `ac7_frame36073`, `ac7_frame36392` | 52%, 58% | ground in view |
+
+On the camera-only capture 83.6% of the frame is exactly zero while the camera pans, and in flight
+the sky stays zero while sweeping across the screen. That is the source reading confirmed from the
+opposite direction.
+
+### Correction: resource 63083 is not the velocity flatten
+
+This document earlier read #63083 as the motion blur velocity flatten, from its format, half
+resolution and compute writing. The pixels disagree: mean 0.55, no zero clear anywhere, a bimodal
+histogram with large populations at both ends, saturated across the sky with the aircraft
+silhouette punched out. That is a mask, and its resource id sits in the same allocation run as the
+cloud textures 62989 to 63019.
+
+The operative conclusion is unchanged, since it must not be used as motion either way, but the
+reasoning was wrong. Format and binding were not enough to identify it.
+
+### The HUD is already separable
+
+The frame ends identically in all 22 captures:
+
+```
+56115 --copy--> 2123 --full screen draw--> 64363 --> [2181 HUD] --> bloom 2253..2273 --> 268
+```
+
+| Resource | Format | Size | Holds |
+| --- | --- | --- | --- |
+| 2123 | `B8G8R8A8` | 2048x1152 | composed scene, byte for byte a copy of 56115 |
+| 64363 | `B8G8R8A8` | 2048x1152 | the same scene after one full screen pass, still no HUD |
+| 2181 | `R8G8B8A8` | 2048x1152 | the HUD alone, on a transparent background |
+| 268 | `R10G10B10A2` | 2048x1152 | swap chain: 64363 graded, plus HUD and its glow |
+
+Resource 2181 holds nothing but the HUD and is composited only in the final draw, along with a
+blur chain that gives it its glow. Any stage up to and including 64363 is a finished HUD-less
+image needing no masking or reconstruction. That is the best available outcome for frame
+generation and removes the HUD exclusion work the validation plan budgeted for.
+
+The single full screen pass from 2123 to 64363 is a vignette: it changes 33.6% of pixels by a mean
+of 7 of 255, growing monotonically from 2.5 at the centre to 11.1 at the edge.
+
+### Screen droplets are a shader effect
+
+A pair of consecutive resources: 57437, a `BC3` 1024x1024 droplet mask, and 57439, the matching
+`BC5_UNORM` normal. A mask plus a two channel normal is a screen space refraction pair. Nothing
+resembling droplets exists as an interface target and no separate droplet pass appears in any
+action list.
+
+Both are resident in all 19 in-flight captures including frames that visibly have none, so
+residency does not mean the effect is running. Which frames draw them needs the shader resource
+bindings per draw, which the exported action list does not record.
+
+A late screen space refraction is applied after velocity is written, so droplets carry no motion
+of their own and would not reproject. They belong after upscaling.
+
+### The caveat that applies to all of this
+
+Every capture was taken at 100 screen percentage, so render resolution and output resolution are
+equal throughout. Nothing here shows which targets follow render resolution and which follow
+output resolution once the two diverge, which is exactly what inserting super resolution does.
