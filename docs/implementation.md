@@ -65,11 +65,14 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] Frame assembly in the orchestrator: a plugin fills an engine-neutral camera frame and the
       orchestrator turns it into a backend's structure, refusing a pairing that cannot work rather
       than producing an image that is quietly wrong. Unit-tested only, no GPU involved.
-- [ ] DLSS on live frames. The whole path is written and links into the research carrier: a frame
-      tap that recognises the pass binding the reconstruction inputs, the view buffer read out of
-      that pass, the motion decode, frame assembly and evaluate, behind F8. Cross-built, and the
-      carrier loads under Wine and installs its hooks. It has not been run in the game, so nothing
-      has evaluated a real frame and no image exists.
+- [x] DLSS on live frames, game-tested. 2176 passes recognised at 1024x576 in one session, 2175
+      evaluated, none refused. The result is the scene, reconstructed: at 1:1 against its own input,
+      aircraft stencil text is legible where the source is pixelated and panel lines resolve where
+      the source stair-steps, so this is reconstruction rather than a smooth rescale.
+      Two things it does not show. The scene was a hangar with a nearly static camera, so the motion
+      vectors were near zero throughout and remain unverified by this. And the colour handed over is
+      the lighting pass output rather than the pre-tonemap image the full resolution captures
+      described, which is a question of insertion point rather than of the backend.
 - [ ] Reinsert the result. Evaluating is not the same as being visible, and the game still presents
       its own upscale.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.

@@ -124,7 +124,25 @@ neither `Ex` variant, and NGX falls back. Every DLSS snippet on this machine tak
 `waitForIdle: Operation failed` twice while the test tears its device down after `slShutdown`; in a
 game the device outlives us, so this may never come up, but it has not been explained.
 
-Still no upscaled pixel: everything above is initialisation and queries. The matrices are the piece
+### It produces an image
+
+Run in the game on 6 September 2026: 2176 sets recognised at 1024x576, 2175 evaluated, none refused.
+Dumping the scene colour it was given and the result it produced, from the same frame, and comparing
+them at 1:1, the reconstruction is real. Aircraft stencil text that is pixelated in the source is
+legible in the result, and panel lines that stair-step in the source resolve into straight edges.
+
+What that run does not establish, and it matters:
+
+- The scene was a hangar with a nearly static camera, so the motion vectors were near zero
+  throughout. Everything about them, the sign, the axis direction and the sentinel, is still
+  unverified by a rendered result. A moving camera is what tests those, and a wrong sign survives a
+  still scene and smears under motion.
+- The colour handed over is the output of the pass that binds depth and velocity together, which is
+  the lighting or composite pass, not the pre-tonemap image the full resolution captures described.
+  Whether that is the right input is a question about the insertion point.
+- Nothing is reinserted. The game still presents its own image, and this runs beside it.
+
+Everything below was written before that run and describes getting there. The matrices are the piece
 that stands between this and one. They come from the view uniform buffer, which the loader reads but
 whose layout is only partly mapped for this engine branch.
 
