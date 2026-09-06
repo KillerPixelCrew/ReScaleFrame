@@ -16,6 +16,7 @@
 
 #include <windows.h>
 
+#include <stdint.h>
 #include <stdio.h>
 #include <wchar.h>
 
@@ -159,6 +160,48 @@ static void start_observer(void)
          (unsigned long)options.constant_buffer_max_bytes);
 }
 
+/* Revive Unreal's temporal jitter without turning temporal AA on.
+
+   PreVisibilityFrameSetup clears TemporalJitterPixels, then computes a jitter only when the view
+   asks for temporal AA:
+
+       cmp  dword ptr [rsi+0x13c0], 2      ; View.AntiAliasingMethod == AAM_TemporalAA
+       jne  <skip>                         ; the six bytes replaced below
+       test rdi, rdi                       ; && ViewState
+
+   Stepping over that jump lets the jitter run whatever the anti-aliasing setting says, while the
+   ViewState check just after it is left alone because a null view state genuinely cannot proceed.
+   Unreal then applies the offset to the projection itself, so every matrix derived from it stays
+   consistent, which is the reason to do it here rather than editing matrices afterwards.
+
+   The expected bytes are checked before writing. If the game updates and the code moves, this
+   refuses rather than corrupting an instruction. */
+static void apply_jitter_patch(void)
+{
+    if (read_number("RSF_ENABLE_JITTER", 0) == 0) {
+        return;
+    }
+    const DWORD rva = read_number("RSF_JITTER_RVA", 0x112b1f3);
+    /* jne rel32 */
+    const uint8_t expected[6] = {0x0F, 0x85, 0xDD, 0x03, 0x00, 0x00};
+    /* The six byte canonical nop, so the fall-through path is reached. */
+    const uint8_t replacement[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    uint8_t previous[6] = {0};
+
+    const rsf_dump_result result =
+        rsf_patch_code(rva, replacement, sizeof(replacement),
+                       rva == 0x112b1f3 ? expected : NULL, rva == 0x112b1f3 ? sizeof(expected) : 0,
+                       previous);
+    if (result == RSF_DUMP_OK) {
+        note("jitter gate patched at rva 0x%lx, was %02x %02x %02x %02x %02x %02x",
+             (unsigned long)rva, previous[0], previous[1], previous[2], previous[3], previous[4],
+             previous[5]);
+    } else {
+        note("jitter gate NOT patched at rva 0x%lx, result %d (expected bytes did not match?)",
+             (unsigned long)rva, (int)result);
+    }
+}
+
 static void report_and_dump(void)
 {
     rsf_observer_status status;
@@ -244,6 +287,10 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     report.struct_size = sizeof(report);
 
     const rsf_dump_result result = rsf_dump_when_decrypted(&options, 250, 180000, 2, &report);
+    /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
+       write into bytes about to be overwritten. */
+    apply_jitter_patch();
+
     note("result %d, entropy %d.%03d, sections %u, imports %u, iat references %u, bytes %llu",
          (int)result, (int)report.code_entropy,
          (int)((report.code_entropy - (int)report.code_entropy) * 1000),

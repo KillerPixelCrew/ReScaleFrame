@@ -73,6 +73,20 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
 /* Measure the entropy of the code section of a loaded module without writing anything. */
 rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy);
 
+/* Write bytes over code in the main module, at an offset from its load base.
+
+   For a protected executable this can only run after the code has been decrypted, which is what
+   the entropy measurement above establishes. Patching earlier writes into ciphertext that is
+   about to be overwritten.
+
+   `expected` and `expected_count`, when given, must match the bytes already there. A patch whose
+   surroundings have changed is a patch aimed at the wrong place, and refusing is much better than
+   corrupting an instruction stream. Returns the previous bytes in `previous` when asked, so a
+   caller can put them back. */
+rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t count,
+                               const uint8_t* expected, uint32_t expected_count,
+                               uint8_t* previous);
+
 /* Append the currently loaded modules to a text file. Which graphics runtime a game selects is
    only visible well after startup, so this has to be sampled late and repeatedly. Modules loaded
    before the dump prove nothing: static imports are mapped whichever renderer is later chosen. */

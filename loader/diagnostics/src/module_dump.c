@@ -608,6 +608,48 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     return sidecar;
 }
 
+rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t count,
+                               const uint8_t* expected, uint32_t expected_count,
+                               uint8_t* previous)
+{
+    if (!bytes || count == 0) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+    unsigned char* base = (unsigned char*)resolve_base(NULL);
+    const IMAGE_NT_HEADERS64* headers = nt_headers(base);
+    if (!headers) {
+        return RSF_DUMP_ERROR_NOT_A_PE;
+    }
+    if (rva + count > headers->OptionalHeader.SizeOfImage) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+    }
+
+    unsigned char* target = base + rva;
+    if (expected && expected_count) {
+        if (expected_count != count) {
+            return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+        }
+        /* Refusing on a mismatch is the whole point. A patch aimed at the wrong address is far
+           worse than no patch, and a build that shifted the code would land exactly there. */
+        if (memcmp(target, expected, expected_count) != 0) {
+            return RSF_DUMP_ERROR_INVALID_ARGUMENT;
+        }
+    }
+
+    DWORD protection = 0;
+    if (!VirtualProtect(target, count, PAGE_EXECUTE_READWRITE, &protection)) {
+        return RSF_DUMP_ERROR_WRITE_FAILED;
+    }
+    if (previous) {
+        memcpy(previous, target, count);
+    }
+    memcpy(target, bytes, count);
+    DWORD restored = 0;
+    VirtualProtect(target, count, protection, &restored);
+    FlushInstructionCache(GetCurrentProcess(), target, count);
+    return RSF_DUMP_OK;
+}
+
 rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
 {
     if (!path_utf8) {
