@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define RSF_TEXTURE_DUMP_ABI_VERSION 1u
+#define RSF_TEXTURE_DUMP_ABI_VERSION 2u
 
 typedef int32_t rsf_dump_texture_result;
 #define RSF_TEXTURE_OK ((rsf_dump_texture_result)0)
@@ -26,6 +26,18 @@ typedef int32_t rsf_dump_texture_result;
 #define RSF_TEXTURE_ERROR_STAGING_FAILED ((rsf_dump_texture_result)-4)
 #define RSF_TEXTURE_ERROR_MAP_FAILED ((rsf_dump_texture_result)-5)
 #define RSF_TEXTURE_ERROR_WRITE_FAILED ((rsf_dump_texture_result)-6)
+/* The texture belongs to a different device than the one passed in. Copying across devices is
+   invalid, and the runtime creating more than one device is exactly how that happens by
+   accident. */
+#define RSF_TEXTURE_ERROR_FOREIGN_DEVICE ((rsf_dump_texture_result)-7)
+
+/* Where progress lines go while a dump runs.
+
+   A dump that takes the process down says nothing about where it was, and a returned result code
+   never arrives. The sink is called before each step rather than after it, so the last line on
+   disk names the step that did not survive. A sink that appends and closes per line is what makes
+   that true; buffering it defeats the purpose. Optional, a null sink logs nothing. */
+typedef void (*rsf_dump_log_fn)(void* user, const char* message);
 
 /* How to turn stored values into something visible. */
 typedef uint32_t rsf_dump_view;
@@ -43,6 +55,9 @@ typedef struct rsf_texture_dump_options {
     rsf_dump_view view;
     /* Scale applied before the view maps values to bytes. Zero means one. */
     float scale;
+    /* Optional progress sink, and the pointer handed back to it. */
+    rsf_dump_log_fn log;
+    void* log_user;
 } rsf_texture_dump_options;
 
 typedef struct rsf_texture_dump_report {

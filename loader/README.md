@@ -53,6 +53,27 @@ It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
 Each F10 writes its own `captureNN_*` set. The index resets per process, so a short run overwrites
 the low numbered files of a longer earlier one.
 
+The dump runs inside `Present`, on the game's own render thread, so a fault there is a closed game
+and no result code. Every step is written to `rsf-dump.log` before it is taken, one line at a time
+with the file closed between lines, which makes the last line the step that did not survive:
+
+```
+dump begin: 3 textures, 1 constant buffers
+texture 1 of 3
+dump ...\capture00_0: 1024x576 format 35 mips 1 slices 1 samples 1
+dump: creating staging copy
+dump: copying (whole resource)
+dump: mapping
+dump: decoding 576 rows
+dump: writing ...\capture00_0.tga
+dump: done, 8.3% unwritten
+```
+
+A run that ends at `dump begin` never reached the first texture; one that ends at `copying` names
+the resource in the line above it. Two cases are refused rather than attempted, because both are
+invalid D3D11 that faults instead of returning a failure: a resource belonging to a different
+device than the one dumping it, and a `CopyResource` between a mip chain and the flat staging copy.
+
 ## Order of operations, and why it is that order
 
 1. **RenderDoc loads on attach**, not on the worker, because it has to be in place before the

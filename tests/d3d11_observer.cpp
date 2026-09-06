@@ -10,6 +10,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace {
@@ -30,6 +31,26 @@ void stage(const char* what)
 {
     std::fprintf(stderr, "[stage] %s\n", what);
     std::fflush(stderr);
+}
+
+// The dump runs inside a present, where a failure is a crashed game and nothing else. Its progress
+// lines are the only account of how far it got, so the sink is part of what this test covers.
+std::vector<std::string> log_lines;
+
+void collect(void* user, const char* message)
+{
+    (void)user;
+    log_lines.emplace_back(message);
+}
+
+bool logged(const char* fragment)
+{
+    for (const std::string& line : log_lines) {
+        if (line.find(fragment) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 HWND make_window()
@@ -62,6 +83,7 @@ int main(int argc, char* argv[])
     options.capacity = 8;
     options.constant_buffer_min_bytes = 2640;  // stock 4.18 view uniform size
     options.constant_buffer_max_bytes = 2640;
+    options.log = collect;
 
     options.abi_version = RSF_OBSERVER_ABI_VERSION + 1u;
     check(rsf_observer_install(&options) == RSF_OBSERVER_ERROR_ABI_MISMATCH,
@@ -207,6 +229,14 @@ int main(int argc, char* argv[])
     check(after.dumps_completed == 1u, "The dump must have run inside the present.");
     check(after.textures_written == 1u, "The one retained target must be written.");
     check(after.constant_bytes_written == 2640u, "The retained constant buffer must be written.");
+
+    // What the loader's log has to contain for a crashed dump to be diagnosable at all: the count
+    // it started with, the resource it was on, and the step it had reached.
+    check(logged("dump begin: 1 textures"), "The dump must announce what it is about to do.");
+    check(logged("texture 1 of 1"), "Each texture must be named before it is touched.");
+    check(logged("256x128"), "The descriptor must be logged before the copy.");
+    check(logged("constant buffer of 2640 bytes"), "Each constant buffer must be named.");
+    check(logged("dump end: 1 textures"), "Completion must be distinguishable from a crash.");
 
     char constants_path[1024];
     std::snprintf(constants_path, sizeof(constants_path), "%s\\observed_cb2640.bin", argv[1]);

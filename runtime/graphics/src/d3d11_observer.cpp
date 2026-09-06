@@ -7,6 +7,7 @@
 
 #include <d3d11.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -201,6 +202,21 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
     return result;
 }
 
+// Read without the lock, which is safe because options are written once during install and never
+// again, and necessary because the interesting lines come from inside the dump loop.
+void say(const Observer& self, const char* format, ...)
+{
+    if (!self.options.log) {
+        return;
+    }
+    char message[512];
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    self.options.log(self.options.log_user, message);
+}
+
 // Performed on the presenting thread, where using the immediate context is safe.
 void perform_pending_dump(Observer& self)
 {
@@ -247,6 +263,7 @@ void perform_pending_dump(Observer& self)
 
     uint32_t written = 0;
     uint32_t constant_bytes = 0;
+    say(self, "dump begin: %zu textures, %zu constant buffers", textures.size(), buffers.size());
     if (context) {
         for (size_t index = 0; index < textures.size(); ++index) {
             char path[1024];
@@ -256,13 +273,33 @@ void perform_pending_dump(Observer& self)
             dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
             dump.output_prefix_utf8 = path;
             dump.view = view;
-            if (rsf_dump_texture(device, context, textures[index], &dump, nullptr) ==
-                RSF_TEXTURE_OK) {
+            dump.log = self.options.log;
+            dump.log_user = self.options.log_user;
+            say(self, "texture %zu of %zu", index + 1, textures.size());
+            const rsf_dump_texture_result result =
+                rsf_dump_texture(device, context, textures[index], &dump, nullptr);
+            if (result == RSF_TEXTURE_OK) {
                 ++written;
+            } else {
+                say(self, "texture %zu refused, result %d", index + 1, int(result));
             }
         }
 
         for (const auto& entry : buffers) {
+            say(self, "constant buffer of %u bytes", entry.bytes);
+            // Same rule as for textures: a copy between resources of different devices is invalid
+            // and crashes rather than failing.
+            ID3D11Device* owner = nullptr;
+            entry.buffer->GetDevice(&owner);
+            const bool same_device = owner == device;
+            if (owner) {
+                owner->Release();
+            }
+            if (!same_device) {
+                say(self, "constant buffer skipped, it belongs to another device");
+                continue;
+            }
+
             D3D11_BUFFER_DESC staging{};
             entry.buffer->GetDesc(&staging);
             staging.Usage = D3D11_USAGE_STAGING;
@@ -287,8 +324,11 @@ void perform_pending_dump(Observer& self)
             }
         }
         context->Release();
+    } else {
+        say(self, "dump abandoned: no device context");
     }
 
+    say(self, "dump end: %u textures, %u constant bytes", written, constant_bytes);
     for (ID3D11Texture2D* texture : textures) {
         texture->Release();
     }

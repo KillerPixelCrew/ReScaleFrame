@@ -130,6 +130,14 @@ static DWORD read_number(const char* name, DWORD fallback)
     return value > 0 ? (DWORD)value : fallback;
 }
 
+/* The observer's progress lines go to the same log as everything else. note() opens, writes and
+   closes per line, which is what makes the last line before a crash survive it. */
+static void observer_note(void* user, const char* message)
+{
+    (void)user;
+    note("%s", message);
+}
+
 /* Installed before the module dump rather than after it. The creation hook only sees textures
    made after it is in place, and the target we are after is allocated during engine startup. */
 static void start_observer(void)
@@ -155,6 +163,7 @@ static void start_observer(void)
        and every size seen is counted, which is what identifies the right one. */
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
+    options.log = observer_note;
 
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",

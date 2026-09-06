@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -30,6 +31,27 @@ void check_near(float actual, float expected, float tolerance, const char* messa
                      double(expected));
         passed = false;
     }
+}
+
+// Collects the progress lines. In the game these go to the loader's log, where they exist to name
+// the resource and the step a dump died on, so a test that never reads them would not notice the
+// sink going quiet.
+std::vector<std::string> log_lines;
+
+void collect(void* user, const char* message)
+{
+    check(user == &log_lines, "The sink must be handed back the pointer it was given.");
+    log_lines.emplace_back(message);
+}
+
+bool logged(const char* fragment)
+{
+    for (const std::string& line : log_lines) {
+        if (line.find(fragment) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The encoding under test, written out the way Common.ush states it.
@@ -106,6 +128,8 @@ int main(int argc, char* argv[])
     options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
     options.output_prefix_utf8 = prefix;
     options.view = RSF_DUMP_VIEW_VELOCITY;
+    options.log = collect;
+    options.log_user = &log_lines;
 
     rsf_texture_dump_report report{};
     report.struct_size = sizeof(report);
@@ -136,6 +160,13 @@ int main(int argc, char* argv[])
         check_near(report.min_y, -1.0f, 0.01f, "Smallest decoded y must match what was encoded.");
         check_near(report.max_y, 0.25f, 0.01f, "Largest decoded y must match what was encoded.");
 
+        // Each step is announced before it runs, which is the only reason a crashing dump says
+        // where it was.
+        check(logged("creating staging copy"), "The staging step must be announced.");
+        check(logged("mapping"), "The mapping step must be announced.");
+        check(logged("writing"), "The write step must be announced.");
+        check(logged("done"), "Completion must be announced.");
+
         char image[1024];
         std::snprintf(image, sizeof(image), "%s.tga", prefix);
         std::FILE* stream = std::fopen(image, "rb");
@@ -162,6 +193,51 @@ int main(int argc, char* argv[])
                   RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT,
               "An unsupported format must be refused, not guessed at.");
         unsupported->Release();
+    }
+
+    // A mip chain has more subresources than the single-subresource staging copy, which makes
+    // CopyResource invalid. The top level has to be named explicitly instead, and a game's targets
+    // are not all flat.
+    D3D11_TEXTURE2D_DESC mipped{};
+    mipped.Width = 8;
+    mipped.Height = 8;
+    mipped.MipLevels = 4;
+    mipped.ArraySize = 1;
+    mipped.Format = DXGI_FORMAT_R16G16_UNORM;
+    mipped.SampleDesc.Count = 1;
+    mipped.Usage = D3D11_USAGE_DEFAULT;
+    mipped.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    ID3D11Texture2D* with_mips = nullptr;
+    if (SUCCEEDED(device->CreateTexture2D(&mipped, nullptr, &with_mips)) && with_mips) {
+        char mip_prefix[1024];
+        std::snprintf(mip_prefix, sizeof(mip_prefix), "%s\\mipped", argv[1]);
+        options.output_prefix_utf8 = mip_prefix;
+        check(rsf_dump_texture(device, context, with_mips, &options, &report) == RSF_TEXTURE_OK,
+              "A texture with mip levels must dump its top level rather than fail.");
+        check(report.width == 8u && report.height == 8u,
+              "The dump must describe the top mip level.");
+        with_mips->Release();
+        options.output_prefix_utf8 = prefix;
+    }
+
+    // Copying between resources of different devices is invalid and takes the process down. It
+    // has to be refused before the copy, not diagnosed after it.
+    ID3D11Device* other_device = nullptr;
+    ID3D11DeviceContext* other_context = nullptr;
+    if (SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, wanted, 1,
+                                    D3D11_SDK_VERSION, &other_device, &obtained, &other_context)) &&
+        other_device) {
+        ID3D11Texture2D* foreign = nullptr;
+        if (SUCCEEDED(other_device->CreateTexture2D(&desc, &initial, &foreign)) && foreign) {
+            check(rsf_dump_texture(device, context, foreign, &options, &report) ==
+                      RSF_TEXTURE_ERROR_FOREIGN_DEVICE,
+                  "A texture from another device must be refused before anything is copied.");
+            foreign->Release();
+        }
+        if (other_context) {
+            other_context->Release();
+        }
+        other_device->Release();
     }
 
     texture->Release();

@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -106,6 +107,21 @@ uint8_t clamp_byte(float value)
     return static_cast<uint8_t>(value + 0.5f);
 }
 
+// Announce a step before taking it. Formatted here rather than in the sink so the sink can stay a
+// plain string callback and cross a DLL boundary without a varargs contract.
+void say(const rsf_texture_dump_options& options, const char* format, ...)
+{
+    if (!options.log) {
+        return;
+    }
+    char message[512];
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    options.log(options.log_user, message);
+}
+
 bool write_targa(const std::string& path, uint32_t width, uint32_t height,
                  const std::vector<uint8_t>& bgra)
 {
@@ -149,9 +165,27 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
 
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
+    say(*options, "dump %s: %ux%u format %u mips %u slices %u samples %u",
+        options->output_prefix_utf8, desc.Width, desc.Height, unsigned(desc.Format), desc.MipLevels,
+        desc.ArraySize, desc.SampleDesc.Count);
+
     const uint32_t stride = bytes_per_pixel(desc.Format);
     if (stride == 0) {
         return RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT;
+    }
+
+    // Copying between resources of different devices is invalid and takes the process down rather
+    // than failing a call. A runtime with more than one device is not exotic: the observer creates
+    // a throwaway one to reach the vtables, and any overlay in the process may create its own.
+    ID3D11Device* owner = nullptr;
+    texture->GetDevice(&owner);
+    const bool same_device = owner == device;
+    if (owner) {
+        owner->Release();
+    }
+    if (!same_device) {
+        say(*options, "dump: refused, texture belongs to another device");
+        return RSF_TEXTURE_ERROR_FOREIGN_DEVICE;
     }
 
     // A staging copy leaves the game's own resource and binding state untouched.
@@ -165,21 +199,33 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     staging.SampleDesc.Count = 1;
     staging.SampleDesc.Quality = 0;
 
+    say(*options, "dump: creating staging copy");
     ID3D11Texture2D* readable = nullptr;
     if (FAILED(device->CreateTexture2D(&staging, nullptr, &readable)) || !readable) {
         return RSF_TEXTURE_ERROR_STAGING_FAILED;
     }
+    // CopyResource requires both resources to have the same subresource count, and the staging
+    // copy deliberately has one. Anything with mips or slices therefore has to name the top one
+    // explicitly instead.
+    const bool single_subresource = desc.MipLevels <= 1 && desc.ArraySize <= 1;
+    say(*options, "dump: copying (%s)",
+        desc.SampleDesc.Count > 1 ? "resolve"
+                                  : (single_subresource ? "whole resource" : "top subresource"));
     if (desc.SampleDesc.Count > 1) {
         context->ResolveSubresource(readable, 0, texture, 0, desc.Format);
-    } else {
+    } else if (single_subresource) {
         context->CopyResource(readable, texture);
+    } else {
+        context->CopySubresourceRegion(readable, 0, 0, 0, 0, texture, 0, nullptr);
     }
 
+    say(*options, "dump: mapping");
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped))) {
         readable->Release();
         return RSF_TEXTURE_ERROR_MAP_FAILED;
     }
+    say(*options, "dump: decoding %u rows", desc.Height);
 
     const float scale = options->scale != 0.0f ? options->scale : 1.0f;
     std::vector<uint8_t> image(static_cast<size_t>(desc.Width) * desc.Height * 4u);
@@ -236,6 +282,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     readable->Release();
 
     const std::string prefix = options->output_prefix_utf8;
+    say(*options, "dump: writing %s.tga", prefix.c_str());
     if (!write_targa(prefix + ".tga", desc.Width, desc.Height, image)) {
         return RSF_TEXTURE_ERROR_WRITE_FAILED;
     }
@@ -263,5 +310,6 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         report->min_y = min_y;
         report->max_y = max_y;
     }
+    say(*options, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
     return RSF_TEXTURE_OK;
 }

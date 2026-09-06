@@ -15,13 +15,15 @@
 #ifndef RSF_D3D11_OBSERVER_H
 #define RSF_D3D11_OBSERVER_H
 
+#include <rescaleframe/texture_dump.h>
+
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define RSF_OBSERVER_ABI_VERSION 1u
+#define RSF_OBSERVER_ABI_VERSION 2u
 
 typedef int32_t rsf_observer_result;
 #define RSF_OBSERVER_OK ((rsf_observer_result)0)
@@ -48,6 +50,11 @@ typedef struct rsf_observer_options {
        branch and the stock size is only a starting guess. */
     uint32_t constant_buffer_min_bytes;
     uint32_t constant_buffer_max_bytes;
+    /* Where a dump reports its progress. Every step inside a present is announced before it runs,
+       so a dump that takes the process down leaves the resource and the step it reached on disk.
+       Optional, and passed on to every texture dump the observer performs. */
+    rsf_dump_log_fn log;
+    void* log_user;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {
