@@ -9,3 +9,5 @@ python tools/inspect-game.py "path/to/Ace7Game.exe" ".local/ac7-executable.json"
 Create the output directory before running it. Keep machine paths, binaries, captures, and Ghidra projects in `.local/` or another untracked workspace. The published research fingerprint uses only the executable name.
 
 Ghidra and a Ghidra MCP bridge can support the next binary-analysis phase. They are external development tools, not runtime dependencies. Local installation pointers can be stored in `.local/tooling.json`; configuring the bridge is separate from building ReScaleFrame.
+
+`ghidra/` holds the DirectX type builder and the COM call decoder that Ghidra does not provide on its own. See [ghidra/README.md](ghidra/README.md) for usage and [docs/research/ghidra-tooling.md](../docs/research/ghidra-tooling.md) for what they established about the installed game.
