@@ -69,12 +69,12 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       evaluated, none refused. The result is the scene, reconstructed: at 1:1 against its own input,
       aircraft stencil text is legible where the source is pixelated and panel lines resolve where
       the source stair-steps, so this is reconstruction rather than a smooth rescale.
-      The camera orbited the aircraft, so the reprojection held: `ClipToPrevClip`, depth and the
-      backend's reconstruction of camera motion from them produced a stable image. Nothing in the
-      scene moved, though, and this engine writes object motion only, so the decoded velocity's sign
-      and axis direction still need a mission to test. The colour handed over is also the lighting
-      pass output rather than the pre-tonemap image the captures described, which is a question of
-      insertion point rather than of the backend.
+      Confirmed in a mission on 7 September 2026: the render scale held at 1024x576 for the whole
+      flight, 7917 frames evaluated with none refused, and the reconstructed frame is the complete
+      scene, sky and cloud layer and terrain and aircraft, at 2048x1152. Under flight there is no
+      smearing, which is the first real test of the decoded velocity and of `ClipToPrevClip`.
+      What is not done: the result is drawn over the game's frame rather than reinserted into its
+      pipeline, so it is ungraded and carries no interface. That is the remaining structural piece.
 - [ ] Reinsert the result. A debug view exists behind F7: a full screen draw over the back buffer
       from inside the Present hook, with a rough tonemap so linear scene colour is viewable. It
       shows the reconstruction moving, which is the only way ghosting and motion vector sign can be

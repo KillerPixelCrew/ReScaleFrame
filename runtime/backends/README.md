@@ -124,7 +124,25 @@ neither `Ex` variant, and NGX falls back. Every DLSS snippet on this machine tak
 `waitForIdle: Operation failed` twice while the test tears its device down after `slShutdown`; in a
 game the device outlives us, so this may never come up, but it has not been explained.
 
-### It produces an image
+### It reconstructs a mission frame
+
+7 September 2026, in flight, with the render scale held at 1024x576 against a 2048x1152 output:
+7917 frames evaluated, none refused, and the result is the whole scene. Sky, cloud layer, sun,
+terrain and aircraft, reconstructed at twice the rendered resolution, with no smearing under
+movement. That last part is the first real test of the decoded velocity and of `ClipToPrevClip`,
+neither of which a static scene can exercise.
+
+Three things got it there, and each was a wrong assumption first: the colour is taken at Present
+rather than at the pass that identifies it, because twenty seven draws add the sky to that same
+target afterwards; the render scale re-applies itself, because loading a mission puts the game's own
+setting back and a backend fed the presented size is doing antialiasing while looking like a
+success; and the output target is cleared once, because a reconstruction does not promise to write
+every pixel of it and unwritten memory reads as an artifact of the reconstruction.
+
+What remains is that the result is drawn over the game's frame rather than reinserted into its
+pipeline, so it is ungraded and has no interface on it.
+
+### The first run, before any of that
 
 Run in the game on 6 September 2026: 2176 sets recognised at 1024x576, 2175 evaluated, none refused.
 Dumping the scene colour it was given and the result it produced, from the same frame, and comparing
