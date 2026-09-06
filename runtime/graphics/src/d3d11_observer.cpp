@@ -584,6 +584,54 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
     return RSF_OBSERVER_OK;
 }
 
+extern "C" rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out)
+{
+    if (!device_out && !context_out) {
+        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
+    }
+    Observer& self = observer();
+
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        if (!self.device) {
+            return RSF_OBSERVER_ERROR_NOT_READY;
+        }
+        device = self.device;
+        device->AddRef();
+        context = self.context;
+        if (context) {
+            context->AddRef();
+        }
+    }
+
+    // Resolved outside the lock for the same reason everything else here is: this calls into D3D11,
+    // and D3D11 can re-enter the creation hook, which takes this mutex.
+    if (!context && context_out) {
+        device->GetImmediateContext(&context);
+        if (context) {
+            std::lock_guard<std::mutex> lock(self.guard);
+            if (!self.context) {
+                self.context = context;
+                self.context->AddRef();
+            }
+        }
+    }
+
+    if (device_out) {
+        *device_out = device;
+    } else {
+        device->Release();
+    }
+    if (context_out) {
+        *context_out = context;
+    } else if (context) {
+        context->Release();
+    }
+    return RSF_OBSERVER_OK;
+}
+
 extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* status)
 {
     if (!status || status->struct_size < sizeof(rsf_observer_status)) {

@@ -65,6 +65,13 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] Frame assembly in the orchestrator: a plugin fills an engine-neutral camera frame and the
       orchestrator turns it into a backend's structure, refusing a pairing that cannot work rather
       than producing an image that is quietly wrong. Unit-tested only, no GPU involved.
+- [ ] DLSS on live frames. The whole path is written and links into the research carrier: a frame
+      tap that recognises the pass binding the reconstruction inputs, the view buffer read out of
+      that pass, the motion decode, frame assembly and evaluate, behind F8. Cross-built, and the
+      carrier loads under Wine and installs its hooks. It has not been run in the game, so nothing
+      has evaluated a real frame and no image exists.
+- [ ] Reinsert the result. Evaluating is not the same as being visible, and the game still presents
+      its own upscale.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

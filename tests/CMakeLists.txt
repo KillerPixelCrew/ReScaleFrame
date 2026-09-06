@@ -36,6 +36,10 @@ add_executable(rsf_ac7_view_test ac7_view.cpp)
 target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
 add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
 
+add_executable(rsf_resource_roles resource_roles.cpp)
+target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME resource_roles COMMAND rsf_resource_roles)
+
 add_executable(rsf_motion_decode motion_decode.cpp)
 target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_decode COMMAND rsf_motion_decode)

@@ -91,6 +91,17 @@ rsf_observer_result rsf_observer_install(const rsf_observer_options* options);
 /* Restore the original vtable entries and release everything retained. */
 rsf_observer_result rsf_observer_uninstall(void);
 
+/* Hand out the device the observer found, and its immediate context.
+
+   Anything that wants to do graphics work inside this game needs a device, and creating one of its
+   own would be a second device: resources could not be shared with the game's, which is the whole
+   point. The observer already has the game's, because it watched it being used.
+
+   Both are AddRef'd and the caller releases them. Either pointer may be null if it is not wanted.
+   Returns RSF_OBSERVER_ERROR_NOT_READY before the game has created anything, which is most of
+   startup, so a caller has to be prepared to ask again rather than give up. */
+rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out);
+
 rsf_observer_result rsf_observer_get_status(rsf_observer_status* status);
 
 /* Ask for a dump to be taken. The work happens inside the next present, on whichever thread the

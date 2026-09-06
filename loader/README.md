@@ -46,6 +46,7 @@ It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
 
 | Key | Action |
 | --- | --- |
+| F8 | Start DLSS, or report its counters if it is already running |
 | F9 | Set `r.ScreenPercentage`, and `r.TemporalAASamples` to match |
 | F10 | Dump velocity targets raw and decoded, view constant buffers, and a buffer size histogram |
 | F11 | Trigger a RenderDoc capture |
@@ -60,6 +61,48 @@ the decode gets checked against the game's own buffer rather than only against v
 up. In the decoded image, blue marks the sentinel the pass wrote where the source held its clear
 value, and mid grey is zero motion, the same convention the raw velocity view uses.
 `RSF_DECODE_MOTION=0` turns it off.
+
+## Running DLSS
+
+The order matters, and each step is a key rather than automatic because each one wants the game to
+be somewhere in particular.
+
+| Step | Key | Why then |
+| --- | --- | --- |
+| 1 | F9, in flight | Revives the jitter path and halves the render scale. Without a jitter there are no extra sub-pixel samples, and the pipeline refuses the frame rather than producing something quietly soft. |
+| 2 | F8 | Starts DLSS. The game's device has to exist, and by the time you can press a key it does. |
+| 3 | F10 | Writes the inputs and, when DLSS is running, its output beside them. |
+
+Set `RSF_STREAMLINE_BIN` to the directory holding `sl.interposer.dll` and the plugins, and
+`RSF_ENABLE_JITTER=1` so F9 has something to enable. `RSF_DLSS_QUALITY` picks a level, 0 native
+through 4 ultra performance, defaulting to 3, and `RSF_DLSS_OUTPUT_WIDTH` and `_HEIGHT` override
+the presented size the observer reports.
+
+Under Proton this also needs DXVK, vkd3d-proton and DXVK-NVAPI all selected together:
+
+```
+WINEDLLOVERRIDES="d3d11,d3d12,d3d12core,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n,b;dinput8=n,b"
+```
+
+`d3d12` belongs in that list even though nothing here wants D3D12: Streamline runs its own compute
+through a DX11-on-12 device, and without it DLSS reports unsupported for a reason that looks
+nothing like the cause. See `runtime/backends/README.md`.
+
+F8 prints counters, and they are the point. A run that produces no image should be able to say
+which step it stopped at, and each of these has been the answer at some point:
+
+```
+frame tap: 41230 calls inspected, 118 passes matched, render 1024x576
+bridge: 118 passes, 0 view reads failed, 6 not the main view, 0 without jitter, 112 evaluated, 0 refused
+pipeline: running 1, dlss supported 1, render 1024x576, output 2048x1152, evaluated 112, refused 0
+```
+
+Passes matched but no evaluates means the camera never arrived: either the view buffer was not the
+one bound at that pass, or every frame was a secondary view. Evaluates with no picture is a
+different problem entirely, and the reason F10 writes the output out.
+
+Nothing here reinserts the result into the game. DLSS evaluating is not the same as DLSS being
+visible, and the second one is not built yet.
 
 F9 sets the jitter sequence length as well as the render scale, because 4.18 does not tie the two
 together and a reconstruction wants the sequence to grow with the area ratio: 8 samples at full

@@ -10,6 +10,8 @@
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/texture_dump.h>
 
+#include "dlss_bridge.h"
+
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
 #endif
@@ -253,6 +255,17 @@ static void report_and_dump(void)
     note("capture %u requested (result %d), %u distinct constant buffer sizes seen", index,
          (int)requested, status.distinct_buffer_sizes);
 
+    /* If DLSS is up, ask for its output too. Comparing it against the game's own inputs from the
+       same key press is the only way to tell an evaluate that ran from one that produced a
+       picture, and those are different things. */
+    if (rsf_bridge_running()) {
+        char dlss_prefix[MAX_PATH * 2];
+        snprintf(dlss_prefix, sizeof(dlss_prefix), "%s\\capture%02u_dlss", observe_directory,
+                 index);
+        rsf_bridge_request_dump(dlss_prefix);
+        rsf_bridge_report();
+    }
+
     /* Wait briefly for a frame to carry it out, then report what it produced. */
     for (int waited = 0; waited < 100; ++waited) {
         rsf_observer_status after;
@@ -416,13 +429,62 @@ static void set_screen_percentage(float value)
     }
 }
 
+/* Bring DLSS up, on demand rather than at startup.
+
+   The device has to exist first, and at startup it does not. Rather than guessing how long the game
+   takes to create one, this is a key press: by the time somebody presses it they are looking at the
+   game, so the device is certainly there. It also means a run can reach the menu without loading a
+   vendor runtime into the process at all. */
+static void start_dlss(void)
+{
+    char directory[MAX_PATH * 2];
+    DWORD width, height;
+
+    if (rsf_bridge_running()) {
+        rsf_bridge_report();
+        return;
+    }
+    if (GetEnvironmentVariableA("RSF_STREAMLINE_BIN", directory, sizeof(directory)) == 0) {
+        note("RSF_STREAMLINE_BIN is not set, so there is nothing to load DLSS from");
+        return;
+    }
+
+    /* The presented size, from the observer, so this does not have to be told what the game is
+       rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
+       size is a refusal instead. */
+    {
+        rsf_observer_status status;
+        memset(&status, 0, sizeof(status));
+        status.struct_size = sizeof(status);
+        if (rsf_observer_get_status(&status) != RSF_OBSERVER_OK || status.present_width == 0) {
+            note("no presented size yet, so DLSS cannot be told what to output");
+            return;
+        }
+        width = read_number("RSF_DLSS_OUTPUT_WIDTH", status.present_width);
+        height = read_number("RSF_DLSS_OUTPUT_HEIGHT", status.present_height);
+    }
+
+    note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
+         (unsigned long)height, (unsigned long)read_number("RSF_DLSS_QUALITY", 3));
+    rsf_bridge_start(directory, width, height, read_number("RSF_DLSS_QUALITY", 3), observer_note,
+                     NULL);
+    rsf_bridge_report();
+}
+
 static DWORD WINAPI observe_worker(LPVOID parameter)
 {
     (void)parameter;
     int was_down = 0;
     int scale_down = 0;
+    int dlss_down = 0;
     int running = 1;
     while (running) {
+        const int dlss = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+        if (dlss && !dlss_down) {
+            start_dlss();
+        }
+        dlss_down = dlss;
+
         const int down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (down && !was_down && observe_directory[0]) {
             report_and_dump();
