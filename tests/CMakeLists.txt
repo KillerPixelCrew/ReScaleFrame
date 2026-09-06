@@ -24,5 +24,9 @@ target_link_libraries(rsf_module_dump_self PRIVATE ReScaleFrame::LoaderDiagnosti
 target_compile_definitions(rsf_module_dump_self PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_test(NAME module_dump_self COMMAND rsf_module_dump_self "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(rsf_texture_dump texture_dump.cpp)
+target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
+
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")
