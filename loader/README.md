@@ -27,7 +27,24 @@ nothing else in the process imports from it, so the forwarding surface is a sing
 is left alone. It loads as a static import, which puts it in place before the executable's entry
 point runs.
 
-It is inert unless `RSF_DUMP_DIR` is set. Reverting is deleting that one file.
+It is inert unless `RSF_DUMP_DIR` is set.
+
+Running DLSS needs the vendor runtime somewhere the game can reach. Put it in the game folder
+rather than pointing at a checkout: under Proton the game runs in a container, and a path into a
+source tree is one more thing that can be wrong for a reason that looks like DLSS failing. So the
+deployed layout is:
+
+```
+ACE COMBAT 7/
+  dinput8.dll                        the research carrier
+  ReScaleFrame/streamline/           sl.interposer.dll, sl.common.dll, sl.dlss.dll,
+                                     sl.pcl.dll, nvngx_dlss.dll
+```
+
+Those five are NVIDIA's, under the NVIDIA RTX SDKs License, and this project neither ships nor
+redistributes them: copying them there is the user's own act under that license. Reverting the
+whole thing is deleting `dinput8.dll` and the `ReScaleFrame` directory. Nothing else in the game
+folder is written to, and no game file is modified.
 
 | Variable | Effect |
 | --- | --- |
@@ -73,12 +90,21 @@ be somewhere in particular.
 | 2 | F8 | Starts DLSS. The game's device has to exist, and by the time you can press a key it does. |
 | 3 | F10 | Writes the inputs and, when DLSS is running, its output beside them. |
 
-Set `RSF_STREAMLINE_BIN` to the directory holding `sl.interposer.dll` and the plugins, and
-`RSF_ENABLE_JITTER=1` so F9 has something to enable. `RSF_DLSS_QUALITY` picks a level, 0 native
-through 4 ultra performance, defaulting to 3, and `RSF_DLSS_OUTPUT_WIDTH` and `_HEIGHT` override
-the presented size the observer reports.
+As Steam launch options, with the deployed layout above:
 
-Under Proton this also needs DXVK, vkd3d-proton and DXVK-NVAPI all selected together:
+```
+PROTON_ENABLE_NVAPI=1 RSF_OBSERVE=1 RSF_ENABLE_JITTER=1
+RSF_DUMP_DIR="Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe"
+RSF_STREAMLINE_BIN="Z:\home\n1ght\.local\share\Steam\steamapps\common\ACE COMBAT 7\ReScaleFrame\streamline"
+WINEDLLOVERRIDES="dinput8=n,b" %command%
+```
+
+All on one line. `RSF_DLSS_QUALITY` picks a level, 0 native through 4 ultra performance, defaulting
+to 3, and `RSF_DLSS_OUTPUT_WIDTH` and `_HEIGHT` override the presented size the observer reports.
+
+Proton already installs DXVK, vkd3d-proton and DXVK-NVAPI into the prefix and selects them, so the
+launch options only have to add `dinput8`. Running the same binaries under plain Wine does not, and
+then the whole list is needed:
 
 ```
 WINEDLLOVERRIDES="d3d11,d3d12,d3d12core,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n,b;dinput8=n,b"
