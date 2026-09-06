@@ -75,11 +75,14 @@ struct Tap {
     // draw rather than at the binding, so this is what keeps a run of draws with unchanged state
     // from rescanning the slots each time.
     bool shadow_dirty = false;
-    // Edge trigger, on the identity of the three textures that make the signature rather than on
-    // completeness alone. A pass draws more than once with the same inputs bound, and firing per
-    // draw would run a backend several times over one frame.
-    ID3D11Texture2D* last_fired_motion = nullptr;
-    ID3D11Texture2D* last_fired_depth = nullptr;
+    // Edge trigger on the set becoming complete.
+    //
+    // Keying it on the identity of the textures instead fired exactly once for a whole session: the
+    // game binds the same targets every frame, so the identity never changes and the edge never
+    // comes back. Completeness does come back, because the pass unbinds its inputs and the frame's
+    // other passes bind their own, so the set goes incomplete between frames and this fires once
+    // per frame, which is what a backend wants.
+    bool signature_complete = false;
     // How many near misses have been described. Bounded so this diagnostic cannot become the
     // reason the game runs badly.
     uint32_t described = 0;
@@ -365,11 +368,9 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     // for a set that never arrives, and it was never a requirement in the first place: a backend
     // handed no exposure derives its own, at some cost to quality and none to running at all.
     const bool qualifies = motion && depth && scene_color;
-    const bool already_fired =
-        motion == self.last_fired_motion && depth == self.last_fired_depth;
-    if (qualifies && !already_fired) {
-        self.last_fired_motion = motion;
-        self.last_fired_depth = depth;
+    const bool was_complete = self.signature_complete;
+    self.signature_complete = qualifies;
+    if (qualifies && !was_complete) {
         const uint32_t frame_index = self.passes.fetch_add(1, std::memory_order_relaxed) + 1;
 
         rsf_frame_tap_pass pass{};
@@ -629,8 +630,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         slot = Tap::Slot{};
     }
     self.shadow_dirty = false;
-    self.last_fired_motion = nullptr;
-    self.last_fired_depth = nullptr;
+    self.signature_complete = false;
     return RSF_FRAME_TAP_OK;
 }
 

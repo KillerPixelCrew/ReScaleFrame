@@ -252,6 +252,11 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     // be in place before the swap chain exists; we attach to a game that is already rendering, and
     // in manual hooking the D3D device may be created before slInit.
     preferences.flags |= sl::PreferenceFlags::eUseManualHooking;
+    // Required by slSetTagForFrame, which is what this integration uses: tagging resources against
+    // a frame token is what lets Streamline know a tag belongs to the frame being evaluated rather
+    // than to whatever was last set. Without the flag the call is refused outright, and the
+    // evaluate that follows fails with nothing wrong in the frame itself.
+    preferences.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     preferences.renderAPI = sl::RenderAPI::eD3D11;
     preferences.logLevel = sl::LogLevel::eDefault;
     preferences.showConsole = false;
@@ -455,6 +460,9 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     constants.clipToPrevClip = to_matrix(frame->clip_to_prev_clip);
     constants.prevClipToClip = to_matrix(frame->prev_clip_to_clip);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
+    // Zero rather than left alone. Streamline warns that an invalid pinhole offset is a mistake,
+    // and the game uses a plain pinhole camera, so zero is the true value rather than a placeholder.
+    constants.cameraPinholeOffset = {0.0f, 0.0f};
     constants.mvecScale = {frame->motion_scale_x, frame->motion_scale_y};
     constants.cameraPos = {frame->camera_position[0], frame->camera_position[1],
                            frame->camera_position[2]};

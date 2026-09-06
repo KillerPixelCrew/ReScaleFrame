@@ -449,6 +449,13 @@ static void start_dlss(void)
         return;
     }
 
+    /* The render scale first, and from here rather than from a second key.
+       Reconstruction needs the game rendering smaller than it presents and needs the projection
+       jittered, and both come from the same console variables, so making them a separate key only
+       created an order to get wrong. Setting them here also means the presented size read below is
+       the one DLSS will be asked to produce. */
+    set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
+
     /* The presented size, from the observer, so this does not have to be told what the game is
        rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
        size is a refusal instead. */
