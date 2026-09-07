@@ -225,6 +225,41 @@ converter at `[rdi+0xd48]` (`AUIManagerActor::FrontWindowConverter`) and passes 
 `0x1425f1cac` (1920.0f) and `0x1425f1ce4` (1080.0f). The interface is rasterized at 1920x1080
 regardless of the render scale.
 
+## The vertex declarations that name an interface draw
+
+Which draws are the interface has to be decided from what a draw is made of, and the vertex
+declaration is the part of that which exists at creation, before anything has drawn. These are read
+from 4.18.3 at `0a14a8d537a3`, not from a later engine: the reference checkout's default branch is
+5.8.2, where `FSimpleElementVertex` carries an `FDFVector4` position and every offset after it
+moves. A fingerprint taken from that branch matches nothing in this game, and would have looked
+like bad luck rather than a mistake.
+
+Unreal's D3D11 RHI writes the semantic name `"ATTRIBUTE"` for every element of every declaration in
+the engine and puts the element index in the semantic index
+(`D3D11VertexDeclaration.cpp:56, 61`), so a name distinguishes nothing. Format, input slot, byte
+offset, semantic index and the per-instance flag are all there is, and they are enough.
+
+| Declaration | Elements (slot, offset, format, semantic index) | Stride | Source |
+| --- | --- | --- | --- |
+| `FSlateVertexDeclaration` | 0/0 `R32G32B32A32_FLOAT` #0; 0/16 `R32G32_FLOAT` #1; 0/24 `R32G32_FLOAT` #2; 0/32 `B8G8R8A8_UNORM` #3; 0/36 `R16G16_UINT` #4 | 40 | `SlateShaders.cpp:52-58`, `RenderingCommon.h:140-155` |
+| `FSlateInstancedVertexDeclaration` | the five above plus 1/0 `R32G32B32A32_FLOAT` #5, per instance | 40 + 16 | `SlateShaders.cpp:73-82` |
+| `FSimpleElementVertexDeclaration` | 0/0 `R32G32B32A32_FLOAT` #0; 0/16 `R32G32_FLOAT` #1; 0/24 `R32G32B32A32_FLOAT` #2; 0/40 `B8G8R8A8_UNORM` #3 | 44 | `BatchedElements.h:33-70` |
+
+`VET_Color` is `B8G8R8A8_UNORM` and `VET_UShort2` is `R16G16_UINT` in this RHI
+(`D3D11VertexDeclaration.cpp:42, 49`), which is where those two formats come from.
+
+The converter's own render targets are recognised separately, by the shape
+`FWidgetRenderer::CreateTargetFor` asks for: PF_B8G8R8A8 with a transparent clear, one mip, no
+array, no multisampling, bound as both render target and shader resource
+(`WidgetRenderer.cpp:68-117`), at the `DrawSize` recorded above. A shape match is a candidate only.
+Several things in an AC7 frame are 1920x1080, and what settles it is a Slate-layout draw writing
+into one, which the frame tap sees and the classifier requires.
+
+Implemented in `games/ac7/src/ui_rules.cpp` as `rsf_ac7_ui_classify_layout` and
+`rsf_ac7_ui_is_widget_target`, both pure functions with no device, tested in
+`tests/ac7_ui_rules.cpp` including a case that asserts the UE5 layout is refused. Nothing runtime
+yet consumes them: this is source-verified identification, not a measured hook.
+
 ## Implementation follow-up
 
 The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. The [representation plan](../representation-plan.md) carries the rest: UI extraction, the presentation bridge, and the vendor contracts. The source inspection itself remains distinct from those later runtime results.

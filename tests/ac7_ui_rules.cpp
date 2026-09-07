@@ -230,6 +230,124 @@ int main()
               "setting exists for the case where these rules are wrong.");
     }
 
+    stage("the 4.18.3 vertex declarations are recognised by their elements");
+    {
+        /* FSlateVertex, exactly as SlateShaders.cpp:52-58 builds it. */
+        rsf_ac7_layout_element slate[6] = {
+            {0, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 0, 0},
+            {1, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 16, 0},
+            {2, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 24, 0},
+            {3, RSF_AC7_FORMAT_B8G8R8A8_UNORM, 0, 32, 0},
+            {4, RSF_AC7_FORMAT_R16G16_UINT, 0, 36, 0},
+            {5, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 1, 0, 1},
+        };
+        check(rsf_ac7_ui_classify_layout(slate, 5) == RSF_AC7_LAYOUT_SLATE, "Slate's five elements.");
+        check(rsf_ac7_ui_classify_layout(slate, 6) == RSF_AC7_LAYOUT_SLATE_INSTANCED,
+              "The sixth element is on its own stream and per instance, which is the whole "
+              "difference between the two declarations.");
+
+        /* The same six elements with the transform marked per vertex is not the instanced
+           declaration and must not be taken for it. */
+        slate[5].per_instance = 0;
+        check(rsf_ac7_ui_classify_layout(slate, 6) == RSF_AC7_LAYOUT_OTHER,
+              "Per instance is part of the fingerprint, not decoration.");
+
+        /* Order is not part of it, because a match is by content. */
+        rsf_ac7_layout_element shuffled[5] = {slate[4], slate[3], slate[2], slate[1], slate[0]};
+        check(rsf_ac7_ui_classify_layout(shuffled, 5) == RSF_AC7_LAYOUT_SLATE,
+              "A declaration with the same elements in another order is the same declaration.");
+
+        /* FSimpleElementVertex, BatchedElements.h:62-66. */
+        const rsf_ac7_layout_element canvas[4] = {
+            {0, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 0, 0},
+            {1, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 16, 0},
+            {2, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 24, 0},
+            {3, RSF_AC7_FORMAT_B8G8R8A8_UNORM, 0, 40, 0},
+        };
+        check(rsf_ac7_ui_classify_layout(canvas, 4) == RSF_AC7_LAYOUT_CANVAS,
+              "The canvas declaration.");
+
+        /* The trap this fingerprint exists to avoid. UE5's FSimpleElementVertex carries a
+           FDFVector4 position and a different offset for everything after it, so a signature taken
+           from a modern checkout matches nothing in a 4.18 game and would have looked merely
+           unlucky rather than wrong. */
+        const rsf_ac7_layout_element ue5_canvas[4] = {
+            {0, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 0, 0},
+            {1, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 32, 0},
+            {2, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 40, 0},
+            {3, RSF_AC7_FORMAT_B8G8R8A8_UNORM, 0, 56, 0},
+        };
+        check(rsf_ac7_ui_classify_layout(ue5_canvas, 4) == RSF_AC7_LAYOUT_OTHER,
+              "A later engine's version of the same struct is a different declaration.");
+
+        /* A declaration that contains all of Slate's elements and one more is not Slate's. */
+        rsf_ac7_layout_element slate_plus[6] = {slate[0], slate[1], slate[2],
+                                                slate[3], slate[4], {7, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 40, 0}};
+        check(rsf_ac7_ui_classify_layout(slate_plus, 6) == RSF_AC7_LAYOUT_OTHER,
+              "Containing the elements is not being the declaration; the count is exact.");
+
+        check(rsf_ac7_ui_classify_layout(nullptr, 5) == RSF_AC7_LAYOUT_OTHER, "A null list.");
+        check(rsf_ac7_ui_classify_layout(slate, 0) == RSF_AC7_LAYOUT_OTHER, "An empty list.");
+        check(rsf_ac7_ui_classify_layout(slate, 99) == RSF_AC7_LAYOUT_OTHER,
+              "More elements than can be held is refused rather than judged from a prefix.");
+    }
+
+    stage("a converter's widget target is recognised by its shape");
+    {
+        const uint32_t sizes[4] = {1920, 1080, 1280, 720};
+        rsf_ac7_texture_facts texture{};
+        texture.struct_size = sizeof(texture);
+        texture.width = 1920;
+        texture.height = 1080;
+        texture.mip_levels = 1;
+        texture.array_size = 1;
+        texture.sample_count = 1;
+        texture.format = RSF_AC7_FORMAT_B8G8R8A8_TYPELESS;
+        texture.is_render_target = 1;
+        texture.is_shader_resource = 1;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 1,
+              "FWidgetRenderer::CreateTargetFor's shape at the converter's draw size.");
+
+        texture.width = 1280;
+        texture.height = 720;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 1,
+              "A second configured draw size, so a run can name one without a rebuild.");
+
+        texture.width = 1920;
+        texture.height = 1080;
+        texture.is_shader_resource = 0;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 0,
+              "Written but never read is not a widget target: the quad has to sample it.");
+        texture.is_shader_resource = 1;
+
+        texture.mip_levels = 4;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 0, "A mip chain is something else.");
+        texture.mip_levels = 1;
+
+        texture.sample_count = 4;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 0, "Multisampled is something else.");
+        texture.sample_count = 1;
+
+        texture.format = 2 /* R32G32B32A32_FLOAT */;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 0,
+              "The converter asks for PF_B8G8R8A8 and nothing else qualifies.");
+        texture.format = RSF_AC7_FORMAT_B8G8R8A8_UNORM;
+
+        texture.width = 2048;
+        texture.height = 1152;
+        check(rsf_ac7_ui_is_widget_target(&texture, sizes, 2) == 0,
+              "A back buffer sized target of the same format is not a widget target.");
+        texture.width = 1920;
+        texture.height = 1080;
+
+        check(rsf_ac7_ui_is_widget_target(&texture, nullptr, 0) == 0,
+              "With no configured draw size there is nothing to match, and everything refuses.");
+        check(rsf_ac7_ui_is_widget_target(nullptr, sizes, 2) == 0, "A null texture.");
+        rsf_ac7_texture_facts short_texture = texture;
+        short_texture.struct_size = 8;
+        check(rsf_ac7_ui_is_widget_target(&short_texture, sizes, 2) == 0, "A short structure.");
+    }
+
     stage("arguments are checked");
     {
         rsf_ac7_draw_facts draw = make_widget_quad(inputs);

@@ -501,7 +501,9 @@ the "picked out by its format" paragraph; tick review findings 5 and 8 with thei
 `ReScaleFrame.ini.sample` (every key, grouped by mechanism), `games/ac7/engine.json` (`ui`,
 `render_scale.per_context`, `video`, `presentation`), `docs/dependencies.md`, `docs/tooling.md`
 (Wine test prefix), `source-map.md`/`repositories.json` (every reference cited here; `fo4test` is
-missing; `references/UnrealEngine` is an empty failed clone), `design.md`/`architecture.md`
+missing; `references/UnrealEngine` is a full clone, checked out at `4.18.3-release`
+(`0a14a8d537a3`) as of 7 Sep 2026 and to be kept there, because its default branch is 5.8.2 and
+several structures this project fingerprints changed shape between the two), `design.md`/`architecture.md`
 (ownership and frame flow around the record). Ghidra naming stays `Class_Method`
 (`FGraphicsSettingsManager_LoadScreenPercentages`, `FSlateRHIRenderer_DrawWindow_RenderThread`),
 applied only once confirmed; tags `rsf-patch`/`rsf-read` on every site the runtime touches.

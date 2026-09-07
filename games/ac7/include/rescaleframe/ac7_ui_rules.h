@@ -54,7 +54,98 @@ typedef uint32_t rsf_ac7_draw_class;
 #define RSF_AC7_BLEND_SRC_ALPHA 5u
 #define RSF_AC7_BLEND_INV_SRC_ALPHA 6u
 
+/* DXGI formats, named here for the same reason as the blend factors: this header stays free of
+   d3d11.h so the rules can be tested without a device. */
+#define RSF_AC7_FORMAT_R32G32B32A32_FLOAT 2u
+#define RSF_AC7_FORMAT_R32G32_FLOAT 16u
+#define RSF_AC7_FORMAT_R16G16_UINT 36u
+#define RSF_AC7_FORMAT_B8G8R8A8_TYPELESS 90u
+#define RSF_AC7_FORMAT_B8G8R8A8_UNORM 87u
+#define RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB 91u
+
 #define RSF_AC7_UI_MAX_INPUTS 16u
+#define RSF_AC7_UI_MAX_LAYOUT_ELEMENTS 16u
+
+/* What produced a vertex declaration. Recognising this is what turns a pointer into a name, and it
+   is the only part of identification that can be done at creation, before anything has drawn. */
+typedef uint32_t rsf_ac7_layout_kind;
+#define RSF_AC7_LAYOUT_OTHER ((rsf_ac7_layout_kind)0)
+/* `FSlateVertexDeclaration`: the interface's own geometry. */
+#define RSF_AC7_LAYOUT_SLATE ((rsf_ac7_layout_kind)1)
+/* `FSlateInstancedVertexDeclaration`: the same five elements plus a per-instance transform. */
+#define RSF_AC7_LAYOUT_SLATE_INSTANCED ((rsf_ac7_layout_kind)2)
+/* `FSimpleElementVertexDeclaration`: the canvas, which is what `ANimbusHUD::DrawWidget*` and the
+   engine's own debug drawing go through. */
+#define RSF_AC7_LAYOUT_CANVAS ((rsf_ac7_layout_kind)3)
+
+/* One `D3D11_INPUT_ELEMENT_DESC`, reduced to the fields that carry information.
+
+   The semantic name is deliberately absent. Unreal's D3D11 RHI writes "ATTRIBUTE" for every element
+   of every declaration in the engine (`D3D11VertexDeclaration.cpp:56`) and puts the element's index
+   in the semantic index, so a name distinguishes nothing and only the index, format, slot and
+   offset do. */
+typedef struct rsf_ac7_layout_element {
+    uint32_t semantic_index;
+    uint32_t format;
+    uint32_t input_slot;
+    uint32_t byte_offset;
+    uint32_t per_instance;
+} rsf_ac7_layout_element;
+
+/* Name a vertex declaration by its element signature.
+
+   Verified against 4.18.3 at `0a14a8d537a3` rather than assumed from a later engine, which matters:
+   UE5's `FSimpleElementVertex` carries a `FDFVector4` position and does not have this layout at all,
+   so a fingerprint taken from a modern checkout would match nothing in this game.
+
+     FSlateVertex, stride 40 (`RenderingCommon.h:140`, `SlateShaders.cpp:52-58, 73-82`)
+       0  float TexCoords[4]        R32G32B32A32_FLOAT  slot 0
+       16 FVector2D MaterialTexCoords R32G32_FLOAT      slot 0
+       24 FVector2D Position        R32G32_FLOAT        slot 0
+       32 FColor Color              B8G8R8A8_UNORM      slot 0
+       36 uint16 PixelSize[2]       R16G16_UINT         slot 0
+       and the instanced declaration appends, on slot 1 at offset 0, a per-instance
+       R32G32B32A32_FLOAT with semantic index 5.
+
+     FSimpleElementVertex, stride 44 (`BatchedElements.h:33-70`)
+       0  FVector4 Position         R32G32B32A32_FLOAT  slot 0
+       16 FVector2D TextureCoordinate R32G32_FLOAT      slot 0
+       24 FLinearColor Color        R32G32B32A32_FLOAT  slot 0
+       40 FColor HitProxyIdColor    B8G8R8A8_UNORM      slot 0
+
+   Element order is not assumed: the engine adds them in the order above, but a match is by content
+   so a reordered declaration with the same elements still resolves. Elements beyond
+   RSF_AC7_UI_MAX_LAYOUT_ELEMENTS make the answer OTHER rather than a guess from a prefix. */
+rsf_ac7_layout_kind rsf_ac7_ui_classify_layout(const rsf_ac7_layout_element* elements,
+                                               uint32_t count);
+
+/* What a texture was created as, reduced to what decides whether it holds a rasterized widget. */
+typedef struct rsf_ac7_texture_facts {
+    uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    uint32_t mip_levels;
+    uint32_t array_size;
+    uint32_t sample_count;
+    uint32_t format;
+    uint32_t is_render_target;
+    uint32_t is_shader_resource;
+} rsf_ac7_texture_facts;
+
+/* Whether a texture has the shape of a converter's widget target.
+
+   `UWidgetToTextureConverter` creates these through `FWidgetRenderer::CreateTargetFor`, which asks
+   for PF_B8G8R8A8 with a transparent clear, one mip, no array, no multisampling, bound as both a
+   render target and a shader resource (`WidgetRenderer.cpp:68-117`). The size is the converter's
+   `DrawSize`, which AC7 sets to a hardcoded 1920x1080 for the front end
+   (`UWidgetToTextureConverter_Setup 0x1404d5c10`, constants `0x1425f1cac`/`0x1425f1ce4`).
+
+   `draw_sizes` is width/height pairs, so a run can name a second size without a rebuild. A shape
+   match is a candidate and nothing more: the frame tap confirms one by seeing a Slate draw write
+   into it, because several things in a frame are 1920x1080 and only one of them is the interface.
+   That distinction is the whole reason this returns a candidacy rather than an answer. */
+int rsf_ac7_ui_is_widget_target(const rsf_ac7_texture_facts* texture, const uint32_t* draw_sizes,
+                                uint32_t pair_count);
 
 typedef struct rsf_ac7_draw_input {
     uint32_t slot;

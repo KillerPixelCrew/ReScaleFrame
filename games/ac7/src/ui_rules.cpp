@@ -69,7 +69,127 @@ bool retargetable(const rsf_ac7_draw_facts& draw)
     return draw.render_target != nullptr && draw.target_count == 1u && draw.uav_bound == 0u;
 }
 
+/* One element of a declaration we are looking for. Matched by content rather than by position, so
+   the order the engine happens to add them in is not part of the fingerprint. */
+struct expected_element {
+    uint32_t semantic_index;
+    uint32_t format;
+    uint32_t input_slot;
+    uint32_t byte_offset;
+    uint32_t per_instance;
+};
+
+bool has_element(const rsf_ac7_layout_element* elements, uint32_t count,
+                 const expected_element& wanted)
+{
+    for (uint32_t index = 0; index < count; ++index) {
+        const rsf_ac7_layout_element& element = elements[index];
+        /* B8G8R8A8 arrives typeless or sRGB in some declarations, and a colour channel that is the
+           same eight bits either way is the same element for this purpose. */
+        const bool format_matches =
+            element.format == wanted.format ||
+            (wanted.format == RSF_AC7_FORMAT_B8G8R8A8_UNORM &&
+             (element.format == RSF_AC7_FORMAT_B8G8R8A8_TYPELESS ||
+              element.format == RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB));
+        if (format_matches && element.semantic_index == wanted.semantic_index &&
+            element.input_slot == wanted.input_slot && element.byte_offset == wanted.byte_offset &&
+            (element.per_instance != 0) == (wanted.per_instance != 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_all(const rsf_ac7_layout_element* elements, uint32_t count,
+             const expected_element* wanted, uint32_t wanted_count)
+{
+    for (uint32_t index = 0; index < wanted_count; ++index) {
+        if (!has_element(elements, count, wanted[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* FSlateVertex, stride 40. The five elements every Slate declaration carries. */
+constexpr expected_element slate_elements[] = {
+    {0, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 0, 0},
+    {1, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 16, 0},
+    {2, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 24, 0},
+    {3, RSF_AC7_FORMAT_B8G8R8A8_UNORM, 0, 32, 0},
+    {4, RSF_AC7_FORMAT_R16G16_UINT, 0, 36, 0},
+};
+
+/* What the instanced declaration appends: a transform on its own stream, per instance. */
+constexpr expected_element slate_instance_element = {5, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 1, 0, 1};
+
+/* FSimpleElementVertex, stride 44. */
+constexpr expected_element canvas_elements[] = {
+    {0, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 0, 0},
+    {1, RSF_AC7_FORMAT_R32G32_FLOAT, 0, 16, 0},
+    {2, RSF_AC7_FORMAT_R32G32B32A32_FLOAT, 0, 24, 0},
+    {3, RSF_AC7_FORMAT_B8G8R8A8_UNORM, 0, 40, 0},
+};
+
 } // namespace
+
+extern "C" rsf_ac7_layout_kind rsf_ac7_ui_classify_layout(const rsf_ac7_layout_element* elements,
+                                                          uint32_t count)
+{
+    if (!elements || count == 0 || count > RSF_AC7_UI_MAX_LAYOUT_ELEMENTS) {
+        return RSF_AC7_LAYOUT_OTHER;
+    }
+
+    /* The element counts are exact. A declaration that carries all of Slate's five and something
+       else besides is not Slate's, and calling it Slate's would divert whatever that something is.
+       The instanced form is the one documented exception, and it is named separately rather than
+       being folded in, because the two draw differently. */
+    constexpr uint32_t slate_count = sizeof(slate_elements) / sizeof(slate_elements[0]);
+    constexpr uint32_t canvas_count = sizeof(canvas_elements) / sizeof(canvas_elements[0]);
+
+    if (count == slate_count && has_all(elements, count, slate_elements, slate_count)) {
+        return RSF_AC7_LAYOUT_SLATE;
+    }
+    if (count == slate_count + 1 && has_all(elements, count, slate_elements, slate_count) &&
+        has_element(elements, count, slate_instance_element)) {
+        return RSF_AC7_LAYOUT_SLATE_INSTANCED;
+    }
+    if (count == canvas_count && has_all(elements, count, canvas_elements, canvas_count)) {
+        return RSF_AC7_LAYOUT_CANVAS;
+    }
+    return RSF_AC7_LAYOUT_OTHER;
+}
+
+extern "C" int rsf_ac7_ui_is_widget_target(const rsf_ac7_texture_facts* texture,
+                                           const uint32_t* draw_sizes, uint32_t pair_count)
+{
+    if (!texture || texture->struct_size < sizeof(rsf_ac7_texture_facts)) {
+        return 0;
+    }
+    /* Both bindings are required. A widget target is written by Slate and then read by the quad
+       that draws it into the scene, and something that can only be one of those is not it. */
+    if (!texture->is_render_target || !texture->is_shader_resource) {
+        return 0;
+    }
+    if (texture->mip_levels != 1u || texture->array_size != 1u || texture->sample_count != 1u) {
+        return 0;
+    }
+    if (texture->format != RSF_AC7_FORMAT_B8G8R8A8_TYPELESS &&
+        texture->format != RSF_AC7_FORMAT_B8G8R8A8_UNORM &&
+        texture->format != RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB) {
+        return 0;
+    }
+    if (!draw_sizes || pair_count == 0) {
+        return 0;
+    }
+    for (uint32_t index = 0; index < pair_count; ++index) {
+        if (texture->width == draw_sizes[index * 2] &&
+            texture->height == draw_sizes[index * 2 + 1]) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 extern "C" int rsf_ac7_ui_is_candidate(const rsf_ac7_ui_registry* registry,
                                        const rsf_ac7_draw_facts* draw)
