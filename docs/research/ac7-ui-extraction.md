@@ -131,18 +131,51 @@ more than one texture per widget: `UWidgetToTextureConverter` holds `RenderTarge
 the glow is applied and therefore what it would take to keep it. The trace now prints every input
 for this reason; before the next run this is inference and not a finding.
 
-### Not a reason to go back to promotion
+### Measured: the quads are not overlays, and this is why extraction discolours the frame
 
-Promoting AC7's own interface target and letting the game composite it would keep the glow for free,
-and with the viewport scaling the divert now has, the quads could rasterize into a promoted target
-at output resolution, which is what made promotion look impossible before. It is worth writing down
-why that is still not the route.
+7 Sep 2026, fourth and fifth extraction runs, with screenshots.
 
-Frame generation needs the interface as a separate premultiplied layer. All three vendors ask for
-it, and it is the only thing that lets a generated frame carry a sharp interface rather than an
-interpolated one. Promotion puts the interface back into the scene, which is exactly what the
-generator must not receive. So extraction is required for M6 onwards whatever happens to the glow,
-and the glow is a problem to solve inside extraction rather than a reason to abandon it.
+The blend was measured and it is not the problem. AC7's interface blend is already
+`ONE / INV_SRC_ALPHA` on both colour and alpha with write mask `0xf`: already premultiplied,
+already writing coverage. The alpha patch is a no-op on it, correctly, and the layer accumulates
+what it should.
+
+What the trace shows instead is the inputs. A diverted quad reads slot 0 at 1920x1080, which is the
+widget texture, and slots 1, 2, 5 and 6 at 1024x576, which is the render resolution. Those are
+scene-sized buffers: the draw samples the scene and the blur and glow chain built from it. It is not
+an overlay that could be moved anywhere; it is a composite that belongs where it is.
+
+And on the title screen the widget texture is the entire picture. Diverting it takes the whole
+visible frame out of the scene, and compositing it back at present paints it in having skipped
+everything AC7 does to it afterwards: its own UI composite, the glow, and the grade. The screenshots
+show exactly that, a flat blue-washed frame rather than a few wrong HUD elements, and it is the same
+cause as the missing effects rather than a second problem.
+
+So compositing at present is the wrong insertion point for this game. The interface is not a layer
+AC7 puts on top at the end; it is content the engine keeps processing.
+
+### The correction: promote the interface target, and take the layer from there
+
+Promotion gets this right for the reason extraction gets it wrong: the game's own composite runs, so
+the colour, the glow and the grade are the game's, and nothing has to be reproduced. What made it
+look impossible before was that the quads rasterize into a render-resolution target, so promoting
+the target alone changed nothing. The divert now has viewport scaling, which is the missing piece:
+with the target promoted and the viewport scaled, the quads rasterize at output resolution into it.
+
+The earlier note here said promotion was not the route because frame generation needs the interface
+as a separate premultiplied layer. That was wrong, and worth correcting rather than quietly
+dropping: AC7's interface target **is** a premultiplied layer with coverage, which is exactly what
+the vendors ask for. Promoted, it is that layer at output resolution. So promotion gives the correct
+picture now and the frame generation input later, and the two stop being in tension.
+
+### Superseded: the argument that promotion was not the route
+
+An earlier version of this section argued that promotion could not be the route because frame
+generation needs the interface as a separate premultiplied layer, and promotion puts the interface
+back into the scene. The premise was wrong. AC7's interface target already is a premultiplied layer
+with coverage, so promoting it produces that layer at output resolution rather than destroying it,
+and the game composites it afterwards. Kept here because it was the stated reason for a decision,
+and a decision reversed without saying why is worse than one never made.
 
 ### Measured: the menu shimmer is our own jitter
 

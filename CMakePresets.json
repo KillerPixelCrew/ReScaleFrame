@@ -28,6 +28,16 @@
   "testPresets": [
     { "name": "windows-debug", "configurePreset": "windows-x64", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64", "output": { "outputOnFailure": true } }
+    { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64", "output": { "outputOnFailure": true } },
+    {
+      "name": "linux-cross-dxvk",
+      "configurePreset": "linux-cross-x64",
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "WINEPREFIX": "${sourceDir}/.local/wine-test-prefix",
+        "WINEDLLOVERRIDES": "d3d11,d3d10core,dxgi,d3d12,d3d12core=n",
+        "WINEDEBUG": "-all"
+      }
+    }
   ]
 }
