@@ -15,6 +15,7 @@
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/overlay_renderer.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -66,6 +67,15 @@ struct Host {
        in the log is the step that did not survive. Only the first few frames, because after that
        the same lines would bury the run. */
     unsigned int trace_frames = 4;
+
+    /* Held while a frame is being drawn.
+
+       A game may present from more than one thread, and this path creates D3D11 resources and
+       issues draws against one device. Two of them at once is not something the panel should ever
+       do, whatever the device's threading mode allows. The second thread skips its frame rather
+       than waiting, because waiting on a render thread to draw a diagnostic is a worse trade than
+       missing one frame of it. */
+    std::atomic<bool> drawing{false};
 
     LARGE_INTEGER frequency{};
     LARGE_INTEGER last_frame{};
@@ -238,34 +248,11 @@ void carry_textures(ID3D11DeviceContext* context)
     }
 }
 
-/* Saved across the overlay's draw. The renderer puts back every stage it touches and deliberately
-   leaves render targets alone, because it draws into whatever the caller bound. That makes the
-   targets this function's problem, and it is the same trade `present_blit` makes at the same point
-   in the frame: OMSetRenderTargets also unbinds unordered access views, which cannot be put back
-   exactly, and at Present the game's last draw has already happened. */
-struct SavedTargets {
-    ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* depth = nullptr;
-};
-
-void save_targets(ID3D11DeviceContext* context, SavedTargets& saved)
-{
-    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets,
-                                &saved.depth);
-}
-
-void restore_targets(ID3D11DeviceContext* context, SavedTargets& saved)
-{
-    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets, saved.depth);
-    for (ID3D11RenderTargetView* target : saved.targets) {
-        if (target) {
-            target->Release();
-        }
-    }
-    if (saved.depth) {
-        saved.depth->Release();
-    }
-}
+/* There was a save and restore of the output merger's render targets here, so the panel could bind
+   the back buffer and put back what it displaced. It is gone with the binding it existed for: the
+   renderer draws into whatever is already bound, so nothing is displaced and nothing needs putting
+   back. Keeping it would also mean OMSetRenderTargets, which unbinds every unordered access view
+   the output merger holds, and those cannot be restored exactly. */
 
 } // namespace
 
@@ -385,41 +372,58 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
         return 0;
     }
 
+    bool idle = false;
+    if (!self.drawing.compare_exchange_strong(idle, true)) {
+        say("overlay frame: thread %lu skipped, another is already drawing the panel",
+            (unsigned long)GetCurrentThreadId());
+        return 0;
+    }
+    // Cleared on every path out, including the early returns below.
+    struct DrawingGuard {
+        Host& host;
+        ~DrawingGuard() { host.drawing.store(false); }
+    } drawing_guard{self};
+
     const bool trace = self.trace_frames > 0;
     if (trace) {
-        say("overlay frame: visible, acquiring the back buffer");
+        // The thread id, because two of these sequences reached CreateRenderTargetView and neither
+        // returned, which one thread cannot do. If the ids differ, the game presents from more than
+        // one thread and this whole path is being run concurrently against one device.
+        say("overlay frame: visible on thread %lu, acquiring the back buffer",
+            (unsigned long)GetCurrentThreadId());
     }
 
     auto* device_context = static_cast<ID3D11DeviceContext*>(context);
     auto* chain = static_cast<IDXGISwapChain*>(swapchain);
 
-    ID3D11Texture2D* back_buffer = nullptr;
-    const HRESULT got_buffer =
-        chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
-    if (FAILED(got_buffer) || !back_buffer) {
-        // Announced rather than returned quietly. A silent refusal here is indistinguishable from
-        // a crash in the same call, which is exactly the confusion this path was in.
-        say("overlay frame: the swap chain would not hand over its back buffer, hr 0x%08lx",
-            (unsigned long)got_buffer);
+    /* The size comes from the swap chain's own description rather than from its back buffer.
+
+       Taking the back buffer and making a render target view over it is what took the game down:
+       the log reached the line before `CreateRenderTargetView` and never the one after, twice, on
+       one thread. It is also work this does not need. `overlay_renderer` draws into whatever is
+       bound when it is called and deliberately never rebinds, because `OMSetRenderTargets` unbinds
+       every unordered access view the output merger holds and those cannot be put back exactly.
+       Present is after the game's last draw, so what is bound is the image about to be shown.
+
+       The consequence, and it is a real one: if the game leaves nothing bound at Present, the
+       panel draws nowhere and is simply not visible. That is a diagnostic worth having over a
+       process that dies. */
+    DXGI_SWAP_CHAIN_DESC chain_description{};
+    const HRESULT got_desc = chain->GetDesc(&chain_description);
+    if (FAILED(got_desc)) {
+        say("overlay frame: the swap chain would not describe itself, hr 0x%08lx",
+            (unsigned long)got_desc);
         return 0;
-    }
-    if (trace) {
-        say("overlay frame: back buffer acquired, reading its description");
     }
     D3D11_TEXTURE2D_DESC description{};
-    back_buffer->GetDesc(&description);
-
-    if (trace) {
-        say("overlay frame: back buffer is %ux%u format %d, making a render target view",
-            description.Width, description.Height, (int)description.Format);
-    }
-    ID3D11RenderTargetView* target = nullptr;
-    const HRESULT made_target = self.device->CreateRenderTargetView(back_buffer, nullptr, &target);
-    back_buffer->Release();
-    if (FAILED(made_target) || !target) {
-        say("overlay frame: no render target view over the back buffer, hr 0x%08lx",
-            (unsigned long)made_target);
+    description.Width = chain_description.BufferDesc.Width;
+    description.Height = chain_description.BufferDesc.Height;
+    if (description.Width == 0 || description.Height == 0) {
         return 0;
+    }
+    if (trace) {
+        say("overlay frame: presenting at %ux%u, drawing into whatever is bound",
+            description.Width, description.Height);
     }
 
     if (trace) {
@@ -442,7 +446,6 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     }
     const rsf_overlay_result laid_out = self.frame(self.panel, &input, stats, &draw_data, &decided);
     if (laid_out != RSF_OVERLAY_OK) {
-        target->Release();
         /* A panicked panel is poisoned for good and every later frame returns the same thing, so
            it is closed here rather than reported once per frame forever. */
         say("overlay: the panel failed to lay out a frame, result %d. Closing it", int(laid_out));
@@ -457,23 +460,14 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     carry_textures(device_context);
 
     if (trace) {
-        say("overlay frame: textures carried, saving targets and binding the back buffer");
-    }
-    SavedTargets saved;
-    save_targets(device_context, saved);
-    device_context->OMSetRenderTargets(1, &target, nullptr);
-
-    if (trace) {
-        say("overlay frame: drawing");
+        say("overlay frame: textures carried, drawing");
     }
     const rsf_overlay_renderer_result drawn = rsf_overlay_renderer_draw(
         self.renderer, device_context, &draw_data, description.Width, description.Height);
 
     if (trace) {
-        say("overlay frame: drawn, result %d. Restoring targets", int(drawn));
+        say("overlay frame: drawn, result %d", int(drawn));
     }
-    restore_targets(device_context, saved);
-    target->Release();
     if (trace) {
         say("overlay frame: complete");
         --self.trace_frames;
