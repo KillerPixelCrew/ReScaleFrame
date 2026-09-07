@@ -25,9 +25,14 @@ RSF_DLSS_QUALITY=3
 # Where dumps, logs and captures are written. A Windows path as Proton sees it.
 RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 
-# Left unset on purpose: the vendor runtime is found at ReScaleFrame\streamline beside the proxy,
-# and renderdoc.dll beside the proxy as well. Set either only for a copy kept somewhere else.
+# Left unset on purpose: the vendor runtime is found at ReScaleFrame\streamline beside the proxy.
 # RSF_STREAMLINE_BIN=
+
+# Frame capture, off unless asked for, and not a default worth having. RenderDoc wraps the device,
+# NGX then refuses to create the DLSS feature, and the retry costs the game a little more every
+# frame until it stops. Turn it on for a capture session, off for anything else. When on,
+# renderdoc.dll is found beside the proxy; the path is only for a copy kept elsewhere.
+# RSF_RENDERDOC=1
 # RSF_RENDERDOC_DLL=
 
 # Let translucent geometry write motion vectors. Stock 4.18 excludes it, which is why the mission

@@ -253,6 +253,19 @@ static void start_capture_support(void)
     char prefix[MAX_PATH];
     rsf_capture_result result;
 
+    /* Off unless asked for, and this is not a convenience default worth having.
+
+       RenderDoc wraps the device, and two things follow that cost a whole session each. NGX refuses
+       to create the DLSS feature on a wrapped device, `NGX create feature failed 0xbad00002` once
+       per frame forever, which slows the game down until it stops. And RenderDoc makes a device of
+       its own, which is how the observer came to hold the wrong one.
+
+       Loading it beside the proxy was meant to save setting a path. It cost more than it saved, so
+       the path is still found automatically, but only when capture is actually wanted. */
+    if (read_number("RSF_RENDERDOC", 0) == 0 &&
+        !read_text("RSF_RENDERDOC_DLL", library, sizeof(library))) {
+        return;
+    }
     if (!read_text("RSF_RENDERDOC_DLL", library, sizeof(library)) &&
         !beside_this_module("renderdoc.dll", library, sizeof(library))) {
         note("no renderdoc.dll beside the proxy and RSF_RENDERDOC_DLL is not set, so F11 has "

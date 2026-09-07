@@ -24,6 +24,11 @@ namespace {
 const char* const unreal_version = "4.18";
 const char* const project_id = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
 
+/* How many evaluates may fail in a row before the pipeline stops asking. Generous enough that a
+   resource rebuild or a mission load is never mistaken for a wall, small enough that a wall costs
+   a fraction of a second rather than the session. */
+constexpr uint32_t kEvaluateFailureLimit = 120;
+
 // One pipeline per process, because the entry points carry no handle: there is one game, one
 // device and one Streamline. State is a function-local static rather than a namespace-scope object
 // so that nothing here runs before the DLL's first call into it.
@@ -51,6 +56,18 @@ struct Pipeline {
     uint32_t reported_width = 0;
     uint32_t reported_height = 0;
     bool streamline_loaded = false;
+
+    /* Consecutive evaluate failures, and whether evaluating has been given up on.
+
+       A failing evaluate is not free. NGX tries to create its feature on each one, and when that
+       cannot succeed the attempts cost time and memory that are never returned: the game slows down
+       frame by frame until it stops responding and dies. That is a worse outcome than not
+       upscaling, and it hides the actual error behind a hang.
+
+       So a run of failures with nothing in between stops it. A single success resets the count,
+       because an evaluate that fails while resources are being rebuilt is ordinary. */
+    uint32_t consecutive_evaluate_failures = 0;
+    bool evaluate_given_up = false;
     rsf_dlss_pipeline_log_fn log = nullptr;
     void* log_user = nullptr;
 
@@ -378,6 +395,9 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
             plan.render_height_max ? plan.render_height_max : plan.render_height;
         self.frames_evaluated = 0;
         self.frames_refused = 0;
+        // Starting again is the way back from having given up, which the message says.
+        self.consecutive_evaluate_failures = 0;
+        self.evaluate_given_up = false;
         self.last_result = RSF_DLSS_PIPELINE_OK;
         self.running = true;
     }
@@ -400,6 +420,12 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     Pipeline& self = pipeline();
     if (!self.device || !self.output || !self.streamline_loaded) {
         return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
+    }
+    /* Given up on, and said so once already. Returning here rather than at the evaluate skips the
+       decode and the frame assembly as well, so a run that cannot upscale costs the game nothing
+       instead of costing it more every frame. */
+    if (self.evaluate_given_up) {
+        return finish(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
     }
     if (!frame->scene_color || !frame->depth || !frame->game_motion || !frame->camera ||
         frame->render_width == 0 || frame->render_height == 0) {
@@ -579,8 +605,18 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
 
     const rsf_dlss_result evaluated = rsf_dlss_evaluate(context_pointer, &dlss_frame);
     if (evaluated != RSF_DLSS_OK) {
-        if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED, frame->render_width,
-                         frame->render_height)) {
+        ++self.consecutive_evaluate_failures;
+        if (self.consecutive_evaluate_failures >= kEvaluateFailureLimit) {
+            self.evaluate_given_up = true;
+            say(self,
+                "DLSS failed to evaluate %u frames in a row (last result %d), so it will not be "
+                "asked again. Each attempt costs time and memory that is not returned, and a game "
+                "slowing to a stop hides the error rather than showing it. Restart the backend to "
+                "try again. If the log above says NGX create feature failed, a capture layer such "
+                "as RenderDoc is the usual reason: it wraps the device and NGX refuses it",
+                self.consecutive_evaluate_failures, int(evaluated));
+        } else if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED, frame->render_width,
+                                frame->render_height)) {
             say(self, "DLSS did not evaluate this frame (result %d)", int(evaluated));
         }
         return finish(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
@@ -639,6 +675,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // A failed dump is diagnostic only and does not change the frame's outcome.
     }
 
+    // One good frame means the run of failures was a rebuild rather than a wall.
+    self.consecutive_evaluate_failures = 0;
     return finish(self, RSF_DLSS_PIPELINE_OK);
 }
 
