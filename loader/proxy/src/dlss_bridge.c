@@ -20,6 +20,7 @@
 #include <windows.h>
 
 #include <rescaleframe/ac7_view.h>
+#include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/d3d11_state.h>
@@ -116,6 +117,8 @@ static struct {
        What the replay also shows is that none of the three targets is written again once the
        colour is finished: the post chain only reads them. So the contents at Present are the
        finished frame, and Present is where this evaluates. */
+    rsf_ac7_scene_color color_selection;
+    unsigned long composed_evaluations;
     void* held_color;
     void* held_depth;
     void* held_motion;
@@ -310,6 +313,10 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     bridge.held_width = pass->render_width;
     bridge.held_height = pass->render_height;
     bridge.have_held = 1;
+    if (rsf_ac7_scene_color_source(&bridge.color_selection, pass->scene_color, pass->context,
+                                   pass->render_width, pass->render_height)) {
+        rsf_frame_tap_watch_input(bridge.color_selection.source);
+    }
 
     /* The scene colour, kept past the frame this time. The reinsertion plan names it by address so
        the tonemap's read of it can be turned into a read of the reconstruction, and it is the same
@@ -322,6 +329,12 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     }
     (void)frame;
     (void)result;
+}
+
+static void on_input_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    (void)user;
+    rsf_ac7_scene_color_draw(&bridge.color_selection, draw);
 }
 
 /* One reported draw's pixel shader inputs, one line each.
@@ -463,7 +476,14 @@ static void evaluate_held(void* context)
     memset(&frame, 0, sizeof(frame));
     frame.struct_size = sizeof(frame);
     frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    frame.scene_color = bridge.held_color;
+    frame.scene_color = rsf_ac7_scene_color_selected(&bridge.color_selection, bridge.held_color);
+    if (frame.scene_color != bridge.held_color) {
+        if (bridge.composed_evaluations < 4) {
+            say("composed scene colour: %p -> %p at %lux%lu", bridge.held_color,
+                frame.scene_color, bridge.held_width, bridge.held_height);
+        }
+        ++bridge.composed_evaluations;
+    }
     frame.depth = bridge.held_depth;
     frame.game_motion = bridge.held_motion;
     frame.exposure = bridge.held_exposure;
@@ -712,6 +732,7 @@ static void on_present(void* user, void* swapchain)
         }
     }
 
+    rsf_ac7_scene_color_end_frame(&bridge.color_selection);
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
@@ -929,6 +950,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     tap.on_pass = on_pass;
     tap.on_target_draw = on_target_draw;
+    tap.on_input_draw = on_input_draw;
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;

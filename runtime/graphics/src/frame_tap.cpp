@@ -75,6 +75,12 @@ struct Tap {
     clear_render_target_view_fn original_clear_target = nullptr;
 
     rsf_frame_tap_options options{};
+    ID3D11DeviceContext* observed_context = nullptr;
+    void* input_watch = nullptr;
+    bool input_watch_dirty = true;
+    bool input_watch_bound = false;
+    bool depth_bound = false;
+    uint32_t target_count = 0;
 
     // The most recent pixel stage constant buffer of the watched size. Held with a reference so it
     // survives being unbound before a callback reads it.
@@ -359,6 +365,22 @@ void shadow_render_target(Tap& self, ID3D11RenderTargetView* view)
     }
 }
 
+// AC7 post passes use output slot zero. Clear its implicit read/write hazard from the shadow.
+void unbind_target_reads(Tap& self)
+{
+    if (!self.target_texture) {
+        return;
+    }
+    for (Tap::Slot& slot : self.slots) {
+        if (slot.texture == self.target_texture) {
+            slot.texture->Release();
+            slot = Tap::Slot{};
+            self.shadow_dirty = true;
+            self.input_watch_dirty = true;
+        }
+    }
+}
+
 // If this draw writes a watched target and that watch still has budget, describe it.
 //
 // Called from the draw hooks after the game's draw has been forwarded, so the description is of a
@@ -379,39 +401,46 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
             break;
         }
     }
-    if (watch_index == RSF_FRAME_TAP_WATCH_SLOTS) {
-        return;
+    if (self.input_watch_dirty) {
+        self.input_watch_bound = false;
+        if (self.input_watch) {
+            for (const Tap::Slot& slot : self.slots) {
+                if (slot.texture == self.input_watch) {
+                    self.input_watch_bound = true;
+                    break;
+                }
+            }
+        }
+        self.input_watch_dirty = false;
     }
-
-    // The budget is spent here rather than after the callback, so a callback that takes the
-    // process down cannot be reached again by the next draw.
-    //
-    // Zero is spent and `unlimited_budget` is the caller's "no limit", which cannot be zero for the
-    // obvious reason: a limit of three counts down to zero, and a zero that also meant no limit
-    // would turn every exhausted watch into an endless one on its next draw.
-    uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
-    for (;;) {
-        if (budget == 0) {
-            return;
-        }
-        if (budget == unlimited_budget) {
-            break;
-        }
-        if (self.watch_budget[watch_index].compare_exchange_weak(budget, budget - 1,
-                                                                 std::memory_order_relaxed)) {
-            break;
+    const bool report_input = self.options.on_input_draw && self.input_watch_bound &&
+                              context == self.observed_context;
+    bool report_target = false;
+    if (watch_index != RSF_FRAME_TAP_WATCH_SLOTS && self.options.on_target_draw) {
+        uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
+        while (budget != 0) {
+            if (budget == unlimited_budget ||
+                self.watch_budget[watch_index].compare_exchange_weak(
+                    budget, budget - 1, std::memory_order_relaxed)) {
+                report_target = true;
+                break;
+            }
         }
     }
-    if (!self.options.on_target_draw) {
+    if (!report_target && !report_input) {
         return;
     }
 
     rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS]{};
     uint32_t reported = 0;
-    for (UINT index = 0; index < max_examined_views && reported < RSF_FRAME_TAP_MAX_INPUTS;
-         ++index) {
+    uint32_t occupied = 0;
+    for (UINT index = 0; index < max_examined_views; ++index) {
         const Tap::Slot& entry = self.slots[index];
         if (!entry.view) {
+            continue;
+        }
+        ++occupied;
+        if (reported == RSF_FRAME_TAP_MAX_INPUTS) {
             continue;
         }
         rsf_frame_tap_input& input = inputs[reported++];
@@ -435,6 +464,10 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     report.element_count = element_count;
     report.input_count = reported;
     report.inputs = inputs;
+    report.depth_bound = self.depth_bound ? 1u : 0u;
+    report.target_count = self.target_count;
+    report.target_samples = self.target_description.SampleDesc.Count;
+    report.inputs_truncated = occupied > reported ? 1u : 0u;
 
     // The viewport, asked for only on a draw that is being reported. It is the one thing here that
     // the shadow cannot supply, because nothing hooks RSSetViewports, and a call per reported draw
@@ -443,14 +476,22 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     UINT viewport_count = 1;
     context->RSGetViewports(&viewport_count, &viewport);
     if (viewport_count >= 1) {
+        report.viewport_x = viewport.TopLeftX;
+        report.viewport_y = viewport.TopLeftY;
         report.viewport_width = uint32_t(viewport.Width);
         report.viewport_height = uint32_t(viewport.Height);
     }
 
     // Not a count of what the caller was told: a report the caller ignores still happened, and a
     // watch that never fires is the thing this number exists to distinguish.
-    self.target_draws_reported.fetch_add(1, std::memory_order_relaxed);
-    self.options.on_target_draw(self.options.on_target_draw_user, &report);
+    if (report_target) {
+        self.target_draws_reported.fetch_add(1, std::memory_order_relaxed);
+        self.options.on_target_draw(self.options.on_target_draw_user, &report);
+    }
+    if (report_input) {
+        report.watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
+        self.options.on_input_draw(self.options.on_input_draw_user, &report);
+    }
 }
 
 rsf_resource_role role_of(const D3D11_TEXTURE2D_DESC& description, const rsf_frame_shape& shape)
@@ -495,7 +536,8 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     // are the game's, because a pass that reads slot 3 has a shader that says slot 3.
     ID3D11ShaderResourceView* substituted[max_examined_views];
     ID3D11ShaderResourceView* const* forwarded = views;
-    if (!inside_hook && views && count > 0 && count <= max_examined_views &&
+    if (!inside_hook && context == self.observed_context && views && count > 0 &&
+        count <= max_examined_views &&
         self.plan_active.load(std::memory_order_relaxed)) {
         const ReentryGuard substitution_guard;
         bool any = false;
@@ -524,7 +566,7 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     }
     forward(context, start_slot, count, forwarded);
 
-    if (inside_hook) {
+    if (inside_hook || context != self.observed_context) {
         return;
     }
     const ReentryGuard guard;
@@ -558,6 +600,12 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
         if (!slot.texture) {
             continue;  // a buffer or a 3D texture, neither of which is in this set
         }
+        if (slot.texture == self.target_texture) {
+            // PSSetShaderResources also refuses a read conflicting with the current output.
+            slot.texture->Release();
+            slot = Tap::Slot{};
+            continue;
+        }
         slot.texture->GetDesc(&slot.description);
     }
     if (!changed) {
@@ -565,6 +613,7 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     }
     self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
     self.shadow_dirty = true;
+    self.input_watch_dirty = true;
 }
 
 // Decide what to bind at render target slot 0, opening any gate this binding opens.
@@ -578,7 +627,8 @@ ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContex
                                                    UINT count, ID3D11RenderTargetView* const* views,
                                                    ID3D11RenderTargetView** substituted)
 {
-    if (inside_hook || !views || count == 0 || !self.plan_active.load(std::memory_order_relaxed)) {
+    if (inside_hook || context != self.observed_context || !views || count == 0 ||
+        !self.plan_active.load(std::memory_order_relaxed)) {
         return views;
     }
     const ReentryGuard substitution_guard;
@@ -636,11 +686,14 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context
     }
     ID3D11RenderTargetView* substituted[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
     forward(context, count, plan_render_targets(self, context, count, views, substituted), depth);
-    if (inside_hook) {
+    if (inside_hook || context != self.observed_context) {
         return;
     }
     const ReentryGuard guard;
+    self.depth_bound = depth != nullptr;
+    self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+    unbind_target_reads(self);
     settle_target_substitution(self, context);
 }
 
@@ -666,11 +719,14 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
     ID3D11RenderTargetView* const* forwarded =
         keeps_targets ? views : plan_render_targets(self, context, count, views, substituted);
     forward(context, count, forwarded, depth, uav_start, uav_count, uavs, initial_counts);
-    if (inside_hook || keeps_targets) {
+    if (inside_hook || context != self.observed_context || keeps_targets) {
         return;
     }
     const ReentryGuard guard;
+    self.depth_bound = depth != nullptr;
+    self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+    unbind_target_reads(self);
     settle_target_substitution(self, context);
 }
 
@@ -682,7 +738,8 @@ void STDMETHODCALLTYPE hooked_rs_set_viewports(ID3D11DeviceContext* context, UIN
     if (!forward) {
         return;
     }
-    if (inside_hook || !self.plan_active.load(std::memory_order_relaxed)) {
+    if (inside_hook || context != self.observed_context ||
+        !self.plan_active.load(std::memory_order_relaxed)) {
         forward(context, count, viewports);
         return;
     }
@@ -713,7 +770,8 @@ void STDMETHODCALLTYPE hooked_rs_set_scissor_rects(ID3D11DeviceContext* context,
     if (!forward) {
         return;
     }
-    if (inside_hook || !self.plan_active.load(std::memory_order_relaxed)) {
+    if (inside_hook || context != self.observed_context ||
+        !self.plan_active.load(std::memory_order_relaxed)) {
         forward(context, count, rectangles);
         return;
     }
@@ -747,7 +805,8 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
         return;
     }
     ID3D11RenderTargetView* target = view;
-    if (!inside_hook && view && self.plan_active.load(std::memory_order_relaxed)) {
+    if (!inside_hook && context == self.observed_context && view &&
+        self.plan_active.load(std::memory_order_relaxed)) {
         const ReentryGuard guard;
         ID3D11Texture2D* texture = texture_behind_target(view);
         if (texture) {
@@ -969,7 +1028,7 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
         return;
     }
     forward(context, index_count, start_index, base_vertex);
-    if (inside_hook) {
+    if (inside_hook || context != self.observed_context) {
         return;
     }
     const ReentryGuard guard;
@@ -986,7 +1045,7 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
         return;
     }
     forward(context, vertex_count, start_vertex);
-    if (inside_hook) {
+    if (inside_hook || context != self.observed_context) {
         return;
     }
     const ReentryGuard guard;
@@ -1004,7 +1063,7 @@ void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* conte
     }
     forward(context, start_slot, count, buffers);
 
-    if (inside_hook || !buffers || count == 0) {
+    if (inside_hook || context != self.observed_context || !buffers || count == 0) {
         return;
     }
     const uint32_t wanted = self.options.view_constant_bytes;
@@ -1067,6 +1126,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     }
 
     self.options = *options;
+    self.observed_context = static_cast<ID3D11DeviceContext*>(device_context);
     if (self.options.view_constant_bytes == 0) {
         self.options.view_constant_bytes = 4096;
     }
@@ -1176,6 +1236,12 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     }
     self.shadow_dirty = false;
     self.signature_complete = false;
+    self.input_watch = nullptr;
+    self.input_watch_bound = false;
+    self.input_watch_dirty = true;
+    self.depth_bound = false;
+    self.target_count = 0;
+    self.observed_context = nullptr;
 
     // Same order and the same reason for the render target shadow, which holds the one other
     // reference this module takes. The watches are cleared with it: they name textures the caller
@@ -1255,6 +1321,17 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_end_frame(void)
     for (bool& gate : self.gate_open) {
         gate = false;
     }
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture)
+{
+    Tap& self = tap();
+    if (!self.installed) {
+        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    }
+    self.input_watch = texture;
+    self.input_watch_dirty = true;
     return RSF_FRAME_TAP_OK;
 }
 

@@ -27,6 +27,11 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
 - [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024×576 input and 2048×1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
+- [x] Conditional composed-colour selection for the DLSS bridge. Persistent input watch and AC7
+      recombine rule are cross-built and synthetic-tested under Wine. Each frame falls back to the
+      identified colour unless a matching composition is observed; no new per-frame allocations.
+      Briefing relief recovery, hangar/flight behaviour, resource overwrite timing, and F6 remain
+      game-unverified. [Decision and checks](research/ac7-composed-scene-color.md).
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a

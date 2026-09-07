@@ -57,7 +57,7 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 4u
+#define RSF_FRAME_TAP_ABI_VERSION 5u
 
 /* Render targets watched at once. Two, because the question this answers needs exactly two: the
    swap chain's back buffer, and whichever target the draw into it reads. */
@@ -92,8 +92,7 @@ typedef void (*rsf_frame_tap_log_fn)(void* user, const char* message);
    reuses. Copy what you need instead. */
 typedef struct rsf_frame_tap_pass {
     uint32_t struct_size;
-    /* The `ID3D11DeviceContext*` that made the call. Deferred contexts share the immediate
-       context's vtable, so this is the one to record commands on, not the immediate context. */
+    /* The installed `ID3D11DeviceContext*` that made the call. */
     void* context;
     /* `ID3D11Texture2D*`, taken to be the view bound at slot 0. Unreal's post process inputs put
        the primary input there, and several full resolution targets in this frame share scene
@@ -171,14 +170,21 @@ typedef struct rsf_frame_tap_target_draw {
        what separates "the tonemap, first draw into the composite" from "the eleventh interface
        element drawn on top of it". */
     uint32_t draw_index;
-    /* Non-zero for `DrawIndexed`. A full screen pass in this engine is an unindexed draw of three
-       or six vertices, so the pair distinguishes one from interface geometry without guessing. */
+    /* Non-zero for `DrawIndexed`. Captured fullscreen passes include indexed and unindexed triangles;
+       callers must consider both this flag and the element count. */
     uint32_t indexed;
     uint32_t element_count;
     /* Occupied pixel shader slots, and the first `RSF_FRAME_TAP_MAX_INPUTS` of them. `input_count`
        is what was reported, not what was bound, when the two differ. */
     uint32_t input_count;
     const rsf_frame_tap_input* inputs;
+    /* Additional draw facts for consumers of an input watch. */
+    uint32_t depth_bound;
+    uint32_t target_count;
+    uint32_t target_samples;
+    float viewport_x;
+    float viewport_y;
+    uint32_t inputs_truncated;
 } rsf_frame_tap_target_draw;
 
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
@@ -261,6 +267,10 @@ typedef struct rsf_frame_tap_options {
        `rsf_frame_tap_watch_target` with nowhere to send anything, and it says so. */
     rsf_frame_tap_target_fn on_target_draw;
     void* on_target_draw_user;
+    /* Reports draws reading the texture named by watch_input, independently of target watches.
+       Only the installed context is observed by this watch. */
+    rsf_frame_tap_target_fn on_input_draw;
+    void* on_input_draw_user;
 } rsf_frame_tap_options;
 
 typedef struct rsf_frame_tap_status {
@@ -300,9 +310,9 @@ typedef struct rsf_frame_tap_status {
     uint32_t gates_opened;
 } rsf_frame_tap_status;
 
-/* Patch the device context vtable. `device_context` is an `ID3D11DeviceContext*`; the immediate
-   context is the one to pass, and the patch applies to every context the runtime creates because
-   they share the vtable.
+/* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.
+   Other contexts share the vtable but are forwarded without observation or substitution, so
+   deferred bindings cannot contaminate the single-context shadow.
 
    Safe to call from a worker thread. It touches no D3D state, only the vtable pages. */
 rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
@@ -331,6 +341,13 @@ rsf_frame_tap_result rsf_frame_tap_uninstall(void);
    Setting a slot resets its budget and its per-target draw ordinal. Safe to call from any thread,
    including from inside `on_target_draw`, which is how the second question follows the first. */
 rsf_frame_tap_result rsf_frame_tap_watch_target(uint32_t index, void* texture, uint32_t limit);
+
+/* Observe draws with a pixel shader SRV onto texture. One persistent watch, independent of the
+   two target watches. Set/clear only on the render thread, including from on_pass. The caller
+   retains texture while armed. No allocations or resource copies are made. Null clears it.
+   Reports use watch_index == RSF_FRAME_TAP_WATCH_SLOTS. Bindings establish possible reads, not
+   shader identity. A caller must qualify the draw before assigning meaning to its output. */
+rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
 
 /* Start substituting, or stop. A null plan clears it and the game's frame goes back to being its
    own; so does uninstalling.

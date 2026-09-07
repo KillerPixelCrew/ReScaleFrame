@@ -129,7 +129,7 @@ That is why the relief is missing from the reconstruction, and motion vectors we
 
 The tap accepts a pass by the set it binds, colour with depth, velocity and a 1x1 exposure, and takes the colour bound there. Nothing in that rule distinguishes a colour before the recombine from one after it.
 
-What would: the recombine is a fullscreen draw that reads the colour already identified and writes another full-size colour target. Recognising it needs the tap to answer "which draws read this texture", where today it answers "which draws write this one". The shadow it already keeps has the information; the query does not exist yet.
+What would: the recombine is a fullscreen draw that reads the colour already identified and writes another full-size colour target. Recognising it needs the tap to answer "which draws read this texture", where today it answers "which draws write this one". The shadow it already keeps has the information. The [composed-colour change](ac7-composed-scene-color.md) adds that query and conditional backend selection; it is synthetic-tested, with game verification still open.
 
 ### Flight does not do this, so the fix has to be conditional
 

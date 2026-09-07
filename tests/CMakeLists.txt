@@ -46,7 +46,7 @@ add_test(NAME motion_decode COMMAND rsf_motion_decode)
 set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_frame_tap frame_tap.cpp)
-target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME frame_tap COMMAND rsf_frame_tap)
 set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
 

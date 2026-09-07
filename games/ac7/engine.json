@@ -68,7 +68,13 @@
     "how": "measured",
     "detail": "The qualifying set precedes about 27 later sky/cloud/translucency draws into the same colour target. Early evaluation omitted the sky; Present-time evaluation produced the complete diagnostic scene. Revalidate input overwrite boundaries before changing timing.",
     "interface_composites_at_render_resolution": true,
-    "notes": "At reduced scale the HUD composite also shrinks. Reinsert before that composite and coordinate downstream output dimensions, grading, and HUD rendering."
+    "notes": "At reduced scale the HUD composite also shrinks. Reinsert before that composite and coordinate downstream output dimensions, grading, and HUD rendering.",
+    "composed_colour": {
+      "state": "implemented_synthetic_tested_game_unverified",
+      "how": "existing_capture_evidence_and_synthetic_draws",
+      "detail": "A persistent PS-input watch selects a same-frame full-size R11G11B10_FLOAT recombine-shaped output reading the identified colour and an RGBA16F layer. Missing matches fall back to the original colour. Byte-format fullscreen consumers close discovery. Contents at evaluation and actual shader identity remain game-unverified.",
+      "research": "docs/research/ac7-composed-scene-color.md"
+    }
   },
   "overlay": {
     "state": "device_mismatch_fixed_synthetic_tested",

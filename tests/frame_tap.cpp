@@ -14,6 +14,7 @@
 // trivial shader and removes a crash that has nothing to do with what is being tested.
 
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/ac7_scene_color.h>
 
 #include <windows.h>
 
@@ -193,6 +194,175 @@ void set_viewport(ID3D11DeviceContext* context, float width, float height)
     context->RSSetViewports(1, &viewport);
 }
 
+rsf_ac7_scene_color selection{};
+uint32_t input_reports = 0;
+
+void collect_input_draw(void*, const rsf_frame_tap_target_draw* draw)
+{
+    ++input_reports;
+    rsf_ac7_scene_color_draw(&selection, draw);
+}
+
+void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+    stage("selecting composed scene colour from real D3D11 draws");
+    ID3D11Texture2D* base = make_target(device, 256, 144, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11Texture2D* composed = make_target(device, 256, 144, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11Texture2D* later = make_target(device, 256, 144, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11Texture2D* layer = make_target(device, 128, 72, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ID3D11Texture2D* tonemap = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_UNORM);
+    ID3D11Texture2D* small = make_target(device, 128, 72, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11ShaderResourceView* base_srv = nullptr;
+    ID3D11ShaderResourceView* layer_srv = nullptr;
+    ID3D11ShaderResourceView* composed_srv = nullptr;
+    ID3D11RenderTargetView* base_rtv = nullptr;
+    ID3D11RenderTargetView* composed_rtv = nullptr;
+    ID3D11RenderTargetView* later_rtv = nullptr;
+    ID3D11RenderTargetView* tonemap_rtv = nullptr;
+    ID3D11RenderTargetView* small_rtv = nullptr;
+    check(base && composed && later && layer && tonemap && small,
+          "Composition fixture textures must be created.");
+    if (!base || !composed || !later || !layer || !tonemap || !small) {
+        return;
+    }
+    check(SUCCEEDED(device->CreateShaderResourceView(base, nullptr, &base_srv)) &&
+              SUCCEEDED(device->CreateShaderResourceView(layer, nullptr, &layer_srv)) &&
+              SUCCEEDED(device->CreateShaderResourceView(composed, nullptr, &composed_srv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(base, nullptr, &base_rtv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(composed, nullptr, &composed_rtv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(later, nullptr, &later_rtv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(tonemap, nullptr, &tonemap_rtv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(small, nullptr, &small_rtv)),
+          "Composition fixture views must be created.");
+    D3D11_TEXTURE2D_DESC depth_desc{};
+    depth_desc.Width = 256;
+    depth_desc.Height = 144;
+    depth_desc.MipLevels = 1;
+    depth_desc.ArraySize = 1;
+    depth_desc.Format = DXGI_FORMAT_D32_FLOAT;
+    depth_desc.SampleDesc.Count = 1;
+    depth_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    ID3D11Texture2D* depth = nullptr;
+    ID3D11DepthStencilView* dsv = nullptr;
+    check(SUCCEEDED(device->CreateTexture2D(&depth_desc, nullptr, &depth)) &&
+              SUCCEEDED(device->CreateDepthStencilView(depth, nullptr, &dsv)),
+          "Composition depth fixture must be created.");
+
+    rsf_ac7_scene_color_source(&selection, base, context, 256, 144);
+    check(rsf_frame_tap_watch_input(base) == RSF_FRAME_TAP_OK, "Input watch must arm.");
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A frame without a recombine must use the original colour.");
+    context->OMSetRenderTargets(1, &composed_rtv, nullptr);
+    set_viewport(context, 256, 144);
+    // Separate calls and high slots exercise inherited bindings rather than an assumed slot zero.
+    context->PSSetShaderResources(30, 1, &base_srv);
+    context->PSSetShaderResources(31, 1, &layer_srv);
+    context->DrawIndexed(12, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "Geometry is not a recombine.");
+    set_viewport(context, 128, 72);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A partial viewport is not the full scene.");
+    set_viewport(context, 256, 144);
+    context->OMSetRenderTargets(1, &small_rtv, nullptr);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A downsample must not replace scene colour.");
+    context->OMSetRenderTargets(1, &tonemap_rtv, nullptr);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "The tonemap must never be selected.");
+    context->OMSetRenderTargets(1, &composed_rtv, nullptr);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A float output after the tonemap boundary must not reopen discovery.");
+    rsf_ac7_scene_color_end_frame(&selection);
+    context->OMSetRenderTargets(1, &composed_rtv, dsv);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A depth-bound draw must not qualify.");
+    context->OMSetRenderTargetsAndUnorderedAccessViews(1, &composed_rtv, nullptr, 1, 0,
+                                                     nullptr, nullptr);
+    ID3D11ShaderResourceView* empty = nullptr;
+    context->PSSetShaderResources(31, 1, &empty);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A colour-only copy must not qualify as recombination.");
+    context->PSSetShaderResources(31, 1, &layer_srv);
+    context->OMSetRenderTargetsAndUnorderedAccessViews(
+        D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 0, nullptr, nullptr);
+    context->DrawIndexed(3, 0, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == composed,
+          "The captured recombine-shaped draw must select the composed target.");
+    check(rsf_ac7_scene_color_source(&selection, base, context, 256, 144) == 0 &&
+              rsf_ac7_scene_color_selected(&selection, base) == composed,
+          "A later qualifying pass carrying the same base must preserve this frame's composition.");
+    context->OMSetRenderTargets(1, &later_rtv, nullptr);
+    context->Draw(3, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == composed,
+          "Later readers must not walk the choice down the post-process chain.");
+    rsf_ac7_scene_color_end_frame(&selection);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "Holding the allocation must not reuse the preceding frame's selection.");
+    // A deferred context shares the hook vtable but must not overwrite immediate-context shadows.
+    ID3D11DeviceContext* deferred = nullptr;
+    check(SUCCEEDED(device->CreateDeferredContext(0, &deferred)), "Deferred context must be created.");
+    if (deferred) {
+        deferred->OMSetRenderTargets(1, &tonemap_rtv, nullptr);
+        deferred->PSSetShaderResources(30, 1, &empty);
+        deferred->Release();
+    }
+    context->Draw(3, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == later,
+          "A fresh draw must refresh the choice without rearming the persistent watch.");
+    rsf_ac7_scene_color_end_frame(&selection);
+    context->PSSetShaderResources(30, 1, &composed_srv);
+    const uint32_t before_unrelated = input_reports;
+    context->Draw(3, 0);
+    check(input_reports == before_unrelated &&
+              rsf_ac7_scene_color_selected(&selection, base) == base,
+          "A draw that does not read the original colour must not be followed.");
+    context->PSSetShaderResources(30, 1, &base_srv);
+    context->OMSetRenderTargets(1, &base_rtv, nullptr); // implicit SRV unbind
+    context->OMSetRenderTargets(1, &composed_rtv, nullptr);
+    context->Draw(3, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "An implicit SRV unbind must not leave a false read in the shadow.");
+    context->PSSetShaderResources(30, 1, &base_srv);
+    context->Draw(3, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == composed,
+          "Explicit rebinding after an implicit unbind must restore discovery.");
+    rsf_ac7_scene_color_source(&selection, later, context, 256, 144);
+    check(rsf_ac7_scene_color_selected(&selection, later) == later && !selection.composed,
+          "Replacing the source must discard the previous resource association.");
+    rsf_ac7_scene_color_source(&selection, base, context, 128, 72);
+    context->Draw(3, 0);
+    check(rsf_ac7_scene_color_selected(&selection, base) == base,
+          "Changing render extent must reject the old full-size association.");
+    rsf_frame_tap_watch_input(nullptr);
+    rsf_ac7_scene_color_clear(&selection);
+    context->PSSetShaderResources(30, 1, &empty);
+    context->PSSetShaderResources(31, 1, &empty);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    dsv->Release();
+    depth->Release();
+    small_rtv->Release();
+    tonemap_rtv->Release();
+    later_rtv->Release();
+    composed_rtv->Release();
+    base_rtv->Release();
+    composed_srv->Release();
+    layer_srv->Release();
+    base_srv->Release();
+    small->Release();
+    tonemap->Release();
+    layer->Release();
+    later->Release();
+    composed->Release();
+    base->Release();
+}
+
 } // namespace
 
 int main()
@@ -202,6 +372,7 @@ int main()
     options.struct_size = sizeof(options);
     options.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     options.on_target_draw = collect_target_draw;
+    options.on_input_draw = collect_input_draw;
     options.output_width = 512;
     options.output_height = 288;
 
@@ -297,6 +468,8 @@ int main()
     context->PSSetShader(pixel_shader, nullptr, 0);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->IASetIndexBuffer(indices, DXGI_FORMAT_R16_UINT, 0);
+
+    test_composed_color(device, context);
 
     stage("drawing into an unwatched target");
     set_viewport(context, 256.0f, 144.0f);
