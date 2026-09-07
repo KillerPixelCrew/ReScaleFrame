@@ -80,15 +80,19 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       the backend is not running and why, and it fills its refusal line in the order the pipeline
       actually fails.
 
-      The panel reports what was clicked and nothing acts on it. Quality, the enable toggle and the
-      dump button log what was asked for and point at the hotkeys. Applying them means a settings
-      change crossing from the message thread to the render thread at a defined boundary, which is
-      the open review finding about F7 and F8, and adding a third way in before that is fixed would
-      make it worse. That boundary is the next piece of work here.
+      The bridge applies start, scale, debug view, reinsertion, dump and capture intents after
+      drawing on the Present thread. Quality and the master enable toggle remain unwired.
 
-      Cross-built with mingw-w64 and the suite passes under Wine on DXVK, but nothing here is a
-      test of the overlay: it draws inside a game's Present and none of the existing tests reach
-      that. Not run against the game, so no claim is made that a panel appears.
+      F5 game runs reached layout but failed in back-buffer view creation. The observer could
+      select a helper device before the presenting device existed. The host now derives its
+      device/context from the presenting chain, checks back-buffer ownership, and releases its
+      target references each frame. The worker-thread target experiment was discarded.
+
+      Cross-built with mingw-w64. A regression test creates the wrong observer device deliberately
+      and checks actual rendered pixels, target restoration and ResizeBuffers. The real egui DLL
+      also passes that test under Wine with DXVK and RenderDoc, without DLSS. The old host
+      reproduces the view-creation access violation in that two-device setup. AC7 validation of
+      the fix remains pending. See [the investigation](research/ac7-overlay-device.md).
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.

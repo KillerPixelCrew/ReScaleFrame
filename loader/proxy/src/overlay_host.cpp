@@ -54,17 +54,6 @@ struct Host {
     rsf_overlay_renderer* renderer = nullptr;
     ID3D11Device* device = nullptr;
 
-    /* The back buffer's render target view, made once and kept.
-
-       Made once because making one per frame is what took the game down, and kept keyed on the
-       back buffer it was made from so a swap chain resize rebuilds it rather than binding a view
-       onto a texture that no longer exists. Null means we draw into whatever the game left bound,
-       which is correct but often invisible. */
-    ID3D11Texture2D* target_texture = nullptr;
-    ID3D11RenderTargetView* target_view = nullptr;
-    /* Set once creating the view has failed, so it is attempted once and not once per frame. */
-    bool target_refused = false;
-
     bool started = false;
     /* Set when a frame failed in a way that will fail again every frame. The panel is closed and
        left closed rather than reporting the same line sixty times a second. */
@@ -259,81 +248,33 @@ void carry_textures(ID3D11DeviceContext* context)
     }
 }
 
-/* The back buffer's view, made at most once.
+// These references exist only inside a Present callback, including on early returns.
+// In particular, no view or texture is retained across Present or ResizeBuffers.
+template <typename T> struct LocalRef {
+    T* value = nullptr;
+    LocalRef() = default;
+    LocalRef(const LocalRef&) = delete;
+    LocalRef& operator=(const LocalRef&) = delete;
+    ~LocalRef()
+    {
+        if (value) {
+            value->Release();
+        }
+    }
+};
 
-   The device comes from the context we are about to draw with, not from the pointer stored when
-   the host started. That is the one difference between this and the version that took the game
-   down: a view is only valid when its resource and the device agree, and a device captured at
-   startup is a guess about which device that is. `present_blit` makes the same call successfully
-   with a device it was handed at the moment it was created.
-
-   Returns null when there is no view to be had, and sets `target_refused` so the attempt is not
-   repeated every frame. The caller then draws into whatever the game left bound. */
-ID3D11RenderTargetView* back_buffer_view(Host& self, ID3D11DeviceContext* context,
-                                         IDXGISwapChain* chain)
+bool same_device(ID3D11Device* a, ID3D11Device* b)
 {
-    if (self.target_refused) {
-        return nullptr;
+    if (!a || !b) {
+        return false;
     }
-
-    say("overlay view: asking the swap chain for its back buffer");
-    ID3D11Texture2D* back_buffer = nullptr;
-    const HRESULT got_buffer =
-        chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
-    say("overlay view: got the back buffer %p", (void*)back_buffer);
-    if (FAILED(got_buffer) || !back_buffer) {
-        say("overlay: the swap chain would not hand over its back buffer, hr 0x%08lx. The panel "
-            "will draw into whatever is bound",
-            (unsigned long)got_buffer);
-        self.target_refused = true;
-        return nullptr;
-    }
-
-    // The same texture as last time means the view we already have is still the right one.
-    if (self.target_view && self.target_texture == back_buffer) {
-        back_buffer->Release();
-        return self.target_view;
-    }
-
-    if (self.target_view) {
-        self.target_view->Release();
-        self.target_view = nullptr;
-    }
-    if (self.target_texture) {
-        self.target_texture->Release();
-        self.target_texture = nullptr;
-    }
-
-    say("overlay view: asking the context for its device");
-    ID3D11Device* device = nullptr;
-    context->GetDevice(&device);
-    say("overlay view: device %p, creating the view", (void*)device);
-    if (!device) {
-        back_buffer->Release();
-        say("overlay: the context would not name its device, so the panel will draw into whatever "
-            "is bound");
-        self.target_refused = true;
-        return nullptr;
-    }
-
-    ID3D11RenderTargetView* view = nullptr;
-    const HRESULT made = device->CreateRenderTargetView(back_buffer, nullptr, &view);
-    say("overlay view: CreateRenderTargetView returned hr 0x%08lx, view %p", (unsigned long)made,
-        (void*)view);
-    device->Release();
-    if (FAILED(made) || !view) {
-        back_buffer->Release();
-        say("overlay: no render target view over the back buffer, hr 0x%08lx. The panel will draw "
-            "into whatever is bound",
-            (unsigned long)made);
-        self.target_refused = true;
-        return nullptr;
-    }
-
-    self.target_texture = back_buffer;
-    self.target_view = view;
-    say("overlay: drawing into the back buffer through a view made once, kept while it lasts");
-    return view;
+    LocalRef<IUnknown> first;
+    LocalRef<IUnknown> second;
+    return SUCCEEDED(a->QueryInterface(__uuidof(IUnknown),
+                                       reinterpret_cast<void**>(&first.value))) &&
+           SUCCEEDED(b->QueryInterface(__uuidof(IUnknown),
+                                       reinterpret_cast<void**>(&second.value))) &&
+           first.value && first.value == second.value;
 }
 
 /* Saved around the draw, because binding a target displaces whatever the game had.
@@ -367,7 +308,7 @@ void restore_targets(ID3D11DeviceContext* context, SavedTargets& saved)
 
 } // namespace
 
-extern "C" int rsf_overlay_host_start(void* device, void* swapchain, rsf_overlay_host_log_fn log,
+extern "C" int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn log,
                                       void* log_user)
 {
     Host& self = host();
@@ -380,9 +321,20 @@ extern "C" int rsf_overlay_host_start(void* device, void* swapchain, rsf_overlay
     if (self.stopped_after_failure) {
         return 0;
     }
-    if (!device || !swapchain) {
+    if (!swapchain) {
         return 0;
     }
+
+    auto* chain = static_cast<IDXGISwapChain*>(swapchain);
+    LocalRef<ID3D11Device> device;
+    const HRESULT got_device = chain->GetDevice(__uuidof(ID3D11Device),
+                                                reinterpret_cast<void**>(&device.value));
+    if (FAILED(got_device) || !device.value) {
+        say("overlay: presenting swap chain has no D3D11 device, hr 0x%08lx",
+            (unsigned long)got_device);
+        return 0;
+    }
+    say("overlay: swap chain %p selects device %p", swapchain, (void*)device.value);
 
     if (!self.panel_module && !load_panel()) {
         self.stopped_after_failure = true;
@@ -402,7 +354,7 @@ extern "C" int rsf_overlay_host_start(void* device, void* swapchain, rsf_overlay
     setup.abi_version = RSF_OVERLAY_RENDERER_ABI_VERSION;
     setup.log = log_from_module;
     setup.log_user = nullptr;
-    if (rsf_overlay_renderer_create(device, &setup, &self.renderer) != RSF_OVERLAY_RENDERER_OK) {
+    if (rsf_overlay_renderer_create(device.value, &setup, &self.renderer) != RSF_OVERLAY_RENDERER_OK) {
         say("overlay: the renderer would not build, so there is nothing to draw with");
         self.destroy(self.panel);
         self.panel = nullptr;
@@ -410,7 +362,6 @@ extern "C" int rsf_overlay_host_start(void* device, void* swapchain, rsf_overlay
         return 0;
     }
 
-    auto* chain = static_cast<IDXGISwapChain*>(swapchain);
     HWND window = window_of(chain);
     if (!window) {
         say("overlay: the swap chain would not say which window it presents to");
@@ -441,7 +392,7 @@ extern "C" int rsf_overlay_host_start(void* device, void* swapchain, rsf_overlay
         return 0;
     }
 
-    self.device = static_cast<ID3D11Device*>(device);
+    self.device = device.value;
     self.device->AddRef();
     QueryPerformanceFrequency(&self.frequency);
     self.last_frame.QuadPart = 0;
@@ -469,11 +420,11 @@ extern "C" void rsf_overlay_host_toggle(void)
     rsf_overlay_input_set_visible(rsf_overlay_input_visible() ? 0u : 1u);
 }
 
-extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
+extern "C" int rsf_overlay_host_present(void* swapchain,
                                         const rsf_overlay_stats* stats, rsf_overlay_intent* intent)
 {
     Host& self = host();
-    if (!self.started || !context || !swapchain || !stats) {
+    if (!self.started || self.stopped_after_failure || !swapchain || !stats) {
         return 0;
     }
     if (!rsf_overlay_input_visible()) {
@@ -497,49 +448,73 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
 
     const bool trace = self.trace_frames > 0;
     if (trace) {
-        // The thread id, because two of these sequences reached CreateRenderTargetView and neither
-        // returned, which one thread cannot do. If the ids differ, the game presents from more than
-        // one thread and this whole path is being run concurrently against one device.
         say("overlay frame: visible on thread %lu, acquiring the back buffer",
             (unsigned long)GetCurrentThreadId());
     }
 
-    auto* device_context = static_cast<ID3D11DeviceContext*>(context);
     auto* chain = static_cast<IDXGISwapChain*>(swapchain);
-
-    /* The size comes from the swap chain's own description rather than from its back buffer.
-
-       Taking the back buffer and making a render target view over it is what took the game down:
-       the log reached the line before `CreateRenderTargetView` and never the one after, twice, on
-       one thread. It is also work this does not need. `overlay_renderer` draws into whatever is
-       bound when it is called and deliberately never rebinds, because `OMSetRenderTargets` unbinds
-       every unordered access view the output merger holds and those cannot be put back exactly.
-       Present is after the game's last draw, so what is bound is the image about to be shown.
-
-       The consequence, and it is a real one: if the game leaves nothing bound at Present, the
-       panel draws nowhere and is simply not visible. That is a diagnostic worth having over a
-       process that dies. */
-    DXGI_SWAP_CHAIN_DESC chain_description{};
-    const HRESULT got_desc = chain->GetDesc(&chain_description);
-    if (FAILED(got_desc)) {
-        say("overlay frame: the swap chain would not describe itself, hr 0x%08lx",
-            (unsigned long)got_desc);
+    LocalRef<ID3D11Device> chain_device;
+    if (FAILED(chain->GetDevice(__uuidof(ID3D11Device),
+                                reinterpret_cast<void**>(&chain_device.value))) ||
+        !same_device(self.device, chain_device.value)) {
+        // Shared vtables can also dispatch Present for another device. Our renderer belongs to
+        // the device selected at start; never submit its resources through a different context.
+        if (trace) {
+            say("overlay: skipping swap chain %p on another device %p (renderer %p)", swapchain,
+                (void*)chain_device.value, (void*)self.device);
+            --self.trace_frames;
+        }
+        return 0;
+    }
+    LocalRef<ID3D11DeviceContext> immediate;
+    chain_device.value->GetImmediateContext(&immediate.value);
+    if (!immediate.value) {
+        return 0;
+    }
+    auto* device_context = immediate.value;
+    LocalRef<ID3D11Texture2D> back_buffer;
+    const HRESULT got_buffer = chain->GetBuffer(0, __uuidof(ID3D11Texture2D),
+                                                reinterpret_cast<void**>(&back_buffer.value));
+    if (FAILED(got_buffer) || !back_buffer.value) {
+        if (trace) {
+            say("overlay: GetBuffer failed, hr 0x%08lx", (unsigned long)got_buffer);
+            --self.trace_frames;
+        }
+        return 0;
+    }
+    LocalRef<ID3D11Device> owner;
+    back_buffer.value->GetDevice(&owner.value);
+    if (!same_device(chain_device.value, owner.value)) {
+        say("overlay: back buffer %p belongs to device %p, chain device %p. Closing panel",
+            (void*)back_buffer.value, (void*)owner.value, (void*)chain_device.value);
+        self.stopped_after_failure = true;
+        rsf_overlay_input_set_visible(0u);
         return 0;
     }
     D3D11_TEXTURE2D_DESC description{};
-    description.Width = chain_description.BufferDesc.Width;
-    description.Height = chain_description.BufferDesc.Height;
+    back_buffer.value->GetDesc(&description);
     if (description.Width == 0 || description.Height == 0) {
         return 0;
     }
+    LocalRef<ID3D11RenderTargetView> target;
     if (trace) {
-        say("overlay frame: presenting at %ux%u, drawing into whatever is bound",
-            description.Width, description.Height);
+        say("overlay view: chain %p, device %p, context %p, buffer %p, owner %p, "
+            "%ux%u format %u bind 0x%x. Creating view",
+            swapchain, (void*)chain_device.value, (void*)device_context, (void*)back_buffer.value,
+            (void*)owner.value, description.Width, description.Height,
+            (unsigned int)description.Format, description.BindFlags);
     }
-
+    const HRESULT made = chain_device.value->CreateRenderTargetView(back_buffer.value, nullptr,
+                                                                     &target.value);
     if (trace) {
-        say("overlay frame: target %ux%u, collecting input", description.Width,
-            description.Height);
+        say("overlay view: CreateRenderTargetView returned hr 0x%08lx, view %p",
+            (unsigned long)made, (void*)target.value);
+    }
+    if (FAILED(made) || !target.value) {
+        say("overlay: no back-buffer view, hr 0x%08lx. Closing panel", (unsigned long)made);
+        self.stopped_after_failure = true;
+        rsf_overlay_input_set_visible(0u);
+        return 0;
     }
 
     rsf_overlay_input input{};
@@ -570,56 +545,15 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     }
     carry_textures(device_context);
 
-    if (trace) {
-        /* What the game left bound. Read only, and the answer decides whether the panel is drawing
-           into nothing or into a target that is not the presented image. */
-        ID3D11RenderTargetView* bound[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-        ID3D11DepthStencilView* bound_depth = nullptr;
-        device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, bound,
-                                           &bound_depth);
-        unsigned int bound_count = 0;
-        for (ID3D11RenderTargetView* view : bound) {
-            if (view) {
-                ++bound_count;
-            }
-        }
-        if (bound_count > 0 && bound[0]) {
-            ID3D11Resource* resource = nullptr;
-            bound[0]->GetResource(&resource);
-            D3D11_RENDER_TARGET_VIEW_DESC view_description{};
-            bound[0]->GetDesc(&view_description);
-            say("overlay frame: %u render targets bound, first is resource %p format %d, depth %s",
-                bound_count, (void*)resource, (int)view_description.Format,
-                bound_depth ? "yes" : "no");
-            if (resource) {
-                resource->Release();
-            }
-        } else {
-            say("overlay frame: nothing is bound at present, so the panel draws nowhere");
-        }
-        for (ID3D11RenderTargetView* view : bound) {
-            if (view) {
-                view->Release();
-            }
-        }
-        if (bound_depth) {
-            bound_depth->Release();
-        }
-        say("overlay frame: textures carried, drawing");
-    }
-
-    /* Bind the back buffer if we can have a view onto it, and put back what was bound afterwards.
-       Without one the renderer draws into whatever the game left, which is correct and frequently
-       invisible. */
-    ID3D11RenderTargetView* view = back_buffer_view(self, device_context, chain);
     SavedTargets saved;
-    if (view) {
-        if (trace) {
-            say("overlay frame: binding the view and saving what was there");
-        }
-        save_targets(device_context, saved);
-        device_context->OMSetRenderTargets(1, &view, nullptr);
-    }
+    save_targets(device_context, saved);
+    // Restore before target is released, on every path out of the draw scope.
+    struct TargetGuard {
+        ID3D11DeviceContext* context;
+        SavedTargets& saved;
+        ~TargetGuard() { restore_targets(context, saved); }
+    } target_guard{device_context, saved};
+    device_context->OMSetRenderTargets(1, &target.value, nullptr);
 
     if (trace) {
         say("overlay frame: calling the renderer");
@@ -630,19 +564,8 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
         say("overlay frame: the renderer returned %d", int(drawn));
     }
 
-    if (view) {
-        restore_targets(device_context, saved);
-        if (trace) {
-            say("overlay frame: targets restored");
-        }
-    }
-
     if (trace) {
-        say("overlay frame: drawn into %s, result %d", view ? "the back buffer" : "what was bound",
-            int(drawn));
-    }
-    if (trace) {
-        say("overlay frame: complete");
+        say("overlay frame: drawn into the back buffer, result %d", int(drawn));
         --self.trace_frames;
     }
 
@@ -668,14 +591,6 @@ extern "C" void rsf_overlay_host_stop(void)
     rsf_overlay_input_set_visible(0u);
     rsf_overlay_input_uninstall();
 
-    if (self.target_view) {
-        self.target_view->Release();
-        self.target_view = nullptr;
-    }
-    if (self.target_texture) {
-        self.target_texture->Release();
-        self.target_texture = nullptr;
-    }
     if (self.renderer) {
         rsf_overlay_renderer_destroy(self.renderer);
         self.renderer = nullptr;

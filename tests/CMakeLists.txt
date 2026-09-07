@@ -67,6 +67,17 @@ add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_
 # a couple of minutes rather than hanging the suite.
 set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
+add_library(rsf_overlay_panel_fixture SHARED overlay_panel_fixture.cpp)
+target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics rsf_build_options)
+set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "")
+add_executable(rsf_overlay_host overlay_host.cpp ../loader/proxy/src/overlay_host.cpp)
+target_link_libraries(rsf_overlay_host PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_compile_definitions(rsf_overlay_host PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_dependencies(rsf_overlay_host rsf_overlay_panel_fixture)
+add_test(NAME overlay_host COMMAND rsf_overlay_host "$<TARGET_FILE_NAME:rsf_overlay_panel_fixture>")
+set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_overlay_host>")
+
 add_executable(rsf_dlss_backend dlss_backend.cpp)
 target_link_libraries(rsf_dlss_backend PRIVATE ReScaleFrame::DLSS rsf_build_options)
 add_test(NAME dlss_backend COMMAND rsf_dlss_backend)

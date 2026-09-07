@@ -5,6 +5,7 @@ Research began on 5 September 2026. The source comparisons are pinned to the rev
 | Document | Read it for |
 | --- | --- |
 | [AC7 frame capture](ac7-frame-capture.md) | Resource contents, motion encoding, camera offsets, jitter, reduced-scale HUD behaviour |
+| [AC7 overlay device mismatch](ac7-overlay-device.md) | Reproduced view-creation crash, swap-chain device selection, pixel readback and resize checks |
 | [UE4.18 hook map](ue418-hook-map.md) | Engine source leads and the researched executable fingerprint |
 | [Binary analysis](ghidra-tooling.md) | Why a runtime dump was needed and how it was checked |
 | [Methodology](methodology.md) | A repeatable analysis workflow |

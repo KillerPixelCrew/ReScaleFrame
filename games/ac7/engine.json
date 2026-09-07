@@ -70,6 +70,13 @@
     "interface_composites_at_render_resolution": true,
     "notes": "At reduced scale the HUD composite also shrinks. Reinsert before that composite and coordinate downstream output dimensions, grading, and HUD rendering."
   },
+  "overlay": {
+    "state": "device_mismatch_fixed_synthetic_tested",
+    "how": "game_log_inspected_and_synthetic_reproduced",
+    "detail": "The observer-selected device differed from the device presenting to the game window. The old host reproduced a CreateRenderTargetView access violation with two devices and RenderDoc. The patched host selects the swap-chain device and passes egui pixel readback and resize checks under Wine/DXVK/RenderDoc without a backend.",
+    "game_validated": false,
+    "research": "docs/research/ac7-overlay-device.md"
+  },
   "result": {
     "backend": "DLSS via Streamline 2.12.0",
     "state": "reconstructs",

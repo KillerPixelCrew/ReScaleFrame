@@ -617,41 +617,22 @@ static void overlay_tick(void* swapchain)
 {
     rsf_overlay_stats stats;
     rsf_overlay_intent intent;
-    void* device;
-    void* context;
-
     if (!bridge.log) {
         return;
     }
-    /* Acquired once, and released before returning. The observer AddRefs both, so the earlier
-       shape of this function, which acquired on every present and released neither, leaked a
-       device and a context reference per frame. */
-    if (rsf_observer_acquire_device(&device, &context) != RSF_OBSERVER_OK) {
+    /* The presenting chain selects the overlay's device. The observer's first allocation can
+       belong to a helper device, including one created by capture support. */
+    if (!rsf_overlay_host_start(swapchain, bridge.log, bridge.log_user) ||
+        !rsf_overlay_host_visible()) {
         return;
-    }
-
-    /* Starting it needs a device, which needs the game to have made one. Starting here rather than
-       at F8 is what lets the panel open and say that the backend is not running, which is the
-       state it is most useful in. */
-    if (!rsf_overlay_host_visible()) {
-        rsf_overlay_host_start(device, swapchain, bridge.log, bridge.log_user);
-        if (!rsf_overlay_host_visible()) {
-            rsf_resource_release(device);
-            rsf_resource_release(context);
-            return;
-        }
     }
 
     fill_overlay_stats(&stats);
     memset(&intent, 0, sizeof(intent));
     intent.struct_size = sizeof(intent);
-    if (!rsf_overlay_host_present(context, swapchain, &stats, &intent)) {
-        rsf_resource_release(device);
-        rsf_resource_release(context);
+    if (!rsf_overlay_host_present(swapchain, &stats, &intent)) {
         return;
     }
-    rsf_resource_release(device);
-    rsf_resource_release(context);
     /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
        That is the boundary the review finding asks for: the panel records what was clicked and the
        change happens where the rendering already is, rather than from the message thread while a
