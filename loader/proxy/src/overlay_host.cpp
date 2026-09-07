@@ -54,6 +54,17 @@ struct Host {
     rsf_overlay_renderer* renderer = nullptr;
     ID3D11Device* device = nullptr;
 
+    /* The back buffer's render target view, made once and kept.
+
+       Made once because making one per frame is what took the game down, and kept keyed on the
+       back buffer it was made from so a swap chain resize rebuilds it rather than binding a view
+       onto a texture that no longer exists. Null means we draw into whatever the game left bound,
+       which is correct but often invisible. */
+    ID3D11Texture2D* target_texture = nullptr;
+    ID3D11RenderTargetView* target_view = nullptr;
+    /* Set once creating the view has failed, so it is attempted once and not once per frame. */
+    bool target_refused = false;
+
     bool started = false;
     /* Set when a frame failed in a way that will fail again every frame. The panel is closed and
        left closed rather than reporting the same line sixty times a second. */
@@ -248,11 +259,105 @@ void carry_textures(ID3D11DeviceContext* context)
     }
 }
 
-/* There was a save and restore of the output merger's render targets here, so the panel could bind
-   the back buffer and put back what it displaced. It is gone with the binding it existed for: the
-   renderer draws into whatever is already bound, so nothing is displaced and nothing needs putting
-   back. Keeping it would also mean OMSetRenderTargets, which unbinds every unordered access view
-   the output merger holds, and those cannot be restored exactly. */
+/* The back buffer's view, made at most once.
+
+   The device comes from the context we are about to draw with, not from the pointer stored when
+   the host started. That is the one difference between this and the version that took the game
+   down: a view is only valid when its resource and the device agree, and a device captured at
+   startup is a guess about which device that is. `present_blit` makes the same call successfully
+   with a device it was handed at the moment it was created.
+
+   Returns null when there is no view to be had, and sets `target_refused` so the attempt is not
+   repeated every frame. The caller then draws into whatever the game left bound. */
+ID3D11RenderTargetView* back_buffer_view(Host& self, ID3D11DeviceContext* context,
+                                         IDXGISwapChain* chain)
+{
+    if (self.target_refused) {
+        return nullptr;
+    }
+
+    ID3D11Texture2D* back_buffer = nullptr;
+    const HRESULT got_buffer =
+        chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
+    if (FAILED(got_buffer) || !back_buffer) {
+        say("overlay: the swap chain would not hand over its back buffer, hr 0x%08lx. The panel "
+            "will draw into whatever is bound",
+            (unsigned long)got_buffer);
+        self.target_refused = true;
+        return nullptr;
+    }
+
+    // The same texture as last time means the view we already have is still the right one.
+    if (self.target_view && self.target_texture == back_buffer) {
+        back_buffer->Release();
+        return self.target_view;
+    }
+
+    if (self.target_view) {
+        self.target_view->Release();
+        self.target_view = nullptr;
+    }
+    if (self.target_texture) {
+        self.target_texture->Release();
+        self.target_texture = nullptr;
+    }
+
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    if (!device) {
+        back_buffer->Release();
+        say("overlay: the context would not name its device, so the panel will draw into whatever "
+            "is bound");
+        self.target_refused = true;
+        return nullptr;
+    }
+
+    ID3D11RenderTargetView* view = nullptr;
+    const HRESULT made = device->CreateRenderTargetView(back_buffer, nullptr, &view);
+    device->Release();
+    if (FAILED(made) || !view) {
+        back_buffer->Release();
+        say("overlay: no render target view over the back buffer, hr 0x%08lx. The panel will draw "
+            "into whatever is bound",
+            (unsigned long)made);
+        self.target_refused = true;
+        return nullptr;
+    }
+
+    self.target_texture = back_buffer;
+    self.target_view = view;
+    say("overlay: drawing into the back buffer through a view made once, kept while it lasts");
+    return view;
+}
+
+/* Saved around the draw, because binding a target displaces whatever the game had.
+
+   OMSetRenderTargets also unbinds every unordered access view the output merger holds and those
+   cannot be put back exactly. At Present the game's last draw has already happened, which is the
+   same trade `present_blit` makes at the same point in the frame. */
+struct SavedTargets {
+    ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    ID3D11DepthStencilView* depth = nullptr;
+};
+
+void save_targets(ID3D11DeviceContext* context, SavedTargets& saved)
+{
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets,
+                                &saved.depth);
+}
+
+void restore_targets(ID3D11DeviceContext* context, SavedTargets& saved)
+{
+    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets, saved.depth);
+    for (ID3D11RenderTargetView* view : saved.targets) {
+        if (view) {
+            view->Release();
+        }
+    }
+    if (saved.depth) {
+        saved.depth->Release();
+    }
+}
 
 } // namespace
 
@@ -460,13 +565,63 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     carry_textures(device_context);
 
     if (trace) {
+        /* What the game left bound. Read only, and the answer decides whether the panel is drawing
+           into nothing or into a target that is not the presented image. */
+        ID3D11RenderTargetView* bound[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+        ID3D11DepthStencilView* bound_depth = nullptr;
+        device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, bound,
+                                           &bound_depth);
+        unsigned int bound_count = 0;
+        for (ID3D11RenderTargetView* view : bound) {
+            if (view) {
+                ++bound_count;
+            }
+        }
+        if (bound_count > 0 && bound[0]) {
+            ID3D11Resource* resource = nullptr;
+            bound[0]->GetResource(&resource);
+            D3D11_RENDER_TARGET_VIEW_DESC view_description{};
+            bound[0]->GetDesc(&view_description);
+            say("overlay frame: %u render targets bound, first is resource %p format %d, depth %s",
+                bound_count, (void*)resource, (int)view_description.Format,
+                bound_depth ? "yes" : "no");
+            if (resource) {
+                resource->Release();
+            }
+        } else {
+            say("overlay frame: nothing is bound at present, so the panel draws nowhere");
+        }
+        for (ID3D11RenderTargetView* view : bound) {
+            if (view) {
+                view->Release();
+            }
+        }
+        if (bound_depth) {
+            bound_depth->Release();
+        }
         say("overlay frame: textures carried, drawing");
     }
+
+    /* Bind the back buffer if we can have a view onto it, and put back what was bound afterwards.
+       Without one the renderer draws into whatever the game left, which is correct and frequently
+       invisible. */
+    ID3D11RenderTargetView* view = back_buffer_view(self, device_context, chain);
+    SavedTargets saved;
+    if (view) {
+        save_targets(device_context, saved);
+        device_context->OMSetRenderTargets(1, &view, nullptr);
+    }
+
     const rsf_overlay_renderer_result drawn = rsf_overlay_renderer_draw(
         self.renderer, device_context, &draw_data, description.Width, description.Height);
 
+    if (view) {
+        restore_targets(device_context, saved);
+    }
+
     if (trace) {
-        say("overlay frame: drawn, result %d", int(drawn));
+        say("overlay frame: drawn into %s, result %d", view ? "the back buffer" : "what was bound",
+            int(drawn));
     }
     if (trace) {
         say("overlay frame: complete");
@@ -495,6 +650,14 @@ extern "C" void rsf_overlay_host_stop(void)
     rsf_overlay_input_set_visible(0u);
     rsf_overlay_input_uninstall();
 
+    if (self.target_view) {
+        self.target_view->Release();
+        self.target_view = nullptr;
+    }
+    if (self.target_texture) {
+        self.target_texture->Release();
+        self.target_texture = nullptr;
+    }
     if (self.renderer) {
         rsf_overlay_renderer_destroy(self.renderer);
         self.renderer = nullptr;
