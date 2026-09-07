@@ -58,9 +58,17 @@
    seconds and each look is 32 frames, so this outlasts one without spinning forever if a screen
    genuinely has no interface. */
 #define RSF_TAIL_MAX_RELOOKS 12ul
-/* How many draws the interface hunt describes per look. Enough for a few frames of the tail, and
-   spent again on every restake, because the surfaces it names do not outlive a screen change. */
-#define RSF_UI_HUNT_DRAWS 48u
+/* How many draws the interface hunt looks at per screen.
+
+   Large, because the budget is spent by every draw that reads the interface and most of them are
+   not squashes: the interface composites itself over several 1920x1080 passes before anything
+   downsamples it. Forty-eight was enough on a menu and ran out on a briefing before a squash
+   appeared, which reads exactly like a screen whose interface cannot be found. The matching itself
+   is a comparison against descriptions the tap already holds, so looking is nearly free and only
+   the reporting needs restraint. */
+#define RSF_UI_HUNT_DRAWS 20000u
+/* How many of those to describe in the log, which is the part that actually costs something. */
+#define RSF_UI_HUNT_LOGGED 24u
 /* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
    spans several frames. The composite takes the whole interface on top of the scene, so it takes
    more, and the ordinal in each report says which draw of the pass it was. */
@@ -221,6 +229,7 @@ static struct {
        tail's format rule. Retained, because the plan names them by address. */
     void* interface_targets[RSF_REINSERT_MAX_INTERFACE_TARGETS];
     uint32_t interface_target_count;
+    unsigned long hunt_logged;
     /* The presented size, kept here so a per-draw callback can judge against it without asking the
        pipeline for its status on every draw. */
     unsigned long output_width;
@@ -513,16 +522,19 @@ static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
         if (draw->inputs[index].width != 1920 || draw->inputs[index].height != 1080) {
             continue;
         }
-        say("interface hunt: a 1920x1080 format %lu texture %p in slot %lu is read by a draw into "
-            "target %p, %lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, %lu targets "
-            "bound, depth %s",
-            (unsigned long)draw->inputs[index].format, draw->inputs[index].texture,
-            (unsigned long)draw->inputs[index].slot, draw->render_target,
-            (unsigned long)draw->target_width,
-            (unsigned long)draw->target_height, (unsigned long)draw->target_format,
-            (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
-            (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
-            (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
+        if (bridge.hunt_logged < RSF_UI_HUNT_LOGGED) {
+            ++bridge.hunt_logged;
+            say("interface hunt: a 1920x1080 format %lu texture %p in slot %lu is read by a draw "
+                "into target %p, %lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, "
+                "%lu targets bound, depth %s",
+                (unsigned long)draw->inputs[index].format, draw->inputs[index].texture,
+                (unsigned long)draw->inputs[index].slot, draw->render_target,
+                (unsigned long)draw->target_width,
+                (unsigned long)draw->target_height, (unsigned long)draw->target_format,
+                (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
+                (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
+                (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
+        }
         /* Remember it, but only when this draw is actually a squash.
 
            The interface's own compositing runs at 1920x1080 and writes 1920x1080, and reads the
@@ -716,6 +728,7 @@ static void watch_for_stalled_plan(void)
         }
         bridge.interface_target_count = 0;
     }
+    bridge.hunt_logged = 0;
     rsf_frame_tap_reset_hunt(RSF_UI_HUNT_DRAWS);
     bridge.tail_frames = 0;
     bridge.tail_draws = 0;

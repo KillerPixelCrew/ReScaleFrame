@@ -55,11 +55,13 @@
 extern "C" {
 #endif
 
-#define RSF_REINSERT_ABI_VERSION 2u
-/* How many surfaces the interface may be composited into. Four is two frames' worth of the pair AC7
-   alternates between, which leaves room for the count to have been miscounted without silently
-   dropping one. */
-#define RSF_REINSERT_MAX_INTERFACE_TARGETS 4u
+/* 3: the interface became a set of targets rather than one, which changed the tail's size. */
+#define RSF_REINSERT_ABI_VERSION 3u
+/* How many surfaces the interface may be composited into. Six is what the tap's plan has room for
+   once the composite and scene colour have taken theirs, and more than the pair AC7 was first seen
+   alternating between, because a screen with more of them should lose none rather than lose the
+   ones found last. */
+#define RSF_REINSERT_MAX_INTERFACE_TARGETS 6u
 
 typedef int32_t rsf_reinsert_result;
 #define RSF_REINSERT_OK ((rsf_reinsert_result)0)
