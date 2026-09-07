@@ -139,7 +139,7 @@ In `ac7_frame52376` the heaviest colour target is 56121, full size `R11G11B10_FL
 
 So the two-layer composite belongs to the menu and briefing screens, where a holographic overlay is drawn as translucency over a nearly empty scene, and not to gameplay. Selecting the composed colour must therefore fall back to the colour bound at the pass when no recombine is present, or it would change the flight path, which works, in pursuit of a screen that does not.
 
-It also closes a question left open earlier: the clouds, contrails and canopy glass missing from flight reconstructions are not this. Whatever explains those, it is not a second scene render being left out.
+It also rules out one thing for flight generally: there is no second scene render there to be left out of the reconstruction. The flight image already contains the sky, the clouds, the terrain and the aircraft, which holding the resources and evaluating at Present fixed. What remains open about clouds, contrails and glass is their motion, whether the vectors describing them are right, and that is untouched by any of this.
 
 Unresolved: whether the relief pass writes depth or velocity at all, which needs its shader resource bindings rather than the render-target list used here.
 
