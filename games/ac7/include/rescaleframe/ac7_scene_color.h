@@ -13,6 +13,8 @@ extern "C" {
 typedef struct rsf_ac7_scene_color {
     void* source;
     void* composed;
+    /* Retained identity of the layer read by this frame's recombine. */
+    void* composed_layer;
     void* context;
     uint32_t width;
     uint32_t height;
@@ -27,6 +29,8 @@ void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state, const rsf_frame_tap_ta
 /* Borrowed result; falls back unless this frame observed a matching draw for this source. */
 void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, void* source);
 void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state);
+/* Captured separate-layer draw shape. Depth/raster suitability is checked by graphics replay. */
+int rsf_ac7_scene_depth_candidate(const rsf_frame_tap_geometry* draw);
 void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state);
 
 #ifdef __cplusplus

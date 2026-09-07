@@ -57,7 +57,7 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 5u
+#define RSF_FRAME_TAP_ABI_VERSION 6u
 
 /* Render targets watched at once. Two, because the question this answers needs exactly two: the
    swap chain's back buffer, and whichever target the draw into it reads. */
@@ -238,6 +238,28 @@ typedef struct rsf_frame_tap_plan {
     void* on_gate_user;
 } rsf_frame_tap_plan;
 
+/* Synchronous geometry observation. Pointers and arrays are borrowed only during the callback.
+   Replay must happen here: retaining a buffer does not preserve its contents across later uploads.
+   kind: 0 Draw, 1 DrawIndexed, 2 DrawInstanced, 3 DrawIndexedInstanced, 4 unsupported/indirect.
+   Only draws with a depth view and one colour target are reported. */
+typedef struct rsf_frame_tap_geometry {
+    void* context;
+    void* target;
+    void* depth_view;
+    uint32_t width, height, format, samples;
+    uint32_t kind, count, start, instances, start_instance;
+    int32_t base_vertex;
+    void* vertex_buffers[32];
+    uint32_t strides[32], offsets[32];
+    void* index_buffer;
+    uint32_t index_format, index_offset;
+    void* input_layout;
+    uint32_t topology;
+    void* vertex_shader;
+    void* vertex_constants[14];
+} rsf_frame_tap_geometry;
+typedef void (*rsf_frame_tap_geometry_fn)(void* user, const rsf_frame_tap_geometry* draw);
+
 typedef struct rsf_frame_tap_options {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -271,6 +293,8 @@ typedef struct rsf_frame_tap_options {
        Only the installed context is observed by this watch. */
     rsf_frame_tap_target_fn on_input_draw;
     void* on_input_draw_user;
+    rsf_frame_tap_geometry_fn on_geometry;
+    void* on_geometry_user;
 } rsf_frame_tap_options;
 
 typedef struct rsf_frame_tap_status {

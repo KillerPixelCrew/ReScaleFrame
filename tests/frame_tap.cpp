@@ -14,6 +14,7 @@
 // trivial shader and removes a crash that has nothing to do with what is being tested.
 
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/depth_replay.h>
 #include <rescaleframe/ac7_scene_color.h>
 
 #include <windows.h>
@@ -363,6 +364,337 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     base->Release();
 }
 
+rsf_depth_replay* depth_fixture = nullptr;
+rsf_frame_tap_geometry last_geometry{};
+uint32_t geometry_reports = 0, depth_draws = 0;
+
+void collect_geometry(void*, const rsf_frame_tap_geometry* draw)
+{
+    if (!depth_fixture || !rsf_ac7_scene_depth_candidate(draw)) {
+        return;
+    }
+    last_geometry = *draw;
+    ++geometry_reports;
+    depth_draws += rsf_depth_replay_draw(depth_fixture, draw);
+}
+
+void test_depth_replay(ID3D11Device* device, ID3D11DeviceContext* context, compile_fn compile)
+{
+    stage("replaying translucent geometry into seeded depth and reading pixels");
+    context->ClearState();
+    depth_fixture = rsf_depth_replay_create(device, 64, 64);
+    check(depth_fixture != nullptr, "Depth replay targets must prepare before rendering.");
+    const char* source = R"(
+cbuffer Position : register(b13) { float4 transform; };
+float4 vs(float3 position : POSITION) : SV_Position {
+    return float4(position.xy * transform.w + transform.xy, transform.z, 1);
+}
+float4 ps() : SV_Target { return float4(1,0,0,1); }
+)";
+    auto make_shader = [&](const char* entry, const char* profile) {
+        ID3DBlob* code = nullptr;
+        ID3DBlob* errors = nullptr;
+        const HRESULT result = compile(source, std::strlen(source), "depth_replay_test", nullptr,
+                                       nullptr, entry, profile, 0, 0, &code, &errors);
+        check(SUCCEEDED(result) && code, "Depth fixture shaders must compile.");
+        if (errors) {
+            errors->Release();
+        }
+        return code;
+    };
+    ID3DBlob* vs_code = make_shader("vs", "vs_5_0");
+    ID3DBlob* ps_code = make_shader("ps", "ps_5_0");
+    if (!depth_fixture || !vs_code || !ps_code) {
+        passed = false;
+        return;
+    }
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11InputLayout* layout = nullptr;
+    D3D11_INPUT_ELEMENT_DESC element{
+        "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 15, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    check(SUCCEEDED(device->CreateVertexShader(vs_code->GetBufferPointer(),
+                                               vs_code->GetBufferSize(), nullptr, &vs)) &&
+              SUCCEEDED(device->CreatePixelShader(ps_code->GetBufferPointer(),
+                                                  ps_code->GetBufferSize(), nullptr, &ps)) &&
+              SUCCEEDED(device->CreateInputLayout(&element, 1, vs_code->GetBufferPointer(),
+                                                  vs_code->GetBufferSize(), &layout)),
+          "Depth fixture shader/layout creation must succeed.");
+    vs_code->Release();
+    ps_code->Release();
+    const float vertices[][4] = {
+        {9, 9, 0, 0}, {9, 9, 0, 0}, {-0.8f, -0.8f, 0, 0}, {0, 0.8f, 0, 0}, {0.8f, -0.8f, 0, 0}};
+    const uint16_t index_values[] = {99, 99, 0, 1, 2};
+    auto buffer = [&](const void* data, UINT bytes, UINT flags) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = bytes;
+        desc.BindFlags = flags;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        D3D11_SUBRESOURCE_DATA initial{};
+        initial.pSysMem = data;
+        ID3D11Buffer* b = nullptr;
+        check(SUCCEEDED(device->CreateBuffer(&desc, data ? &initial : nullptr, &b)),
+              "Depth fixture buffer creation.");
+        return b;
+    };
+    ID3D11Buffer* vb = buffer(vertices, sizeof(vertices), D3D11_BIND_VERTEX_BUFFER);
+    ID3D11Buffer* ib = buffer(index_values, sizeof(index_values), D3D11_BIND_INDEX_BUFFER);
+    ID3D11Buffer* cb = buffer(nullptr, 16, D3D11_BIND_CONSTANT_BUFFER);
+    ID3D11Texture2D* layer = make_target(device, 64, 64, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ID3D11RenderTargetView* rtv = nullptr;
+    check(layer && SUCCEEDED(device->CreateRenderTargetView(layer, nullptr, &rtv)),
+          "Depth fixture colour target.");
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = 64;
+    desc.Height = 64;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R32G8X24_TYPELESS;
+    desc.SampleDesc.Count = 1;
+    desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D* depth = nullptr;
+    ID3D11Texture2D* staging = nullptr;
+    check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &depth)),
+          "Opaque depth fixture creation.");
+    desc.BindFlags = 0;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &staging)),
+          "Depth staging fixture creation.");
+    D3D11_DEPTH_STENCIL_VIEW_DESC view{};
+    view.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    view.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+    ID3D11DepthStencilView* writable = nullptr;
+    ID3D11DepthStencilView* readonly = nullptr;
+    check(SUCCEEDED(device->CreateDepthStencilView(depth, &view, &writable)),
+          "Writable fixture depth view.");
+    view.Flags = D3D11_DSV_READ_ONLY_DEPTH;
+    check(SUCCEEDED(device->CreateDepthStencilView(depth, &view, &readonly)),
+          "Read-only fixture depth view.");
+    D3D11_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = TRUE;
+    ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    ds.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+    ds.StencilEnable = TRUE;
+    ds.StencilReadMask = 255;
+    ds.StencilWriteMask = 255;
+    ds.FrontFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_REPLACE,
+                    D3D11_COMPARISON_ALWAYS};
+    ds.BackFace = ds.FrontFace;
+    ID3D11DepthStencilState* depth_state = nullptr;
+    check(SUCCEEDED(device->CreateDepthStencilState(&ds, &depth_state)),
+          "Depth-read stencil-write state.");
+    D3D11_RASTERIZER_DESC raster_desc{};
+    raster_desc.FillMode = D3D11_FILL_SOLID;
+    raster_desc.CullMode = D3D11_CULL_NONE;
+    raster_desc.DepthClipEnable = TRUE;
+    raster_desc.ScissorEnable = TRUE;
+    ID3D11RasterizerState* raster = nullptr;
+    check(SUCCEEDED(device->CreateRasterizerState(&raster_desc, &raster)),
+          "Depth fixture raster state.");
+    ID3D11ShaderResourceView* high_srv = nullptr;
+    ID3D11Texture2D* high_texture = make_target(device, 8, 8, DXGI_FORMAT_R8G8B8A8_UNORM);
+    check(SUCCEEDED(device->CreateShaderResourceView(high_texture, nullptr, &high_srv)),
+          "High slot fixture resource.");
+    auto bind = [&](ID3D11DeviceContext* c) {
+        c->VSSetShader(vs, nullptr, 0);
+        c->PSSetShader(ps, nullptr, 0);
+        c->IASetInputLayout(layout);
+        c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        UINT stride = 16, offset = 16;
+        c->IASetVertexBuffers(15, 1, &vb, &stride, &offset);
+        c->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 2);
+        c->VSSetConstantBuffers(13, 1, &cb);
+        c->PSSetShaderResources(100, 1, &high_srv);
+        c->OMSetRenderTargets(1, &rtv, readonly);
+        c->OMSetDepthStencilState(depth_state, 37);
+        c->RSSetState(raster);
+        set_viewport(c, 64, 64);
+        D3D11_RECT scissor{0, 0, 64, 64};
+        c->RSSetScissorRects(1, &scissor);
+    };
+    auto transform = [&](float x, float z) {
+        const float values[4] = {x, 0, z, 0.4f};
+        context->UpdateSubresource(cb, 0, nullptr, values, 0, 0);
+    };
+    auto read = [&](void* texture, UINT x, UINT y) {
+        context->CopyResource(staging, static_cast<ID3D11Texture2D*>(texture));
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
+            check(false, "Depth readback mapping must succeed.");
+            return -1.0f;
+        }
+        float value = 0;
+        std::memcpy(&value, static_cast<const char*>(mapped.pData) + y * mapped.RowPitch + x * 8,
+                    4);
+        context->Unmap(staging, 0);
+        return value;
+    };
+    auto selected = [&]() {
+        return rsf_depth_replay_selected(depth_fixture, context, depth, layer);
+    };
+    bind(context);
+    transform(-0.45f, 0.6f);
+    context->ClearDepthStencilView(writable, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.25f, 0);
+    check(selected() == depth, "No layer draw must keep the original depth identity.");
+    context->DrawIndexed(3, 1, 1);
+    check(depth_draws == 1,
+          "One game indexed draw must cause exactly one replay, without recursion.");
+    check(last_geometry.vertex_buffers[15] == vb && last_geometry.strides[15] == 16 &&
+              last_geometry.offsets[15] == 16 && last_geometry.index_buffer == ib &&
+              last_geometry.index_format == DXGI_FORMAT_R16_UINT &&
+              last_geometry.index_offset == 2 && last_geometry.input_layout == layout &&
+              last_geometry.vertex_shader == vs && last_geometry.vertex_constants[13] == cb &&
+              last_geometry.start == 1 && last_geometry.base_vertex == 1,
+          "Shadow must include high IA/VS slots, offsets, layout and indexed draw arguments.");
+    void* augmented = selected();
+    check(augmented != depth, "A successful matching layer must select the copied depth.");
+    check(read(augmented, 18, 32) == 0.6f && read(augmented, 2, 2) == 0.25f,
+          "Triangle pixels must gain geometry depth while opaque seed survives outside coverage.");
+    check(read(depth, 18, 32) == 0.25f, "Replay must never change the game's opaque depth.");
+    transform(0.45f, 0.8f);
+    context->DrawIndexedInstanced(3, 1, 1, 1, 0);
+    check(depth_draws == 2 && last_geometry.kind == 3, "Indexed instanced draws must replay once.");
+    check(
+        read(augmented, 18, 32) == 0.6f && read(augmented, 46, 32) == 0.8f,
+        "Immediate replay must preserve each draw's constants, and accumulate without reseeding.");
+    check(rsf_depth_replay_selected(depth_fixture, context, depth, nullptr) == depth &&
+              rsf_depth_replay_selected(depth_fixture, context, depth, high_texture) == depth &&
+              rsf_depth_replay_selected(depth_fixture, context, high_texture, layer) ==
+                  high_texture,
+          "Absent/wrong composition layer or different opaque depth must use the original.");
+    ID3D11DepthStencilView* actual_dsv = nullptr;
+    ID3D11RenderTargetView* actual_rtv = nullptr;
+    context->OMGetRenderTargets(1, &actual_rtv, &actual_dsv);
+    check(actual_rtv == rtv && actual_dsv == readonly,
+          "Replay must restore colour and read-only depth targets.");
+    actual_rtv->Release();
+    actual_dsv->Release();
+    ID3D11DepthStencilState* actual_ds = nullptr;
+    UINT reference = 0;
+    context->OMGetDepthStencilState(&actual_ds, &reference);
+    check(actual_ds == depth_state && reference == 37,
+          "Replay must restore stencil reference and depth state.");
+    actual_ds->Release();
+    ID3D11PixelShader* actual_ps = nullptr;
+    context->PSGetShader(&actual_ps, nullptr, nullptr);
+    check(actual_ps == ps, "Replay must restore the pixel shader.");
+    actual_ps->Release();
+    ID3D11Buffer* actual_vb = nullptr;
+    UINT stride = 0, offset = 0;
+    context->IAGetVertexBuffers(15, 1, &actual_vb, &stride, &offset);
+    check(actual_vb == vb && stride == 16 && offset == 16 &&
+              bound_resource(context, 100) == high_srv,
+          "Replay must preserve high vertex/resource bindings outside the broad state helper's "
+          "range.");
+    actual_vb->Release();
+
+    stage("matching augmented depth to the layer consumed by composition");
+    ID3D11Texture2D* base_color = make_target(device, 64, 64, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11Texture2D* combined = make_target(device, 64, 64, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11ShaderResourceView* base_srv = nullptr;
+    ID3D11ShaderResourceView* layer_srv = nullptr;
+    ID3D11RenderTargetView* combined_rtv = nullptr;
+    check(SUCCEEDED(device->CreateShaderResourceView(base_color, nullptr, &base_srv)) &&
+              SUCCEEDED(device->CreateShaderResourceView(layer, nullptr, &layer_srv)) &&
+              SUCCEEDED(device->CreateRenderTargetView(combined, nullptr, &combined_rtv)),
+          "Depth composition fixture views.");
+    rsf_ac7_scene_color_source(&selection, base_color, context, 64, 64);
+    rsf_frame_tap_watch_input(base_color);
+    context->OMSetRenderTargets(1, &combined_rtv, nullptr);
+    ID3D11ShaderResourceView* composition_inputs[] = {base_srv, layer_srv};
+    context->PSSetShaderResources(0, 2, composition_inputs);
+    context->Draw(3, 1);
+    check(rsf_ac7_scene_color_selected(&selection, base_color) == combined &&
+              selection.composed_layer == layer &&
+              rsf_depth_replay_selected(depth_fixture, context, depth, selection.composed_layer) ==
+                  augmented,
+          "Same-frame composition must identify the exact layer whose depth was replayed.");
+    rsf_ac7_scene_color_end_frame(&selection);
+    check(rsf_depth_replay_selected(depth_fixture, context, depth, selection.composed_layer) ==
+              depth,
+          "A following frame without composition must keep original depth even while the copy "
+          "exists.");
+    rsf_ac7_scene_color_clear(&selection);
+    rsf_frame_tap_watch_input(nullptr);
+    ID3D11ShaderResourceView* no_inputs[2]{};
+    context->PSSetShaderResources(0, 2, no_inputs);
+    combined_rtv->Release();
+    layer_srv->Release();
+    base_srv->Release();
+    combined->Release();
+    base_color->Release();
+    bind(context);
+
+    stage("depth replay frame reset, occlusion, scissor and refusal");
+    rsf_depth_replay_end_frame(depth_fixture);
+    check(selected() == depth, "Frame end must invalidate the previous layer immediately.");
+    context->ClearDepthStencilView(writable, D3D11_CLEAR_DEPTH, 0.9f, 0);
+    transform(-0.45f, 0.6f);
+    context->Draw(3, 1);
+    check(read(selected(), 18, 32) == 0.9f,
+          "Nearer opaque depth must occlude the replayed triangle.");
+    rsf_depth_replay_end_frame(depth_fixture);
+    context->ClearDepthStencilView(writable, D3D11_CLEAR_DEPTH, 0.25f, 0);
+    D3D11_RECT scissor{0, 0, 10, 64};
+    context->RSSetScissorRects(1, &scissor);
+    context->DrawInstanced(3, 1, 1, 0);
+    check(read(selected(), 18, 32) == 0.25f, "Replay must retain the game's scissor coverage.");
+    rsf_depth_replay_end_frame(depth_fixture);
+    context->OMSetRenderTargets(1, &rtv, writable);
+    context->Draw(3, 1);
+    check(selected() == depth, "A writable depth view must refuse this candidate for the frame.");
+    context->OMSetRenderTargets(1, &rtv, readonly);
+    context->Draw(3, 1);
+    check(selected() == depth, "A later supported draw must not hide an incomplete layer.");
+    rsf_depth_replay_end_frame(depth_fixture);
+
+    stage("depth replay shadow reset and foreign context isolation");
+    context->ClearState();
+    bind(context);
+    transform(-0.45f, 0.6f);
+    ID3D11DeviceContext* deferred = nullptr;
+    check(SUCCEEDED(device->CreateDeferredContext(0, &deferred)), "Deferred fixture context.");
+    const uint32_t before = geometry_reports;
+    bind(deferred);
+    deferred->Draw(3, 1);
+    check(geometry_reports == before,
+          "Foreign-context geometry must not enter the immediate shadow.");
+    context->DrawIndexed(3, 1, 1);
+    check(selected() != depth && last_geometry.vertex_buffers[15] == vb,
+          "ClearState must allow correctly rebound immediate geometry to replay.");
+    ID3D11CommandList* list = nullptr;
+    check(SUCCEEDED(deferred->FinishCommandList(FALSE, &list)), "Deferred fixture command list.");
+    context->ExecuteCommandList(list, FALSE);
+    list->Release();
+    deferred->Release();
+    rsf_depth_replay_end_frame(depth_fixture);
+    bind(context);
+    context->DrawIndexed(3, 1, 1);
+    check(selected() != depth,
+          "ExecuteCommandList without restore must invalidate and reseed the shadow.");
+
+    context->ClearState();
+    rsf_depth_replay_destroy(depth_fixture);
+    depth_fixture = nullptr;
+    high_srv->Release();
+    high_texture->Release();
+    raster->Release();
+    depth_state->Release();
+    readonly->Release();
+    writable->Release();
+    staging->Release();
+    depth->Release();
+    rtv->Release();
+    layer->Release();
+    cb->Release();
+    ib->Release();
+    vb->Release();
+    layout->Release();
+    ps->Release();
+    vs->Release();
+}
+
 } // namespace
 
 int main()
@@ -373,6 +705,7 @@ int main()
     options.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     options.on_target_draw = collect_target_draw;
     options.on_input_draw = collect_input_draw;
+    options.on_geometry = collect_geometry;
     options.output_width = 512;
     options.output_height = 288;
 
@@ -469,6 +802,11 @@ int main()
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->IASetIndexBuffer(indices, DXGI_FORMAT_R16_UINT, 0);
 
+    test_depth_replay(device, context, compile);
+    context->VSSetShader(vertex_shader, nullptr, 0);
+    context->PSSetShader(pixel_shader, nullptr, 0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->IASetIndexBuffer(indices, DXGI_FORMAT_R16_UINT, 0);
     test_composed_color(device, context);
 
     stage("drawing into an unwatched target");

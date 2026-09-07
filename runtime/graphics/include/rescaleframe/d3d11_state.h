@@ -53,6 +53,12 @@ uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* state);
    moment is unbound by the runtime with a warning nobody sees in a shipping game. */
 void rsf_d3d11_state_restore(void* context, rsf_d3d11_state* state);
 
+/* Narrow scope for immediate depth replay. Saves only OM targets/depth state and the pixel
+   shader (including linkage). Caller must refuse OM UAVs before entering this scope. No input,
+   rasterizer, predicate, or stream-output binding is touched. */
+uint32_t rsf_d3d11_depth_state_save(void* context, rsf_d3d11_state* state);
+void rsf_d3d11_depth_state_restore(void* context, rsf_d3d11_state* state);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

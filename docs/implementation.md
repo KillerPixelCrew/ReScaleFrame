@@ -30,8 +30,14 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] Conditional composed-colour selection for the DLSS bridge. Persistent input watch and AC7
       recombine rule are cross-built and synthetic-tested under Wine. Each frame falls back to the
       identified colour unless a matching composition is observed; no new per-frame allocations.
-      Briefing relief recovery, hangar/flight behaviour, resource overwrite timing, and F6 remain
-      game-unverified. [Decision and checks](research/ac7-composed-scene-color.md).
+      Briefing relief presence was reported game-tested on 7 September. Reconstruction quality,
+      hangar/flight regression, resource overwrite timing, and F6 remain open. [Decision and checks](research/ac7-composed-scene-color.md).
+- [x] Conditional translucent depth for the research DLSS bridge. IA/VS shadowing and immediate
+      depth-only replay use startup allocations and restore disturbed state. Same-frame composed
+      layer/source-depth identity gates backend selection; absent layers keep original depth.
+      Synthetic pixel readback covers accumulation, opaque occlusion, frame reset and state
+      restoration under Wine. Actual briefing reconstruction and flight regression remain
+      game-unverified. [Decision and checks](research/ac7-translucent-depth.md).
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a

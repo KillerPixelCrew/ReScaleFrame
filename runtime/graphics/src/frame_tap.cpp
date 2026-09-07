@@ -74,6 +74,11 @@ struct Tap {
     rs_set_scissor_rects_fn original_set_scissors = nullptr;
     clear_render_target_view_fn original_clear_target = nullptr;
 
+    // Borrowed shadow of live IA/VS bindings, never retained as a deferred draw record.
+    rsf_frame_tap_geometry geometry{};
+    bool geometry_valid = false;
+    ID3D11DepthStencilView* geometry_depth = nullptr;
+    void* extra_originals[13]{};
     rsf_frame_tap_options options{};
     ID3D11DeviceContext* observed_context = nullptr;
     void* input_watch = nullptr;
@@ -691,6 +696,7 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context
     }
     const ReentryGuard guard;
     self.depth_bound = depth != nullptr;
+    self.geometry_depth = depth;
     self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
     unbind_target_reads(self);
@@ -724,6 +730,7 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
     }
     const ReentryGuard guard;
     self.depth_bound = depth != nullptr;
+    self.geometry_depth = depth;
     self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
     unbind_target_reads(self);
@@ -1019,6 +1026,251 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     // that the entries have to survive until the slot is rebound.
 }
 
+// Seed inherited state on the owning render thread, also after ClearState/ExecuteCommandList.
+// Getters release their references immediately: the context owns the live bindings.
+void seed_geometry(Tap& self, ID3D11DeviceContext* context)
+{
+    auto& g = self.geometry;
+    auto drop = [](auto* item) {
+        if (item) {
+            item->Release();
+        }
+    };
+    ID3D11Buffer* buffers[32]{};
+    context->IAGetVertexBuffers(0, 32, buffers, g.strides, g.offsets);
+    for (UINT i = 0; i < 32; ++i) {
+        g.vertex_buffers[i] = buffers[i];
+        drop(buffers[i]);
+    }
+    ID3D11Buffer* index = nullptr;
+    DXGI_FORMAT format{};
+    context->IAGetIndexBuffer(&index, &format, &g.index_offset);
+    g.index_buffer = index;
+    g.index_format = format;
+    drop(index);
+    ID3D11InputLayout* layout = nullptr;
+    context->IAGetInputLayout(&layout);
+    g.input_layout = layout;
+    drop(layout);
+    D3D11_PRIMITIVE_TOPOLOGY topology{};
+    context->IAGetPrimitiveTopology(&topology);
+    g.topology = topology;
+    ID3D11VertexShader* shader = nullptr;
+    context->VSGetShader(&shader, nullptr, nullptr);
+    g.vertex_shader = shader;
+    drop(shader);
+    context->VSGetConstantBuffers(0, 14, buffers);
+    for (UINT i = 0; i < 14; ++i) {
+        g.vertex_constants[i] = buffers[i];
+        drop(buffers[i]);
+    }
+    self.geometry_valid = true;
+}
+
+void report_geometry(Tap& self, ID3D11DeviceContext* context, UINT kind, UINT count, UINT start,
+                     INT base, UINT instances = 1, UINT first_instance = 0)
+{
+    if (!self.options.on_geometry || !self.geometry_depth || self.target_count != 1 ||
+        !self.target_texture || self.target_substituted) {
+        return;
+    }
+    if (!self.geometry_valid) {
+        seed_geometry(self, context);
+    }
+    auto& g = self.geometry;
+    g.context = context;
+    g.target = self.target_texture;
+    g.depth_view = self.geometry_depth;
+    g.width = self.target_description.Width;
+    g.height = self.target_description.Height;
+    g.format = self.target_description.Format;
+    g.samples = self.target_description.SampleDesc.Count;
+    g.kind = kind;
+    g.count = count;
+    g.start = start;
+    g.base_vertex = base;
+    g.instances = instances;
+    g.start_instance = first_instance;
+    self.options.on_geometry(self.options.on_geometry_user, &g);
+}
+
+void STDMETHODCALLTYPE hooked_vertex_buffers(ID3D11DeviceContext* c, UINT start, UINT count,
+                                             ID3D11Buffer* const* b, const UINT* strides,
+                                             const UINT* offsets)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*,
+                                        const UINT*, const UINT*);
+    reinterpret_cast<Fn>(s.extra_originals[0])(c, start, count, b, strides, offsets);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    for (UINT i = 0; i < count && start + i < 32; ++i) {
+        s.geometry.vertex_buffers[start + i] = b ? b[i] : nullptr;
+        s.geometry.strides[start + i] = strides ? strides[i] : 0;
+        s.geometry.offsets[start + i] = offsets ? offsets[i] : 0;
+    }
+}
+void STDMETHODCALLTYPE hooked_index_buffer(ID3D11DeviceContext* c, ID3D11Buffer* b, DXGI_FORMAT f,
+                                           UINT o)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, DXGI_FORMAT, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[1])(c, b, f, o);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    s.geometry.index_buffer = b;
+    s.geometry.index_format = f;
+    s.geometry.index_offset = o;
+}
+void STDMETHODCALLTYPE hooked_layout(ID3D11DeviceContext* c, ID3D11InputLayout* l)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11InputLayout*);
+    reinterpret_cast<Fn>(s.extra_originals[2])(c, l);
+    if (!inside_hook && c == s.observed_context) {
+        s.geometry.input_layout = l;
+    }
+}
+void STDMETHODCALLTYPE hooked_topology(ID3D11DeviceContext* c, D3D11_PRIMITIVE_TOPOLOGY t)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, D3D11_PRIMITIVE_TOPOLOGY);
+    reinterpret_cast<Fn>(s.extra_originals[3])(c, t);
+    if (!inside_hook && c == s.observed_context) {
+        s.geometry.topology = t;
+    }
+}
+void STDMETHODCALLTYPE hooked_vertex_shader(ID3D11DeviceContext* c, ID3D11VertexShader* v,
+                                            ID3D11ClassInstance* const* classes, UINT count)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11VertexShader*,
+                                        ID3D11ClassInstance* const*, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[4])(c, v, classes, count);
+    if (!inside_hook && c == s.observed_context) {
+        s.geometry.vertex_shader = v;
+    }
+}
+void STDMETHODCALLTYPE hooked_vertex_constants(ID3D11DeviceContext* c, UINT start, UINT count,
+                                               ID3D11Buffer* const* b)
+{
+    auto& s = tap();
+    reinterpret_cast<ps_set_constant_buffers_fn>(s.extra_originals[5])(c, start, count, b);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    for (UINT i = 0; i < count && start + i < 14; ++i) {
+        s.geometry.vertex_constants[start + i] = b ? b[i] : nullptr;
+    }
+}
+void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, UINT instances,
+                                                UINT start, INT base, UINT first)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[6])(c, n, instances, start, base, first);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    const ReentryGuard guard;
+    report_geometry(s, c, 3, n, start, base, instances, first);
+    consider_bound_set(s, c);
+    consider_target_draw(s, c, true, n);
+}
+void STDMETHODCALLTYPE hooked_instanced(ID3D11DeviceContext* c, UINT n, UINT instances, UINT start,
+                                        UINT first)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[7])(c, n, instances, start, first);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    const ReentryGuard guard;
+    report_geometry(s, c, 2, n, start, 0, instances, first);
+    consider_bound_set(s, c);
+    consider_target_draw(s, c, false, n);
+}
+// Command lists/ClearState invalidate all observation until the engine binds targets again.
+void invalidate_geometry(Tap& s)
+{
+    s.geometry_valid = false;
+    s.geometry_depth = nullptr;
+    s.depth_bound = false;
+    s.target_count = 0;
+    s.target_substituted = false;
+    s.game_viewport_count = 0;
+    s.game_scissor_count = 0;
+    if (s.view_constants) {
+        s.view_constants->Release();
+        s.view_constants = nullptr;
+    }
+    for (auto& slot : s.slots) {
+        if (slot.texture) {
+            slot.texture->Release();
+        }
+        slot = Tap::Slot{};
+    }
+    s.shadow_dirty = true;
+    s.signature_complete = false;
+    s.input_watch_dirty = true;
+    shadow_render_target(s, nullptr);
+}
+void STDMETHODCALLTYPE hooked_clear_state(ID3D11DeviceContext* c)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
+    reinterpret_cast<Fn>(s.extra_originals[8])(c);
+    if (!inside_hook && c == s.observed_context) {
+        invalidate_geometry(s);
+    }
+}
+void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* c, ID3D11CommandList* list, BOOL restore)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
+    reinterpret_cast<Fn>(s.extra_originals[9])(c, list, restore);
+    if (!inside_hook && c == s.observed_context && !restore) {
+        invalidate_geometry(s);
+    }
+}
+void STDMETHODCALLTYPE hooked_indexed_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, UINT offset)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[10])(c, b, offset);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    const ReentryGuard guard;
+    report_geometry(s, c, 4, 0, 0, 0);
+}
+void STDMETHODCALLTYPE hooked_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, UINT offset)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[11])(c, b, offset);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    const ReentryGuard guard;
+    report_geometry(s, c, 4, 0, 0, 0);
+}
+void STDMETHODCALLTYPE hooked_auto(ID3D11DeviceContext* c)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
+    reinterpret_cast<Fn>(s.extra_originals[12])(c);
+    if (inside_hook || c != s.observed_context) {
+        return;
+    }
+    const ReentryGuard guard;
+    report_geometry(s, c, 4, 0, 0, 0);
+}
+constexpr size_t extra_slots[] = {18, 19, 17, 24, 11, 7, 20, 21, 110, 58, 39, 40, 38};
+
 void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT index_count,
                                            UINT start_index, INT base_vertex)
 {
@@ -1032,6 +1284,7 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
         return;
     }
     const ReentryGuard guard;
+    report_geometry(self, context, 1, index_count, start_index, base_vertex);
     consider_bound_set(self, context);
     consider_target_draw(self, context, true, index_count);
 }
@@ -1049,6 +1302,7 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
         return;
     }
     const ReentryGuard guard;
+    report_geometry(self, context, 0, vertex_count, start_vertex, 0);
     consider_bound_set(self, context);
     consider_target_draw(self, context, false, vertex_count);
 }
@@ -1145,6 +1399,23 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
         void* replacement;
         void** original;
     } patches[] = {
+        {extra_slots[0], reinterpret_cast<void*>(&hooked_vertex_buffers), &self.extra_originals[0]},
+        {extra_slots[1], reinterpret_cast<void*>(&hooked_index_buffer), &self.extra_originals[1]},
+        {extra_slots[2], reinterpret_cast<void*>(&hooked_layout), &self.extra_originals[2]},
+        {extra_slots[3], reinterpret_cast<void*>(&hooked_topology), &self.extra_originals[3]},
+        {extra_slots[4], reinterpret_cast<void*>(&hooked_vertex_shader), &self.extra_originals[4]},
+        {extra_slots[5], reinterpret_cast<void*>(&hooked_vertex_constants),
+         &self.extra_originals[5]},
+        {extra_slots[6], reinterpret_cast<void*>(&hooked_indexed_instanced),
+         &self.extra_originals[6]},
+        {extra_slots[7], reinterpret_cast<void*>(&hooked_instanced), &self.extra_originals[7]},
+        {extra_slots[8], reinterpret_cast<void*>(&hooked_clear_state), &self.extra_originals[8]},
+        {extra_slots[9], reinterpret_cast<void*>(&hooked_execute), &self.extra_originals[9]},
+        {extra_slots[10], reinterpret_cast<void*>(&hooked_indexed_indirect),
+         &self.extra_originals[10]},
+        {extra_slots[11], reinterpret_cast<void*>(&hooked_indirect), &self.extra_originals[11]},
+        {extra_slots[12], reinterpret_cast<void*>(&hooked_auto), &self.extra_originals[12]},
+
         {slot_ps_set_shader_resources, reinterpret_cast<void*>(&hooked_ps_set_shader_resources),
          reinterpret_cast<void**>(&self.original_set_views)},
         {slot_ps_set_constant_buffers, reinterpret_cast<void*>(&hooked_ps_set_constant_buffers),
@@ -1162,8 +1433,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
          reinterpret_cast<void**>(&self.original_set_viewports)},
         {slot_rs_set_scissor_rects, reinterpret_cast<void*>(&hooked_rs_set_scissor_rects),
          reinterpret_cast<void**>(&self.original_set_scissors)},
-        {slot_clear_render_target_view,
-         reinterpret_cast<void*>(&hooked_clear_render_target_view),
+        {slot_clear_render_target_view, reinterpret_cast<void*>(&hooked_clear_render_target_view),
          reinterpret_cast<void**>(&self.original_clear_target)},
     };
     constexpr size_t patch_count = sizeof(patches) / sizeof(patches[0]);
@@ -1196,6 +1466,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         // Cleared before the vtable goes back, so a call already inside a hook stops substituting
         // rather than reaching for views the caller is about to release.
         self.plan_active.store(false, std::memory_order_relaxed);
+        for (size_t i = 0; i < 13; ++i) {
+            patch_slot(self.vtable, extra_slots[i], self.extra_originals[i], nullptr);
+        }
         patch_slot(self.vtable, slot_ps_set_shader_resources,
                    reinterpret_cast<void*>(self.original_set_views), nullptr);
         patch_slot(self.vtable, slot_ps_set_constant_buffers,
@@ -1242,6 +1515,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     self.depth_bound = false;
     self.target_count = 0;
     self.observed_context = nullptr;
+    self.geometry = rsf_frame_tap_geometry{};
+    self.geometry_valid = false;
+    self.geometry_depth = nullptr;
 
     // Same order and the same reason for the render target shadow, which holds the one other
     // reference this module takes. The watches are cleared with it: they name textures the caller

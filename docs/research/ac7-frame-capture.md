@@ -8,7 +8,7 @@ The research proxy runs DLSS with decoded sparse velocity, depth, jitter, and ca
 
 F7 displays the reconstructed scene over the back buffer with a rough tonemap. The output is not yet reinserted before the game's grading and HUD composite.
 
-The briefing screen's terrain relief now reaches the reconstruction, game-tested on 7 September, once the backend was given the composed colour rather than the colour bound at the tapped pass. Whether that layer reconstructs well is a separate and open question: it writes no depth and no velocity, and a still camera shows neither problem. See [composed scene colour](ac7-composed-scene-color.md).
+The briefing screen's terrain relief now reaches the reconstruction, game-tested on 7 September, once the backend was given the composed colour rather than the colour bound at the tapped pass. The relief still retains input pixelation under the continuously panning briefing camera, as reported on 7 September. It writes no depth or velocity of its own. The conditional [translucent-depth replay](ac7-translucent-depth.md) is synthetic-tested; its effect on briefing reconstruction remains game-unverified. See also [composed scene colour](ac7-composed-scene-color.md).
 
 ## Capture workflow
 

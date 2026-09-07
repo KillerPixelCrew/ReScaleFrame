@@ -26,6 +26,7 @@
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/depth_replay.h>
 #include <rescaleframe/present_blit.h>
 #include <rescaleframe/resource_ref.h>
 #include <rescaleframe/scene_reinsert.h>
@@ -117,6 +118,10 @@ static struct {
        What the replay also shows is that none of the three targets is written again once the
        colour is finished: the post chain only reads them. So the contents at Present are the
        finished frame, and Present is where this evaluates. */
+    rsf_depth_replay* depth_replay[2];
+    unsigned long depth_evaluations;
+    unsigned long depth_candidates;
+    unsigned long depth_replayed;
     rsf_ac7_scene_color color_selection;
     unsigned long composed_evaluations;
     void* held_color;
@@ -331,6 +336,19 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     (void)result;
 }
 
+static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
+{
+    unsigned int i;
+    (void)user;
+    if (!bridge.started || !rsf_ac7_scene_depth_candidate(draw)) {
+        return;
+    }
+    ++bridge.depth_candidates;
+    for (i = 0; i < 2; ++i) {
+        bridge.depth_replayed += rsf_depth_replay_draw(bridge.depth_replay[i], draw);
+    }
+}
+
 static void on_input_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     (void)user;
@@ -485,6 +503,24 @@ static void evaluate_held(void* context)
         ++bridge.composed_evaluations;
     }
     frame.depth = bridge.held_depth;
+    if (frame.scene_color != bridge.held_color) {
+        unsigned int i;
+        for (i = 0; i < 2; ++i) {
+            void* selected =
+                rsf_depth_replay_selected(bridge.depth_replay[i], context, bridge.held_depth,
+                                          bridge.color_selection.composed_layer);
+            if (selected != bridge.held_depth) {
+                frame.depth = selected;
+            }
+        }
+        if (frame.depth != bridge.held_depth) {
+            if (bridge.depth_evaluations < 4) {
+                say("translucent depth: %p -> %p at %lux%lu", bridge.held_depth, frame.depth,
+                    bridge.held_width, bridge.held_height);
+            }
+            ++bridge.depth_evaluations;
+        }
+    }
     frame.game_motion = bridge.held_motion;
     frame.exposure = bridge.held_exposure;
     frame.render_width = (uint32_t)bridge.held_width;
@@ -733,6 +769,8 @@ static void on_present(void* user, void* swapchain)
     }
 
     rsf_ac7_scene_color_end_frame(&bridge.color_selection);
+    rsf_depth_replay_end_frame(bridge.depth_replay[0]);
+    rsf_depth_replay_end_frame(bridge.depth_replay[1]);
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
@@ -951,6 +989,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.on_pass = on_pass;
     tap.on_target_draw = on_target_draw;
     tap.on_input_draw = on_input_draw;
+    tap.on_geometry = on_geometry;
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
@@ -959,8 +998,22 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.output_width = (uint32_t)output_width;
     tap.output_height = (uint32_t)output_height;
 
+    /* Called from the setup worker. Allocate once, before hooks can replay a draw. The recorded
+       full/50% sizes are supported; a different extent safely uses the original depth. */
+    bridge.depth_replay[0] =
+        rsf_depth_replay_create(bridge.device, (uint32_t)output_width, (uint32_t)output_height);
+    bridge.depth_replay[1] = rsf_depth_replay_create(bridge.device, (uint32_t)output_width / 2,
+                                                     (uint32_t)output_height / 2);
+    if (!bridge.depth_replay[0] || !bridge.depth_replay[1]) {
+        say("translucent depth: a startup target could not be prepared; that size will fall back");
+    }
+
     tapped = rsf_frame_tap_install(bridge.context, &tap);
     if (tapped != RSF_FRAME_TAP_OK) {
+        rsf_depth_replay_destroy(bridge.depth_replay[0]);
+        rsf_depth_replay_destroy(bridge.depth_replay[1]);
+        bridge.depth_replay[0] = NULL;
+        bridge.depth_replay[1] = NULL;
         say("dlss bridge: frame tap not installed, result %d", (int)tapped);
         rsf_dlss_pipeline_stop();
         return 0;
@@ -976,6 +1029,8 @@ void rsf_bridge_report(void)
     rsf_dlss_pipeline_status status;
     rsf_frame_tap_status tap;
 
+    say("translucent depth: %lu candidate draws, %lu replayed, %lu selected evaluations",
+        bridge.depth_candidates, bridge.depth_replayed, bridge.depth_evaluations);
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {

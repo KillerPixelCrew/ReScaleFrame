@@ -70,10 +70,16 @@
     "interface_composites_at_render_resolution": true,
     "notes": "At reduced scale the HUD composite also shrinks. Reinsert before that composite and coordinate downstream output dimensions, grading, and HUD rendering.",
     "composed_colour": {
-      "state": "implemented_synthetic_tested_game_unverified",
+      "state": "implemented_synthetic_tested_briefing_presence_reported_game_tested",
       "how": "existing_capture_evidence_and_synthetic_draws",
-      "detail": "A persistent PS-input watch selects a same-frame full-size R11G11B10_FLOAT recombine-shaped output reading the identified colour and an RGBA16F layer. Missing matches fall back to the original colour. Byte-format fullscreen consumers close discovery. Contents at evaluation and actual shader identity remain game-unverified.",
+      "detail": "A persistent PS-input watch selects a same-frame full-size R11G11B10_FLOAT recombine-shaped output reading the identified colour and an RGBA16F layer. Missing matches fall back to the original colour. Byte-format fullscreen consumers close discovery. Briefing relief presence in the selected input was reported game-tested on 7 September. Reconstruction quality, resource lifetime through evaluation, and actual shader identity remain unverified.",
       "research": "docs/research/ac7-composed-scene-color.md"
+    },
+    "translucent_depth": {
+      "state": "implemented_synthetic_tested_game_unverified",
+      "how": "established_capture_and_source_evidence_with_synthetic_depth_readback",
+      "detail": "Immediately replay separate-layer geometry into preallocated reversed-Z depth seeded from opaque scene depth. Select it only when this frame selects composed colour reading the exact replayed layer with the same context and source depth. No composition keeps original depth. Startup full/half output extents only; unsupported draws or ambiguous layers fall back.",
+      "research": "docs/research/ac7-translucent-depth.md"
     }
   },
   "overlay": {

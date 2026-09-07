@@ -8,6 +8,7 @@ extern "C" void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
 {
     rsf_resource_release(state->source);
     rsf_resource_release(state->composed);
+    rsf_resource_release(state->composed_layer);
     *state = rsf_ac7_scene_color{};
 }
 
@@ -45,6 +46,8 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         return;
     }
     bool reads_source = false;
+    void* layer = nullptr;
+    bool ambiguous_layer = false;
     bool reads_layer = false;
     for (uint32_t i = 0; i < draw->input_count; ++i) {
         const rsf_frame_tap_input& input = draw->inputs[i];
@@ -57,6 +60,10 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
             ((input.width == state->width && input.height == state->height) ||
              (input.width == (state->width + 1) / 2 &&
               input.height == (state->height + 1) / 2))) {
+            if (layer && layer != input.texture) {
+                ambiguous_layer = true;
+            }
+            layer = input.texture;
             reads_layer = true;
         }
     }
@@ -77,6 +84,12 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         rsf_resource_release(state->composed);
         state->composed = draw->render_target;
     }
+    if (ambiguous_layer) {
+        layer = nullptr;
+    }
+    rsf_resource_retain(layer);
+    rsf_resource_release(state->composed_layer);
+    state->composed_layer = layer;
     state->composed_this_frame = 1;
 }
 
@@ -87,6 +100,16 @@ extern "C" void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, 
 
 extern "C" void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state)
 {
+    rsf_resource_release(state->composed_layer);
+    state->composed_layer = nullptr;
     state->composed_this_frame = 0;
     state->search_closed = 0;
+}
+
+extern "C" int rsf_ac7_scene_depth_candidate(const rsf_frame_tap_geometry* draw)
+{
+    // Briefing capture 1486-2015: one full-size RGBA16F target, geometry with read-only scene
+    // depth. Identity is confirmed later by the recombine reading this exact target.
+    return draw && draw->target && draw->depth_view && draw->samples == 1 &&
+           draw->format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 }

@@ -230,3 +230,55 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
     // kind that surfaces minutes later as a use after free somewhere else entirely.
     std::memset(state_pointer, 0, sizeof(*state_pointer));
 }
+
+namespace {
+struct DepthState {
+    ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    ID3D11DepthStencilView* depth;
+    ID3D11DepthStencilState* state;
+    UINT reference;
+    ID3D11PixelShader* shader;
+    ID3D11ClassInstance* classes[D3D11_SHADER_MAX_INTERFACES];
+    UINT class_count;
+};
+static_assert(sizeof(DepthState) <= RSF_D3D11_STATE_BYTES);
+} // namespace
+
+extern "C" uint32_t rsf_d3d11_depth_state_save(void* pointer, rsf_d3d11_state* storage)
+{
+    if (!pointer || !storage) {
+        return 0;
+    }
+    auto* context = static_cast<ID3D11DeviceContext*>(pointer);
+    auto& s = *new (storage->opaque) DepthState{};
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, &s.depth);
+    context->OMGetDepthStencilState(&s.state, &s.reference);
+    s.class_count = D3D11_SHADER_MAX_INTERFACES;
+    context->PSGetShader(&s.shader, s.classes, &s.class_count);
+    return 1;
+}
+
+extern "C" void rsf_d3d11_depth_state_restore(void* pointer, rsf_d3d11_state* storage)
+{
+    if (!pointer || !storage) {
+        return;
+    }
+    auto* context = static_cast<ID3D11DeviceContext*>(pointer);
+    auto& s = *reinterpret_cast<DepthState*>(storage->opaque);
+    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, s.depth);
+    context->OMSetDepthStencilState(s.state, s.reference);
+    context->PSSetShader(s.shader, s.classes, s.class_count);
+    release_array(reinterpret_cast<IUnknown* const*>(s.targets),
+                  D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
+    release_array(reinterpret_cast<IUnknown* const*>(s.classes), s.class_count);
+    if (s.depth) {
+        s.depth->Release();
+    }
+    if (s.state) {
+        s.state->Release();
+    }
+    if (s.shader) {
+        s.shader->Release();
+    }
+    std::memset(storage, 0, sizeof(*storage));
+}
