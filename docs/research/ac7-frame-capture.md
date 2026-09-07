@@ -131,7 +131,17 @@ The tap accepts a pass by the set it binds, colour with depth, velocity and a 1x
 
 What would: the recombine is a fullscreen draw that reads the colour already identified and writes another full-size colour target. Recognising it needs the tap to answer "which draws read this texture", where today it answers "which draws write this one". The shadow it already keeps has the information; the query does not exist yet.
 
-Unresolved: whether the relief pass writes depth or velocity at all, which needs its shader resource bindings rather than the render-target list used here; and whether flight frames have a second render of this kind, which the existing flight captures could answer without a new run.
+### Flight does not do this, so the fix has to be conditional
+
+All 22 flight captures were rescanned for the same shape on 7 September 2026. None has a separate translucency layer.
+
+In `ac7_frame52376` the heaviest colour target is 56121, full size `R11G11B10_FLOAT`, taking 44 draws and 206,216 indices: translucency is drawn straight into scene colour along with everything else. The only other full-size `R16G16B16A16_FLOAT` targets are 1732, 2168 and 2172, which the temporal-filter work above already identified as that pass's input, output and history, and none of them receives geometry. The same holds across the other 21.
+
+So the two-layer composite belongs to the menu and briefing screens, where a holographic overlay is drawn as translucency over a nearly empty scene, and not to gameplay. Selecting the composed colour must therefore fall back to the colour bound at the pass when no recombine is present, or it would change the flight path, which works, in pursuit of a screen that does not.
+
+It also closes a question left open earlier: the clouds, contrails and canopy glass missing from flight reconstructions are not this. Whatever explains those, it is not a second scene render being left out.
+
+Unresolved: whether the relief pass writes depth or velocity at all, which needs its shader resource bindings rather than the render-target list used here.
 
 ## Masks, clouds, and droplets
 
