@@ -624,11 +624,19 @@ static void evaluate_held(void* context)
     if (frame.scene_color != bridge.held_color) {
         unsigned int i;
         for (i = 0; i < 2; ++i) {
-            void* selected =
-                rsf_depth_replay_selected(bridge.depth_replay[i], context, bridge.held_depth,
-                                          bridge.color_selection.composed_layer);
-            if (selected != bridge.held_depth) {
-                frame.depth = selected;
+            /* Against every layer the recombine reads, not one chosen for it. The replay knows
+               which texture it drew into, so the match is that texture appearing among this
+               frame's inputs, and there is nothing left to guess. */
+            uint32_t candidate;
+            for (candidate = 0; candidate < bridge.color_selection.composed_layer_count;
+                 ++candidate) {
+                void* selected = rsf_depth_replay_selected(
+                    bridge.depth_replay[i], context, bridge.held_depth,
+                    bridge.color_selection.composed_layers[candidate]);
+                if (selected != bridge.held_depth) {
+                    frame.depth = selected;
+                    break;
+                }
             }
         }
         if (frame.depth != bridge.held_depth) {
@@ -650,9 +658,13 @@ static void evaluate_held(void* context)
                 memset(&detail, 0, sizeof(detail));
                 rsf_depth_replay_get_detail(bridge.depth_replay[slot], &detail);
                 say("translucent depth: replay %u holds layer %p source %p context %p, %lu draws, "
-                    "refused %lu; the frame offers layer %p depth %p context %p",
+                    "refused %lu; the frame offers %lu layers, first %p, depth %p context %p",
                     slot, detail.layer, detail.source, detail.context, (unsigned long)detail.draws,
-                    (unsigned long)detail.refused, bridge.color_selection.composed_layer,
+                    (unsigned long)detail.refused,
+                    (unsigned long)bridge.color_selection.composed_layer_count,
+                    bridge.color_selection.composed_layer_count
+                        ? bridge.color_selection.composed_layers[0]
+                        : NULL,
                     bridge.held_depth, context);
             }
         }

@@ -8,7 +8,9 @@ extern "C" void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
 {
     rsf_resource_release(state->source);
     rsf_resource_release(state->composed);
-    rsf_resource_release(state->composed_layer);
+    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
+        rsf_resource_release(state->composed_layers[i]);
+    }
     *state = rsf_ac7_scene_color{};
 }
 
@@ -46,9 +48,9 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         return;
     }
     bool reads_source = false;
-    void* layer = nullptr;
-    bool ambiguous_layer = false;
     bool reads_layer = false;
+    void* candidates[8] = {};
+    uint32_t candidate_count = 0;
     for (uint32_t i = 0; i < draw->input_count; ++i) {
         const rsf_frame_tap_input& input = draw->inputs[i];
         if (input.texture == state->source && input.format == DXGI_FORMAT_R11G11B10_FLOAT &&
@@ -60,11 +62,14 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
             ((input.width == state->width && input.height == state->height) ||
              (input.width == (state->width + 1) / 2 &&
               input.height == (state->height + 1) / 2))) {
-            if (layer && layer != input.texture) {
-                ambiguous_layer = true;
-            }
-            layer = input.texture;
             reads_layer = true;
+            bool already = false;
+            for (uint32_t seen = 0; seen < candidate_count; ++seen) {
+                already = already || candidates[seen] == input.texture;
+            }
+            if (!already && candidate_count < 8) {
+                candidates[candidate_count++] = input.texture;
+            }
         }
     }
     // The captured tonemap/composite boundary is byte-format colour. Close discovery when a
@@ -84,12 +89,15 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         rsf_resource_release(state->composed);
         state->composed = draw->render_target;
     }
-    if (ambiguous_layer) {
-        layer = nullptr;
+    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
+        rsf_resource_release(state->composed_layers[i]);
+        state->composed_layers[i] = nullptr;
     }
-    rsf_resource_retain(layer);
-    rsf_resource_release(state->composed_layer);
-    state->composed_layer = layer;
+    state->composed_layer_count = candidate_count;
+    for (uint32_t i = 0; i < candidate_count; ++i) {
+        rsf_resource_retain(candidates[i]);
+        state->composed_layers[i] = candidates[i];
+    }
     state->composed_this_frame = 1;
 }
 
@@ -100,8 +108,11 @@ extern "C" void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, 
 
 extern "C" void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state)
 {
-    rsf_resource_release(state->composed_layer);
-    state->composed_layer = nullptr;
+    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
+        rsf_resource_release(state->composed_layers[i]);
+        state->composed_layers[i] = nullptr;
+    }
+    state->composed_layer_count = 0;
     state->composed_this_frame = 0;
     state->search_closed = 0;
 }

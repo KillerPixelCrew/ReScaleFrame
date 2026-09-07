@@ -605,16 +605,25 @@ float4 ps() : SV_Target { return float4(1,0,0,1); }
     ID3D11ShaderResourceView* composition_inputs[] = {base_srv, layer_srv};
     context->PSSetShaderResources(0, 2, composition_inputs);
     context->Draw(3, 1);
-    check(rsf_ac7_scene_color_selected(&selection, base_color) == combined &&
-              selection.composed_layer == layer &&
-              rsf_depth_replay_selected(depth_fixture, context, depth, selection.composed_layer) ==
-                  augmented,
-          "Same-frame composition must identify the exact layer whose depth was replayed.");
+    /* The layer is now one of a set, because a recombine arrives with several half-float inputs
+       bound and picking one of them would be a guess. The claim is that the replayed layer is
+       among what this frame reads, which is the question that actually matters. */
+    bool layer_offered = false;
+    void* depth_from_layers = depth;
+    for (uint32_t i = 0; i < selection.composed_layer_count; ++i) {
+        layer_offered = layer_offered || selection.composed_layers[i] == layer;
+        if (rsf_depth_replay_selected(depth_fixture, context, depth,
+                                      selection.composed_layers[i]) == augmented) {
+            depth_from_layers = augmented;
+        }
+    }
+    check(rsf_ac7_scene_color_selected(&selection, base_color) == combined && layer_offered &&
+              depth_from_layers == augmented,
+          "Same-frame composition must offer the exact layer whose depth was replayed.");
     rsf_ac7_scene_color_end_frame(&selection);
-    check(rsf_depth_replay_selected(depth_fixture, context, depth, selection.composed_layer) ==
-              depth,
-          "A following frame without composition must keep original depth even while the copy "
-          "exists.");
+    check(selection.composed_layer_count == 0,
+          "A following frame without composition must offer no layer, so the original depth "
+          "stands even while the copy exists.");
     rsf_ac7_scene_color_clear(&selection);
     rsf_frame_tap_watch_input(nullptr);
     ID3D11ShaderResourceView* no_inputs[2]{};

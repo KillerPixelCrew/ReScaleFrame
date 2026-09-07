@@ -13,8 +13,20 @@ extern "C" {
 typedef struct rsf_ac7_scene_color {
     void* source;
     void* composed;
-    /* Retained identity of the layer read by this frame's recombine. */
-    void* composed_layer;
+    /* Retained identities of the layers this frame's recombine reads.
+
+       Every half-float input of the right size is a candidate, and there is usually more than one:
+       D3D11 leaves slots bound, so a recombine arrives with whatever the previous draws left
+       alongside what it actually reads. This used to keep one and null it the moment a second
+       appeared, which was safe while separate translucency was half resolution and only one input
+       could match. Rendering it at full resolution made two of them match and the layer became null
+       every frame, so nothing was ever handed over.
+
+       Keeping all of them removes the guess rather than making a better one. The caller has the
+       texture its own replay drew into, and asking whether that is among these is the exact
+       question; picking one here would only be inventing an answer to it. */
+    void* composed_layers[8];
+    uint32_t composed_layer_count;
     void* context;
     uint32_t width;
     uint32_t height;
