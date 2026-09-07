@@ -66,3 +66,11 @@ RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 # A direct multiplier in percent, overriding both targets when it is not zero. For pinning the
 # layer to one resolution regardless of render scale.
 # RSF_TRANSLUCENCY_SCALE=0
+
+# Going above the scene's resolution needs the engine to build a depth to match, which stock 4.18
+# does only below 1.0: at or above it the layer borrows the scene's depth, and a large colour target
+# with a small depth is a pair D3D11 rejects. Game-tested, that made the briefing relief vanish
+# entirely. The proxy narrows that borrow to exactly 1.0 with four one-byte patches, after which the
+# engine allocates, fills, view-transforms and resolves the layer's own depth at any size. There is
+# no setting for it: if those patches do not match, the scale holds at the scene's resolution by
+# itself and says so in the log.

@@ -180,6 +180,33 @@ Two limits, both real. The count comes from the frame tap, which is installed wh
 
 Whether a layer above the scene's resolution composites correctly is untested. `SeparateTranslucencyScale` at `[rbx+0x220]` follows the same xmm1 the width and height do, so the recombine's UV maths is given a consistent scale, but every value the engine itself produces there is at most 1.0.
 
+### Game-tested: 4.18 cannot bind a depth for a layer above the scene, and the ceiling is five gates
+
+7 September 2026. A heavy target of 100 gave a scale of 2.0 at a 50% render scale, and the briefing relief disappeared entirely. The HUD, the radar and the text were untouched; only the translucent layer was gone.
+
+The instrumentation named the cause without another run. The layer was drawn: `translucent depth: last candidate 2048x1152`, and the heavy detection was exactly right, `540030 indices in 59 draws`, matching the capture. The next field is the fault: `depth view format 20 dimension 3 flags 0x1, its texture 1024x576`. A 2048×1152 colour target paired with a 1024×576 depth-stencil is an invalid pair in D3D11, so nothing drew.
+
+Four gates in 4.18 test the same expression and take the borrow branch above 1.0:
+
+| Source | What it decides above 1.0 |
+| --- | --- |
+| Source | RVA | Bytes | What it decides |
+| --- | --- | --- | --- |
+| `TranslucentRendering.cpp:1258` | `0x1168f6f` | `76 0E` jbe | skips `SetupDownsampledTranslucencyViewUniformBuffer`, so the sized depth is never allocated or filled and no scaled view uniform buffer is built |
+| `SceneRenderTargets.cpp:1373` | `0x1097a0c` | `76 17` jbe | binds `GetSceneDepthSurface()` instead of the sized depth |
+| `SceneRenderTargets.cpp:1400` | `0x109d03a` | `cmova r15d,ecx` | picks the scene depth to resolve, on the snapshot branch |
+| `SceneRenderTargets.cpp:1405` | `0x109d061` | `76 17` jbe | the same, on the other branch |
+
+`TranslucentRendering.cpp:94` and `:580` test it too but need no change here. The log proves `:94` already passes, because the layer was allocated and drawn at 2048×1152; the relief goes through the AfterDOF path, which does not consult it. `:580` only selects which view uniform buffer the draws use, so it costs accuracy in scene-texture lookups rather than the layer itself, and it lives in templated code with many instantiations.
+
+The fix is to ask `Scale == 1.f` instead, because borrowing the scene's depth is correct only at exactly 1.0. `jbe` becomes `je` and `cmova` becomes `cmovne`, one byte each. Everything else the engine already does correctly at any scale: `DownsampleDepthSurface` takes the factor as a parameter and derives its viewport and rectangle from it, so at 2.0 it upsamples, and `SetupDownsampledTranslucencyViewUniformBuffer` rebuilds the view from `ScaledSize` and `ViewRect * scale`. No new shader, hook or resource.
+
+These four are provable no-ops for stock behaviour. With `comiss 1.0, scale`, `je` and `jbe` agree at exactly 1.0, where both act on ZF, and agree below 1.0, where neither fires; `cmovne` and `cmova` agree the same way. They differ only above 1.0, a state only the scale patch can reach. That is also how the direction of the `:1258` gate was settled without another lookup: the stock briefing runs at 0.5 and its setup call must run, which only holds if the register being compared is 1.0.
+
+The ceiling therefore follows the patches rather than a setting. All four apply or none do, since a partial application would leave the engine allocating a depth it does not bind, and a refusal keeps the scale at the scene's resolution.
+
+An earlier revision of this section called the above-1.0 case impossible without patching five gates and running an upsample the engine never does. That was wrong on both counts and is recorded because the reasoning failure is worth not repeating: the obstacle was described before the options were enumerated.
+
 ### Flight captures do not show this layer, which is not the same as flight not having it
 
 All 22 flight captures were rescanned for the same shape on 7 September 2026. None has a separate translucency layer.

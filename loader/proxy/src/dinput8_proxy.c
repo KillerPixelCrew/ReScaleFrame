@@ -322,6 +322,10 @@ static void register_overlay_actions(void);
    it, which run whenever the scale is applied or restored. */
 static void set_separate_translucency_scale(void);
 static void apply_separate_translucency_patch(void);
+static int apply_translucency_depth_patches(void);
+/* Whether the engine will build a depth for a layer larger than the scene, which is what a scale
+   above 1.0 depends on. Settled at patch time, read whenever the scale is chosen. */
+static int translucency_depth_conformed;
 
 static void start_observer(void)
 {
@@ -568,6 +572,8 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
        write into bytes about to be overwritten. */
     apply_jitter_patch();
     apply_translucent_velocity_patch();
+    /* Before the scale patch, because the scale it settles on depends on whether these applied. */
+    translucency_depth_conformed = apply_translucency_depth_patches();
     apply_separate_translucency_patch();
 
     note("result %d, entropy %d.%03d, sections %u, imports %u, iat references %u, bytes %llu",
@@ -811,6 +817,7 @@ static void set_separate_translucency_scale(void)
     unsigned long render_percent;
     unsigned long target;
     const unsigned long override_percent = read_number("RSF_TRANSLUCENCY_SCALE", 0);
+    static int ceiling_reported;
     DWORD protection = 0;
     DWORD restored = 0;
 
@@ -834,9 +841,29 @@ static void set_separate_translucency_scale(void)
         scale.value = (float)target / (float)render_percent;
     }
     /* The engine clamps its own console value to 100 and this patch is downstream of that clamp,
-       so the bound has to be here. Four is already sixteen times the pixels of the scene. */
+       so the bound has to be here. */
     if (scale.value < 0.25f) {
         scale.value = 0.25f;
+    }
+    /* Above the scene's resolution only once the engine can build a depth to match.
+
+       Stock 4.18 borrows the scene's depth for any scale at or above 1.0, which pairs a large
+       colour target with a small depth. Game-tested on 7 September: at 2.0 the briefing relief
+       disappeared, and the log said why in one line, `last candidate 2048x1152 ... depth view ...
+       its texture 1024x576`. `apply_translucency_depth_patches` narrows that borrow to exactly 1.0,
+       after which the engine allocates, fills, view-transforms and resolves the layer's own depth
+       at whatever size it is.
+
+       So the ceiling follows those patches rather than a setting. If a game update moves them they
+       refuse, this stays at the scene's resolution, and the briefing is soft rather than missing. */
+    if (scale.value > 1.0f && !translucency_depth_conformed) {
+        if (target != 0 && !ceiling_reported) {
+            ceiling_reported = 1;
+            note("separate translucency asked for %d%% of the scene, but the depth patches did not "
+                 "apply, so the engine has no depth to bind at that size. Held at 100%%",
+                 (int)(scale.value * 100.0f));
+        }
+        scale.value = 1.0f;
     }
     if (scale.value > 4.0f) {
         scale.value = 4.0f;
@@ -956,6 +983,70 @@ static void apply_separate_translucency_patch(void)
          "adjustable while the game runs",
          (unsigned long)rva, (void*)immediate);
     set_separate_translucency_scale();
+}
+
+/* Let the engine build a depth for a separate translucency layer larger than the scene.
+
+   4.18 decides four times whether the layer has its own depth or borrows the scene's, and every one
+   of them asks `Scale < 1.f`. Below 1.0 that is the downsampling case and the engine allocates a
+   depth at the layer's size, fills it, builds a view uniform buffer for the scaled rect and
+   resolves it. At exactly 1.0 the layer is the scene's size and the scene's depth fits. Above 1.0
+   all four take the borrow branch, which pairs a large colour target with a small depth. D3D11 does
+   not allow that pair, and game-testing it on 7 September made the briefing relief disappear
+   entirely while its HUD stayed.
+
+   Asking `Scale == 1.f` instead is the whole fix, because the borrow is correct only at exactly
+   1.0. Everything else the engine already does correctly at any scale: `DownsampleDepthSurface`
+   takes the factor as a parameter and sets its viewport and rectangle from it, so at 2.0 it simply
+   upsamples, and `SetupDownsampledTranslucencyViewUniformBuffer` rebuilds the view from
+   `ScaledSize` and `ViewRect * scale`. Nothing here adds a shader, a hook or a resource.
+
+   The four sites, against 4.18.3 source:
+
+     TranslucentRendering.cpp:1258   0x1168f6f  76 0E  jbe   skips the depth allocation and fill
+     SceneRenderTargets.cpp:1373     0x1097a0c  76 17  jbe   binds scene depth instead
+     SceneRenderTargets.cpp:1400     0x109d03a  cmova        picks scene depth to resolve
+     SceneRenderTargets.cpp:1405     0x109d061  76 17  jbe   the same, on the other branch
+
+   `jbe` becomes `je` and `cmova` becomes `cmovne`, one byte each. With `comiss 1.0, scale` the two
+   are the same instruction for every scale the engine can produce on its own: at 1.0 both act on
+   ZF, and below 1.0 neither fires. They differ only above 1.0, which is a state only our own scale
+   patch can reach. So this changes nothing about stock rendering, and it is what the scale above
+   1.0 is allowed to depend on.
+
+   All four or none. A partial application would leave the engine allocating a depth it does not
+   bind, so a failure here keeps the scale clamped to the scene's resolution. */
+static int apply_translucency_depth_patches(void)
+{
+    static const struct {
+        DWORD rva;
+        uint8_t count;
+        uint8_t expected[4];
+        uint8_t replacement[4];
+        const char* what;
+    } sites[] = {
+        {0x1168f6f, 2, {0x76, 0x0E}, {0x74, 0x0E}, "the depth allocation and fill"},
+        {0x1097a0c, 2, {0x76, 0x17}, {0x74, 0x17}, "the depth bind"},
+        {0x109d03a, 4, {0x44, 0x0F, 0x47, 0xF9}, {0x44, 0x0F, 0x45, 0xF9}, "the snapshot resolve"},
+        {0x109d061, 2, {0x76, 0x17}, {0x74, 0x17}, "the resolve"},
+    };
+    uint8_t previous[4] = {0};
+    unsigned int i;
+
+    for (i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
+        const rsf_dump_result result =
+            rsf_patch_code(sites[i].rva, sites[i].replacement, sites[i].count, sites[i].expected,
+                           sites[i].count, previous);
+        if (result != RSF_DUMP_OK) {
+            note("translucency depth: %s at rva 0x%lx did NOT match, result %d. The layer stays at "
+                 "the scene's resolution",
+                 sites[i].what, (unsigned long)sites[i].rva, (int)result);
+            return 0;
+        }
+        note("translucency depth: %s at rva 0x%lx now asks for exactly 1.0 rather than less",
+             sites[i].what, (unsigned long)sites[i].rva);
+    }
+    return 1;
 }
 
 static void action_set_render_scale(unsigned long percent)
