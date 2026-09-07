@@ -276,9 +276,11 @@ ID3D11RenderTargetView* back_buffer_view(Host& self, ID3D11DeviceContext* contex
         return nullptr;
     }
 
+    say("overlay view: asking the swap chain for its back buffer");
     ID3D11Texture2D* back_buffer = nullptr;
     const HRESULT got_buffer =
         chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
+    say("overlay view: got the back buffer %p", (void*)back_buffer);
     if (FAILED(got_buffer) || !back_buffer) {
         say("overlay: the swap chain would not hand over its back buffer, hr 0x%08lx. The panel "
             "will draw into whatever is bound",
@@ -302,8 +304,10 @@ ID3D11RenderTargetView* back_buffer_view(Host& self, ID3D11DeviceContext* contex
         self.target_texture = nullptr;
     }
 
+    say("overlay view: asking the context for its device");
     ID3D11Device* device = nullptr;
     context->GetDevice(&device);
+    say("overlay view: device %p, creating the view", (void*)device);
     if (!device) {
         back_buffer->Release();
         say("overlay: the context would not name its device, so the panel will draw into whatever "
@@ -314,6 +318,8 @@ ID3D11RenderTargetView* back_buffer_view(Host& self, ID3D11DeviceContext* contex
 
     ID3D11RenderTargetView* view = nullptr;
     const HRESULT made = device->CreateRenderTargetView(back_buffer, nullptr, &view);
+    say("overlay view: CreateRenderTargetView returned hr 0x%08lx, view %p", (unsigned long)made,
+        (void*)view);
     device->Release();
     if (FAILED(made) || !view) {
         back_buffer->Release();
@@ -608,15 +614,27 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     ID3D11RenderTargetView* view = back_buffer_view(self, device_context, chain);
     SavedTargets saved;
     if (view) {
+        if (trace) {
+            say("overlay frame: binding the view and saving what was there");
+        }
         save_targets(device_context, saved);
         device_context->OMSetRenderTargets(1, &view, nullptr);
     }
 
+    if (trace) {
+        say("overlay frame: calling the renderer");
+    }
     const rsf_overlay_renderer_result drawn = rsf_overlay_renderer_draw(
         self.renderer, device_context, &draw_data, description.Width, description.Height);
+    if (trace) {
+        say("overlay frame: the renderer returned %d", int(drawn));
+    }
 
     if (view) {
         restore_targets(device_context, saved);
+        if (trace) {
+            say("overlay frame: targets restored");
+        }
     }
 
     if (trace) {
