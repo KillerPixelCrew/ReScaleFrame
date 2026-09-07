@@ -36,6 +36,16 @@ void rsf_bridge_request_dump(const char* prefix);
    a debug view: the image is ungraded scene colour with no interface on it. */
 void rsf_bridge_toggle_display(void);
 
+/* Put the reconstruction back into the game's own frame, or stop.
+
+   This is the real path rather than the debug view above: the scene is reconstructed before the
+   game's tonemap, the game grades it and composites its own interface onto it at output resolution,
+   and its final upscale becomes a copy. It needs the frame's tail to have been identified, which
+   takes the first few frames after the backend starts.
+
+   Off until asked for, because it changes what the game draws. */
+void rsf_bridge_toggle_reinsert(void);
+
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 

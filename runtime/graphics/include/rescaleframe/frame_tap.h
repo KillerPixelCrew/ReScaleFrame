@@ -33,7 +33,20 @@
    Hence `rsf_frame_tap_watch_target`. Name a render target and the tap reports the next few draws
    into it with their pixel shader inputs, sizes and viewport. Point it at the back buffer and the
    answer names the composite; point it at the composite and the answer names the draw that reads
-   scene colour, which is the one to intervene at. Nothing here changes a binding or a draw. */
+   scene colour, which is the one to intervene at.
+
+   And then the intervention itself, because this module owns the hooks the substitution has to
+   happen in. `rsf_frame_tap_set_plan` names textures to swap out: a shader resource view onto one
+   of them is bound as something else, a render target view onto one is bound as something else,
+   and viewports and scissor rectangles are scaled while a substituted target is bound. That is
+   enough to make the game draw its own tail at output resolution over a reconstructed scene, and
+   `scene_reinsert.h` is what decides which textures those are and creates the replacements.
+
+   The watch is an observer and the plan is not, so the honest split is per call rather than per
+   module: a binding named by the plan is altered before it is forwarded, and everything else is
+   forwarded first and looked at afterwards. The shadow always records what the game asked for
+   rather than what was bound in its place, because everything else here is a description of the
+   game's frame and would stop being one otherwise. */
 
 #ifndef RSF_FRAME_TAP_H
 #define RSF_FRAME_TAP_H
@@ -44,7 +57,7 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 3u
+#define RSF_FRAME_TAP_ABI_VERSION 4u
 
 /* Render targets watched at once. Two, because the question this answers needs exactly two: the
    swap chain's back buffer, and whichever target the draw into it reads. */
@@ -54,6 +67,10 @@ extern "C" {
    game's frame; a pass binding more is reported truncated, with `input_count` saying so, rather
    than not reported at all. */
 #define RSF_FRAME_TAP_MAX_INPUTS 16u
+
+/* Textures a plan may substitute at once. Three, plus room: the composite, the interface's target
+   and the scene colour is the whole of the tail this was written for. */
+#define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 4u
 
 typedef int32_t rsf_frame_tap_result;
 #define RSF_FRAME_TAP_OK ((rsf_frame_tap_result)0)
@@ -167,6 +184,54 @@ typedef struct rsf_frame_tap_target_draw {
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
 typedef void (*rsf_frame_tap_target_fn)(void* user, const rsf_frame_tap_target_draw* draw);
 
+/* One texture the plan replaces.
+
+   Every pointer here is a D3D11 interface the caller owns and keeps alive for as long as the plan
+   is set. Nothing is retained: this module compares `texture` by address and never dereferences it,
+   and hands the views straight to the runtime. */
+typedef struct rsf_frame_tap_substitution {
+    /* `ID3D11Texture2D*` to look for behind a view the game is binding. */
+    void* texture;
+    /* `ID3D11ShaderResourceView*` bound in place of any view onto `texture`. Null leaves shader
+       resource bindings of it alone. */
+    void* shader_view;
+    /* `ID3D11RenderTargetView*` bound in place of any view onto `texture`, in both the output
+       merger and `ClearRenderTargetView`. Null leaves render target bindings of it alone. A
+       non-null one is also what makes viewports scale while it is bound. */
+    void* render_view;
+    /* `ID3D11Texture2D*`. Null means this substitution applies from the start of the frame.
+       Otherwise it applies only after that texture has been bound as a render target in the current
+       frame, and `rsf_frame_tap_end_frame` closes it again.
+
+       This exists for scene colour. The scene passes read scene colour while they are still writing
+       it, and substituting there would hand a pass a reconstruction of the frame it has not
+       finished drawing. Gating on the composite being bound means the substitution begins where the
+       post chain does. */
+    void* after_target;
+} rsf_frame_tap_substitution;
+
+/* Called the first time in a frame that a substitution's `after_target` is bound as a render
+   target, before that binding is forwarded.
+
+   It is the one moment where the scene is finished and nothing downstream has read it yet, which
+   is where a reconstruction has to run. Whatever it does to the device context it must put back:
+   the game is midway through its frame and will not rebind what it believes is still there.
+   `d3d11_state.h` exists for that. */
+typedef void (*rsf_frame_tap_gate_fn)(void* user, void* context, void* texture);
+
+typedef struct rsf_frame_tap_plan {
+    uint32_t struct_size;
+    uint32_t count;
+    rsf_frame_tap_substitution items[RSF_FRAME_TAP_MAX_SUBSTITUTIONS];
+    /* Applied to viewports and scissor rectangles while a substituted render target is bound. The
+       game asks for the resolution it believes it is drawing at, which is the render resolution,
+       and the substituted target is at output resolution. One means no scaling. */
+    float viewport_scale_x;
+    float viewport_scale_y;
+    rsf_frame_tap_gate_fn on_gate;
+    void* on_gate_user;
+} rsf_frame_tap_plan;
+
 typedef struct rsf_frame_tap_options {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -224,6 +289,15 @@ typedef struct rsf_frame_tap_status {
        says the texture handed over is never drawn into, which is a different fault from a watch
        that reports and describes nothing recognisable. */
     uint32_t target_draws_reported;
+    /* Whether a plan is set, and what it has done. Bindings altered and render targets redirected
+       are counted apart because they fail differently: a plan that substitutes shader resources and
+       redirects nothing draws a reconstruction into a render resolution target, and a plan that
+       redirects and substitutes nothing draws the render resolution scene into an output resolution
+       one. Both look like "it did something" from one number. */
+    uint32_t plan_set;
+    uint32_t inputs_substituted;
+    uint32_t targets_redirected;
+    uint32_t gates_opened;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is an `ID3D11DeviceContext*`; the immediate
@@ -257,6 +331,24 @@ rsf_frame_tap_result rsf_frame_tap_uninstall(void);
    Setting a slot resets its budget and its per-target draw ordinal. Safe to call from any thread,
    including from inside `on_target_draw`, which is how the second question follows the first. */
 rsf_frame_tap_result rsf_frame_tap_watch_target(uint32_t index, void* texture, uint32_t limit);
+
+/* Start substituting, or stop. A null plan clears it and the game's frame goes back to being its
+   own; so does uninstalling.
+
+   Every view in the plan has to outlive it, and clearing the plan does not put back a binding that
+   is already in place. Clear it and let a frame pass before releasing anything it named.
+
+   Setting a plan changes what the game draws, which nothing else in this module does. It is refused
+   unless the plan is complete enough to be coherent: a substitution with a texture and no
+   replacement, or a viewport scale of zero, is `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT` rather than a
+   frame that half works. Safe to call from any thread; it takes effect on the next binding. */
+rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
+
+/* Close every gate a plan opened, so the next frame opens them again.
+
+   Called from the caller's own per frame point, normally the present hook, because this module has
+   no idea where a frame ends: it watches bindings and draws, and nothing in either says so. */
+rsf_frame_tap_result rsf_frame_tap_end_frame(void);
 
 rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* status);
 

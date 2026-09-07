@@ -20,6 +20,7 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
+| F6 | Reinsert the reconstruction into the game's own frame, or stop |
 | F8 | Start DLSS after the game has a device; later presses report counters |
 | F7 | Toggle the reconstructed debug image over the back buffer |
 | F9 | Apply render scale and the corresponding jitter sequence length |
@@ -27,6 +28,8 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 | F11 | Trigger RenderDoc when capture support is available |
 
 Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
+
+F6 is that reinsertion, and it is off until asked for because a wrong substitution corrupts the frame. It needs the frame's tail identified first, which the loader learns from the draw into the back buffer over the first few frames after F8, so an immediate press reports what is still missing. It refuses when the game renders at the presented size, which is also what a mission load looks like from inside the frame. With F6 on, the reconstruction runs before the game's tonemap rather than at Present, the game grades it and draws its own interface over it at output resolution, and the last draw into the back buffer becomes a copy. The result has not been looked at yet.
 
 F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with the process and can overwrite earlier captures; use a new directory per run. Velocity previews show unwritten pixels in blue and zero motion in grey. The decoded dump should match the reference decode's range and unwritten fraction.
 

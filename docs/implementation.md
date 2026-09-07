@@ -34,20 +34,45 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       scene before the game's own composite so the grade and the interface survive. That is the
       remaining structural piece and the reason the picture is ungraded and has no HUD.
 
-      The instrument that places it is built. The frame tap now also shadows the output merger and
-      describes the draws into a render target it is asked to watch: extent, viewport, ordinal
-      within the pass, indexed or not, and every pixel shader input with its slot number. The
-      bridge points it at the swap chain's back buffer, takes the single texture that draw reads as
-      the composite, then watches that, and marks the scene colour wherever it appears among the
-      inputs. Which draw into the composite reads scene colour is the tonemap, and that is where
-      the substitution goes. It is not in any capture here: the exported action list records render
-      target bindings and not shader resource bindings, which
+      The whole path is now built, behind F6, and none of it has been run against the game.
+
+      Finding the tail: the frame tap shadows the output merger and describes the draws into a
+      render target it is asked to watch, with extent, viewport, ordinal within the pass, and every
+      pixel shader input with its slot number. The loader points it at the swap chain's back buffer,
+      takes the single texture that draw reads as the composite, then watches that. The interface's
+      own target is picked out of the composite's inputs by its format, `R8G8B8A8` where every scene
+      target in this tail is `B8G8R8A8`; an input that does not match leaves the interface
+      unidentified rather than guessed at. None of this is in a capture here, because the exported
+      action list records render target bindings and not shader resource bindings, which
       [ac7-frame-capture.md](research/ac7-frame-capture.md) states as a limitation twice.
 
-      Cross-built with mingw-w64 and tested under Wine on DXVK. The watch is exercised against a
-      real device: an unwatched target, three draws into a watched one, a fourth past the budget, a
-      different target, the watched one again, a cleared watch, and a draw after uninstalling. Not
-      yet run against the game, so nothing here says what AC7's tail actually looks like.
+      Doing the substitution: `runtime/graphics/scene_reinsert` promotes the composite and the
+      interface target to output resolution, points scene colour at the reconstruction, and hands
+      the tap a plan. The tap then swaps those bindings before forwarding them and scales viewports
+      and scissor rectangles while a promoted target is bound, so the game tonemaps and grades the
+      reconstruction with its own shaders, draws its own interface over it at output resolution, and
+      its final upscale into the back buffer becomes a copy.
+
+      Two decisions in that, both load bearing. Scene colour is substituted only after the composite
+      has been bound in the frame, because the scene passes read scene colour while they are still
+      writing it and an ungated substitution is a feedback loop rather than an upscale. And the
+      reconstruction now runs at that same moment rather than at Present, because it is the one
+      point where the scene is finished and nothing downstream has read it; evaluating at Present
+      would leave the scene a frame behind the interface drawn over it. The price is a mid-frame
+      evaluate, so the whole pipeline is saved and restored around it through
+      `runtime/graphics/d3d11_state`.
+
+      Cross-built with mingw-w64 and tested under Wine on DXVK, against a real device: the watch
+      across seven states, the substitution checked by asking the context what actually got bound,
+      the state save checked stage by stage after being deliberately disturbed, and the plan checked
+      for what it gates and what it leaves alone. What no test here can reach is whether the
+      substitution produces a correct picture, which needs the game's own shaders reading the game's
+      own constants.
+
+      Known and not fixed: bloom is still computed from the render resolution scene, so the glow
+      composited over the reconstruction is low resolution. Post process shaders that address texels
+      rather than sampling normalised will address the wrong ones, because their constants still
+      describe the buffer the engine believes it has. Both are visible only in a rendered result.
 - [ ] In-game overlay. The egui crate builds as a Windows DLL exporting its five entry points, the
       D3D11 renderer and the window procedure hook compile, and the observer now offers the Present
       callback they need. Nothing loads or draws them yet.

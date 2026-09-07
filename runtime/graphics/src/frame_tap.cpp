@@ -22,6 +22,9 @@ constexpr size_t slot_draw = 13;
 constexpr size_t slot_ps_set_constant_buffers = 16;
 constexpr size_t slot_om_set_render_targets = 33;
 constexpr size_t slot_om_set_render_targets_and_uavs = 34;
+constexpr size_t slot_rs_set_viewports = 44;
+constexpr size_t slot_rs_set_scissor_rects = 45;
+constexpr size_t slot_clear_render_target_view = 50;
 
 using ps_set_shader_resources_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
                                                             ID3D11ShaderResourceView* const*);
@@ -35,6 +38,13 @@ using om_set_render_targets_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, 
 using om_set_render_targets_and_uavs_fn = void(STDMETHODCALLTYPE*)(
     ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*, UINT, UINT,
     ID3D11UnorderedAccessView* const*, const UINT*);
+using rs_set_viewports_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT,
+                                                     const D3D11_VIEWPORT*);
+using rs_set_scissor_rects_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT,
+                                                         const D3D11_RECT*);
+using clear_render_target_view_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*,
+                                                             ID3D11RenderTargetView*,
+                                                             const FLOAT[4]);
 
 // Every slot D3D11 allows a stage, rather than a guess at how many are used.
 //
@@ -60,6 +70,9 @@ struct Tap {
     draw_fn original_draw = nullptr;
     om_set_render_targets_fn original_set_targets = nullptr;
     om_set_render_targets_and_uavs_fn original_set_targets_and_uavs = nullptr;
+    rs_set_viewports_fn original_set_viewports = nullptr;
+    rs_set_scissor_rects_fn original_set_scissors = nullptr;
+    clear_render_target_view_fn original_clear_target = nullptr;
 
     rsf_frame_tap_options options{};
 
@@ -123,6 +136,28 @@ struct Tap {
     std::atomic<void*> watch[RSF_FRAME_TAP_WATCH_SLOTS] = {};
     std::atomic<uint32_t> watch_budget[RSF_FRAME_TAP_WATCH_SLOTS] = {};
     std::atomic<uint32_t> target_draws_reported{0};
+
+    // The substitution plan. Written under the lock by whoever sets it and read on the render
+    // thread without one, which `plan_active` is what makes safe: it is only ever set to true after
+    // the plan is fully written, and cleared before the plan is touched again.
+    rsf_frame_tap_plan plan{};
+    std::atomic<bool> plan_active{false};
+    // Which of the plan's gates have opened in the current frame.
+    bool gate_open[RSF_FRAME_TAP_MAX_SUBSTITUTIONS] = {};
+    // Whether the render target now bound is one the plan replaced, which is what decides whether a
+    // viewport is scaled.
+    bool target_substituted = false;
+    // The viewport and scissor rectangles the game last asked for, before any scaling. A pass that
+    // draws into a substituted target and then one that does not would otherwise inherit the scaled
+    // values, because the engine sets a viewport per pass and not per target.
+    D3D11_VIEWPORT game_viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+    UINT game_viewport_count = 0;
+    D3D11_RECT game_scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+    UINT game_scissor_count = 0;
+
+    std::atomic<uint32_t> inputs_substituted{0};
+    std::atomic<uint32_t> targets_redirected{0};
+    std::atomic<uint32_t> gates_opened{0};
 
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
@@ -214,6 +249,88 @@ ID3D11Texture2D* texture_behind_target(ID3D11RenderTargetView* view)
     resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
     resource->Release();
     return texture;
+}
+
+// The plan entry naming this texture, or null. `index_out` receives its position, because whether
+// an entry applies yet is a property of its gate rather than of the entry.
+const rsf_frame_tap_substitution* find_entry(const Tap& self, void* texture, uint32_t& index_out)
+{
+    if (!texture) {
+        return nullptr;
+    }
+    for (uint32_t index = 0; index < self.plan.count; ++index) {
+        if (self.plan.items[index].texture == texture) {
+            index_out = index;
+            return &self.plan.items[index];
+        }
+    }
+    return nullptr;
+}
+
+bool entry_applies(const Tap& self, uint32_t index)
+{
+    return self.plan.items[index].after_target == nullptr || self.gate_open[index];
+}
+
+// Open any gate this render target opens, and tell the caller. Runs before the binding is
+// forwarded, which is the whole point: the gate is the moment the scene is finished and nothing
+// downstream has read it, and a reconstruction that ran afterwards would be a frame late.
+void open_gates_for(Tap& self, ID3D11DeviceContext* context, void* texture)
+{
+    if (!texture) {
+        return;
+    }
+    for (uint32_t index = 0; index < self.plan.count; ++index) {
+        if (self.plan.items[index].after_target != texture || self.gate_open[index]) {
+            continue;
+        }
+        self.gate_open[index] = true;
+        self.gates_opened.fetch_add(1, std::memory_order_relaxed);
+        if (self.plan.on_gate) {
+            // Under the reentry guard the caller set up, so whatever this binds comes back through
+            // these hooks as the tap's own work rather than as the game's.
+            self.plan.on_gate(self.plan.on_gate_user, context, texture);
+        }
+    }
+}
+
+// Put the viewport and the scissor rectangles where the currently bound target needs them.
+//
+// The game asks for the resolution it believes it is drawing at. When the target under it has been
+// replaced by an output resolution one, that request covers a corner of it, so it is scaled; when
+// the next pass binds a target that was not replaced, the game's own numbers go back, because the
+// engine sets a viewport per pass and not per target and would otherwise inherit the scaled ones.
+//
+// The originals are called rather than the context's own methods. Going through the context would
+// come straight back into the viewport hook, which would then have to decide whether a call is the
+// game's request or this putting it into effect, and that is a distinction better not to need.
+void apply_viewport_policy(Tap& self, ID3D11DeviceContext* context)
+{
+    const float scale_x = self.target_substituted ? self.plan.viewport_scale_x : 1.0f;
+    const float scale_y = self.target_substituted ? self.plan.viewport_scale_y : 1.0f;
+
+    if (self.game_viewport_count > 0 && self.original_set_viewports) {
+        D3D11_VIEWPORT scaled[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+        for (UINT index = 0; index < self.game_viewport_count; ++index) {
+            scaled[index] = self.game_viewports[index];
+            scaled[index].TopLeftX *= scale_x;
+            scaled[index].TopLeftY *= scale_y;
+            scaled[index].Width *= scale_x;
+            scaled[index].Height *= scale_y;
+        }
+        self.original_set_viewports(context, self.game_viewport_count, scaled);
+    }
+    if (self.game_scissor_count > 0 && self.original_set_scissors) {
+        D3D11_RECT scaled[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+        for (UINT index = 0; index < self.game_scissor_count; ++index) {
+            const D3D11_RECT& source = self.game_scissors[index];
+            scaled[index].left = LONG(float(source.left) * scale_x);
+            scaled[index].top = LONG(float(source.top) * scale_y);
+            scaled[index].right = LONG(float(source.right) * scale_x);
+            scaled[index].bottom = LONG(float(source.bottom) * scale_y);
+        }
+        self.original_set_scissors(context, self.game_scissor_count, scaled);
+    }
 }
 
 // Record what the output merger now has at render target slot 0. Called from both binding hooks,
@@ -361,8 +478,9 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
                                                       ID3D11ShaderResourceView* const* views)
 {
     Tap& self = tap();
-    // Forwarded first, always. The game's binding has to happen whether or not this recognises it,
-    // and it has to be in place before a callback that may bind something else and restore it.
+    // Forwarded first unless the plan says otherwise. The game's binding has to happen whether or
+    // not this recognises it, and it has to be in place before a callback that may bind something
+    // else and restore it.
     const ps_set_shader_resources_fn forward = self.original_set_views;
     if (!forward) {
         // Only reachable if a call arrived between the vtable write and the store of the original,
@@ -371,7 +489,40 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
         // process with nothing to read.
         return;
     }
-    forward(context, start_slot, count, views);
+
+    // A binding named by the plan is altered before it goes through, which is the one thing here
+    // that does not merely watch. Only the views are swapped; the slots, the count and the order
+    // are the game's, because a pass that reads slot 3 has a shader that says slot 3.
+    ID3D11ShaderResourceView* substituted[max_examined_views];
+    ID3D11ShaderResourceView* const* forwarded = views;
+    if (!inside_hook && views && count > 0 && count <= max_examined_views &&
+        self.plan_active.load(std::memory_order_relaxed)) {
+        const ReentryGuard substitution_guard;
+        bool any = false;
+        for (UINT index = 0; index < count; ++index) {
+            substituted[index] = views[index];
+            if (!views[index]) {
+                continue;
+            }
+            ID3D11Texture2D* texture = texture_behind(views[index]);
+            if (!texture) {
+                continue;
+            }
+            uint32_t entry_index = 0;
+            const rsf_frame_tap_substitution* entry = find_entry(self, texture, entry_index);
+            texture->Release();
+            if (!entry || !entry->shader_view || !entry_applies(self, entry_index)) {
+                continue;
+            }
+            substituted[index] = static_cast<ID3D11ShaderResourceView*>(entry->shader_view);
+            any = true;
+        }
+        if (any) {
+            forwarded = substituted;
+            self.inputs_substituted.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    forward(context, start_slot, count, forwarded);
 
     if (inside_hook) {
         return;
@@ -416,6 +567,64 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     self.shadow_dirty = true;
 }
 
+// Decide what to bind at render target slot 0, opening any gate this binding opens.
+//
+// Returns the view to forward, which is the game's own unless the plan replaced it. `substituted`
+// is the caller's array to build a replaced set in; only slot 0 is ever replaced, because Unreal
+// binds several targets in the GBuffer pass and exactly one everywhere in the frame's tail, and a
+// multiple target pass whose first target moved to another resolution is a pass that will not draw
+// at all.
+ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContext* context,
+                                                   UINT count, ID3D11RenderTargetView* const* views,
+                                                   ID3D11RenderTargetView** substituted)
+{
+    if (inside_hook || !views || count == 0 || !self.plan_active.load(std::memory_order_relaxed)) {
+        return views;
+    }
+    const ReentryGuard substitution_guard;
+    if (!views[0]) {
+        return views;
+    }
+    ID3D11Texture2D* texture = texture_behind_target(views[0]);
+    if (!texture) {
+        return views;
+    }
+    // Before the substitution and before the binding is forwarded. A gate is the point in the frame
+    // this binding marks, not a consequence of what gets bound there.
+    open_gates_for(self, context, texture);
+
+    uint32_t entry_index = 0;
+    const rsf_frame_tap_substitution* entry = find_entry(self, texture, entry_index);
+    texture->Release();
+    if (!entry || !entry->render_view || !entry_applies(self, entry_index) ||
+        count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) {
+        return views;
+    }
+    for (UINT index = 0; index < count; ++index) {
+        substituted[index] = views[index];
+    }
+    substituted[0] = static_cast<ID3D11RenderTargetView*>(entry->render_view);
+    self.targets_redirected.fetch_add(1, std::memory_order_relaxed);
+    return substituted;
+}
+
+// Whether the target now bound was replaced, and the viewport put where that needs it. Called after
+// the binding has been forwarded, so the viewport lands on the target it belongs to.
+void settle_target_substitution(Tap& self, ID3D11DeviceContext* context)
+{
+    bool substituted = false;
+    if (self.plan_active.load(std::memory_order_relaxed) && self.target_texture) {
+        uint32_t entry_index = 0;
+        const rsf_frame_tap_substitution* entry = find_entry(self, self.target_texture, entry_index);
+        substituted = entry && entry->render_view && entry_applies(self, entry_index);
+    }
+    if (substituted == self.target_substituted) {
+        return;
+    }
+    self.target_substituted = substituted;
+    apply_viewport_policy(self, context);
+}
+
 void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context, UINT count,
                                                     ID3D11RenderTargetView* const* views,
                                                     ID3D11DepthStencilView* depth)
@@ -425,12 +634,14 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context
     if (!forward) {
         return;
     }
-    forward(context, count, views, depth);
+    ID3D11RenderTargetView* substituted[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    forward(context, count, plan_render_targets(self, context, count, views, substituted), depth);
     if (inside_hook) {
         return;
     }
     const ReentryGuard guard;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+    settle_target_substitution(self, context);
 }
 
 // The same binding by another entry point. Unreal's D3D11 backend uses it whenever a pass declares
@@ -446,18 +657,109 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
     if (!forward) {
         return;
     }
-    forward(context, count, views, depth, uav_start, uav_count, uavs, initial_counts);
-    if (inside_hook) {
+    // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL leaves the render targets alone, so the shadow
+    // has to be left alone with them, and so does the substitution: there is nothing being bound to
+    // replace. Treating it as an unbind is how a shadow starts describing a target the game is
+    // still drawing into.
+    const bool keeps_targets = count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL;
+    ID3D11RenderTargetView* substituted[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    ID3D11RenderTargetView* const* forwarded =
+        keeps_targets ? views : plan_render_targets(self, context, count, views, substituted);
+    forward(context, count, forwarded, depth, uav_start, uav_count, uavs, initial_counts);
+    if (inside_hook || keeps_targets) {
         return;
     }
     const ReentryGuard guard;
-    // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL leaves the render targets alone, so the shadow
-    // has to be left alone with them. Treating it as an unbind is how a shadow starts describing a
-    // target the game is still drawing into.
-    if (count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
+    shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+    settle_target_substitution(self, context);
+}
+
+void STDMETHODCALLTYPE hooked_rs_set_viewports(ID3D11DeviceContext* context, UINT count,
+                                               const D3D11_VIEWPORT* viewports)
+{
+    Tap& self = tap();
+    const rs_set_viewports_fn forward = self.original_set_viewports;
+    if (!forward) {
         return;
     }
-    shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+    if (inside_hook || !self.plan_active.load(std::memory_order_relaxed)) {
+        forward(context, count, viewports);
+        return;
+    }
+    const ReentryGuard guard;
+    // Remembered unscaled. This is the game's intent, and it is what has to go back when the next
+    // pass binds a target that was not replaced.
+    self.game_viewport_count = 0;
+    if (viewports) {
+        for (UINT index = 0;
+             index < count && index < D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+             ++index) {
+            self.game_viewports[index] = viewports[index];
+            self.game_viewport_count = index + 1;
+        }
+    }
+    if (!self.target_substituted || self.game_viewport_count == 0) {
+        forward(context, count, viewports);
+        return;
+    }
+    apply_viewport_policy(self, context);
+}
+
+void STDMETHODCALLTYPE hooked_rs_set_scissor_rects(ID3D11DeviceContext* context, UINT count,
+                                                   const D3D11_RECT* rectangles)
+{
+    Tap& self = tap();
+    const rs_set_scissor_rects_fn forward = self.original_set_scissors;
+    if (!forward) {
+        return;
+    }
+    if (inside_hook || !self.plan_active.load(std::memory_order_relaxed)) {
+        forward(context, count, rectangles);
+        return;
+    }
+    const ReentryGuard guard;
+    self.game_scissor_count = 0;
+    if (rectangles) {
+        for (UINT index = 0;
+             index < count && index < D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+             ++index) {
+            self.game_scissors[index] = rectangles[index];
+            self.game_scissor_count = index + 1;
+        }
+    }
+    if (!self.target_substituted || self.game_scissor_count == 0) {
+        forward(context, count, rectangles);
+        return;
+    }
+    apply_viewport_policy(self, context);
+}
+
+// The clear has to follow the target. A replaced composite that the game never clears keeps the
+// previous frame's interface, and a replaced interface target that is never cleared keeps every
+// frame of it at once.
+void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* context,
+                                                       ID3D11RenderTargetView* view,
+                                                       const FLOAT colour[4])
+{
+    Tap& self = tap();
+    const clear_render_target_view_fn forward = self.original_clear_target;
+    if (!forward) {
+        return;
+    }
+    ID3D11RenderTargetView* target = view;
+    if (!inside_hook && view && self.plan_active.load(std::memory_order_relaxed)) {
+        const ReentryGuard guard;
+        ID3D11Texture2D* texture = texture_behind_target(view);
+        if (texture) {
+            uint32_t entry_index = 0;
+            const rsf_frame_tap_substitution* entry = find_entry(self, texture, entry_index);
+            texture->Release();
+            if (entry && entry->render_view && entry_applies(self, entry_index)) {
+                target = static_cast<ID3D11RenderTargetView*>(entry->render_view);
+            }
+        }
+    }
+    forward(context, target, colour);
 }
 
 // Look at what is bound now and, if it is the set, hand it to the caller.
@@ -796,6 +1098,13 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
         {slot_om_set_render_targets_and_uavs,
          reinterpret_cast<void*>(&hooked_om_set_render_targets_and_uavs),
          reinterpret_cast<void**>(&self.original_set_targets_and_uavs)},
+        {slot_rs_set_viewports, reinterpret_cast<void*>(&hooked_rs_set_viewports),
+         reinterpret_cast<void**>(&self.original_set_viewports)},
+        {slot_rs_set_scissor_rects, reinterpret_cast<void*>(&hooked_rs_set_scissor_rects),
+         reinterpret_cast<void**>(&self.original_set_scissors)},
+        {slot_clear_render_target_view,
+         reinterpret_cast<void*>(&hooked_clear_render_target_view),
+         reinterpret_cast<void**>(&self.original_clear_target)},
     };
     constexpr size_t patch_count = sizeof(patches) / sizeof(patches[0]);
 
@@ -824,6 +1133,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         if (!self.installed) {
             return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
         }
+        // Cleared before the vtable goes back, so a call already inside a hook stops substituting
+        // rather than reaching for views the caller is about to release.
+        self.plan_active.store(false, std::memory_order_relaxed);
         patch_slot(self.vtable, slot_ps_set_shader_resources,
                    reinterpret_cast<void*>(self.original_set_views), nullptr);
         patch_slot(self.vtable, slot_ps_set_constant_buffers,
@@ -835,6 +1147,12 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
                    reinterpret_cast<void*>(self.original_set_targets), nullptr);
         patch_slot(self.vtable, slot_om_set_render_targets_and_uavs,
                    reinterpret_cast<void*>(self.original_set_targets_and_uavs), nullptr);
+        patch_slot(self.vtable, slot_rs_set_viewports,
+                   reinterpret_cast<void*>(self.original_set_viewports), nullptr);
+        patch_slot(self.vtable, slot_rs_set_scissor_rects,
+                   reinterpret_cast<void*>(self.original_set_scissors), nullptr);
+        patch_slot(self.vtable, slot_clear_render_target_view,
+                   reinterpret_cast<void*>(self.original_clear_target), nullptr);
         // The originals are deliberately kept. A call that entered a hook before the vtable was
         // restored still has to forward, and clearing them turns that race from a stale hook into a
         // null call. They stay valid for as long as the runtime is loaded, and a later install
@@ -873,6 +1191,69 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     for (uint32_t index = 0; index < RSF_FRAME_TAP_WATCH_SLOTS; ++index) {
         self.watch[index].store(nullptr, std::memory_order_relaxed);
         self.watch_budget[index].store(0, std::memory_order_relaxed);
+    }
+    self.plan = rsf_frame_tap_plan{};
+    for (bool& gate : self.gate_open) {
+        gate = false;
+    }
+    self.target_substituted = false;
+    self.game_viewport_count = 0;
+    self.game_scissor_count = 0;
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan)
+{
+    Tap& self = tap();
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (!self.installed) {
+        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    }
+    if (!plan) {
+        // Cleared first, so the render thread stops reading the plan before it is overwritten.
+        self.plan_active.store(false, std::memory_order_relaxed);
+        self.plan = rsf_frame_tap_plan{};
+        for (bool& gate : self.gate_open) {
+            gate = false;
+        }
+        self.target_substituted = false;
+        return RSF_FRAME_TAP_OK;
+    }
+    if (plan->struct_size < sizeof(rsf_frame_tap_plan) || plan->count == 0 ||
+        plan->count > RSF_FRAME_TAP_MAX_SUBSTITUTIONS || plan->viewport_scale_x <= 0.0f ||
+        plan->viewport_scale_y <= 0.0f) {
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+    for (uint32_t index = 0; index < plan->count; ++index) {
+        const rsf_frame_tap_substitution& item = plan->items[index];
+        // A named texture with nothing to put in its place is the half working case this refuses:
+        // it reads like an intervention and does nothing, which is worse than saying no.
+        if (!item.texture || (!item.shader_view && !item.render_view)) {
+            return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+        }
+    }
+
+    self.plan_active.store(false, std::memory_order_relaxed);
+    self.plan = *plan;
+    for (bool& gate : self.gate_open) {
+        gate = false;
+    }
+    self.target_substituted = false;
+    self.plan_active.store(true, std::memory_order_relaxed);
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_end_frame(void)
+{
+    Tap& self = tap();
+    if (!self.plan_active.load(std::memory_order_relaxed)) {
+        return RSF_FRAME_TAP_OK;
+    }
+    // No lock. This is called from the present hook on the render thread, which is the same thread
+    // the gates are opened on, and taking the tap's lock on a per frame path would put the render
+    // thread behind whichever worker happens to be reading status.
+    for (bool& gate : self.gate_open) {
+        gate = false;
     }
     return RSF_FRAME_TAP_OK;
 }
@@ -915,5 +1296,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->render_width = self.render_width.load(std::memory_order_relaxed);
     status->render_height = self.render_height.load(std::memory_order_relaxed);
     status->target_draws_reported = self.target_draws_reported.load(std::memory_order_relaxed);
+    status->plan_set = self.plan_active.load(std::memory_order_relaxed) ? 1u : 0u;
+    status->inputs_substituted = self.inputs_substituted.load(std::memory_order_relaxed);
+    status->targets_redirected = self.targets_redirected.load(std::memory_order_relaxed);
+    status->gates_opened = self.gates_opened.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

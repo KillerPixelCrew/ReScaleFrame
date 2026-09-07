@@ -5,6 +5,8 @@ add_library(rsf_graphics STATIC
     src/constant_buffer_read.cpp
     src/resource_ref.cpp
     src/frame_tap.cpp
+    src/d3d11_state.cpp
+    src/scene_reinsert.cpp
     src/present_blit.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp

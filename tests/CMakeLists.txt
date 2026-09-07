@@ -50,6 +50,16 @@ target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::Graphics rsf_build_opt
 add_test(NAME frame_tap COMMAND rsf_frame_tap)
 set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
 
+add_executable(rsf_d3d11_state d3d11_state.cpp)
+target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
+set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
+
+add_executable(rsf_scene_reinsert scene_reinsert.cpp)
+target_link_libraries(rsf_scene_reinsert PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME scene_reinsert COMMAND rsf_scene_reinsert)
+set_tests_properties(scene_reinsert PROPERTIES TIMEOUT 120)
+
 add_executable(rsf_d3d11_observer d3d11_observer.cpp)
 target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")

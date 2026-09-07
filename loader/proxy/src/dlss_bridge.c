@@ -22,10 +22,12 @@
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/present_blit.h>
 #include <rescaleframe/resource_ref.h>
+#include <rescaleframe/scene_reinsert.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +56,15 @@
    more, and the ordinal in each report says which draw of the pass it was. */
 #define RSF_TAIL_BACK_BUFFER_DRAWS 8u
 #define RSF_TAIL_COMPOSITE_DRAWS 64u
+
+/* DXGI_FORMAT_R8G8B8A8_UNORM, written as a number because this file has no D3D headers.
+
+   It is how the interface's own target is told apart from the scene's. The replayed captures in
+   ac7-frame-capture.md have every scene target in the tail as B8G8R8A8 and the interface alone, on
+   a transparent background, as R8G8B8A8. That is one observed difference in one game and not a
+   rule about engines, which is why an input that does not match leaves the interface unpromoted
+   rather than being promoted on a guess. */
+#define RSF_FORMAT_R8G8B8A8_UNORM 28ul
 
 static struct {
     int started;
@@ -135,6 +146,19 @@ static struct {
     int composite_found;
     unsigned long tail_frames;
     unsigned long tail_draws;
+
+    /* The interface's own target, and the scene colour, both taken from the frame and both held.
+       The plan names them by address and the tap never dereferences them, so a reference of our own
+       is what keeps that address meaning what it meant when it was learned. */
+    void* interface_target;
+    void* scene_color;
+
+    /* Reinsertion proper. Off until asked for: it changes what the game draws, and a wrong
+       substitution is a corrupted frame or a dead process rather than a diagnostic nobody reads. */
+    rsf_reinsert* reinsert;
+    int reinsert_on;
+    unsigned long reinsert_frames;
+    unsigned long gate_evaluates;
 } bridge;
 
 static void release_held(void)
@@ -281,6 +305,16 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     bridge.held_width = pass->render_width;
     bridge.held_height = pass->render_height;
     bridge.have_held = 1;
+
+    /* The scene colour, kept past the frame this time. The reinsertion plan names it by address so
+       the tonemap's read of it can be turned into a read of the reconstruction, and it is the same
+       pooled target every frame. Replaced rather than ignored when it changes, which is what a
+       render scale change or a resolution change looks like from here. */
+    if (bridge.scene_color != pass->scene_color) {
+        rsf_resource_release(bridge.scene_color);
+        bridge.scene_color = pass->scene_color;
+        rsf_resource_retain(bridge.scene_color);
+    }
     (void)frame;
     (void)result;
 }
@@ -321,6 +355,28 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
         (unsigned long)draw->input_count);
     describe_inputs(draw);
 
+    /* A draw into the composite. One of its inputs is the interface's own target, which is what has
+       to be promoted for the HUD to be drawn at output resolution instead of magnified with the
+       scene. It is told apart by its format: every scene target in this tail is B8G8R8A8 and the
+       interface alone is R8G8B8A8. Nothing else in a composite draw's inputs matches that, and an
+       input that does not match leaves it unidentified rather than guessed at. */
+    if (draw->watch_index == 1 && !bridge.interface_target) {
+        uint32_t index;
+        for (index = 0; index < draw->input_count; ++index) {
+            const rsf_frame_tap_input* input = &draw->inputs[index];
+            if (!input->texture || input->format != RSF_FORMAT_R8G8B8A8_UNORM) {
+                continue;
+            }
+            bridge.interface_target = input->texture;
+            rsf_resource_retain(bridge.interface_target);
+            say("  slot %lu is the interface's own target at %lux%lu, so the HUD can be drawn at "
+                "output resolution rather than magnified with the scene",
+                (unsigned long)input->slot, (unsigned long)input->width,
+                (unsigned long)input->height);
+            break;
+        }
+    }
+
     /* What the back buffer draw reads is the composite. At a reduced render scale it reads exactly
        one resource, so anything else is a different tail than the one the capture describes, and
        taking the first input regardless would name the wrong texture and describe the wrong pass.
@@ -355,10 +411,13 @@ static void watch_tail(void* swapchain)
         return;
     }
     if (bridge.tail_frames == RSF_TAIL_STOP_FRAMES) {
+        /* The watch stops; the references do not. The composite and the interface target are what
+           the reinsertion plan names, and an engine pooled target is not made harder to reuse by
+           one more reference the way a swap chain buffer is. */
         rsf_frame_tap_watch_target(1, NULL, 0);
-        rsf_resource_release(bridge.composite);
-        bridge.composite = NULL;
-        say("frame tail: done looking, %lu draws described", bridge.tail_draws);
+        say("frame tail: done looking, %lu draws described, composite %s, interface target %s",
+            bridge.tail_draws, bridge.composite ? "found" : "not found",
+            bridge.interface_target ? "found" : "not found");
         return;
     }
     if (bridge.tail_frames >= RSF_TAIL_ARM_FRAMES) {
@@ -417,6 +476,34 @@ static void evaluate_held(void* context)
     release_held();
 }
 
+/* Called by the frame tap when the game binds the composite, before that binding is forwarded.
+
+   This is where the reconstruction has to run once the result is being reinserted. The scene is
+   finished by now, the post chain has not read it yet, and the tonemap that follows within the same
+   pass is the draw whose scene colour is about to be substituted. Evaluating at Present instead,
+   which is what the debug view does, would put the reconstruction a whole frame behind the grade
+   and the interface drawn over it.
+
+   The price of being here rather than at Present is that the game is midway through its frame and
+   will not rebind what it believes is still bound. Streamline says it does not restore state, so
+   the whole pipeline is saved and put back around the evaluate. */
+static void on_gate(void* user, void* context, void* texture)
+{
+    rsf_d3d11_state state;
+
+    (void)user;
+    (void)texture;
+    if (!bridge.have_held || !context) {
+        return;
+    }
+    if (!rsf_d3d11_state_save(context, &state)) {
+        return;
+    }
+    evaluate_held(context);
+    rsf_d3d11_state_restore(context, &state);
+    ++bridge.gate_evaluates;
+}
+
 /* Called before the game's own Present, from the observer.
 
    Drawing the reconstruction over the finished frame replaces a graded image that has an interface
@@ -434,10 +521,20 @@ static void on_present(void* user, void* swapchain)
     }
     bridge.pass_in_frame = 0;
 
-    /* The frame is finished here, which is the whole reason the evaluate waits for it. */
     if (bridge.started) {
         watch_tail(swapchain);
-        evaluate_held(bridge.context);
+        if (bridge.reinsert_on) {
+            /* The evaluate already happened, at the gate, where it has to happen for the result to
+               reach the game's own tonemap. All that is left is to let go of the frame's inputs and
+               to close the gates so the next frame opens them again. */
+            ++bridge.reinsert_frames;
+            release_held();
+            rsf_frame_tap_end_frame();
+        } else {
+            /* The frame is finished here, which is the whole reason the evaluate waits for it when
+               the result is only being drawn over the top. */
+            evaluate_held(bridge.context);
+        }
     }
 
     if (!bridge.started || !bridge.show || !bridge.blit) {
@@ -480,6 +577,113 @@ void rsf_bridge_toggle_display(void)
 rsf_observer_present_fn rsf_bridge_present_hook(void)
 {
     return on_present;
+}
+
+/* Stop substituting and put the frame back the way the game draws it. */
+static void stop_reinsert(void)
+{
+    rsf_frame_tap_set_plan(NULL);
+    rsf_frame_tap_end_frame();
+    bridge.reinsert_on = 0;
+    say("reinsert: off, the game draws its own frame again");
+}
+
+void rsf_bridge_toggle_reinsert(void)
+{
+    rsf_reinsert_setup setup;
+    rsf_reinsert_frame_tail tail;
+    rsf_frame_tap_plan plan;
+    rsf_dlss_pipeline_status pipeline;
+    rsf_reinsert_result prepared;
+    void* reconstruction;
+
+    if (bridge.reinsert_on) {
+        stop_reinsert();
+        return;
+    }
+    if (!bridge.started) {
+        say("reinsert: nothing to reinsert, the backend is not running");
+        return;
+    }
+
+    /* Every one of these is a thing the frame had to say for itself, and a missing one names which
+       run to do again rather than leaving a silent no-op. */
+    if (!bridge.composite) {
+        say("reinsert: the composite has not been identified yet, so there is nowhere to put the "
+            "result. It is learned from the draw into the back buffer in the first few frames");
+        return;
+    }
+    if (!bridge.scene_color) {
+        say("reinsert: no scene colour has been seen yet, so nothing has been reconstructed");
+        return;
+    }
+    if (bridge.held_width == 0 || bridge.held_height == 0) {
+        say("reinsert: the render resolution is not known yet");
+        return;
+    }
+
+    memset(&pipeline, 0, sizeof(pipeline));
+    pipeline.struct_size = sizeof(pipeline);
+    if (rsf_dlss_pipeline_get_status(&pipeline) != RSF_DLSS_PIPELINE_OK || !pipeline.running) {
+        say("reinsert: the pipeline is not running");
+        return;
+    }
+    reconstruction = rsf_dlss_pipeline_output_texture();
+    if (!reconstruction) {
+        say("reinsert: there is no reconstruction to put back");
+        return;
+    }
+
+    if (!bridge.reinsert) {
+        memset(&setup, 0, sizeof(setup));
+        setup.struct_size = sizeof(setup);
+        setup.abi_version = RSF_REINSERT_ABI_VERSION;
+        setup.device = bridge.device;
+        setup.output_width = pipeline.output_width;
+        setup.output_height = pipeline.output_height;
+        setup.log = bridge.log;
+        setup.log_user = bridge.log_user;
+        if (rsf_reinsert_create(&setup, &bridge.reinsert) != RSF_REINSERT_OK) {
+            say("reinsert: could not be created");
+            return;
+        }
+    }
+
+    memset(&tail, 0, sizeof(tail));
+    tail.struct_size = sizeof(tail);
+    tail.composite = bridge.composite;
+    tail.interface_target = bridge.interface_target;
+    tail.scene_color = bridge.scene_color;
+    tail.reconstruction = reconstruction;
+    tail.render_width = (uint32_t)bridge.held_width;
+    tail.render_height = (uint32_t)bridge.held_height;
+    prepared = rsf_reinsert_prepare(bridge.reinsert, &tail);
+    if (prepared == RSF_REINSERT_ERROR_NOT_SCALED) {
+        say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
+        return;
+    }
+    if (prepared != RSF_REINSERT_OK) {
+        say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
+        return;
+    }
+
+    memset(&plan, 0, sizeof(plan));
+    plan.struct_size = sizeof(plan);
+    if (rsf_reinsert_fill_plan(bridge.reinsert, &plan) != RSF_REINSERT_OK) {
+        say("reinsert: the plan could not be built");
+        return;
+    }
+    plan.on_gate = on_gate;
+
+    if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
+        say("reinsert: the frame tap refused the plan");
+        return;
+    }
+    bridge.reinsert_on = 1;
+    /* Deliberately not "reinsertion works". The substitutions are in place and the game will draw
+       its own tail over the reconstruction; whether the result is right is a thing to look at. */
+    say("reinsert: on. The scene is reconstructed before the game's tonemap, and the grade and the "
+        "interface are the game's own. Press F6 again to stop");
 }
 
 int rsf_bridge_start(const char* streamline_directory, unsigned long output_width,
@@ -595,9 +799,21 @@ void rsf_bridge_report(void)
 
     /* Whether the frame's tail was ever described. Zero draws with a watch that was set is a
        different fault from a watch that was never armed, and both look like silence otherwise. */
-    say("frame tail: %lu presents watched, %lu draws described, composite %s",
+    say("frame tail: %lu presents watched, %lu draws described, composite %s, interface target %s",
         bridge.tail_frames, bridge.tail_draws,
-        bridge.composite_found ? "identified" : "not identified yet");
+        bridge.composite_found ? "identified" : "not identified yet",
+        bridge.interface_target ? "identified" : "not identified");
+
+    /* What the substitution is actually doing, which the tap counts because it is the only thing
+       that sees every binding. Reinsertion on with nothing redirected means the plan names a
+       texture the frame never binds, and that is invisible in the picture: the game simply draws
+       what it always drew. */
+    if (bridge.reinsert_on) {
+        say("reinsert: on, %lu frames, %lu evaluates at the gate, %lu bindings substituted, "
+            "%lu targets redirected, %lu gates opened",
+            bridge.reinsert_frames, bridge.gate_evaluates, (unsigned long)tap.inputs_substituted,
+            (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened);
+    }
 
     memset(&status, 0, sizeof(status));
     status.struct_size = sizeof(status);

@@ -82,6 +82,42 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     reports.push_back(report);
 }
 
+uint32_t gates_seen = 0;
+
+void note_gate(void* user, void* context, void* texture)
+{
+    (void)user;
+    (void)context;
+    (void)texture;
+    ++gates_seen;
+}
+
+// What the runtime actually has bound, as against what the test asked for. The two differing is
+// the entire claim a substitution makes, so every check of one is a call to the other.
+//
+// Both of these hand back a reference and both drop it before returning. Comparing addresses is
+// all the caller does, and holding the reference would keep a view alive past the point the test
+// releases it, which is where a leak turns into a crash on shutdown instead.
+ID3D11RenderTargetView* bound_target(ID3D11DeviceContext* context)
+{
+    ID3D11RenderTargetView* view = nullptr;
+    context->OMGetRenderTargets(1, &view, nullptr);
+    if (view) {
+        view->Release();
+    }
+    return view;
+}
+
+ID3D11ShaderResourceView* bound_resource(ID3D11DeviceContext* context, UINT slot)
+{
+    ID3D11ShaderResourceView* view = nullptr;
+    context->PSGetShaderResources(slot, 1, &view);
+    if (view) {
+        view->Release();
+    }
+    return view;
+}
+
 ID3D11Texture2D* make_target(ID3D11Device* device, UINT width, UINT height, DXGI_FORMAT format)
 {
     D3D11_TEXTURE2D_DESC description{};
@@ -341,6 +377,106 @@ int main()
     context->Draw(3, 0);
     check(reports.empty(), "A cleared watch must report nothing.");
 
+    // The substitution plan, which is the half of this module that changes what the game draws.
+    // Checked by asking the context what is actually bound after each call, because the whole
+    // claim is that the game asked for one thing and another went through.
+    stage("planning substitutions");
+    ID3D11Texture2D* promoted = make_target(device, 512, 288, DXGI_FORMAT_B8G8R8A8_UNORM);
+    ID3D11Texture2D* reconstruction = make_target(device, 512, 288, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    check(promoted && reconstruction, "The replacement textures must be created.");
+    if (!promoted || !reconstruction) {
+        return 1;
+    }
+    ID3D11RenderTargetView* promoted_target = nullptr;
+    ID3D11ShaderResourceView* promoted_resource = nullptr;
+    ID3D11ShaderResourceView* reconstruction_resource = nullptr;
+    check(SUCCEEDED(device->CreateRenderTargetView(promoted, nullptr, &promoted_target)) &&
+              SUCCEEDED(device->CreateShaderResourceView(promoted, nullptr, &promoted_resource)) &&
+              SUCCEEDED(device->CreateShaderResourceView(reconstruction, nullptr,
+                                                         &reconstruction_resource)),
+          "The replacement views must be created.");
+
+    rsf_frame_tap_plan plan{};
+    plan.struct_size = sizeof(plan);
+    plan.viewport_scale_x = 2.0f;
+    plan.viewport_scale_y = 2.0f;
+    plan.on_gate = note_gate;
+    plan.count = 2;
+    // The composite: promoted to a larger target, and ungated.
+    plan.items[0].texture = composite;
+    plan.items[0].render_view = promoted_target;
+    plan.items[0].shader_view = promoted_resource;
+    // The scene colour: substituted only once the composite has been bound this frame, which is
+    // what keeps a reconstruction out of the passes still drawing the scene.
+    plan.items[1].texture = source;
+    plan.items[1].shader_view = reconstruction_resource;
+    plan.items[1].after_target = composite;
+
+    plan.viewport_scale_x = 0.0f;
+    check(rsf_frame_tap_set_plan(&plan) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+          "A viewport scale of zero must be refused.");
+    plan.viewport_scale_x = 2.0f;
+    plan.items[1].shader_view = nullptr;
+    check(rsf_frame_tap_set_plan(&plan) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+          "A named texture with nothing to put in its place must be refused.");
+    plan.items[1].shader_view = reconstruction_resource;
+    check(rsf_frame_tap_set_plan(&plan) == RSF_FRAME_TAP_OK, "A complete plan must be accepted.");
+
+    stage("substituting before the gate opens");
+    // A target that is not in the plan, so the gate stays shut and scene colour stays itself.
+    context->OMSetRenderTargets(1, &other_view, nullptr);
+    context->PSSetShaderResources(2, 1, &source_view);
+    check(gates_seen == 0, "A target the plan does not name must not open a gate.");
+    check(bound_resource(context, 2) == source_view,
+          "A gated substitution must not apply before its gate opens.");
+
+    stage("substituting after the gate opens");
+    context->OMSetRenderTargets(1, &composite_view, nullptr);
+    check(gates_seen == 1, "Binding the gate's target must open it exactly once.");
+    check(bound_target(context) == promoted_target,
+          "A planned render target must be replaced by the one the plan names.");
+    context->OMSetRenderTargets(1, &composite_view, nullptr);
+    check(gates_seen == 1, "A gate must not reopen within the same frame.");
+
+    set_viewport(context, 128.0f, 72.0f);
+    D3D11_VIEWPORT actual{};
+    UINT actual_count = 1;
+    context->RSGetViewports(&actual_count, &actual);
+    check(actual_count == 1 && actual.Width == 256.0f && actual.Height == 144.0f,
+          "A viewport must be scaled while a substituted target is bound.");
+
+    // Rebinding scene colour now that the gate is open. The same call as before the gate, and a
+    // different view reaches the runtime.
+    ID3D11ShaderResourceView* nothing = nullptr;
+    context->PSSetShaderResources(2, 1, &nothing);
+    context->PSSetShaderResources(2, 1, &source_view);
+    check(bound_resource(context, 2) == reconstruction_resource,
+          "A planned shader resource must be replaced once its gate is open.");
+
+    stage("leaving the substituted target");
+    context->OMSetRenderTargets(1, &other_view, nullptr);
+    actual_count = 1;
+    context->RSGetViewports(&actual_count, &actual);
+    check(actual_count == 1 && actual.Width == 128.0f && actual.Height == 72.0f,
+          "The game's own viewport must come back when an unsubstituted target is bound.");
+
+    stage("ending the frame");
+    check(rsf_frame_tap_end_frame() == RSF_FRAME_TAP_OK, "Ending a frame must succeed.");
+    context->PSSetShaderResources(2, 1, &nothing);
+    context->PSSetShaderResources(2, 1, &source_view);
+    check(bound_resource(context, 2) == source_view,
+          "Ending the frame must shut the gates again.");
+    context->OMSetRenderTargets(1, &composite_view, nullptr);
+    check(gates_seen == 2, "A gate must open again in the next frame.");
+
+    stage("clearing the plan");
+    check(rsf_frame_tap_set_plan(nullptr) == RSF_FRAME_TAP_OK, "Clearing a plan must succeed.");
+    context->OMSetRenderTargets(1, &other_view, nullptr);
+    context->OMSetRenderTargets(1, &composite_view, nullptr);
+    check(bound_target(context) == composite_view,
+          "A cleared plan must leave the game's own render target alone.");
+    check(gates_seen == 2, "A cleared plan must open no further gates.");
+
     stage("checking status");
     rsf_frame_tap_status status{};
     status.struct_size = sizeof(status);
@@ -363,6 +499,11 @@ int main()
     check(reports.empty(), "Nothing may be reported once the tap is uninstalled.");
 
     stage("releasing");
+    reconstruction_resource->Release();
+    promoted_resource->Release();
+    promoted_target->Release();
+    reconstruction->Release();
+    promoted->Release();
     indices->Release();
     pixel_shader->Release();
     vertex_shader->Release();

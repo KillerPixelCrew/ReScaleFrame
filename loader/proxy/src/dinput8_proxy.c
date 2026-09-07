@@ -516,6 +516,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int scale_down = 0;
     int dlss_down = 0;
     int show_down = 0;
+    int reinsert_down = 0;
     int ticks = 0;
     int running = 1;
     while (running) {
@@ -531,6 +532,17 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
                 rsf_bridge_toggle_display();
             }
             show_down = show;
+        }
+
+        {
+            /* The real path, as against F7's debug view: the reconstruction goes into the game's
+               own frame before the tonemap, so the grade and the interface are the game's. It needs
+               the frame's tail identified first, which takes a few frames after F8. */
+            const int reinsert = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+            if (reinsert && !reinsert_down) {
+                rsf_bridge_toggle_reinsert();
+            }
+            reinsert_down = reinsert;
         }
 
         /* Report on a timer as well as on the key, because the report a key press produces is
