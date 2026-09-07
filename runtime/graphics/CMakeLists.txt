@@ -11,6 +11,7 @@ add_library(rsf_graphics STATIC
     src/present_blit.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
+    src/ui_identify.cpp
     src/d3d11_observer.cpp)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side
 # the contract exists to constrain. The renderer and the input capture only consume it.
