@@ -36,6 +36,11 @@ add_executable(rsf_ac7_view_test ac7_view.cpp)
 target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
 add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
 
+# No device: the classifier is a pure function over shadowed facts, which is the point of it.
+add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.cpp)
+target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)
+add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
+
 add_executable(rsf_resource_roles resource_roles.cpp)
 target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)

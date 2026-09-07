@@ -9,6 +9,13 @@ add_library(rsf_game_ac7 SHARED src/plugin.cpp)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
+# Which draws are the interface is a game fact, so the rule lives here. It is a pure function over
+# facts the frame tap shadows, which is what lets it be tested without a device.
+add_library(rsf_ac7_ui_rules STATIC src/ui_rules.cpp)
+target_include_directories(rsf_ac7_ui_rules PUBLIC include)
+target_link_libraries(rsf_ac7_ui_rules PRIVATE rsf_build_options)
+add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_ui_rules)
+
 # Capture-derived scene selection stays with the game; graphics supplies only draw observations.
 add_library(rsf_ac7_scene_color STATIC src/scene_color.cpp)
 target_include_directories(rsf_ac7_scene_color PUBLIC include)
