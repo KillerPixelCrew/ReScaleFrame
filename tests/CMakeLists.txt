@@ -46,6 +46,12 @@ add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
+# A vendor that is not compiled in still has to answer, and has to answer differently from one
+# whose runtime is missing. Runs in both configurations and CI builds it both ways.
+add_executable(rsf_fsr_backend fsr_backend.cpp)
+target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR rsf_build_options)
+add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
+
 # Choosing between three vendors on a machine that has none of them, which is the point of
 # negotiation being a pure function over what each one said it could do.
 add_executable(rsf_negotiate negotiate.cpp)

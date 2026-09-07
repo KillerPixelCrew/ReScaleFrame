@@ -657,9 +657,18 @@ ID3D11BlendState* patched_blend_for(Tap& self, ID3D11DeviceContext* context,
     const UINT targets = description.IndependentBlendEnable ? 8u : 1u;
     for (UINT index = 0; index < targets; ++index) {
         D3D11_RENDER_TARGET_BLEND_DESC& target = description.RenderTarget[index];
+        // The alpha channel has to be writable before any of the operations below mean anything.
+        //
+        // A blend that writes colour only is ordinary for an interface drawn into a target whose
+        // alpha nobody reads, and AC7's is exactly that. Patching the alpha operations of such a
+        // state changes nothing at all: the channel is masked off, so the layer accumulates colour
+        // and no coverage, and a premultiplied composite of colour with zero coverage contributes
+        // nothing. Which is a black intro image, and a menu that is dark and washed out in
+        // proportion to how much coverage it was missing.
+        target.RenderTargetWriteMask |= D3D11_COLOR_WRITE_ENABLE_ALPHA;
         if (!target.BlendEnable) {
             // An opaque draw already writes alpha 1 where it covers, which is the coverage a layer
-            // wants. Nothing to patch, and enabling a blend here would change the colour.
+            // wants. Nothing further to patch, and enabling a blend here would change the colour.
             continue;
         }
         target.SrcBlendAlpha = D3D11_BLEND_ONE;
@@ -682,6 +691,22 @@ ID3D11BlendState* patched_blend_for(Tap& self, ID3D11DeviceContext* context,
     self.patched_blends[self.patched_blend_count].patched = patched;
     ++self.patched_blend_count;
     self.blend_states_patched.fetch_add(1, std::memory_order_relaxed);
+
+    /* What the game's blend was, once per distinct state. There are only ever a handful, and this
+       is the line that says whether a layer with no coverage is the blend's fault: a write mask
+       without its alpha bit makes every alpha operation below it decorative. */
+    D3D11_BLEND_DESC before{};
+    if (original) {
+        original->GetDesc(&before);
+    }
+    say(self,
+        "divert: patched a blend. Before: enable %u, colour %u/%u op %u, alpha %u/%u op %u, "
+        "write mask 0x%x. After: alpha 2/6 op 1, write mask 0x%x",
+        before.RenderTarget[0].BlendEnable, before.RenderTarget[0].SrcBlend,
+        before.RenderTarget[0].DestBlend, before.RenderTarget[0].BlendOp,
+        before.RenderTarget[0].SrcBlendAlpha, before.RenderTarget[0].DestBlendAlpha,
+        before.RenderTarget[0].BlendOpAlpha, before.RenderTarget[0].RenderTargetWriteMask,
+        description.RenderTarget[0].RenderTargetWriteMask);
     return patched;
 }
 

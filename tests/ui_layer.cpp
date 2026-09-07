@@ -263,6 +263,17 @@ int main()
                 D3D11_BLEND_DESC patched = translucent;
                 patched.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
 
+                // And a write mask without its alpha bit, which is what AC7's interface blend
+                // actually has and what the first three extraction runs tripped over. A target
+                // whose alpha nobody reads is ordinarily drawn this way, so it is not a strange
+                // case; it just makes every alpha operation above it decorative.
+                D3D11_BLEND_DESC masked = patched;
+                masked.RenderTarget[0].RenderTargetWriteMask =
+                    D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN |
+                    D3D11_COLOR_WRITE_ENABLE_BLUE;
+                ID3D11BlendState* masked_state = nullptr;
+                device->CreateBlendState(&masked, &masked_state);
+
                 ID3D11BlendState* unpatched_state = nullptr;
                 ID3D11BlendState* patched_state = nullptr;
                 device->CreateBlendState(&translucent, &unpatched_state);
@@ -324,6 +335,23 @@ int main()
                       "interface is many overlapping draws and the layer has to end up with the "
                       "coverage they jointly have.");
 
+                rsf_ui_layer_begin_frame(layer, context);
+                draw_once(masked_state, 1.0f, 1.0f, 1.0f, 0.5f);
+                read_pixel(device, context,
+                           static_cast<ID3D11Texture2D*>(rsf_ui_layer_texture(layer)), out);
+                check(near_enough(out.a, 0.0f, 1.0f / 255.0f),
+                      "Patched alpha operations under a write mask that excludes alpha still "
+                      "accumulate nothing. This is the failure that made an extracted interface "
+                      "arrive black over a black scene and washed out over a lit one: the layer "
+                      "had colour and no coverage, and a premultiplied composite of colour with "
+                      "zero coverage contributes nothing.");
+                check(near_enough(out.r, 0.5f, 2.0f / 255.0f),
+                      "While the colour lands normally, which is why every counter said the "
+                      "divert had worked.");
+
+                if (masked_state) {
+                    masked_state->Release();
+                }
                 if (unpatched_state) {
                     unpatched_state->Release();
                 }
