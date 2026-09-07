@@ -367,6 +367,23 @@ static void start_observer(void)
     rsf_bridge_set_log(observer_note, NULL);
     register_overlay_actions();
 
+    /* Naming the game's pipeline objects, so a run can say which draws are the interface. On by
+       default because it changes nothing and the answer is what the next milestone needs; the
+       hooks are only patched when something asks for them, so turning it off costs the game
+       nothing at all. */
+    if (read_number("RSF_UI_CLASSIFY", 1) != 0) {
+        const unsigned long width = read_number("RSF_UI_WIDGET_WIDTH", 1920);
+        const unsigned long height = read_number("RSF_UI_WIDGET_HEIGHT", 1080);
+        if (rsf_bridge_identify_ui(width, height)) {
+            options.on_layout = rsf_bridge_layout_hook();
+            options.on_shader = rsf_bridge_shader_hook();
+            options.on_texture = rsf_bridge_texture_hook();
+            note("ui classification on, widget draw size %lux%lu", width, height);
+        } else {
+            note("ui classification could not start; nothing will be classified this run");
+        }
+    }
+
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",
          (int)result, (unsigned long)options.format, (unsigned long)options.minimum_width,

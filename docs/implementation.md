@@ -165,8 +165,15 @@ classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
   - [x] Re-entry counted rather than flagged, so a hook may issue context calls (`ad16848`).
   - [x] The tap shadows the pixel shader, blend and depth-stencil state, and reports them with the
         layout, vertex shader, stride and topology it already held. Frame tap ABI 7 (`cc64734`).
-  - [ ] Shader hashing and the registries that turn these reports into named sets.
-  - [ ] Per-screen classification counts in the run log, and the run itself.
+  - [x] Membership sets held by address with eviction before reuse, and Castagnoli shader hashes
+        with the published check value pinned (`9210a29`).
+  - [x] A candidate prefilter inside the tap, so the classifier sees the few draws in a frame worth
+        describing rather than a callback per draw (`3039edc`).
+  - [x] The loader wires creation to classification and reports the counts, `RSF_UI_CLASSIFY` on by
+        default because it changes nothing.
+  - [ ] The run. Nothing here has been in front of the game, so no count in this list is a
+        measurement yet, and the screens are still reported by extent rather than by name: which
+        screen the game is on is M3's question.
 - [ ] M2. Divert into the UI layer and composite at present with FG off: the layer, `fullscreen_pass`,
       `composite`, the divert primitive with the alpha-op blend patch, `scene_promote` replacing
       `scene_reinsert` (interface targets deleted, chain targets added), egui in the layer.

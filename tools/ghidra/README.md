@@ -73,6 +73,32 @@ single call through a stack local was correctly reported as ambiguous rather tha
 A resolved slot says which method an offset belongs to. It does not prove the path executes or
 that a hook there works.
 
+## build-fid.py
+
+Builds a Function ID database from reference binaries that carry PDBs, so a shipped game's
+functions can be matched against an engine build whose names are known.
+
+```bash
+python3 tools/ghidra/build-fid.py .local/ghidra/fid \
+    --binary ~/ue4/Blank-Win64-Shipping.exe --variant Shipping-Win64 \
+    --binary ~/ue4/Blank.exe --variant Development-Win64 \
+    --library UnrealEngine --release 4.18.3
+```
+
+It imports each binary into a `<library>/<release>/<variant>` project folder with Function ID and
+the demanglers switched off, which is what Ghidra's own pre-script does and is required: matching
+against a database while building one corrupts the names recorded. It then creates the `.fidb` and
+runs `CreateMultipleLibraries`, answering that script's prompts through a generated properties file.
+
+Put the `.pdb` beside its `.exe`. A binary without symbols contributes addresses and no names, and
+the script says so rather than producing an empty library quietly.
+
+FID hashes an instruction sequence with operands masked. It survives relocation, not a different
+inlining decision, so build the reference the way the target was built: for a shipped game that is a
+monolithic Win64 Shipping game target, not an editor build. Build Development as a second variant;
+it inlines less, so more functions survive as distinct bodies to match. A match is a claim about
+bytes. A game on a patched engine misses exactly the functions someone changed.
+
 ## export-types.py
 
 A Ghidra script that writes the current program's data types to a `.gdt`. Use it on a binary that

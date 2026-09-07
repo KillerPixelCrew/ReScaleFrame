@@ -57,6 +57,22 @@ rsf_observer_present_fn rsf_bridge_present_hook(void);
    silent, and would not come up at all. */
 void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
 
+/* Start naming the game's pipeline objects and classifying the draws made from them.
+
+   This changes no pixel. It answers which draws on a screen are the interface, by which producer,
+   and how many looked like it and matched no rule, which is the number that decides whether
+   diverting them is safe to attempt. `widget_width` and `widget_height` name the size a converter
+   rasterizes at, zero meaning AC7's hardcoded 1920x1080. Returns zero if the registry could not be
+   created, in which case nothing is classified and the run says so.
+
+   Call before installing the observer: the three hooks below have to be in its options, because
+   what an object is can only be learned as the game creates it. */
+int rsf_bridge_identify_ui(unsigned long widget_width, unsigned long widget_height);
+
+rsf_observer_layout_fn rsf_bridge_layout_hook(void);
+rsf_observer_shader_fn rsf_bridge_shader_hook(void);
+rsf_observer_texture_fn rsf_bridge_texture_hook(void);
+
 /* What the overlay can ask for that this file does not own.
 
    Starting the backend, the render scale and frame capture all live in the carrier, because they

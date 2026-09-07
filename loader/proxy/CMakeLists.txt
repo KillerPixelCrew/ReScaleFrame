@@ -12,6 +12,7 @@ target_link_libraries(rsf_proxy_dinput8 PRIVATE
     # AGENTS.md and are here because this is what can be loaded today.
     ReScaleFrame::OrchestratorCore
     ReScaleFrame::AC7SceneColor
+    ReScaleFrame::AC7UIRules
     ReScaleFrame::AC7View
     rsf_build_options)
 target_compile_definitions(rsf_proxy_dinput8 PRIVATE _CRT_SECURE_NO_WARNINGS)

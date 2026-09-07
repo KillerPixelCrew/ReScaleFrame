@@ -28,8 +28,10 @@
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/depth_replay.h>
 #include <rescaleframe/present_blit.h>
+#include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/resource_ref.h>
 #include <rescaleframe/scene_reinsert.h>
+#include <rescaleframe/ui_identify.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -251,7 +253,149 @@ static struct {
 
     /* What the overlay can ask the carrier for. See dlss_bridge.h. */
     rsf_bridge_actions actions;
+
+    /* Interface identification. The registry holds what each pipeline object turned out to be, the
+       counts are what a run reports, and neither changes a pixel: M1 is the milestone that answers
+       which draws are the interface, and nothing acts on the answer yet. */
+    rsf_ui_registry* ui;
+    int ui_classify;
+    unsigned long ui_class_counts[7];
+    unsigned long ui_candidate_draws;
+    /* The extent the interface was rasterized at, and the extent it was drawn into. Two numbers
+       rather than a screen name, because which screen the game is on is M3's question and claiming
+       it now would be inventing it. */
+    unsigned long ui_widget_extent[2];
+    unsigned long ui_layer_extent[2];
+    unsigned long ui_reported_counts[7];
+    unsigned long ui_traced;
 } bridge;
+
+/* The configured draw sizes a converter rasterizes at. AC7's front end is a hardcoded 1920x1080
+   (`UWidgetToTextureConverter_Setup 0x1404d5c10`), and a second pair can be named without a
+   rebuild because the hangar and the briefing are not obliged to agree with it. */
+static unsigned long ui_draw_sizes[4] = {1920, 1080, 0, 0};
+static unsigned long ui_draw_size_pairs = 1;
+
+/* Publish the registry's sets to the tap, so its prefilter has something to match. Called after any
+   change, which is rare: pipeline objects are created in bursts at load and then not at all. */
+static void publish_ui_candidates(void)
+{
+    void* merged_layouts[128];
+    uint32_t slate_count = 0;
+    uint32_t canvas_count = 0;
+    void* const* slate = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, &slate_count);
+    void* const* canvas = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_CANVAS_LAYOUT, &canvas_count);
+    uint32_t merged = 0;
+    for (uint32_t index = 0; index < slate_count && merged < 128; ++index) {
+        merged_layouts[merged++] = slate[index];
+    }
+    for (uint32_t index = 0; index < canvas_count && merged < 128; ++index) {
+        merged_layouts[merged++] = canvas[index];
+    }
+
+    uint32_t widget_count = 0;
+    void* const* widgets = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_WIDGET_TARGET, &widget_count);
+    uint32_t forced_count = 0;
+    void* const* forced = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_FORCE_SHADER, &forced_count);
+
+    rsf_frame_tap_candidates candidates;
+    memset(&candidates, 0, sizeof(candidates));
+    candidates.struct_size = sizeof(candidates);
+    candidates.layouts = merged_layouts;
+    candidates.layout_count = merged;
+    candidates.widget_targets = widgets;
+    candidates.widget_target_count = widget_count;
+    candidates.shaders = forced;
+    candidates.shader_count = forced_count;
+    rsf_frame_tap_set_candidates(&candidates);
+}
+
+/* A vertex declaration was created. Name it if the game's own rule recognises it.
+
+   The address is forgotten first, always. D3D11 hands out a released address again immediately, and
+   an entry that outlived its object would make this confidently wrong about a live one. */
+static void on_layout_created(void* user, void* layout, const rsf_observer_layout_element* elements,
+                              uint32_t copied, uint32_t count)
+{
+    rsf_ac7_layout_element facts[RSF_AC7_UI_MAX_LAYOUT_ELEMENTS];
+    uint32_t index;
+    (void)user;
+    if (!bridge.ui || !layout) {
+        return;
+    }
+    rsf_ui_registry_forget(bridge.ui, layout);
+    if (copied != count || count > RSF_AC7_UI_MAX_LAYOUT_ELEMENTS) {
+        return;
+    }
+    for (index = 0; index < copied; ++index) {
+        facts[index].semantic_index = elements[index].semantic_index;
+        facts[index].format = elements[index].format;
+        facts[index].input_slot = elements[index].input_slot;
+        facts[index].byte_offset = elements[index].byte_offset;
+        facts[index].per_instance = elements[index].per_instance;
+    }
+    switch (rsf_ac7_ui_classify_layout(facts, copied)) {
+    case RSF_AC7_LAYOUT_SLATE:
+    case RSF_AC7_LAYOUT_SLATE_INSTANCED:
+        rsf_ui_registry_add(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, layout);
+        publish_ui_candidates();
+        break;
+    case RSF_AC7_LAYOUT_CANVAS:
+        rsf_ui_registry_add(bridge.ui, RSF_UI_SET_CANVAS_LAYOUT, layout);
+        publish_ui_candidates();
+        break;
+    default:
+        break;
+    }
+}
+
+static void on_shader_created(void* user, void* shader, uint32_t stage, const void* bytecode,
+                              uint32_t bytes)
+{
+    (void)user;
+    (void)stage;
+    if (!bridge.ui || !shader) {
+        return;
+    }
+    rsf_ui_registry_forget(bridge.ui, shader);
+    /* Hashed and dropped for now. The override lists that would name one are read from settings and
+       resolved here; until a run has produced hashes to name, computing them is the whole point and
+       matching them against an empty list is the honest result. */
+    (void)rsf_ui_shader_hash(bytecode, bytes);
+}
+
+static void on_texture_created(void* user, void* texture, uint32_t width, uint32_t height,
+                               uint32_t format, uint32_t mip_levels, uint32_t array_size,
+                               uint32_t sample_count, uint32_t bind_flags, uint32_t misc_flags)
+{
+    rsf_ac7_texture_facts facts;
+    uint32_t sizes[4];
+    uint32_t index;
+    (void)user;
+    (void)misc_flags;
+    if (!bridge.ui || !texture) {
+        return;
+    }
+    rsf_ui_registry_forget(bridge.ui, texture);
+
+    memset(&facts, 0, sizeof(facts));
+    facts.struct_size = sizeof(facts);
+    facts.width = width;
+    facts.height = height;
+    facts.mip_levels = mip_levels;
+    facts.array_size = array_size;
+    facts.sample_count = sample_count;
+    facts.format = format;
+    facts.is_render_target = (bind_flags & RSF_OBSERVER_BIND_RENDER_TARGET) != 0;
+    facts.is_shader_resource = (bind_flags & RSF_OBSERVER_BIND_SHADER_RESOURCE) != 0;
+    for (index = 0; index < ui_draw_size_pairs * 2 && index < 4; ++index) {
+        sizes[index] = (uint32_t)ui_draw_sizes[index];
+    }
+    if (rsf_ac7_ui_is_widget_target(&facts, sizes, (uint32_t)ui_draw_size_pairs)) {
+        rsf_ui_registry_add(bridge.ui, RSF_UI_SET_WIDGET_TARGET, texture);
+        publish_ui_candidates();
+    }
+}
 
 static void release_held(void)
 {
@@ -511,6 +655,109 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
 
    Says which slot carried it, because a texture of that shape bound in some other slot and not read
    would be the same false positive that every earlier identification fell for. */
+/* Every draw the tap's prefilter let through, classified and counted. Nothing else.
+
+   This is what M1 is for: a run says how many draws on each screen are the interface and by which
+   producer, and the number that matters most is how many came back UNKNOWN. An UNKNOWN is a draw
+   that looked like the interface and matched no rule, and diverting on a guess is exactly the
+   mistake this frame has made four times. */
+static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    rsf_ac7_draw_facts facts;
+    rsf_ac7_ui_registry rules;
+    rsf_ac7_draw_input inputs[RSF_AC7_UI_MAX_INPUTS];
+    uint32_t slate_count = 0;
+    uint32_t canvas_count = 0;
+    uint32_t widget_count = 0;
+    uint32_t forced_count = 0;
+    uint32_t skip_count = 0;
+    uint32_t index;
+    uint32_t used = 0;
+    rsf_ac7_draw_class verdict;
+    (void)user;
+
+    if (!draw || !bridge.ui || !bridge.ui_classify) {
+        return;
+    }
+    ++bridge.ui_candidate_draws;
+
+    memset(&rules, 0, sizeof(rules));
+    rules.struct_size = sizeof(rules);
+    rules.slate_layouts = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, &slate_count);
+    rules.slate_layout_count = slate_count;
+    rules.canvas_layouts = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_CANVAS_LAYOUT, &canvas_count);
+    rules.canvas_layout_count = canvas_count;
+    rules.widget_targets = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_WIDGET_TARGET, &widget_count);
+    rules.widget_target_count = widget_count;
+    rules.force_shaders = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_FORCE_SHADER, &forced_count);
+    rules.force_shader_count = forced_count;
+    rules.skip_shaders = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SKIP_SHADER, &skip_count);
+    rules.skip_shader_count = skip_count;
+    /* The frame's own target, once the tail walk has found it. Null until then, which makes a Slate
+       draw UNKNOWN rather than classified on half a fact. */
+    rules.back_buffer = bridge.composite_found ? bridge.composite : NULL;
+
+    memset(&facts, 0, sizeof(facts));
+    facts.struct_size = sizeof(facts);
+    facts.input_layout = draw->input_layout;
+    facts.vertex_shader = draw->vertex_shader;
+    facts.pixel_shader = draw->pixel_shader;
+    facts.render_target = draw->render_target;
+    facts.target_width = draw->target_width;
+    facts.target_height = draw->target_height;
+    facts.target_count = draw->target_count;
+    facts.depth_bound = draw->depth_bound;
+    facts.indexed = draw->indexed;
+    facts.element_count = draw->element_count;
+    facts.vertex_stride = draw->vertex_stride;
+    /* The blend state is shadowed by pointer and its factors are not readable without a device
+       call, so the rule sees the over blend AC7's interface uses. Reading the description belongs
+       with the divert, which needs it anyway to patch the alpha operations. */
+    facts.blend_enabled = 1;
+    facts.src_blend = RSF_AC7_BLEND_SRC_ALPHA;
+    facts.dest_blend = RSF_AC7_BLEND_INV_SRC_ALPHA;
+    for (index = 0; index < draw->input_count && used < RSF_AC7_UI_MAX_INPUTS; ++index) {
+        inputs[used].slot = draw->inputs[index].slot;
+        inputs[used].texture = draw->inputs[index].texture;
+        inputs[used].width = draw->inputs[index].width;
+        inputs[used].height = draw->inputs[index].height;
+        ++used;
+    }
+    facts.input_count = used;
+    facts.inputs = inputs;
+
+    verdict = rsf_ac7_ui_classify(&rules, &facts);
+    if (verdict < 7) {
+        ++bridge.ui_class_counts[verdict];
+    }
+
+    if (verdict == RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+        /* Both extents, because the gap between them is the whole problem: the interface is
+           rasterized at one size and drawn into a target at another. */
+        for (index = 0; index < used; ++index) {
+            if (inputs[index].width != 0) {
+                bridge.ui_widget_extent[0] = inputs[index].width;
+                bridge.ui_widget_extent[1] = inputs[index].height;
+                break;
+            }
+        }
+        bridge.ui_layer_extent[0] = draw->target_width;
+        bridge.ui_layer_extent[1] = draw->target_height;
+    }
+
+    if (bridge.ui_traced < 24u && verdict != RSF_AC7_DRAW_SCENE) {
+        ++bridge.ui_traced;
+        say("  ui draw: class %u, layout %p, vs %p, ps %p, %s %lu, stride %lu, target %p %lux%lu, "
+            "depth %lu, targets %lu, inputs %lu",
+            (unsigned)verdict, draw->input_layout, draw->vertex_shader, draw->pixel_shader,
+            draw->indexed ? "indices" : "vertices", (unsigned long)draw->element_count,
+            (unsigned long)draw->vertex_stride, draw->render_target,
+            (unsigned long)draw->target_width, (unsigned long)draw->target_height,
+            (unsigned long)draw->depth_bound, (unsigned long)draw->target_count,
+            (unsigned long)used);
+    }
+}
+
 static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     uint32_t index;
@@ -1187,6 +1434,26 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
     bridge.log_user = log_user;
 }
 
+int rsf_bridge_identify_ui(unsigned long widget_width, unsigned long widget_height)
+{
+    if (!bridge.ui) {
+        bridge.ui = rsf_ui_registry_create(RSF_UI_IDENTIFY_ABI_VERSION);
+        if (!bridge.ui) {
+            return 0;
+        }
+    }
+    if (widget_width != 0 && widget_height != 0) {
+        ui_draw_sizes[0] = widget_width;
+        ui_draw_sizes[1] = widget_height;
+    }
+    bridge.ui_classify = 1;
+    return 1;
+}
+
+rsf_observer_layout_fn rsf_bridge_layout_hook(void) { return on_layout_created; }
+rsf_observer_shader_fn rsf_bridge_shader_hook(void) { return on_shader_created; }
+rsf_observer_texture_fn rsf_bridge_texture_hook(void) { return on_texture_created; }
+
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
 {
     if (actions) {
@@ -1425,6 +1692,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.hunt_format = 0;
     tap.hunt_budget = RSF_UI_HUNT_DRAWS;
     tap.on_hunt_draw = on_hunt_draw;
+    tap.on_candidate_draw = on_candidate_draw;
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
@@ -1484,6 +1752,48 @@ void rsf_bridge_report(void)
         bridge.depth_candidate_samples);
     say("translucent depth: %lu geometry draws reached the hook, %lu of them candidates",
         bridge.geometry_draws, bridge.depth_candidates);
+    if (bridge.ui) {
+        rsf_ui_registry_counters counters;
+        uint32_t slate = 0, canvas = 0, widget = 0;
+        int moved = 0;
+        unsigned int index;
+        memset(&counters, 0, sizeof(counters));
+        counters.struct_size = sizeof(counters);
+        rsf_ui_registry_get_counters(bridge.ui, &counters);
+        rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, &slate);
+        rsf_ui_registry_view(bridge.ui, RSF_UI_SET_CANVAS_LAYOUT, &canvas);
+        rsf_ui_registry_view(bridge.ui, RSF_UI_SET_WIDGET_TARGET, &widget);
+        say("ui: named %lu slate layouts, %lu canvas layouts, %lu widget targets; %lu addresses "
+            "forgotten on reuse, %lu adds refused full",
+            (unsigned long)slate, (unsigned long)canvas, (unsigned long)widget,
+            (unsigned long)counters.forgotten_on_reuse,
+            (unsigned long)(counters.refused_full[RSF_UI_SET_SLATE_LAYOUT] +
+                            counters.refused_full[RSF_UI_SET_CANVAS_LAYOUT] +
+                            counters.refused_full[RSF_UI_SET_WIDGET_TARGET]));
+        /* Quiet when nothing has changed, like the rest of this report: a screen that is holding
+           still should stop writing rather than filling the log with the same line. */
+        for (index = 0; index < 7; ++index) {
+            moved = moved || bridge.ui_class_counts[index] != bridge.ui_reported_counts[index];
+            bridge.ui_reported_counts[index] = bridge.ui_class_counts[index];
+        }
+        if (moved) {
+            say("ui: %lu candidate draws: slate %lu, widget quad %lu, canvas-into-frame %lu, "
+                "modulate %lu, converter raster %lu, unknown %lu, skipped %lu",
+                bridge.ui_candidate_draws, bridge.ui_class_counts[RSF_AC7_DRAW_UI_SLATE],
+                bridge.ui_class_counts[RSF_AC7_DRAW_UI_WIDGET_QUAD],
+                bridge.ui_class_counts[RSF_AC7_DRAW_SCENE],
+                bridge.ui_class_counts[RSF_AC7_DRAW_UI_MODULATE],
+                bridge.ui_class_counts[RSF_AC7_DRAW_WIDGET_RASTER],
+                bridge.ui_class_counts[RSF_AC7_DRAW_UNKNOWN],
+                bridge.ui_class_counts[RSF_AC7_DRAW_SKIP]);
+            if (bridge.ui_widget_extent[0]) {
+                say("ui: the interface is rasterized at %lux%lu and drawn into %lux%lu, which is "
+                    "the gap promotion cannot close",
+                    bridge.ui_widget_extent[0], bridge.ui_widget_extent[1],
+                    bridge.ui_layer_extent[0], bridge.ui_layer_extent[1]);
+            }
+        }
+    }
     say("translucent layer: last completed frame drew %lu indices in %lu draws into it",
         bridge.translucent_indices_last, bridge.translucent_draws_last);
     {
