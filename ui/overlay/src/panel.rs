@@ -126,6 +126,8 @@ fn body(
     intent: &mut Intent,
     controls: &mut Controls,
 ) {
+    session_section(ui, stats, intent);
+    ui.separator();
     controls_section(ui, selection, stats, intent, controls);
     ui.separator();
     resolution_section(ui, stats);
@@ -141,11 +143,92 @@ fn body(
         intent.dump_requested = true;
     }
 
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Capture a frame").clicked() {
+            intent.capture_requested = true;
+        }
+        if stats.captures_written > 0 {
+            ui.label(
+                RichText::new(format!("{} written", stats.captures_written))
+                    .small()
+                    .color(MUTED),
+            );
+        }
+    });
+
     ui.label(
         RichText::new("Counters only. This build measures no frame time and no latency.")
             .small()
             .color(MUTED),
     );
+}
+
+/// Everything that used to be a function key.
+///
+/// The order is the order these have to happen in, and the state each button is in says why it
+/// cannot happen yet, rather than the press being silently ignored. Starting is separate from
+/// enabling because bringing a backend up can fail where choosing to reconstruct cannot.
+fn session_section(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent) {
+    ui.horizontal_wrapped(|ui| {
+        ui.scope(|ui| {
+            if stats.backend_loaded {
+                ui.disable();
+            }
+            if ui.button("Start backend").clicked() {
+                intent.start_requested = true;
+            }
+        });
+        if stats.backend_loaded {
+            ui.label(RichText::new("running").small().color(MUTED));
+        }
+    });
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Render scale");
+        for percent in [50u32, 67, 100] {
+            let current = stats.render_scale_percent == percent;
+            if ui
+                .selectable_label(current, format!("{percent}%"))
+                .clicked()
+                && !current
+            {
+                intent.scale_requested = true;
+                intent.scale_percent = percent;
+            }
+        }
+    });
+
+    let mut debug_view = stats.debug_view_on;
+    if ui
+        .checkbox(&mut debug_view, "Show the reconstruction over the frame")
+        .changed()
+    {
+        intent.debug_view = debug_view;
+        intent.debug_view_changed = true;
+    }
+
+    // Reinsertion needs the frame's tail identified first, which takes a few frames after the
+    // backend starts. Saying so beats a button that looks live and does nothing.
+    ui.scope(|ui| {
+        if !stats.reinsert_available {
+            ui.disable();
+        }
+        let mut reinsert = stats.reinsert_on;
+        if ui
+            .checkbox(&mut reinsert, "Put it into the game's own frame")
+            .changed()
+        {
+            intent.reinsert = reinsert;
+            intent.reinsert_changed = true;
+        }
+    });
+    if !stats.reinsert_available {
+        ui.label(
+            RichText::new("Reinsertion waits for the frame's tail to be identified.")
+                .small()
+                .color(MUTED),
+        );
+    }
 }
 
 fn controls_section(

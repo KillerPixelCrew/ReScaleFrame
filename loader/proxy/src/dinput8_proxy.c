@@ -83,7 +83,6 @@ __declspec(dllexport) HRESULT WINAPI DirectInput8Create(HINSTANCE instance, DWOR
     return original(instance, version, interface_id, out, outer);
 }
 
-#if RSF_HAVE_FRAME_CAPTURE
 /* A file sitting beside this DLL, which is beside the game executable. Written out rather than
    assumed from the working directory, because a game's working directory is not reliably its
    install folder. */
@@ -114,6 +113,132 @@ static int beside_this_module(const char* name, char* out, size_t count)
     return 1;
 }
 
+/* Settings, from a file beside the proxy rather than from the launch line.
+
+   Every knob here started as an environment variable, which meant a Steam launch option long
+   enough to lose a quote in, edited through a dialog, for values that change between runs. The file
+   is the same names, one per line, `NAME=value`, with `#` or `;` starting a comment. It is read
+   once, at attach.
+
+   An environment variable still wins where it is set, so an existing launch line keeps working and
+   a one-off override does not mean editing the file. */
+#define RSF_CONFIG_MAX_ENTRIES 64
+#define RSF_CONFIG_KEY_BYTES 64
+#define RSF_CONFIG_VALUE_BYTES 512
+
+static struct {
+    char key[RSF_CONFIG_KEY_BYTES];
+    char value[RSF_CONFIG_VALUE_BYTES];
+} config_entries[RSF_CONFIG_MAX_ENTRIES];
+static int config_count = 0;
+static int config_loaded = 0;
+static char config_path[MAX_PATH * 2];
+
+static char* trim(char* text)
+{
+    char* end;
+    while (*text == ' ' || *text == '\t') {
+        ++text;
+    }
+    end = text + strlen(text);
+    while (end > text && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) {
+        --end;
+    }
+    *end = '\0';
+    return text;
+}
+
+static void load_config(void)
+{
+    FILE* file;
+    char line[RSF_CONFIG_KEY_BYTES + RSF_CONFIG_VALUE_BYTES + 4];
+
+    if (config_loaded) {
+        return;
+    }
+    config_loaded = 1;
+    if (!beside_this_module("ReScaleFrame.ini", config_path, sizeof(config_path))) {
+        return;
+    }
+    file = fopen(config_path, "r");
+    if (!file) {
+        return;
+    }
+    while (fgets(line, (int)sizeof(line), file) && config_count < RSF_CONFIG_MAX_ENTRIES) {
+        char* separator;
+        char* key;
+        char* value;
+        char* comment = strpbrk(line, "#;");
+        if (comment) {
+            *comment = '\0';
+        }
+        separator = strchr(line, '=');
+        if (!separator) {
+            continue;
+        }
+        *separator = '\0';
+        key = trim(line);
+        value = trim(separator + 1);
+        if (!*key || strlen(key) >= RSF_CONFIG_KEY_BYTES ||
+            strlen(value) >= RSF_CONFIG_VALUE_BYTES) {
+            continue;
+        }
+        strcpy(config_entries[config_count].key, key);
+        strcpy(config_entries[config_count].value, value);
+        ++config_count;
+    }
+    fclose(file);
+}
+
+/* A setting's text, or null when nothing sets it. The environment wins over the file. */
+static const char* setting(const char* name, char* out, size_t count)
+{
+    int index;
+    if (GetEnvironmentVariableA(name, out, (DWORD)count) != 0) {
+        return out;
+    }
+    load_config();
+    for (index = 0; index < config_count; ++index) {
+        if (_stricmp(config_entries[index].key, name) == 0) {
+            if (strlen(config_entries[index].value) >= count) {
+                return NULL;
+            }
+            strcpy(out, config_entries[index].value);
+            return out;
+        }
+    }
+    return NULL;
+}
+
+/* A numeric setting.
+
+   Base zero, so the hexadecimal addresses this file documents can be written the way it documents
+   them. Absent and zero are different: a setting present and zero is that value, which is what
+   makes `RSF_DECODE_MOTION=0` disable decoding and quality zero select Native. Both were review
+   findings, and both were consequences of the old parse rejecting anything not strictly positive.
+   Text that is not a number at all falls back, because a typo should not read as zero. */
+static DWORD read_number(const char* name, DWORD fallback)
+{
+    char text[64];
+    char* end = NULL;
+    unsigned long value;
+    if (!setting(name, text, sizeof(text)) || !text[0]) {
+        return fallback;
+    }
+    value = strtoul(text, &end, 0);
+    if (end == text) {
+        return fallback;
+    }
+    return (DWORD)value;
+}
+
+/* A text setting, with the same precedence. Returns zero when nothing sets it. */
+static int read_text(const char* name, char* out, size_t count)
+{
+    return setting(name, out, count) != NULL && out[0] != '\0';
+}
+
+#if RSF_HAVE_FRAME_CAPTURE
 /* RenderDoc has to be loaded before the graphics device exists, so this runs on the carrier's own
    attach rather than on the worker thread. It only loads a library and reads two variables.
 
@@ -127,13 +252,13 @@ static void start_capture_support(void)
     char prefix[MAX_PATH];
     rsf_capture_result result;
 
-    if (GetEnvironmentVariableA("RSF_RENDERDOC_DLL", library, MAX_PATH) == 0 &&
+    if (!read_text("RSF_RENDERDOC_DLL", library, sizeof(library)) &&
         !beside_this_module("renderdoc.dll", library, sizeof(library))) {
         note("no renderdoc.dll beside the proxy and RSF_RENDERDOC_DLL is not set, so F11 has "
              "nothing to capture with");
         return;
     }
-    if (GetEnvironmentVariableA("RSF_CAPTURE_PREFIX", prefix, MAX_PATH) == 0) {
+    if (!read_text("RSF_CAPTURE_PREFIX", prefix, sizeof(prefix))) {
         prefix[0] = '\0';
     }
     result = rsf_capture_initialise(library, prefix[0] ? prefix : NULL);
@@ -165,16 +290,6 @@ static DWORD WINAPI capture_worker(LPVOID parameter)
 
 static char observe_directory[MAX_PATH];
 
-static DWORD read_number(const char* name, DWORD fallback)
-{
-    char text[64];
-    if (GetEnvironmentVariableA(name, text, sizeof(text)) == 0) {
-        return fallback;
-    }
-    const long value = strtol(text, NULL, 10);
-    return value > 0 ? (DWORD)value : fallback;
-}
-
 /* The observer's progress lines go to the same log as everything else. note() opens, writes and
    closes per line, which is what makes the last line before a crash survive it. */
 static void observer_note(void* user, const char* message)
@@ -185,6 +300,10 @@ static void observer_note(void* user, const char* message)
 
 /* Installed before the module dump rather than after it. The creation hook only sees textures
    made after it is in place, and the target we are after is allocated during engine startup. */
+/* Defined below, next to the actions themselves. Declared here because they are registered when
+   the observer is installed, which is before anything can call them. */
+static void register_overlay_actions(void);
+
 static void start_observer(void)
 {
     if (read_number("RSF_OBSERVE", 0) == 0) {
@@ -223,6 +342,7 @@ static void start_observer(void)
        starts as soon as the game has a device, and the bridge would otherwise have nowhere to
        speak until the backend was started. */
     rsf_bridge_set_log(observer_note, NULL);
+    register_overlay_actions();
 
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",
@@ -393,7 +513,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     (void)parameter;
 
     char directory[MAX_PATH];
-    if (GetEnvironmentVariableA("RSF_DUMP_DIR", directory, MAX_PATH) == 0) {
+    if (!read_text("RSF_DUMP_DIR", directory, sizeof(directory))) {
         note("RSF_DUMP_DIR is not set, nothing to do");
         return 0;
     }
@@ -559,8 +679,10 @@ static void start_dlss(void)
         rsf_bridge_report();
         return;
     }
-    if (GetEnvironmentVariableA("RSF_STREAMLINE_BIN", directory, sizeof(directory)) == 0) {
-        note("RSF_STREAMLINE_BIN is not set, so there is nothing to load DLSS from");
+    if (!read_text("RSF_STREAMLINE_BIN", directory, sizeof(directory)) &&
+        !beside_this_module("ReScaleFrame\\streamline", directory, sizeof(directory))) {
+        note("RSF_STREAMLINE_BIN is not set and no ReScaleFrame\\streamline sits beside the proxy, "
+             "so there is nothing to load DLSS from");
         return;
     }
 
@@ -611,6 +733,74 @@ static void keep_render_scale(void)
         note("the game had reset the render scale, put back to %d", (int)value);
         set_jitter_sequence_length(value, offset);
     }
+}
+
+/* What the overlay panel can ask this file for.
+
+   These are the actions that used to be function keys. They run on the render thread, called from
+   the present hook where the panel was drawn, which is the boundary the review finding wants and
+   is why the panel can drive them safely when a hotkey worker cannot.
+
+   The scale one remembers what was asked so the panel can show what is in effect. Without it the
+   only answer available is the environment default, which stops being true the moment anything
+   changes it. */
+static unsigned long requested_scale_percent = 0;
+
+static void action_start_backend(void)
+{
+    start_dlss();
+}
+
+static void action_set_render_scale(unsigned long percent)
+{
+    if (percent == 0 || percent > 100) {
+        return;
+    }
+    requested_scale_percent = percent;
+    set_screen_percentage((float)percent);
+}
+
+static unsigned long action_render_scale_percent(void)
+{
+    return requested_scale_percent;
+}
+
+static void action_trigger_dump(void)
+{
+    report_and_dump();
+}
+
+static void action_trigger_capture(void)
+{
+#if RSF_HAVE_FRAME_CAPTURE
+    const rsf_capture_result result = rsf_capture_trigger(1);
+    note("capture triggered from the panel, result %d, captures so far %u", (int)result,
+         rsf_capture_count());
+#else
+    note("this build has no frame capture support");
+#endif
+}
+
+static unsigned long action_capture_count(void)
+{
+#if RSF_HAVE_FRAME_CAPTURE
+    return rsf_capture_count();
+#else
+    return 0;
+#endif
+}
+
+static void register_overlay_actions(void)
+{
+    rsf_bridge_actions actions;
+    memset(&actions, 0, sizeof(actions));
+    actions.start_backend = action_start_backend;
+    actions.set_render_scale = action_set_render_scale;
+    actions.trigger_dump = action_trigger_dump;
+    actions.trigger_capture = action_trigger_capture;
+    actions.capture_count = action_capture_count;
+    actions.render_scale_percent = action_render_scale_percent;
+    rsf_bridge_set_actions(&actions);
 }
 
 static DWORD WINAPI observe_worker(LPVOID parameter)

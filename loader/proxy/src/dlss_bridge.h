@@ -57,6 +57,26 @@ rsf_observer_present_fn rsf_bridge_present_hook(void);
    silent, and would not come up at all. */
 void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
 
+/* What the overlay can ask for that this file does not own.
+
+   Starting the backend, the render scale and frame capture all live in the carrier, because they
+   need its environment parsing, its console-variable addresses and its RenderDoc handle. The
+   overlay runs from the present hook in here, so the panel's requests arrive here and are handed
+   back out through these. Any member may be null, and a request for a null one is refused out loud
+   rather than silently dropped.
+
+   Registered at attach, next to the log sink and for the same reason. */
+typedef struct rsf_bridge_actions {
+    void (*start_backend)(void);
+    void (*set_render_scale)(unsigned long percent);
+    void (*trigger_dump)(void);
+    void (*trigger_capture)(void);
+    unsigned long (*capture_count)(void);
+    unsigned long (*render_scale_percent)(void);
+} rsf_bridge_actions;
+
+void rsf_bridge_set_actions(const rsf_bridge_actions* actions);
+
 int rsf_bridge_running(void);
 
 #endif /* RSF_DLSS_BRIDGE_H */

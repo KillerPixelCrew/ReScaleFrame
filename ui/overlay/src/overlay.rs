@@ -136,8 +136,13 @@ impl Overlay {
         let selection = &self.selection;
         let controls = &mut self.controls;
         *controls = Controls::default();
+        let pointer = Pos2::new(
+            sanitise(input.mouse[0], 0.0) * points_per_pixel,
+            sanitise(input.mouse[1], 0.0) * points_per_pixel,
+        );
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), selection, stats, &mut intent, controls);
+            paint_cursor(ui.ctx(), pointer);
         });
 
         // Applied after the layout rather than during it, so every widget in the frame reads the
@@ -388,6 +393,32 @@ impl Overlay {
 /// Chosen rather than measured, and the one number here that is pure taste: a panel laid out at
 /// one point per pixel is unreadable on a 4K display, so it scales with the display height and
 /// stops at 3x. There is no way to ask the host for a preferred scale in ABI version 1.
+/// Draw a pointer, because the game does not.
+///
+/// Ace Combat 7 is played with a pad and hides the system cursor, so a panel that answers a mouse
+/// is unusable without one: the pointer is somewhere, and the only evidence of where is whatever
+/// happens to highlight. This draws on the foreground layer after the panel, so it is never behind
+/// a widget, and it is deliberately a plain arrow with an outline rather than a themed shape, so it
+/// stays visible against a bright sky and a dark hangar alike.
+fn paint_cursor(ctx: &egui::Context, position: Pos2) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("rsf_overlay_cursor"),
+    ));
+    // A convex triangle rather than the classic notched arrow: egui tessellates concave paths
+    // poorly, and a shape that renders wrongly is worse than a plain one that renders.
+    let points = vec![
+        position,
+        position + egui::vec2(0.0, 17.0),
+        position + egui::vec2(12.0, 12.0),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        egui::Color32::WHITE,
+        egui::Stroke::new(1.0, egui::Color32::BLACK),
+    ));
+}
+
 fn pixels_per_point(display_height: f32) -> f32 {
     (display_height / REFERENCE_HEIGHT).clamp(1.0, 3.0)
 }

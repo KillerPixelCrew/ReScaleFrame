@@ -23,7 +23,10 @@
 extern "C" {
 #endif
 
-#define RSF_OVERLAY_ABI_VERSION 1u
+/* 2: the panel drives the session rather than reporting on it, so intent gained start, debug view,
+   reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
+   were extended by appending, which is the only way they are allowed to change. */
+#define RSF_OVERLAY_ABI_VERSION 2u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
@@ -87,6 +90,13 @@ typedef struct rsf_overlay_stats {
        clicked. Those differ whenever a change has been requested and not yet applied. */
     rsf_overlay_quality quality;
     uint32_t enabled;
+    /* Appended in ABI 2. What is actually in effect, so the panel shows the session rather than
+       its own last click. `render_scale_percent` is zero when nothing has set one. */
+    uint32_t debug_view_on;
+    uint32_t reinsert_on;
+    uint32_t reinsert_available;
+    uint32_t render_scale_percent;
+    uint32_t captures_written;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -100,6 +110,21 @@ typedef struct rsf_overlay_intent {
     /* The user asked for the current frame's inputs to be written out, which is how a picture gets
        checked rather than assumed. */
     uint32_t dump_requested;
+    /* Appended in ABI 2, when the panel took over from the hotkeys.
+
+       Each is a request made once, on the frame the user clicked, and none of them is a statement
+       about what happened: the host decides, and says so through the stats and its refusal line.
+       Start is separate from `enabled` because bringing a backend up and choosing to reconstruct
+       are different acts, and the first can fail in ways the second cannot. */
+    uint32_t start_requested;
+    uint32_t debug_view_changed;
+    uint32_t debug_view;
+    uint32_t reinsert_changed;
+    uint32_t reinsert;
+    /* Apply the render scale below, as a percentage. Zero percent is not a request. */
+    uint32_t scale_requested;
+    uint32_t scale_percent;
+    uint32_t capture_requested;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 1;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 2;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -91,6 +91,16 @@ pub struct RsfOverlayStats {
     pub quality: RsfOverlayQuality,
     /// Non-zero when reconstruction is currently enabled.
     pub enabled: u32,
+    /// Non-zero while the debug view is drawing over the frame.
+    pub debug_view_on: u32,
+    /// Non-zero while the reconstruction is being put into the game's own frame.
+    pub reinsert_on: u32,
+    /// Non-zero once reinsertion has everything it needs, so the panel can refuse before asking.
+    pub reinsert_available: u32,
+    /// The render scale in effect, as a percentage, or zero when nothing has set one.
+    pub render_scale_percent: u32,
+    /// How many frame captures have been written this session.
+    pub captures_written: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -109,6 +119,22 @@ pub struct RsfOverlayIntent {
     pub enabled: u32,
     /// Non-zero when the user asked for this frame's inputs to be written out.
     pub dump_requested: u32,
+    /// Bring the backend up. Separate from `enabled`: starting can fail where choosing cannot.
+    pub start_requested: u32,
+    /// Non-zero when the debug view was toggled in this frame.
+    pub debug_view_changed: u32,
+    /// The debug view state the panel now shows.
+    pub debug_view: u32,
+    /// Non-zero when reinsertion was toggled in this frame.
+    pub reinsert_changed: u32,
+    /// The reinsertion state the panel now shows.
+    pub reinsert: u32,
+    /// Apply `scale_percent`. Zero percent is not a request.
+    pub scale_requested: u32,
+    /// The render scale to apply, as a percentage.
+    pub scale_percent: u32,
+    /// Non-zero when the user asked for a frame capture.
+    pub capture_requested: u32,
 }
 
 impl Default for RsfOverlayIntent {
@@ -120,6 +146,14 @@ impl Default for RsfOverlayIntent {
             enabled_changed: 0,
             enabled: 0,
             dump_requested: 0,
+            start_requested: 0,
+            debug_view_changed: 0,
+            debug_view: 0,
+            reinsert_changed: 0,
+            reinsert: 0,
+            scale_requested: 0,
+            scale_percent: 0,
+            capture_requested: 0,
         }
     }
 }
@@ -251,7 +285,8 @@ mod tests {
     /// point is that the two agree, and only one of them is in this file.
     #[test]
     fn stats_matches_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayStats>(), 104);
+        // 124 bytes of fields, padded to 128 by the eight byte alignment the two pointers impose.
+        assert_eq!(size_of::<RsfOverlayStats>(), 128);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -261,11 +296,16 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, jitter_pixels), 88);
         assert_eq!(offset_of!(RsfOverlayStats, quality), 96);
         assert_eq!(offset_of!(RsfOverlayStats, enabled), 100);
+        // Appended in ABI 2. Their offsets are the check that they were appended rather than
+        // inserted, which is the one change these structs are not allowed to make.
+        assert_eq!(offset_of!(RsfOverlayStats, debug_view_on), 104);
+        assert_eq!(offset_of!(RsfOverlayStats, captures_written), 120);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 24);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 56);
+        assert_eq!(offset_of!(RsfOverlayIntent, start_requested), 24);
         assert_eq!(size_of::<RsfOverlayInput>(), 36);
         assert_eq!(size_of::<RsfOverlayVertex>(), 20);
         assert_eq!(offset_of!(RsfOverlayVertex, color), 16);

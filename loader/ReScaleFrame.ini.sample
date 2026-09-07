@@ -1,0 +1,35 @@
+# ReScaleFrame settings.
+#
+# Copy this beside the proxy, as ReScaleFrame.ini next to Ace7Game.exe, and edit it there. It is
+# read once when the proxy attaches. One NAME=value per line; # or ; starts a comment.
+#
+# These are the same names that used to be Steam launch options, and an environment variable still
+# wins over the file, so an existing launch line keeps working and a one-off override does not mean
+# editing this.
+#
+# Numbers accept hexadecimal with an 0x prefix, and zero means zero rather than "unset".
+
+# Watch the game's D3D11 use. Nothing else works without it.
+RSF_OBSERVE=1
+
+# Run the engine's own temporal jitter, which every super resolution backend needs. Off in the
+# game's menu; this steps over the gate rather than turning temporal AA on.
+RSF_ENABLE_JITTER=1
+
+# Render scale, as a percentage. The panel can change this at runtime.
+RSF_SCREEN_PERCENTAGE=50
+
+# 0 Native, 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
+RSF_DLSS_QUALITY=3
+
+# Where dumps, logs and captures are written. A Windows path as Proton sees it.
+RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
+
+# Left unset on purpose: the vendor runtime is found at ReScaleFrame\streamline beside the proxy,
+# and renderdoc.dll beside the proxy as well. Set either only for a copy kept somewhere else.
+# RSF_STREAMLINE_BIN=
+# RSF_RENDERDOC_DLL=
+
+# Let translucent geometry write motion vectors. Stock 4.18 excludes it, which is why the mission
+# map's relief and the vehicle symbols in replay have none. Untested against the game.
+# RSF_TRANSLUCENT_VELOCITY=1

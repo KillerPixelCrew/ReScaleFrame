@@ -161,6 +161,9 @@ static struct {
     int reinsert_on;
     unsigned long reinsert_frames;
     unsigned long gate_evaluates;
+
+    /* What the overlay can ask the carrier for. See dlss_bridge.h. */
+    rsf_bridge_actions actions;
 } bridge;
 
 static void release_held(void)
@@ -590,6 +593,17 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
     stats->frames_presented = bridge.frames_shown;
     stats->enabled = (uint32_t)(bridge.reinsert_on || bridge.show);
+    stats->debug_view_on = (uint32_t)bridge.show;
+    stats->reinsert_on = (uint32_t)bridge.reinsert_on;
+    /* What rsf_bridge_toggle_reinsert would refuse on, asked before the click rather than after.
+       The composite has to have been identified and a reconstruction has to exist. */
+    stats->reinsert_available =
+        (uint32_t)(bridge.started && bridge.composite_found && bridge.scene_color != NULL &&
+                   bridge.evaluated > 0);
+    stats->render_scale_percent =
+        bridge.actions.render_scale_percent ? (uint32_t)bridge.actions.render_scale_percent() : 0u;
+    stats->captures_written =
+        bridge.actions.capture_count ? (uint32_t)bridge.actions.capture_count() : 0u;
 }
 
 /* Lay the panel out and draw it, and report what was clicked without acting on it.
@@ -631,17 +645,56 @@ static void overlay_tick(void* swapchain)
     if (!rsf_overlay_host_present(context, swapchain, &stats, &intent)) {
         return;
     }
-    if (intent.quality_changed) {
-        say("overlay: quality %u was asked for. Changing it live is not wired up yet",
-            (unsigned)intent.quality);
+    /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
+       That is the boundary the review finding asks for: the panel records what was clicked and the
+       change happens where the rendering already is, rather than from the message thread while a
+       frame is in flight. */
+    if (intent.start_requested) {
+        if (bridge.actions.start_backend) {
+            bridge.actions.start_backend();
+        } else {
+            say("overlay: nothing is registered to start the backend");
+        }
     }
-    if (intent.enabled_changed) {
-        say("overlay: reconstruction %s was asked for. Use F8 and F6; the panel does not drive "
-            "them yet",
-            intent.enabled ? "on" : "off");
+    if (intent.scale_requested && intent.scale_percent > 0) {
+        if (bridge.actions.set_render_scale) {
+            bridge.actions.set_render_scale(intent.scale_percent);
+        } else {
+            say("overlay: nothing is registered to set the render scale");
+        }
+    }
+    if (intent.debug_view_changed && (intent.debug_view != 0) != (bridge.show != 0)) {
+        rsf_bridge_toggle_display();
+    }
+    if (intent.reinsert_changed && (intent.reinsert != 0) != (bridge.reinsert_on != 0)) {
+        rsf_bridge_toggle_reinsert();
     }
     if (intent.dump_requested) {
-        say("overlay: a dump was asked for. Use F10; the panel does not drive it yet");
+        if (bridge.actions.trigger_dump) {
+            bridge.actions.trigger_dump();
+        } else {
+            say("overlay: nothing is registered to write a dump");
+        }
+    }
+    if (intent.enabled_changed) {
+        /* The master enable is the pair of switches above it in the panel, and there is no third
+           thing for it to mean. Said rather than quietly doing nothing. */
+        say("overlay: the enable toggle does not act on its own. Use the debug view and the "
+            "reinsertion switches");
+    }
+    if (intent.capture_requested) {
+        if (bridge.actions.trigger_capture) {
+            bridge.actions.trigger_capture();
+        } else {
+            say("overlay: no capture support was registered, so there is nothing to capture with");
+        }
+    }
+    if (intent.quality_changed) {
+        /* Quality selects a render size, so changing it means rebuilding the backend rather than
+           setting a value. Not done here yet, and said rather than silently ignored. */
+        say("overlay: quality %u was asked for. It needs the backend rebuilt, which is not wired "
+            "up yet",
+            (unsigned)intent.quality);
     }
 }
 
@@ -711,6 +764,15 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
 {
     bridge.log = log;
     bridge.log_user = log_user;
+}
+
+void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
+{
+    if (actions) {
+        bridge.actions = *actions;
+    } else {
+        memset(&bridge.actions, 0, sizeof(bridge.actions));
+    }
 }
 
 /* Stop substituting and put the frame back the way the game draws it. */

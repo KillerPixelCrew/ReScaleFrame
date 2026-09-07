@@ -122,6 +122,16 @@ pub struct Stats<'a> {
     pub quality_raw: abi::RsfOverlayQuality,
     /// Whether reconstruction is currently enabled.
     pub enabled: bool,
+    /// Whether the debug view is drawing over the frame.
+    pub debug_view_on: bool,
+    /// Whether the reconstruction is being put into the game's own frame.
+    pub reinsert_on: bool,
+    /// Whether reinsertion has everything it needs, so the panel can refuse before asking.
+    pub reinsert_available: bool,
+    /// The render scale in effect as a percentage, or zero when nothing has set one.
+    pub render_scale_percent: u32,
+    /// Frame captures written this session.
+    pub captures_written: u32,
 }
 
 impl Default for Stats<'_> {
@@ -149,6 +159,11 @@ impl Default for Stats<'_> {
             quality: Some(Quality::Native),
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
             enabled: false,
+            debug_view_on: false,
+            reinsert_on: false,
+            reinsert_available: false,
+            render_scale_percent: 0,
+            captures_written: 0,
         }
     }
 }
@@ -206,13 +221,36 @@ pub struct Intent {
     pub enabled_changed: bool,
     /// Whether the user asked for this frame's inputs to be written out.
     pub dump_requested: bool,
+    /// Whether the user asked to bring the backend up.
+    pub start_requested: bool,
+    /// The debug view state the panel shows.
+    pub debug_view: bool,
+    /// Whether the debug view was toggled in this frame.
+    pub debug_view_changed: bool,
+    /// The reinsertion state the panel shows.
+    pub reinsert: bool,
+    /// Whether reinsertion was toggled in this frame.
+    pub reinsert_changed: bool,
+    /// Whether the user asked for the render scale below to be applied.
+    pub scale_requested: bool,
+    /// The render scale the panel shows, as a percentage.
+    pub scale_percent: u32,
+    /// Whether the user asked for a frame capture.
+    pub capture_requested: bool,
 }
 
 impl Intent {
     /// Whether the user did anything at all this frame.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        !self.quality_changed && !self.enabled_changed && !self.dump_requested
+        !self.quality_changed
+            && !self.enabled_changed
+            && !self.dump_requested
+            && !self.start_requested
+            && !self.debug_view_changed
+            && !self.reinsert_changed
+            && !self.scale_requested
+            && !self.capture_requested
     }
 }
 

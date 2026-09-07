@@ -30,11 +30,21 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
 
-F5 opens the egui overlay. It comes up as soon as the game has a device, before and independently of
-F8, because the state it is most useful in is the one where nothing is running and the panel can say
-why. It draws over the finished frame after everything else and is never one of the reconstruction's
-inputs. The panel reports what was clicked and does not yet apply it: the hotkeys remain the way to
-change anything. The panel DLL is found through `RSF_OVERLAY_DLL`, or beside the proxy.
+F5 opens the egui overlay, and the panel now drives the session rather than reporting on it: start
+the backend, set the render scale, toggle the debug view and reinsertion, dump a frame, take a
+capture. It draws its own mouse cursor, because AC7 is played with a pad and hides the system one, so
+a panel that answers a mouse would otherwise be unusable. Requests are applied on the render thread
+at the point in the frame the panel was drawn from, which is the boundary the
+[review](../docs/review.md) asks for and something a hotkey worker cannot offer.
+
+It comes up as soon as the game has a device, before and independently of the backend, because the
+state it is most useful in is the one where nothing is running and the panel can say why. It draws
+over the finished frame after everything else and is never one of the reconstruction's inputs. The
+panel DLL is found through `RSF_OVERLAY_DLL`, or beside the proxy.
+
+The function keys below still work and are the fallback while the panel is unproven in game. They
+come out once it is confirmed working there; removing the only control path before its replacement
+has ever run would leave nothing to fall back to.
 
 F6 is that reinsertion, and it is off until asked for because a wrong substitution corrupts the frame. It needs the frame's tail identified first, which the loader learns from the draw into the back buffer over the first few frames after F8, so an immediate press reports what is still missing. It refuses when the game renders at the presented size, which is also what a mission load looks like from inside the frame. With F6 on, the reconstruction runs before the game's tonemap rather than at Present, the game grades it and draws its own interface over it at output resolution, and the last draw into the back buffer becomes a copy. The result has not been looked at yet.
 
@@ -51,6 +61,21 @@ JSON records the unwritten fraction. The briefing screen cannot answer it, becau
 writes velocity at all. Mission replay is the case this exists for.
 
 F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with the process and can overwrite earlier captures; use a new directory per run. Velocity previews show unwritten pixels in blue and zero motion in grey. The decoded dump should match the reference decode's range and unwritten fraction.
+
+## Settings
+
+Settings live in `ReScaleFrame.ini` beside the proxy, one `NAME=value` per line, `#` or `;` starting
+a comment, read once at attach. [`ReScaleFrame.ini.sample`](ReScaleFrame.ini.sample) is a starting
+point. The names are the ones below, unchanged, because they were environment variables first and an
+environment variable of the same name still wins over the file. That keeps an existing launch line
+working and makes a one-off override a launch option rather than an edit.
+
+Numbers accept hexadecimal with an `0x` prefix, and a setting present and zero is that value rather
+than an absence, so `RSF_DECODE_MOTION=0` disables decoding and quality `0` selects Native. Both
+were [review findings](../docs/review.md) against the old parser.
+
+The vendor runtime is found at `ReScaleFrame\streamline` beside the proxy, and `renderdoc.dll`
+beside the proxy, so neither path normally needs setting at all.
 
 ## Environment settings
 
