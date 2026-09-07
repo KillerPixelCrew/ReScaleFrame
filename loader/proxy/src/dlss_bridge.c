@@ -1094,8 +1094,11 @@ void rsf_bridge_report(void)
     rsf_dlss_pipeline_status status;
     rsf_frame_tap_status tap;
 
-    say("translucent depth: %lu candidate draws, %lu replayed, %lu selected evaluations",
-        bridge.depth_candidates, bridge.depth_replayed, bridge.depth_evaluations);
+    say("translucent depth: %lu candidate draws, %lu replayed, %lu selected evaluations, last "
+        "refusals %lu and %lu",
+        bridge.depth_candidates, bridge.depth_replayed, bridge.depth_evaluations,
+        (unsigned long)rsf_depth_replay_last_reject(bridge.depth_replay[0]),
+        (unsigned long)rsf_depth_replay_last_reject(bridge.depth_replay[1]));
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {

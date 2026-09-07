@@ -10,6 +10,25 @@ typedef struct rsf_depth_replay rsf_depth_replay;
    No allocation, compilation, or buffer retention for deferred replay occurs in draw/end_frame.
    The owner serializes setup/destruction with callbacks and keeps the object for the session. */
 rsf_depth_replay* rsf_depth_replay_create(void* device, uint32_t width, uint32_t height);
+
+/* Why the last draw was not replayed, or zero if the last one was.
+
+   A replay that draws nothing looks identical to one that was never asked, and five separate tests
+   can reject a draw. This says which:
+
+     1  nothing usable in the report
+     2  a different size than this replay was built for
+     3  this draw's shape: primitive kind, topology, no vertex shader, no elements
+     4  the depth view's format, dimension or read-only flag
+     5  the depth view's resource is not a 2D texture
+     6  that texture's size, format or sample count
+     7  the pipeline has a stage or binding this cannot reproduce
+     8  the depth stencil state is not the translucency one
+     9  the copy or the draw itself failed
+
+   Reasons 4 and above stop the replay for the rest of the frame, because they describe the frame
+   rather than the draw. Reasons 2 and 3 skip one draw and let the next be judged on its own. */
+uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* replay);
 void rsf_depth_replay_destroy(rsf_depth_replay* replay);
 /* Call only synchronously inside the tap's geometry callback, for game-selected candidates.
    The tap suppresses reentry. Returns 1 for a replay, 0 for refusal. Unsupported draws poison

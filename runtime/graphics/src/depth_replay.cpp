@@ -13,7 +13,16 @@ struct rsf_depth_replay {
     void* context = nullptr;
     uint32_t width = 0, height = 0, draws = 0;
     bool refused = false;
+    /* Why the last draw was not replayed. Reported rather than inferred: this refused three
+       hundred and forty thousand candidates in a run without saying which test did it, and five
+       tests can each do it. See `rsf_depth_replay_last_reject`. */
+    uint32_t last_reject = 0;
 };
+
+extern "C" uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* r)
+{
+    return r ? r->last_reject : 0u;
+}
 
 extern "C" void rsf_depth_replay_end_frame(rsf_depth_replay* r)
 {
@@ -145,21 +154,35 @@ bool supported_pipeline(ID3D11DeviceContext* c)
 
 extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_tap_geometry* g)
 {
-    if (!r || !g || !g->context || !g->depth_view || !g->target || g->width != r->width ||
-        g->height != r->height || g->samples != 1) {
+    if (!r || !g || !g->context || !g->depth_view || !g->target) {
+        if (r) {
+            r->last_reject = 1; /* nothing to work with */
+        }
+        return 0;
+    }
+    if (g->width != r->width || g->height != r->height || g->samples != 1) {
+        r->last_reject = 2; /* a different size than this replay was built for */
         return 0;
     }
     if (r->refused) {
         return 0;
     }
-    auto refuse = [r]() {
+    /* Sticky, and only for what cannot change: a depth view this cannot write through is a
+       property of the device and the frame, so retrying it every draw forever buys nothing. */
+    auto refuse = [r](uint32_t why) {
         r->refused = true;
+        r->last_reject = why;
         return 0u;
     };
+    /* Not sticky, because these are properties of one draw and the next draw is a different one.
+       This used to refuse for good on the first line or point primitive it saw, which in a frame
+       with a few hundred thousand candidate draws means the first one, and every translucent draw
+       after it was silently skipped for the life of the process. */
     if (g->kind > 3 || !g->vertex_shader || !g->count || !g->instances ||
         (g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST &&
          g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP)) {
-        return refuse();
+        r->last_reject = 3; /* this draw's shape */
+        return 0;
     }
     auto* c = static_cast<ID3D11DeviceContext*>(g->context);
     auto* dsv = static_cast<ID3D11DepthStencilView*>(g->depth_view);
@@ -168,7 +191,7 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     if (vd.Format != DXGI_FORMAT_D32_FLOAT_S8X24_UINT ||
         vd.ViewDimension != D3D11_DSV_DIMENSION_TEXTURE2D || vd.Texture2D.MipSlice != 0 ||
         !(vd.Flags & D3D11_DSV_READ_ONLY_DEPTH)) {
-        return refuse();
+        return refuse(4);
     }
     ID3D11Resource* resource = nullptr;
     dsv->GetResource(&resource);
@@ -176,7 +199,7 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&source));
     resource->Release();
     if (!source) {
-        return refuse();
+        return refuse(5);
     }
     D3D11_TEXTURE2D_DESC desc{};
     source->GetDesc(&desc);
@@ -185,7 +208,7 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
                        desc.SampleDesc.Quality == 0 && desc.MipLevels == 1 && desc.ArraySize == 1;
     if (!valid) {
         source->Release();
-        return refuse();
+        return refuse(6);
     }
     if (!r->source) {
         r->source = source;
@@ -196,11 +219,11 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
         const bool same = r->source == source && r->layer == g->target && r->context == c;
         source->Release();
         if (!same) {
-            return refuse();
+            return refuse(7);
         }
     }
     if (!supported_pipeline(c)) {
-        return refuse();
+        return refuse(8);
     }
     D3D11_VIEWPORT viewport{};
     UINT count = 1;
@@ -208,7 +231,7 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     if (count != 1 || viewport.TopLeftX != 0 || viewport.TopLeftY != 0 ||
         viewport.Width != float(r->width) || viewport.Height != float(r->height) ||
         viewport.MinDepth != 0 || viewport.MaxDepth != 1) {
-        return refuse();
+        return refuse(9);
     }
 
     rsf_d3d11_state saved;
