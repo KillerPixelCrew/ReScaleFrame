@@ -184,6 +184,11 @@ void apply_visibility(State& self, bool visible)
     if (visible) {
         seed_cursor_position(self);
     }
+    // Announced because this is the one thing that happens on the message thread when the toggle
+    // is pressed, and a crash on the first opened frame looks identical whether the window
+    // procedure or the render thread died. The last line in the log says which.
+    say(self, visible ? "overlay input: toggle pressed, now visible"
+                      : "overlay input: toggle pressed, now hidden");
 }
 
 LRESULT chain_to_game(WNDPROC forward, HWND window, UINT message, WPARAM wparam, LPARAM lparam)

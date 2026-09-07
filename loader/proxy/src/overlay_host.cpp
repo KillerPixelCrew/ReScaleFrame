@@ -385,26 +385,43 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
         return 0;
     }
 
+    const bool trace = self.trace_frames > 0;
+    if (trace) {
+        say("overlay frame: visible, acquiring the back buffer");
+    }
+
     auto* device_context = static_cast<ID3D11DeviceContext*>(context);
     auto* chain = static_cast<IDXGISwapChain*>(swapchain);
 
     ID3D11Texture2D* back_buffer = nullptr;
-    if (FAILED(chain->GetBuffer(0, __uuidof(ID3D11Texture2D),
-                                reinterpret_cast<void**>(&back_buffer))) ||
-        !back_buffer) {
+    const HRESULT got_buffer =
+        chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
+    if (FAILED(got_buffer) || !back_buffer) {
+        // Announced rather than returned quietly. A silent refusal here is indistinguishable from
+        // a crash in the same call, which is exactly the confusion this path was in.
+        say("overlay frame: the swap chain would not hand over its back buffer, hr 0x%08lx",
+            (unsigned long)got_buffer);
         return 0;
+    }
+    if (trace) {
+        say("overlay frame: back buffer acquired, reading its description");
     }
     D3D11_TEXTURE2D_DESC description{};
     back_buffer->GetDesc(&description);
 
+    if (trace) {
+        say("overlay frame: back buffer is %ux%u format %d, making a render target view",
+            description.Width, description.Height, (int)description.Format);
+    }
     ID3D11RenderTargetView* target = nullptr;
     const HRESULT made_target = self.device->CreateRenderTargetView(back_buffer, nullptr, &target);
     back_buffer->Release();
     if (FAILED(made_target) || !target) {
+        say("overlay frame: no render target view over the back buffer, hr 0x%08lx",
+            (unsigned long)made_target);
         return 0;
     }
 
-    const bool trace = self.trace_frames > 0;
     if (trace) {
         say("overlay frame: target %ux%u, collecting input", description.Width,
             description.Height);
