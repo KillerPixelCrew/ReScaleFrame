@@ -88,8 +88,32 @@ system Wine is unmeasured; the fixture prints the `HRESULT`s and skips with 77 r
 and the first game run under Proton is the real measurement. Windows results are a separate status
 class and are recorded when they exist.
 
+## Measured: shared handles are not available in the plain Wine prefix
+
+7 Sep 2026, `tests/shared_surface.cpp` against `~/.wine` under system Wine.
+
+`IDXGIResource1::CreateSharedHandle` returns `E_NOTIMPL` (`0x80004001`). The D3D11 texture is
+created with `SHARED | SHARED_NTHANDLE` without complaint and then no handle can be obtained from
+it, so the export half refuses and the import half is never reached. A D3D12 device is created on
+the same adapter successfully, so D3D12 itself is present and working.
+
+The prefix matters and the result does not generalise. `~/.wine/drive_c/windows/system32/d3d11.dll`
+is 469 KB and `dxgi.dll` 252 KB, which are Wine's own WineD3D rather than DXVK; DXVK's are several
+megabytes. So what this measures is that **WineD3D does not implement shared NT handles**, which is
+a different statement from anything about DXVK or vkd3d-proton, and a much less interesting one.
+
+The measurement that decides whether the bridge can work under Proton is still open, and needs the
+dedicated prefix the plan describes: DXVK's `d3d11` and `dxgi` plus vkd3d-proton's `d3d12core` and
+its `d3d12` shim. The fixture is written for exactly that and reports the `HRESULT` from whichever
+half refuses, so the answer will name the runtime rather than the symptom.
+
+The fixture skips with 77 rather than failing, here and anywhere else the two runtimes disagree,
+because that is a fact about the environment and not a defect in the code. What it must never do is
+pass quietly while the bridge cannot work, which is why every step prints what it got.
+
 ## Status
 
-Design only. Nothing in this file has been built or run. The plan's M4 builds the bridge with a
-pass-through present and no frame generation; M6 to M8 add the vendors; the measurements from each
-run are appended here.
+The surfaces and the fence are built (`shared_surface.cpp`), with the create, export, open and
+signal round trip covered. Everything else in this file is design. The plan's M4 builds the bridge
+with a pass-through present and no frame generation; M6 to M8 add the vendors; the measurements from
+each run are appended here.

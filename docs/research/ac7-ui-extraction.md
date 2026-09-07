@@ -94,4 +94,31 @@ appended here.
 
 ### Per-screen classification
 
-Not yet measured.
+Not yet measured under the corrected rules. The first run, 7 Sep 2026, is recorded in
+[the implementation tracker](../implementation.md); its counts are superseded because two of the
+rules that produced them were wrong.
+
+### Measured: the menu shimmer is our own jitter
+
+7 Sep 2026, by toggling the jitter gate on F4 while holding still on the main menu.
+
+The front end shimmers at a reduced render scale and holds still at 100%. With the gate closed the
+shimmer stops; with it open it returns. So the cause is the jitter this project forces on, and not,
+as was also plausible, a reconstruction failing to resolve menu elements that carry no motion
+vectors.
+
+Both halves are needed to explain it. AC7 runs no temporal anti-aliasing, so the projection only
+moves because `apply_jitter_patch` makes it; and the front end is drawn into render-resolution
+targets and then spatially upscaled, so at 50% a sub-pixel offset is magnified by the upscale rather
+than resolved by anything. At 100% the same offset is there and is too small to see.
+
+This has a consequence for extraction beyond the obvious one. Drawing the interface into a layer at
+output resolution takes it out of the upscaled path entirely, so the jitter stops landing on it, and
+the shimmer should go without the gate being closed at all. That is a second, independent reason to
+expect the front end to improve, and it is worth checking separately from sharpness: a run where the
+interface is sharp but still shimmering would mean the quads are being composited at output
+resolution and still being jittered, which points at the projection rather than at the layer.
+
+The gate following the reconstruction (`RSF_ENABLE_JITTER=1`) is a mitigation and not the fix. The
+fix is that nothing needing jitter should be drawn at a resolution nothing resolves it at, which is
+what the screen policy decides and what extraction removes the need for on the front end.

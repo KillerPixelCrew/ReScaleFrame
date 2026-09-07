@@ -46,6 +46,13 @@ add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
+# Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
+# HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
+add_executable(rsf_shared_surface shared_surface.cpp)
+target_link_libraries(rsf_shared_surface PRIVATE ReScaleFrame::Presentation rsf_build_options)
+add_test(NAME shared_surface COMMAND rsf_shared_surface)
+set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 # The layer, and the alpha accumulation that decides whether diverting into it works at all.
 add_executable(rsf_ui_layer ui_layer.cpp)
 target_link_libraries(rsf_ui_layer PRIVATE ReScaleFrame::Graphics rsf_build_options)
