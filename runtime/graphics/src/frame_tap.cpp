@@ -1661,6 +1661,16 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     return RSF_FRAME_TAP_OK;
 }
 
+extern "C" rsf_frame_tap_result rsf_frame_tap_reset_hunt(uint32_t budget)
+{
+    Tap& self = tap();
+    if (!self.installed) {
+        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    }
+    self.hunt_budget.store(budget ? budget : 64u, std::memory_order_relaxed);
+    return RSF_FRAME_TAP_OK;
+}
+
 extern "C" rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan)
 {
     Tap& self = tap();

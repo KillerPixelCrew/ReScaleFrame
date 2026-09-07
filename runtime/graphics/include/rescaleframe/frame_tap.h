@@ -449,6 +449,15 @@ rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
    frame that half works. Safe to call from any thread; it takes effect on the next binding. */
 rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
 
+/* Give the shape hunt a fresh budget, so it describes the frame that is on screen now.
+
+   The surfaces it finds are pooled allocations named by address, and a screen change retires them.
+   Whatever was found during an intro is not what a title screen composites into, and a hunt whose
+   budget ran out during the intro will never say so: it simply stops reporting, and the stale set
+   goes on being promoted while nothing is drawn into it. Anything that re-identifies the frame has
+   to re-run this too. */
+rsf_frame_tap_result rsf_frame_tap_reset_hunt(uint32_t budget);
+
 /* Close every gate a plan opened, so the next frame opens them again.
 
    Called from the caller's own per frame point, normally the present hook, because this module has

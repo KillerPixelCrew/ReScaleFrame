@@ -58,6 +58,9 @@
    seconds and each look is 32 frames, so this outlasts one without spinning forever if a screen
    genuinely has no interface. */
 #define RSF_TAIL_MAX_RELOOKS 12ul
+/* How many draws the interface hunt describes per look. Enough for a few frames of the tail, and
+   spent again on every restake, because the surfaces it names do not outlive a screen change. */
+#define RSF_UI_HUNT_DRAWS 48u
 /* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
    spans several frames. The composite takes the whole interface on top of the scene, so it takes
    more, and the ordinal in each report says which draw of the pass it was. */
@@ -700,6 +703,20 @@ static void watch_for_stalled_plan(void)
     bridge.composite = NULL;
     rsf_resource_release(bridge.interface_target);
     bridge.interface_target = NULL;
+    /* And the hunt's findings, which go stale the same way and for the same reason. Keeping them
+       is worse than having none: the composite is re-identified and promoted while the interface
+       targets still name allocations from the previous screen, so the plan looks healthy, the
+       counters climb, and the interface is squashed exactly as it was. That is what a title screen
+       after an intro looked like. */
+    {
+        uint32_t index;
+        for (index = 0; index < bridge.interface_target_count; ++index) {
+            rsf_resource_release(bridge.interface_targets[index]);
+            bridge.interface_targets[index] = NULL;
+        }
+        bridge.interface_target_count = 0;
+    }
+    rsf_frame_tap_reset_hunt(RSF_UI_HUNT_DRAWS);
     bridge.tail_frames = 0;
     bridge.tail_draws = 0;
 }
@@ -1383,7 +1400,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
        reproduced the mistake it exists to avoid. The size comes from the binary; the format is
        reported rather than assumed. */
     tap.hunt_format = 0;
-    tap.hunt_budget = 48;
+    tap.hunt_budget = RSF_UI_HUNT_DRAWS;
     tap.on_hunt_draw = on_hunt_draw;
     tap.log = log;
     tap.log_user = log_user;
