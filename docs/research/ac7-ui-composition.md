@@ -184,6 +184,43 @@ That makes reinsertion's structure right and its scope too small. Promoting the 
 interface to native is what the first three steps need. Keeping the interface addressable at present
 is what the last step needs, and nothing addresses that yet.
 
+## Why promoting the interface target does not sharpen it
+
+Game-tested 7 September. With reinsertion alive the picture is cleaner and the interface is still
+well short of native. The log shows the interface target promoted, `1024x576 to 2048x1152, format
+27`, so the texture is the right size and the pixels land across all of it. The glyphs are still the
+ones rasterized for a 1024x576 target, magnified.
+
+Promoting a render target changes where pixels land, not how they are generated. Slate rasterizes
+text from a font atlas at a size the layout decides, and 4.18's widget renderer makes that explicit:
+
+```cpp
+FGeometry WindowGeometry = FGeometry::MakeRoot(DrawSize * (1 / Scale), FSlateLayoutTransform(Scale));
+```
+
+Absolute pixels are `LocalSize * Scale`, which is `DrawSize`, and the layout space is
+`DrawSize / Scale`. So native-resolution interface needs both terms moved together: `DrawSize` to
+the output resolution and `Scale` to the ratio. `DrawSize` alone doubles the layout space and halves
+the apparent size of everything; `Scale` alone halves the layout space and doubles it. Neither is
+usable on its own.
+
+`FWidgetRenderer::DrawWidget` passes a literal `1` for that scale, and AC7 has inlined it.
+`UWidgetToTextureConverter_SetupVirtualWindow` at `0x1404d69a0` reads the converter's `DrawSize`
+straight from `this+0x28`, the offset the SDK gives, converts the `FIntPoint` to the `FVector2D` the
+`SVirtualWindow` is constructed with, and resizes the window to it:
+
+```c
+uVar4 = *(undefined8 *)(param_1 + 0x28);                       // DrawSize
+puVar8[0x46] = CONCAT44((float)(int)(uVar4 >> 32), (float)(int)uVar4);   // SNew(SVirtualWindow).Size(...)
+...
+FUN_140c921b0(*pplVar2, CONCAT44(...));                        // Window->Resize(DrawSize)
+```
+
+Its two callers, `FUN_1404d5c10` and `FUN_1404d6340`, are where the draw happens and where the scale
+term lives. Identifying which and patching both terms is the outstanding work. Until then the
+interface is drawn at render resolution and magnified, which is better than before only because the
+composite it lands in is no longer magnified again after it.
+
 ## Status
 
 No code changed for this note. The stock behaviour is established from source, the AC7 tail from a
