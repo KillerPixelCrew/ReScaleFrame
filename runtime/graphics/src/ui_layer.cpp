@@ -83,7 +83,9 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
     /* Not the back buffer's R10G10B10A2. Two bits of alpha cannot express partial coverage, and
        partial coverage is the entire content of this surface. Non-sRGB on both sides, so the
        composite happens in the back buffer's own encoding and no conversion creeps in. */
-    description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    /* Typeless when sRGB is wanted, so the render target view can encode and the shader resource
+       view can decode over the same memory. A plain UNORM texture cannot carry an sRGB view. */
+    description.Format = setup->srgb ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_R8G8B8A8_UNORM;
     description.SampleDesc.Count = 1;
     description.Usage = D3D11_USAGE_DEFAULT;
     /* Unordered access as well as the obvious two: the alpha accumulation check generates mips over
@@ -117,8 +119,29 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
                 return RSF_UI_LAYER_ERROR_RESOURCE_FAILED;
             }
         }
-        if (FAILED(device->CreateRenderTargetView(slot.texture, nullptr, &slot.target)) ||
-            FAILED(device->CreateShaderResourceView(slot.texture, nullptr, &slot.source))) {
+        /* Explicit view descriptors when the texture is typeless, because a null one means "the
+           texture's own format" and a typeless texture has none to give.
+         *
+         * The two views deliberately disagree. The render target view encodes, so a diverted draw
+         * stores exactly what it stored in the target it came from. The shader resource view does
+         * not decode, so the composite reads those stored bits and blends them onto a back buffer
+         * that also holds encoded colour. Decoding here would put linear values on top of encoded
+         * ones, which is the mismatch this whole option exists to remove. */
+        D3D11_RENDER_TARGET_VIEW_DESC target_view{};
+        D3D11_SHADER_RESOURCE_VIEW_DESC source_view{};
+        const D3D11_RENDER_TARGET_VIEW_DESC* target_desc = nullptr;
+        const D3D11_SHADER_RESOURCE_VIEW_DESC* source_desc = nullptr;
+        if (setup->srgb) {
+            target_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            target_view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            source_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            source_view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            source_view.Texture2D.MipLevels = 1;
+            target_desc = &target_view;
+            source_desc = &source_view;
+        }
+        if (FAILED(device->CreateRenderTargetView(slot.texture, target_desc, &slot.target)) ||
+            FAILED(device->CreateShaderResourceView(slot.texture, source_desc, &slot.source))) {
             rsf_ui_layer_destroy(layer);
             return RSF_UI_LAYER_ERROR_RESOURCE_FAILED;
         }

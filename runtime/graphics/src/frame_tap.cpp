@@ -136,6 +136,8 @@ struct Tap {
     ID3D11RenderTargetView* target_view = nullptr;
     ID3D11Texture2D* target_texture = nullptr;
     D3D11_TEXTURE2D_DESC target_description{};
+    // The bound view's format, which for a typeless texture is the one that means anything.
+    uint32_t target_view_format = 0;
     // Draws into the current target since it was bound. Reset by a change of binding, so it counts
     // a pass rather than a frame.
     uint32_t draws_into_target = 0;
@@ -499,6 +501,17 @@ void shadow_render_target(Tap& self, ID3D11RenderTargetView* view)
     if (self.target_texture) {
         self.target_texture->GetDesc(&self.target_description);
     }
+    /* The view's format as well as the texture's, because for a typeless texture they differ and it
+       is the view that decides what a shader's output means on the way in. Unreal allocates its
+       targets typeless and picks sRGB or not per view, so the texture format cannot answer whether
+       a draw's colour is being encoded, and a layer that does not encode where the original did
+       stores linear values that later read as too dark. */
+    self.target_view_format = 0;
+    if (view) {
+        D3D11_RENDER_TARGET_VIEW_DESC view_description{};
+        view->GetDesc(&view_description);
+        self.target_view_format = static_cast<uint32_t>(view_description.Format);
+    }
 }
 
 // AC7 post passes use output slot zero. Clear its implicit read/write hazard from the shadow.
@@ -575,6 +588,7 @@ void fill_divert_facts(const Tap& self, bool indexed, UINT element_count,
     facts.target_width = self.target_description.Width;
     facts.target_height = self.target_description.Height;
     facts.target_format = static_cast<uint32_t>(self.target_description.Format);
+    facts.target_view_format = self.target_view_format;
     facts.target_count = self.target_count;
     facts.target_samples = self.target_description.SampleDesc.Count;
     facts.depth_bound = self.depth_bound ? 1u : 0u;
@@ -938,6 +952,7 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     report.target_width = self.target_description.Width;
     report.target_height = self.target_description.Height;
     report.target_format = uint32_t(self.target_description.Format);
+    report.target_view_format = self.target_view_format;
     report.draw_index = ordinal;
     report.indexed = indexed ? 1u : 0u;
     report.element_count = element_count;

@@ -381,6 +381,7 @@ static void start_observer(void)
             skipped[0] = '\0';
         }
         rsf_bridge_name_shaders(forced, skipped);
+        rsf_bridge_set_ui_encoding((int)read_number("RSF_UI_ENCODE", 1));
         if (rsf_bridge_identify_ui()) {
             options.on_layout = rsf_bridge_layout_hook();
             options.on_shader = rsf_bridge_shader_hook();

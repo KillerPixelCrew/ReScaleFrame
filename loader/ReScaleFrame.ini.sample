@@ -32,6 +32,15 @@ RSF_ENABLE_JITTER=1
 # The creation hooks are only patched when this is on, so turning it off costs the game nothing.
 RSF_UI_CLASSIFY=1
 
+# Whether the extraction layer encodes colour on the way in, matching the target the diverted draws
+# came from. 1 encodes, 0 does not.
+#
+# The first extraction run put the interface on screen at native resolution and it came out dark and
+# desaturated, which is what storing linear values where encoded ones belong looks like. If 1 makes
+# it too bright instead, the answer is 0 and the target was never sRGB. The "ui draw:" trace prints
+# the view format the game bound: 29 is R8G8B8A8_UNORM_SRGB, 28 is plain UNORM.
+RSF_UI_ENCODE=1
+
 # Name shaders the rules got wrong, by hash, in either direction. Forced wins over every rule and
 # skipped loses to none, so this corrects a run without waiting for a build.
 #

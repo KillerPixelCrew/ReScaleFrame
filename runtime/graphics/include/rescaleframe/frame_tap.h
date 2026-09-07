@@ -206,6 +206,11 @@ typedef struct rsf_frame_tap_target_draw {
     void* depth_stencil_state;
     uint32_t vertex_stride;
     uint32_t topology;
+    /* The bound render target view's format, which is not the texture's when the texture is
+       typeless. Unreal allocates typeless and chooses sRGB per view, so this is the only thing that
+       says whether a draw's colour is being encoded on the way in. A layer that does not encode
+       where the original did holds linear values that later read as too dark. */
+    uint32_t target_view_format;
 } rsf_frame_tap_target_draw;
 
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */

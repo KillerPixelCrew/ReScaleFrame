@@ -57,6 +57,15 @@ typedef struct rsf_ui_layer_setup {
        presentation bridge. Costs nothing when unused and cannot be added later without recreating,
        which is why it is asked for at creation. */
     uint32_t shareable;
+    /* Write through an sRGB view, so a shader's linear output is encoded on the way in exactly as
+       it was in the target the draws were taken from.
+     *
+     * This is not cosmetic. Unreal allocates its targets typeless and chooses per view; a draw that
+       was being encoded and now is not stores linear values where encoded ones are expected, and
+       the whole layer comes out dark and desaturated while every count says it worked. The texture
+       is created typeless so both views can exist over it, and the composite reads back through a
+       matching sRGB view so the decode undoes the encode exactly. */
+    uint32_t srgb;
     rsf_ui_layer_log_fn log;
     void* log_user;
 } rsf_ui_layer_setup;

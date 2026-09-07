@@ -913,13 +913,18 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
         ++bridge.ui_traced;
         /* The hashes rather than the pointers, because a hash is what a settings file can name and
            a pointer is meaningless the moment the process exits. */
+        /* The view format as well as the texture's. They differ whenever the texture is typeless,
+           which Unreal's are, and the view is the one that says whether this draw's colour is being
+           encoded on the way in. Format 29 is R8G8B8A8_UNORM_SRGB and 28 is plain UNORM. */
         say("  ui draw: class %u, vs 0x%08lx, ps 0x%08lx, layout %p, %s %lu, stride %lu, "
-            "target %p %lux%lu, depth %lu, targets %lu, inputs %lu",
+            "target %p %lux%lu texture format %lu view format %lu, depth %lu, targets %lu, "
+            "inputs %lu",
             (unsigned)verdict, ui_hash_of(draw->vertex_shader), ui_hash_of(draw->pixel_shader),
             draw->input_layout, draw->indexed ? "indices" : "vertices",
             (unsigned long)draw->element_count, (unsigned long)draw->vertex_stride,
             draw->render_target, (unsigned long)draw->target_width,
-            (unsigned long)draw->target_height, (unsigned long)draw->depth_bound,
+            (unsigned long)draw->target_height, (unsigned long)draw->target_format,
+            (unsigned long)draw->target_view_format, (unsigned long)draw->depth_bound,
             (unsigned long)draw->target_count, (unsigned long)draw->input_count);
     }
 }
@@ -1329,6 +1334,11 @@ static void on_gate(void* user, void* context, void* texture)
     ++bridge.gate_evaluates;
 }
 
+/* Whether the layer encodes on write. Settable because the right answer depends on how the game
+   viewed the target these draws came from, and this frame has been wrong about that kind of thing
+   before. Defaults to on, which is what the first run's symptoms point at. */
+static int ui_layer_srgb = 1;
+
 /* Modules that log take a sink and a user pointer; this bridge's log is a single global. */
 static void bridge_layer_log(void* user, const char* message)
 {
@@ -1428,6 +1438,13 @@ static int start_extraction(unsigned long width, unsigned long height)
     /* Shareable from the start: frame generation opens this on a D3D12 device later and the flag
        cannot be added without recreating the texture. */
     layer.shareable = 1;
+    /* Encode on the way in, matching the target the draws were taken from.
+     *
+     * The first extraction run put the interface on screen at native resolution and it came out
+     * dark and desaturated, which is what storing linear values where encoded ones belong looks
+     * like. The `ui draw:` trace now prints the view format the game bound, so the next run says
+     * whether this is the right answer rather than leaving it as the likeliest one. */
+    layer.srgb = ui_layer_srgb;
     layer.log = bridge_layer_log;
     if (rsf_ui_layer_create(bridge.device, &layer, &bridge.layer) != RSF_UI_LAYER_OK) {
         say("ui extract: the layer could not be created; the interface stays in the scene");
@@ -1867,6 +1884,11 @@ static unsigned int parse_hash_list(const char* text, unsigned long* out, unsign
         cursor = end;
     }
     return count;
+}
+
+void rsf_bridge_set_ui_encoding(int srgb)
+{
+    ui_layer_srgb = srgb != 0;
 }
 
 void rsf_bridge_name_shaders(const char* forced, const char* skipped)

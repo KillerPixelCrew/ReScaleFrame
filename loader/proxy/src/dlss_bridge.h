@@ -82,6 +82,14 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
  * name it has. */
 void rsf_bridge_name_shaders(const char* forced, const char* skipped);
 
+/* Whether the extraction layer encodes on write, matching a target the game viewed as sRGB.
+ *
+ * Non-zero is the default and is what the first extraction run's symptoms point at: the interface
+ * arrived at native resolution and came out dark and desaturated, which is what storing linear
+ * values where encoded ones belong looks like. Set before extraction starts; the layer is created
+ * once and the views cannot be changed afterwards. */
+void rsf_bridge_set_ui_encoding(int srgb);
+
 int rsf_bridge_identify_ui(void);
 
 /* Start extracting the interface: divert the draws the classifier names into a layer at `width` by
