@@ -176,6 +176,10 @@ static void start_observer(void)
     /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
        observer's options are written once, and harmless until something turns the display on. */
     options.on_present = rsf_bridge_present_hook();
+    /* Same reason, and it has to happen before the first present rather than at F8: the overlay
+       starts as soon as the game has a device, and the bridge would otherwise have nowhere to
+       speak until the backend was started. */
+    rsf_bridge_set_log(observer_note, NULL);
 
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",

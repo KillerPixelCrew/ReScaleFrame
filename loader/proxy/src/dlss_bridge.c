@@ -706,6 +706,12 @@ rsf_observer_present_fn rsf_bridge_present_hook(void)
     return on_present;
 }
 
+void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
+{
+    bridge.log = log;
+    bridge.log_user = log_user;
+}
+
 /* Stop substituting and put the frame back the way the game draws it. */
 static void stop_reinsert(void)
 {

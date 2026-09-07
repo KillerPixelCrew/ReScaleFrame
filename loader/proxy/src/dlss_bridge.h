@@ -49,6 +49,14 @@ void rsf_bridge_toggle_reinsert(void);
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 
+/* Where this speaks, set at install rather than at F8.
+
+   Starting the backend used to be the first thing that gave the bridge a log sink, which was fine
+   while everything it did happened after F8. The overlay does not: it comes up as soon as the game
+   has a device so that it can be opened to see that nothing is running. Without this it would be
+   silent, and would not come up at all. */
+void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
+
 int rsf_bridge_running(void);
 
 #endif /* RSF_DLSS_BRIDGE_H */
