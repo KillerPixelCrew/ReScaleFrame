@@ -29,6 +29,16 @@ rsf_depth_replay* rsf_depth_replay_create(void* device, uint32_t width, uint32_t
    Reasons 4 and above stop the replay for the rest of the frame, because they describe the frame
    rather than the draw. Reasons 2 and 3 skip one draw and let the next be judged on its own. */
 uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* replay);
+
+/* What the last candidate actually looked like, so a refusal can be read instead of guessed at.
+   Zeroed fields mean that stage was never reached. */
+typedef struct rsf_depth_replay_detail {
+    uint32_t draw_width, draw_height, draw_samples;
+    uint32_t dsv_format, dsv_dimension, dsv_flags;
+    uint32_t source_width, source_height, source_format, source_samples;
+} rsf_depth_replay_detail;
+
+void rsf_depth_replay_get_detail(const rsf_depth_replay* replay, rsf_depth_replay_detail* out);
 void rsf_depth_replay_destroy(rsf_depth_replay* replay);
 /* Call only synchronously inside the tap's geometry callback, for game-selected candidates.
    The tap suppresses reentry. Returns 1 for a replay, 0 for refusal. Unsupported draws poison

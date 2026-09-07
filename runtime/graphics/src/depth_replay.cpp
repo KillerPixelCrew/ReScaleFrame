@@ -17,11 +17,24 @@ struct rsf_depth_replay {
        hundred and forty thousand candidates in a run without saying which test did it, and five
        tests can each do it. See `rsf_depth_replay_last_reject`. */
     uint32_t last_reject = 0;
+    /* What the last candidate's depth view and its resource actually were. Recorded so a refusal
+       can be read rather than guessed at: every one of these has been a wrong assumption at some
+       point, and each wrong guess costs a run of the game. */
+    rsf_depth_replay_detail detail{};
 };
 
 extern "C" uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* r)
 {
     return r ? r->last_reject : 0u;
+}
+
+extern "C" void rsf_depth_replay_get_detail(const rsf_depth_replay* r,
+                                            rsf_depth_replay_detail* out)
+{
+    if (!out) {
+        return;
+    }
+    *out = r ? r->detail : rsf_depth_replay_detail{};
 }
 
 extern "C" void rsf_depth_replay_end_frame(rsf_depth_replay* r)
@@ -188,6 +201,12 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     auto* dsv = static_cast<ID3D11DepthStencilView*>(g->depth_view);
     D3D11_DEPTH_STENCIL_VIEW_DESC vd{};
     dsv->GetDesc(&vd);
+    r->detail.dsv_format = uint32_t(vd.Format);
+    r->detail.dsv_dimension = uint32_t(vd.ViewDimension);
+    r->detail.dsv_flags = uint32_t(vd.Flags);
+    r->detail.draw_width = g->width;
+    r->detail.draw_height = g->height;
+    r->detail.draw_samples = g->samples;
     if (vd.Format != DXGI_FORMAT_D32_FLOAT_S8X24_UINT ||
         vd.ViewDimension != D3D11_DSV_DIMENSION_TEXTURE2D || vd.Texture2D.MipSlice != 0 ||
         !(vd.Flags & D3D11_DSV_READ_ONLY_DEPTH)) {
@@ -203,6 +222,10 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     }
     D3D11_TEXTURE2D_DESC desc{};
     source->GetDesc(&desc);
+    r->detail.source_width = desc.Width;
+    r->detail.source_height = desc.Height;
+    r->detail.source_format = uint32_t(desc.Format);
+    r->detail.source_samples = desc.SampleDesc.Count;
     const bool valid = desc.Width == r->width && desc.Height == r->height &&
                        desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS && desc.SampleDesc.Count == 1 &&
                        desc.SampleDesc.Quality == 0 && desc.MipLevels == 1 && desc.ArraySize == 1;

@@ -151,6 +151,13 @@ static struct {
     rsf_depth_replay* depth_replay[2];
     unsigned long depth_evaluations;
     unsigned long depth_candidates;
+    unsigned long depth_candidate_width;
+    unsigned long depth_candidate_height;
+    unsigned long depth_candidate_samples;
+    unsigned long geometry_draws;
+    unsigned long geometry_traced;
+    unsigned long depth_replay_width[2];
+    unsigned long depth_replay_height[2];
     unsigned long depth_replayed;
     rsf_ac7_scene_color color_selection;
     unsigned long composed_evaluations;
@@ -366,16 +373,61 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     (void)result;
 }
 
+/* How many geometry draws are described in full before the counters take over.
+
+   Enough to cover a frame's translucency and stop well short of a log nobody can open. Every
+   question about this path so far has been answered by one line that was not being written, and
+   each of those cost a run of the game, so this writes all of them at once. */
+#define RSF_GEOMETRY_TRACE_DRAWS 400u
+
 static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
     unsigned int i;
+    unsigned int rejects[2];
     (void)user;
-    if (!bridge.started || !rsf_ac7_scene_depth_candidate(draw)) {
+    if (!bridge.started) {
+        return;
+    }
+    /* Counted before the game-specific filter as well as after, because "no candidates" and "the
+       filter rejected them all" are different answers and looked identical. */
+    ++bridge.geometry_draws;
+    if (!rsf_ac7_scene_depth_candidate(draw)) {
+        if (bridge.geometry_traced < RSF_GEOMETRY_TRACE_DRAWS) {
+            ++bridge.geometry_traced;
+            say("geometry %lu: NOT a candidate. target %p %lux%lu format %lu samples %lu, depth "
+                "view %p, kind %lu topology %lu, %lu elements, %lu instances",
+                bridge.geometry_draws, draw->target, (unsigned long)draw->width,
+                (unsigned long)draw->height, (unsigned long)draw->format,
+                (unsigned long)draw->samples, draw->depth_view, (unsigned long)draw->kind,
+                (unsigned long)draw->topology, (unsigned long)draw->count,
+                (unsigned long)draw->instances);
+        }
         return;
     }
     ++bridge.depth_candidates;
+    bridge.depth_candidate_width = draw->width;
+    bridge.depth_candidate_height = draw->height;
+    bridge.depth_candidate_samples = draw->samples;
+
     for (i = 0; i < 2; ++i) {
-        bridge.depth_replayed += rsf_depth_replay_draw(bridge.depth_replay[i], draw);
+        const uint32_t replayed = rsf_depth_replay_draw(bridge.depth_replay[i], draw);
+        bridge.depth_replayed += replayed;
+        rejects[i] = replayed ? 0u : rsf_depth_replay_last_reject(bridge.depth_replay[i]);
+    }
+
+    if (bridge.geometry_traced < RSF_GEOMETRY_TRACE_DRAWS) {
+        ++bridge.geometry_traced;
+        say("geometry %lu: candidate. target %p %lux%lu format %lu samples %lu, depth view %p, "
+            "kind %lu topology %lu, %lu elements, %lu instances, vs %p. Replay targets %lux%lu "
+            "and %lux%lu refused %lu and %lu",
+            bridge.geometry_draws, draw->target, (unsigned long)draw->width,
+            (unsigned long)draw->height, (unsigned long)draw->format,
+            (unsigned long)draw->samples, draw->depth_view, (unsigned long)draw->kind,
+            (unsigned long)draw->topology, (unsigned long)draw->count,
+            (unsigned long)draw->instances, draw->vertex_shader,
+            bridge.depth_replay_width[0], bridge.depth_replay_height[0],
+            bridge.depth_replay_width[1], bridge.depth_replay_height[1],
+            (unsigned long)rejects[0], (unsigned long)rejects[1]);
     }
 }
 
@@ -1069,6 +1121,12 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
         rsf_depth_replay_create(bridge.device, (uint32_t)output_width, (uint32_t)output_height);
     bridge.depth_replay[1] = rsf_depth_replay_create(bridge.device, (uint32_t)output_width / 2,
                                                      (uint32_t)output_height / 2);
+    bridge.depth_replay_width[0] = output_width;
+    bridge.depth_replay_height[0] = output_height;
+    bridge.depth_replay_width[1] = output_width / 2;
+    bridge.depth_replay_height[1] = output_height / 2;
+    say("translucent depth: replay targets built at %lux%lu and %lux%lu", output_width,
+        output_height, output_width / 2, output_height / 2);
     if (!bridge.depth_replay[0] || !bridge.depth_replay[1]) {
         say("translucent depth: a startup target could not be prepared; that size will fall back");
     }
@@ -1095,10 +1153,31 @@ void rsf_bridge_report(void)
     rsf_frame_tap_status tap;
 
     say("translucent depth: %lu candidate draws, %lu replayed, %lu selected evaluations, last "
-        "refusals %lu and %lu",
+        "refusals %lu and %lu, last candidate %lux%lu samples %lu",
         bridge.depth_candidates, bridge.depth_replayed, bridge.depth_evaluations,
         (unsigned long)rsf_depth_replay_last_reject(bridge.depth_replay[0]),
-        (unsigned long)rsf_depth_replay_last_reject(bridge.depth_replay[1]));
+        (unsigned long)rsf_depth_replay_last_reject(bridge.depth_replay[1]),
+        bridge.depth_candidate_width, bridge.depth_candidate_height,
+        bridge.depth_candidate_samples);
+    say("translucent depth: %lu geometry draws reached the hook, %lu of them candidates",
+        bridge.geometry_draws, bridge.depth_candidates);
+    {
+        unsigned int slot;
+        for (slot = 0; slot < 2; ++slot) {
+            rsf_depth_replay_detail detail;
+            memset(&detail, 0, sizeof(detail));
+            rsf_depth_replay_get_detail(bridge.depth_replay[slot], &detail);
+            say("translucent depth: replay %u built %lux%lu, last draw %lux%lu samples %lu, depth "
+                "view format %lu dimension %lu flags 0x%lx, its texture %lux%lu format %lu samples "
+                "%lu",
+                slot, bridge.depth_replay_width[slot], bridge.depth_replay_height[slot],
+                (unsigned long)detail.draw_width, (unsigned long)detail.draw_height,
+                (unsigned long)detail.draw_samples, (unsigned long)detail.dsv_format,
+                (unsigned long)detail.dsv_dimension, (unsigned long)detail.dsv_flags,
+                (unsigned long)detail.source_width, (unsigned long)detail.source_height,
+                (unsigned long)detail.source_format, (unsigned long)detail.source_samples);
+        }
+    }
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
