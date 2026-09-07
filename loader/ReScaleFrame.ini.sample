@@ -12,8 +12,17 @@
 # Watch the game's D3D11 use. Nothing else works without it.
 RSF_OBSERVE=1
 
-# Run the engine's own temporal jitter, which every super resolution backend needs. Off in the
-# game's menu; this steps over the gate rather than turning temporal AA on.
+# Run the engine's own temporal jitter, which every super resolution backend needs. This steps over
+# the anti-aliasing gate rather than turning temporal AA on, because AC7 runs none.
+#
+# 1 opens the gate only while a reconstruction is resolving frames, which is what keeps the front
+# end still: an offset that nothing accumulates is visible as a shimmer, and the menu holds still
+# so it has nowhere to hide. 2 opens it from decryption to exit, which is what every measurement
+# before this was taken under. 0 never patches.
+#
+# F4 and the overlay's "Jitter the projection" switch flip it live in either mode. Doing that while
+# looking at the main menu is how a shimmer caused by the jitter is told apart from one caused by
+# the resolve failing on elements that carry no motion vectors.
 RSF_ENABLE_JITTER=1
 
 # Render scale, as a percentage. The panel can change this at runtime.
