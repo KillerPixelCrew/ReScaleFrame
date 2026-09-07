@@ -228,3 +228,48 @@ game run's log, and the two candidate causes are stated as candidates because ne
 tested. The identity of slot 1 is unverified and is the first thing to settle, since both the
 reinsertion bug and the frame generation requirement depend on which surface actually carries the
 interface.
+
+## Root: the interface is rasterized at 1920x1080 and then squashed
+
+7 September 2026, from the binary rather than from captures, after being told repeatedly that the
+branch was being tapped instead of the root.
+
+`UWidgetToTextureConverter_Setup` at `0x1404d5c10` does not compute `DrawSize`. It is handed one:
+
+```c
+local_res8 = (float)param_3;                            // the caller's FVector2D
+*(int *)(param_1 + 5)              = (int)local_res8;   // +0x28  DrawSize.X
+*(int *)((longlong)param_1 + 0x2c) = (int)fStackX_c;    // +0x2C  DrawSize.Y
+```
+
+The front end's caller is at `0x1406243e0`, and it is unambiguous about which converter it is
+building, `mov [rdi+0xd48], rax`, the `FrontWindowConverter` offset the SDK gives:
+
+```
+1406244f8  movss xmm1, [0x1425f1ce4]      ; 0x44870000 = 1080.0f
+140624500  movss xmm0, [0x1425f1cac]      ; 0x44F00000 = 1920.0f
+140624508  unpcklps xmm0, xmm1
+140624510  movq  r8, xmm0                 ; the FVector2D DrawSize
+14062451f  call  UWidgetToTextureConverter_Setup
+```
+
+**The interface is rasterized at a fixed 1920x1080 and never sees the render scale.** So the blur is
+not low resolution rasterization, and the `DrawSize`/`Scale` patch described in the section above is
+unnecessary: 1920x1080 is already ample for a 2048x1152 output. A 1920x1080 interface is composited
+into a 1024x576 composite, squashed to fit, and the frame's last draw blows that back up to
+2048x1152. Sharp, downsampled, re-upsampled.
+
+The root is therefore the resolution of the target the interface is composited *into*, not the
+resolution it is drawn *at*. Reinsertion promoting the composite is aimed correctly; something in
+between is still at render resolution.
+
+This also retires a claim made earlier in this file. The surface the tail calls the interface target,
+slot 1 at 1024x576 `R8G8B8A8_UNORM`, cannot be a `WidgetToTextureConverter` render target, because
+those are 1920x1080. It was identified by format, and the glow chain that appeared to confirm it,
+256x144 and 128x72, was one frame's coincidence: other frames show 1x1 and 63x63 in those slots. So
+what has been promoted as the interface for several runs is a render resolution surface of unknown
+role.
+
+The measurement that closes this is small and specific: find the draw whose shader input is a
+1920x1080 `R8G8B8A8` texture, and record what it writes into and with what viewport. That names the
+target that has to be promoted, and it does not depend on any format heuristic.
