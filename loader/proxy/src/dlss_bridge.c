@@ -520,12 +520,16 @@ static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
             (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
             (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
             (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
-        /* Remember it. This is the identification the tail's format rule kept getting wrong: the
-           surface the interface is composited into is the one a draw reading the interface writes
-           to, and nothing about that depends on a format. Only smaller-than-output targets are
-           worth taking, since one already at output resolution is not being squashed. */
-        if (draw->render_target && draw->target_width < bridge.output_width &&
-            draw->target_height < bridge.output_height) {
+        /* Remember it, but only when this draw is actually a squash.
+
+           The interface's own compositing runs at 1920x1080 and writes 1920x1080, and reads the
+           interface while doing it, so it matches the hunt exactly as much as the squash does.
+           Promoting those targets is meaningless and it costs plan entries that the real ones need.
+           The rule that separates them needs no sizes from elsewhere: a draw that writes a target
+           smaller than the texture it is reading is losing detail, and that is the definition of
+           the thing being looked for. */
+        if (draw->render_target && (draw->target_width < draw->inputs[index].width ||
+                                    draw->target_height < draw->inputs[index].height)) {
             uint32_t seen;
             for (seen = 0; seen < bridge.interface_target_count; ++seen) {
                 if (bridge.interface_targets[seen] == draw->render_target) {

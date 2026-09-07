@@ -70,7 +70,11 @@ extern "C" {
 
 /* Textures a plan may substitute at once. Three, plus room: the composite, the interface's target
    and the scene colour is the whole of the tail this was written for. */
-#define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 4u
+/* Eight, because four was exactly the composite, scene colour and one interface target with one to
+   spare, and the interface turned out to be composited into more than one surface. A plan that
+   describes the frame correctly and is then refused for being one entry too long is a silent
+   failure: reinsertion reports itself on and nothing is substituted. */
+#define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 8u
 
 typedef int32_t rsf_frame_tap_result;
 #define RSF_FRAME_TAP_OK ((rsf_frame_tap_result)0)
