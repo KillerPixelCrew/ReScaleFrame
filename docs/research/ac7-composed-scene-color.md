@@ -103,3 +103,22 @@ build, latency result, or target-device performance result is claimed for this c
 
 The F6 reinsertion plan still names the original scene resource. This change selects backend input;
 it does not establish the correct composed-colour substitution site or validate F6 in game.
+
+## Game-tested: the relief reaches the frame
+
+7 September 2026, briefing screen. The terrain relief and contour lines are present in the
+reconstruction, which is the first time they have been. That closes the question this change was
+made for: the layer was absent from the backend's input, not lost by it, and recombine recognition
+works in the running game rather than only against a synthetic draw sequence.
+
+What that confirms in turn: the composition order read from 4.18.3 source holds in this build, the
+composed target is the right one to hand a backend, and the fallback did not swallow the case it
+was meant to catch.
+
+What it does not settle. Whether the reconstruction of that layer is good is a separate question
+from whether it is there, and the reasons to expect trouble are known: separate translucency binds
+depth read only, so those pixels carry the depth of whatever opaque surface sits behind them, and
+the relief is a static mesh actor that never enters the velocity pass. A still camera hides both.
+Moving the briefing camera, and mission replay, are what would show ghosting or smear if either
+convention is wrong. Flight behaviour is also unverified since this change, though the condition is
+false there in every capture examined.

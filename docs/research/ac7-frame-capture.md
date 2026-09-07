@@ -8,6 +8,8 @@ The research proxy runs DLSS with decoded sparse velocity, depth, jitter, and ca
 
 F7 displays the reconstructed scene over the back buffer with a rough tonemap. The output is not yet reinserted before the game's grading and HUD composite.
 
+The briefing screen's terrain relief now reaches the reconstruction, game-tested on 7 September, once the backend was given the composed colour rather than the colour bound at the tapped pass. Whether that layer reconstructs well is a separate and open question: it writes no depth and no velocity, and a still camera shows neither problem. See [composed scene colour](ac7-composed-scene-color.md).
+
 ## Capture workflow
 
 The Windows RenderDoc DLL captured D3D11 calls through DXVK under Proton. In the recorded setup, Linux RenderDoc could not parse D3D11 chunks. Windows `renderdoccmd.exe` converted them under Wine without a replay device:
