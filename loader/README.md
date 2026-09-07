@@ -20,6 +20,7 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
+| F5 | Open or close the egui overlay |
 | F6 | Reinsert the reconstruction into the game's own frame, or stop |
 | F8 | Start DLSS after the game has a device; later presses report counters |
 | F7 | Toggle the reconstructed debug image over the back buffer |
@@ -28,6 +29,12 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 | F11 | Trigger RenderDoc when capture support is available |
 
 Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
+
+F5 opens the egui overlay. It comes up as soon as the game has a device, before and independently of
+F8, because the state it is most useful in is the one where nothing is running and the panel can say
+why. It draws over the finished frame after everything else and is never one of the reconstruction's
+inputs. The panel reports what was clicked and does not yet apply it: the hotkeys remain the way to
+change anything. The panel DLL is found through `RSF_OVERLAY_DLL`, or beside the proxy.
 
 F6 is that reinsertion, and it is off until asked for because a wrong substitution corrupts the frame. It needs the frame's tail identified first, which the loader learns from the draw into the back buffer over the first few frames after F8, so an immediate press reports what is still missing. It refuses when the game renders at the presented size, which is also what a mission load looks like from inside the frame. With F6 on, the reconstruction runs before the game's tonemap rather than at Present, the game grades it and draws its own interface over it at output resolution, and the last draw into the back buffer becomes a copy. The result has not been looked at yet.
 
@@ -54,6 +61,7 @@ F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with th
 | `RSF_DLSS_QUALITY` | `3`: Performance; backend enum is Native=0, Quality=1, Balanced=2, Performance=3, Ultra Performance=4 |
 | `RSF_DLSS_OUTPUT_WIDTH`, `RSF_DLSS_OUTPUT_HEIGHT` | Observer's presented dimensions |
 | `RSF_DECODE_MOTION` | `1`; controls decoded diagnostic dumps |
+| `RSF_OVERLAY_DLL` | Explicit path to `rescaleframe_overlay.dll`; otherwise looked for beside the proxy |
 
 **Parser limitations:** numeric environment values currently accept positive decimal integers only. Zero falls back to the default, so quality `0` selects Performance and `RSF_DECODE_MOTION=0` does not disable decoding. Address overrides must be decimal, despite the hexadecimal defaults shown above. Quality selection also does not choose `RSF_SCREEN_PERCENTAGE` automatically. These are open [review findings](../docs/review.md).
 

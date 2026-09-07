@@ -1,7 +1,9 @@
 # Research carrier DLL. Its file name is the mechanism, so it is deliberately not ReScaleFrame.*.
 add_library(rsf_proxy_dinput8 SHARED
     src/dinput8_proxy.c
-    src/dlss_bridge.c)
+    src/dlss_bridge.c
+    # C++ because it is the one part of the bridge that talks to COM directly.
+    src/overlay_host.cpp)
 target_link_libraries(rsf_proxy_dinput8 PRIVATE
     ReScaleFrame::LoaderDiagnostics
     ReScaleFrame::Graphics

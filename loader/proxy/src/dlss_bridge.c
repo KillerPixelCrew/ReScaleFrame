@@ -33,6 +33,7 @@
 #include <string.h>
 
 #include "dlss_bridge.h"
+#include "overlay_host.h"
 
 /* Unreal's velocity encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written here as
    the decode a backend needs, which is the reciprocal of that scale and the same bias. The sentinel
@@ -504,16 +505,148 @@ static void on_gate(void* user, void* context, void* texture)
     ++bridge.gate_evaluates;
 }
 
-/* Called before the game's own Present, from the observer.
+/* The debug view: draw the reconstruction over the finished frame.
 
-   Drawing the reconstruction over the finished frame replaces a graded image that has an interface
-   on it with an ungraded one that does not, so it looks wrong in brightness and has no HUD even
-   when the reconstruction is perfect. That is the price of being able to see motion at all, and it
-   is a debug view rather than a step towards how this should work. */
-static void on_present(void* user, void* swapchain)
+   It replaces a graded image that has an interface on it with an ungraded one that does not, so it
+   looks wrong in brightness and has no HUD even when the reconstruction is perfect. That is the
+   price of being able to see motion at all, and it is a debug view rather than a step towards how
+   this should work. */
+static void show_result(void* swapchain)
 {
     void* output;
 
+    if (!bridge.started || !bridge.show || !bridge.blit) {
+        return;
+    }
+    output = rsf_dlss_pipeline_output_texture();
+    if (!output || bridge.evaluated == 0) {
+        return;
+    }
+    if (rsf_present_blit_draw(bridge.blit, bridge.context, swapchain, output, 1u) ==
+        RSF_PRESENT_BLIT_OK) {
+        ++bridge.frames_shown;
+    }
+}
+
+/* Everything the panel displays, gathered from where it actually lives.
+
+   It is filled every frame the panel is open rather than kept as state, because a number the panel
+   shows and a number the bridge holds disagreeing is the failure this is meant to catch, not to
+   introduce. */
+static void fill_overlay_stats(rsf_overlay_stats* stats)
+{
+    rsf_dlss_pipeline_status pipeline;
+    rsf_frame_tap_status tap;
+
+    memset(stats, 0, sizeof(*stats));
+    stats->struct_size = sizeof(*stats);
+
+    memset(&pipeline, 0, sizeof(pipeline));
+    pipeline.struct_size = sizeof(pipeline);
+    if (rsf_dlss_pipeline_get_status(&pipeline) == RSF_DLSS_PIPELINE_OK) {
+        stats->backend_loaded = pipeline.running;
+        stats->backend_supported = pipeline.dlss_supported;
+        stats->render_width = pipeline.render_width;
+        stats->render_height = pipeline.render_height;
+        stats->output_width = pipeline.output_width;
+        stats->output_height = pipeline.output_height;
+        stats->frames_evaluated = (uint32_t)pipeline.frames_evaluated;
+        stats->frames_refused = (uint32_t)pipeline.frames_refused;
+        stats->last_result = (int32_t)pipeline.last_result;
+    }
+    stats->backend_name = "DLSS";
+
+    /* Why nothing is happening, in the order the pipeline actually fails. A backend that is running
+       and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
+       the entire reason this field exists. */
+    if (!bridge.started) {
+        stats->refusal_reason = "not started, press F8";
+    } else if (!stats->backend_supported) {
+        stats->refusal_reason = "the driver did not accept DLSS";
+    } else if (bridge.passes == 0) {
+        stats->refusal_reason = "no pass has bound the reconstruction inputs yet";
+    } else if (bridge.no_jitter > 0 && bridge.evaluated == 0) {
+        stats->refusal_reason = "the projection carries no jitter, press F9";
+    } else if (bridge.not_main_view > 0 && bridge.evaluated == 0) {
+        stats->refusal_reason = "the view read was not the main view";
+    }
+
+    memset(&tap, 0, sizeof(tap));
+    tap.struct_size = sizeof(tap);
+    if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
+        stats->have_motion = tap.motion_seen > 0;
+        stats->have_depth = tap.depth_seen > 0;
+        stats->have_exposure = tap.exposure_seen > 0;
+        if (stats->render_width == 0) {
+            stats->render_width = tap.render_width;
+            stats->render_height = tap.render_height;
+        }
+    }
+    stats->have_scene_color = bridge.scene_color != NULL || bridge.held_color != NULL;
+    stats->motion_decoded = bridge.evaluated > 0;
+    stats->jitter_active = bridge.held_camera.has_jitter;
+    stats->jitter_pixels[0] = bridge.held_camera.jitter_pixels[0];
+    stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
+    stats->frames_presented = bridge.frames_shown;
+    stats->enabled = (uint32_t)(bridge.reinsert_on || bridge.show);
+}
+
+/* Lay the panel out and draw it, and report what was clicked without acting on it.
+
+   Nothing here applies an intent yet. The panel can already change quality and toggle
+   reconstruction in its own model, and wiring those to the bridge means a settings change crossing
+   from the message thread to the render thread at a defined point, which is the open review finding
+   about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
+   and leaves the hotkeys as the way to ask. */
+static void overlay_tick(void* swapchain)
+{
+    rsf_overlay_stats stats;
+    rsf_overlay_intent intent;
+    void* device;
+    void* context;
+
+    if (!bridge.log) {
+        return;
+    }
+    if (!rsf_overlay_host_visible()) {
+        /* Starting it needs a device, which needs the game to have made one. Acquiring it here
+           rather than at F8 is what lets the panel open and say that the backend is not running,
+           which is the state it is most useful in. */
+        if (rsf_observer_acquire_device(&device, &context) != RSF_OBSERVER_OK) {
+            return;
+        }
+        rsf_overlay_host_start(device, swapchain, bridge.log, bridge.log_user);
+        if (!rsf_overlay_host_visible()) {
+            return;
+        }
+    }
+
+    if (rsf_observer_acquire_device(&device, &context) != RSF_OBSERVER_OK) {
+        return;
+    }
+    fill_overlay_stats(&stats);
+    memset(&intent, 0, sizeof(intent));
+    intent.struct_size = sizeof(intent);
+    if (!rsf_overlay_host_present(context, swapchain, &stats, &intent)) {
+        return;
+    }
+    if (intent.quality_changed) {
+        say("overlay: quality %u was asked for. Changing it live is not wired up yet",
+            (unsigned)intent.quality);
+    }
+    if (intent.enabled_changed) {
+        say("overlay: reconstruction %s was asked for. Use F8 and F6; the panel does not drive "
+            "them yet",
+            intent.enabled ? "on" : "off");
+    }
+    if (intent.dump_requested) {
+        say("overlay: a dump was asked for. Use F10; the panel does not drive it yet");
+    }
+}
+
+/* Called before the game's own Present, from the observer. */
+static void on_present(void* user, void* swapchain)
+{
     (void)user;
     if (bridge.frames_described < 4 && bridge.pass_in_frame > 0) {
         say("frame ended after %lu qualifying passes", bridge.pass_in_frame);
@@ -537,17 +670,11 @@ static void on_present(void* user, void* swapchain)
         }
     }
 
-    if (!bridge.started || !bridge.show || !bridge.blit) {
-        return;
-    }
-    output = rsf_dlss_pipeline_output_texture();
-    if (!output || bridge.evaluated == 0) {
-        return;
-    }
-    if (rsf_present_blit_draw(bridge.blit, bridge.context, swapchain, output, 1u) ==
-        RSF_PRESENT_BLIT_OK) {
-        ++bridge.frames_shown;
-    }
+    show_result(swapchain);
+
+    /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
+       It takes no part in the reconstruction and is never one of its inputs. */
+    overlay_tick(swapchain);
 }
 
 void rsf_bridge_toggle_display(void)

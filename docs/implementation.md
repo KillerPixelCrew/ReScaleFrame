@@ -73,9 +73,22 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       composited over the reconstruction is low resolution. Post process shaders that address texels
       rather than sampling normalised will address the wrong ones, because their constants still
       describe the buffer the engine believes it has. Both are visible only in a rendered result.
-- [ ] In-game overlay. The egui crate builds as a Windows DLL exporting its five entry points, the
-      D3D11 renderer and the window procedure hook compile, and the observer now offers the Present
-      callback they need. Nothing loads or draws them yet.
+- [ ] In-game overlay. The three pieces are now joined by a caller: `loader/proxy/overlay_host`
+      loads the egui DLL, builds the renderer against the game's device, subclasses the window the
+      swap chain presents to, and lays out and draws one frame per Present. F5 opens it. It starts
+      as soon as the game has a device rather than at F8, so the panel can be opened to see that
+      the backend is not running and why, and it fills its refusal line in the order the pipeline
+      actually fails.
+
+      The panel reports what was clicked and nothing acts on it. Quality, the enable toggle and the
+      dump button log what was asked for and point at the hotkeys. Applying them means a settings
+      change crossing from the message thread to the render thread at a defined boundary, which is
+      the open review finding about F7 and F8, and adding a third way in before that is fixed would
+      make it worse. That boundary is the next piece of work here.
+
+      Cross-built with mingw-w64 and the suite passes under Wine on DXVK, but nothing here is a
+      test of the overlay: it draws inside a game's Present and none of the existing tests reach
+      that. Not run against the game, so no claim is made that a panel appears.
 - [ ] Early loader and orchestrator handshake in the actual AC7 process.
 - [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
 - [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.
