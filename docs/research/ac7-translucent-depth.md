@@ -1,5 +1,18 @@
 # AC7 translucent depth for camera motion
 
+## The path is complete, 7 September 2026
+
+The replayed depth reaches the backend: 67,801 of 68,995 candidate draws replayed and 1,194 selected evaluations, with the swap logged each frame as `0x2FB41790 -> 0x30359A20 at 1024x576`. Nothing was selected until two bugs cleared, and both had been introduced by earlier fixes rather than found in the game.
+
+The first was in the replay. An unsupported primitive kind or topology set a refusal that is checked before every later draw, so the first line or point primitive in a frame disabled the replay for every translucent draw after it, for the life of the process. Those tests describe a draw and now skip it; only the tests that describe the frame stay sticky.
+
+The second appeared the moment separate translucency stopped rendering at half resolution. The recombine's layer was identified by keeping one half-float input of the right size and discarding it if a second appeared. At half resolution only one input could match, so it worked. At full resolution two matched, the layer became null every frame, and the handover compared against nothing. The other two terms, the depth and the context, had matched all along.
+
+Every candidate the recombine reads is now offered, and the caller asks whether the texture its own replay drew into is among them.
+
+That pattern is worth naming, because this tail has produced it four times: the composite selection, the interface format, and now the layer. A running game binds more than it reads, so any rule of the form "the one that matches" fails as soon as a second thing matches. Each time the fix was to compare against everything bound rather than to choose more cleverly.
+
+
 7 September 2026. Implemented in the research proxy, cross-built with MinGW-w64, and
 synthetic-tested under Wine. Deployed for game verification. No AC7 run or DLSS quality
 measurement was performed for this change. No MSVC/Windows verification.
