@@ -37,6 +37,9 @@ struct State {
     // before the procedure is swapped in and are not cleared by uninstall.
     std::atomic<bool> installed{false};
     std::atomic<uint32_t> visible{0};
+    /* When the visibility last actually changed, so two routes reporting one press do not undo
+       each other. See apply_visibility. */
+    std::atomic<unsigned long long> last_visibility_change{0};
     std::atomic<HWND> window{nullptr};
     std::atomic<WNDPROC> original{nullptr};
     std::atomic<uint32_t> toggle_key{VK_F7};
@@ -176,10 +179,27 @@ void seed_cursor_position(State& self)
 
 void apply_visibility(State& self, bool visible)
 {
+    /* One press, one change.
+
+       The toggle key reaches this from two directions: the window procedure, which sees the key as
+       a message and can swallow it, and a hotkey worker polling the key state, which exists because
+       a run turned up where no message ever arrived. Both fire on the same press. The procedure
+       opens the panel and the poll, asking for the opposite of what it now sees, closes it again,
+       which looks exactly like the panel flashing for one frame and vanishing.
+
+       Ignoring a change that lands within a few frames of the last one costs nothing a hand can
+       notice and makes either path work alone or together. */
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG previous_change = self.last_visibility_change.load(std::memory_order_acquire);
+    if (previous_change != 0 && now - previous_change < 250) {
+        return;
+    }
+
     const uint32_t previous = self.visible.exchange(visible ? 1u : 0u, std::memory_order_acq_rel);
     if ((previous != 0) == visible) {
         return;
     }
+    self.last_visibility_change.store(now, std::memory_order_release);
     clear_transient_input(self);
     if (visible) {
         seed_cursor_position(self);
