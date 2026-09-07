@@ -33,6 +33,21 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       motion vector's sign can be judged. It is not the real path, which reinserts the reconstructed
       scene before the game's own composite so the grade and the interface survive. That is the
       remaining structural piece and the reason the picture is ungraded and has no HUD.
+
+      The instrument that places it is built. The frame tap now also shadows the output merger and
+      describes the draws into a render target it is asked to watch: extent, viewport, ordinal
+      within the pass, indexed or not, and every pixel shader input with its slot number. The
+      bridge points it at the swap chain's back buffer, takes the single texture that draw reads as
+      the composite, then watches that, and marks the scene colour wherever it appears among the
+      inputs. Which draw into the composite reads scene colour is the tonemap, and that is where
+      the substitution goes. It is not in any capture here: the exported action list records render
+      target bindings and not shader resource bindings, which
+      [ac7-frame-capture.md](research/ac7-frame-capture.md) states as a limitation twice.
+
+      Cross-built with mingw-w64 and tested under Wine on DXVK. The watch is exercised against a
+      real device: an unwatched target, three draws into a watched one, a fourth past the budget, a
+      different target, the watched one again, a cleared watch, and a draw after uninstalling. Not
+      yet run against the game, so nothing here says what AC7's tail actually looks like.
 - [ ] In-game overlay. The egui crate builds as a Windows DLL exporting its five entry points, the
       D3D11 renderer and the window procedure hook compile, and the observer now offers the Present
       callback they need. Nothing loads or draws them yet.

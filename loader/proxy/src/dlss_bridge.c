@@ -39,6 +39,22 @@
 #define RSF_UNREAL_MOTION_BIAS (32767.0f / 65535.0f)
 #define RSF_MOTION_SENTINEL (-1000.0f)
 
+/* How long the frame's tail is looked at, in presents.
+
+   Bounded on purpose, and not only because this runs on the render thread. Watching the back
+   buffer means holding a reference on it, and a held back buffer reference makes `ResizeBuffers`
+   fail, which is a mode change or an alt-tab breaking. A few frames answers the question; keeping
+   the watch for the process's life would trade an answer for a fault that appears much later and
+   looks like something else entirely. The composite is an engine pooled target and carries no such
+   hazard, so it is watched for longer. */
+#define RSF_TAIL_ARM_FRAMES 6ul
+#define RSF_TAIL_STOP_FRAMES 32ul
+/* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
+   spans several frames. The composite takes the whole interface on top of the scene, so it takes
+   more, and the ordinal in each report says which draw of the pass it was. */
+#define RSF_TAIL_BACK_BUFFER_DRAWS 8u
+#define RSF_TAIL_COMPOSITE_DRAWS 64u
+
 static struct {
     int started;
     void* device;
@@ -95,6 +111,30 @@ static struct {
     unsigned long held_width;
     unsigned long held_height;
     int have_held;
+
+    /* Learning where the reconstruction goes back in.
+
+       The result is drawn over the finished frame today, which is why it is ungraded and has no
+       interface. Putting it back properly means replacing the scene before the game composites its
+       interface onto it, and at a reduced render scale that composite runs at render resolution:
+       ac7-frame-capture.md has the frame ending in one draw that reads a single 1024x576 composite
+       and writes the 2048x1152 back buffer.
+
+       Which draws write that composite, and which of them reads scene colour, is the one fact that
+       places the intervention and it is in no capture here. The exported action list records render
+       target bindings and not shader resource bindings, which that document states as a limitation
+       twice. So it is asked of the running game: watch the back buffer, and whatever its draw
+       reads is the composite; watch the composite, and its draws say which one is the tonemap.
+
+       Both are retained for as long as they are watched, because the tap compares by address and
+       does not hold a reference of its own. */
+    void* back_buffer;
+    void* composite;
+    /* Kept separately from the pointer, which is dropped when the watch ends. What was learned
+       outlives the reference that was needed to learn it. */
+    int composite_found;
+    unsigned long tail_frames;
+    unsigned long tail_draws;
 } bridge;
 
 static void release_held(void)
@@ -245,6 +285,107 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     (void)result;
 }
 
+/* One reported draw's pixel shader inputs, one line each.
+
+   Slot numbers are kept rather than renumbered, so a gap says a slot held something that is not a
+   2D texture. The scene colour is marked where it appears, and that mark is the answer being looked
+   for: the draw into the composite that reads it is the tonemap, and the tonemap is where the
+   reconstructed scene has to go in. */
+static void describe_inputs(const rsf_frame_tap_target_draw* draw)
+{
+    uint32_t index;
+    for (index = 0; index < draw->input_count; ++index) {
+        const rsf_frame_tap_input* input = &draw->inputs[index];
+        say("    slot %lu: %p %lux%lu format %lu%s", (unsigned long)input->slot, input->texture,
+            (unsigned long)input->width, (unsigned long)input->height,
+            (unsigned long)input->format,
+            (input->texture && input->texture == bridge.held_color) ? "  <- scene colour" : "");
+    }
+}
+
+/* Called by the frame tap, on the render thread, after a draw into a target this asked about. */
+static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    (void)user;
+    if (!draw) {
+        return;
+    }
+    ++bridge.tail_draws;
+
+    say("%s draw %lu: target %p %lux%lu format %lu, viewport %lux%lu, %s %lu, %lu inputs",
+        draw->watch_index == 0 ? "back buffer" : "composite", (unsigned long)draw->draw_index,
+        draw->render_target, (unsigned long)draw->target_width,
+        (unsigned long)draw->target_height, (unsigned long)draw->target_format,
+        (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
+        draw->indexed ? "indices" : "vertices", (unsigned long)draw->element_count,
+        (unsigned long)draw->input_count);
+    describe_inputs(draw);
+
+    /* What the back buffer draw reads is the composite. At a reduced render scale it reads exactly
+       one resource, so anything else is a different tail than the one the capture describes, and
+       taking the first input regardless would name the wrong texture and describe the wrong pass.
+       Refusing here costs one game run and is the difference between an answer and a guess. */
+    if (draw->watch_index != 0 || bridge.composite) {
+        return;
+    }
+    if (draw->input_count != 1 || !draw->inputs[0].texture) {
+        return;
+    }
+    /* Our own debug blit also draws over the back buffer reading exactly one texture, from inside
+       the Present hook, and nothing about its shape distinguishes it from the game's last draw.
+       Taking it would point the reinsertion at the reconstruction's own output. */
+    if (draw->inputs[0].texture == rsf_dlss_pipeline_output_texture()) {
+        return;
+    }
+    bridge.composite = draw->inputs[0].texture;
+    bridge.composite_found = 1;
+    rsf_resource_retain(bridge.composite);
+    rsf_frame_tap_watch_target(1, bridge.composite, RSF_TAIL_COMPOSITE_DRAWS);
+    say("  that single input is the composite the scene has to be replaced in. Watching it: the "
+        "draw into it that reads scene colour is where the reconstruction goes back");
+}
+
+/* Ask the frame about its own tail, for a bounded number of presents. */
+static void watch_tail(void* swapchain)
+{
+    void* buffer;
+
+    ++bridge.tail_frames;
+    if (bridge.tail_frames > RSF_TAIL_STOP_FRAMES) {
+        return;
+    }
+    if (bridge.tail_frames == RSF_TAIL_STOP_FRAMES) {
+        rsf_frame_tap_watch_target(1, NULL, 0);
+        rsf_resource_release(bridge.composite);
+        bridge.composite = NULL;
+        say("frame tail: done looking, %lu draws described", bridge.tail_draws);
+        return;
+    }
+    if (bridge.tail_frames >= RSF_TAIL_ARM_FRAMES) {
+        if (bridge.back_buffer) {
+            rsf_frame_tap_watch_target(0, NULL, 0);
+            rsf_resource_release(bridge.back_buffer);
+            bridge.back_buffer = NULL;
+        }
+        return;
+    }
+
+    /* Re-read rather than kept. A flip model swap chain hands out a different texture per frame,
+       and a watch left on the previous one would match nothing while looking exactly like a tail
+       that has no draws in it. */
+    buffer = rsf_swapchain_back_buffer(swapchain);
+    if (!buffer) {
+        return;
+    }
+    if (buffer == bridge.back_buffer) {
+        rsf_resource_release(buffer);
+        return;
+    }
+    rsf_resource_release(bridge.back_buffer);
+    bridge.back_buffer = buffer;
+    rsf_frame_tap_watch_target(0, buffer, RSF_TAIL_BACK_BUFFER_DRAWS);
+}
+
 /* Run the frame that was held, now that the game has finished drawing it. */
 static void evaluate_held(void* context)
 {
@@ -295,6 +436,7 @@ static void on_present(void* user, void* swapchain)
 
     /* The frame is finished here, which is the whole reason the evaluate waits for it. */
     if (bridge.started) {
+        watch_tail(swapchain);
         evaluate_held(bridge.context);
     }
 
@@ -398,6 +540,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.struct_size = sizeof(tap);
     tap.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     tap.on_pass = on_pass;
+    tap.on_target_draw = on_target_draw;
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
@@ -449,6 +592,12 @@ void rsf_bridge_report(void)
         "%lu evaluated, %lu refused, last result %ld",
         bridge.passes, bridge.view_read_failures, bridge.not_main_view, bridge.no_jitter,
         bridge.evaluated, bridge.refused, bridge.last_result);
+
+    /* Whether the frame's tail was ever described. Zero draws with a watch that was set is a
+       different fault from a watch that was never armed, and both look like silence otherwise. */
+    say("frame tail: %lu presents watched, %lu draws described, composite %s",
+        bridge.tail_frames, bridge.tail_draws,
+        bridge.composite_found ? "identified" : "not identified yet");
 
     memset(&status, 0, sizeof(status));
     status.struct_size = sizeof(status);

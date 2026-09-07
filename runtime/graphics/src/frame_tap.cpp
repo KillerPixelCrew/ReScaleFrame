@@ -20,6 +20,8 @@ constexpr size_t slot_ps_set_shader_resources = 8;
 constexpr size_t slot_draw_indexed = 12;
 constexpr size_t slot_draw = 13;
 constexpr size_t slot_ps_set_constant_buffers = 16;
+constexpr size_t slot_om_set_render_targets = 33;
+constexpr size_t slot_om_set_render_targets_and_uavs = 34;
 
 using ps_set_shader_resources_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
                                                             ID3D11ShaderResourceView* const*);
@@ -27,6 +29,12 @@ using ps_set_constant_buffers_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*
                                                             ID3D11Buffer* const*);
 using draw_indexed_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
 using draw_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
+using om_set_render_targets_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT,
+                                                          ID3D11RenderTargetView* const*,
+                                                          ID3D11DepthStencilView*);
+using om_set_render_targets_and_uavs_fn = void(STDMETHODCALLTYPE*)(
+    ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*, UINT, UINT,
+    ID3D11UnorderedAccessView* const*, const UINT*);
 
 // Every slot D3D11 allows a stage, rather than a guess at how many are used.
 //
@@ -38,6 +46,9 @@ using draw_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 // pointer test per slot.
 constexpr UINT max_examined_views = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
 
+// What a watch budget holds when the caller asked for no limit. See consider_target_draw.
+constexpr uint32_t unlimited_budget = 0xffffffffu;
+
 struct Tap {
     std::mutex guard;
     bool installed = false;
@@ -47,6 +58,8 @@ struct Tap {
     ps_set_constant_buffers_fn original_set_constants = nullptr;
     draw_indexed_fn original_draw_indexed = nullptr;
     draw_fn original_draw = nullptr;
+    om_set_render_targets_fn original_set_targets = nullptr;
+    om_set_render_targets_and_uavs_fn original_set_targets_and_uavs = nullptr;
 
     rsf_frame_tap_options options{};
 
@@ -86,6 +99,30 @@ struct Tap {
     // How many near misses have been described. Bounded so this diagnostic cannot become the
     // reason the game runs badly.
     uint32_t described = 0;
+
+    // What the output merger has bound at render target slot 0, shadowed for the same reason the
+    // shader resources are: knowing which target a draw writes needs the binding call, and asking
+    // the context at the draw would put an OMGetRenderTargets and two reference counts on every
+    // draw in the frame. Slot 0 only. Unreal binds several targets in the GBuffer pass and nowhere
+    // in the frame's tail, which is what this is for.
+    //
+    // The texture is retained. Unlike a shader resource, whose view the runtime keeps alive for as
+    // long as it is bound, this one is resolved once here and read at a later draw.
+    ID3D11RenderTargetView* target_view = nullptr;
+    ID3D11Texture2D* target_texture = nullptr;
+    D3D11_TEXTURE2D_DESC target_description{};
+    // Draws into the current target since it was bound. Reset by a change of binding, so it counts
+    // a pass rather than a frame.
+    uint32_t draws_into_target = 0;
+
+    // Watched render targets. Compared by pointer and never dereferenced, so these are plain
+    // addresses rather than references: see the note on rsf_frame_tap_watch_target.
+    //
+    // Atomic because they are set from whichever thread asked and read on the render thread. The
+    // budget is atomic for the same reason and is only ever decremented by the render thread.
+    std::atomic<void*> watch[RSF_FRAME_TAP_WATCH_SLOTS] = {};
+    std::atomic<uint32_t> watch_budget[RSF_FRAME_TAP_WATCH_SLOTS] = {};
+    std::atomic<uint32_t> target_draws_reported{0};
 
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
@@ -161,6 +198,142 @@ ID3D11Texture2D* texture_behind(ID3D11ShaderResourceView* view)
     resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
     resource->Release();
     return texture;
+}
+
+// The texture behind a render target view, with a reference the caller owns. Same shape and same
+// reason as texture_behind above; the two are separate because the view types are unrelated and a
+// template over them would be longer than the duplication.
+ID3D11Texture2D* texture_behind_target(ID3D11RenderTargetView* view)
+{
+    ID3D11Resource* resource = nullptr;
+    view->GetResource(&resource);
+    if (!resource) {
+        return nullptr;
+    }
+    ID3D11Texture2D* texture = nullptr;
+    resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+    resource->Release();
+    return texture;
+}
+
+// Record what the output merger now has at render target slot 0. Called from both binding hooks,
+// with the game's call already forwarded.
+void shadow_render_target(Tap& self, ID3D11RenderTargetView* view)
+{
+    if (self.target_view == view) {
+        // The same view rebound is most of what a frame does. It is not a new pass, so the draw
+        // ordinal deliberately continues rather than restarting: a pass that rebinds its own
+        // target between draws would otherwise report every draw as the first one.
+        return;
+    }
+    if (self.target_texture) {
+        self.target_texture->Release();
+        self.target_texture = nullptr;
+    }
+    self.target_description = D3D11_TEXTURE2D_DESC{};
+    self.target_view = view;
+    self.draws_into_target = 0;
+    if (!view) {
+        return;
+    }
+    self.target_texture = texture_behind_target(view);
+    if (self.target_texture) {
+        self.target_texture->GetDesc(&self.target_description);
+    }
+}
+
+// If this draw writes a watched target and that watch still has budget, describe it.
+//
+// Called from the draw hooks after the game's draw has been forwarded, so the description is of a
+// draw that has already happened. Everything it reads is the shadow, which is why it costs a
+// pointer compare on the draws that do not match, which is all but a handful in a frame.
+void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
+                          UINT element_count)
+{
+    if (!self.target_texture) {
+        return;
+    }
+    const uint32_t ordinal = self.draws_into_target++;
+
+    uint32_t watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
+    for (uint32_t index = 0; index < RSF_FRAME_TAP_WATCH_SLOTS; ++index) {
+        if (self.watch[index].load(std::memory_order_relaxed) == self.target_texture) {
+            watch_index = index;
+            break;
+        }
+    }
+    if (watch_index == RSF_FRAME_TAP_WATCH_SLOTS) {
+        return;
+    }
+
+    // The budget is spent here rather than after the callback, so a callback that takes the
+    // process down cannot be reached again by the next draw.
+    //
+    // Zero is spent and `unlimited_budget` is the caller's "no limit", which cannot be zero for the
+    // obvious reason: a limit of three counts down to zero, and a zero that also meant no limit
+    // would turn every exhausted watch into an endless one on its next draw.
+    uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
+    for (;;) {
+        if (budget == 0) {
+            return;
+        }
+        if (budget == unlimited_budget) {
+            break;
+        }
+        if (self.watch_budget[watch_index].compare_exchange_weak(budget, budget - 1,
+                                                                 std::memory_order_relaxed)) {
+            break;
+        }
+    }
+    if (!self.options.on_target_draw) {
+        return;
+    }
+
+    rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS]{};
+    uint32_t reported = 0;
+    for (UINT index = 0; index < max_examined_views && reported < RSF_FRAME_TAP_MAX_INPUTS;
+         ++index) {
+        const Tap::Slot& entry = self.slots[index];
+        if (!entry.view) {
+            continue;
+        }
+        rsf_frame_tap_input& input = inputs[reported++];
+        input.slot = index;
+        input.texture = entry.texture;
+        input.width = entry.description.Width;
+        input.height = entry.description.Height;
+        input.format = uint32_t(entry.description.Format);
+    }
+
+    rsf_frame_tap_target_draw report{};
+    report.struct_size = sizeof(report);
+    report.context = context;
+    report.watch_index = watch_index;
+    report.render_target = self.target_texture;
+    report.target_width = self.target_description.Width;
+    report.target_height = self.target_description.Height;
+    report.target_format = uint32_t(self.target_description.Format);
+    report.draw_index = ordinal;
+    report.indexed = indexed ? 1u : 0u;
+    report.element_count = element_count;
+    report.input_count = reported;
+    report.inputs = inputs;
+
+    // The viewport, asked for only on a draw that is being reported. It is the one thing here that
+    // the shadow cannot supply, because nothing hooks RSSetViewports, and a call per reported draw
+    // is affordable where a call per draw would not be.
+    D3D11_VIEWPORT viewport{};
+    UINT viewport_count = 1;
+    context->RSGetViewports(&viewport_count, &viewport);
+    if (viewport_count >= 1) {
+        report.viewport_width = uint32_t(viewport.Width);
+        report.viewport_height = uint32_t(viewport.Height);
+    }
+
+    // Not a count of what the caller was told: a report the caller ignores still happened, and a
+    // watch that never fires is the thing this number exists to distinguish.
+    self.target_draws_reported.fetch_add(1, std::memory_order_relaxed);
+    self.options.on_target_draw(self.options.on_target_draw_user, &report);
 }
 
 rsf_resource_role role_of(const D3D11_TEXTURE2D_DESC& description, const rsf_frame_shape& shape)
@@ -241,6 +414,50 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
     }
     self.calls_inspected.fetch_add(1, std::memory_order_relaxed);
     self.shadow_dirty = true;
+}
+
+void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context, UINT count,
+                                                    ID3D11RenderTargetView* const* views,
+                                                    ID3D11DepthStencilView* depth)
+{
+    Tap& self = tap();
+    const om_set_render_targets_fn forward = self.original_set_targets;
+    if (!forward) {
+        return;
+    }
+    forward(context, count, views, depth);
+    if (inside_hook) {
+        return;
+    }
+    const ReentryGuard guard;
+    shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
+}
+
+// The same binding by another entry point. Unreal's D3D11 backend uses it whenever a pass declares
+// an unordered access view, and a shadow that only watched the first call would go stale for every
+// pass that does, which in this frame includes the compute-adjacent post process work.
+void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
+    ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView* const* views,
+    ID3D11DepthStencilView* depth, UINT uav_start, UINT uav_count,
+    ID3D11UnorderedAccessView* const* uavs, const UINT* initial_counts)
+{
+    Tap& self = tap();
+    const om_set_render_targets_and_uavs_fn forward = self.original_set_targets_and_uavs;
+    if (!forward) {
+        return;
+    }
+    forward(context, count, views, depth, uav_start, uav_count, uavs, initial_counts);
+    if (inside_hook) {
+        return;
+    }
+    const ReentryGuard guard;
+    // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL leaves the render targets alone, so the shadow
+    // has to be left alone with them. Treating it as an unbind is how a shadow starts describing a
+    // target the game is still drawing into.
+    if (count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
+        return;
+    }
+    shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
 }
 
 // Look at what is bound now and, if it is the set, hand it to the caller.
@@ -455,6 +672,7 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
     }
     const ReentryGuard guard;
     consider_bound_set(self, context);
+    consider_target_draw(self, context, true, index_count);
 }
 
 void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_count,
@@ -471,6 +689,7 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
     }
     const ReentryGuard guard;
     consider_bound_set(self, context);
+    consider_target_draw(self, context, false, vertex_count);
 }
 
 void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* context, UINT start_slot,
@@ -555,39 +774,40 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     // game object for no benefit.
     self.vtable = *reinterpret_cast<void***>(device_context);
 
-    if (!patch_slot(self.vtable, slot_ps_set_shader_resources,
-                    reinterpret_cast<void*>(&hooked_ps_set_shader_resources),
-                    reinterpret_cast<void**>(&self.original_set_views))) {
-        return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
-    }
-    if (!patch_slot(self.vtable, slot_ps_set_constant_buffers,
-                    reinterpret_cast<void*>(&hooked_ps_set_constant_buffers),
-                    reinterpret_cast<void**>(&self.original_set_constants))) {
-        patch_slot(self.vtable, slot_ps_set_shader_resources,
-                   reinterpret_cast<void*>(self.original_set_views), nullptr);
-        self.original_set_views = nullptr;
-        return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
-    }
+    // Every slot at once, undone as a unit. The bindings and the draws only mean anything together:
+    // hooked bindings with an unhooked draw is a tap that runs and recognises nothing, and a
+    // hooked draw with an unhooked output merger reports draws into a target it cannot name. So a
+    // partial patch is not a degraded tap, it is a confusing one, and it is rolled back.
+    const struct {
+        size_t index;
+        void* replacement;
+        void** original;
+    } patches[] = {
+        {slot_ps_set_shader_resources, reinterpret_cast<void*>(&hooked_ps_set_shader_resources),
+         reinterpret_cast<void**>(&self.original_set_views)},
+        {slot_ps_set_constant_buffers, reinterpret_cast<void*>(&hooked_ps_set_constant_buffers),
+         reinterpret_cast<void**>(&self.original_set_constants)},
+        {slot_draw_indexed, reinterpret_cast<void*>(&hooked_draw_indexed),
+         reinterpret_cast<void**>(&self.original_draw_indexed)},
+        {slot_draw, reinterpret_cast<void*>(&hooked_draw),
+         reinterpret_cast<void**>(&self.original_draw)},
+        {slot_om_set_render_targets, reinterpret_cast<void*>(&hooked_om_set_render_targets),
+         reinterpret_cast<void**>(&self.original_set_targets)},
+        {slot_om_set_render_targets_and_uavs,
+         reinterpret_cast<void*>(&hooked_om_set_render_targets_and_uavs),
+         reinterpret_cast<void**>(&self.original_set_targets_and_uavs)},
+    };
+    constexpr size_t patch_count = sizeof(patches) / sizeof(patches[0]);
 
-    // The draws are where the set is judged. Failing to patch either one leaves the bindings hooked
-    // and nothing looking at them, which would be a tap that runs and never recognises anything, so
-    // both are undone rather than left half installed.
-    if (!patch_slot(self.vtable, slot_draw_indexed,
-                    reinterpret_cast<void*>(&hooked_draw_indexed),
-                    reinterpret_cast<void**>(&self.original_draw_indexed)) ||
-        !patch_slot(self.vtable, slot_draw, reinterpret_cast<void*>(&hooked_draw),
-                    reinterpret_cast<void**>(&self.original_draw))) {
-        if (self.original_draw_indexed) {
-            patch_slot(self.vtable, slot_draw_indexed,
-                       reinterpret_cast<void*>(self.original_draw_indexed), nullptr);
+    for (size_t applied = 0; applied < patch_count; ++applied) {
+        if (patch_slot(self.vtable, patches[applied].index, patches[applied].replacement,
+                       patches[applied].original)) {
+            continue;
         }
-        patch_slot(self.vtable, slot_ps_set_constant_buffers,
-                   reinterpret_cast<void*>(self.original_set_constants), nullptr);
-        patch_slot(self.vtable, slot_ps_set_shader_resources,
-                   reinterpret_cast<void*>(self.original_set_views), nullptr);
-        self.original_set_views = nullptr;
-        self.original_set_constants = nullptr;
-        self.original_draw_indexed = nullptr;
+        while (applied-- > 0) {
+            patch_slot(self.vtable, patches[applied].index, *patches[applied].original, nullptr);
+            *patches[applied].original = nullptr;
+        }
         return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
     }
 
@@ -611,6 +831,10 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         patch_slot(self.vtable, slot_draw_indexed,
                    reinterpret_cast<void*>(self.original_draw_indexed), nullptr);
         patch_slot(self.vtable, slot_draw, reinterpret_cast<void*>(self.original_draw), nullptr);
+        patch_slot(self.vtable, slot_om_set_render_targets,
+                   reinterpret_cast<void*>(self.original_set_targets), nullptr);
+        patch_slot(self.vtable, slot_om_set_render_targets_and_uavs,
+                   reinterpret_cast<void*>(self.original_set_targets_and_uavs), nullptr);
         // The originals are deliberately kept. A call that entered a hook before the vtable was
         // restored still has to forward, and clearing them turns that race from a stale hook into a
         // null call. They stay valid for as long as the runtime is loaded, and a later install
@@ -634,6 +858,43 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     }
     self.shadow_dirty = false;
     self.signature_complete = false;
+
+    // Same order and the same reason for the render target shadow, which holds the one other
+    // reference this module takes. The watches are cleared with it: they name textures the caller
+    // owns, and leaving them set across an uninstall would have a later install start matching
+    // addresses from a session that has ended.
+    if (self.target_texture) {
+        self.target_texture->Release();
+        self.target_texture = nullptr;
+    }
+    self.target_view = nullptr;
+    self.target_description = D3D11_TEXTURE2D_DESC{};
+    self.draws_into_target = 0;
+    for (uint32_t index = 0; index < RSF_FRAME_TAP_WATCH_SLOTS; ++index) {
+        self.watch[index].store(nullptr, std::memory_order_relaxed);
+        self.watch_budget[index].store(0, std::memory_order_relaxed);
+    }
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_watch_target(uint32_t index, void* texture,
+                                                           uint32_t limit)
+{
+    if (index >= RSF_FRAME_TAP_WATCH_SLOTS) {
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+    Tap& self = tap();
+    // The lock guards `installed`, and taking it here cannot deadlock against the callback this
+    // may be called from: the draw path holds no lock while it calls out.
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (!self.installed) {
+        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    }
+    // The budget first. Setting the texture first would let the render thread spend a budget that
+    // belongs to the previous watch on the first draw after the store.
+    self.watch_budget[index].store(
+        texture ? (limit == 0 ? unlimited_budget : limit) : 0u, std::memory_order_relaxed);
+    self.watch[index].store(texture, std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }
 
@@ -653,5 +914,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->passes_seen = self.passes.load(std::memory_order_relaxed);
     status->render_width = self.render_width.load(std::memory_order_relaxed);
     status->render_height = self.render_height.load(std::memory_order_relaxed);
+    status->target_draws_reported = self.target_draws_reported.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

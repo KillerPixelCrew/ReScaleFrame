@@ -95,6 +95,8 @@ Reinsert the reconstructed scene before the composite, make downstream allocatio
 
 The current resource match occurs before roughly 27 later sky/cloud draws into the same colour target. Early evaluation omitted the sky. Holding the selected resources and evaluating at Present produced the complete diagnostic image. Recheck input overwrite boundaries when moving evaluation earlier; an AddRef preserves allocation lifetime only.
 
+Chunk 6714 is a run of draws sharing one output binding, not a single draw, so "before the composite" is not yet an address. Which of those draws reads scene colour decides where the substitution goes. The captures here cannot answer that, because the exported action list records render-target bindings and not shader resource bindings. The question is asked of the running game instead: `rsf_frame_tap_watch_target` names a render target and the frame tap reports the next few draws into it with their pixel shader inputs, slots, sizes, viewport, and ordinal within the pass. The loader points it at the back buffer, takes the single texture that draw reads as the composite, watches that in turn, and marks scene colour where it appears. Nothing is altered. Not yet run against the game; this records the instrument, not an answer.
+
 ## Masks, clouds, and droplets
 
 Resource #63083 was initially called velocity flattening because it was half-size, two-channel, and compute-written. Replay showed a mean near 0.55, no zero clear, a bimodal distribution, saturated sky, and an aircraft cutout. It is a mask. Its allocation neighbours include cloud resources 62989–63019, but its exact producer still needs identification.

@@ -23,6 +23,15 @@ void rsf_resource_retain(void* resource);
    mistake to avoid: nothing here counts on its behalf. */
 void rsf_resource_release(void* resource);
 
+/* The texture behind a swap chain, as an `ID3D11Texture2D*` with a reference the caller releases.
+
+   `swapchain` is an `IDXGISwapChain*`; buffer 0 is the one a frame ends in. Null on failure, which
+   is a swap chain that is not backed by a D3D11 texture and not something a caller can fix.
+
+   Here for the same reason as the two above: naming the back buffer is how C code says which
+   render target it means, and asking for it means two calls through vtables C cannot spell. */
+void* rsf_swapchain_back_buffer(void* swapchain);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
