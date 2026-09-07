@@ -372,6 +372,15 @@ static void start_observer(void)
        hooks are only patched when something asks for them, so turning it off costs the game
        nothing at all. */
     if (read_number("RSF_UI_CLASSIFY", 1) != 0) {
+        char forced[512];
+        char skipped[512];
+        if (!read_text("RSF_UI_SHADER_FORCE", forced, sizeof(forced))) {
+            forced[0] = '\0';
+        }
+        if (!read_text("RSF_UI_SHADER_SKIP", skipped, sizeof(skipped))) {
+            skipped[0] = '\0';
+        }
+        rsf_bridge_name_shaders(forced, skipped);
         if (rsf_bridge_identify_ui()) {
             options.on_layout = rsf_bridge_layout_hook();
             options.on_shader = rsf_bridge_shader_hook();

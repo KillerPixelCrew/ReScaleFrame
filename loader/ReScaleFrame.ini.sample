@@ -32,10 +32,14 @@ RSF_ENABLE_JITTER=1
 # The creation hooks are only patched when this is on, so turning it off costs the game nothing.
 RSF_UI_CLASSIFY=1
 
-# The size a widget converter rasterizes the interface at. AC7's front end is a hardcoded 1920x1080
-# and there is no reason to change this unless a screen turns out to use another.
-# RSF_UI_WIDGET_WIDTH=1920
-# RSF_UI_WIDGET_HEIGHT=1080
+# Name shaders the rules got wrong, by hash, in either direction. Forced wins over every rule and
+# skipped loses to none, so this corrects a run without waiting for a build.
+#
+# The hashes come from the "ui draw:" trace lines, which print the vertex and pixel shader hash of
+# the first two dozen interface-shaped draws for exactly this purpose. Hex, separated by anything.
+#
+# RSF_UI_SHADER_FORCE=0x1a2b3c4d, 0x5e6f7a8b
+# RSF_UI_SHADER_SKIP=0x9c0d1e2f
 
 # Render scale, as a percentage. The panel can change this at runtime.
 RSF_SCREEN_PERCENTAGE=50

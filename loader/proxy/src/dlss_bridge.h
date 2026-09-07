@@ -71,6 +71,17 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
 
    Call before installing the observer: the three hooks below have to be in its options, because
    what an object is can only be learned as the game creates it. */
+/* Name shaders by hash, in either direction, from a settings file.
+ *
+ * The escape hatch for a run where the rules are wrong about one draw and a rebuild is too slow.
+ * Both are hex lists, separated by anything; null or empty means none. Forced wins over every rule,
+ * skipped loses to none.
+ *
+ * The hashes to name come from the `ui draw:` trace lines, which print them for exactly this
+ * reason: a shader's pointer means nothing once the process exits, and its hash is the only stable
+ * name it has. */
+void rsf_bridge_name_shaders(const char* forced, const char* skipped);
+
 int rsf_bridge_identify_ui(void);
 
 /* Start extracting the interface: divert the draws the classifier names into a layer at `width` by

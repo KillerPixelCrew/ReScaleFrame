@@ -35,7 +35,9 @@
 #include <rescaleframe/ui_identify.h>
 #include <rescaleframe/ui_layer.h>
 
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dlss_bridge.h"
@@ -280,6 +282,10 @@ static struct {
     unsigned long ui_composites;
 } bridge;
 
+/* Declared here because the resource creation hooks below are defined before it and have things
+   worth saying. */
+static void say(const char* format, ...);
+
 /* Publish the registry's sets to the tap, so its prefilter has something to match. Called after any
    change, which is rare: pipeline objects are created in bursts at load and then not at all. */
 static void publish_ui_candidates(void)
@@ -353,19 +359,123 @@ static void on_layout_created(void* user, void* layout, const rsf_observer_layou
     }
 }
 
+/* Shader hashes a setting named, in either direction, resolved to pointers as the game creates
+   them. Small fixed arrays: naming more than a handful by hand is not a thing anyone does, and a
+   longer list would mean the rules are wrong in a way a list cannot fix. */
+#define RSF_UI_MAX_NAMED 16u
+static unsigned long ui_forced_hashes[RSF_UI_MAX_NAMED];
+static unsigned long ui_skipped_hashes[RSF_UI_MAX_NAMED];
+static unsigned int ui_forced_count;
+static unsigned int ui_skipped_count;
+static unsigned long ui_hashes_seen;
+
+/* Shader pointer to hash, so a trace line can name the shader that made a draw.
+ *
+ * Without this the override lists are unusable: the hash is known only at creation, the draw report
+ * carries only a pointer, and nobody can name in a settings file a number they were never shown. A
+ * bounded open-addressed table, keyed by pointer, overwriting on collision because a stale entry is
+ * a wrong name in a diagnostic and never a wrong picture. */
+#define RSF_UI_HASH_SLOTS 4096u
+static struct {
+    void* shader;
+    unsigned long hash;
+} ui_hash_table[RSF_UI_HASH_SLOTS];
+
+static unsigned int ui_hash_slot(const void* shader)
+{
+    /* Fibonacci hashing on the pointer. Addresses are aligned, so the low bits are zeros and using
+       them directly would pile every shader into a fraction of the table. */
+    unsigned long long key = (unsigned long long)(size_t)shader;
+    key *= 0x9E3779B97F4A7C15ull;
+    return (unsigned int)((key >> 52) & (RSF_UI_HASH_SLOTS - 1u));
+}
+
+static void ui_remember_hash(void* shader, unsigned long hash)
+{
+    unsigned int slot = ui_hash_slot(shader);
+    unsigned int probe;
+    for (probe = 0; probe < 8u; ++probe) {
+        const unsigned int index = (slot + probe) & (RSF_UI_HASH_SLOTS - 1u);
+        if (ui_hash_table[index].shader == NULL || ui_hash_table[index].shader == shader) {
+            ui_hash_table[index].shader = shader;
+            ui_hash_table[index].hash = hash;
+            return;
+        }
+    }
+    ui_hash_table[slot].shader = shader;
+    ui_hash_table[slot].hash = hash;
+}
+
+static unsigned long ui_hash_of(const void* shader)
+{
+    unsigned int slot;
+    unsigned int probe;
+    if (!shader) {
+        return 0;
+    }
+    slot = ui_hash_slot(shader);
+    for (probe = 0; probe < 8u; ++probe) {
+        const unsigned int index = (slot + probe) & (RSF_UI_HASH_SLOTS - 1u);
+        if (ui_hash_table[index].shader == shader) {
+            return ui_hash_table[index].hash;
+        }
+        if (ui_hash_table[index].shader == NULL) {
+            break;
+        }
+    }
+    return 0;
+}
+
+static void ui_forget_hash(void* shader)
+{
+    unsigned int slot = ui_hash_slot(shader);
+    unsigned int probe;
+    for (probe = 0; probe < 8u; ++probe) {
+        const unsigned int index = (slot + probe) & (RSF_UI_HASH_SLOTS - 1u);
+        if (ui_hash_table[index].shader == shader) {
+            ui_hash_table[index].shader = NULL;
+            ui_hash_table[index].hash = 0;
+            return;
+        }
+    }
+}
+
+/* Every shader the game creates, hashed once, and matched against what the settings named.
+ *
+ * The hash is the only stable name a shader has: its pointer is reused, its bytecode is borrowed
+ * for the length of the creation call, and nothing else about it survives. Naming one is the escape
+ * hatch for a run where the rules are wrong about a particular draw and a rebuild is too slow, which
+ * is what SpecialK's HUD registry is for and why it is worth carrying. */
 static void on_shader_created(void* user, void* shader, uint32_t stage, const void* bytecode,
                               uint32_t bytes)
 {
+    unsigned long hash;
+    unsigned int index;
     (void)user;
     (void)stage;
     if (!bridge.ui || !shader) {
         return;
     }
     rsf_ui_registry_forget(bridge.ui, shader);
-    /* Hashed and dropped for now. The override lists that would name one are read from settings and
-       resolved here; until a run has produced hashes to name, computing them is the whole point and
-       matching them against an empty list is the honest result. */
-    (void)rsf_ui_shader_hash(bytecode, bytes);
+    ui_forget_hash(shader);
+    hash = (unsigned long)rsf_ui_shader_hash(bytecode, bytes);
+    ui_remember_hash(shader, hash);
+    ++ui_hashes_seen;
+    for (index = 0; index < ui_forced_count; ++index) {
+        if (ui_forced_hashes[index] == hash) {
+            rsf_ui_registry_add(bridge.ui, RSF_UI_SET_FORCE_SHADER, shader);
+            publish_ui_candidates();
+            say("ui: shader 0x%08lx named by the settings as interface", hash);
+            return;
+        }
+    }
+    for (index = 0; index < ui_skipped_count; ++index) {
+        if (ui_skipped_hashes[index] == hash) {
+            rsf_ui_registry_add(bridge.ui, RSF_UI_SET_SKIP_SHADER, shader);
+            say("ui: shader 0x%08lx named by the settings as not interface", hash);
+            return;
+        }
+    }
 }
 
 /* A texture was created, so whatever used to live at that address does not any more.
@@ -789,14 +899,16 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
 
     if (bridge.ui_traced < 24u && verdict != RSF_AC7_DRAW_SCENE) {
         ++bridge.ui_traced;
-        say("  ui draw: class %u, layout %p, vs %p, ps %p, %s %lu, stride %lu, target %p %lux%lu, "
-            "depth %lu, targets %lu, inputs %lu",
-            (unsigned)verdict, draw->input_layout, draw->vertex_shader, draw->pixel_shader,
-            draw->indexed ? "indices" : "vertices", (unsigned long)draw->element_count,
-            (unsigned long)draw->vertex_stride, draw->render_target,
-            (unsigned long)draw->target_width, (unsigned long)draw->target_height,
-            (unsigned long)draw->depth_bound, (unsigned long)draw->target_count,
-            (unsigned long)draw->input_count);
+        /* The hashes rather than the pointers, because a hash is what a settings file can name and
+           a pointer is meaningless the moment the process exits. */
+        say("  ui draw: class %u, vs 0x%08lx, ps 0x%08lx, layout %p, %s %lu, stride %lu, "
+            "target %p %lux%lu, depth %lu, targets %lu, inputs %lu",
+            (unsigned)verdict, ui_hash_of(draw->vertex_shader), ui_hash_of(draw->pixel_shader),
+            draw->input_layout, draw->indexed ? "indices" : "vertices",
+            (unsigned long)draw->element_count, (unsigned long)draw->vertex_stride,
+            draw->render_target, (unsigned long)draw->target_width,
+            (unsigned long)draw->target_height, (unsigned long)draw->depth_bound,
+            (unsigned long)draw->target_count, (unsigned long)draw->input_count);
     }
 }
 
@@ -1671,6 +1783,54 @@ int rsf_bridge_extract_ui(unsigned long width, unsigned long height)
     say("ui extract: on. Interface draws now go to a %lux%lu layer and are composited at present",
         width, height);
     return 1;
+}
+
+/* Parse a comma or space separated list of hex hashes, as a settings file writes them.
+ *
+ * Tolerant on purpose: these are typed by hand off a log line, so an 0x prefix is optional and any
+ * punctuation between numbers separates them. Anything unparseable is skipped and counted, because
+ * silently ignoring a shader somebody meant to name is how an escape hatch stops being one. */
+static unsigned int parse_hash_list(const char* text, unsigned long* out, unsigned int capacity,
+                                    unsigned int* rejected)
+{
+    unsigned int count = 0;
+    const char* cursor = text;
+
+    if (!text) {
+        return 0;
+    }
+    while (*cursor && count < capacity) {
+        char* end = NULL;
+        unsigned long value;
+        while (*cursor && !isxdigit((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        if (!*cursor) {
+            break;
+        }
+        value = strtoul(cursor, &end, 16);
+        if (end == cursor) {
+            ++cursor;
+            if (rejected) {
+                ++*rejected;
+            }
+            continue;
+        }
+        out[count++] = value;
+        cursor = end;
+    }
+    return count;
+}
+
+void rsf_bridge_name_shaders(const char* forced, const char* skipped)
+{
+    unsigned int rejected = 0;
+    ui_forced_count = parse_hash_list(forced, ui_forced_hashes, RSF_UI_MAX_NAMED, &rejected);
+    ui_skipped_count = parse_hash_list(skipped, ui_skipped_hashes, RSF_UI_MAX_NAMED, &rejected);
+    if (ui_forced_count || ui_skipped_count || rejected) {
+        say("ui: %u shaders named as interface, %u as not, %u entries unreadable",
+            ui_forced_count, ui_skipped_count, rejected);
+    }
 }
 
 int rsf_bridge_identify_ui(void)

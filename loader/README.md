@@ -97,7 +97,7 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_RENDERDOC_DLL` | Explicit Windows RenderDoc DLL path |
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
 | `RSF_UI_CLASSIFY` | `1`; name pipeline objects as the game creates them and classify the draws made from them. Reports through the `ui:` lines and changes nothing |
-| `RSF_UI_WIDGET_WIDTH`, `RSF_UI_WIDGET_HEIGHT` | `1920`, `1080`; the size a widget converter rasterizes the interface at |
+| `RSF_UI_SHADER_FORCE`, `RSF_UI_SHADER_SKIP` | hex hash lists naming shaders the rules got wrong, in either direction. The hashes are printed by the `ui draw:` trace lines |
 | `RSF_ENABLE_JITTER` | `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
