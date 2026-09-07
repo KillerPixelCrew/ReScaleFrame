@@ -93,4 +93,72 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [ ] WSGM launch/profile integration, limiter coordination, and rendered-frame AutoTDP inputs.
 - [ ] Matched-condition visual, frame-time, latency, and power measurements.
 
+## AC7 motion and velocity improvements
+
+The engine's camera transform is already available through `ClipToPrevClip`; camera motion is
+not being estimated from images. The current DLSS path decodes the sparse object-velocity buffer
+and asks Streamline to resolve unwritten pixels using depth and that transform. The tasks below
+are investigations and proposed improvements, not confirmed defects or game-tested changes.
+
+- [ ] Investigate the engine path first. Inspect the shaders that consume AC7's scene velocity
+      buffer, including temporal filtering and motion blur where present. Locate their per-pixel
+      camera-motion calculation and establish whether a complete, reusable motion texture exists
+      or the result is only an intermediate shader value. Record the pass, inputs, encoding,
+      extent, timing, and lifetime. Follow the later correction in
+      [ac7-frame-capture.md](research/ac7-frame-capture.md): resource 63083 was identified as a mask,
+      not velocity flattening; capture resource IDs are not runtime identifiers.
+- [ ] Choose the motion source from that evidence. Prefer reusing a suitable engine-produced
+      full-motion texture. If the engine only computes motion inside a consuming shader, evaluate
+      exporting that intermediate through a shader change versus retaining Streamline's existing
+      resolve. Engine camera transforms still need depth to become per-pixel displacement.
+      Do not assume an engine-produced result is more accurate without matching conventions.
+- [ ] Establish the exact meaning of written object vectors. Determine whether they already
+      include camera movement at those pixels or contain only an object-motion contribution.
+      Preserve valid zero motion separately from unwritten pixels, and never add camera movement
+      twice. Verify the sentinel handling against the Streamline version actually loaded.
+- [ ] Reconcile the Rust and live C/C++ motion conversions. `MotionToPixels::unreal` in
+      `runtime/backends/rsf-upscaler/src/frame.rs` uses half the viewport extent and a vertical
+      sign flip, while `loader/proxy/src/dlss_bridge.c` and
+      `runtime/orchestrator/src/dlss_pipeline.cpp` currently default output/backend scales to
+      one. Trace clip displacement, normalized UV displacement, pixel units, and temporal
+      direction end to end. Measure aircraft or missile displacement on both axes before changing
+      factors or signs; matching a numeric range alone does not establish matching units.
+- [ ] Verify jitter throughout reprojection. In `games/ac7/src/view_uniforms.cpp`, establish
+      whether the engine's `ClipToPrevClip` remains unjittered after enabling temporal jitter.
+      Removing jitter from `ViewToClip` alone does not prove this. With a stationary camera and
+      changing jitter, unjittered camera motion must remain zero. If necessary, remove both frames'
+      jitter transforms and recompute the inverse. Explicitly match the backend's vector-jitter
+      flag to the measured object-vector convention.
+- [ ] Add motion diagnostics: raw/written-pixel coverage, decoded object vectors, camera-only
+      vectors, resolved vectors, and previous-frame reprojection error. Expose the actual submitted
+      scales, jitter, frame identity, and reset reason. Separate disocclusions and changing shading
+      from vector errors; do not judge correctness from a vector colour plot alone.
+- [ ] Propagate camera cuts and interrupted history through the AC7 camera frame. Prefer the
+      engine's cut/history state, with evaluated-frame continuity tracking for missed frames.
+      Cover mission loads, camera-mode switches, and resource/resolution changes. The pipeline
+      currently adds a reset on rebuild; ordinary fast flight must not be treated as a cut.
+- [ ] Audit geometry coverage using the diagnostics: aircraft, missiles, animated control surfaces,
+      and other independently moving or deforming geometry. Where writes are missing, first look
+      for an existing engine velocity path that can be enabled. Otherwise assess a shader change
+      or additional velocity pass using previous object transforms or deformation state. Opaque
+      depth alone cannot recover independent object movement.
+- [ ] Investigate clouds, smoke, and contrails separately. Locate their own depth, history, and
+      motion inputs, and assess whether they can supply useful motion for reconstruction.
+      Validate sky reprojection at clear/reversed-Z depth separately from ordinary geometry.
+      Do not assign opaque background motion to transparent layers as though it were exact.
+- [ ] Confirm the screen-droplet/refraction pass and place it after reconstruction where feasible.
+      Coordinate this with output reinsertion so the scene is reconstructed before the game's
+      grade and HUD composite. Recheck all relevant extents at reduced render scale; full-resolution
+      captures alone did not establish an output-resolution HUD path.
+- [ ] Consider a shared dense-motion resolve only if needed for another backend or diagnostics.
+      Extend the existing decode pass with depth and verified camera data when useful for XeSS/FSR,
+      rather than making a second camera reconstruction mandatory for DLSS. If submitting a
+      complete field, set backend metadata accordingly to prevent another camera-motion resolve.
+      Validate depth-aware edge dilation and its metadata without applying it twice.
+- [ ] Validate in controlled captures and live motion: stationary camera with jitter, horizontal
+      and vertical pans, forward flight near terrain, roll/FOV changes, tracked aircraft, crossing
+      missiles, clouds/contrails, and camera cuts at native and reduced render resolution.
+      Check colour/depth/motion/camera frame alignment and GPU cost. Record synthetic-tested,
+      capture-validated, and game-tested results separately before marking tasks complete.
+
 The [validation plan](research/validation-plan.md) defines acceptance. Built does not mean injected, recognized does not mean supported, and a higher presentation counter does not establish lower latency or better handheld performance.
