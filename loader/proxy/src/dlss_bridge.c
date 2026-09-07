@@ -69,6 +69,36 @@
    rather than being promoted on a guess. */
 #define RSF_FORMAT_R8G8B8A8_UNORM 28ul
 
+/* Eight bit colour, in every spelling this game's tail uses.
+
+   Written as numbers because this file has no D3D headers. The typeless entries are not pedantry:
+   the composite arrives bound as `R8G8B8A8_TYPELESS`, 27, and a check for `R8G8B8A8_UNORM` alone
+   missed it in every run. A view's format is whatever the view was created with, and a pooled
+   target is commonly typeless. */
+static int is_eight_bit_colour(unsigned long format)
+{
+    switch (format) {
+    case 27ul: /* R8G8B8A8_TYPELESS */
+    case 28ul: /* R8G8B8A8_UNORM */
+    case 29ul: /* R8G8B8A8_UNORM_SRGB */
+    case 87ul: /* B8G8R8A8_UNORM */
+    case 88ul: /* B8G8R8X8_UNORM */
+    case 90ul: /* B8G8R8A8_TYPELESS */
+    case 91ul: /* B8G8R8A8_UNORM_SRGB */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* The R8G8B8A8 family alone, which is how the interface's own target is told from the scene's.
+   The replayed capture has every scene target in the tail as B8G8R8A8 and the interface alone, on
+   a transparent background, as R8G8B8A8. Same reason for the typeless entry as above. */
+static int is_interface_colour(unsigned long format)
+{
+    return format == 27ul || format == 28ul || format == 29ul;
+}
+
 static struct {
     int started;
     void* device;
@@ -400,7 +430,7 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
         uint32_t index;
         for (index = 0; index < draw->input_count; ++index) {
             const rsf_frame_tap_input* input = &draw->inputs[index];
-            if (!input->texture || input->format != RSF_FORMAT_R8G8B8A8_UNORM) {
+            if (!input->texture || !is_interface_colour(input->format)) {
                 continue;
             }
             bridge.interface_target = input->texture;
@@ -420,38 +450,56 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     if (draw->watch_index != 0 || bridge.composite) {
         return;
     }
-    if (draw->input_count != 1 || !draw->inputs[0].texture) {
-        return;
-    }
-    /* Our own debug blit also draws over the back buffer reading exactly one texture, from inside
-       the Present hook, and nothing about its shape distinguishes it from the game's last draw.
-       Taking it would point the reinsertion at the reconstruction's own output. */
-    if (draw->inputs[0].texture == rsf_dlss_pipeline_output_texture()) {
-        return;
-    }
-    /* And it has to be the size of a picture.
+    /* Pick the composite out of what is bound, rather than expecting it to be alone.
 
-       The game's tail is not one draw into the back buffer, it is several, and at least one of the
-       earlier ones reads a 2048x32 strip: a bar or a letterbox, not the scene. It satisfies every
-       test above, so the first match won and the reinsertion spent every run promoting a strip. F6
-       then turned on and substituted nothing, because the gate it waits for never came.
+       The capture shows the frame ending in one draw that reads a single composite, and this used
+       to require exactly that. A running game does not oblige: D3D11 leaves shader resource slots
+       bound until something replaces them, so the same draw arrives here with seven inputs, of
+       which one is read. frame_tap.h says as much, that bindings establish possible reads and not
+       reads, and this is what that costs when ignored. The requirement matched nothing on the
+       briefing screen and the tail was never identified in any run.
 
-       The composite carries the whole frame, so its height is the render height or the presented
-       height, never a small fraction of the target it is drawn into. Half is a wide margin: this
-       game's composite is either the same size as the back buffer or exactly half it. */
-    if (draw->inputs[0].height * 2u < draw->target_height) {
-        say("  a %ux%u input is too small to be the composite of a %ux%u target, so it is a bar or "
-            "an overlay rather than the scene. Still looking",
-            draw->inputs[0].width, draw->inputs[0].height, draw->target_width,
-            draw->target_height);
+       What the composite is, among those seven: the picture that goes to the back buffer, so it is
+       eight bit colour because it is past the tonemap, and it is the size of a picture rather than
+       a bloom mip. The rest of that draw's bindings are the bloom chain at 256x144 and 128x72, a
+       63x63 dirt or lens texture, the pre-tonemap scene colour in half float, and the velocity
+       target. Size and format between them name it without guessing. */
+    const rsf_frame_tap_input* composite = NULL;
+    {
+        uint32_t index;
+        for (index = 0; index < draw->input_count; ++index) {
+            const rsf_frame_tap_input* input = &draw->inputs[index];
+            if (!input->texture || !is_eight_bit_colour(input->format)) {
+                continue;
+            }
+            /* Half the target's height is a wide margin: the composite is either the size of the
+               back buffer or exactly half it at a reduced render scale, and every mip and bar in
+               this draw is far smaller. */
+            if (input->height * 2u < draw->target_height) {
+                continue;
+            }
+            composite = input;
+            break;
+        }
+    }
+    if (!composite) {
         return;
     }
-    bridge.composite = draw->inputs[0].texture;
+    /* Our own debug blit also draws over the back buffer, from inside the Present hook, and nothing
+       about its shape distinguishes it from the game's last draw. Taking it would point the
+       reinsertion at the reconstruction's own output. */
+    if (composite->texture == rsf_dlss_pipeline_output_texture()) {
+        return;
+    }
+    bridge.composite = composite->texture;
     bridge.composite_found = 1;
     rsf_resource_retain(bridge.composite);
     rsf_frame_tap_watch_target(1, bridge.composite, RSF_TAIL_COMPOSITE_DRAWS);
-    say("  that single input is the composite the scene has to be replaced in. Watching it: the "
-        "draw into it that reads scene colour is where the reconstruction goes back");
+    say("  slot %lu, %lux%lu format %lu, is the composite the scene has to be replaced in. "
+        "Watching it: the draw into it that reads scene colour is where the reconstruction goes "
+        "back",
+        (unsigned long)composite->slot, (unsigned long)composite->width,
+        (unsigned long)composite->height, (unsigned long)composite->format);
 }
 
 /* Ask the frame about its own tail, for a bounded number of presents. */
