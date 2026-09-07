@@ -646,6 +646,13 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // was made from rather than a different frame's.
         const std::string input_prefix = prefix + "_input";
         const std::string output_prefix = prefix + "_output";
+        /* The velocity the backend was actually handed, rather than one that merely looks like
+           velocity. The observer retains several `R16G16_UNORM` targets and the key dump writes the
+           first of them, which is not necessarily the one the pass binds: a flight capture read
+           entirely unwritten while the tap was recognising motion in every frame. These two come
+           from this frame's own inputs, so what they show is what the backend saw. */
+        const std::string motion_prefix = prefix + "_motion";
+        const std::string decoded_prefix = prefix + "_motion_decoded";
         const struct {
             const char* what;
             const std::string& path;
@@ -653,9 +660,15 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         } targets[] = {
             {"the scene colour it was given", input_prefix, frame->scene_color},
             {"the upscaled result", output_prefix, self.output},
+            {"the game velocity it was given", motion_prefix, frame->game_motion},
+            {"the decoded motion it submitted", decoded_prefix,
+             self.decode ? rsf_motion_decode_texture(self.decode) : nullptr},
         };
 
         for (const auto& target : targets) {
+            if (!target.texture) {
+                continue;
+            }
             say(self, "writing %s to %s", target.what, target.path.c_str());
             rsf_texture_dump_options options{};
             options.struct_size = uint32_t(sizeof(options));

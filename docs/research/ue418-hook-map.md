@@ -156,8 +156,21 @@ What would cover it is camera motion reconstructed from depth, and separate tran
 read only, so those pixels carry the depth of whatever opaque surface is behind them. That is the
 open question for its reconstruction quality, separate from getting it into the input at all.
 
-What it does not do. Coverage is 0.05% of the frame: the contour relief and the dotted terrain grid
-write nothing.
+Measured in flight, and it changes nothing there. Four captures during cannon fire with the patch
+off recorded 0.9196 unwritten; four with it on recorded 0.9196. Both sit inside the 4.7 to 8.3 per
+cent written that this document records for clear-sky flight, so the opaque path is untouched and
+the tracers gained no vectors. Cannon fire covers a lot of pixels, so a change would not have been
+subtle.
+
+That is the shape of the whole result. The cut reaches translucent geometry that is movable and
+falls into the default-material substitution, which wants a material that writes every pixel, is not
+two-sided, and does not modify mesh position. Map icons qualify. Tracers, ribbons and particle
+sprites are two-sided, as are the holographic sheets of the relief, so `SupportsVelocity` refuses
+them for want of a permutation the cook never produced. No wider cut reaches those: the missing
+thing is a compiled shader, not a branch.
+
+What it does not do. Coverage is 0.05% of the frame in the briefing: the contour relief and the
+dotted terrain grid write nothing.
 The full-size target stays empty because the scene renders at half scale here. Magnitudes are around
 a thousandth of a screen width, near a pixel at this resolution, from a still camera, so this says
 the vectors exist and not that they are correct. Mission replay, where the camera and the symbols
