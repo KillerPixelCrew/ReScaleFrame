@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 2;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 3;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -101,6 +101,11 @@ pub struct RsfOverlayStats {
     pub render_scale_percent: u32,
     /// How many frame captures have been written this session.
     pub captures_written: u32,
+    /// Appended in ABI 3. Non-zero while the engine's temporal jitter gate is open.
+    pub jitter_on: u32,
+    /// Non-zero when the jitter patch verified its site, so there is a gate to open. Zero after a
+    /// game update moved the code, and the panel shows that rather than offering a dead switch.
+    pub jitter_available: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -135,6 +140,10 @@ pub struct RsfOverlayIntent {
     pub scale_percent: u32,
     /// Non-zero when the user asked for a frame capture.
     pub capture_requested: u32,
+    /// Appended in ABI 3. The user moved the jitter switch.
+    pub jitter_changed: u32,
+    /// The jitter state the panel now shows.
+    pub jitter: u32,
 }
 
 impl Default for RsfOverlayIntent {
@@ -154,6 +163,8 @@ impl Default for RsfOverlayIntent {
             scale_requested: 0,
             scale_percent: 0,
             capture_requested: 0,
+            jitter_changed: 0,
+            jitter: 0,
         }
     }
 }
@@ -285,8 +296,10 @@ mod tests {
     /// point is that the two agree, and only one of them is in this file.
     #[test]
     fn stats_matches_the_header_layout() {
-        // 124 bytes of fields, padded to 128 by the eight byte alignment the two pointers impose.
-        assert_eq!(size_of::<RsfOverlayStats>(), 128);
+        // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
+        // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
+        // than after it. That is exactly why the padding is written down here.
+        assert_eq!(size_of::<RsfOverlayStats>(), 136);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -300,12 +313,16 @@ mod tests {
         // inserted, which is the one change these structs are not allowed to make.
         assert_eq!(offset_of!(RsfOverlayStats, debug_view_on), 104);
         assert_eq!(offset_of!(RsfOverlayStats, captures_written), 120);
+        // Appended in ABI 3, into the padding ABI 2 left behind.
+        assert_eq!(offset_of!(RsfOverlayStats, jitter_on), 124);
+        assert_eq!(offset_of!(RsfOverlayStats, jitter_available), 128);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 56);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 64);
         assert_eq!(offset_of!(RsfOverlayIntent, start_requested), 24);
+        assert_eq!(offset_of!(RsfOverlayIntent, jitter_changed), 56);
         assert_eq!(size_of::<RsfOverlayInput>(), 36);
         assert_eq!(size_of::<RsfOverlayVertex>(), 20);
         assert_eq!(offset_of!(RsfOverlayVertex, color), 16);

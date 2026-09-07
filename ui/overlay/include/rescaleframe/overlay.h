@@ -26,7 +26,7 @@ extern "C" {
 /* 2: the panel drives the session rather than reporting on it, so intent gained start, debug view,
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
-#define RSF_OVERLAY_ABI_VERSION 2u
+#define RSF_OVERLAY_ABI_VERSION 3u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
@@ -97,6 +97,12 @@ typedef struct rsf_overlay_stats {
     uint32_t reinsert_available;
     uint32_t render_scale_percent;
     uint32_t captures_written;
+    /* Appended in ABI 3. Whether the engine's temporal jitter gate is open right now, and whether
+       there is a gate to open at all: the patch verifies its site at startup and a game update
+       that moved the code leaves `jitter_available` zero, which the panel must show rather than
+       offering a switch that does nothing. */
+    uint32_t jitter_on;
+    uint32_t jitter_available;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -125,6 +131,9 @@ typedef struct rsf_overlay_intent {
     uint32_t scale_requested;
     uint32_t scale_percent;
     uint32_t capture_requested;
+    /* Appended in ABI 3. */
+    uint32_t jitter_changed;
+    uint32_t jitter;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

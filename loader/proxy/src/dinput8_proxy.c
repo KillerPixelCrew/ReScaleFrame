@@ -389,30 +389,99 @@ static void start_observer(void)
    consistent, which is the reason to do it here rather than editing matrices afterwards.
 
    The expected bytes are checked before writing. If the game updates and the code moves, this
-   refuses rather than corrupting an instruction. */
-static void apply_jitter_patch(void)
+   refuses rather than corrupting an instruction.
+
+   The patch goes on and off at runtime rather than once at attach. Jitter that nothing resolves is
+   visible as a shimmer, and the front end is where it shows: the main menu holds still, so an
+   offset that changes every frame has nothing to hide behind. Luma's Unreal path never has this
+   problem because it never manufactures jitter, running only where the engine already ran temporal
+   AA (`main.cpp:829`) and treating a frame without it as a camera cut (`:1135`). We have to
+   manufacture it, because AC7 runs no temporal AA at all and a reconstruction needs the samples.
+   What we can copy is the discipline: the jitter exists while something of ours resolves it and at
+   no other time. */
+static struct {
+    int mode;
+    int enabled;
+    int site_verified;
+    DWORD rva;
+} jitter_patch;
+
+/* Write the gate open or closed. Idempotent, and announced on every transition: a jitter that
+   silently stopped and a jitter that was never on look identical in the image. */
+static void set_jitter_enabled(int enabled)
 {
-    if (read_number("RSF_ENABLE_JITTER", 0) == 0) {
+    if (jitter_patch.mode == 0 || !jitter_patch.site_verified) {
         return;
     }
-    const DWORD rva = read_number("RSF_JITTER_RVA", 0x112b1f3);
-    /* jne rel32 */
-    const uint8_t expected[6] = {0x0F, 0x85, 0xDD, 0x03, 0x00, 0x00};
+    if (jitter_patch.enabled == (enabled != 0)) {
+        return;
+    }
+    /* jne rel32, the stock gate. */
+    static const uint8_t gate[6] = {0x0F, 0x85, 0xDD, 0x03, 0x00, 0x00};
     /* The six byte canonical nop, so the fall-through path is reached. */
-    const uint8_t replacement[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    static const uint8_t open[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    const uint8_t* write = enabled ? open : gate;
+    const uint8_t* expect = enabled ? gate : open;
     uint8_t previous[6] = {0};
 
     const rsf_dump_result result =
-        rsf_patch_code(rva, replacement, sizeof(replacement),
-                       rva == 0x112b1f3 ? expected : NULL, rva == 0x112b1f3 ? sizeof(expected) : 0,
-                       previous);
+        rsf_patch_code(jitter_patch.rva, write, sizeof(gate), expect, sizeof(gate), previous);
     if (result == RSF_DUMP_OK) {
-        note("jitter gate patched at rva 0x%lx, was %02x %02x %02x %02x %02x %02x",
-             (unsigned long)rva, previous[0], previous[1], previous[2], previous[3], previous[4],
-             previous[5]);
+        jitter_patch.enabled = (enabled != 0);
+        note("jitter %s at rva 0x%lx", enabled ? "on" : "off", (unsigned long)jitter_patch.rva);
     } else {
-        note("jitter gate NOT patched at rva 0x%lx, result %d (expected bytes did not match?)",
-             (unsigned long)rva, (int)result);
+        note("jitter %s REFUSED at rva 0x%lx, result %d (bytes were %02x %02x %02x %02x %02x %02x)",
+             enabled ? "on" : "off", (unsigned long)jitter_patch.rva, (int)result, previous[0],
+             previous[1], previous[2], previous[3], previous[4], previous[5]);
+    }
+}
+
+/* Called by the bridge when a reconstruction starts resolving frames, and by the panel. A start
+   only opens the gate in mode 1; mode 2 has it open already and an explicit click is obeyed in
+   either, which is what makes the switch usable as an experiment. */
+static void action_set_jitter(unsigned long open)
+{
+    set_jitter_enabled(open != 0);
+}
+
+static unsigned long action_jitter_open(void)
+{
+    return (unsigned long)jitter_patch.enabled;
+}
+
+static unsigned long action_jitter_available(void)
+{
+    return (unsigned long)(jitter_patch.mode != 0 && jitter_patch.site_verified);
+}
+
+/* Record the site and check it, without deciding yet whether the gate is open.
+
+   Mode 2 is the old behaviour, on from attach and never off, kept so a run can compare against
+   every result taken before this. Mode 1 follows the reconstruction. Both verify the expected
+   bytes here, by opening the gate and closing it again, so a game update is reported at startup
+   rather than at the first transition, when whoever is looking is looking at something else. */
+static void apply_jitter_patch(void)
+{
+    jitter_patch.mode = (int)read_number("RSF_ENABLE_JITTER", 0);
+    if (jitter_patch.mode == 0) {
+        return;
+    }
+    jitter_patch.rva = read_number("RSF_JITTER_RVA", 0x112b1f3);
+    jitter_patch.site_verified = 1;
+    jitter_patch.enabled = 0;
+
+    set_jitter_enabled(1);
+    if (!jitter_patch.enabled) {
+        jitter_patch.site_verified = 0;
+        note("jitter gate not found at rva 0x%lx, jitter stays off for this run",
+             (unsigned long)jitter_patch.rva);
+        return;
+    }
+    if (jitter_patch.mode == 1) {
+        set_jitter_enabled(0);
+        note("jitter follows the reconstruction (RSF_ENABLE_JITTER=1); F4 forces it on or off");
+    } else {
+        note("jitter on for the whole run (RSF_ENABLE_JITTER=2); F4 toggles it");
     }
 }
 
@@ -1144,6 +1213,9 @@ static void register_overlay_actions(void)
     actions.trigger_capture = action_trigger_capture;
     actions.capture_count = action_capture_count;
     actions.render_scale_percent = action_render_scale_percent;
+    actions.set_jitter = action_set_jitter;
+    actions.jitter_open = action_jitter_open;
+    actions.jitter_available = action_jitter_available;
     rsf_bridge_set_actions(&actions);
 }
 
@@ -1156,6 +1228,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int show_down = 0;
     int panel_down = 0;
     int reinsert_down = 0;
+    int jitter_down = 0;
     int ticks = 0;
     int running = 1;
     while (running) {
@@ -1224,6 +1297,18 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
         }
         scale_down = scale;
+
+        {
+            /* Flip the jitter while looking at the screen that shows it. A shimmering front end
+               has two possible causes and they need different fixes: an offset nothing resolves,
+               or a resolve that fails on elements with no motion vectors. Holding still on the
+               main menu and pressing this separates them in one press, which no counter can. */
+            const int jitter = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
+            if (jitter && !jitter_down) {
+                set_jitter_enabled(!jitter_patch.enabled);
+            }
+            jitter_down = jitter;
+        }
         Sleep(50);
     }
     return 0;

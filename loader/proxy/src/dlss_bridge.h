@@ -83,6 +83,21 @@ typedef struct rsf_bridge_actions {
        change takes effect on the next F6. Null means drop, which is the only one of the three that
        keeps the pixels. */
     unsigned long (*reinsert_depth_policy)(void);
+    /* The engine's temporal jitter, which on this game is ours: AC7 runs no temporal AA, so a
+       patched gate is what makes the projection move at all. Opening it where nothing resolves the
+       offset shows as a shimmer, and the front end is where that shows, because it holds still.
+
+       Luma's Unreal path never has the problem because it never manufactures the jitter: it runs
+       only where the engine already ran temporal AA and treats a frame without it as a camera cut.
+       We cannot copy that, but we can copy the discipline, which is what `set_jitter` is for. The
+       bridge opens the gate when it starts resolving frames and the panel and F4 can override.
+
+       `jitter_open` and `jitter_available` report; the second is zero when the patch could not
+       find its site, so the panel refuses instead of offering a switch that does nothing. Null
+       means this build has no jitter control and the panel shows it greyed. */
+    void (*set_jitter)(unsigned long open);
+    unsigned long (*jitter_open)(void);
+    unsigned long (*jitter_available)(void);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);

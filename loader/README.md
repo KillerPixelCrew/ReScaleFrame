@@ -20,6 +20,7 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
+| F4 | Open or close the engine's temporal jitter gate, live |
 | F5 | Open or close the egui overlay |
 | F6 | Reinsert the reconstruction into the game's own frame, or stop |
 | F8 | Start DLSS after the game has a device; later presses report counters |
@@ -27,6 +28,11 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 | F9 | Apply render scale and the corresponding jitter sequence length |
 | F10 | Dump retained velocity/view data and, while DLSS runs, matched colour/output |
 | F11 | Trigger RenderDoc when capture support is available |
+
+F4 exists because a shimmering front end has two possible causes that no counter separates: an
+offset nothing resolves, or a resolve that fails on elements with no motion vectors. Hold still on
+the main menu and press it. If the shimmer stops, the jitter is the cause; if it does not, the
+resolve is, and the jitter is only what makes it visible.
 
 Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
 
@@ -89,7 +95,7 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_VIEW_CB_MIN`, `RSF_VIEW_CB_MAX` | `1024`, `8192` bytes |
 | `RSF_RENDERDOC_DLL` | Explicit Windows RenderDoc DLL path |
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
-| `RSF_ENABLE_JITTER` | `0`; set `1` to patch the AA gate after decryption |
+| `RSF_ENABLE_JITTER` | `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
 | `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |

@@ -245,6 +245,8 @@ unsafe fn frame_inner(
             scale_requested: u32::from(produced.scale_requested),
             scale_percent: produced.scale_percent,
             capture_requested: u32::from(produced.capture_requested),
+            jitter_changed: u32::from(produced.jitter_changed),
+            jitter: u32::from(produced.jitter),
         };
     }
     if let Some(out) = unsafe { draw_data.as_mut() } {
@@ -316,6 +318,8 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         reinsert_available: stats.reinsert_available != 0,
         render_scale_percent: stats.render_scale_percent,
         captures_written: stats.captures_written,
+        jitter_gate_on: stats.jitter_on != 0,
+        jitter_gate_available: stats.jitter_available != 0,
     }
 }
 
@@ -404,6 +408,8 @@ mod tests {
             reinsert_available: 0,
             render_scale_percent: 50,
             captures_written: 0,
+            jitter_on: 1,
+            jitter_available: 1,
         }
     }
 
@@ -565,7 +571,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 2);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 3);
     }
 
     #[test]

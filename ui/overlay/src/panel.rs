@@ -229,6 +229,36 @@ fn session_section(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent) {
                 .color(MUTED),
         );
     }
+
+    // The engine runs no temporal anti-aliasing, so the jitter a reconstruction needs is ours: a
+    // patched gate makes the projection move. On a screen where nothing resolves it that shows as
+    // a shimmer, and the front end is where it shows, because it holds still. This is here rather
+    // than only on F4 so it can be flipped while looking at the screen in question.
+    ui.scope(|ui| {
+        if !stats.jitter_gate_available {
+            ui.disable();
+        }
+        let mut jitter = stats.jitter_gate_on;
+        if ui
+            .checkbox(&mut jitter, "Jitter the projection")
+            .on_hover_text(
+                "Off holds the image still and gives a reconstruction nothing to work from. \
+                 Turn it off on the main menu to tell a shimmer caused by the jitter from one \
+                 caused by the resolve.",
+            )
+            .changed()
+        {
+            intent.jitter = jitter;
+            intent.jitter_changed = true;
+        }
+    });
+    if !stats.jitter_gate_available {
+        ui.label(
+            RichText::new("The jitter gate was not found in this build of the game.")
+                .small()
+                .color(MUTED),
+        );
+    }
 }
 
 fn controls_section(

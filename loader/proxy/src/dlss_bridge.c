@@ -1011,6 +1011,9 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         bridge.actions.render_scale_percent ? (uint32_t)bridge.actions.render_scale_percent() : 0u;
     stats->captures_written =
         bridge.actions.capture_count ? (uint32_t)bridge.actions.capture_count() : 0u;
+    stats->jitter_on = bridge.actions.jitter_open ? (uint32_t)bridge.actions.jitter_open() : 0u;
+    stats->jitter_available =
+        bridge.actions.jitter_available ? (uint32_t)bridge.actions.jitter_available() : 0u;
 }
 
 /* Lay the panel out and draw it, and report what was clicked without acting on it.
@@ -1076,6 +1079,13 @@ static void overlay_tick(void* swapchain)
            thing for it to mean. Said rather than quietly doing nothing. */
         say("overlay: the enable toggle does not act on its own. Use the debug view and the "
             "reinsertion switches");
+    }
+    if (intent.jitter_changed) {
+        if (bridge.actions.set_jitter) {
+            bridge.actions.set_jitter(intent.jitter);
+        } else {
+            say("overlay: this build has no jitter control registered");
+        }
     }
     if (intent.capture_requested) {
         if (bridge.actions.trigger_capture) {
@@ -1451,6 +1461,11 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     }
 
     bridge.started = 1;
+    /* After the tap is installed, not before: the jitter is only worth having once there is
+       something reading the frames it belongs to. */
+    if (bridge.actions.set_jitter) {
+        bridge.actions.set_jitter(1);
+    }
     say("dlss bridge: running, watching for the pass that binds the reconstruction inputs");
     return 1;
 }

@@ -132,6 +132,12 @@ pub struct Stats<'a> {
     pub render_scale_percent: u32,
     /// Frame captures written this session.
     pub captures_written: u32,
+    /// Whether the patched jitter gate is open. Distinct from `jitter_active`, which says the view
+    /// data arrived carrying an offset: the gate is the cause and that is the effect, and a run
+    /// where they disagree is telling us something.
+    pub jitter_gate_on: bool,
+    /// Whether the gate was found in this build, so the panel can refuse before offering a switch.
+    pub jitter_gate_available: bool,
 }
 
 impl Default for Stats<'_> {
@@ -164,6 +170,8 @@ impl Default for Stats<'_> {
             reinsert_available: false,
             render_scale_percent: 0,
             captures_written: 0,
+            jitter_gate_on: false,
+            jitter_gate_available: false,
         }
     }
 }
@@ -237,6 +245,10 @@ pub struct Intent {
     pub scale_percent: u32,
     /// Whether the user asked for a frame capture.
     pub capture_requested: bool,
+    /// The jitter gate state the panel shows.
+    pub jitter: bool,
+    /// Whether the jitter gate was toggled in this frame.
+    pub jitter_changed: bool,
 }
 
 impl Intent {
@@ -251,6 +263,7 @@ impl Intent {
             && !self.reinsert_changed
             && !self.scale_requested
             && !self.capture_requested
+            && !self.jitter_changed
     }
 }
 
