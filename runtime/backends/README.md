@@ -4,9 +4,9 @@
 | --- | --- | --- |
 | `rsf-upscaler` | Rust quality, motion, and input-validation model | Unit-tested; no GPU calls |
 | `dlss` | C++ Streamline adapter behind `rescaleframe/dlss.h` | Evaluates live AC7 frames |
-| XeSS / FSR | Additional runtime backends | Planned |
+| XeSS / FSR | Additional runtime backends | Planned; the [representation plan](../../docs/representation-plan.md) specifies `runtime/backends/{dlss,fsr,xess}` each implementing `rsf_sr_provider` and `rsf_fg_provider` from a vendor-neutral `backend.h`, with `RSF_HAVE_FFX` and `RSF_HAVE_XESS` discovery mirroring the DLSS target |
 
-The orchestrator owns shared resources and frame sequencing. Each backend owns its vendor context, capability queries, input requirements, and evaluation. Streamline stays in C++ so its versioned vendor types come from the official headers.
+The orchestrator owns shared resources and frame sequencing. Each backend owns its vendor context, capability queries, input requirements, and evaluation. Streamline stays in C++ so its versioned vendor types come from the official headers. No frame generation SDK runs on D3D11; the plan's presentation bridge is where every FG backend and the D3D12-only SR backends execute ([vendor contracts](../../docs/research/vendor-fg-contracts.md)).
 
 ## Motion and frame data
 

@@ -130,6 +130,13 @@ for our number itself, instead of being overruled once per screen change and rev
 
 ## The two candidate causes of the missing environment under F6
 
+> **Retracted, 7 September.** Both candidates below were framed around "the interface target", a
+> render-resolution `R8G8B8A8` surface picked by format. The run log later showed what that surface
+> is: AC7's own UI layer, which the widget quads draw into with the scene's depth bound, composited
+> by the game before the upscale (see "Root" below and the tail order at the end of this file). The
+> depth mismatch was real and is recorded; the identification was wrong. Superseded by the
+> [representation plan](../representation-plan.md).
+
 Reinsertion currently promotes both slot 0 and slot 1 to 2048x1152 and reports doing so. The briefing
 then loses its 3D environment while the interface survives, which is the same signature as the
 separate translucency layer at a scale above 1.0.
@@ -185,6 +192,11 @@ interface to native is what the first three steps need. Keeping the interface ad
 is what the last step needs, and nothing addresses that yet.
 
 ## Why promoting the interface target does not sharpen it
+
+> **Retracted, 7 September.** The `DrawSize`/`Scale` patch described here is unnecessary: the
+> interface is rasterized at 1920x1080 (see "Root" below), and the surface being promoted was not
+> a converter target at all. Kept as the record of a wrong turn. Superseded by the
+> [representation plan](../representation-plan.md).
 
 Game-tested 7 September. With reinsertion alive the picture is cleaner and the interface is still
 well short of native. The log shows the interface target promoted, `1024x576 to 2048x1152, format
@@ -273,3 +285,33 @@ role.
 The measurement that closes this is small and specific: find the draw whose shader input is a
 1920x1080 `R8G8B8A8` texture, and record what it writes into and with what viewport. That names the
 target that has to be promoted, and it does not depend on any format heuristic.
+
+## The briefing tail, in order, from the run log
+
+7 September 2026. The shape hunt described above ran and reported the whole tail of one briefing
+frame (`rsf-dump.log`, one frame near line 425,120). Read top to bottom:
+
+1. Glow pass: 6 indices, no depth, reads a 1920x1080 `B8G8R8A8_TYPELESS` widget texture, writes
+   another 1920x1080 texture (alternating `0x3075D000` / `0x3075CC40` per frame).
+2. Scene lighting into scene colour `0x308F4390` (`R11G11B10_FLOAT`) with depth view `0x307329D0`.
+3. Four world-space widget quads: 6 indices each, reading four different 1920x1080 widget textures
+   in PS slot 0, writing 1024x576 `R8G8B8A8_TYPELESS` targets `0x308F6550` (two quads) and
+   `0x308F6190` (two quads), viewport 1024x576 at 0,0, **with the same depth view the scene used**.
+4. Tonemap: scene colour plus bloom into the composite `0x308F3FD0` (1024x576, `B8G8R8A8_TYPELESS`).
+5. An unwatched step produces `0x308E2770` (1024x576, same format) from the composite.
+6. The game's own UI composite pass: reads `0x308E2770` (slot 0), `0x308F6550` (slot 1, the
+   `R8G8B8A8` layer) and the glow and lens surfaces, and writes the composite `0x308F3FD0` again.
+7. Upscale: composite to the back buffer, 2048x1152 `R10G10B10A2_UNORM`.
+
+So the interface on the briefing is not rasterized into scene colour. AC7 draws the widget quads,
+depth-tested against the scene, into a dedicated render-resolution `R8G8B8A8` layer of its own, and
+composites that layer itself before the upscale. The alternating pair of layer targets is what the
+SDK's `UWidgetComponent::DownsampledRenderTargetArray[2]` names. Three consequences: diverting the
+quads elsewhere makes the game's own layer transparent and the back buffer HUD-less by construction;
+occlusion is real wherever scene geometry sits in front of a panel; and reinsertion has an
+unpromoted intermediate (`0x308E2770`) between the tonemap and the UI composite, which is why
+promoting the composite made the picture cleaner without making it sharper.
+
+That is the last finding this note records. What follows from it is the
+[representation plan](../representation-plan.md), and the work is tracked there and in
+[ac7-ui-extraction.md](ac7-ui-extraction.md).

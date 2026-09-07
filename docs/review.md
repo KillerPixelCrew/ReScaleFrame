@@ -40,6 +40,9 @@ Select colour/history through verified pass semantics, and allow the supported c
 
 ### 5. P2: Numeric settings reject valid zero values
 
+> Status 7 September 2026: the parser now reads with `strtoul` base 0 and honours a present-and-zero
+> value; the `config_parse` test that closes this lands with the representation plan's M5.
+
 [`read_number`](https://github.com/KillerPixelCrew/ReScaleFrame/blob/a9f3d5d/loader/proxy/src/dinput8_proxy.c#L125-L133) uses decimal `strtol` and accepts only values greater than zero. Consequently, `RSF_DLSS_QUALITY=0` falls back to Performance (`3`), and `RSF_DECODE_MOTION=0` falls back to enabled (`1`). Hexadecimal RVA overrides also fall back instead of selecting the requested address.
 
 Use typed parsing with explicit ranges and full-string/overflow checks. Zero should be valid for native quality and booleans. Keep desired quality and the engine's effective render size consistent; F8 currently applies the independent screen-percentage setting before backend planning.
@@ -57,6 +60,9 @@ Track success and output generation per frame; skip the blit when current output
 Queue bounded button events with position/order, or extend the ABI with preserved transitions. Test press and release between collections, plus focus/visibility changes and overflow. Existing Rust tests feed frame-separated input and do not cover the Win32 handoff.
 
 ### 8. P2: CI skips Rust execution and the live SDK implementation
+
+> Status 7 September 2026: open. Planned as a two-leg vendor-header matrix plus `cargo test` in the
+> representation plan's build section.
 
 [`eng/verify.ps1`](https://github.com/KillerPixelCrew/ReScaleFrame/blob/a9f3d5d/eng/verify.ps1#L22-L26) runs CTest, formatting, and Clippy; it never runs `cargo test`. The [workflow](https://github.com/KillerPixelCrew/ReScaleFrame/blob/a9f3d5d/.github/workflows/verify.yml) also does not provide Streamline headers. A clean CI checkout therefore compiles the unavailable stub, leaving the SDK-enabled C++ branch unchecked.
 

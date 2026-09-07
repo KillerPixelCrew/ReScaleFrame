@@ -58,6 +58,11 @@
     "detail": "At 50%, scene allocations measure 1024x576 while presentation remains 2048x1152. Use engine size/rectangle setup rather than resizing textures alone.",
     "resets_on_level_load": true,
     "resets_detail": "Mission loading restores the game scale; the proxy currently reapplies the requested scale on a timer.",
+    "per_context": {
+      "state": "located_in_binary_not_applied",
+      "how": "ghidra_string_and_call_graph",
+      "detail": "AC7 keeps its own per-context table, FGraphicsSettingsManager: FUN_1405f5260 loads six values through FUN_1405f4590(this, x, index 0..5, flag) matching EGraphicsScreenPercentageSettings (Gameplay 0, NonGameplay 1, VRNonGameplay 2, VRGameplay 3, VRAirShow 4, MPGameplay 5); FName globals DAT_14356eec0..ef18; FUN_14015fb40 references r.ScreenPercentage at 0x14265cbd8. This is what overwrites the console value on transitions. The representation plan applies the render scale here (M3), expected-byte guarded, with the console write as the announced fallback."
+    },
     "console_manager_rva": "0x3a8b290",
     "find_console_variable_vtable_offset": "0x90"
   },
@@ -95,13 +100,43 @@
     "game_validated": false,
     "research": "docs/research/ac7-overlay-device.md"
   },
+  "ui": {
+    "state": "identified_extraction_planned",
+    "how": "sdk_offsets_binary_constants_and_run_log",
+    "detail": "The front-end interface is rasterized at a fixed 1920x1080 through Nimbus.WidgetToTextureConverter (DrawSize at +0x28; UWidgetToTextureConverter_Setup 0x1404d5c10; front-end caller 0x1406243e0 with constants 0x1425f1cac = 1920.0f and 0x1425f1ce4 = 1080.0f). On the briefing it is drawn as four world-space widget quads (6 indices each, reading 1920x1080 B8G8R8A8_TYPELESS widget textures) into AC7's own render-resolution R8G8B8A8_TYPELESS layer, alternating 0x308F6550 / 0x308F6190, with the scene's depth view bound, and composited by the game before the upscale. Promotion of that layer cannot sharpen it; the representation plan extracts every classified interface draw into a mod-owned premultiplied R8G8B8A8 layer at output resolution instead.",
+    "converters": {
+      "AUIManagerActor.FrontWindowConverter": "0x0D48",
+      "ANimbusHUD.HudWidgetConverter": "0x0470",
+      "ANimbusHUD.HudPostProcessConverter": "0x0478",
+      "AStereoWidgetActor.StereoWidgetConverter": "0x0370",
+      "AStereoWidgetActor.OverlayTextureConverter": "0x0378"
+    },
+    "widget_component_additions": {
+      "bEnableDownsampleRenderTarget": "0x0828",
+      "DownsampledRenderTargetArray[2]": "0x0830",
+      "GlowRenderTarget": "0x0840",
+      "note": "No Space field in the dumped UWidgetComponent; the world-space premise is stock-source until M1 classifies per screen."
+    },
+    "engine_composite_path": "r.HDR.UI.CompositeMode strings at 0x142bc44c8, 0x142bc5140, 0x142cce798; FCompositePS0/1 at 0x142bc7d58 / 0x142bc7e28; FSlateElementVS at 0x142bc5320; FUN_141343660 is FSlateRHIRenderer::DrawWindow_RenderThread. Recorded, not used.",
+    "research": "docs/research/ac7-ui-composition.md, docs/research/ac7-ui-extraction.md"
+  },
+  "video": {
+    "state": "located_in_sdk_not_hooked",
+    "how": "sdk_dump",
+    "detail": "AUIManagerActor holds FullscreenMovieWidget at 0x0D60 and a CriWare UManaComponent at 0x0F10; UManaComponent::Play/Stop/IsPlaying, EManaComponentStatus::Playing = 5. The plan's screen policy reports VIDEO from hooks on Play/Stop once located in Ghidra; until then video is never reported and the eligibility fallbacks stay named."
+  },
+  "presentation": {
+    "state": "planned",
+    "detail": "No frame generation SDK runs on D3D11 (DLSS-G manifest rhi d3d12/vk; FidelityFX FG and XeFG are D3D12-only). The representation plan's bridge keeps a D3D11 IDXGISwapChain4 facade for the game while a same-adapter D3D12 queue owns the real chain; the FG vendor creates or wraps it. Back buffer R10G10B10A2_UNORM 2048x1152; the UI layer must be its own R8G8B8A8_UNORM.",
+    "research": "docs/research/presentation-bridge.md, docs/research/vendor-fg-contracts.md"
+  },
   "result": {
     "backend": "DLSS via Streamline 2.12.0",
     "state": "reconstructs",
     "how": "measured",
     "detail": "Recorded 7 September mission: 7917 evaluations, no refusals, 1024x576 input, 2048x1152 output. The reported image included the complete scene without obvious smearing. Controlled motion, quality, and performance validation remain open.",
     "not_yet": [
-      "Reinserted into game post-processing. F7 is a rough-tonemapped debug display over the back buffer and hides the HUD.",
+      "Reinserted into game post-processing with the interface intact. F6 promotes the composite and runs game-tested; the interface stays soft because it is scene geometry on the screens that matter, which the representation plan extracts instead of promoting. F7 is a rough-tonemapped debug display over the back buffer and hides the HUD.",
       "MSVC/Windows validation of the recorded runtime path. Those sessions used MinGW-w64 and Wine/Proton."
     ]
   }

@@ -9,10 +9,11 @@ D3D11 utilities shared by the research proxy and runtime. Game-specific view int
 | `resource_ref` | Retain and release COM resources across the C ABI |
 | `constant_buffer_read` | Stage and read a buffer with type/device checks |
 | `motion_decode` | Convert biased velocity to float motion and preserve unwritten pixels |
-| `scene_reinsert` | Put a reconstructed scene back into the game's frame, keeping its grade and interface |
+| `scene_reinsert` | Put a reconstructed scene back into the game's frame by promoting its composite; becomes `scene_promote` in the representation plan, with the interface-target promotion removed |
+| `depth_replay` | Replay the separate translucency layer's draws depth-only into an output-resolution copy of scene depth, for the backend's camera-motion resolve |
 | `d3d11_state` | Save everything the device context has bound, and put it back |
 | `texture_dump` | Read supported texture formats into diagnostic TGA/JSON files |
-| `present_blit` | Show reconstructed scene colour over the back buffer |
+| `present_blit` | Show reconstructed scene colour over the back buffer; becomes `fullscreen_pass` plus `composite` in the representation plan |
 | `overlay_renderer`, `overlay_input` | Render egui meshes and collect window input |
 
 The frame tap uses format and binding heuristics. It does not yet identify a verified AC7 shader, view, and frame. A retained texture can still be overwritten by the game; choose the consumption or copy point explicitly.
@@ -27,9 +28,9 @@ Three parts of that plan are decisions rather than mechanics:
 
 - Scene colour is gated on the composite being bound. The scene passes read scene colour while they are still writing it, so an ungated substitution hands a lighting pass a reconstruction of a frame it has not finished, which is a feedback loop rather than an upscale.
 - The gate is also where the reconstruction runs. It is the last point before anything reads scene colour and the first where the scene is whole; evaluating at Present would leave the scene a frame behind the grade and interface drawn over it. The price is a mid-frame evaluate, where the game will not rebind what it believes is still bound, which is what `d3d11_state` is for.
-- The interface target is identified by format, `R8G8B8A8` where every scene target in this tail is `B8G8R8A8`. That is one observed difference in one game, so an input that does not match leaves the interface magnified with the scene and says so rather than promoting on a guess.
+- The interface target used to be identified by format, `R8G8B8A8` against `B8G8R8A8` scene targets. That rule is retired: the surface it picked is AC7's own render-resolution UI layer, which the widget quads draw into and the game composites itself, and promoting it cannot sharpen an interface that is rasterized as scene geometry. The interface is extracted instead; see the [representation plan](../../docs/representation-plan.md) and [AC7 UI extraction](../../docs/research/ac7-ui-extraction.md). The code still carries the set until M2 replaces it.
 
-Not fixed by any of it: bloom is still computed from the render-resolution scene, so the glow composited over the reconstruction is low resolution, and post-process shaders addressing texels rather than sampling normalized will address the wrong ones, because their constants still describe the buffer the engine believes it has. Both are visible only in a rendered result and neither has been looked at.
+Not fixed by any of it: bloom is still computed from the render-resolution scene, so the glow composited over the reconstruction is low resolution, and post-process shaders addressing texels rather than sampling normalized will address the wrong ones, because their constants still describe the buffer the engine believes it has. Both are visible only in a rendered result and neither has been looked at. The plan also promotes the chain targets between the tonemap and the back-buffer draw, which reinsertion has been leaving at render resolution.
 
 Run context work on the owning render thread. Save and restore all affected graphics state around injected work. Hook installation, rollback, and teardown must account for callbacks already in flight. Current gaps are in [the review](../../docs/review.md).
 

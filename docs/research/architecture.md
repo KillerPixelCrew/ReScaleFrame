@@ -63,6 +63,11 @@ SR colour and FG HUD-less colour are different inputs. FG needs the completed ou
 
 ## DX11/DX12 presentation bridge
 
+The design below is carried forward, with the intercept site, the facade contract, the surface set
+and the per-Present protocol specified in [presentation-bridge.md](presentation-bridge.md) and the
+[representation plan](../representation-plan.md). Reference implementations studied for it are
+recorded in [vendor-fg-contracts.md](vendor-fg-contracts.md).
+
 Expose a DX11-facing swap-chain facade to the game while a same-adapter DX12 queue owns the real presentation chain. Preserve the outward COM contract: `QueryInterface`, `GetDevice`, `GetBuffer`, reference counts, descriptions, resize, flags, fullscreen/output behaviour, and window association. Do not create a competing HWND swap chain.
 
 Shared textures need compatible handles/formats and explicit GPU ordering:

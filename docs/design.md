@@ -25,9 +25,11 @@ These components share a repository and release version. C interfaces keep owner
 
 SR scene colour and FG HUD-less colour come from different stages. Retaining a texture keeps its allocation alive; it does not preserve its contents. Generated frames do not advance simulation.
 
+Step 4 is where AC7 departs from a stock engine: it rasterizes its interface at a fixed 1920x1080 and, on several screens, draws it as world-space widget quads into its own render-resolution layer before compositing. The runtime therefore does not receive a HUD-less image from the game; it makes one, by diverting every interface draw the plugin classifies into a mod-owned premultiplied `R8G8B8A8` layer at output resolution and compositing it back at present. The layer and the HUD-less copy are the same two inputs every frame generation SDK asks for. The frame record, the vendor-neutral backend contract, the facade over the swap chain, and the order of events per Present are specified in the [representation plan](representation-plan.md); the frame flow above is the summary of it.
+
 ## Backend and frontend choices
 
-The planned Claw path uses native DX11 XeSS-SR and a same-adapter DX12 presentation bridge for XeSS MFG/XeLL. Vulkan/DXVK remains an alternative to measure. The API findings are tied to the SDK revisions in [presentation research](research/presentation-backends.md).
+The planned Claw path uses native DX11 XeSS-SR and a same-adapter DX12 presentation bridge for XeSS MFG/XeLL. Vulkan/DXVK remains an alternative to measure. The API findings are tied to the SDK revisions in [presentation research](research/presentation-backends.md) and the frame generation requirements of all three vendors are in [vendor contracts](research/vendor-fg-contracts.md). No frame generation SDK runs on D3D11, so the bridge is on every path, not only the Claw's; the order the plan builds the vendors in is FidelityFX, then DLSS-G, then XeFG, because that is the order they can be measured on the development machine.
 
 One provider owns FG/presentation at a time. Query capabilities from the actual device, driver, API, and SDK configuration, then report requested and effective settings separately.
 

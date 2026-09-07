@@ -142,7 +142,8 @@ Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
   are borrowed for the duration of the call.
-- Frame callbacks are deliberately absent for now. They land after the renderer experiments settle
+- Frame callbacks are deliberately absent for now (their shape, ABI 2, is specified in
+  `docs/representation-plan.md` and lands with its M5). They land after the renderer experiments settle
   their shape.
 
 The honesty rule is testable here: `rsf_game_info.rendering_ready` stays `0` and `status` stays

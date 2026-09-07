@@ -12,4 +12,4 @@ Frame assembly checks the camera data, jitter, resource sizes, and decoded-motio
 
 The caller supplies the D3D11 device/context and a matching camera/resource set. Resource changes rebuild the pipeline and reset history. Engine camera cuts, missed-frame continuity, render-thread commands, and full teardown still need work.
 
-The live AC7 bridge evaluates at Present to include later sky draws. Returning the result to the game's post-processing is the next integration step. See [design](../../docs/design.md), [todo](../../docs/implementation.md), and [review](../../docs/review.md).
+The live AC7 bridge evaluates at the composite gate when reinsertion (F6) is on and at Present otherwise. The [representation plan](../../docs/representation-plan.md) turns this scaffold into the session that owns the tap, the pipeline, the UI layer and the presentation bridge, renames `dlss_pipeline` to a vendor-neutral `sr_pipeline`, and stops `frame_assembly.h` including the DLSS header. See [design](../../docs/design.md), [todo](../../docs/implementation.md), and [review](../../docs/review.md).

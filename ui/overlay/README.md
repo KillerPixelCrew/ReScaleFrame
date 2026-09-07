@@ -2,7 +2,7 @@
 
 Rust/egui behind the C ABI in [overlay.h](include/rescaleframe/overlay.h). It produces meshes, texture updates, and settings intents. The C++ D3D11 renderer in `runtime/graphics` handles GPU work.
 
-The DLL, renderer, and input hook are implemented, but nothing yet loads and connects them in the game. The planned Compare, Inspect, Capture, Performance, and Status views are in [the todo](../../docs/implementation.md#egui-development-and-validation-workflow).
+The DLL, renderer, and input hook are loaded and connected by `loader/proxy/overlay_host`, which builds the renderer against the presenting device and draws one frame per Present; F5 opens the panel and it is game-tested in AC7 with a mouse cursor. The planned Compare, Inspect, Capture, Performance, and Status views are in [the todo](../../docs/implementation.md#egui-development-and-validation-workflow). ABI 3, appended per the rule in the header, is specified in the [representation plan](../../docs/representation-plan.md): effective vendor, route and multiplier, UI layer and bridge state, and the intents to change them.
 
 | Layer | Files | Responsibility |
 | --- | --- | --- |

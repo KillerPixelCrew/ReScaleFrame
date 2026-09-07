@@ -71,20 +71,29 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       had never been identified in any run. This is the same failure as the composite selection, the
       interface format and the layer identity: a running game binds more than it reads.
 
-      Third run, current state: the tail is found and reinsertion runs. **It blows up the interface,
-      and only a fraction of it is visible.** That is the open bug. It was set aside at the time
-      because the base upscale was not yet working and there was no point tuning composition under a
-      broken input; that reason is now gone, since the input chain is game-tested.
+      Third run: the tail is found and reinsertion runs, and it blew up the interface. Later runs
+      the same day fixed the blow-up (the plan went stale on screen changes and is now restaked)
+      and left the picture cleaner but the interface soft, with the briefing's 3D environment
+      missing under F6.
+
+      Superseded, 7 September. The interface was never a target to promote. AC7 rasterizes it at a
+      fixed 1920x1080 and, on the briefing and hangar, draws it as world-space widget quads into its
+      own render-resolution `R8G8B8A8` layer, depth-tested against the scene, before compositing it
+      itself. Promotion cannot sharpen that; extraction can. The mechanism below is replaced by the
+      [representation plan](representation-plan.md): a mod-owned premultiplied UI layer, a HUD-less
+      scene, and a composite at present. The account of the three runs stays because the failures
+      were all the same mistake about bindings.
 
       Finding the tail: the frame tap shadows the output merger and describes the draws into a
       render target it is asked to watch, with extent, viewport, ordinal within the pass, and every
       pixel shader input with its slot number. The loader points it at the swap chain's back buffer,
-      takes the single texture that draw reads as the composite, then watches that. The interface's
-      own target is picked out of the composite's inputs by its format, `R8G8B8A8` where every scene
-      target in this tail is `B8G8R8A8`; an input that does not match leaves the interface
-      unidentified rather than guessed at. None of this is in a capture here, because the exported
-      action list records render target bindings and not shader resource bindings, which
-      [ac7-frame-capture.md](research/ac7-frame-capture.md) states as a limitation twice.
+      takes the composite among what that draw reads (eight-bit colour, at least half the target's
+      height), then watches that. An "interface target" used to be picked out of the composite's
+      inputs by its format; that rule is retired, since the surface it picked is a render-resolution
+      target of unknown role and converter targets are 1920x1080. None of this is in a capture here,
+      because the exported action list records render target bindings and not shader resource
+      bindings, which [ac7-frame-capture.md](research/ac7-frame-capture.md) states as a limitation
+      twice.
 
       Doing the substitution: `runtime/graphics/scene_reinsert` promotes the composite and the
       interface target to output resolution, points scene colour at the reconstruction, and hands
@@ -133,14 +142,38 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       also passes that test under Wine with DXVK and RenderDoc, without DLSS. The old host
       reproduces the view-creation access violation in that two-device setup. AC7 validation of
       the fix remains pending. See [the investigation](research/ac7-overlay-device.md).
-- [ ] Early loader and orchestrator handshake in the actual AC7 process.
-- [ ] Game-plugin detection/preparation/lifecycle and bounded diagnostics.
-- [ ] Synthetic DX11/DX12 presentation bridge with correct GPU resource lifetimes.
-- [ ] XeLL timing and XeSS FG/MFG on the target Claw.
-- [ ] AC7 TAA/input capture, frame identity, and scene/HUD boundaries.
-- [ ] Native-resolution XeSS evaluation as an intermediate check.
-- [ ] True lower-resolution SR with larger-output reinsertion into AC7 post-processing.
-- [ ] Combined SR, XeLL, and every supported MFG setting in AC7.
+## Representation
+
+The [representation plan](representation-plan.md) covers everything after the SR input chain: UI
+extraction into a mod-owned premultiplied layer, the DX11 to DX12 presentation bridge, and a
+vendor-neutral contract that DLSS, FSR and XeSS implement for super resolution and frame generation.
+Each milestone ends deployed to the game and is judged by the log lines named in the plan. Status
+classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
+
+- [ ] M0. Compile again and decide the four uncommitted files. In progress.
+- [ ] M1. Classify every UI draw per screen, change nothing: creation hooks for layouts, shaders,
+      blend and depth states; the tap shadows the pixel shader, blend and depth-stencil state and
+      the vertex stride; `games/ac7` gains the classifier. One run answers which producer draws the
+      interface on each screen.
+- [ ] M2. Divert into the UI layer and composite at present with FG off: the layer, `fullscreen_pass`,
+      `composite`, the divert primitive with the alpha-op blend patch, `scene_promote` replacing
+      `scene_reinsert` (interface targets deleted, chain targets added), egui in the layer.
+- [ ] M3. Frame identity, eligibility, and the game's own per-context screen percentage table.
+- [ ] M4. Presentation bridge with a pass-through present and no FG.
+- [ ] M5. Migration: `backend.h`, game SDK ABI 2, orchestrator session, `dlss_bridge.c` deleted,
+      overlay ABI 3; `rendering_ready` flips only with this milestone's evidence.
+- [ ] M6. Frame generation, FidelityFX first (any D3D12 GPU, no XeLL, no Streamline device conflict).
+- [ ] M7. Frame generation, DLSS-G; DLSS-SR moves to the D3D12 proxy while DLSS-G owns FG.
+- [ ] M8. Frame generation, XeFG with XeLL, non-Intel mode on the development machine.
+- [ ] M9. Super resolution per vendor behind `rsf_sr_provider` (FSR via the bridge, XeSS-SR D3D11
+      on Arc).
+- [ ] M10. Claw device run: XeSS-SR D3D11, XeFG 3x/4x, XeLL. The only device-tested milestone.
+
+Retained from the earlier list and folded into those milestones: the loader and orchestrator
+handshake (M5), plugin lifecycle (M5), the synthetic bridge (M4), XeLL and MFG on the Claw (M8,
+M10), frame identity and scene/HUD boundaries (M1 to M3), reinsertion into post-processing (M2),
+combined SR and MFG (M6 to M10). Still outside the plan:
+
 - [ ] Standalone profiles, native egui rendering/input, and handheld controls.
 - [ ] WSGM launch/profile integration, limiter coordination, and rendered-frame AutoTDP inputs.
 - [ ] Matched-condition visual, frame-time, latency, and power measurements.
@@ -312,10 +345,13 @@ Open defects from the [7 September review](review.md). These are not fixed by th
 - [ ] Reject non-finite camera, projection, reprojection, and jitter data in the reader/assembly path; add poisoned-input regressions.
 - [ ] Roll back every observer hook after partial installation failure, and quiesce callbacks before teardown.
 - [ ] Fix RGBA16F colour selection in the frame tap and test colour/history selection together.
-- [ ] Parse settings by type/range so native quality and explicit false values work; validate address overrides.
+- [x] Parse settings so explicit zero values work. `read_number` uses `strtoul` with base 0, so hexadecimal
+      overrides and a present-and-zero value are honoured (7 September). Type/range validation and a
+      `config_parse` test land with the representation plan's M5.
 - [ ] Gate the debug blit on a successful evaluation of the current frame and reset history after gaps.
 - [ ] Preserve input press/release events between frames so egui does not lose short clicks.
 - [ ] Add Rust test execution and a pinned SDK-header compile job to CI; keep hardware evaluation a separate gate.
+      Planned as the two-leg vendor matrix in the [representation plan](representation-plan.md).
 - [ ] Make capture-timeline reads reflect inherited bindings at draws, or explicitly report unsupported tracking.
 - [ ] Derive discovery extents from verified render data/backend planning so inputs below 50% can be selected.
 

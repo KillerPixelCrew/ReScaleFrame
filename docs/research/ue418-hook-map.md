@@ -180,6 +180,51 @@ The missing relief in the reconstruction is a separate problem and this does not
 layer is absent from the backend's input because of which colour target is tapped, not because of
 motion vectors. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
 
+## Screen percentage per context: FGraphicsSettingsManager
+
+Found 7 September 2026 in the Ghidra project while looking for what overwrites `r.ScreenPercentage`
+on every screen change. AC7 keeps its own per-context table rather than one value:
+
+| Item | Address | Evidence |
+| --- | --- | --- |
+| `FGraphicsSettingsManager` load of six per-context percentages | `FUN_1405f5260` | calls `FUN_1405f4590(this, x, index, flag)` six times with index 0..5, matching the SDK's `EGraphicsScreenPercentageSettings` (Gameplay 0, NonGameplay 1, VRNonGameplay 2, VRGameplay 3, VRAirShow 4, MPGameplay 5) |
+| per-context reader | `FUN_1405f4590` | the callee above; takes the context index |
+| FName globals | `DAT_14356eec0` .. `DAT_14356ef18` | built by static initialisers such as `FUN_14015fc30` (`"NonGameplayScreenPercentage"`); strings at `0x14265cc18` (Gameplay), `0x14265cc50` (NonGameplay), `0x14265ce30`, `0x14265d0a8`, `0x14265d320` |
+| `r.ScreenPercentage` reference in the manager | `FUN_14015fb40` | data reference to the string at `0x14265cbd8` |
+
+This is why a mission load puts the console value back to 100 and why the proxy has re-written it
+on a timer. The [representation plan](../representation-plan.md) applies the render scale through
+this table instead (expected-byte guarded, M3) and keeps the console write as the announced
+fallback. Names are not yet assigned in the Ghidra project; they will be once the per-context
+semantics are confirmed by a patch that takes.
+
+## The engine's UI composition path is compiled in
+
+Strings present in `Ace7Game.exe`: `r.HDR.UI.CompositeMode` at `0x142bc44c8`, `0x142bc5140`,
+`0x142cce798`; `FCompositePS0` and `FCompositePS1` at `0x142bc7d58` and `0x142bc7e28`;
+`FSlateElementVS` at `0x142bc5320`. Referencing functions: `FUN_140315560` (cvar registration),
+`FUN_141343660`, `FUN_14164a840`.
+
+`FUN_141343660` is `FSlateRHIRenderer::DrawWindow_RenderThread` (4.18.3 `SlateRHIRenderer.cpp:601`).
+Its `bCompositeUI` is `DAT_143c783c3` (`GRHISupportsHDROutput`, read at `0x1413436ed`) and
+`DAT_1436a2e96` (`GSupportsVolumeTextureRendering`) and a platform mask through `FUN_140df9ea0` and
+the cvar at `DAT_143c8f250+4` and `FUN_141220f10` (`IsHDREnabled`, reading `DAT_143c85b00`). When
+true it allocates a `PF_B8G8R8A8` UI target and an HDR-format source target at viewport size,
+snapshots the back buffer, redirects Slate, and composites through `FUN_141351120`
+(`FCompositePS<1>`, scRGB) or `FUN_1413515d0` (`FCompositePS<0>`, PQ), both through a 32³ LUT with
+no SDR mode. Recorded because it is the in-engine blueprint for UI extraction; not used, because it
+covers only Slate, the front-end interface on the screens that matter is widget quads, and the
+composite would need intercepting.
+
+## The interface converter
+
+`UWidgetToTextureConverter_Setup` at `0x1404d5c10` stores a caller-supplied `FVector2D` into
+`DrawSize` at `this+0x28` (the SDK's offset); `UWidgetToTextureConverter_SetupVirtualWindow` at
+`0x1404d69a0` builds the `SVirtualWindow` from it. The front-end caller at `0x1406243e0` stores the
+converter at `[rdi+0xd48]` (`AUIManagerActor::FrontWindowConverter`) and passes the constants at
+`0x1425f1cac` (1920.0f) and `0x1425f1ce4` (1080.0f). The interface is rasterized at 1920x1080
+regardless of the render scale.
+
 ## Implementation follow-up
 
-The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. Next, turn these stock-source leads into verified AC7 function/shader/frame identities and complete output reinsertion. The source inspection itself remains distinct from those later runtime results.
+The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. The [representation plan](../representation-plan.md) carries the rest: UI extraction, the presentation bridge, and the vendor contracts. The source inspection itself remains distinct from those later runtime results.

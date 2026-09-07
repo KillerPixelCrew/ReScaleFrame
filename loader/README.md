@@ -101,8 +101,17 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_DLSS_OUTPUT_WIDTH`, `RSF_DLSS_OUTPUT_HEIGHT` | Observer's presented dimensions |
 | `RSF_DECODE_MOTION` | `1`; controls decoded diagnostic dumps |
 | `RSF_OVERLAY_DLL` | Explicit path to `rescaleframe_overlay.dll`; otherwise looked for beside the proxy |
+| `RSF_RENDERDOC` | `0`; set `1` to load RenderDoc at attach for a capture session |
+| `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
+| `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
+| `RSF_TRANSLUCENCY_TARGET`, `RSF_TRANSLUCENCY_TARGET_HEAVY` | `0` (match the scene), `100` (native): the layer's resolution as a percentage of the presented size, derived against the render scale in effect |
+| `RSF_TRANSLUCENCY_HEAVY_INDICES` | `100000`; a frame whose layer draws more indices than this is heavy (the briefing) |
+| `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding both targets |
+| `RSF_REINSERT_DEPTH` | `0`; what F6 does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
 
-**Parser limitations:** numeric environment values currently accept positive decimal integers only. Zero falls back to the default, so quality `0` selects Performance and `RSF_DECODE_MOTION=0` does not disable decoding. Address overrides must be decimal, despite the hexadecimal defaults shown above. Quality selection also does not choose `RSF_SCREEN_PERCENTAGE` automatically. These are open [review findings](../docs/review.md).
+The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
+
+Quality selection does not choose `RSF_SCREEN_PERCENTAGE` automatically; the [representation plan](../docs/representation-plan.md) derives the render scale from the vendor's plan per quality level.
 
 ## Startup and diagnostics
 
