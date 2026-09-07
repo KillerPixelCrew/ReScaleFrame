@@ -161,4 +161,92 @@ are investigations and proposed improvements, not confirmed defects or game-test
       Check colour/depth/motion/camera frame alignment and GPU cost. Record synthetic-tested,
       capture-validated, and game-tested results separately before marking tasks complete.
 
+## Engine integration improvements
+
+Use the existing plugin/runtime ownership split. These tasks extend the first working target and
+the motion investigations above; none is a claim of completed implementation.
+
+- [ ] Capture view data on the CPU when UE4 constructs or uploads it, with the matching render-frame
+      and view identity. Measure the current constant-buffer staging allocation, copy, and immediate
+      Map cost before replacing it. Reusing staging allocations is an interim improvement only;
+      do not introduce stale camera data to avoid a synchronous readback.
+- [ ] Promote discovered AC7 passes into explicit, verified engine-function or shader identities,
+      with resource checks as confirmation. Keep broad format/binding discovery as a diagnostic
+      mode. Select resources for a known pass, view, and frame rather than the first plausible set.
+- [ ] Establish a frame record with render-frame ID, view ID, valid rectangles, camera/exposure
+      state, and resource-use boundaries. Distinguish rendered frames, Present calls, and generated
+      frames. Define immediate-consumption versus copy-before-reuse obligations; retaining a
+      texture's allocation does not preserve its contents.
+- [ ] Complete reinsertion at the chosen scene reconstruction boundary before expanding into FG.
+      Return an output-resolution result to downstream passes and preserve grading, effects, and
+      an output-resolution HUD. Bypass only the original filtering/upscaling that SR replaces;
+      investigate cloud-specific temporal accumulation before disabling any temporal pass.
+- [ ] Verify the engine's exposure and pre-exposure convention, frame alignment, and backend
+      conversion. Identifying a 1x1 texture alone is insufficient. Compare against auto-exposure
+      during bright/dark transitions and record the source and effective values in diagnostics.
+- [ ] Verify texture mip selection at reduced render resolution. Apply any required bias through
+      appropriate engine/material paths, restore it when SR is disabled, and compare fine-detail
+      recovery against shimmer. Avoid indiscriminate global bias or sharpening as a substitute.
+- [ ] Sequence the integration work around CPU-side view capture, explicit pass/frame identification,
+      correct reinsertion, and exposure/mip tuning before additional backends and FG. Build the
+      egui inspection and capture tools alongside these steps so they can validate each change.
+
+## egui development and validation workflow
+
+Use the prepared egui overlay as the main in-game development and validation interface as well as
+the eventual player settings UI. Prioritize effective settings, buffer inspection, frame-time plots,
+and capture of the next N frames; prove the capture format before building offline sequence replay.
+
+- [ ] Connect the existing egui DLL, D3D11 renderer, and input hook through the runtime lifecycle.
+      Support opening/closing the interface, correct input ownership, graphics-state restoration,
+      and clean shutdown. Reuse the existing overlay implementation rather than creating another UI.
+- [ ] Implement a bounded command/status path: egui requests changes, the render integration applies
+      them at a defined frame boundary, and the UI reports effective settings or a refusal reason.
+      Keep vendor calls and per-frame GPU work in the runtime, and game-specific preparation in AC7.
+- [ ] Add a Compare view for native game output, native-resolution DLAA, reduced-resolution DLSS,
+      and ordinary scaling at the same reduced resolution. Support split-screen or a movable divider
+      where inputs are matched. Label a genuine native reference as a separate render or matched
+      run; it cannot be recovered from the same low-resolution input.
+- [ ] Make comparisons temporally valid. Handle history resets when changing backend or resolution,
+      label warm-up periods, and compare settled results. Use independent histories if running
+      multiple temporal configurations together. Record the extra cost of comparison mode.
+- [ ] Add an Inspect view for scene colour, depth, raw/decoded/resolved motion, camera-only motion,
+      written-pixel coverage, exposure, and reprojection error. Include pixel inspection, units,
+      display scale, and resource/frame identity. Distinguish disocclusions and shading changes
+      from motion errors. Use this view to deliver the motion diagnostics listed above.
+- [ ] Separate freezing the displayed diagnostic image from pausing processing. Continue maintaining
+      valid live history when only the display is frozen, and define reset/resume behaviour when
+      processing stops. Never feed repeated or mismatched frames to a backend accidentally.
+- [ ] Add a Capture view with capture-next-N-frames, progress, cancellation, and completion/error
+      status. Save matching colour, depth, motion, available exposure, camera matrices, jitter,
+      resets, frame IDs/timing, extents, formats, and relevant settings in a versioned sequence
+      format. Include game fingerprint, RSF commit/build, backend/SDK version, adapter, driver,
+      graphics API, and capture stage so results can be reproduced and compared.
+- [ ] Use bounded GPU readback queues with completion tracking and background file writing.
+      Configure memory/disk limits and report dropped or incomplete frames and their identities.
+      Mark gaps that invalidate temporal replay. Avoid silently stalling gameplay and measure the
+      capture overhead; GPU context work stays on its owning thread.
+- [ ] Keep diagnostic UI out of captured scene inputs and backend history. Offer a separate
+      annotated screenshot/export when overlay information is wanted. Preserve unmodified numeric
+      buffer data alongside any tonemapped or colourized previews.
+- [ ] Add a Performance view with frame-time history, CPU hook/readback time, GPU decode/SR time,
+      resource rebuilds, and diagnostic overhead. Retrieve GPU timings without forcing immediate
+      synchronization and identify unavailable/invalid measurements. Distinguish rendered and
+      presented/generated rates; do not label either as input latency.
+- [ ] Add a Status view showing selected pass/view, actual render/output sizes and valid rectangles,
+      requested/effective configuration, frame continuity, history reset reasons, missing inputs,
+      backend support, and capture queue/dropped-frame status. Bound logging and graph history.
+- [ ] Once live capture is validated, implement offline replay of complete sequences through a
+      supported backend with their original order, constants, exposure, and reset state. Reject
+      incompatible/incomplete inputs or mark comparison limits explicitly. Use replay to compare
+      motion conversions and backend settings without requiring another full game session.
+- [ ] Define repeatable visual/performance runs using the motion scenarios above plus exposure
+      transitions and fine-texture scenes. Compare native, DLAA, reduced-resolution DLSS, and
+      ordinary scaling under matched conditions. Export settings, warm-up rules, capture identity,
+      image comparisons, and timing summaries; separate backend cost from tooling overhead.
+- [ ] Validate the initial egui workflow in game: change settings and confirm effective values,
+      inspect buffers, capture a bounded sequence, exercise cancellation/queue overflow, and check
+      that opening, freezing, or closing diagnostics does not corrupt history or game input.
+      Record built, synthetic-tested, capture-validated, and game-tested status separately.
+
 The [validation plan](research/validation-plan.md) defines acceptance. Built does not mean injected, recognized does not mean supported, and a higher presentation counter does not establish lower latency or better handheld performance.
