@@ -84,19 +84,62 @@ __declspec(dllexport) HRESULT WINAPI DirectInput8Create(HINSTANCE instance, DWOR
 }
 
 #if RSF_HAVE_FRAME_CAPTURE
+/* A file sitting beside this DLL, which is beside the game executable. Written out rather than
+   assumed from the working directory, because a game's working directory is not reliably its
+   install folder. */
+static int beside_this_module(const char* name, char* out, size_t count)
+{
+    HMODULE self = NULL;
+    DWORD length;
+    char* separator;
+
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)&beside_this_module, &self)) {
+        return 0;
+    }
+    length = GetModuleFileNameA(self, out, (DWORD)count);
+    if (length == 0 || length >= count) {
+        return 0;
+    }
+    separator = strrchr(out, '\\');
+    if (!separator) {
+        return 0;
+    }
+    separator[1] = '\0';
+    if (strlen(out) + strlen(name) >= count) {
+        return 0;
+    }
+    strcat(out, name);
+    return 1;
+}
+
 /* RenderDoc has to be loaded before the graphics device exists, so this runs on the carrier's own
-   attach rather than on the worker thread. It only loads a library and reads two variables. */
+   attach rather than on the worker thread. It only loads a library and reads two variables.
+
+   The DLL is looked for beside this one before any variable is consulted, because that is where it
+   ends up when the proxy is deployed and requiring a path to a file already in the folder is a way
+   to press F11 seven times and get nothing. An explicit `RSF_RENDERDOC_DLL` still wins, for a build
+   kept somewhere else. */
 static void start_capture_support(void)
 {
     char library[MAX_PATH];
-    if (GetEnvironmentVariableA("RSF_RENDERDOC_DLL", library, MAX_PATH) == 0) {
+    char prefix[MAX_PATH];
+    rsf_capture_result result;
+
+    if (GetEnvironmentVariableA("RSF_RENDERDOC_DLL", library, MAX_PATH) == 0 &&
+        !beside_this_module("renderdoc.dll", library, sizeof(library))) {
+        note("no renderdoc.dll beside the proxy and RSF_RENDERDOC_DLL is not set, so F11 has "
+             "nothing to capture with");
         return;
     }
-    char prefix[MAX_PATH];
     if (GetEnvironmentVariableA("RSF_CAPTURE_PREFIX", prefix, MAX_PATH) == 0) {
         prefix[0] = '\0';
     }
-    rsf_capture_initialise(library, prefix[0] ? prefix : NULL);
+    result = rsf_capture_initialise(library, prefix[0] ? prefix : NULL);
+    /* Announced either way. A capture key that silently does nothing is what this is fixing, and a
+       load that failed here is the only place that can say why. */
+    note("capture support: %s, result %d", library, (int)result);
 }
 
 /* Watch for the capture key without touching the game's input. A polled key state cannot disturb
