@@ -466,12 +466,18 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     // address: the surface being looked for is the one whose identity is not yet known.
     bool report_hunt = false;
     if (self.options.on_hunt_draw && self.options.hunt_width && self.options.hunt_height &&
-        self.options.hunt_format && context == self.observed_context &&
+        context == self.observed_context &&
         self.hunt_budget.load(std::memory_order_relaxed) != 0) {
         for (const Tap::Slot& slot : self.slots) {
+            // Format zero means any, and it is the sensible default rather than a convenience. The
+            // shadow records the texture's own format, which for a render target is routinely the
+            // typeless one the view reinterprets, so a hunt named after the view's format misses
+            // the texture entirely. Asking only for a size and reporting what format turned up
+            // cannot make that mistake.
             if (slot.texture && slot.description.Width == self.options.hunt_width &&
                 slot.description.Height == self.options.hunt_height &&
-                uint32_t(slot.description.Format) == self.options.hunt_format) {
+                (self.options.hunt_format == 0 ||
+                 uint32_t(slot.description.Format) == self.options.hunt_format)) {
                 report_hunt = true;
                 break;
             }

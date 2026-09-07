@@ -54,6 +54,10 @@
    hazard, so it is watched for longer. */
 #define RSF_TAIL_ARM_FRAMES 6ul
 #define RSF_TAIL_STOP_FRAMES 32ul
+/* How many times a restake will look again before settling for what it can see. A video is a few
+   seconds and each look is 32 frames, so this outlasts one without spinning forever if a screen
+   genuinely has no interface. */
+#define RSF_TAIL_MAX_RELOOKS 12ul
 /* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
    spans several frames. The composite takes the whole interface on top of the scene, so it takes
    more, and the ordinal in each report says which draw of the pass it was. */
@@ -208,6 +212,7 @@ static struct {
     unsigned long redirects_seen;
     unsigned long redirect_stall;
     unsigned long tail_restakes;
+    unsigned long tail_relooks;
     int tail_restaking;
     unsigned long tail_draws;
 
@@ -497,11 +502,12 @@ static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
         if (draw->inputs[index].width != 1920 || draw->inputs[index].height != 1080) {
             continue;
         }
-        say("interface hunt: a 1920x1080 texture %p in slot %lu is read by a draw into target %p, "
-            "%lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, %lu targets bound, "
-            "depth %s",
-            draw->inputs[index].texture, (unsigned long)draw->inputs[index].slot,
-            draw->render_target, (unsigned long)draw->target_width,
+        say("interface hunt: a 1920x1080 format %lu texture %p in slot %lu is read by a draw into "
+            "target %p, %lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, %lu targets "
+            "bound, depth %s",
+            (unsigned long)draw->inputs[index].format, draw->inputs[index].texture,
+            (unsigned long)draw->inputs[index].slot, draw->render_target,
+            (unsigned long)draw->target_width,
             (unsigned long)draw->target_height, (unsigned long)draw->target_format,
             (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
             (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
@@ -679,9 +685,29 @@ static void watch_tail(void* swapchain)
         say("frame tail: done looking, %lu draws described, composite %s, interface target %s",
             bridge.tail_draws, bridge.composite ? "found" : "not found",
             bridge.interface_target ? "found" : "not found");
-        /* Looking again is only ever asked for by a stalled plan, so a plan is what it owes. */
+        /* Looking again is only ever asked for by a stalled plan, so a plan is what it owes.
+
+           Unless the frame it looked at was not the one worth describing. A restake fires 240
+           frames after the plan went quiet, which during a screen change lands in whatever is on
+           screen at that moment, and the user's run caught one mid video: 38 draws, composite
+           found, interface target not found. Installing that leaves the interface at render
+           resolution for the whole briefing that follows, which is exactly the symptom reported.
+
+           So an incomplete tail is not accepted. Looking again costs 32 frames and the alternative
+           is being wrong until the next stall, which is another 240 frames away at best and never
+           at worst, because a partial plan still redirects and so never looks stalled. */
         if (bridge.tail_restaking) {
+            if (!bridge.interface_target && bridge.tail_relooks < RSF_TAIL_MAX_RELOOKS) {
+                ++bridge.tail_relooks;
+                say("frame tail: no interface target in that frame, which is what a video or a "
+                    "screen change looks like. Looking again, attempt %lu of %lu",
+                    bridge.tail_relooks, RSF_TAIL_MAX_RELOOKS);
+                bridge.tail_frames = 0;
+                bridge.tail_draws = 0;
+                return;
+            }
             bridge.tail_restaking = 0;
+            bridge.tail_relooks = 0;
             install_reinsert_plan();
         }
         return;
@@ -1305,7 +1331,12 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
        states rather than from a guess. 28 is DXGI_FORMAT_R8G8B8A8_UNORM. */
     tap.hunt_width = 1920;
     tap.hunt_height = 1080;
-    tap.hunt_format = 28;
+    /* Any format. The first attempt asked for R8G8B8A8_UNORM, which is 28, and found nothing across
+       a whole session: the shadow carries the texture's own format and AC7's colour targets are
+       created typeless, 27, for the view to reinterpret. Naming a format here is how the hunt
+       reproduced the mistake it exists to avoid. The size comes from the binary; the format is
+       reported rather than assumed. */
+    tap.hunt_format = 0;
     tap.hunt_budget = 48;
     tap.on_hunt_draw = on_hunt_draw;
     tap.log = log;
