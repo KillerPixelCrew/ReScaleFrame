@@ -64,6 +64,10 @@ struct State {
     float last_report_x = 0.0f;
     float last_report_y = 0.0f;
     bool have_last_report = false;
+    /* Set once a raw mouse movement has been seen. Raw input is not affected by the game warping
+       the pointer and is not coalesced, so once it arrives it drives the overlay's pointer and the
+       window messages are ignored. See record_raw_mouse. */
+    std::atomic<bool> have_raw_input{false};
     uint32_t buttons = 0;
     float scroll = 0.0f;
 
@@ -144,6 +148,60 @@ uint32_t overlay_button_bit(uint32_t virtual_key)
     }
 }
 
+/* Move the pointer by a raw mouse movement.
+
+   This is the good path, and the one an overlay wants in a game that locks the mouse. A game that
+   warps the pointer every frame is steering from raw input, so `WM_INPUT` is already being
+   delivered to this window and arrives here through the subclass without registering anything of
+   our own. Registering would be worse than useless: raw input registration is per process and per
+   device class, so ours would replace the game's and take its steering with it.
+
+   Raw movement is what the mouse reported, before the pointer was clipped, warped or coalesced.
+   Window moves are coalesced, which is why following them looked chunky: with the game warping
+   every frame, the real movement and the warp back often arrive as one message and cancel.
+
+   The caller stops the message after this, which it already did before the overlay read anything
+   from it: while the panel is open, raw movement must not also steer the aircraft. */
+void record_raw_mouse(State& self, HWND window, LPARAM lparam)
+{
+    UINT size = 0;
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, nullptr, &size,
+                        sizeof(RAWINPUTHEADER)) != 0 ||
+        size == 0 || size > sizeof(RAWINPUT)) {
+        return;
+    }
+    RAWINPUT raw{};
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
+                        sizeof(RAWINPUTHEADER)) != size ||
+        raw.header.dwType != RIM_TYPEMOUSE) {
+        return;
+    }
+    // Absolute devices, a tablet or some remote desktops, report a position rather than a movement
+    // and are left to the window messages, which are correct for them.
+    if ((raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) {
+        return;
+    }
+    const long dx = raw.data.mouse.lLastX;
+    const long dy = raw.data.mouse.lLastY;
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+
+    RECT client{};
+    const bool have_client = GetClientRect(window, &client) && client.right > 0 && client.bottom > 0;
+    const float width = have_client ? static_cast<float>(client.right) : 0.0f;
+    const float height = have_client ? static_cast<float>(client.bottom) : 0.0f;
+
+    std::lock_guard<std::mutex> lock(self.guard);
+    self.have_raw_input.store(true, std::memory_order_release);
+    self.mouse_x += static_cast<float>(dx);
+    self.mouse_y += static_cast<float>(dy);
+    if (have_client) {
+        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), width - 1.0f);
+        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), height - 1.0f);
+    }
+}
+
 /* Follow the pointer by how far it moved, not by where it is.
 
    Ace Combat 7 is played with a pad and steers with a locked mouse: it warps the pointer back to
@@ -165,6 +223,11 @@ void record_mouse_position(State& self, HWND window, LPARAM lparam)
     // rsf_overlay_input_collect: this module does not scale them.
     const float x = static_cast<float>(GET_X_LPARAM(lparam));
     const float y = static_cast<float>(GET_Y_LPARAM(lparam));
+
+    // Raw input has taken over, and following both would count every movement twice.
+    if (self.have_raw_input.load(std::memory_order_acquire)) {
+        return;
+    }
 
     RECT client{};
     if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) {
@@ -462,6 +525,12 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
 
     case WM_INPUT:
         if (visible) {
+            // Read before it is stopped. This is the movement the overlay's own pointer follows:
+            // raw input is what the mouse reported, before the pointer was warped back to the
+            // centre and before Windows coalesced anything, which is what makes it smooth where
+            // following the window's own moves is chunky.
+            record_raw_mouse(self, window, lparam);
+
             // Raw input is how a game reads mouse movement for aiming, so it has to stop here or
             // the overlay's clicks steer as well. The default procedure still runs: WM_INPUT is
             // documented as requiring it so the system can release the input data, and skipping
