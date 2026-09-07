@@ -10,6 +10,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,100 @@ void stage(const char* what)
 // The dump runs inside a present, where a failure is a crashed game and nothing else. Its progress
 // lines are the only account of how far it got, so the sink is part of what this test covers.
 std::vector<std::string> log_lines;
+
+// What the creation callbacks saw. The observer reports pipeline objects as the game builds them,
+// which is what turns a pointer into a name for the rest of the run; these record that the
+// translation out of D3D11's descriptors is faithful, since everything downstream trusts it.
+struct SeenLayout {
+    void* layout;
+    uint32_t copied;
+    uint32_t count;
+    rsf_observer_layout_element elements[RSF_OBSERVER_MAX_LAYOUT_ELEMENTS];
+};
+std::vector<SeenLayout> seen_layouts;
+
+struct SeenShader {
+    void* shader;
+    uint32_t stage;
+    uint32_t bytes;
+    bool had_bytecode;
+};
+std::vector<SeenShader> seen_shaders;
+
+struct SeenTexture {
+    void* texture;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t mip_levels;
+    uint32_t array_size;
+    uint32_t sample_count;
+    uint32_t bind_flags;
+};
+std::vector<SeenTexture> seen_textures;
+
+void on_layout(void* user, void* layout, const rsf_observer_layout_element* elements,
+               uint32_t copied, uint32_t count)
+{
+    (void)user;
+    SeenLayout record{};
+    record.layout = layout;
+    record.copied = copied;
+    record.count = count;
+    for (uint32_t index = 0; index < copied && index < RSF_OBSERVER_MAX_LAYOUT_ELEMENTS; ++index) {
+        record.elements[index] = elements[index];
+    }
+    seen_layouts.push_back(record);
+}
+
+void on_shader(void* user, void* shader, uint32_t stage, const void* bytecode, uint32_t bytes)
+{
+    (void)user;
+    seen_shaders.push_back({shader, stage, bytes, bytecode != nullptr});
+}
+
+void on_texture(void* user, void* texture, uint32_t width, uint32_t height, uint32_t format,
+                uint32_t mip_levels, uint32_t array_size, uint32_t sample_count,
+                uint32_t bind_flags, uint32_t misc_flags)
+{
+    (void)user;
+    (void)misc_flags;
+    seen_textures.push_back(
+        {texture, width, height, format, mip_levels, array_size, sample_count, bind_flags});
+}
+
+using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
+                                    LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+
+// Loaded rather than linked, as elsewhere in this tree, so nothing here needs the compiler import
+// library to build.
+compile_fn load_compiler()
+{
+    const HMODULE module =
+        LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!module) {
+        return nullptr;
+    }
+    return reinterpret_cast<compile_fn>(
+        reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
+}
+
+// A vertex shader whose input signature is Slate's, so a real input layout can be created against
+// it. D3D11 validates a layout against a shader signature, which is why this has to compile rather
+// than being a made up blob. The semantics do not matter; the declaration does.
+const char* const layout_probe_source =
+    "struct VSIn {\n"
+    "  float4 texcoords : ATTRIBUTE0;\n"
+    "  float2 material  : ATTRIBUTE1;\n"
+    "  float2 position  : ATTRIBUTE2;\n"
+    "  float4 color     : ATTRIBUTE3;\n"
+    "  uint2  pixelsize : ATTRIBUTE4;\n"
+    "};\n"
+    "float4 VSMain(VSIn input) : SV_Position {\n"
+    "  return float4(input.position, 0, 1) + input.texcoords + float4(input.color.rgb, 0)\n"
+    "       + float4(input.material, 0, 0) + float4(input.pixelsize.x, input.pixelsize.y, 0, 0);\n"
+    "}\n"
+    "float4 PSMain() : SV_Target { return float4(1, 1, 1, 1); }\n";
 
 void collect(void* user, const char* message)
 {
@@ -89,6 +184,9 @@ int main(int argc, char* argv[])
     options.motion_scale = 1.0f / (0.499f * 0.5f);
     options.motion_bias = 32767.0f / 65535.0f;
     options.motion_invalid_value = -1000.0f;
+    options.on_layout = on_layout;
+    options.on_shader = on_shader;
+    options.on_texture = on_texture;
 
     options.abi_version = RSF_OBSERVER_ABI_VERSION + 1u;
     check(rsf_observer_install(&options) == RSF_OBSERVER_ERROR_ABI_MISMATCH,
@@ -165,6 +263,172 @@ int main(int argc, char* argv[])
     ID3D11Texture2D* wrong_format = make_target(DXGI_FORMAT_R8G8B8A8_UNORM, 256, 128);
     ID3D11Texture2D* too_small = make_target(DXGI_FORMAT_R16G16_UNORM, 32, 16);
     check(match && wrong_format && too_small, "The test targets must be created.");
+
+    stage("creation callbacks");
+    {
+        // Every texture, not only the ones the dump filter keeps. The filter serves dumping; what a
+        // texture is for is a question the caller answers, and it cannot answer it about a texture
+        // it was never told about. `too_small` and `wrong_format` are both filtered out above and
+        // both must still have been reported.
+        auto find_texture = [](void* texture) -> const SeenTexture* {
+            for (const SeenTexture& seen : seen_textures) {
+                if (seen.texture == texture) {
+                    return &seen;
+                }
+            }
+            return nullptr;
+        };
+        const SeenTexture* reported = find_texture(match);
+        check(reported != nullptr, "A created texture must be reported.");
+        check(find_texture(wrong_format) != nullptr,
+              "A texture the dump filter rejects on format must still be reported.");
+        check(find_texture(too_small) != nullptr,
+              "A texture the dump filter rejects on size must still be reported.");
+        if (reported) {
+            check(reported->width == 256 && reported->height == 128,
+                  "The reported size must be the descriptor's.");
+            check(reported->format == static_cast<uint32_t>(DXGI_FORMAT_R16G16_UNORM),
+                  "The reported format must be the descriptor's.");
+            check(reported->mip_levels == 1 && reported->array_size == 1 &&
+                      reported->sample_count == 1,
+                  "Mip, array and sample counts must survive the translation: all three are part "
+                  "of what identifies a widget target.");
+            check((reported->bind_flags & RSF_OBSERVER_BIND_RENDER_TARGET) != 0 &&
+                      (reported->bind_flags & RSF_OBSERVER_BIND_SHADER_RESOURCE) != 0,
+                  "The bind flags this header names must be the D3D11 values.");
+        }
+
+        const compile_fn compile = load_compiler();
+        if (!compile) {
+            std::fprintf(stderr, "d3dcompiler_47.dll is not available, skipping the layout and "
+                                 "shader callbacks\n");
+        } else {
+            ID3DBlob* vertex_code = nullptr;
+            ID3DBlob* pixel_code = nullptr;
+            ID3DBlob* errors = nullptr;
+            HRESULT compiled =
+                compile(layout_probe_source, std::strlen(layout_probe_source), "observer_test",
+                        nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vertex_code, &errors);
+            if (errors) {
+                errors->Release();
+                errors = nullptr;
+            }
+            check(SUCCEEDED(compiled) && vertex_code, "The probe vertex shader must compile.");
+            compiled = compile(layout_probe_source, std::strlen(layout_probe_source),
+                               "observer_test", nullptr, nullptr, "PSMain", "ps_5_0", 0, 0,
+                               &pixel_code, &errors);
+            if (errors) {
+                errors->Release();
+            }
+            check(SUCCEEDED(compiled) && pixel_code, "The probe pixel shader must compile.");
+
+            if (vertex_code && pixel_code) {
+                // Slate's declaration, from 4.18.3. The point is not that the observer knows what
+                // Slate is, which it must not, but that the five fields that identify a
+                // declaration survive the trip out of D3D11 intact.
+                const D3D11_INPUT_ELEMENT_DESC slate[] = {
+                    {"ATTRIBUTE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,
+                     D3D11_INPUT_PER_VERTEX_DATA, 0},
+                    {"ATTRIBUTE", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA,
+                     0},
+                    {"ATTRIBUTE", 2, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA,
+                     0},
+                    {"ATTRIBUTE", 3, DXGI_FORMAT_B8G8R8A8_UNORM, 0, 32,
+                     D3D11_INPUT_PER_VERTEX_DATA, 0},
+                    {"ATTRIBUTE", 4, DXGI_FORMAT_R16G16_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA,
+                     0},
+                };
+                ID3D11InputLayout* layout = nullptr;
+                const HRESULT made = device->CreateInputLayout(
+                    slate, 5, vertex_code->GetBufferPointer(), vertex_code->GetBufferSize(),
+                    &layout);
+                check(SUCCEEDED(made) && layout, "The probe input layout must be created.");
+                if (layout) {
+                    bool found = false;
+                    for (const SeenLayout& seen : seen_layouts) {
+                        if (seen.layout != layout) {
+                            continue;
+                        }
+                        found = true;
+                        check(seen.count == 5 && seen.copied == 5,
+                              "All five elements must be reported.");
+                        check(seen.elements[4].semantic_index == 4 &&
+                                  seen.elements[4].format ==
+                                      static_cast<uint32_t>(DXGI_FORMAT_R16G16_UINT) &&
+                                  seen.elements[4].input_slot == 0 &&
+                                  seen.elements[4].byte_offset == 36 &&
+                                  seen.elements[4].per_instance == 0,
+                              "The last element must arrive with its index, format, slot, offset "
+                              "and step class intact.");
+                        check(seen.elements[0].byte_offset == 0 && seen.elements[1].byte_offset == 16,
+                              "Offsets must not be renumbered.");
+                    }
+                    check(found, "Creating an input layout must reach the callback.");
+                    layout->Release();
+                }
+
+                ID3D11PixelShader* pixel = nullptr;
+                device->CreatePixelShader(pixel_code->GetBufferPointer(),
+                                          pixel_code->GetBufferSize(), nullptr, &pixel);
+                check(pixel != nullptr, "The probe pixel shader must be created.");
+                if (pixel) {
+                    bool found = false;
+                    for (const SeenShader& seen : seen_shaders) {
+                        if (seen.shader != pixel) {
+                            continue;
+                        }
+                        found = true;
+                        check(seen.stage == RSF_OBSERVER_STAGE_PIXEL,
+                              "A pixel shader must be reported as one.");
+                        check(seen.had_bytecode && seen.bytes == pixel_code->GetBufferSize(),
+                              "The bytecode must arrive whole, because hashing it is the caller's "
+                              "job and a truncated blob hashes to a plausible wrong answer.");
+                    }
+                    check(found, "Creating a pixel shader must reach the callback.");
+                }
+
+                // Created here rather than assumed to happen during device setup: whether a
+                // runtime builds shaders of its own is the runtime's business, and an assertion
+                // about it tests the driver instead of this code.
+                //
+                // The pixel shader above is deliberately still alive. Releasing it first made this
+                // run fail, because the runtime handed the vertex shader the address the pixel
+                // shader had just vacated and the lookup below found the stale record. That is not
+                // a quirk of the test: it is the reason nothing downstream may key a registry on a
+                // pointer without evicting on reuse, and it happened within a few lines of one
+                // another rather than over a long session.
+                ID3D11VertexShader* vertex = nullptr;
+                device->CreateVertexShader(vertex_code->GetBufferPointer(),
+                                           vertex_code->GetBufferSize(), nullptr, &vertex);
+                check(vertex != nullptr, "The probe vertex shader must be created.");
+                if (vertex) {
+                    bool found = false;
+                    for (const SeenShader& seen : seen_shaders) {
+                        if (seen.shader != vertex) {
+                            continue;
+                        }
+                        found = true;
+                        check(seen.stage == RSF_OBSERVER_STAGE_VERTEX,
+                              "A vertex shader must be reported as one: the two stages share a "
+                              "callback and only this field separates them.");
+                        check(seen.bytes == vertex_code->GetBufferSize(),
+                              "The vertex bytecode must arrive whole.");
+                    }
+                    check(found, "Creating a vertex shader must reach the callback.");
+                    vertex->Release();
+                }
+                if (pixel) {
+                    pixel->Release();
+                }
+            }
+            if (vertex_code) {
+                vertex_code->Release();
+            }
+            if (pixel_code) {
+                pixel_code->Release();
+            }
+        }
+    }
 
     D3D11_TEXTURE2D_DESC staging{};
     staging.Width = 256;

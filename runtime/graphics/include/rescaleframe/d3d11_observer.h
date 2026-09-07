@@ -23,7 +23,58 @@
 extern "C" {
 #endif
 
-#define RSF_OBSERVER_ABI_VERSION 4u
+#define RSF_OBSERVER_ABI_VERSION 5u
+
+/* One element of a vertex declaration, reduced to what identifies it.
+
+   The semantic name is deliberately not carried. Unreal's D3D11 RHI writes "ATTRIBUTE" for every
+   element of every declaration in the engine and puts the element index in the semantic index, so
+   the name distinguishes nothing and only these five fields do. Neutral rather than a D3D11 type
+   because this header stays free of d3d11.h, and because what a declaration means is a game
+   question that gets answered in `games/<id>`, not here. */
+typedef struct rsf_observer_layout_element {
+    uint32_t semantic_index;
+    uint32_t format;
+    uint32_t input_slot;
+    uint32_t byte_offset;
+    uint32_t per_instance;
+} rsf_observer_layout_element;
+
+#define RSF_OBSERVER_MAX_LAYOUT_ELEMENTS 16u
+
+/* A vertex declaration was created. `layout` is the `ID3D11InputLayout*`, borrowed: it is reported
+   at the moment it exists and this must not retain it without its own reference.
+
+   `elements` is valid only for the duration of the call, and `count` is the real element count even
+   when it exceeds what was copied, so a caller can tell "too many to describe" from "few". */
+typedef void (*rsf_observer_layout_fn)(void* user, void* layout,
+                                       const rsf_observer_layout_element* elements, uint32_t copied,
+                                       uint32_t count);
+
+#define RSF_OBSERVER_STAGE_VERTEX 0u
+#define RSF_OBSERVER_STAGE_PIXEL 1u
+
+/* A shader was created. `bytecode` is the compiled blob the game passed, borrowed for the call.
+
+   The bytecode rather than a hash computed here, because what to do with it belongs to the caller:
+   an override table keyed by hash needs one hash function and this file should not be the thing
+   that decides which. */
+typedef void (*rsf_observer_shader_fn)(void* user, void* shader, uint32_t stage,
+                                       const void* bytecode, uint32_t bytes);
+
+/* A texture was created, with the descriptor it was created from. Reported for every texture, not
+   only the ones the format filter retains, because deciding what a texture is for is the caller's
+   job and the filter above exists to serve dumping. Borrowed for the call. */
+typedef void (*rsf_observer_texture_fn)(void* user, void* texture, uint32_t width, uint32_t height,
+                                        uint32_t format, uint32_t mip_levels, uint32_t array_size,
+                                        uint32_t sample_count, uint32_t bind_flags,
+                                        uint32_t misc_flags);
+
+/* Bind flags, so a caller does not need d3d11.h to read the ones above. These are the D3D11 values. */
+#define RSF_OBSERVER_BIND_SHADER_RESOURCE 0x8u
+#define RSF_OBSERVER_BIND_RENDER_TARGET 0x20u
+#define RSF_OBSERVER_BIND_DEPTH_STENCIL 0x40u
+#define RSF_OBSERVER_BIND_UNORDERED_ACCESS 0x80u
 
 /* Called on the game's render thread, immediately before its own Present.
 
@@ -76,6 +127,21 @@ typedef struct rsf_observer_options {
     /* Optional. Invoked before every Present, which is where an overlay draws. */
     rsf_observer_present_fn on_present;
     void* on_present_user;
+    /* Appended in ABI 5. What the game created, reported as it is created.
+
+       Creation is the right place to learn what a pipeline object is: it runs rarely, it carries
+       the full descriptor, and the answer is then a pointer comparison for the rest of the run.
+       Binding runs a hundred times a frame and carries less.
+
+       All four are optional and all four are called on whichever thread the game creates from,
+       inside its own creation call, with the observer's lock held. Nothing in a callback may call
+       back into D3D11: that re-enters this hook and deadlocks. Record and return. */
+    rsf_observer_layout_fn on_layout;
+    void* on_layout_user;
+    rsf_observer_shader_fn on_shader;
+    void* on_shader_user;
+    rsf_observer_texture_fn on_texture;
+    void* on_texture_user;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {

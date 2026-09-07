@@ -37,4 +37,11 @@ Function signatures identify compiled library functions. They do not supply engi
 
 Recommend authorized [Unreal Engine GitHub access](https://www.unrealengine.com/en-US/ue-on-github) for Unreal research. The AC7 reference is stock `4.18.3-release`, recorded in [the hook map](research/ue418-hook-map.md). It explains engine behaviour but is not the game's exact source or a guarantee of matching offsets.
 
+The checkout at `references/UnrealEngine` is a full clone whose default branch is 5.8.2. It is kept
+checked out at `4.18.3-release` (`0a14a8d537a3`), and every read for this project must be at that
+tag. The engine's structures are not stable across that gap: `FSimpleElementVertex` alone gained a
+`FDFVector4` position, which moves every offset after it, so a signature taken from the default
+branch matches nothing in the game and fails silently. If the checkout has been moved, put it back
+before reading, or read through `git show 4.18.3-release:<path>`.
+
 Keep licensed source and captures outside Git. Commit the method, evidence references, conclusions, uncertainty, and implementation use as required by [the agent instructions](../AGENTS.md).
