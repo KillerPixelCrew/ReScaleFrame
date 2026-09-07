@@ -63,8 +63,6 @@ Paths below are relative to the reference engine's `Engine/` directory. Exact re
 
 **Capture before all relevant HUD paths.** Stock `UGameViewportClient::Draw` submits the scene before calling HUD `PostRender` and flushing Canvas. Slate draws later through its own renderer. Capture must be ordered on the render/GPU work stream; returning from a game-thread enqueue does not mean rendering is finished. AC7's target markers, cockpit UI, subtitles, and trueSky ordering remain game-specific validation items.
 
-## Next concrete runtime experiment
+## Implementation follow-up
 
-Use the observed DXGI factory/D3D11 device routes to establish an early observer, then resolve candidate outer-frame and post-process boundaries using these source leads. Trace view/frame IDs, resource dimensions, current API thread, and scene/HUD ordering without altering the image. Only after those are verified should the plugin attempt native-resolution XeSS evaluation and then larger-output reinsertion.
-
-The game was inspected as a file only. It was not launched, injected, patched, or configured during this follow-up.
+The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. Next, turn these stock-source leads into verified AC7 function/shader/frame identities and complete output reinsertion. The source inspection itself remains distinct from those later runtime results.

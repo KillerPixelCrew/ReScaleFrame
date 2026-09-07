@@ -13,65 +13,20 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 
 ## First working target
 
-- [x] Decrypted AC7 module capture and import map for offline analysis. Loader diagnostic only:
-      it performs no interception and touches no graphics object. Cross-built with mingw-w64 and
-      tested under Wine, and run against the installed game on 6 September 2026. Results are in
-      [ghidra-tooling.md](research/ghidra-tooling.md). Not yet built with MSVC.
-- [x] Render analysis of the installed game: frame timeline, both velocity targets, the temporal
-      AA pass identified by its inputs, and the view uniform buffer read live with offsets
-      confirmed against engine source. Game-tested. See [ac7-frame-capture.md](research/ac7-frame-capture.md).
-- [x] Temporal jitter revived by patching the anti-aliasing gate, verified in the running game:
-      every perspective view now carries a sub-pixel offset where all fifty earlier captures were
-      zero. Game-tested, not yet built with MSVC.
-- [x] Console variables set in the running game, and render scale confirmed working through
-      `r.ScreenPercentage`. Game-tested, not yet built with MSVC.
-- [x] Vendor-neutral upscaler model in Rust: quality levels, AC7's motion vector encoding taken
-      from engine source, and a viability check that reports every blocker rather than the first.
-      Unit-tested only. No vendor SDK is vendored and nothing here touches a GPU.
-      See [runtime/backends/README.md](../runtime/backends/README.md).
-- [x] Per-frame conversions out of Unreal's units: clip space jitter to pixels, screen space motion
-      to pixels, and the jitter sequence length a render scale calls for. Unit-tested against the
-      offsets and the largest motion recorded from the running game. The vertical sign follows
-      engine source and has not been checked against a rendered result.
-- [x] Jitter sequence length set in the game alongside the render scale, and the render scale holds
-      itself: loading a mission puts the game's own screen percentage back, so it is re-applied on a
-      timer, which does nothing while the scale is already ours. Game-tested through a full mission.
-- [x] DLSS through Streamline: load, device handover, support query, render size planning, resource
-      tags and per frame constants, behind the C ABI in `runtime/backends/dlss`. Runs in the game.
-- [x] View uniform buffer mapped, including `ClipToPrevClip`, the camera basis and the projection.
-      Offsets are checked by an identity that ties five of them together rather than fitted to one
-      buffer, and `tools/verify-view-layout.py` re-runs that check over the captured buffers: 11
-      perspective views, 0 failures. Game-tested data, offline analysis.
-- [x] Motion vector decode pass, required for every backend rather than only the ones that want
-      camera motion: they take a scale factor and Unreal's storage carries a bias. A D3D11 compute
-      pass with the encoding as parameters, saving and restoring the compute state around its
-      dispatch. Cross-built and tested under Wine on DXVK against values encoded with the engine's
-      own constants, including the sentinel and an axis flip. Checked against the game's own
-      velocity target too: the raw dump decoded by the reference path and the target this pass
-      produced report the same range and the same unwritten fraction.
-- [x] View uniform buffer reader in the AC7 plugin: matrices, camera basis, projection, sizes, and
-      `ClipToPrevClip` read rather than composed, with `PrevClipToClip` inverted from it. Refuses
-      rather than guesses, by checking the relationships that hold in a view buffer and nowhere
-      else. Run against the captured buffers it recognises all 50 as view buffers, accepts 10 as
-      perspective, and marks the 1016x1016 and 128x93 ones as secondary views. Reads the jitter in
-      pixels and hands back the projection with it removed, which 4.18 keeps no copy of.
-- [x] `TemporalAAJitter` located at `0x720`, by differencing the captures taken before the
-      anti-aliasing gate was patched against those taken after. Confirmed against the two elements
-      of `ViewToClip` the engine writes the same values into, and against the pixel offsets
-      recorded from a live read.
-- [x] Frame assembly in the orchestrator: a plugin fills an engine-neutral camera frame and the
-      orchestrator turns it into a backend's structure, refusing a pairing that cannot work rather
-      than producing an image that is quietly wrong. Unit-tested only, no GPU involved.
-- [x] DLSS on live frames, game-tested. 2176 passes recognised at 1024x576 in one session, 2175
-      evaluated, none refused. The result is the scene, reconstructed: at 1:1 against its own input,
-      aircraft stencil text is legible where the source is pixelated and panel lines resolve where
-      the source stair-steps, so this is reconstruction rather than a smooth rescale.
-      Confirmed in a mission on 7 September 2026: the render scale held at 1024x576 for the whole
-      flight, 7917 frames evaluated with none refused, and the reconstructed frame is the complete
-      scene, sky and cloud layer and terrain and aircraft, at 2048x1152. Under flight there is no
-      smearing, which is the first real test of the decoded velocity and of `ClipToPrevClip`.
-      What is not done: the result is drawn over the game's frame rather than reinserted into its
-      pipeline, so it is ungraded and carries no interface. That is the remaining structural piece.
+- [x] Decrypted module capture and import map. Cross-built, Wine-tested, and run in AC7 on 6 September; that run was not MSVC-verified. [Evidence](research/ghidra-tooling.md).
+- [x] AC7 frame/resource analysis and live view-buffer mapping. Captures identify sparse velocity and a separate half-size mask, plus a temporal-filter candidate. [Evidence](research/ac7-frame-capture.md).
+- [x] Temporal jitter enabled through the engine AA gate and measured in perspective views. Game-tested; the recorded patch build was not MSVC-verified.
+- [x] Console-variable access and `r.ScreenPercentage` changes verified in game; the recorded build was not MSVC-verified.
+- [x] Rust input model: quality levels, UE motion encoding, and all-blocker viability reporting. Unit-tested; no GPU calls. [Backend guide](../runtime/backends/README.md).
+- [x] Rust jitter/motion unit conversions and scale-dependent jitter sequence length. Unit-tested against recorded values; live C/C++ sign/scale agreement remains open below.
+- [x] Jitter sample count follows render scale; a timer restores scale after mission loading. Game-tested through a full mission.
+- [x] Streamline DLSS adapter: loading, device handover, support/render-size queries, tags, constants, and evaluation. Runs in AC7.
+- [x] View layout mapped through matrix identities, including camera basis, projection, and `ClipToPrevClip`. Offline check: 11 captured perspective views, no failures.
+- [x] D3D11 motion decode with bias/scale parameters, unwritten sentinel, and compute-state handling. Cross-built and tested under Wine/DXVK with source-encoded values and an axis flip. Game-buffer dumps matched the reference range and unwritten fraction.
+- [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
+- [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
+- [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
+- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024×576 input and 2048×1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a
@@ -249,4 +204,19 @@ and capture of the next N frames; prove the capture format before building offli
       that opening, freezing, or closing diagnostics does not corrupt history or game input.
       Record built, synthetic-tested, capture-validated, and game-tested status separately.
 
-The [validation plan](research/validation-plan.md) defines acceptance. Built does not mean injected, recognized does not mean supported, and a higher presentation counter does not establish lower latency or better handheld performance.
+## Repository review follow-up
+
+Open defects from the [7 September review](review.md). These are not fixed by the documentation rewrite.
+
+- [ ] Move F8 startup and F7 state changes to a render-thread command boundary; eliminate concurrent immediate-context use.
+- [ ] Reject non-finite camera, projection, reprojection, and jitter data in the reader/assembly path; add poisoned-input regressions.
+- [ ] Roll back every observer hook after partial installation failure, and quiesce callbacks before teardown.
+- [ ] Fix RGBA16F colour selection in the frame tap and test colour/history selection together.
+- [ ] Parse settings by type/range so native quality and explicit false values work; validate address overrides.
+- [ ] Gate the debug blit on a successful evaluation of the current frame and reset history after gaps.
+- [ ] Preserve input press/release events between frames so egui does not lose short clicks.
+- [ ] Add Rust test execution and a pinned SDK-header compile job to CI; keep hardware evaluation a separate gate.
+- [ ] Make capture-timeline reads reflect inherited bindings at draws, or explicitly report unsupported tracking.
+- [ ] Derive discovery extents from verified render data/backend planning so inputs below 50% can be selected.
+
+The [validation plan](research/validation-plan.md) defines acceptance. Keep build, synthetic, game, and target-device results separate.

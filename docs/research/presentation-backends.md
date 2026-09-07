@@ -12,9 +12,9 @@ Updated 5 September 2026 after inspecting Community Shaders' Vulkan branch and i
 | XeSS-FG/MFG | No | Supported devices; higher interpolation counts are hardware-dependent | No current native API |
 | XeLL | No | Supported devices and configurations | No current native API |
 
-Sources: [Intel's current support matrix](https://www.intel.com/content/www/us/en/developer/topic-technology/gamedev/xess.html), [SR Vulkan header](https://github.com/intel/xess/blob/8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0/inc/xess/xess_vk.h), and [Vulkan FG/XeLL request #60](https://github.com/intel/xess/issues/60). The issue contains an Intel acknowledgement, but no delivery date in the inspected discussion. An absent native API does not mean a mixed Vulkan/DX12 application is impossible.
+Sources: [Intel's support matrix](https://www.intel.com/content/www/us/en/developer/topic-technology/gamedev/xess.html), [SR Vulkan header](https://github.com/intel/xess/blob/8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0/inc/xess/xess_vk.h), and [Vulkan FG/XeLL request #60](https://github.com/intel/xess/issues/60). The issue contains an Intel acknowledgement, but no delivery date in the inspected discussion. An absent native API does not mean a mixed Vulkan/DX12 application is impossible.
 
-## What Community Shaders is actually changing
+## Community Shaders reference
 
 [PR #2632](https://github.com/community-shaders/skyrim-community-shaders/pull/2632) targets its Vulkan migration. The inspected upstream branch is `codex/vulkan-clean` at `eeb28dda597d220b54e65b4a1007fbd638b5e63a`. The related cleanup proposal, [PR #2670](https://github.com/community-shaders/skyrim-community-shaders/pull/2670), describes a DXVK fork exposing Vulkan device/resources, command submission, synchronization, and FG presentation hooks. These PRs were open when inspected; they are not evidence of a completed release.
 
@@ -22,7 +22,7 @@ This is a translation of Skyrim's DX11 rendering into Vulkan with custom integra
 
 The branch pins `doodlum/Streamline` at `579442cb54615dddb8f34a78def6f5ca7d4ec659`, rather than NVIDIA's unmodified upstream SDK. That fork adds `sl.xess`, `sl.fsr`, and `sl.fsr_g`. Its `sl.xess` implementation records `xessVKExecute` through Streamline; the public header describes the feature as upscaling only. This is useful prior art for a shared vendor interface. It does not supply native Vulkan XeSS MFG.
 
-This also qualifies the earlier Streamline conclusion: **stock NVIDIA Streamline and Community Shaders' extended Streamline are different integration surfaces**. The custom fork is a candidate backend dependency, subject to compatibility and maintenance review. It should not dictate the public Game SDK.
+The custom fork is a possible backend dependency. Keep the public Game SDK independent of it and check compatibility and maintenance cost.
 
 For [XeSS PR #2704](https://github.com/community-shaders/skyrim-community-shaders/pull/2704), the [maintainer's stated reason](https://github.com/community-shaders/skyrim-community-shaders/pull/2704#issuecomment-5545322652) was that the Vulkan update would break the DX11/DX12 implementation, with XeSS support planned in the update. This is a project migration decision, not a claim that native DX12 interop cannot work.
 
@@ -37,7 +37,7 @@ The current PR description also reports testing SR quality modes and XeSS FG/mul
 | DXVK/Vulkan SR with DX12 MFG presentation | Allows Vulkan rendering while retaining Intel MFG | Requires an additional Vulkan/DX12 interop path, compatible shared formats/handles, GPU identity matching, and explicit cross-API synchronization/presentation ownership |
 | Native DX11 with only a Vulkan processing/presentation bridge | Could avoid translating the entire game | Still needs cross-API resource sharing; does not gain all same-device DXVK advantages or native XeSS MFG |
 
-Vulkan is not inherently slower or faster here. A DXVK path may change CPU overhead, shader compilation behavior, driver scheduling, memory use, and power consumption. Those can offset or exceed bridge costs, in either direction. API names cannot establish the winner.
+Measure CPU overhead, shader compilation, scheduling, memory, power, and interop costs under matched conditions. API choice alone does not predict the result.
 
 For **the first Windows AC7/Claw SR+MFG target**, retain native DX11 SR plus DX12 MFG as the initial implementation. Keep renderer interop and presentation as replaceable orchestrator components. The Game SDK describes resource API, identity, conventions, and lifetime so a Vulkan backend does not require rewriting the game plugin's semantic contract.
 

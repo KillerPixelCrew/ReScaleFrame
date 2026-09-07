@@ -1,11 +1,6 @@
 # Ghidra tooling
 
-Ghidra ships no analyser that understands the graphics stack, and no public extension provides
-one. These scripts fill that gap: they give Ghidra the DirectX types it lacks, then use them to
-decode COM calls. They are development tools and are not part of any build.
-
-Everything here writes to an untracked output directory. Keep generated archives, reports, and
-Ghidra projects in `.local/`.
+DirectX type generation and COM-call analysis for Ghidra. Keep generated archives, reports, and projects in an untracked directory such as `.local/`.
 
 ## Prerequisites
 
@@ -24,12 +19,13 @@ Produces the type information Ghidra is missing for DX11, DX12 and DXGI.
 python3 tools/ghidra/build-directx-types.py .local/ghidra --gdt --ghidra-home /opt/ghidra
 ```
 
-Three outputs land in the output directory:
+Generated files:
 
 | File | Contents |
 | --- | --- |
 | `directx.h` | the selected headers flattened into one declaration-only translation unit |
-| `directx-vtables.json` | every COM interface's vtable slots and byte offsets, plus 6100 interface IDs |
+| `directx-vtables.json` | every COM interface's vtable slots and byte offsets, plus interface IDs from the installed headers |
+| `directx-slots.h` | selected COM slot indices and IID bytes for native code |
 | `directx.gdt` | a Ghidra data type archive, importable from the Data Type Manager |
 
 The header is preprocessed with a Windows target, then stripped of GCC attribute syntax and

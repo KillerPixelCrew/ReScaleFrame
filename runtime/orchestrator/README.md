@@ -1,35 +1,15 @@
 # Orchestrator
 
-This is the in-game runtime. It will own plugin selection/lifecycle, configuration, vendor backends, graphics resources, frame IDs, latency, and presentation.
+The orchestrator owns shared frame processing and vendor backends. The eventual plugin/settings lifecycle is still scaffolding; the research proxy currently drives the working DLSS pipeline.
 
-Loading the DLL does not activate graphics features. The intended sequence is: establish shared services, select the game plugin, validate/prepare the game, negotiate available inputs, then activate the requested supported pipeline. Game plugins never load or own a second orchestrator.
+| Module | Purpose |
+| --- | --- |
+| `runtime` | Version entry point |
+| `frame_assembly` | Validate camera/resource inputs and build a DLSS frame |
+| `dlss_pipeline` | Manage output/decode resources, backend setup, rebuilds, and evaluation |
 
-## Frame assembly
+Frame assembly checks the camera data, jitter, resource sizes, and decoded-motion requirements. It accepts native-size output or a larger output. Missing inputs return a refusal rather than being guessed.
 
-The first thing here that is not scaffolding. A plugin knows where its engine keeps camera data and
-how its velocity is stored; a backend knows what a vendor SDK wants; neither should know the other.
-So a plugin fills `rsf_camera_frame`, which names nothing vendor specific, and
-`rsf_assemble_dlss_frame` turns it into a backend's structure. Being the component that may know
-both sides is what the orchestrator is for.
+The caller supplies the D3D11 device/context and a matching camera/resource set. Resource changes rebuild the pipeline and reset history. Engine camera cuts, missed-frame continuity, render-thread commands, and full teardown still need work.
 
-The conversion is short, and every decision in it is one this project has got wrong somewhere:
-
-- **Which projection.** A matrix still carrying the temporal jitter makes the reconstruction correct
-  for a camera that was never rendered. That reads as softness, not as a bug, so it is the mistake
-  most likely to survive a look at the result.
-- **What the jitter is measured in.** Pixels at render resolution, converted from the clip space the
-  engine stores, dividing by the view rect rather than the buffer, because those differ the moment
-  the render scale moves.
-- **Whether motion has been decoded.** Assembly refuses a frame whose motion is still in the game's
-  storage. Backends take a scale factor and cannot subtract a bias, so the raw target reads as a
-  large constant motion across a still image.
-- **What marks a pixel nothing wrote.** The sentinel the decode pass established, which is what lets
-  a backend reconstruct camera motion for those pixels rather than believing them.
-- **An infinite far plane.** Reversed-Z projections have none to read and backends want a number, so
-  one is chosen and named rather than buried.
-
-It also refuses rather than assembling something that will look wrong: no jitter means no extra
-sub-pixel samples to reconstruct from, and an output no larger than the render size is not
-upscaling.
-
-Everything else here is still version metadata. See `docs/implementation.md` for the next work.
+The live AC7 bridge evaluates at Present to include later sky draws. Returning the result to the game's post-processing is the next integration step. See [design](../../docs/design.md), [todo](../../docs/implementation.md), and [review](../../docs/review.md).

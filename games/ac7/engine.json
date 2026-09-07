@@ -8,84 +8,76 @@
     "render_api": "d3d11",
     "examined": "2026-09-06"
   },
-
   "engine": {
     "family": "Unreal Engine 4",
     "version": "4.18",
     "vendor_branch": true,
     "how": "inferred",
     "evidence": [
-      "The view uniform buffer has no ViewToClipNoAA, which arrived after 4.18, and every field after ViewToClip therefore sits 0x40 earlier than a later engine puts it. That shift is what made the stock layout stop predicting the buffer partway through, and correcting for it made the whole layout check out.",
-      "The velocity encoding matches 4.18's Common.ush exactly: written pixels average 0.4999928 against the 32767/65535 the source states, agreeing to seven decimal places.",
-      "D3D12RHI markers and the full D3D12 interface set are present in .rdata, consistent with 4.18 having it compiled in."
+      "The verified view layout lacks ViewToClipNoAA, consistent with UE4.18. Later engine layouts shift subsequent fields by 0x40.",
+      "Written velocity averages 0.4999928, agreeing with the source bias 32767/65535; the scale comes from inspected Common.ush.",
+      "D3D12RHI markers and D3D12 interface IDs are present in .rdata; successful native D3D12 execution remains untested."
     ],
-    "notes": "Vendor branch rather than stock: the view uniform buffer stops matching the stock layout in its later half even after the ViewToClipNoAA shift is accounted for, and the stock 2640 byte view buffer size does not occur at all. Treat stock offsets as hypotheses past the fields verified in ac7-frame-capture.md."
+    "notes": "AC7 is a custom branch. Use only capture-validated offsets. A 4096-byte buffer allocation can reflect pooling and does not establish the underlying structure size."
   },
-
   "executable_protection": {
     "state": "encrypted",
     "how": "measured",
-    "evidence": "Shannon entropy 7.997 across all 38.9 MB of .text on disk, the PE entry point in a trailing .bind section belonging to the Steam DRM wrapper, and no reference anywhere in the file to the d3d11.dll or dxgi.dll import slots. Only .rdata is plaintext.",
-    "consequence": "Static analysis answers nothing about code. Every hook site and offset here came from the module as it exists in memory after the wrapper decrypts it."
+    "evidence": "Shipped .text entropy is about 7.997 across 38.9 MB, the entry point is in .bind, and graphics-import references are absent. The decrypted runtime dump contains readable code and 19,888 import references. .rdata and .pdata provide plaintext data.",
+    "consequence": "Use the decrypted runtime image for code analysis; the shipped file still supplies fingerprint, imports, strings, and data."
   },
-
   "velocity": {
     "present": true,
     "how": "measured",
     "format": "R16G16_UNORM",
     "encoding": "unreal_biased",
-    "encoding_detail": "In * (0.499 * 0.5) + 32767/65535, taken from Common.ush rather than fitted to captured data: in a frame where little moves the samples cannot determine the scale, and a fitted value came out wrong by four times while looking entirely reasonable.",
+    "encoding_detail": "stored = velocity * 0.2495 + 32767/65535. Test raw zero before decoding; decoded zero is valid motion.",
     "clear_value_means_unwritten": true,
     "camera_motion_included": false,
-    "camera_motion_evidence": "Measured from replayed pixels rather than assumed: 83.6% of a camera-panning frame is exactly zero, and in flight the sky stays zero while sweeping across the screen.",
-    "consumed_by_shipped_game": false,
-    "notes": "Written every frame by ten draws while the shipped settings present neither temporal antialiasing nor, in these captures, motion blur. The buffer exists because the engine's infrastructure wanted it, not because the game uses it, which is exactly the case worth looking for in other games."
+    "camera_motion_evidence": "83.6% of a camera-panning capture is zero; sky pixels remain unwritten during camera movement. This establishes missing dense camera coverage, not the camera contribution within written object vectors.",
+    "consumed_by_shipped_game": null,
+    "notes": "Ten draws write the sampled velocity pass. Captured temporal-filter candidates bind this texture; exact consumer shader identity/use remains to be verified. The earlier claim that the game never consumes it was unsupported."
   },
-
   "jitter": {
     "state": "gated",
     "how": "measured",
-    "detail": "PreVisibilityFrameSetup computes a sub-pixel offset only behind View.AntiAliasingMethod == AAM_TemporalAA, and the menu offers no setting that selects it. Stepping over one conditional jump, six bytes at RVA 0x112b1f3, runs it whatever the menu says.",
-    "verified": "Every perspective view carries an offset afterwards where all fifty earlier captures were exactly zero. Converted through the engine's own construction: -0.147, +0.065 and -0.430 pixels, all inside the half pixel a sample pattern produces.",
+    "detail": "The research proxy bypasses six bytes at RVA 0x112b1f3 so engine temporal jitter setup runs despite the menu AA selection.",
+    "verified": "Sampled perspective views changed from zero jitter before the patch to sub-pixel jitter afterward; recorded horizontal offsets include -0.147, +0.065, and -0.430 pixels.",
     "field_offset": "0x720",
     "field_layout": "current x, current y, previous x, previous y, in clip space"
   },
-
   "temporal_pass": {
     "state": "runs_without_jitter",
-    "how": "measured",
-    "detail": "A pass binding colour, a history target, velocity, depth and a 1x1 exposure target appears in every capture. Earlier notes named it FRCPassPostProcessTemporalAA from that input signature, which was inference and not proof, and this game does not run that anti-aliasing mode at all.",
-    "notes": "Accumulates without sub-pixel jitter, so it stabilises specular and cloud rendering and gains no resolution. Replacing its consumer rather than restoring it is the point: 4.18's own temporal antialiasing is what the developers had and chose not to ship."
+    "how": "inferred",
+    "detail": "Captured bindings include colour, history, velocity, depth, and a 1x1 exposure candidate while view jitter is zero. This supports temporal filtering; the exact AC7 shader/function is not established by those bindings alone.",
+    "notes": "Do not label this definitively as stock FRCPassPostProcessTemporalAA or disable cloud-specific history without inspecting its consumers."
   },
-
   "render_scale": {
     "mechanism": "r.ScreenPercentage",
     "how": "measured",
-    "detail": "In 4.18 that one variable is the whole mechanism: it shrinks the scene buffers through ComputeDesiredSize, makes ViewRect differ from UnscaledViewRect so the upscale pass appears, and the jitter formula divides by ViewRect so the offset rescales by itself.",
+    "detail": "At 50%, scene allocations measure 1024x576 while presentation remains 2048x1152. Use engine size/rectangle setup rather than resizing textures alone.",
     "resets_on_level_load": true,
-    "resets_detail": "Loading a mission re-applies the game's own graphics settings and puts the value back to 100. A backend fed the presented size afterwards is doing antialiasing while looking like a success, so the scale has to re-apply itself.",
+    "resets_detail": "Mission loading restores the game scale; the proxy currently reapplies the requested scale on a timer.",
     "console_manager_rva": "0x3a8b290",
     "find_console_variable_vtable_offset": "0x90"
   },
-
   "insertion_point": {
     "recognised_at": "the pass that binds colour, depth and velocity together at render resolution",
     "colour_format": "R11G11B10_FLOAT",
     "colour_complete_at": "present",
     "how": "measured",
-    "detail": "The pass that names the resources is the lighting. A capture replay shows twenty seven further draws adding the sky, the clouds and the translucency to that same colour target afterwards, and taking the colour where the set is recognised produced a reconstruction of a world with a black sky. None of the three inputs is written again once the colour is finished, so the evaluate happens at Present.",
+    "detail": "The qualifying set precedes about 27 later sky/cloud/translucency draws into the same colour target. Early evaluation omitted the sky; Present-time evaluation produced the complete diagnostic scene. Revalidate input overwrite boundaries before changing timing.",
     "interface_composites_at_render_resolution": true,
-    "notes": "The interface is composited before the game's own upscale, so at reduced scale it is upscaled with the scene. Reinserting before that composite is what would let the grade and the HUD survive; drawing over the finished frame, which is what happens today, loses both."
+    "notes": "At reduced scale the HUD composite also shrinks. Reinsert before that composite and coordinate downstream output dimensions, grading, and HUD rendering."
   },
-
   "result": {
     "backend": "DLSS via Streamline 2.12.0",
     "state": "reconstructs",
     "how": "measured",
-    "detail": "In flight with the render scale held at 1024x576 against a 2048x1152 output: 7917 frames evaluated, none refused, and the reconstructed frame is the whole scene with no smearing under movement.",
+    "detail": "Recorded 7 September mission: 7917 evaluations, no refusals, 1024x576 input, 2048x1152 output. The reported image included the complete scene without obvious smearing. Controlled motion, quality, and performance validation remain open.",
     "not_yet": [
-      "Reinserted into the game's pipeline. The result is drawn over the finished frame, so it is ungraded and carries no interface.",
-      "Built with MSVC. Everything here is cross-compiled with mingw-w64 and tested under Wine."
+      "Reinserted into game post-processing. F7 is a rough-tonemapped debug display over the back buffer and hides the HUD.",
+      "MSVC/Windows validation of the recorded runtime path. Those sessions used MinGW-w64 and Wine/Proton."
     ]
   }
 }

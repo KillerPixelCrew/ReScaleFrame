@@ -5,6 +5,16 @@ instructions here rather than in tool-specific files.
 
 Use natural, concise language in documentation, code comments, issues, commits, and PRs. Avoid em dashes and filler.
 
+## Research and tool setup
+
+Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
+
+Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record relevant fingerprints, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
+
+Every commit and PR includes its research or links to the relevant notes. For changes without a new experiment, give the rationale and checks performed. Never invent research or describe a source review as a runtime test. When evidence corrects an earlier conclusion, retain a concise account of what changed and why.
+
+Check the environment before recommending installation. [docs/tooling.md](docs/tooling.md) lists build tools, Ghidra/PyGhidra, Ghidra MCP, Function ID signature databases, RenderDoc, vendor SDKs, and authorized Unreal source access. Use the local game-render-analysis skill or methodology for rendering questions. If older instructions conflict with current source or measured evidence, document the correction rather than repeating the old claim.
+
 ## Project boundaries
 
 - Keep all first-party code in this monorepo. Do not split the loader, orchestrator, SDK, UI, or game plugins into separate repositories or submodules.
@@ -27,9 +37,9 @@ Use natural, concise language in documentation, code comments, issues, commits, 
 
 ## Build and verify
 
-`eng/verify.ps1` is the full gate and matches CI. It compares `VERSION` against the Cargo workspace
+`eng/verify.ps1` is the native/lint gate and matches CI. It compares `VERSION` against the Cargo workspace
 version, configures, builds, and tests the native tree, then runs `cargo fmt --check` and
-`cargo clippy -D warnings`.
+`cargo clippy -D warnings`. Run `cargo test --workspace --locked` separately when Rust behaviour is affected; the script does not execute those tests.
 
 ```powershell
 ./eng/verify.ps1                        # Debug
@@ -105,7 +115,7 @@ free of GPL includes.
 
 Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 
-- Every struct leads with `struct_size`. Entry points reject a short struct with
+- Size-checked call structures lead with `struct_size`; embedded metadata is part of its enclosing ABI. Entry points reject a short call structure with
   `RSF_ERROR_INVALID_ARGUMENT` and a mismatched `abi_version` with `RSF_ERROR_ABI_MISMATCH`.
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
@@ -114,7 +124,7 @@ Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
   their shape.
 
 The honesty rule is testable here: `rsf_game_info.rendering_ready` stays `0` and `status` stays
-truthful until the pipeline actually works, and the contract test asserts it. The same applies to
+truthful until rendering works through the plugin lifecycle, and the contract test asserts it. The same applies to
 prose. Built is not injected, recognized is not supported, and a higher presentation counter is not
 lower latency. Do not soften README or status wording ahead of the code.
 
@@ -136,7 +146,7 @@ any third-party code or binary.
 
 The procedure this project uses to analyse a game is written down in
 [docs/research/methodology.md](docs/research/methodology.md), with the operational version as a
-skill at `.claude/skills/game-render-analysis/`. Read one of them before starting on a new game or
+skill at `.agents/skills/game-render-analysis/`. Read one of them before starting on a new game or
 a new render question; both record failures worth not repeating.
 
 `tools/inspect-game.py` is read-only PE inspection; a string match is a lead, not a verified hook

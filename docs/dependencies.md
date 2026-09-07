@@ -1,38 +1,19 @@
-# Dependencies and references
+# Dependencies
 
-All first-party code lives in this repository. The initial native scaffold depends only on the Windows/C++ toolchain. The egui dependency is pinned in the Cargo workspace, with transitive versions recorded in `Cargo.lock`.
+The native build needs the Windows/C++ toolchain. Rust dependencies are pinned in `Cargo.toml` and `Cargo.lock`. MinGW-w64 and Wine support the optional Linux cross-build.
 
-No vendor graphics SDK, reference repository, game binary, or Epic engine source is copied into this repository. The research source map records inspected revisions and upstream links. Epic links require authorized access.
+Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outside version control. [The source map](research/source-map.md) records inspected revisions; Epic links require authorized access.
 
-Vendor backends will need separately managed SDK/runtime dependencies and their applicable notices. Before incorporating reference code, check that project's actual license and compatibility with ReScaleFrame's selected license. Studying a source file does not make it first-party code.
+## Optional local SDKs
 
-First-party runtime, loader, launcher, UI, game plugins, tools, and documentation use GPL-3.0-only. The Game SDK under `sdk/game/` uses MIT. No third-party runtime binaries are currently distributed.
-
-## Development-only dependencies
-
-These support research and are not part of any shipped artifact. Nothing here is committed; all of it lands in the untracked `vendor/` directory and the build treats it as optional.
-
-| Item | Source | License | Used by |
+| Dependency | Inspected version | Local path | Purpose |
 | --- | --- | --- | --- |
-| `renderdoc_app.h` | `baldurk/renderdoc`, tag `v1.45` | MIT | `loader/diagnostics/src/frame_capture.c` |
-| `renderdoc.dll` (x64) | `renderdoc.org/stable/1.45/RenderDoc_1.45_64.zip` | MIT | loaded at runtime by the research proxy |
-| Streamline SDK headers | `NVIDIA-RTX/Streamline`, tag `v2.12.0` | MIT | `runtime/backends/dlss` |
-| `sl.*.dll`, `nvngx_dlss.dll` (x64) | `streamline-sdk-v2.12.0.zip` release asset | NVIDIA RTX SDKs License | loaded at runtime by the DLSS backend |
+| RenderDoc header and x64 DLL | 1.45 | `vendor/renderdoc/` | In-application capture |
+| Streamline headers | 2.12.0 | `vendor/streamline/include/sl.h` | Compile the DLSS adapter |
+| Streamline/NGX x64 runtime | 2.12.0 release package | `vendor/streamline/bin/x64/` | Load and evaluate DLSS |
 
-Fetch both into `vendor/renderdoc/`. Capture support compiles only when the header is present, so a checkout without it still builds and tests. The DLL is never loaded from the search path, only from the explicit path in `RSF_RENDERDOC_DLL`.
+Without the headers, the checkout still builds; the relevant API reports that the feature is unavailable. `RSF_RENDERDOC_DLL` and `RSF_STREAMLINE_BIN` select runtime locations. See [loader setup](../loader/README.md).
 
-Streamline is the DLSS SDK; there has been no separate one since DLSS 2. Fetch the release asset
-and extract it into `vendor/streamline/`, so that `vendor/streamline/include/sl.h` and
-`vendor/streamline/bin/x64/sl.interposer.dll` exist. The build compiles the DLSS backend only when
-the header is present, and a checkout without it still builds and tests: the entry points remain
-and report that this build has no DLSS in it, which is a different statement from DLSS failing.
+RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll`. Check the exact release's included terms and notices before redistribution. ReScaleFrame does not currently include these binaries.
 
-The two licenses differ and the difference matters. Streamline's own source and headers are MIT.
-The NGX runtime binaries next to them, `nvngx_dlss.dll` in particular, are under the NVIDIA RTX
-SDKs License and are redistributable only on its terms. Neither is committed here and neither is
-shipped by this project. The backend loads them from a path given at runtime, so deploying them is
-the user's action under NVIDIA's license, not a redistribution by ReScaleFrame.
-
-The in-application capture approach, and specifically the need to allow NVIDIA vendor extensions so that RenderDoc does not cause device removal on hybrid graphics, follow Skyrim Community Shaders' `src/Features/RenderDoc.cpp`. That is a studied approach, not copied code.
-
-mingw-w64 and Wine support the Linux cross build described in `AGENTS.md`. Neither is required on Windows.
+First-party code and documentation use GPL-3.0-only; `sdk/game/` uses MIT. Reference projects retain their own licenses. Record provenance and check compatibility before incorporating their code.
