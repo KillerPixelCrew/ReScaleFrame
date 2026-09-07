@@ -57,7 +57,24 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       scene before the game's own composite so the grade and the interface survive. That is the
       remaining structural piece and the reason the picture is ungraded and has no HUD.
 
-      The whole path is now built, behind F6, and none of it has been run against the game.
+      The whole path is built behind F6 and has been run against the game. It took three runs to get
+      there and each failed differently, which is worth keeping because the failures were all the
+      same mistake about bindings.
+
+      First run: nothing happened at all. The tail walk had taken a 2048×32 strip as the composite,
+      a UI bar the final draw also reads, and promoted that. Zero gates opened, so F6 did precisely
+      nothing. Fixed by rejecting any input less than half the height of the target it is drawn into.
+
+      Second run: the panel said no tail. The rule required the final draw to have exactly one input,
+      and it has seven, because D3D11 leaves shader resource slots bound until something replaces
+      them. `frame_tap.h` warns about this in as many words and the tail code ignored it, so the tail
+      had never been identified in any run. This is the same failure as the composite selection, the
+      interface format and the layer identity: a running game binds more than it reads.
+
+      Third run, current state: the tail is found and reinsertion runs. **It blows up the interface,
+      and only a fraction of it is visible.** That is the open bug. It was set aside at the time
+      because the base upscale was not yet working and there was no point tuning composition under a
+      broken input; that reason is now gone, since the input chain is game-tested.
 
       Finding the tail: the frame tap shadows the output merger and describes the draws into a
       render target it is asked to watch, with extent, viewport, ordinal within the pass, and every
