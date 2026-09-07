@@ -321,6 +321,7 @@ static void register_overlay_actions(void);
 /* Defined next to the other console variable work, and called from the render scale paths above
    it, which run whenever the scale is applied or restored. */
 static void set_separate_translucency_scale(void);
+static void apply_separate_translucency_patch(void);
 
 static void start_observer(void)
 {
@@ -567,6 +568,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
        write into bytes about to be overwritten. */
     apply_jitter_patch();
     apply_translucent_velocity_patch();
+    apply_separate_translucency_patch();
 
     note("result %d, entropy %d.%03d, sections %u, imports %u, iat references %u, bytes %llu",
          (int)result, (int)report.code_entropy,
@@ -793,18 +795,68 @@ static void action_start_backend(void)
    puts its own back. */
 static void set_separate_translucency_scale(void)
 {
-    uint32_t offset = 0;
-    const float wanted = (float)read_number("RSF_SEPARATE_TRANSLUCENCY_PERCENT", 101);
-    if (wanted == 0.0f) {
+    /* Replaced by the patch below. Setting the console variable could not do this: the scale
+       reaches 0.5 by two different routes and the variable only controls one of them. */
+}
+
+/* Render separate translucency at the scene's resolution, by taking the halving out.
+
+   The briefing map's relief is separate translucency and arrives at 512x288 while the scene is
+   1024x576. Nothing downstream recovers that: by the time anything sees the composite the layer is
+   already a doubling of a quarter resolution image. It was never a motion problem.
+
+   `FSceneRenderTargets::SetSeparateTranslucencyBufferSize` computes one scale and uses it three
+   times, for the width, the height and the stored scale:
+
+     movss  xmm1, [0.5]                  ; the halving, at 1410be330
+     ...
+     mulss  xmm0, xmm1                   ; scaled width
+     mulss  xmm0, xmm1                   ; scaled height
+     movss  [rbx+0x220], xmm1            ; SeparateTranslucencyScale
+
+   The scale arrives at 0.5 two ways: the console variable can say 50, or it can say 100 and the
+   automatic downsampling takes over, which is the branch pair just above that load. Setting the
+   variable only addresses the second, and this game's value is evidently not the 100 that a write
+   guarded on the expected value would accept, because that write never happened.
+
+   So the branch pair and the load are replaced together with an unconditional load of 1.0, which
+   sits four bytes after the 0.5 in the same constant pool. Fifteen bytes:
+
+     73 0D                     jnc  +0x0D          ; skip when the scale is not ~1.0
+     40 84 FF                  test dil, dil       ; and when nothing asked to downsample
+     74 08                     jz   +8
+     F3 0F 10 0D 58 61 4B 01   movss xmm1, [0.5]
+
+   become `movss xmm1, [1.0]` and a seven byte nop. Everything after reads xmm1, so width, height
+   and the stored scale all become full resolution whatever the variable says.
+
+   The expected bytes are checked before writing. If the game updates and this moves, it refuses
+   rather than corrupting an instruction. */
+static void apply_separate_translucency_patch(void)
+{
+    if (read_number("RSF_FULL_TRANSLUCENCY", 1) == 0) {
         return;
     }
-    if (rsf_console_set_float("r.SeparateTranslucencyScreenPercentage", 100.0f, wanted,
-                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90),
-                              &offset) == RSF_DUMP_OK) {
-        note("separate translucency percentage set to %d at object offset 0x%lx, so the layer is "
-             "rendered at the scene's resolution rather than half of it",
-             (int)wanted, (unsigned long)offset);
+    const DWORD rva = read_number("RSF_FULL_TRANSLUCENCY_RVA", 0x10be329);
+    const uint8_t expected[15] = {0x73, 0x0D, 0x40, 0x84, 0xFF, 0x74, 0x08, 0xF3,
+                                  0x0F, 0x10, 0x0D, 0x58, 0x61, 0x4B, 0x01};
+    /* movss xmm1, [rip+0x014B6163] loads the 1.0 at 0x142574494, then a seven byte nop. */
+    const uint8_t replacement[15] = {0xF3, 0x0F, 0x10, 0x0D, 0x63, 0x61, 0x4B, 0x01,
+                                     0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00};
+    uint8_t previous[15] = {0};
+
+    const rsf_dump_result result =
+        rsf_patch_code(rva, replacement, sizeof(replacement),
+                       rva == 0x10be329 ? expected : NULL, rva == 0x10be329 ? sizeof(expected) : 0,
+                       previous);
+    if (result == RSF_DUMP_OK) {
+        note("separate translucency halving removed at rva 0x%lx, so the layer renders at the "
+             "scene's resolution rather than half of it",
+             (unsigned long)rva);
+    } else {
+        note("separate translucency halving NOT removed at rva 0x%lx, result %d (expected bytes "
+             "did not match?)",
+             (unsigned long)rva, (int)result);
     }
 }
 

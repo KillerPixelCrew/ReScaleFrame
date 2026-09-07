@@ -110,6 +110,25 @@ Working consequences of the ownership split above:
 behavior from proposed implementation, and `docs/research/ue418-hook-map.md` holds the AC7 and
 UE4.18 hook research.
 
+## Changing engine behaviour
+
+Patch the code. That is the default here, not the fallback.
+
+When the engine does something that has to stop, find the instructions in Ghidra against the
+matching Unreal source and replace them. Console variables, configuration files and engine settings
+are all things the game can overwrite, arrive at by another route, or ignore, and every one of them
+has cost a run of the game to find that out. The jitter gate, the velocity blend-mode gate and the
+separate-translucency halving were all settled this way after other approaches were not.
+
+The rule that makes it safe is the expected bytes. Every patch names what it expects to find and
+writes only where it finds it, so a game update moves the code and the patch refuses instead of
+corrupting an instruction. It is announced either way, because a patch that silently did nothing is
+indistinguishable from one that worked until something downstream fails.
+
+Patch after decryption, next to the others in `apply_*_patch`, and record the site in
+`docs/research/ue418-hook-map.md` with its RVA, its bytes and the source it corresponds to. Name the
+function in the Ghidra project while the evidence is in front of you.
+
 ## Native ABI
 
 `sdk/game/include/rescaleframe/game_api.h` is the versioned contract between orchestrator and
