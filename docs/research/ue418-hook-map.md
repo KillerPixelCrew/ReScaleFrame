@@ -87,7 +87,31 @@ Doing it ourselves at the D3D11 level, by re-issuing the translucent draws into 
 
 That is the strongest argument for the gate cut over the alternatives: when the engine's own velocity pass runs, it supplies `PreviousLocalToWorld` from bookkeeping it already maintains. Whether translucent primitives are registered in `MotionBlurInfoData` at all is the open question, since nothing has ever needed them there; if they are not, the pass runs and writes zero motion.
 
-Untested. No address has been located in `Ace7Game.exe`, nothing has been patched, and whether AC7's icon materials meet the substitution conditions is unknown. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
+### The dynamic-mesh gate, located
+
+Found 7 September 2026 in `Ace7Game.exe.dump` (71,385,127 bytes, entropy 6.267 after decryption), image base `0x140000000`.
+
+The chain starts at the wide literal `L"Velocity"` at `142af9008`, the pooled render-target name from `VelocityRendering.cpp:896`. Its only referrer is `FUN_1411869c0`, which also reads `L"r.MotionBlurDebug"` and then branches between two implementations: `FDeferredShadingSceneRenderer::RenderVelocities` and its parallel and serial paths. The serial path `FUN_141186cc0` loops views, and `FUN_141184dc0` walks dynamic mesh elements and calls `FUN_141182390` with the argument list of `FVelocityDrawingPolicyFactory::DrawDynamicMesh`: command list, view, drawing context, mesh, `bPreFog`, render state, proxy, hit proxy id, instanced-stereo flag.
+
+The gate is the first thing that function does:
+
+```text
+1411823d5  CALL qword ptr [RAX + 0x198]   ; Material->GetBlendMode()
+1411823db  CMP  EAX,0x1                   ; 83 F8 01
+1411823de  JA   0x14118274c               ; 0F 87 68 03 00 00  -> return false
+1411823e4  MOV  RAX,qword ptr [RBX]
+1411823ea  CALL qword ptr [RAX + 0x20]    ; GetMaterialDomain()
+1411823ed  CMP  EAX,0x3                   ; MD_UI
+1411823f0  JZ   0x14118274c
+```
+
+`CMP EAX,1` with `JA` is `BlendMode == BLEND_Opaque || BlendMode == BLEND_Masked` compiled as an unsigned compare, matching `VelocityRendering.cpp:544`. The domain check that follows is `ShouldIncludeDomainInMeshPass` and should be left alone; excluding UI-domain materials is wanted.
+
+Proposed patch: at RVA `0x11823de`, replace the six bytes `0F 87 68 03 00 00` with six `0x90`. That drops only the blend-mode rejection and leaves the domain check, the movable test and `SupportsVelocity` in place, so a material without a usable permutation still refuses rather than drawing wrongly.
+
+This is the dynamic path only. The static equivalent at `VelocityRendering.cpp:507`, inside `AddVelocityStaticMesh`, has not been located; it runs when a primitive is added to the scene rather than during rendering, and whichever path AC7's icons take decides whether one patch or both are needed.
+
+Untested. Nothing has been patched, and whether AC7's icon materials meet the substitution conditions is unknown. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
 
 ## Implementation follow-up
 
