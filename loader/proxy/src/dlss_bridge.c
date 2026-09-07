@@ -214,6 +214,14 @@ static struct {
     unsigned long tail_restakes;
     unsigned long tail_relooks;
     int tail_restaking;
+    /* The surfaces the interface is composited into, found by the shape hunt rather than by the
+       tail's format rule. Retained, because the plan names them by address. */
+    void* interface_targets[RSF_REINSERT_MAX_INTERFACE_TARGETS];
+    uint32_t interface_target_count;
+    /* The presented size, kept here so a per-draw callback can judge against it without asking the
+       pipeline for its status on every draw. */
+    unsigned long output_width;
+    unsigned long output_height;
     unsigned long tail_draws;
 
     /* The interface's own target, and the scene colour, both taken from the frame and both held.
@@ -512,6 +520,29 @@ static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
             (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
             (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
             (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
+        /* Remember it. This is the identification the tail's format rule kept getting wrong: the
+           surface the interface is composited into is the one a draw reading the interface writes
+           to, and nothing about that depends on a format. Only smaller-than-output targets are
+           worth taking, since one already at output resolution is not being squashed. */
+        if (draw->render_target && draw->target_width < bridge.output_width &&
+            draw->target_height < bridge.output_height) {
+            uint32_t seen;
+            for (seen = 0; seen < bridge.interface_target_count; ++seen) {
+                if (bridge.interface_targets[seen] == draw->render_target) {
+                    break;
+                }
+            }
+            if (seen == bridge.interface_target_count &&
+                bridge.interface_target_count < RSF_REINSERT_MAX_INTERFACE_TARGETS) {
+                rsf_resource_retain(draw->render_target);
+                bridge.interface_targets[bridge.interface_target_count++] = draw->render_target;
+                say("interface hunt: target %p %lux%lu is where the interface is squashed, and is "
+                    "now one of %lu to promote",
+                    draw->render_target, (unsigned long)draw->target_width,
+                    (unsigned long)draw->target_height,
+                    (unsigned long)bridge.interface_target_count);
+            }
+        }
         break;
     }
 }
@@ -1208,6 +1239,7 @@ static int install_reinsert_plan(void)
     rsf_reinsert_frame_tail tail;
     rsf_frame_tap_plan plan;
     rsf_reinsert_result prepared;
+    uint32_t index;
     void* reconstruction = rsf_dlss_pipeline_output_texture();
 
     if (!bridge.reinsert || !bridge.composite || !bridge.scene_color || !reconstruction ||
@@ -1222,7 +1254,15 @@ static int install_reinsert_plan(void)
     memset(&tail, 0, sizeof(tail));
     tail.struct_size = sizeof(tail);
     tail.composite = bridge.composite;
-    tail.interface_target = bridge.interface_target;
+    /* The hunt's findings first, because they are an observation rather than a rule: each one is a
+       target a draw reading the 1920x1080 interface actually wrote into. The tail's own guess is
+       taken only when the hunt has found nothing yet, and only if it is not already in the set. */
+    for (index = 0; index < bridge.interface_target_count; ++index) {
+        tail.interface_targets[tail.interface_target_count++] = bridge.interface_targets[index];
+    }
+    if (bridge.interface_target && tail.interface_target_count == 0) {
+        tail.interface_targets[tail.interface_target_count++] = bridge.interface_target;
+    }
     tail.scene_color = bridge.scene_color;
     tail.reconstruction = reconstruction;
     tail.render_width = (uint32_t)bridge.held_width;
@@ -1329,6 +1369,8 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
        it writes into is the one that has to be at output resolution. Every format rule tried so far
        has picked the wrong surface at least once, which is why this starts from a size the binary
        states rather than from a guess. 28 is DXGI_FORMAT_R8G8B8A8_UNORM. */
+    bridge.output_width = output_width;
+    bridge.output_height = output_height;
     tap.hunt_width = 1920;
     tap.hunt_height = 1080;
     /* Any format. The first attempt asked for R8G8B8A8_UNORM, which is 28, and found nothing across

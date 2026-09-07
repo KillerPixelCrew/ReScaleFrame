@@ -136,7 +136,8 @@ int main()
     rsf_reinsert_frame_tail tail{};
     tail.struct_size = sizeof(tail);
     tail.composite = composite;
-    tail.interface_target = interface_target;
+    tail.interface_targets[0] = interface_target;
+    tail.interface_target_count = 1;
     tail.scene_color = scene_color;
     tail.reconstruction = reconstruction;
     tail.render_width = 256;
@@ -203,7 +204,8 @@ int main()
     stage("preparing again without an interface target");
     log_lines.clear();
     rsf_reinsert_frame_tail no_interface = tail;
-    no_interface.interface_target = nullptr;
+    no_interface.interface_targets[0] = nullptr;
+    no_interface.interface_target_count = 0;
     check(rsf_reinsert_prepare(reinsert, &no_interface) == RSF_REINSERT_OK,
           "An unidentified interface target must still allow the scene to be reinserted.");
     check(logged("magnified with the scene"),

@@ -55,7 +55,11 @@
 extern "C" {
 #endif
 
-#define RSF_REINSERT_ABI_VERSION 1u
+#define RSF_REINSERT_ABI_VERSION 2u
+/* How many surfaces the interface may be composited into. Four is two frames' worth of the pair AC7
+   alternates between, which leaves room for the count to have been miscounted without silently
+   dropping one. */
+#define RSF_REINSERT_MAX_INTERFACE_TARGETS 4u
 
 typedef int32_t rsf_reinsert_result;
 #define RSF_REINSERT_OK ((rsf_reinsert_result)0)
@@ -91,10 +95,20 @@ typedef struct rsf_reinsert_frame_tail {
     uint32_t struct_size;
     /* The render resolution target the interface is composited into and the last draw reads. */
     void* composite;
-    /* The interface's own target. Null is allowed and means it was not identified: the scene is
-       still reconstructed, and the interface is magnified with it exactly as it is today. Saying
-       so is better than substituting a texture that might be something else. */
-    void* interface_target;
+    /* The targets the interface is composited into. An empty set is allowed and means none was
+       identified: the scene is still reconstructed and the interface is magnified with it, which is
+       better than substituting a texture that might be something else.
+
+       A set rather than one, because the game uses more than one. AC7 rasterizes its interface at a
+       fixed 1920x1080 and then composites it down into a render resolution surface, and the surface
+       it picks alternates between at least two allocations from frame to frame. Promoting one of
+       them leaves the other frames squashed, which looks like the promotion not working at all
+       rather than like it working half the time.
+
+       This is the fourth time a rule of the form "the one that matches" has been wrong in this
+       frame. Composite selection, interface format, translucent layer identity and now this. */
+    void* interface_targets[RSF_REINSERT_MAX_INTERFACE_TARGETS];
+    uint32_t interface_target_count;
     /* The scene colour the tonemap reads, and what replaces it. */
     void* scene_color;
     /* The reconstruction, at output resolution. `rsf_dlss_pipeline_output_texture` is one. */

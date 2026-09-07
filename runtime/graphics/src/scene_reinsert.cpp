@@ -51,7 +51,8 @@ struct rsf_reinsert {
     void* log_user = nullptr;
 
     Replacement composite;
-    Replacement interface_target;
+    Replacement interface_targets[RSF_REINSERT_MAX_INTERFACE_TARGETS];
+    uint32_t interface_target_count;
 
     // Not a replacement: the reconstruction already exists at output resolution and belongs to
     // whoever produced it. All this owns is a way to read it.
@@ -185,12 +186,30 @@ extern "C" rsf_reinsert_result rsf_reinsert_prepare(rsf_reinsert* reinsert,
                            reinsert->composite, "composite")) {
         return RSF_REINSERT_ERROR_RESOURCE_FAILED;
     }
-    if (!build_replacement(reinsert, static_cast<ID3D11Texture2D*>(tail->interface_target),
-                           reinsert->interface_target, "interface target")) {
-        release_replacement(reinsert->composite);
-        return RSF_REINSERT_ERROR_RESOURCE_FAILED;
+    for (uint32_t index = 0; index < reinsert->interface_target_count; ++index) {
+        release_replacement(reinsert->interface_targets[index]);
     }
-    if (!tail->interface_target) {
+    reinsert->interface_target_count = 0;
+    for (uint32_t index = 0;
+         index < tail->interface_target_count && index < RSF_REINSERT_MAX_INTERFACE_TARGETS;
+         ++index) {
+        if (!tail->interface_targets[index]) {
+            continue;
+        }
+        if (!build_replacement(reinsert,
+                               static_cast<ID3D11Texture2D*>(tail->interface_targets[index]),
+                               reinsert->interface_targets[reinsert->interface_target_count],
+                               "interface target")) {
+            for (uint32_t undo = 0; undo < reinsert->interface_target_count; ++undo) {
+                release_replacement(reinsert->interface_targets[undo]);
+            }
+            reinsert->interface_target_count = 0;
+            release_replacement(reinsert->composite);
+            return RSF_REINSERT_ERROR_RESOURCE_FAILED;
+        }
+        ++reinsert->interface_target_count;
+    }
+    if (reinsert->interface_target_count == 0) {
         say(reinsert,
             "reinsert: the interface's own target was not identified, so the interface is "
             "magnified with the scene rather than drawn at output resolution");
@@ -201,7 +220,10 @@ extern "C" rsf_reinsert_result rsf_reinsert_prepare(rsf_reinsert* reinsert,
             &reinsert->reconstruction_view))) {
         say(reinsert, "reinsert: the reconstruction could not be made readable");
         release_replacement(reinsert->composite);
-        release_replacement(reinsert->interface_target);
+        for (uint32_t index = 0; index < reinsert->interface_target_count; ++index) {
+            release_replacement(reinsert->interface_targets[index]);
+        }
+        reinsert->interface_target_count = 0;
         return RSF_REINSERT_ERROR_RESOURCE_FAILED;
     }
 
@@ -238,11 +260,16 @@ extern "C" rsf_reinsert_result rsf_reinsert_fill_plan(rsf_reinsert* reinsert,
     composite.shader_view = reinsert->composite.shader_view;
     composite.render_view = reinsert->composite.target_view;
 
-    if (reinsert->interface_target.original) {
+    for (uint32_t index = 0;
+         index < reinsert->interface_target_count && plan->count < RSF_FRAME_TAP_MAX_SUBSTITUTIONS;
+         ++index) {
+        if (!reinsert->interface_targets[index].original) {
+            continue;
+        }
         rsf_frame_tap_substitution& interface_item = plan->items[plan->count++];
-        interface_item.texture = reinsert->interface_target.original;
-        interface_item.shader_view = reinsert->interface_target.shader_view;
-        interface_item.render_view = reinsert->interface_target.target_view;
+        interface_item.texture = reinsert->interface_targets[index].original;
+        interface_item.shader_view = reinsert->interface_targets[index].shader_view;
+        interface_item.render_view = reinsert->interface_targets[index].target_view;
     }
 
     // Scene colour last and gated on the composite, because the scene passes read scene colour
@@ -263,7 +290,7 @@ extern "C" rsf_reinsert_result rsf_reinsert_get_status(rsf_reinsert* reinsert,
         return RSF_REINSERT_ERROR_INVALID_ARGUMENT;
     }
     status->ready = reinsert->ready ? 1u : 0u;
-    status->interface_promoted = reinsert->interface_target.original ? 1u : 0u;
+    status->interface_promoted = reinsert->interface_target_count;
     status->render_width = reinsert->render_width;
     status->render_height = reinsert->render_height;
     status->output_width = reinsert->output_width;
@@ -282,7 +309,9 @@ extern "C" void rsf_reinsert_destroy(rsf_reinsert* reinsert)
     if (reinsert->reconstruction_view) {
         reinsert->reconstruction_view->Release();
     }
-    release_replacement(reinsert->interface_target);
+    for (uint32_t index = 0; index < reinsert->interface_target_count; ++index) {
+        release_replacement(reinsert->interface_targets[index]);
+    }
     release_replacement(reinsert->composite);
     if (reinsert->device) {
         reinsert->device->Release();
