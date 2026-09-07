@@ -73,6 +73,11 @@ typedef struct rsf_bridge_actions {
     void (*trigger_capture)(void);
     unsigned long (*capture_count)(void);
     unsigned long (*render_scale_percent)(void);
+    /* How many indices this frame's separate translucency draws carried, reported once per frame.
+       The carrier owns what to do about it: the resolution that layer renders at is a patched
+       immediate over there, and the thresholds are settings, so this reports and does not decide.
+       Called from the present hook, on the render thread, like the rest of these. */
+    void (*translucent_geometry)(unsigned long indices);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);

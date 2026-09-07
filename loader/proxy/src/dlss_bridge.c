@@ -156,6 +156,13 @@ static struct {
     unsigned long depth_candidate_samples;
     unsigned long geometry_draws;
     unsigned long geometry_traced;
+    /* Indices drawn into the separate translucency layer, this frame and the last completed one.
+       The second is kept so the report and the panel have something to show: the live one is zero
+       for most of a frame and would read as "nothing there" whenever it was asked. */
+    unsigned long translucent_indices;
+    unsigned long translucent_indices_last;
+    unsigned long translucent_draws;
+    unsigned long translucent_draws_last;
     unsigned long depth_handover_traced;
     unsigned long depth_replay_width[2];
     unsigned long depth_replay_height[2];
@@ -409,6 +416,12 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
     bridge.depth_candidate_width = draw->width;
     bridge.depth_candidate_height = draw->height;
     bridge.depth_candidate_samples = draw->samples;
+    /* What tells the briefing relief apart from a tracer, summed here because this is the only
+       place that sees every draw into the layer. Instances multiply it: a hundred instanced
+       billboards are a hundred billboards' worth of geometry however few draws they took. */
+    ++bridge.translucent_draws;
+    bridge.translucent_indices +=
+        (unsigned long)draw->count * (draw->instances ? (unsigned long)draw->instances : 1ul);
 
     for (i = 0; i < 2; ++i) {
         const uint32_t replayed = rsf_depth_replay_draw(bridge.depth_replay[i], draw);
@@ -916,6 +929,18 @@ static void on_present(void* user, void* swapchain)
         }
     }
 
+    /* Before the per-frame state is cleared. The count is only ever nonzero once the frame tap is
+       installed, which happens when the backend starts, so a briefing reached without starting one
+       reports zero and the layer keeps its ordinary scale. That is a real limit and not a
+       deliberate choice: nothing observes draws before the tap exists. */
+    bridge.translucent_indices_last = bridge.translucent_indices;
+    bridge.translucent_draws_last = bridge.translucent_draws;
+    if (bridge.actions.translucent_geometry) {
+        bridge.actions.translucent_geometry(bridge.translucent_indices);
+    }
+    bridge.translucent_indices = 0;
+    bridge.translucent_draws = 0;
+
     rsf_ac7_scene_color_end_frame(&bridge.color_selection);
     rsf_depth_replay_end_frame(bridge.depth_replay[0]);
     rsf_depth_replay_end_frame(bridge.depth_replay[1]);
@@ -1192,6 +1217,8 @@ void rsf_bridge_report(void)
         bridge.depth_candidate_samples);
     say("translucent depth: %lu geometry draws reached the hook, %lu of them candidates",
         bridge.geometry_draws, bridge.depth_candidates);
+    say("translucent layer: last completed frame drew %lu indices in %lu draws into it",
+        bridge.translucent_indices_last, bridge.translucent_draws_last);
     {
         unsigned int slot;
         for (slot = 0; slot < 2; ++slot) {

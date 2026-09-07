@@ -773,30 +773,92 @@ static void action_start_backend(void)
     start_dlss();
 }
 
-/* Render separate translucency at the scene's resolution instead of half of it.
+/* The separate translucency scale, as the patch below leaves it: a four byte immediate inside the
+   instruction stream, which is why it can be changed while the game runs.
 
-   The briefing map's relief is separate translucency, and it arrives at 512x288 while the scene is
-   1024x576. No reconstruction recovers that: by the time anything sees the composite the layer is
-   already a doubling of a quarter resolution image. It is not a motion problem and it never was.
+   Null until the patch goes in. Nothing else may write it, and a write is a single aligned store,
+   so a render thread reading the instruction either sees the old scale or the new one. Both are
+   valid floats and neither can be half of the other's bits. */
+static volatile uint32_t* translucency_scale_slot;
+static float translucency_scale_now;
+/* Set by the bridge when this frame's separate translucency layer carried real geometry rather
+   than a handful of particles. See action_translucent_geometry. */
+static int translucency_layer_heavy;
 
-   4.18's SetSeparateTranslucencyBufferSize explains it exactly:
+/* Choose the separate translucency scale for the render scale that is now in effect.
 
-     const float CVarScale = Clamp(CVar->GetValueOnRenderThread() / 100.0f, 0.0f, 100.0f);
-     float EffectiveScale = CVarScale;
-     if (Abs(CVarScale - 1.0f) < .001f && bAnyViewWantsDownsampledSeparateTranslucency)
-         EffectiveScale = .5f;
+   The scale is a multiplier on the scene buffer, so what it is worth depends entirely on how large
+   that buffer is. At a 50% render scale a scale of 1.0 puts the layer at half of native, and 2.0
+   puts it at native. That relationship is the whole reason this cannot be a constant: DLSS, XeSS
+   and FSR each pick their own render scale per quality level, and a fixed multiplier would mean a
+   different translucency resolution for every one of them.
 
-   At the default of 100 the scale is exactly 1.0, which is what arms the automatic halving. The
-   value has to sit outside a thousandth of 1.0 to escape it, so this asks for a hair over 100
-   rather than 100 itself: same resolution to any eye, and the branch no longer applies.
+   So the settings are percentages of the presented resolution, and the multiplier is derived:
 
-   Written the same way as the render scale: replace the value only where the expected one is
-   found, so it does nothing while the setting is already ours and takes effect again when the game
-   puts its own back. */
+     RSF_TRANSLUCENCY_TARGET        percent of native, 0 means "match the scene" (scale 1.0)
+     RSF_TRANSLUCENCY_TARGET_HEAVY  the same, for a frame whose layer is carrying scene geometry
+     RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding both when nonzero
+
+   The heavy target defaults to 100, which is the briefing case: the relief there is the scene, not
+   a decoration over it, and reconstructing it from half of a half was the thing that made it look
+   unupscaled. Rendering that layer at native costs a briefing screen nothing worth having. */
 static void set_separate_translucency_scale(void)
 {
-    /* Replaced by the patch below. Setting the console variable could not do this: the scale
-       reaches 0.5 by two different routes and the variable only controls one of them. */
+    union {
+        float value;
+        uint32_t bits;
+    } scale;
+    unsigned long render_percent;
+    unsigned long target;
+    const unsigned long override_percent = read_number("RSF_TRANSLUCENCY_SCALE", 0);
+    DWORD protection = 0;
+    DWORD restored = 0;
+
+    if (!translucency_scale_slot) {
+        return;
+    }
+
+    render_percent = requested_scale_percent ? requested_scale_percent
+                                             : read_number("RSF_SCREEN_PERCENTAGE", 50);
+    if (render_percent == 0) {
+        render_percent = 100;
+    }
+    target = translucency_layer_heavy ? read_number("RSF_TRANSLUCENCY_TARGET_HEAVY", 100)
+                                      : read_number("RSF_TRANSLUCENCY_TARGET", 0);
+
+    if (override_percent != 0) {
+        scale.value = (float)override_percent / 100.0f;
+    } else if (target == 0) {
+        scale.value = 1.0f;
+    } else {
+        scale.value = (float)target / (float)render_percent;
+    }
+    /* The engine clamps its own console value to 100 and this patch is downstream of that clamp,
+       so the bound has to be here. Four is already sixteen times the pixels of the scene. */
+    if (scale.value < 0.25f) {
+        scale.value = 0.25f;
+    }
+    if (scale.value > 4.0f) {
+        scale.value = 4.0f;
+    }
+
+    if (*translucency_scale_slot == scale.bits) {
+        return;
+    }
+    if (!VirtualProtect((LPVOID)translucency_scale_slot, sizeof(uint32_t), PAGE_EXECUTE_READWRITE,
+                        &protection)) {
+        note("separate translucency scale could not be made writable, left at %d%%",
+             (int)(translucency_scale_now * 100.0f));
+        return;
+    }
+    *translucency_scale_slot = scale.bits;
+    VirtualProtect((LPVOID)translucency_scale_slot, sizeof(uint32_t), protection, &restored);
+    FlushInstructionCache(GetCurrentProcess(), (LPCVOID)translucency_scale_slot, sizeof(uint32_t));
+    translucency_scale_now = scale.value;
+    note("separate translucency scale now %d%% of the scene, which at a %lu%% render scale is "
+         "%d%% of native (%s layer)",
+         (int)(scale.value * 100.0f), render_percent,
+         (int)(scale.value * (float)render_percent), translucency_layer_heavy ? "heavy" : "light");
 }
 
 /* Render separate translucency at the scene's resolution, by taking the halving out.
@@ -819,19 +881,41 @@ static void set_separate_translucency_scale(void)
    variable only addresses the second, and this game's value is evidently not the 100 that a write
    guarded on the expected value would accept, because that write never happened.
 
-   So the branch pair and the load are replaced together with an unconditional load of 1.0, which
-   sits four bytes after the 0.5 in the same constant pool. Fifteen bytes:
+   So the branch pair and the load are replaced together. Fifteen bytes:
 
      73 0D                     jnc  +0x0D          ; skip when the scale is not ~1.0
      40 84 FF                  test dil, dil       ; and when nothing asked to downsample
      74 08                     jz   +8
      F3 0F 10 0D 58 61 4B 01   movss xmm1, [0.5]
 
-   become `movss xmm1, [1.0]` and a seven byte nop. Everything after reads xmm1, so width, height
-   and the stored scale all become full resolution whatever the variable says.
+   The first version of this loaded the 1.0 that sits four bytes after the 0.5 in the same pool,
+   which fixed the briefing relief and the cannon tracers at once but fixed the scale at exactly the
+   scene's resolution. That is not enough, because the right scale depends on the render scale and
+   the render scale moves with the quality level. The pool has no 1.5 and no 2.0 next to the 0.5,
+   and hunting one elsewhere would only trade one constant for another.
+
+   Carrying the value in the instruction instead answers both. The disassembly settles the one
+   question that needs settling, which is whether a register is free:
+
+     1410be338  movd  xmm0, dword ptr [rbx+0x208]     ; does not read eax
+     1410be346  mov   rax, qword ptr [rbx+0x208]      ; overwrites rax outright
+
+   Every path out of the patched window reaches those, so eax is dead across it and can carry the
+   float. Fifteen bytes become:
+
+     66 0F 1F 44 00 00         nop  word ptr [rax+rax*1]
+     B8 xx xx xx xx            mov  eax, <scale bits>
+     66 0F 6E C8               movd xmm1, eax
+
+   The six byte nop leads so the immediate lands at rva+7, which is 0x10be330 and four byte
+   aligned. That alignment is the point: `set_separate_translucency_scale` above changes the scale
+   by storing one aligned word into it while the game runs, and an aligned store cannot be seen
+   half done. Everything after still reads xmm1, so the width, the height and the stored
+   SeparateTranslucencyScale all follow it.
 
    The expected bytes are checked before writing. If the game updates and this moves, it refuses
-   rather than corrupting an instruction. */
+   rather than corrupting an instruction. An overridden RVA that would leave the immediate
+   unaligned is patched but not registered, so it keeps its startup scale and never changes. */
 static void apply_separate_translucency_patch(void)
 {
     if (read_number("RSF_FULL_TRANSLUCENCY", 1) == 0) {
@@ -840,24 +924,38 @@ static void apply_separate_translucency_patch(void)
     const DWORD rva = read_number("RSF_FULL_TRANSLUCENCY_RVA", 0x10be329);
     const uint8_t expected[15] = {0x73, 0x0D, 0x40, 0x84, 0xFF, 0x74, 0x08, 0xF3,
                                   0x0F, 0x10, 0x0D, 0x58, 0x61, 0x4B, 0x01};
-    /* movss xmm1, [rip+0x014B6163] loads the 1.0 at 0x142574494, then a seven byte nop. */
-    const uint8_t replacement[15] = {0xF3, 0x0F, 0x10, 0x0D, 0x63, 0x61, 0x4B, 0x01,
-                                     0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00};
+    const uint8_t replacement[15] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00, /* nop word */
+                                     0xB8, 0x00, 0x00, 0x80, 0x3F,       /* mov eax, 1.0f */
+                                     0x66, 0x0F, 0x6E, 0xC8};            /* movd xmm1, eax */
     uint8_t previous[15] = {0};
+    unsigned char* base;
+    unsigned char* immediate;
 
     const rsf_dump_result result =
         rsf_patch_code(rva, replacement, sizeof(replacement),
                        rva == 0x10be329 ? expected : NULL, rva == 0x10be329 ? sizeof(expected) : 0,
                        previous);
-    if (result == RSF_DUMP_OK) {
-        note("separate translucency halving removed at rva 0x%lx, so the layer renders at the "
-             "scene's resolution rather than half of it",
-             (unsigned long)rva);
-    } else {
+    if (result != RSF_DUMP_OK) {
         note("separate translucency halving NOT removed at rva 0x%lx, result %d (expected bytes "
              "did not match?)",
              (unsigned long)rva, (int)result);
+        return;
     }
+
+    base = (unsigned char*)GetModuleHandleW(NULL);
+    immediate = base ? base + rva + 7 : NULL;
+    if (!immediate || ((uintptr_t)immediate & 3u) != 0) {
+        note("separate translucency halving removed at rva 0x%lx, but its scale sits at an "
+             "unaligned address and stays at 100%% of the scene for this run",
+             (unsigned long)rva);
+        return;
+    }
+    translucency_scale_slot = (volatile uint32_t*)(void*)immediate;
+    translucency_scale_now = 1.0f;
+    note("separate translucency halving removed at rva 0x%lx, scale carried at 0x%p and "
+         "adjustable while the game runs",
+         (unsigned long)rva, (void*)immediate);
+    set_separate_translucency_scale();
 }
 
 static void action_set_render_scale(unsigned long percent)
@@ -867,6 +965,10 @@ static void action_set_render_scale(unsigned long percent)
     }
     requested_scale_percent = percent;
     set_screen_percentage((float)percent);
+    /* Again here rather than only inside set_screen_percentage, which reaches it only when the
+       console write actually happened. A scale that is already ours writes nothing, and the
+       translucency multiplier still has to be recomputed against it. */
+    set_separate_translucency_scale();
 }
 
 static unsigned long action_render_scale_percent(void)
@@ -899,11 +1001,41 @@ static unsigned long action_capture_count(void)
 #endif
 }
 
+/* How much geometry went into the separate translucency layer this frame, from the bridge.
+
+   The briefing relief and a burst of cannon tracers are the same kind of surface to the engine and
+   are told apart by how much of it there is: the captured briefing layer is 59 draws and 540,030
+   indices, and gameplay effects are orders of magnitude below that. So the rule is a threshold on
+   the count rather than any attempt to recognise a screen, and the count is logged the first few
+   times it crosses so the threshold can be set from what the game actually draws.
+
+   The scale it selects lands on the next frame's buffer allocation, not this one. A briefing lasts
+   thousands of frames and a tracer burst lasts tens, so a frame of latency is invisible in the one
+   case and is the reason the other never triggers a resize storm. */
+static void action_translucent_geometry(unsigned long indices)
+{
+    static unsigned long crossings;
+    const unsigned long threshold = read_number("RSF_TRANSLUCENCY_HEAVY_INDICES", 100000);
+    const int heavy = threshold != 0 && indices >= threshold;
+    if (heavy == translucency_layer_heavy) {
+        return;
+    }
+    translucency_layer_heavy = heavy;
+    if (crossings < 8) {
+        ++crossings;
+        note("separate translucency layer became %s: %lu indices this frame against a threshold "
+             "of %lu",
+             heavy ? "heavy" : "light", indices, threshold);
+    }
+    set_separate_translucency_scale();
+}
+
 static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = action_start_backend;
+    actions.translucent_geometry = action_translucent_geometry;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;
     actions.trigger_capture = action_trigger_capture;

@@ -143,6 +143,43 @@ This retires a chain of explanations that were each true and none of which was t
 
 It also corrects the section below. Cannon tracers improving means flight uses this layer when translucent effects are active; the flight captures examined were taken at native scale and mostly without effects firing, so the layer was simply not allocated in them. Absence in those captures was read as absence in flight, which was too strong.
 
+### The layer's resolution is now a variable, and the briefing asks for native
+
+7 September 2026, built and cross-tested, not yet game-tested.
+
+Rendering the layer at the scene's resolution was not enough. The user reports the briefing's cloud-coverage point cloud almost completely eaten, and it already looks poor at the stock 50% render scale, so the layer wants to be larger than the scene rather than equal to it. The right multiplier is not a constant either: the scale multiplies the scene buffer, so what it is worth depends on the render scale, and DLSS, XeSS and FSR each choose their own render scale per quality level. A fixed 1.0 means a different translucency resolution for every one of them.
+
+The first patch loaded the 1.0 four bytes past the 0.5 in the same constant pool. That pool holds 0.5, 1.0, π/2, π, 2π, 90, 180 and 270 at `0x142574490` onward and has no 1.5 or 2.0, and re-targeting the displacement to a constant found elsewhere would only trade one fixed value for another.
+
+Carrying the value inside the instruction answers both. `FSceneRenderTargets_SetSeparateTranslucencyBufferSize` at `0x1410be2b0` shows a free register across the patched window:
+
+```
+1410be329  73 0D                     jnc   0x1410be338
+1410be32b  40 84 FF                  test  dil, dil
+1410be32e  74 08                     jz    0x1410be338
+1410be330  F3 0F 10 0D 58 61 4B 01   movss xmm1, [0x142574490]   ; 0.5
+1410be338  66 0F 6E 83 08 02 00 00   movd  xmm0, [rbx+0x208]     ; does not read eax
+1410be346  48 8B 83 08 02 00 00      mov   rax, [rbx+0x208]      ; overwrites rax
+```
+
+Every path out of the window reaches those two, so `eax` is dead across it. The fifteen bytes at RVA `0x10be329` become:
+
+```
+66 0F 1F 44 00 00         nop  word ptr [rax+rax*1]
+B8 xx xx xx xx            mov  eax, <scale bits>
+66 0F 6E C8               movd xmm1, eax
+```
+
+The six-byte nop leads deliberately, so the immediate lands at RVA `0x10be330`, four-byte aligned. That is what makes the scale adjustable while the game runs: the proxy changes it with one aligned store, which a render thread reading the instruction either sees or does not, never half of. An overridden RVA that would leave the immediate unaligned is patched but not registered, keeping its startup value.
+
+The settings are percentages of the presented resolution rather than of the scene, and the multiplier is derived from whichever render scale is in effect. `RSF_TRANSLUCENCY_TARGET` defaults to 0, meaning match the scene, which is exactly the behaviour above. `RSF_TRANSLUCENCY_TARGET_HEAVY` defaults to 100, meaning native.
+
+Heavy is decided by how much geometry went into the layer in one frame, because the briefing relief and a burst of cannon tracers are the same kind of surface to the engine and differ only in quantity: the captured briefing layer is 59 draws and 540,030 indices, and the flight effects are orders of magnitude below that. The threshold is `RSF_TRANSLUCENCY_HEAVY_INDICES`, default 100,000, and the count is logged on each crossing and in the counter report so it can be set from what the game draws.
+
+Two limits, both real. The count comes from the frame tap, which is installed when the backend starts, so a briefing reached without starting one reports zero and keeps the ordinary scale. And the chosen scale reaches the next frame's buffer allocation rather than the current one, which is invisible across a briefing and is what stops a short tracer burst from causing a resize each way.
+
+Whether a layer above the scene's resolution composites correctly is untested. `SeparateTranslucencyScale` at `[rbx+0x220]` follows the same xmm1 the width and height do, so the recombine's UV maths is given a consistent scale, but every value the engine itself produces there is at most 1.0.
+
 ### Flight captures do not show this layer, which is not the same as flight not having it
 
 All 22 flight captures were rescanned for the same shape on 7 September 2026. None has a separate translucency layer.
