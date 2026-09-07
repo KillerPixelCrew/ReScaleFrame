@@ -46,6 +46,12 @@ add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
+# The composite's arithmetic, which nothing covered while it lived in present_blit.
+add_executable(rsf_fullscreen_pass fullscreen_pass.cpp)
+target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
+set_tests_properties(fullscreen_pass PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 add_executable(rsf_resource_roles resource_roles.cpp)
 target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)

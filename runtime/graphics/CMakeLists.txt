@@ -9,6 +9,7 @@ add_library(rsf_graphics STATIC
     src/d3d11_state.cpp
     src/scene_reinsert.cpp
     src/present_blit.cpp
+    src/fullscreen_pass.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
     src/ui_identify.cpp
