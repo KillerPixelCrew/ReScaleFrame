@@ -417,6 +417,9 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
     }
 
     // Queried outside the lock for the same re-entrancy reason as the creation hook.
+    // Recorded under the lock and reported outside it, because everything in this file is.
+    void* replaced_device = nullptr;
+    void* presenting_device = nullptr;
     if (need_details) {
         DXGI_SWAP_CHAIN_DESC desc{};
         const bool described = SUCCEEDED(swapchain->GetDesc(&desc));
@@ -430,12 +433,46 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
             self.present_height = desc.BufferDesc.Height;
         }
         if (device) {
+            /* The presenting device wins, always, even over one already chosen.
+
+               A process can hold more than one D3D11 device. RenderDoc makes one, and so do some
+               layers and middleware. `hooked_create_buffer` takes the first device that creates a
+               constant buffer, which can easily be one of those rather than the game's, and until
+               this ran only if nothing had been chosen yet, so a helper device chosen early was
+               kept for the life of the process.
+
+               Everything downstream then had the wrong device. It looked like it worked, because a
+               device will happily compile shaders and allocate buffers of its own. It failed at
+               exactly the point where one device has to touch another's resource: staging a copy of
+               the game's view constant buffer refused every time, which read as a hundred thousand
+               view read failures and no evaluations, and creating a view on the game's back buffer
+               took the process down.
+
+               The device that presents the frame is by definition the device that drew it. */
+            if (self.device && self.device != device) {
+                replaced_device = self.device;
+                self.device->Release();
+                self.device = nullptr;
+                if (self.context) {
+                    self.context->Release();
+                    self.context = nullptr;
+                }
+            }
             if (!self.device) {
                 self.device = device;
+                presenting_device = device;
             } else {
                 device->Release();
             }
         }
+    }
+    if (replaced_device && self.options.log) {
+        char message[256];
+        std::snprintf(message, sizeof(message),
+                      "observer: the presenting device is %p, not the %p chosen earlier. Adopted "
+                      "the presenting one; anything holding the other has the wrong device",
+                      presenting_device, replaced_device);
+        self.options.log(self.options.log_user, message);
     }
     perform_pending_dump(self);
 

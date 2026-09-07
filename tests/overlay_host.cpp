@@ -37,7 +37,15 @@ void present(void*, void* pointer)
         void* observed = nullptr;
         require(rsf_observer_acquire_device(&observed, nullptr) == RSF_OBSERVER_OK,
                 "observer must have selected a device");
-        require(observed != device, "helper device must win observer selection to exercise the bug");
+        /* The helper device creates a constant buffer before the game's device presents, so the
+           observer used to keep the helper for the life of the process and hand it to everything.
+           It now adopts the presenting device instead, which is the device that drew the frame.
+
+           This asserted the opposite until the observer was fixed, because the mismatch was the
+           bug being reproduced. Asserting the correction here keeps the two halves honest: the
+           observer must hand out the presenting device, and the host below must not depend on it
+           doing so, since it takes its own device from the chain. */
+        require(observed == device, "the observer must adopt the presenting device, not a helper");
         static_cast<ID3D11Device*>(observed)->Release();
         require(rsf_overlay_host_start(chain, log_line, nullptr) != 0, "host starts without DLSS");
         rsf_overlay_host_toggle();
