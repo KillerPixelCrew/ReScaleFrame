@@ -156,6 +156,7 @@ static struct {
     unsigned long depth_candidate_samples;
     unsigned long geometry_draws;
     unsigned long geometry_traced;
+    unsigned long depth_handover_traced;
     unsigned long depth_replay_width[2];
     unsigned long depth_replay_height[2];
     unsigned long depth_replayed;
@@ -636,6 +637,24 @@ static void evaluate_held(void* context)
                     bridge.held_width, bridge.held_height);
             }
             ++bridge.depth_evaluations;
+        } else if (bridge.depth_handover_traced < 8) {
+            /* Both sides of the comparison, here rather than in the periodic report.
+
+               The report runs on a timer and end_frame clears the layer, the depth and the context
+               the moment the frame finishes, so every field read there was null and said nothing.
+               This is the one place where both sides exist at once. */
+            unsigned int slot;
+            ++bridge.depth_handover_traced;
+            for (slot = 0; slot < 2; ++slot) {
+                rsf_depth_replay_detail detail;
+                memset(&detail, 0, sizeof(detail));
+                rsf_depth_replay_get_detail(bridge.depth_replay[slot], &detail);
+                say("translucent depth: replay %u holds layer %p source %p context %p, %lu draws, "
+                    "refused %lu; the frame offers layer %p depth %p context %p",
+                    slot, detail.layer, detail.source, detail.context, (unsigned long)detail.draws,
+                    (unsigned long)detail.refused, bridge.color_selection.composed_layer,
+                    bridge.held_depth, context);
+            }
         }
     }
     frame.game_motion = bridge.held_motion;
@@ -1176,13 +1195,6 @@ void rsf_bridge_report(void)
                 (unsigned long)detail.dsv_dimension, (unsigned long)detail.dsv_flags,
                 (unsigned long)detail.source_width, (unsigned long)detail.source_height,
                 (unsigned long)detail.source_format, (unsigned long)detail.source_samples);
-            /* What the handover compares. All four have to agree, and a mismatch in any one looks
-               the same from outside: draws replayed, nothing selected. */
-            say("translucent depth: replay %u holds layer %p source %p context %p, %lu draws, "
-                "refused %lu; the frame offers layer %p depth %p context %p",
-                slot, detail.layer, detail.source, detail.context, (unsigned long)detail.draws,
-                (unsigned long)detail.refused, bridge.color_selection.composed_layer,
-                bridge.held_depth, bridge.context);
         }
     }
     memset(&tap, 0, sizeof(tap));
