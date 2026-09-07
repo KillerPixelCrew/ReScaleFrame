@@ -1176,6 +1176,13 @@ void rsf_bridge_report(void)
                 (unsigned long)detail.dsv_dimension, (unsigned long)detail.dsv_flags,
                 (unsigned long)detail.source_width, (unsigned long)detail.source_height,
                 (unsigned long)detail.source_format, (unsigned long)detail.source_samples);
+            /* What the handover compares. All four have to agree, and a mismatch in any one looks
+               the same from outside: draws replayed, nothing selected. */
+            say("translucent depth: replay %u holds layer %p source %p context %p, %lu draws, "
+                "refused %lu; the frame offers layer %p depth %p context %p",
+                slot, detail.layer, detail.source, detail.context, (unsigned long)detail.draws,
+                (unsigned long)detail.refused, bridge.color_selection.composed_layer,
+                bridge.held_depth, bridge.context);
         }
     }
     memset(&tap, 0, sizeof(tap));

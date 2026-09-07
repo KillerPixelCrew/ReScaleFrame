@@ -34,7 +34,16 @@ extern "C" void rsf_depth_replay_get_detail(const rsf_depth_replay* r,
     if (!out) {
         return;
     }
-    *out = r ? r->detail : rsf_depth_replay_detail{};
+    if (!r) {
+        *out = rsf_depth_replay_detail{};
+        return;
+    }
+    *out = r->detail;
+    out->layer = r->layer;
+    out->source = r->source;
+    out->context = r->context;
+    out->draws = r->draws;
+    out->refused = r->refused ? 1u : 0u;
 }
 
 extern "C" void rsf_depth_replay_end_frame(rsf_depth_replay* r)

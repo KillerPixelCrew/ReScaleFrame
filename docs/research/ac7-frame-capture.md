@@ -133,7 +133,17 @@ The tap accepts a pass by the set it binds, colour with depth, velocity and a 1x
 
 What would: the recombine is a fullscreen draw that reads the colour already identified and writes another full-size colour target. Recognising it needs the tap to answer "which draws read this texture", where today it answers "which draws write this one". The shadow it already keeps has the information. The [composed-colour change](ac7-composed-scene-color.md) adds that query and conditional backend selection; it is synthetic-tested, with game verification still open.
 
-### Flight does not do this, so the fix has to be conditional
+### Game-tested: separate translucency was rendering at half resolution, and that was the whole thing
+
+7 September 2026. Patching the halving out of `SetSeparateTranslucencyBufferSize` fixed the briefing relief and the cannon tracers at once. The user's words were day and night, with only minimal smearing left.
+
+The layer was rendering at 512×288 against a 1024×576 scene and being doubled into the composite before anything downstream saw it. Every reconstruction was handed a picture in which that content was already a 2× blow-up, and no motion, depth or backend recovers detail that was never drawn. Counters after the patch: candidate draws at 1024×576 rather than 512×288, and the depth replay went from 0 replayed to 167,374 of 170,319.
+
+This retires a chain of explanations that were each true and none of which was the cause. Translucency does lack velocity, the relief is a static mesh actor that cannot enter the velocity pass, and separate translucency does bind depth read-only. All of that is correct and none of it was why the terrain looked unupscaled.
+
+It also corrects the section below. Cannon tracers improving means flight uses this layer when translucent effects are active; the flight captures examined were taken at native scale and mostly without effects firing, so the layer was simply not allocated in them. Absence in those captures was read as absence in flight, which was too strong.
+
+### Flight captures do not show this layer, which is not the same as flight not having it
 
 All 22 flight captures were rescanned for the same shape on 7 September 2026. None has a separate translucency layer.
 

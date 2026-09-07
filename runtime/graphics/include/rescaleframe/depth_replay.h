@@ -36,6 +36,14 @@ typedef struct rsf_depth_replay_detail {
     uint32_t draw_width, draw_height, draw_samples;
     uint32_t dsv_format, dsv_dimension, dsv_flags;
     uint32_t source_width, source_height, source_format, source_samples;
+    /* What the selection predicate compares. It hands over its texture only when the layer, the
+       depth and the context all match what the caller is about to submit, and a mismatch in any one
+       of them looks identical from outside: replayed draws, nothing selected. */
+    void* layer;
+    void* source;
+    void* context;
+    uint32_t draws;
+    uint32_t refused;
 } rsf_depth_replay_detail;
 
 void rsf_depth_replay_get_detail(const rsf_depth_replay* replay, rsf_depth_replay_detail* out);
