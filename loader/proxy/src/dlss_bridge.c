@@ -275,6 +275,18 @@ static struct {
 
     /* Extraction: the layer the interface is diverted into and the pass that puts it back. Off
        until asked for, because it changes the picture and everything above it does not. */
+    /* The texture the frame ends in, refreshed every present.
+     *
+     * Distinct from `back_buffer`, which the tail walk owns and lets go of after thirty-two frames
+     * because holding a reference to it makes ResizeBuffers fail. Classification needs to know the
+     * frame's own target for the whole run, not for the first half second, and reading the tail
+     * walk's field instead is why the first extraction run classified zero Slate draws.
+     *
+     * Held without a reference on purpose: the swap chain owns it and this is only ever compared,
+     * never used. It is refreshed before anything reads it, so a stale value cannot outlive a
+     * resize by more than the present that discovers it. */
+    void* present_target;
+
     rsf_ui_layer* layer;
     rsf_fullscreen_pass* composite_pass;
     int ui_extract;
@@ -807,7 +819,7 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
      * declaration, six indices and a stride of 40, writing into the 2048x1152 back buffer, came
      * back UNKNOWN, because it was being compared against a 1024x576 composite. That draw is the
      * interface at native resolution and is the least ambiguous thing in the frame. */
-    rules.back_buffer = bridge.back_buffer;
+    rules.back_buffer = bridge.present_target;
 
     memset(&facts, 0, sizeof(facts));
     facts.struct_size = sizeof(facts);
@@ -1333,21 +1345,41 @@ static void* back_buffer_view(void* swapchain)
 {
     static void* cached_for = NULL;
     static void* cached = NULL;
+    static int complained = 0;
     void* buffer;
 
-    (void)swapchain;
-    buffer = bridge.back_buffer;
-    if (!buffer || !bridge.device) {
+    if (!swapchain || !bridge.device) {
+        return NULL;
+    }
+    /* Asked of the swap chain every present rather than taken from `bridge.back_buffer`.
+     *
+     * That field belongs to the frame tail walk, which holds it for thirty-two frames and then
+     * deliberately lets it go, because a held back buffer reference makes ResizeBuffers fail. The
+     * first extraction run read it anyway and got null on every frame, so 17702 draws were diverted
+     * out of the scene and none of them were ever composited back. The interface simply vanished,
+     * and nothing said why, because the null path was the silent one.
+     *
+     * The reference from GetBuffer is released as soon as the view exists. The view keeps the
+     * surface alive on its own, and it is the view rather than the buffer that has to survive to
+     * the draw. */
+    buffer = rsf_swapchain_back_buffer(swapchain);
+    if (!buffer) {
+        if (!complained) {
+            complained = 1;
+            say("ui extract: the swap chain gave no back buffer, so nothing can be composited");
+        }
         return NULL;
     }
     if (buffer != cached_for) {
         rsf_resource_release(cached);
         cached = rsf_create_render_target_view(bridge.device, buffer);
         cached_for = buffer;
-        if (!cached) {
+        if (!cached && !complained) {
+            complained = 1;
             say("ui extract: no view onto the back buffer, so nothing can be composited onto it");
         }
     }
+    rsf_resource_release(buffer);
     return cached;
 }
 
@@ -1665,6 +1697,21 @@ static void overlay_tick(void* swapchain)
 static void on_present(void* user, void* swapchain)
 {
     (void)user;
+
+    /* Before anything reads it. The classifier compares against this on every candidate draw of the
+       next frame, and a run where it is null classifies every Slate draw into the frame's own
+       target as unknown, which is what happened the first time. */
+    {
+        void* buffer = rsf_swapchain_back_buffer(swapchain);
+        if (buffer) {
+            bridge.present_target = buffer;
+            /* The pointer outlives the reference deliberately: the swap chain owns the surface and
+               this is only ever compared against a bound target, never dereferenced. Holding the
+               reference is what makes ResizeBuffers fail. */
+            rsf_resource_release(buffer);
+        }
+    }
+
     if (bridge.frames_described < 4 && bridge.pass_in_frame > 0) {
         say("frame ended after %lu qualifying passes", bridge.pass_in_frame);
         ++bridge.frames_described;
@@ -2201,6 +2248,14 @@ void rsf_bridge_report(void)
                     (unsigned long)divert_status.divert_refused,
                     (unsigned long)divert_status.divert_last_refusal,
                     (unsigned long long)layer_status.frames_written, bridge.ui_composites);
+                /* The one combination that means the interface has been taken out of the frame and
+                   not put back, which is exactly what the first run did and what nothing said at
+                   the time. Worth its own sentence rather than being left as two numbers a reader
+                   has to compare. */
+                if (layer_status.frames_written > 0 && bridge.ui_composites == 0) {
+                    say("ui extract: the interface is being diverted and never composited, so it "
+                        "is missing from the picture entirely. The layer has no target.");
+                }
             }
             if (bridge.ui_widget_extent[0]) {
                 say("ui: the interface is rasterized at %lux%lu and drawn into %lux%lu, which is "
