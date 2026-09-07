@@ -11,6 +11,7 @@
 #include <rescaleframe/texture_dump.h>
 
 #include "dlss_bridge.h"
+#include "overlay_host.h"
 
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -810,6 +811,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int scale_down = 0;
     int dlss_down = 0;
     int show_down = 0;
+    int panel_down = 0;
     int reinsert_down = 0;
     int ticks = 0;
     int running = 1;
@@ -819,6 +821,22 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             start_dlss();
         }
         dlss_down = dlss;
+
+        {
+            /* The overlay's own toggle is the window procedure's, which is the right place for it:
+               it can swallow the key so the game does not also act on it. It is not always
+               reached, though. A run turned up where the panel never opened and no toggle ever
+               arrived, so the key never became a message for the window the swap chain named.
+
+               Polling here as well costs nothing and does not depend on which window has focus.
+               Both paths end in the same set_visible, and the input module ignores a transition to
+               the state it is already in, so pressing F5 once cannot toggle twice. */
+            const int panel = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+            if (panel && !panel_down) {
+                rsf_overlay_host_toggle();
+            }
+            panel_down = panel;
+        }
 
         {
             const int show = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
