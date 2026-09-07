@@ -211,6 +211,40 @@ typedef struct rsf_frame_tap_target_draw {
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
 typedef void (*rsf_frame_tap_target_fn)(void* user, const rsf_frame_tap_target_draw* draw);
 
+/* The pipeline objects worth a second look, so the tap can reject the rest of the frame inline.
+
+   A frame is tens of thousands of draws and a handful of them are the interface. Asking a callback
+   about each one would put a call on the game's hottest path to be told "no" almost every time, so
+   the test lives here and only a draw that passes it is reported. The test is pointer comparisons
+   against these sets and nothing else: no device calls, no descriptors, no allocation.
+
+   The arrays are copied, so the caller may rebuild its own storage freely afterwards. Membership is
+   by address, which is only meaningful while an object is alive, so whoever fills these has to drop
+   an address the moment the game releases it. See `ui_identify.h`, which exists for that. */
+typedef struct rsf_frame_tap_candidates {
+    uint32_t struct_size;
+    /* Input layouts that name an interface producer. */
+    void* const* layouts;
+    uint32_t layout_count;
+    /* `ID3D11Texture2D*` a converter rasterizes a widget into. A draw reading one in a low pixel
+       slot is a candidate: it may be drawing the interface, or merely have it left bound. */
+    void* const* widget_targets;
+    uint32_t widget_target_count;
+    /* Shaders a setting named, in either direction. Always candidates, because the point of naming
+       one is to reach a draw the rules got wrong. */
+    void* const* shaders;
+    uint32_t shader_count;
+} rsf_frame_tap_candidates;
+
+/* How many pixel shader slots the prefilter examines for a widget target. The world space quads
+   read theirs in slot 0; a few textures deeper is cheap and covers a shader that binds a sampler
+   ahead of its texture. Beyond that the odds of a stale binding outweigh the odds of a real read. */
+#define RSF_FRAME_TAP_CANDIDATE_SLOTS 4u
+
+/* Replace the candidate sets. Empty or null sets switch the prefilter off, which is the default and
+   costs a single load per draw. */
+rsf_frame_tap_result rsf_frame_tap_set_candidates(const rsf_frame_tap_candidates* candidates);
+
 /* One texture the plan replaces.
 
    Every pointer here is a D3D11 interface the caller owns and keeps alive for as long as the plan
@@ -363,6 +397,12 @@ typedef struct rsf_frame_tap_options {
     void* on_input_draw_user;
     rsf_frame_tap_geometry_fn on_geometry;
     void* on_geometry_user;
+    /* Appended in ABI 7. Every draw that passes the candidate prefilter, wherever it draws and
+       whether or not anything is being watched. This is the one report that is about the frame as a
+       whole rather than about a target somebody named, and it is what answers which draws are the
+       interface. Silent until `rsf_frame_tap_set_candidates` has been given something to match. */
+    rsf_frame_tap_target_fn on_candidate_draw;
+    void* on_candidate_draw_user;
 } rsf_frame_tap_options;
 
 typedef struct rsf_frame_tap_status {

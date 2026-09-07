@@ -127,6 +127,23 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     }
 }
 
+// Candidate reports, which are about the frame rather than about a watched target.
+std::vector<Report> candidates;
+
+void collect_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    (void)user;
+    Report report;
+    report.watch_index = draw->watch_index;
+    report.render_target = draw->render_target;
+    report.indexed = draw->indexed;
+    report.element_count = draw->element_count;
+    report.input_layout = draw->input_layout;
+    report.pixel_shader = draw->pixel_shader;
+    report.vertex_shader = draw->vertex_shader;
+    candidates.push_back(report);
+}
+
 uint32_t gates_seen = 0;
 
 void note_gate(void* user, void* context, void* texture)
@@ -757,6 +774,7 @@ int main()
     options.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     options.on_target_draw = collect_target_draw;
     options.on_input_draw = collect_input_draw;
+    options.on_candidate_draw = collect_candidate_draw;
     options.on_geometry = collect_geometry;
     options.output_width = 512;
     options.output_height = 288;
@@ -832,6 +850,19 @@ int main()
                                                   pixel_code->GetBufferSize(), nullptr,
                                                   &pixel_shader)),
           "The test shaders must be created.");
+    // An input layout to name as a candidate. The shader reads nothing from the input assembler,
+    // and a declaration may supply more than a shader consumes, so one element is enough: what is
+    // being tested is that the tap recognises the object, not what it describes.
+    const D3D11_INPUT_ELEMENT_DESC layout_elements[] = {
+        {"ATTRIBUTE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+    ID3D11InputLayout* test_layout = nullptr;
+    check(SUCCEEDED(device->CreateInputLayout(layout_elements, 1,
+                                              vertex_code->GetBufferPointer(),
+                                              vertex_code->GetBufferSize(), &test_layout)) &&
+              test_layout,
+          "The test input layout must be created.");
+
     vertex_code->Release();
     pixel_code->Release();
 
@@ -978,6 +1009,94 @@ int main()
         // Put the bindings back the way the following stages expect them.
         context->OMSetRenderTargets(1, &composite_view, nullptr);
         context->PSSetShaderResources(2, 1, &source_view);
+    }
+
+    stage("the candidate prefilter");
+    {
+        // Nothing named: the frame pays one load per draw and nobody hears about it.
+        candidates.clear();
+        context->OMSetRenderTargets(1, &other_view, nullptr);
+        context->Draw(3, 0);
+        check(candidates.empty(),
+              "With no candidate sets, no draw is a candidate. This is the state the game is in "
+              "before anything has been identified, and it has to cost nothing.");
+
+        // Named by input layout, which is how an interface producer is recognised.
+        void* layout_set[] = {test_layout};
+        rsf_frame_tap_candidates sets{};
+        sets.struct_size = sizeof(sets);
+        sets.layouts = layout_set;
+        sets.layout_count = 1;
+        check(rsf_frame_tap_set_candidates(&sets) == RSF_FRAME_TAP_OK,
+              "Setting the candidate sets must succeed.");
+
+        context->IASetInputLayout(test_layout);
+        candidates.clear();
+        context->Draw(3, 0);
+        check(candidates.size() == 1,
+              "A draw whose input layout is named must be reported wherever it draws: this report "
+              "is about the frame, not about a target somebody watched.");
+        if (!candidates.empty()) {
+            check(candidates[0].watch_index == RSF_FRAME_TAP_WATCH_SLOTS,
+                  "A candidate must not claim a watch slot, or it reads as a watch hit.");
+            check(candidates[0].input_layout == test_layout,
+                  "And must carry the layout that made it one.");
+        }
+
+        context->IASetInputLayout(nullptr);
+        candidates.clear();
+        context->Draw(3, 0);
+        check(candidates.empty(), "A draw with an unnamed layout must not be reported.");
+
+        // Named by reading a widget target. The prefilter looks at the low pixel slots only, which
+        // is where a quad reads the interface it is drawing.
+        void* widget_set[] = {source};
+        sets.layouts = nullptr;
+        sets.layout_count = 0;
+        sets.widget_targets = widget_set;
+        sets.widget_target_count = 1;
+        check(rsf_frame_tap_set_candidates(&sets) == RSF_FRAME_TAP_OK,
+              "Replacing the sets must succeed.");
+
+        context->PSSetShaderResources(0, 1, &source_view);
+        candidates.clear();
+        context->Draw(3, 0);
+        check(candidates.size() == 1,
+              "A draw reading a widget target in a low slot is a candidate. Whether it is drawing "
+              "the interface or merely has it left bound is the classifier's question, not this "
+              "one: the prefilter's job is to be cheap and to miss nothing.");
+
+        // Slot two as well: earlier stages bound the same texture there, and it is inside the
+        // examined range, so leaving it would make the next check pass for the wrong reason.
+        ID3D11ShaderResourceView* unbind = nullptr;
+        context->PSSetShaderResources(0, 1, &unbind);
+        context->PSSetShaderResources(2, 1, &unbind);
+        context->PSSetShaderResources(8, 1, &source_view);
+        candidates.clear();
+        context->Draw(3, 0);
+        check(candidates.empty(),
+              "The same texture in a slot beyond the examined ones must not be a candidate. Past "
+              "a few slots the odds of a stale binding beat the odds of a real read.");
+        context->PSSetShaderResources(8, 1, &unbind);
+
+        // Refusal rather than truncation.
+        sets.widget_target_count = 100000;
+        check(rsf_frame_tap_set_candidates(&sets) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "More candidates than can be held must be refused, not truncated: a set that stops "
+              "partway is a rule that stops matching partway.");
+        sets.widget_target_count = 1;
+        rsf_frame_tap_candidates short_sets{};
+        short_sets.struct_size = 4;
+        check(rsf_frame_tap_set_candidates(&short_sets) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "A short structure must be refused.");
+
+        check(rsf_frame_tap_set_candidates(nullptr) == RSF_FRAME_TAP_OK,
+              "A null argument disarms the prefilter.");
+        candidates.clear();
+        context->PSSetShaderResources(0, 1, &source_view);
+        context->Draw(3, 0);
+        check(candidates.empty(), "And nothing is a candidate afterwards.");
+        context->PSSetShaderResources(0, 1, &unbind);
     }
 
     stage("exhausting the budget");
@@ -1138,6 +1257,9 @@ int main()
     reconstruction->Release();
     promoted->Release();
     indices->Release();
+    if (test_layout) {
+        test_layout->Release();
+    }
     pixel_shader->Release();
     vertex_shader->Release();
     source_view->Release();

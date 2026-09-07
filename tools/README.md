@@ -22,6 +22,12 @@ Ghidra/PyGhidra are development tools, not runtime dependencies.
 | `ue4-view-layout.py` | Derive stock view-buffer offset candidates and inspect dumped values |
 | `verify-view-layout.py` | Check AC7 matrix, jitter, and size relationships across captured buffers |
 | `analyze-view-buffers.py` | Identify view buffer fields by how they behave across captures |
+| `parse-ue-sdk.py` | Index a dumped Unreal reflection SDK: class layouts, field offsets, functions |
+| `find-native-registrations.py` | Join that index to a module dump through the engine's own registration arrays |
+
+The reflection pair recovered 10,728 named addresses in AC7 and is written up in
+[docs/research/ue-reflection-mapping.md](../docs/research/ue-reflection-mapping.md). It names
+gameplay and UMG code only; the renderer has no reflection data and needs the source-string route.
 
 The procedure these belong to is in [docs/research/methodology.md](../docs/research/methodology.md).
 

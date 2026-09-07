@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 
 namespace {
@@ -150,6 +151,22 @@ struct Tap {
     ID3D11PixelShader* pixel_shader = nullptr;
     ID3D11BlendState* blend_state = nullptr;
     ID3D11DepthStencilState* depth_stencil_state = nullptr;
+
+    // The candidate sets, copied so the caller may rebuild its own storage. Counts are atomic and
+    // published after the entries are written, so the render thread either sees an old set or a
+    // complete new one. A newly created layout being missed for a few draws is the worst case, and
+    // it corrects itself on the next draw; the alternative is a lock on every draw in the frame.
+    static constexpr uint32_t max_candidates = 64;
+    void* candidate_layouts[max_candidates]{};
+    void* candidate_widget_targets[max_candidates]{};
+    void* candidate_shaders[max_candidates]{};
+    std::atomic<uint32_t> candidate_layout_count{0};
+    std::atomic<uint32_t> candidate_widget_target_count{0};
+    std::atomic<uint32_t> candidate_shader_count{0};
+    // One load rejects the whole mechanism when nothing has been named, which is what the frame
+    // pays before anything is set up.
+    std::atomic<uint32_t> candidates_armed{0};
+    std::atomic<uint64_t> candidate_draws{0};
 
     // Watched render targets. Compared by pointer and never dereferenced, so these are plain
     // addresses rather than references: see the note on rsf_frame_tap_watch_target.
@@ -523,6 +540,40 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
         }
     }
 
+    // Is this one of the handful of draws in the frame worth describing? Pointer comparisons over
+    // the shadow, guarded by a single load that rejects everything until something has been named.
+    // The sets are small by construction, so these loops are a few compares and no memory the draw
+    // path did not already touch.
+    bool report_candidate = false;
+    if (self.options.on_candidate_draw && context == self.observed_context &&
+        self.candidates_armed.load(std::memory_order_relaxed) != 0) {
+        const uint32_t layouts = self.candidate_layout_count.load(std::memory_order_acquire);
+        for (uint32_t index = 0; index < layouts && !report_candidate; ++index) {
+            report_candidate = self.geometry.input_layout == self.candidate_layouts[index];
+        }
+        const uint32_t shaders = self.candidate_shader_count.load(std::memory_order_acquire);
+        for (uint32_t index = 0; index < shaders && !report_candidate; ++index) {
+            report_candidate = self.pixel_shader == self.candidate_shaders[index] ||
+                               self.geometry.vertex_shader == self.candidate_shaders[index];
+        }
+        const uint32_t targets = self.candidate_widget_target_count.load(std::memory_order_acquire);
+        if (!report_candidate && targets != 0) {
+            for (uint32_t slot = 0; slot < RSF_FRAME_TAP_CANDIDATE_SLOTS && !report_candidate;
+                 ++slot) {
+                ID3D11Texture2D* texture = self.slots[slot].texture;
+                if (!texture) {
+                    continue;
+                }
+                for (uint32_t index = 0; index < targets && !report_candidate; ++index) {
+                    report_candidate = texture == self.candidate_widget_targets[index];
+                }
+            }
+        }
+        if (report_candidate) {
+            self.candidate_draws.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     bool report_target = false;
     if (watch_index != RSF_FRAME_TAP_WATCH_SLOTS && self.options.on_target_draw) {
         uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
@@ -535,7 +586,7 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
             }
         }
     }
-    if (!report_target && !report_input && !report_hunt) {
+    if (!report_target && !report_input && !report_hunt && !report_candidate) {
         return;
     }
 
@@ -609,6 +660,12 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     if (report_input) {
         report.watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
         self.options.on_input_draw(self.options.on_input_draw_user, &report);
+    }
+    if (report_candidate) {
+        // No watch slot: this draw was not reported because anyone named its target, but because
+        // of what it is made of. Saying so keeps a candidate from being read as a watch hit.
+        report.watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
+        self.options.on_candidate_draw(self.options.on_candidate_draw_user, &report);
     }
 }
 
@@ -1813,6 +1870,61 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture)
     }
     self.input_watch = texture;
     self.input_watch_dirty = true;
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_candidates(
+    const rsf_frame_tap_candidates* candidates)
+{
+    Tap& self = tap();
+    if (!candidates) {
+        // Disarm. The counts go to zero first so a draw in flight stops looking before the entries
+        // it was looking at are touched.
+        self.candidates_armed.store(0, std::memory_order_relaxed);
+        self.candidate_layout_count.store(0, std::memory_order_release);
+        self.candidate_widget_target_count.store(0, std::memory_order_release);
+        self.candidate_shader_count.store(0, std::memory_order_release);
+        return RSF_FRAME_TAP_OK;
+    }
+    if (candidates->struct_size < sizeof(rsf_frame_tap_candidates)) {
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+    if (candidates->layout_count > Tap::max_candidates ||
+        candidates->widget_target_count > Tap::max_candidates ||
+        candidates->shader_count > Tap::max_candidates) {
+        // Refused rather than truncated. A silently shortened set is a rule that stops matching
+        // partway down, which is indistinguishable from a rule that is wrong.
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+
+    struct Copy {
+        void* const* source;
+        uint32_t count;
+        void* destination;
+        std::atomic<uint32_t>* published;
+    };
+    const Copy copies[] = {
+        {candidates->layouts, candidates->layouts ? candidates->layout_count : 0u,
+         self.candidate_layouts, &self.candidate_layout_count},
+        {candidates->widget_targets,
+         candidates->widget_targets ? candidates->widget_target_count : 0u,
+         self.candidate_widget_targets, &self.candidate_widget_target_count},
+        {candidates->shaders, candidates->shaders ? candidates->shader_count : 0u,
+         self.candidate_shaders, &self.candidate_shader_count},
+    };
+
+    uint32_t total = 0;
+    for (const Copy& copy : copies) {
+        // Shrink first, then write, then publish. A reader between the two sees fewer entries than
+        // there are, never an entry that is being overwritten.
+        copy.published->store(0, std::memory_order_release);
+        if (copy.source && copy.count) {
+            std::memcpy(copy.destination, copy.source, copy.count * sizeof(void*));
+        }
+        copy.published->store(copy.count, std::memory_order_release);
+        total += copy.count;
+    }
+    self.candidates_armed.store(total != 0 ? 1u : 0u, std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }
 
