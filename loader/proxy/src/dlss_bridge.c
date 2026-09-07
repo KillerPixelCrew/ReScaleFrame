@@ -200,6 +200,15 @@ static struct {
        outlives the reference that was needed to learn it. */
     int composite_found;
     unsigned long tail_frames;
+    /* Whether the tail is being looked for again because the plan went stale, and how many times
+       that has happened. The plan matches textures by address, and holding a reference keeps a
+       texture alive without keeping it in use: the engine's render target pool is free to give the
+       composite role to a different allocation, after which every substitution silently stops
+       matching and reinsertion does nothing while still reporting itself as on. */
+    unsigned long redirects_seen;
+    unsigned long redirect_stall;
+    unsigned long tail_restakes;
+    int tail_restaking;
     unsigned long tail_draws;
 
     /* The interface's own target, and the scene colour, both taken from the frame and both held.
@@ -569,6 +578,60 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 }
 
 /* Ask the frame about its own tail, for a bounded number of presents. */
+/* How many frames of redirecting nothing means the plan no longer describes the frame.
+
+   Generous, because a legitimately quiet stretch exists: a loading screen or a menu can go a while
+   without binding the composite. Restaking costs 32 frames of describing the tail again, so being
+   slow to react is cheaper than reacting to a pause. */
+#define RSF_REINSERT_STALL_FRAMES 240ul
+
+/* Defined below, next to the toggle it shares its work with. Declared here because a stalled plan
+   is noticed in the present hook, which runs long before that. */
+static int install_reinsert_plan(void);
+
+/* Notice that reinsertion has stopped doing anything, and go and find the tail again.
+
+   The plan matches textures by address. Holding a reference keeps a texture alive, which is not the
+   same as keeping it in use: the engine's render target pool is free to hand the composite role to
+   a different allocation on a screen change or a resize, and from that moment every substitution
+   stops matching. Nothing about that is visible from inside the game, and nothing about it is
+   visible in the counters either, because they do not fall, they simply stop rising. That is what
+   was happening when reinsertion reported itself on for 18,000 frames having opened 569 gates. */
+static void watch_for_stalled_plan(void)
+{
+    rsf_frame_tap_status tap;
+
+    memset(&tap, 0, sizeof(tap));
+    tap.struct_size = sizeof(tap);
+    if (rsf_frame_tap_get_status(&tap) != RSF_FRAME_TAP_OK) {
+        return;
+    }
+    if (tap.targets_redirected != bridge.redirects_seen) {
+        bridge.redirects_seen = tap.targets_redirected;
+        bridge.redirect_stall = 0;
+        return;
+    }
+    if (bridge.tail_restaking || ++bridge.redirect_stall < RSF_REINSERT_STALL_FRAMES) {
+        return;
+    }
+
+    ++bridge.tail_restakes;
+    bridge.redirect_stall = 0;
+    bridge.tail_restaking = 1;
+    say("reinsert: nothing has been redirected for %lu frames, so the plan no longer names the "
+        "textures this frame uses. Looking for the tail again, restake %lu",
+        RSF_REINSERT_STALL_FRAMES, bridge.tail_restakes);
+    /* Let go of what the plan named before looking, so a stale composite cannot be re-found by
+       being the thing already held. The tail walk re-identifies both from the frame itself. */
+    rsf_frame_tap_set_plan(NULL);
+    rsf_resource_release(bridge.composite);
+    bridge.composite = NULL;
+    rsf_resource_release(bridge.interface_target);
+    bridge.interface_target = NULL;
+    bridge.tail_frames = 0;
+    bridge.tail_draws = 0;
+}
+
 static void watch_tail(void* swapchain)
 {
     void* buffer;
@@ -585,6 +648,11 @@ static void watch_tail(void* swapchain)
         say("frame tail: done looking, %lu draws described, composite %s, interface target %s",
             bridge.tail_draws, bridge.composite ? "found" : "not found",
             bridge.interface_target ? "found" : "not found");
+        /* Looking again is only ever asked for by a stalled plan, so a plan is what it owes. */
+        if (bridge.tail_restaking) {
+            bridge.tail_restaking = 0;
+            install_reinsert_plan();
+        }
         return;
     }
     if (bridge.tail_frames >= RSF_TAIL_ARM_FRAMES) {
@@ -920,6 +988,7 @@ static void on_present(void* user, void* swapchain)
                reach the game's own tonemap. All that is left is to let go of the frame's inputs and
                to close the gates so the next frame opens them again. */
             ++bridge.reinsert_frames;
+            watch_for_stalled_plan();
             release_held();
             rsf_frame_tap_end_frame();
         } else {
@@ -1007,10 +1076,7 @@ static void stop_reinsert(void)
 void rsf_bridge_toggle_reinsert(void)
 {
     rsf_reinsert_setup setup;
-    rsf_reinsert_frame_tail tail;
-    rsf_frame_tap_plan plan;
     rsf_dlss_pipeline_status pipeline;
-    rsf_reinsert_result prepared;
     void* reconstruction;
 
     if (bridge.reinsert_on) {
@@ -1065,6 +1131,37 @@ void rsf_bridge_toggle_reinsert(void)
         }
     }
 
+    if (!install_reinsert_plan()) {
+        return;
+    }
+    bridge.reinsert_on = 1;
+    /* Deliberately not "reinsertion works". The substitutions are in place and the game will draw
+       its own tail over the reconstruction; whether the result is right is a thing to look at. */
+    say("reinsert: on. The scene is reconstructed before the game's tonemap, and the grade and the "
+        "interface are the game's own. Press F6 again to stop");
+}
+
+/* Build the substitutions for the tail as it currently stands and hand them to the tap.
+
+   Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
+   whether reinsertion should be on; it only makes the plan describe the frame that is actually
+   being drawn now. */
+static int install_reinsert_plan(void)
+{
+    rsf_reinsert_frame_tail tail;
+    rsf_frame_tap_plan plan;
+    rsf_reinsert_result prepared;
+    void* reconstruction = rsf_dlss_pipeline_output_texture();
+
+    if (!bridge.reinsert || !bridge.composite || !bridge.scene_color || !reconstruction ||
+        bridge.held_width == 0 || bridge.held_height == 0) {
+        say("reinsert: the plan cannot be built, composite %s, scene colour %s, reconstruction %s, "
+            "render size %lux%lu",
+            bridge.composite ? "found" : "missing", bridge.scene_color ? "found" : "missing",
+            reconstruction ? "found" : "missing", bridge.held_width, bridge.held_height);
+        return 0;
+    }
+
     memset(&tail, 0, sizeof(tail));
     tail.struct_size = sizeof(tail);
     tail.composite = bridge.composite;
@@ -1076,18 +1173,18 @@ void rsf_bridge_toggle_reinsert(void)
     prepared = rsf_reinsert_prepare(bridge.reinsert, &tail);
     if (prepared == RSF_REINSERT_ERROR_NOT_SCALED) {
         say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
-        return;
+        return 0;
     }
     if (prepared != RSF_REINSERT_OK) {
         say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
-        return;
+        return 0;
     }
 
     memset(&plan, 0, sizeof(plan));
     plan.struct_size = sizeof(plan);
     if (rsf_reinsert_fill_plan(bridge.reinsert, &plan) != RSF_REINSERT_OK) {
         say("reinsert: the plan could not be built");
-        return;
+        return 0;
     }
     plan.on_gate = on_gate;
     /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
@@ -1100,13 +1197,12 @@ void rsf_bridge_toggle_reinsert(void)
 
     if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
         say("reinsert: the frame tap refused the plan");
-        return;
+        return 0;
     }
-    bridge.reinsert_on = 1;
-    /* Deliberately not "reinsertion works". The substitutions are in place and the game will draw
-       its own tail over the reconstruction; whether the result is right is a thing to look at. */
-    say("reinsert: on. The scene is reconstructed before the game's tonemap, and the grade and the "
-        "interface are the game's own. Press F6 again to stop");
+    /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
+       just because the previous plan's redirects are still the last thing counted. */
+    bridge.redirect_stall = 0;
+    return 1;
 }
 
 int rsf_bridge_start(const char* streamline_directory, unsigned long output_width,
