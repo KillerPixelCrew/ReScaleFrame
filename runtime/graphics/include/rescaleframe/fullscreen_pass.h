@@ -51,6 +51,18 @@ typedef uint32_t rsf_fullscreen_mode;
    one that is empty: a layer with no alpha composites to nothing and looks identical to a broken
    one, and this frame has spent runs on exactly that kind of ambiguity. */
 #define RSF_FULLSCREEN_ALPHA ((rsf_fullscreen_mode)3)
+/* Premultiplied, with the destination's transfer function applied to the layer first.
+ *
+ * Needed when the layer holds linear values and the target holds transformed ones, which is the
+ * case here: AC7 stores its interface as linear in a plain UNORM target and transforms it in a
+ * later pass, while the back buffer this composites onto has already been transformed. Blending one
+ * into the other untransformed is what makes an extracted interface arrive dark.
+ *
+ * Two curves because which one a game used is not something the API records, and the difference
+ * between them is visible in the shadows. sRGB is the piecewise standard; GAMMA22 is the pure power
+ * curve that a lot of engines actually apply. */
+#define RSF_FULLSCREEN_PREMULTIPLIED_SRGB ((rsf_fullscreen_mode)4)
+#define RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22 ((rsf_fullscreen_mode)5)
 
 typedef void (*rsf_fullscreen_log_fn)(void* user, const char* message);
 

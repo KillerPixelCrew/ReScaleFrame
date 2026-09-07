@@ -235,6 +235,52 @@ int main()
               "Full coverage must leave nothing of the scene.");
     }
 
+    stage("the composite can apply the destination's transfer function");
+    {
+        // The case this exists for: a layer holding linear values going onto a target that holds
+        // transformed ones. Without the transform the interface arrives dark, which is exactly what
+        // the first two extraction runs showed.
+        const float ui[4] = {0.5f, 0.5f, 0.5f, 1.0f};
+        const float background[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        context->ClearRenderTargetView(layer_target, ui);
+        context->ClearRenderTargetView(scene_target, background);
+
+        parameters.mode = RSF_FULLSCREEN_PREMULTIPLIED_SRGB;
+        check(rsf_fullscreen_pass_draw(pass, context, scene_target, layer_source, &parameters) ==
+                  RSF_FULLSCREEN_OK,
+              "The sRGB composite must draw.");
+
+        Pixel out{};
+        check(read_pixel(device, context, scene, out), "It must be readable.");
+        // sRGB encode of 0.5 is 1.055 * 0.5^(1/2.4) - 0.055, about 0.7354.
+        const float budget = 3.0f / 1023.0f;
+        check(near_enough(out.r, 0.7354f, budget),
+              "Linear 0.5 must come out as sRGB 0.735. Getting this wrong is not subtle: it is the "
+              "difference between an interface that matches the game's and one that is visibly "
+              "dark, and it cannot be judged by looking at counters.");
+
+        context->ClearRenderTargetView(scene_target, background);
+        parameters.mode = RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22;
+        rsf_fullscreen_pass_draw(pass, context, scene_target, layer_source, &parameters);
+        check(read_pixel(device, context, scene, out), "The gamma composite must be readable.");
+        // 0.5^(1/2.2) is about 0.7297: close to sRGB but not the same, and the two are told apart
+        // in the shadows rather than at mid grey.
+        check(near_enough(out.r, 0.7297f, budget),
+              "And the pure power curve must be the pure power curve, not an approximation of the "
+              "piecewise one.");
+
+        // Alpha must survive both, or the composite stops being premultiplied.
+        context->ClearRenderTargetView(scene_target, background);
+        const float half_covered[4] = {0.25f, 0.25f, 0.25f, 0.5f};
+        context->ClearRenderTargetView(layer_target, half_covered);
+        parameters.mode = RSF_FULLSCREEN_PREMULTIPLIED_SRGB;
+        rsf_fullscreen_pass_draw(pass, context, scene_target, layer_source, &parameters);
+        check(read_pixel(device, context, scene, out), "The partial coverage case must be readable.");
+        check(out.r > 0.5f && out.r < 0.65f,
+              "Partial coverage must still land between the encoded colour and the background: the "
+              "transform changes the colour and must not change the coverage.");
+    }
+
     stage("the copy mode is opaque and does not blend");
     {
         const float source[4] = {0.25f, 0.5f, 0.75f, 0.0f};

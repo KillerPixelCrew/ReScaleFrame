@@ -1334,10 +1334,14 @@ static void on_gate(void* user, void* context, void* texture)
     ++bridge.gate_evaluates;
 }
 
-/* Whether the layer encodes on write. Settable because the right answer depends on how the game
-   viewed the target these draws came from, and this frame has been wrong about that kind of thing
-   before. Defaults to on, which is what the first run's symptoms point at. */
-static int ui_layer_srgb = 1;
+/* Which transfer function the composite applies to the layer on its way onto the back buffer.
+ *
+ * The layer holds what AC7's own interface target held, which the trace shows is linear in a plain
+ * UNORM view. The back buffer holds colour the game has already transformed for display. So the
+ * composite has to transform, and which curve is right is not something the API records: sRGB is the
+ * piecewise standard and 2.2 is the pure power curve many engines actually apply, and the difference
+ * shows in the shadows. Settable so one run can tell them apart. */
+static rsf_fullscreen_mode ui_composite_mode = RSF_FULLSCREEN_PREMULTIPLIED_SRGB;
 
 /* Modules that log take a sink and a user pointer; this bridge's log is a single global. */
 static void bridge_layer_log(void* user, const char* message)
@@ -1438,13 +1442,16 @@ static int start_extraction(unsigned long width, unsigned long height)
     /* Shareable from the start: frame generation opens this on a D3D12 device later and the flag
        cannot be added without recreating the texture. */
     layer.shareable = 1;
-    /* Encode on the way in, matching the target the draws were taken from.
+    /* Plain UNORM, matching the target these draws came from exactly.
      *
-     * The first extraction run put the interface on screen at native resolution and it came out
-     * dark and desaturated, which is what storing linear values where encoded ones belong looks
-     * like. The `ui draw:` trace now prints the view format the game bound, so the next run says
-     * whether this is the right answer rather than leaving it as the likeliest one. */
-    layer.srgb = ui_layer_srgb;
+     * Measured rather than assumed now: the trace reports the widget quads writing into a view of
+     * format 28, R8G8B8A8_UNORM, so nothing encodes them on the way in and the layer must not
+     * either. The converter that fills the widget texture they read does use an sRGB view, format
+     * 91, which is why the quads receive decoded colour and store it linear.
+     *
+     * The transform therefore belongs at the composite, where the destination's encoding is known,
+     * and not here. Encoding here was the previous attempt and left the picture dark. */
+    layer.srgb = 0;
     layer.log = bridge_layer_log;
     if (rsf_ui_layer_create(bridge.device, &layer, &bridge.layer) != RSF_UI_LAYER_OK) {
         say("ui extract: the layer could not be created; the interface stays in the scene");
@@ -1496,7 +1503,7 @@ static void composite_ui(void* swapchain)
         if (source && target_view) {
             memset(&parameters, 0, sizeof(parameters));
             parameters.struct_size = sizeof(parameters);
-            parameters.mode = RSF_FULLSCREEN_PREMULTIPLIED;
+            parameters.mode = ui_composite_mode;
             if (rsf_fullscreen_pass_draw(bridge.composite_pass, bridge.context, target_view, source,
                                          &parameters) == RSF_FULLSCREEN_OK) {
                 ++bridge.ui_composites;
@@ -1886,9 +1893,19 @@ static unsigned int parse_hash_list(const char* text, unsigned long* out, unsign
     return count;
 }
 
-void rsf_bridge_set_ui_encoding(int srgb)
+void rsf_bridge_set_ui_encoding(int encoding)
 {
-    ui_layer_srgb = srgb != 0;
+    switch (encoding) {
+    case 0:
+        ui_composite_mode = RSF_FULLSCREEN_PREMULTIPLIED;
+        break;
+    case 2:
+        ui_composite_mode = RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22;
+        break;
+    default:
+        ui_composite_mode = RSF_FULLSCREEN_PREMULTIPLIED_SRGB;
+        break;
+    }
 }
 
 void rsf_bridge_name_shaders(const char* forced, const char* skipped)

@@ -82,13 +82,15 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
  * name it has. */
 void rsf_bridge_name_shaders(const char* forced, const char* skipped);
 
-/* Whether the extraction layer encodes on write, matching a target the game viewed as sRGB.
+/* Which transfer function the composite applies to the layer: 0 none, 1 sRGB, 2 gamma 2.2.
  *
- * Non-zero is the default and is what the first extraction run's symptoms point at: the interface
- * arrived at native resolution and came out dark and desaturated, which is what storing linear
- * values where encoded ones belong looks like. Set before extraction starts; the layer is created
- * once and the views cannot be changed afterwards. */
-void rsf_bridge_set_ui_encoding(int srgb);
+ * The layer holds what AC7's interface target held, which the trace shows is linear in a plain
+ * UNORM view, while the back buffer holds colour the game has already transformed for display.
+ * Compositing one onto the other untransformed is what made the extracted interface arrive dark.
+ *
+ * Which curve is correct is not something the graphics API records, and the two differ visibly in
+ * the shadows, so this exists to tell them apart in one run rather than by argument. */
+void rsf_bridge_set_ui_encoding(int encoding);
 
 int rsf_bridge_identify_ui(void);
 

@@ -259,6 +259,106 @@ typedef struct rsf_sr_provider {
     void (*close)(void* session);
 } rsf_sr_provider;
 
+/* Creating the presentation chain, which is the part no two vendors do alike.
+ *
+ * All three take the chain over and hand something back, and what they hand back differs: FidelityFX
+ * creates its own for the window, XeFG wraps one and returns a proxy, Streamline upgrades the
+ * factory so the chain the caller then creates is already theirs. The shape below covers all three
+ * by asking for what the window needs and returning what the caller must present through. */
+typedef struct rsf_fg_swapchain_desc {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    /* The window, as an HWND. Untyped so this header needs no Windows headers. */
+    void* hwnd;
+    /* The D3D12 device and direct queue the vendor presents from. Frame generation is D3D12 on all
+       three, so these are not optional the way the probe's are. */
+    void* d3d12_device;
+    void* d3d12_queue;
+    /* What the game's own chain looks like, so the proxy matches it. */
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t buffer_count;
+    /* The most frames that may ever be generated between two rendered ones. Reserved at creation
+       because every vendor allocates for it, and raising it later is NEEDS_RESTART. */
+    uint32_t max_generated_frames;
+    rsf_ui_mode ui_mode;
+    rsf_latency_mode latency;
+    uint32_t allow_tearing;
+    rsf_backend_log_fn log;
+    void* log_user;
+} rsf_fg_swapchain_desc;
+
+typedef struct rsf_fg_swapchain_result {
+    uint32_t struct_size;
+    /* What the caller presents through from now on, as an `IDXGISwapChain*`. Owned by the backend
+       and released by `destroy_swapchain`. */
+    void* present_chain;
+    /* What the vendor actually granted, which may be less than was asked for. Reported rather than
+       assumed: a caller that believes it reserved three and got one will count frames that never
+       existed. */
+    uint32_t effective_max_generated_frames;
+    rsf_ui_mode effective_ui_mode;
+} rsf_fg_swapchain_result;
+
+/* One rendered frame's inputs, handed over before the present that may generate around it.
+ *
+ * Unlike reconstruction, the vendor keeps these past the call: interpolation happens between this
+ * present and the next. That is what `rsf_lifetime` is for and why the ring in the presentation
+ * side exists at all. */
+typedef struct rsf_fg_frame {
+    uint32_t struct_size;
+    const rsf_frame_record* record;
+    /* The finished frame, and the same frame without the interface on it. The second is what the
+       generator interpolates; interpolating the first drags the interface along with the scene. */
+    rsf_backend_resource backbuffer;
+    rsf_backend_resource hudless;
+    /* The interface as a premultiplied layer, which the generator composites onto each frame it
+       makes. Exactly what extraction produces, which is the reason extraction is worth doing
+       beyond sharpness. */
+    rsf_backend_resource ui;
+    rsf_backend_resource depth;
+    rsf_backend_resource motion;
+    float motion_scale_x;
+    float motion_scale_y;
+    /* Zero means do not generate around this frame: a cut, a menu, a video, or a frame whose
+       inputs were incomplete. Distinct from disabling generation, which costs a chain rebuild. */
+    uint32_t interpolate;
+    uint32_t generated_frames;
+} rsf_fg_frame;
+
+typedef struct rsf_fg_provider {
+    uint32_t struct_size;
+    rsf_backend_result (*probe)(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps);
+    rsf_backend_result (*create_swapchain)(const rsf_fg_swapchain_desc* desc,
+                                           rsf_fg_swapchain_result* result, void** session);
+    /* Change what is generated without rebuilding, where the backend allows it. Returns
+       NEEDS_RESTART where it does not, rather than pretending. */
+    rsf_backend_result (*set_options)(void* session, uint32_t enabled, uint32_t generated_frames,
+                                      rsf_ui_mode ui_mode);
+    rsf_backend_result (*tag_frame)(void* session, void* command_list, const rsf_fg_frame* frame);
+    /* Called after the present returns, for backends that finish their work there. */
+    rsf_backend_result (*after_present)(void* session);
+    rsf_backend_result (*resize)(void* session, uint32_t width, uint32_t height, uint32_t format);
+    rsf_backend_result (*latency_marker)(void* session, rsf_latency_marker marker,
+                                         uint64_t frame_id);
+    rsf_backend_result (*latency_sleep)(void* session);
+    /* How many frames the vendor says it generated, which is the only honest source for that
+       number: counting presents counts frames the vendor may have dropped. */
+    rsf_backend_result (*get_generated_count)(void* session, uint64_t* generated);
+    void (*destroy_swapchain)(void* session);
+} rsf_fg_provider;
+
+/* Each vendor's module exports these two. Both exist whether or not the vendor's headers were
+   available at build time; without them `probe` returns NOT_COMPILED, so a caller asks the same
+   question of every vendor and gets an answer from each rather than a link error. */
+const rsf_sr_provider* rsf_dlss_sr_provider(void);
+const rsf_fg_provider* rsf_dlss_fg_provider(void);
+const rsf_sr_provider* rsf_fsr_sr_provider(void);
+const rsf_fg_provider* rsf_fsr_fg_provider(void);
+const rsf_sr_provider* rsf_xess_sr_provider(void);
+const rsf_fg_provider* rsf_xess_fg_provider(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
