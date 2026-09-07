@@ -119,6 +119,18 @@ Selection by resource id or by allocation age would be wrong. The complete targe
 
 Consequences. A menu screen is not a smaller version of the flight frame, and reconstructing its first layer alone will always drop content. The second layer carries no velocity, so a temporal backend cannot reconstruct it from these inputs even if it were tapped. Either the composite result is what gets scaled in these screens, or reconstruction is declined there and they run at native. Nothing here says which, and neither has been tried.
 
+### Why the reconstruction misses it, and where the whole scene already exists
+
+Source read of 4.18.3 `PostProcessing.cpp`: separate translucency is recombined into the post-process chain at line 1453, through `FRCPassPostProcessBokehDOFRecombine`, and temporal AA is added at line 1467. **The composition happens before temporal AA, not after it.**
+
+So a composed colour, scene and relief together, exists in the frame before the pass this integration taps. The capture identifies it: target 46633, one fullscreen draw at event 2146 with three indices and no depth bound, full size `R11G11B10_FLOAT`, holding the complete image. Its inputs are the base pass output 1723 and the separate translucency target 46630.
+
+That is why the relief is missing from the reconstruction, and motion vectors were never the reason. The backend is handed the colour one step too early in the chain. Giving the icons velocity, which now works, does not put the layer into the input; only taking the composed target does.
+
+The tap accepts a pass by the set it binds, colour with depth, velocity and a 1x1 exposure, and takes the colour bound there. Nothing in that rule distinguishes a colour before the recombine from one after it.
+
+What would: the recombine is a fullscreen draw that reads the colour already identified and writes another full-size colour target. Recognising it needs the tap to answer "which draws read this texture", where today it answers "which draws write this one". The shadow it already keeps has the information; the query does not exist yet.
+
 Unresolved: whether the relief pass writes depth or velocity at all, which needs its shader resource bindings rather than the render-target list used here; and whether flight frames have a second render of this kind, which the existing flight captures could answer without a new run.
 
 ## Masks, clouds, and droplets
