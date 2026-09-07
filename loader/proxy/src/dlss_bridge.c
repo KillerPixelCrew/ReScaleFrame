@@ -898,6 +898,7 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
 static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     rsf_ac7_draw_class verdict;
+    uint32_t index;
     (void)user;
 
     if (!draw || !bridge.ui || !bridge.ui_classify) {
@@ -926,6 +927,18 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
             (unsigned long)draw->target_height, (unsigned long)draw->target_format,
             (unsigned long)draw->target_view_format, (unsigned long)draw->depth_bound,
             (unsigned long)draw->target_count, (unsigned long)draw->input_count);
+        /* Every input, not just the count. AC7's converter produces a widget texture and several
+           derived ones, a downsample, two blur stages and a version with glow already applied
+           (`UWidgetToTextureConverter` fields 0x48 through 0xD8). Whether the quad reads the plain
+           widget or the one with glow decides whether the glow travels with a diverted draw or is
+           added later by a pass we do not divert, and that is the difference between an extracted
+           interface that looks like the game's and one that looks flat. */
+        for (index = 0; index < draw->input_count && index < 8; ++index) {
+            say("    input slot %lu: %p %lux%lu format %lu",
+                (unsigned long)draw->inputs[index].slot, draw->inputs[index].texture,
+                (unsigned long)draw->inputs[index].width, (unsigned long)draw->inputs[index].height,
+                (unsigned long)draw->inputs[index].format);
+        }
     }
 }
 

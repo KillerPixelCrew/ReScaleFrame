@@ -46,6 +46,12 @@ add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
+# Choosing between three vendors on a machine that has none of them, which is the point of
+# negotiation being a pure function over what each one said it could do.
+add_executable(rsf_negotiate negotiate.cpp)
+target_link_libraries(rsf_negotiate PRIVATE ReScaleFrame::Contract rsf_build_options)
+add_test(NAME negotiate COMMAND rsf_negotiate)
+
 # Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
 # HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
 add_executable(rsf_shared_surface shared_surface.cpp)

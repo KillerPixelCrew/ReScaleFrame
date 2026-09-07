@@ -98,6 +98,52 @@ Not yet measured under the corrected rules. The first run, 7 Sep 2026, is record
 [the implementation tracker](../implementation.md); its counts are superseded because two of the
 rules that produced them were wrong.
 
+### Measured: extraction works, and what it costs
+
+7 Sep 2026, third extraction run.
+
+The interface reaches the screen at native resolution. 59584 draws diverted with zero refusals,
+3605 frames written to the layer and 3605 composited. This is the thing promotion could not do, and
+it is done.
+
+Two things were wrong on the way and both are recorded because both were instructive.
+
+The composite read the frame tail walk's back buffer field, which that walk holds for thirty-two
+frames and then deliberately releases, because a held swap chain reference makes `ResizeBuffers`
+fail. So the interface was diverted out of the scene and never put back: it vanished rather than
+moved, and nothing said so because the failing path returned null quietly. The composite now asks
+the swap chain itself every present.
+
+The colour was wrong twice, in opposite directions, before the measurement settled it. The widget
+quads write into **view format 28**, plain `R8G8B8A8_UNORM`, so nothing encodes them on the way in;
+the converter filling the widget texture they read uses **view format 91**,
+`B8G8R8A8_UNORM_SRGB`, so they receive decoded colour and store it linear. AC7's interface target
+therefore holds linear values that a later pass transforms for display. Encoding at the layer was
+wrong; the transform belongs at the composite, where the back buffer already holds transformed
+colour. With the sRGB curve applied there the picture is close.
+
+### Open: the glow does not travel with a diverted draw
+
+What remains is that the extracted interface has none of the game's glow. AC7's converter produces
+more than one texture per widget: `UWidgetToTextureConverter` holds `RenderTarget` at `0x48`,
+`DownSampleRT` at `0xC0`, `BlurXRT` at `0xC8`, `BlurYRT` at `0xD0` and `RenderTargetWithGlow` at
+`0xD8`. The quads have six pixel inputs, and which of those textures they are is what decides where
+the glow is applied and therefore what it would take to keep it. The trace now prints every input
+for this reason; before the next run this is inference and not a finding.
+
+### Not a reason to go back to promotion
+
+Promoting AC7's own interface target and letting the game composite it would keep the glow for free,
+and with the viewport scaling the divert now has, the quads could rasterize into a promoted target
+at output resolution, which is what made promotion look impossible before. It is worth writing down
+why that is still not the route.
+
+Frame generation needs the interface as a separate premultiplied layer. All three vendors ask for
+it, and it is the only thing that lets a generated frame carry a sharp interface rather than an
+interpolated one. Promotion puts the interface back into the scene, which is exactly what the
+generator must not receive. So extraction is required for M6 onwards whatever happens to the glow,
+and the glow is a problem to solve inside extraction rather than a reason to abandon it.
+
 ### Measured: the menu shimmer is our own jitter
 
 7 Sep 2026, by toggling the jitter gate on F4 while holding still on the main menu.
