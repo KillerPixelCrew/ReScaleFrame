@@ -429,6 +429,23 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     if (draw->inputs[0].texture == rsf_dlss_pipeline_output_texture()) {
         return;
     }
+    /* And it has to be the size of a picture.
+
+       The game's tail is not one draw into the back buffer, it is several, and at least one of the
+       earlier ones reads a 2048x32 strip: a bar or a letterbox, not the scene. It satisfies every
+       test above, so the first match won and the reinsertion spent every run promoting a strip. F6
+       then turned on and substituted nothing, because the gate it waits for never came.
+
+       The composite carries the whole frame, so its height is the render height or the presented
+       height, never a small fraction of the target it is drawn into. Half is a wide margin: this
+       game's composite is either the same size as the back buffer or exactly half it. */
+    if (draw->inputs[0].height * 2u < draw->target_height) {
+        say("  a %ux%u input is too small to be the composite of a %ux%u target, so it is a bar or "
+            "an overlay rather than the scene. Still looking",
+            draw->inputs[0].width, draw->inputs[0].height, draw->target_width,
+            draw->target_height);
+        return;
+    }
     bridge.composite = draw->inputs[0].texture;
     bridge.composite_found = 1;
     rsf_resource_retain(bridge.composite);
