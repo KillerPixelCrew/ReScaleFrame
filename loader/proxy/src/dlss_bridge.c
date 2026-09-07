@@ -1090,6 +1090,13 @@ void rsf_bridge_toggle_reinsert(void)
         return;
     }
     plan.on_gate = on_gate;
+    /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
+       whatever the game draws with depth into the composite is lost unless something gives. The
+       three answers are all wrong in different ways and the setting exists so all three can be
+       compared in one run rather than one per build. See `depth_policy`. */
+    plan.depth_policy = bridge.actions.reinsert_depth_policy
+                            ? (uint32_t)bridge.actions.reinsert_depth_policy()
+                            : RSF_FRAME_TAP_DEPTH_DROP;
 
     if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
         say("reinsert: the frame tap refused the plan");
@@ -1279,6 +1286,21 @@ void rsf_bridge_report(void)
             "%lu targets redirected, %lu gates opened",
             bridge.reinsert_frames, bridge.gate_evaluates, (unsigned long)tap.inputs_substituted,
             (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened);
+        /* The number that says whether geometry is being dropped. A promoted target bound with the
+           game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
+           carry no depth and are untouched. That is exactly the shape of an interface that looks
+           right over a scene that is missing. */
+        say("reinsert: %lu depth mismatches, policy %lu (0 drop, 1 keep, 2 refuse), last pair "
+            "target %lux%lu against depth %lux%lu format %lu",
+            (unsigned long)tap.depth_mismatches,
+            bridge.actions.reinsert_depth_policy
+                ? (unsigned long)bridge.actions.reinsert_depth_policy()
+                : 0ul,
+            (unsigned long)tap.depth_mismatch_target_width,
+            (unsigned long)tap.depth_mismatch_target_height,
+            (unsigned long)tap.depth_mismatch_depth_width,
+            (unsigned long)tap.depth_mismatch_depth_height,
+            (unsigned long)tap.depth_mismatch_depth_format);
     }
 
     memset(&status, 0, sizeof(status));

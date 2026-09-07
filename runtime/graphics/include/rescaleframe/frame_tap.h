@@ -236,7 +236,34 @@ typedef struct rsf_frame_tap_plan {
     float viewport_scale_y;
     rsf_frame_tap_gate_fn on_gate;
     void* on_gate_user;
+    /* What to do when a substituted target is bound alongside a depth stencil that is not the same
+       size as it.
+
+       A promoted target is at output resolution while the game's depth is still at render
+       resolution, and D3D11 refuses that pair, so every draw in such a pass is dropped. Flat
+       interface draws bind no depth and are unaffected, which is how this loses scene geometry and
+       leaves the interface looking correct.
+
+       There is no right answer available here, only three wrong ones with different costs, so it is
+       a choice rather than a rule:
+
+         DROP    unbind the depth and keep the substitution. The pass draws, without its depth test
+                 or depth writes. Content survives, occlusion within the pass does not.
+         KEEP    forward both, which is what this did before the mismatch was understood. The pair
+                 is invalid and the pass draws nothing.
+         REFUSE  leave the target alone for that binding. The pass draws correctly into the game's
+                 own render resolution target, which nothing downstream reads once the promoted one
+                 is in the frame, so its content is lost anyway.
+
+       The honest fix is a depth of the right size with the right contents, which needs a resource
+       this module does not own and a rescale pass that does not exist yet. Until then DROP is the
+       default because it is the only one of the three that keeps the pixels. */
+    uint32_t depth_policy;
 } rsf_frame_tap_plan;
+
+#define RSF_FRAME_TAP_DEPTH_DROP 0u
+#define RSF_FRAME_TAP_DEPTH_KEEP 1u
+#define RSF_FRAME_TAP_DEPTH_REFUSE 2u
 
 /* Synchronous geometry observation. Pointers and arrays are borrowed only during the callback.
    Replay must happen here: retaining a buffer does not preserve its contents across later uploads.
@@ -332,6 +359,19 @@ typedef struct rsf_frame_tap_status {
     uint32_t inputs_substituted;
     uint32_t targets_redirected;
     uint32_t gates_opened;
+    /* Bindings where a substituted target arrived with a depth stencil of a different size, and
+       what was done about them. A promoted target is at output resolution and the game's depth is
+       still at render resolution, so forwarding both is a pair D3D11 rejects and every draw in that
+       pass is dropped. Counted apart from the redirects because a frame can redirect thousands of
+       times and mismatch on the handful of passes that carry depth, which is exactly the case that
+       loses geometry while leaving flat interface draws alone. The last sizes are kept so the
+       report can name the pair rather than only count it. */
+    uint32_t depth_mismatches;
+    uint32_t depth_mismatch_target_width;
+    uint32_t depth_mismatch_target_height;
+    uint32_t depth_mismatch_depth_width;
+    uint32_t depth_mismatch_depth_height;
+    uint32_t depth_mismatch_depth_format;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.

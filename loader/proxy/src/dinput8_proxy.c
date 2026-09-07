@@ -1121,12 +1121,24 @@ static void action_translucent_geometry(unsigned long indices)
     set_separate_translucency_scale();
 }
 
+/* What reinsertion does when a promoted target meets the game's render resolution depth.
+
+   0 drops the depth, so the pass draws without its depth test. 1 forwards both, which is an invalid
+   pair and draws nothing. 2 leaves the target alone, so the pass draws into a texture nothing reads.
+   All three are wrong; dropping is the only one that keeps the pixels, so it is the default. A
+   setting rather than a constant so all three can be compared in one run. */
+static unsigned long action_reinsert_depth_policy(void)
+{
+    return read_number("RSF_REINSERT_DEPTH", 0);
+}
+
 static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = action_start_backend;
     actions.translucent_geometry = action_translucent_geometry;
+    actions.reinsert_depth_policy = action_reinsert_depth_policy;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;
     actions.trigger_capture = action_trigger_capture;

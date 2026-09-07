@@ -169,6 +169,15 @@ struct Tap {
     std::atomic<uint32_t> inputs_substituted{0};
     std::atomic<uint32_t> targets_redirected{0};
     std::atomic<uint32_t> gates_opened{0};
+    // Substituted bindings whose depth was the wrong size for the promoted target. The last pair is
+    // kept alongside the count so a report can name it, since "some mismatched" and "a 1024x576
+    // depth met a 2048x1152 target" are answers of very different use.
+    std::atomic<uint32_t> depth_mismatches{0};
+    std::atomic<uint32_t> depth_mismatch_target_width{0};
+    std::atomic<uint32_t> depth_mismatch_target_height{0};
+    std::atomic<uint32_t> depth_mismatch_depth_width{0};
+    std::atomic<uint32_t> depth_mismatch_depth_height{0};
+    std::atomic<uint32_t> depth_mismatch_depth_format{0};
 
     // Counters live outside the lock. Taking a mutex on every pixel shader binding would put this
     // module on the game's hottest path for the sake of two numbers nobody reads per frame.
@@ -260,6 +269,33 @@ ID3D11Texture2D* texture_behind_target(ID3D11RenderTargetView* view)
     resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
     resource->Release();
     return texture;
+}
+
+// The extent and format of whatever a view is looking at. False when it is not a 2D texture, which
+// leaves the caller to treat the size as unknown rather than as zero.
+bool view_extent(ID3D11View* view, uint32_t& width, uint32_t& height, uint32_t& format)
+{
+    if (!view) {
+        return false;
+    }
+    ID3D11Resource* resource = nullptr;
+    view->GetResource(&resource);
+    if (!resource) {
+        return false;
+    }
+    ID3D11Texture2D* texture = nullptr;
+    resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+    resource->Release();
+    if (!texture) {
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC description{};
+    texture->GetDesc(&description);
+    texture->Release();
+    width = description.Width;
+    height = description.Height;
+    format = description.Format;
+    return true;
 }
 
 // The plan entry naming this texture, or null. `index_out` receives its position, because whether
@@ -628,9 +664,12 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
 // binds several targets in the GBuffer pass and exactly one everywhere in the frame's tail, and a
 // multiple target pass whose first target moved to another resolution is a pass that will not draw
 // at all.
+// `depth_out` starts as what the game asked for and may be cleared, which is how a promoted target
+// avoids being paired with a depth of the wrong size. See `depth_policy`.
 ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContext* context,
                                                    UINT count, ID3D11RenderTargetView* const* views,
-                                                   ID3D11RenderTargetView** substituted)
+                                                   ID3D11RenderTargetView** substituted,
+                                                   ID3D11DepthStencilView** depth_out)
 {
     if (inside_hook || context != self.observed_context || !views || count == 0 ||
         !self.plan_active.load(std::memory_order_relaxed)) {
@@ -655,6 +694,33 @@ ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContex
         count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) {
         return views;
     }
+
+    // The promoted target is at output resolution and whatever depth the game has bound is still at
+    // render resolution. D3D11 rejects that pair, so the pass would draw nothing at all: the flat
+    // interface draws bind no depth and survive, and everything depth tested is silently lost.
+    if (depth_out && *depth_out) {
+        uint32_t depth_width = 0, depth_height = 0, depth_format = 0;
+        uint32_t target_width = 0, target_height = 0, target_format = 0;
+        const bool measured =
+            view_extent(*depth_out, depth_width, depth_height, depth_format) &&
+            view_extent(static_cast<ID3D11RenderTargetView*>(entry->render_view), target_width,
+                        target_height, target_format);
+        if (measured && (depth_width != target_width || depth_height != target_height)) {
+            self.depth_mismatches.fetch_add(1, std::memory_order_relaxed);
+            self.depth_mismatch_target_width.store(target_width, std::memory_order_relaxed);
+            self.depth_mismatch_target_height.store(target_height, std::memory_order_relaxed);
+            self.depth_mismatch_depth_width.store(depth_width, std::memory_order_relaxed);
+            self.depth_mismatch_depth_height.store(depth_height, std::memory_order_relaxed);
+            self.depth_mismatch_depth_format.store(depth_format, std::memory_order_relaxed);
+            if (self.plan.depth_policy == RSF_FRAME_TAP_DEPTH_REFUSE) {
+                return views;
+            }
+            if (self.plan.depth_policy != RSF_FRAME_TAP_DEPTH_KEEP) {
+                *depth_out = nullptr;
+            }
+        }
+    }
+
     for (UINT index = 0; index < count; ++index) {
         substituted[index] = views[index];
     }
@@ -690,13 +756,18 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context
         return;
     }
     ID3D11RenderTargetView* substituted[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-    forward(context, count, plan_render_targets(self, context, count, views, substituted), depth);
+    ID3D11DepthStencilView* forwarded_depth = depth;
+    ID3D11RenderTargetView* const* forwarded_targets =
+        plan_render_targets(self, context, count, views, substituted, &forwarded_depth);
+    forward(context, count, forwarded_targets, forwarded_depth);
     if (inside_hook || context != self.observed_context) {
         return;
     }
     const ReentryGuard guard;
-    self.depth_bound = depth != nullptr;
-    self.geometry_depth = depth;
+    // The shadow records what is actually bound now, not what the game asked for, because the
+    // geometry replay reads it back and a depth that was dropped is not there to replay against.
+    self.depth_bound = forwarded_depth != nullptr;
+    self.geometry_depth = forwarded_depth;
     self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
     unbind_target_reads(self);
@@ -722,15 +793,18 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
     // still drawing into.
     const bool keeps_targets = count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL;
     ID3D11RenderTargetView* substituted[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    ID3D11DepthStencilView* forwarded_depth = depth;
     ID3D11RenderTargetView* const* forwarded =
-        keeps_targets ? views : plan_render_targets(self, context, count, views, substituted);
-    forward(context, count, forwarded, depth, uav_start, uav_count, uavs, initial_counts);
+        keeps_targets ? views
+                      : plan_render_targets(self, context, count, views, substituted,
+                                            &forwarded_depth);
+    forward(context, count, forwarded, forwarded_depth, uav_start, uav_count, uavs, initial_counts);
     if (inside_hook || context != self.observed_context || keeps_targets) {
         return;
     }
     const ReentryGuard guard;
-    self.depth_bound = depth != nullptr;
-    self.geometry_depth = depth;
+    self.depth_bound = forwarded_depth != nullptr;
+    self.geometry_depth = forwarded_depth;
     self.target_count = count;
     shadow_render_target(self, (views && count > 0) ? views[0] : nullptr);
     unbind_target_reads(self);
@@ -1653,5 +1727,16 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->inputs_substituted = self.inputs_substituted.load(std::memory_order_relaxed);
     status->targets_redirected = self.targets_redirected.load(std::memory_order_relaxed);
     status->gates_opened = self.gates_opened.load(std::memory_order_relaxed);
+    status->depth_mismatches = self.depth_mismatches.load(std::memory_order_relaxed);
+    status->depth_mismatch_target_width =
+        self.depth_mismatch_target_width.load(std::memory_order_relaxed);
+    status->depth_mismatch_target_height =
+        self.depth_mismatch_target_height.load(std::memory_order_relaxed);
+    status->depth_mismatch_depth_width =
+        self.depth_mismatch_depth_width.load(std::memory_order_relaxed);
+    status->depth_mismatch_depth_height =
+        self.depth_mismatch_depth_height.load(std::memory_order_relaxed);
+    status->depth_mismatch_depth_format =
+        self.depth_mismatch_depth_format.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

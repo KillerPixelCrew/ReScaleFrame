@@ -39,6 +39,21 @@ RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 # map's relief and the vehicle symbols in replay have none. Untested against the game.
 # RSF_TRANSLUCENT_VELOCITY=1
 
+# What reinsertion (F6) does when a promoted target meets the game's own depth.
+#
+# Reinsertion promotes the composite to output resolution. The game keeps binding a depth at render
+# resolution, and D3D11 rejects that pair, so every draw in such a pass is dropped. Flat interface
+# draws bind no depth and are untouched, which is how the interface can look right over a scene that
+# is missing. All three answers are wrong in different ways, so pick by looking:
+#
+#   0  drop the depth and keep the substitution. The pass draws, without its depth test or writes.
+#   1  forward both. The pair is invalid and the pass draws nothing. This is what it did before.
+#   2  leave the target alone. The pass draws correctly into a texture nothing downstream reads.
+#
+# The count and the last mismatching pair are in the F7 report. Zero mismatches means depth is not
+# involved and the missing geometry has another cause.
+# RSF_REINSERT_DEPTH=0
+
 # Separate translucency resolution.
 #
 # 4.18 renders that layer at half the scene and doubles it back on composite, so at a 50% render

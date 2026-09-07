@@ -78,6 +78,11 @@ typedef struct rsf_bridge_actions {
        immediate over there, and the thresholds are settings, so this reports and does not decide.
        Called from the present hook, on the render thread, like the rest of these. */
     void (*translucent_geometry)(unsigned long indices);
+    /* What reinsertion should do when a promoted target meets the game's render resolution depth:
+       0 drop the depth, 1 forward both, 2 leave the target alone. Read when the plan is built, so a
+       change takes effect on the next F6. Null means drop, which is the only one of the three that
+       keeps the pixels. */
+    unsigned long (*reinsert_depth_policy)(void);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);
