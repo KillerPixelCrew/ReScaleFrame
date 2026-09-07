@@ -63,6 +63,14 @@ struct Report {
 
 std::vector<Report> reports;
 
+// Set for one stage only, so the rest of the test keeps its plain behaviour. Null means the
+// callback does nothing beyond recording, which is what it did before.
+struct {
+    ID3D11DeviceContext* context = nullptr;
+    ID3D11RenderTargetView* other_target = nullptr;
+    ID3D11RenderTargetView* original_target = nullptr;
+} divert_rehearsal;
+
 void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     (void)user;
@@ -82,6 +90,27 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
         report.inputs.push_back(draw->inputs[index]);
     }
     reports.push_back(report);
+
+    // Act like a divert: bind somewhere else and put it back, from inside the hook. This is the
+    // shape of what M2 does for real, and what it must not disturb is the shadow of the game's own
+    // bindings.
+    //
+    // Honest about its reach: this passes with re-entry suppressed by a flag as well as by a
+    // depth, because the hooks it goes through check and return before constructing a guard, so a
+    // nested call leaves a flag alone. The case that separates the two needs a plan active, where
+    // the substitution guard is constructed ahead of that check; it becomes reachable when the
+    // divert lands and is worth a case of its own then. What this covers today is that a callback
+    // may bind from inside a hook at all without the next draw being misattributed.
+    if (divert_rehearsal.context) {
+        ID3D11RenderTargetView* elsewhere = divert_rehearsal.other_target;
+        divert_rehearsal.context->OMSetRenderTargets(1, &elsewhere, nullptr);
+        // Slot two specifically, the one the game bound and the assertions below read. Clearing an
+        // unread slot would let this pass without meaning anything, which an earlier version of
+        // this test did.
+        ID3D11ShaderResourceView* nothing = nullptr;
+        divert_rehearsal.context->PSSetShaderResources(2, 1, &nothing);
+        divert_rehearsal.context->OMSetRenderTargets(1, &divert_rehearsal.original_target, nullptr);
+    }
 }
 
 uint32_t gates_seen = 0;
@@ -867,6 +896,42 @@ int main()
               "An indexed draw must be reported as one, with its index count.");
     }
 
+    stage("a callback that binds, as a divert will");
+    {
+        // The watch budget is spent by the draws above, so re-arm with exactly what this stage
+        // uses: two draws, one to bind through the callback and one to see what the shadow held
+        // afterwards. Exactly two, so the stage leaves the watch spent and the stages below start
+        // where they did before this one existed.
+        check(rsf_frame_tap_watch_target(0, composite, 2) == RSF_FRAME_TAP_OK,
+              "Re-arming the watch must succeed.");
+        reports.clear();
+        divert_rehearsal.context = context;
+        divert_rehearsal.other_target = other_view;
+        divert_rehearsal.original_target = composite_view;
+
+        context->OMSetRenderTargets(1, &composite_view, nullptr);
+        context->PSSetShaderResources(2, 1, &source_view);
+        context->Draw(3, 0);
+        context->Draw(3, 0);
+        divert_rehearsal.context = nullptr;
+
+        check(reports.size() == 2,
+              "Both draws must be reported: a callback binding inside the hook must not stop the "
+              "next draw being recognised.");
+        for (const Report& report : reports) {
+            check(report.render_target == composite,
+                  "The draw must still be attributed to the target the game bound, not to what "
+                  "the callback bound while inside the hook.");
+            check(report.inputs.size() == 1 && report.inputs[0].slot == 2 &&
+                      report.inputs[0].texture == source,
+                  "The callback cleared slot two and the game's binding must survive it in the "
+                  "shadow, because what the shadow describes is the game's frame.");
+        }
+        // Put the bindings back the way the following stages expect them.
+        context->OMSetRenderTargets(1, &composite_view, nullptr);
+        context->PSSetShaderResources(2, 1, &source_view);
+    }
+
     stage("exhausting the budget");
     reports.clear();
     context->Draw(3, 0);
@@ -1002,7 +1067,7 @@ int main()
     status.struct_size = sizeof(status);
     check(rsf_frame_tap_get_status(&status) == RSF_FRAME_TAP_OK, "Status must be readable.");
     check(status.installed == 1, "Status must say the tap is installed.");
-    check(status.target_draws_reported == 4,
+    check(status.target_draws_reported == 6,
           "Status must count every reported draw, across watches and re-arms.");
 
     stage("uninstalling");

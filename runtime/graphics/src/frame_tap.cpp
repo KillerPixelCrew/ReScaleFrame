@@ -207,11 +207,28 @@ Tap& tap()
 
 // The callback binds resources of its own, which comes straight back through these hooks. Without
 // this the recognition would run on the callback's own bindings and could recurse without end.
-thread_local bool inside_hook = false;
+// A depth rather than a flag.
+//
+// Most hooks check this and return before constructing a guard, so a nested call that bails out
+// leaves it alone and a flag survives. The substitution paths are the exception: their guard is
+// constructed before that check, because the swap has to happen whether or not the call is
+// recognised. So a callback that binds something while a plan is active constructs and destroys a
+// guard inside an outer one, and with a flag the destructor clears it, leaving the rest of the
+// outer hook recognising bindings that belong to the callback rather than to the game.
+//
+// Nothing has gone wrong from it yet, because the callbacks that run today bind nothing. That
+// stops being true as soon as a hook issues context calls of its own, which is exactly what
+// diverting a draw is. Counting costs the same and does not depend on which of two orderings a
+// given hook happens to use.
+// It reads as a flag at every use, which is why it keeps the name: zero is outside, anything else
+// is inside, and every existing `if (inside_hook || ...)` means what it did before.
+thread_local uint32_t inside_hook = 0;
 
 struct ReentryGuard {
-    ReentryGuard() { inside_hook = true; }
-    ~ReentryGuard() { inside_hook = false; }
+    ReentryGuard() { ++inside_hook; }
+    ~ReentryGuard() { --inside_hook; }
+    ReentryGuard(const ReentryGuard&) = delete;
+    ReentryGuard& operator=(const ReentryGuard&) = delete;
 };
 
 // Options are written once during install and never again, so reading them without the lock is
