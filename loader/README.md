@@ -20,7 +20,7 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
-| F3 | Extract the interface: divert it into a layer at output resolution and composite it back |
+| F3 | Extract the interface: divert it into a layer at output resolution and composite it back. Sharpens the interface and discolours the frame; see the note below |
 | F4 | Open or close the engine's temporal jitter gate, live |
 | F5 | Open or close the egui overlay |
 | F6 | Reinsert the reconstruction into the game's own frame, or stop |
@@ -30,10 +30,20 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 | F10 | Dump retained velocity/view data and, while DLSS runs, matched colour/output |
 | F11 | Trigger RenderDoc when capture support is available |
 
-F4 exists because a shimmering front end has two possible causes that no counter separates: an
-offset nothing resolves, or a resolve that fails on elements with no motion vectors. Hold still on
-the main menu and press it. If the shimmer stops, the jitter is the cause; if it does not, the
-resolve is, and the jitter is only what makes it visible.
+F3 does what it says and the result is not yet usable. The interface arrives at native resolution,
+which is the point of it, and the frame arrives flat and discoloured, because AC7's interface draws
+read the scene and its glow chain and are composited by the game afterwards. Compositing at present
+skips that. The route is being changed to promote the game's own interface target instead; until
+then F3 is a measurement rather than a feature.
+
+F4 answered a question and is kept for the next one like it. The front end shimmers at a reduced
+render scale and holds still at 100%, and toggling the gate on the main menu stops and starts it, so
+the cause is the jitter this project forces on rather than a reconstruction failing on elements with
+no motion vectors. AC7 runs no temporal anti-aliasing, so the projection only moves because we make
+it, and the front end is drawn at render resolution and spatially upscaled, which magnifies a
+sub-pixel offset instead of resolving it. `RSF_ENABLE_JITTER=1` keeps the gate shut except while a
+reconstruction is running, which is a mitigation; drawing the interface at output resolution removes
+the cause.
 
 Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
 
@@ -98,6 +108,7 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
 | `RSF_UI_CLASSIFY` | `1`; name pipeline objects as the game creates them and classify the draws made from them. Reports through the `ui:` lines and changes nothing |
 | `RSF_UI_SHADER_FORCE`, `RSF_UI_SHADER_SKIP` | hex hash lists naming shaders the rules got wrong, in either direction. The hashes are printed by the `ui draw:` trace lines |
+| `RSF_UI_ENCODE` | `1`; which transfer function the composite applies to the extracted interface. `0` none, `1` sRGB, `2` gamma 2.2 |
 | `RSF_ENABLE_JITTER` | `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |

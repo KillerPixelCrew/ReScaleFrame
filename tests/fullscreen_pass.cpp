@@ -190,10 +190,24 @@ int main()
         Pixel out{};
         check(read_pixel(device, context, scene, out), "The composite must be readable.");
         // ui.rgb + (1 - ui.a) * scene.rgb
-        const float budget = 2.0f / 1023.0f;
-        check(near_enough(out.r, 0.5f + 0.5f * 0.4f, budget) &&
-                  near_enough(out.g, 0.5f + 0.5f * 0.2f, budget) &&
-                  near_enough(out.b, 0.5f + 0.5f * 0.8f, budget),
+        //
+        // One step of each format, not one step of the destination. The layer is eight bit and 0.5
+        // lands exactly on a boundary there, so a runtime that rounds 127.5 down and one that
+        // rounds it up disagree by a whole step before the blend even starts, and that step is
+        // worth about two thousandths in the result. DXVK rounds down and WineD3D rounds up, which
+        // is how a budget of two parts in 1023 passed on one and failed on the other while the
+        // arithmetic was right on both.
+        const float budget = 1.0f / 255.0f + 2.0f / 1023.0f;
+        const bool correct = near_enough(out.r, 0.5f + 0.5f * 0.4f, budget) &&
+                             near_enough(out.g, 0.5f + 0.5f * 0.2f, budget) &&
+                             near_enough(out.b, 0.5f + 0.5f * 0.8f, budget);
+        if (!correct) {
+            // What it actually was. A budget failure and a blend that did something else entirely
+            // read the same in a pass or fail, and they need different fixes.
+            std::fprintf(stderr, "  got %.4f %.4f %.4f, wanted %.4f %.4f %.4f\n", out.r, out.g,
+                         out.b, 0.7f, 0.6f, 0.9f);
+        }
+        check(correct,
               "Half coverage must give ui.rgb + (1 - ui.a) * scene.rgb. This is the arithmetic "
               "every frame generation SDK asks for and getting it slightly wrong is invisible in "
               "motion and wrong in every frame.");

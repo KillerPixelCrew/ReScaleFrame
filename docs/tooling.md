@@ -33,6 +33,29 @@ The suggested signature library is [threatrack/ghidra-fidb-repo](https://github.
 
 Function signatures identify compiled library functions. They do not supply engine structure layouts or verify AC7 hook addresses. Ghidra `.gdt` files provide types; this repo generates DirectX archives from local headers and can export compiler-derived types. Keep both kinds of generated/downloaded data untracked. [Ghidra's Function ID documentation](https://github.com/NationalSecurityAgency/ghidra/blob/master/Ghidra/Features/FunctionID/src/main/doc/fid.xml) explains creating and sharing databases.
 
+## A Wine prefix with DXVK, for the tests that need it
+
+`eng/wine-test-prefix.sh` builds `.local/wine-test-prefix` from an installed Proton, copying its
+DXVK `d3d11`, `dxgi` and `d3d10core` and vkd3d-proton's `d3d12` and `d3d12core` over the prefix's
+own and marking them native. Nothing is downloaded and nothing is added to the repository: these
+are the same builds the game runs with.
+
+```bash
+eng/wine-test-prefix.sh            # once, or after Proton updates
+ctest --preset linux-cross-dxvk    # the suite, in that prefix
+ctest --preset linux-cross-debug   # the suite, in the default one
+```
+
+It exists because the two runtimes disagree about things this project depends on, and the default
+prefix is the one that lies. Wine's own D3D11 does not implement shared NT handles, so
+`shared_surface` skips there and the presentation bridge looks impossible; under DXVK every stage
+passes and the bridge is possible. A fixture that had only run in the default prefix would have
+reported the wrong answer about the only environment that matters.
+
+Both presets are worth running. `texture_dump` currently passes under WineD3D and fails under DXVK
+with the subprocess killed, reproducibly, which is unexamined and is the kind of difference the
+second preset exists to surface.
+
 ## Unreal source
 
 Recommend authorized [Unreal Engine GitHub access](https://www.unrealengine.com/en-US/ue-on-github) for Unreal research. The AC7 reference is stock `4.18.3-release`, recorded in [the hook map](research/ue418-hook-map.md). It explains engine behaviour but is not the game's exact source or a guarantee of matching offsets.

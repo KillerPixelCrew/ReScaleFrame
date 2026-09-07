@@ -4,6 +4,10 @@ ReScaleFrame adds upscaling and frame generation to games through engine-aware h
 
 **DLSS runs in AC7 through the research proxy.** The recorded mission test evaluated 7,917 frames at 1024×576 into a 2048×1152 output. F7 displays that output over the game. Reinsertion into the game's post-processing is still pending, so this debug view lacks the game's grading and HUD.
 
+**The interface reaches the screen at native resolution.** AC7 rasterizes its front end at a fixed 1920×1080 and draws it into the scene as world-space quads at render resolution, which no amount of promoting a target could sharpen. Diverting those draws into a mod-owned layer and compositing at present does sharpen them, and was measured doing so on 7 September 2026. It also produces the wrong picture: the quads read the scene and its glow chain, so compositing at present skips AC7's own interface composite, its glow and its grade. The route is being changed to promote the game's own interface target instead, which keeps all three and yields the same premultiplied layer frame generation will need. See [the extraction note](docs/research/ac7-ui-extraction.md).
+
+**The presentation bridge is possible where the game runs.** Every frame generation SDK this targets is D3D12 and AC7 is D3D11, so the frame has to cross devices. Under a Wine prefix built from Proton's DXVK and vkd3d-proton, a D3D11 texture opens on a D3D12 device and a shared fence signals across, measured rather than assumed. Nothing above that has been built.
+
 The longer-term target is XeSS-SR, XeSS MFG, and XeLL on the MSI Claw 8, with DLSS and FSR using the same runtime. XeSS/MFG, the standalone launcher, WSGM integration, and in-game egui wiring are unfinished.
 
 ## Get started
@@ -33,8 +37,10 @@ Streamline and RenderDoc are optional local dependencies. Without their headers,
 | --- | --- |
 | `loader` | Research proxy, module capture, and bootstrap scaffold |
 | `runtime/orchestrator` | Frame assembly and DLSS pipeline |
-| `runtime/backends` | Streamline DLSS adapter and Rust input model |
-| `runtime/graphics` | D3D11 observation, resource handling, decode, and UI rendering |
+| `runtime/contract` | What a reconstruction or frame generator has to be, for all three vendors, and the negotiation that chooses between them |
+| `runtime/backends` | Streamline DLSS adapter, FSR and XeSS providers that answer without their SDKs present, and the Rust input model |
+| `runtime/presentation` | Surfaces and a fence two devices can share, for the D3D11 to D3D12 bridge |
+| `runtime/graphics` | D3D11 observation, resource handling, decode, interface extraction, and UI rendering |
 | `games/ac7` | Build recognition and view-uniform reader |
 | `sdk/game` | C ABI for game plugins |
 | `ui/overlay` | egui settings and status DLL; runtime wiring pending |

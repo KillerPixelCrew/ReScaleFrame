@@ -184,8 +184,8 @@ classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
         not carried forward as measurements. Screens are still reported by extent rather than by
         name: which screen the game is on is M3's question.
 
-M2, extraction. The layer, the compositor and the divert are built and synthetic-tested; the run
-that judges the picture has not happened.
+M2, extraction. Built, game-tested, and the test changed the design: the mechanism works and the
+insertion point is wrong. Five runs on 7 September 2026.
 
 - [x] `fullscreen_pass`: one triangle, four modes, the premultiplied composite all three frame
       generation SDKs specify. Verified by breaking it (`e1572f4`).
@@ -196,7 +196,21 @@ that judges the picture has not happened.
       blend alpha patched from a cache, everything restored, refusals counted with a reason
       (`a45ce13`).
 - [x] Wired end to end on F3 (`fd67216`).
-- [ ] The run: whether the interface arrives sharp, arrives at all, or arrives in the wrong place.
+- [x] The runs. The interface reaches the screen at native resolution, 59584 draws diverted with no
+      refusals and every written frame composited, which is the thing promotion could not do. Three
+      faults were found and two of them were mine: the composite read the tail walk's back buffer
+      field, which that walk releases after thirty-two frames, so the interface was diverted and
+      never put back; and the colour transform belonged at the composite rather than at the layer.
+- [x] Measured against the game rather than assumed: AC7's interface blend is already
+      `ONE / INV_SRC_ALPHA` on colour and alpha with write mask `0xf`, so coverage was never the
+      problem. The quads read the scene and its blur and glow chain as inputs, at render resolution,
+      which makes them composites rather than overlays.
+- [ ] **The route changes.** Compositing at present skips AC7's own UI composite, its glow and its
+      grade, and on the title screen the diverted widget texture is the whole picture, so the frame
+      comes out flat and discoloured. Promotion of AC7's interface target is the correction: the
+      game composites it, so the colour and the glow are the game's, and the promoted target is
+      itself the premultiplied layer frame generation wants. The argument recorded here against
+      promotion was wrong on its premise and is marked superseded rather than deleted.
 - [ ] `scene_promote` replacing `scene_reinsert`. Deliberately not done before the run: interface
       promotion is the fallback if extraction fails, and deleting it first would remove the only
       thing that has produced a result.
@@ -206,9 +220,14 @@ M4, the presentation bridge, has its riskiest piece answered as far as this mach
 
 - [x] `shared_surface`: D3D11 textures and a fence created shareable and opened on D3D12, with the
       export, open and signal round trip covered (`510281f`).
-- [x] Measured: WineD3D does not implement shared NT handles (`E_NOTIMPL`). That is a statement
-      about the plain Wine prefix and not about DXVK, whose measurement needs the dedicated prefix
-      the plan describes and is still open.
+- [x] Measured, and the answer is yes. Under a prefix built by `eng/wine-test-prefix.sh` from an
+      installed Proton's DXVK and vkd3d-proton, every stage passes: a D3D11 texture opens on a
+      D3D12 device on the same adapter, and a fence signalled on one side is seen on the other.
+      Risk 7 is retired. Under the default prefix WineD3D returns `E_NOTIMPL` and the fixture skips,
+      which is why the script exists: a fixture that had only run there would have reported the
+      bridge impossible and been wrong about the only environment that matters.
+- [ ] `texture_dump` fails under DXVK with the subprocess killed, reproducibly, while passing under
+      WineD3D. Unexamined.
 - [ ] The swap chain facade, the ring, and the intercept.
 
 M5, the vendor-neutral contract, is built and tested without hardware.

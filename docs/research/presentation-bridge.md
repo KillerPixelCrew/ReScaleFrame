@@ -102,10 +102,29 @@ is 469 KB and `dxgi.dll` 252 KB, which are Wine's own WineD3D rather than DXVK; 
 megabytes. So what this measures is that **WineD3D does not implement shared NT handles**, which is
 a different statement from anything about DXVK or vkd3d-proton, and a much less interesting one.
 
-The measurement that decides whether the bridge can work under Proton is still open, and needs the
-dedicated prefix the plan describes: DXVK's `d3d11` and `dxgi` plus vkd3d-proton's `d3d12core` and
-its `d3d12` shim. The fixture is written for exactly that and reports the `HRESULT` from whichever
-half refuses, so the answer will name the runtime rather than the symptom.
+## Measured: under DXVK and vkd3d-proton, sharing works
+
+7 Sep 2026, the same fixture in a prefix built by `eng/wine-test-prefix.sh` from an installed
+Proton's DXVK and vkd3d-proton.
+
+Every stage passes. A D3D11 texture created with `SHARED | SHARED_NTHANDLE` exports an NT handle,
+an `ID3D12Device` on the same adapter opens it, and the opened resource describes the same extent
+and format on both sides. A fence created on D3D11 with `D3D11_FENCE_FLAG_SHARED` opens on D3D12,
+and a value signalled through `ID3D11DeviceContext4::Signal` is observed by
+`ID3D12Fence::GetCompletedValue` on the other side.
+
+That is the whole foundation of the bridge, and it means the bridge is possible where the game
+actually runs. Risk 7 in the plan is retired by measurement.
+
+The two results together are the useful part: WineD3D cannot do this and DXVK can, so a fixture
+that had only ever run in the default prefix would have reported the bridge impossible and been
+wrong about the only environment that matters. The script exists so the distinction cannot be
+skipped by accident.
+
+One test does not survive the move. `texture_dump` fails under DXVK with the subprocess killed,
+reproducibly rather than intermittently, while passing under WineD3D. That is a real difference and
+not the flakiness seen before; it is unexamined and recorded here rather than left as a red run
+somebody explains away.
 
 The fixture skips with 77 rather than failing, here and anywhere else the two runtimes disagree,
 because that is a fact about the environment and not a defect in the code. What it must never do is

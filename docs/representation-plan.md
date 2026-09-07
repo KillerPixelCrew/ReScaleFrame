@@ -34,7 +34,8 @@ SDK free of GPL includes.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| UI handling | Divert every classified UI draw into a mod-owned premultiplied `R8G8B8A8_UNORM` layer at back-buffer extent, no depth; scene stays HUD-less; composite at present when FG is off; hand layer + HUD-less to FG when on | Skyrim CS `SetUIBuffer`; the vendor contract; the only thing that sharpens geometry-rasterized UI |
+| UI handling | **Superseded 7 Sep 2026 by measurement, see below.** Divert every classified UI draw into a mod-owned premultiplied `R8G8B8A8_UNORM` layer at back-buffer extent, no depth; scene stays HUD-less; composite at present when FG is off; hand layer + HUD-less to FG when on | Skyrim CS `SetUIBuffer`; the vendor contract; the only thing that sharpens geometry-rasterized UI |
+| UI handling, corrected | Promote AC7's own interface target to output resolution and scale the rasterizing draws' viewports, so the game's UI composite runs as it always did; take the frame generation layer from that promoted target, which already holds premultiplied colour with coverage | The divert works and the insertion point is wrong: the quads read the scene and its glow chain, so they are composites rather than overlays, and compositing at present skips AC7's own UI composite, glow and grade. Promotion keeps all three and yields the same layer the vendors ask for |
 | Depth for diverted quads | Divert regardless of the scene depth being bound; bind no DSV (overlay semantics); `RSF_UI_DEPTH=0` default, promoted depth via `depth_replay`'s output-res depth later | The briefing quads all bind scene depth; "divert only depth-free draws" would extract nothing |
 | Alpha | Per-draw blend patch on "over" blends only (`DestBlend == INV_SRC_ALPHA`): alpha ops → `ONE/INV_SRC_ALPHA/ADD`, colour ops untouched, cached by original state pointer; Slate untouched (already accumulates); additive left (alpha 0 = pure add); modulate counted, not representable | UE base-pass `BLEND_Translucent` keeps alpha at 0 from a transparent clear (`BasePassRendering.h:1105`); Slate does not (`SlateRHIRenderingPolicy.cpp:730`); Skyrim CS `GetPatchedAlphaBlendState` |
 | Identification | Plugin-side classifier: shader-hash override table → Slate input-layout fingerprint (into non-widget target) → reads a registered widget render target with a translucent blend → scene | Every format rule so far was wrong once; SpecialK's hash registry; UE's `FSlateVertex` layout is distinctive |
@@ -522,8 +523,12 @@ applied only once confirmed; tags `rsf-patch`/`rsf-read` on every site the runti
    → `compare-captures.py` ≤ 2/255 on a static menu with divert off/on.
 6. DXVK tolerates invalid RT/DSV pairs, Windows rejects the binding → never bind a mismatched pair;
    WARP + debug layer in CI → error count 0.
-7. vkd3d-proton vs Windows for shared handles/fences → fixture prints HRESULTs and skips; bridge
-   self-disables with reason → `bridge: timeouts 0` under Proton, then the Windows line.
+7. ~~vkd3d-proton vs Windows for shared handles/fences~~ **retired 7 Sep 2026.** Under a prefix
+   built from Proton's DXVK and vkd3d-proton, `shared_surface` passes every stage: the texture
+   exports an NT handle, D3D12 opens it on the same adapter, and a fence signalled on one side is
+   seen on the other. WineD3D returns `E_NOTIMPL` and the fixture skips there, which is why
+   `eng/wine-test-prefix.sh` exists rather than the default prefix being trusted. Windows itself is
+   still unmeasured, and is the easy direction.
 8. Streamline wants the swap chain (`slUpgradeInterface`) and one device per process → inner-chain
    provider model; SR moves to D3D12 when DLSS-G owns FG → M7 lines.
 9. FFX replaces the chain; XeFG needs its proxy + XeLL; FG toggles need chain rebuilds → provider

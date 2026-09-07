@@ -4,7 +4,15 @@
 | --- | --- | --- |
 | `rsf-upscaler` | Rust quality, motion, and input-validation model | Unit-tested; no GPU calls |
 | `dlss` | C++ Streamline adapter behind `rescaleframe/dlss.h` | Evaluates live AC7 frames |
-| XeSS / FSR | Additional runtime backends | Planned; the [representation plan](../../docs/representation-plan.md) specifies `runtime/backends/{dlss,fsr,xess}` each implementing `rsf_sr_provider` and `rsf_fg_provider` from a vendor-neutral `backend.h`, with `RSF_HAVE_FFX` and `RSF_HAVE_XESS` discovery mirroring the DLSS target |
+| `fsr` | FidelityFX behind `rsf_sr_provider` and `rsf_fg_provider` | Provider and capabilities only; every entry point returns `NOT_COMPILED` without the SDK headers and `NOT_READY` with them. Both branches compile |
+| `xess` | XeSS behind the same two | The same, plus the D3D11 reconstruction path it alone offers, which is Intel hardware only and currently reported as unavailable until the hardware check exists |
+
+The two new backends implement the contract and do no work. That is deliberate rather than a
+placeholder: negotiation has to know what each vendor *is* before anything is created, and that
+question is answerable without the runtime being present. `probe` therefore fills capabilities from
+what the SDK is and loads nothing, and the distinction between "not compiled in" and "compiled in,
+runtime missing" is preserved end to end, because one is a fact about the build and the other about
+the machine.
 
 The orchestrator owns shared resources and frame sequencing. Each backend owns its vendor context, capability queries, input requirements, and evaluation. Streamline stays in C++ so its versioned vendor types come from the official headers. No frame generation SDK runs on D3D11; the plan's presentation bridge is where every FG backend and the D3D12-only SR backends execute ([vendor contracts](../../docs/research/vendor-fg-contracts.md)).
 
