@@ -143,9 +143,18 @@ This retires a chain of explanations that were each true and none of which was t
 
 It also corrects the section below. Cannon tracers improving means flight uses this layer when translucent effects are active; the flight captures examined were taken at native scale and mostly without effects firing, so the layer was simply not allocated in them. Absence in those captures was read as absence in flight, which was too strong.
 
-### The layer's resolution is now a variable, and the briefing asks for native
+### Game-tested: the layer's resolution is a variable, and the briefing draws at native
 
-7 September 2026, built and cross-tested, not yet game-tested.
+7 September 2026. The briefing relief renders at 2048×1152 inside a 1024×576 scene and reaches the
+reconstruction. The user's report was that it looks great and is upscaled. The run recorded the
+whole chain: the four depth gates applied, the scale immediate carried at `0x1410BE330`, the layer
+recognised as heavy at 537,168 indices against a threshold of 100,000, and `separate translucency
+scale now 200% of the scene, which at a 50% render scale is 100% of native (heavy layer)`.
+
+The depth followed it, which is the thing that had failed: `last draw 2048x1152 ... depth view ...
+its texture 2048x1152`, where the previous run read `1024x576` for that last field. Replay went
+from 22 of 1,497,917 candidate draws to 733,861 of 744,726. A capture of the output at 2048×1152
+records `fraction_unwritten` 0.0000 and shows the terrain contours as clean single-pixel curves.
 
 Rendering the layer at the scene's resolution was not enough. The user reports the briefing's cloud-coverage point cloud almost completely eaten, and it already looks poor at the stock 50% render scale, so the layer wants to be larger than the scene rather than equal to it. The right multiplier is not a constant either: the scale multiplies the scene buffer, so what it is worth depends on the render scale, and DLSS, XeSS and FSR each choose their own render scale per quality level. A fixed 1.0 means a different translucency resolution for every one of them.
 

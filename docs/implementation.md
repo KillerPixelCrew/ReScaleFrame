@@ -36,8 +36,20 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       depth-only replay use startup allocations and restore disturbed state. Same-frame composed
       layer/source-depth identity gates backend selection; absent layers keep original depth.
       Synthetic pixel readback covers accumulation, opaque occlusion, frame reset and state
-      restoration under Wine. Actual briefing reconstruction and flight regression remain
-      game-unverified. [Decision and checks](research/ac7-translucent-depth.md).
+      restoration under Wine. Game-tested in the briefing on 7 September: 733,861 of 744,726
+      candidate draws replayed. Flight regression remains unverified.
+      [Decision and checks](research/ac7-translucent-depth.md).
+- [x] Separate translucency at its own resolution. 4.18 halves the layer and doubles it back on
+      composite, so at a 50% render scale the briefing relief reached any reconstruction as a
+      quarter-resolution image. Patching the halving out fixed the relief and the cannon tracers at
+      once. The scale is now a four-byte immediate inside the patched instruction, aligned so it can
+      be rewritten while the game runs, and derived from the render scale in effect so it follows a
+      quality level instead of being fixed. Going above the scene's resolution needs the engine to
+      size the layer's depth to match, which four one-byte patches enable by narrowing `Scale < 1.f`
+      to `Scale == 1.f`; they are no-ops for every scale the engine produces on its own.
+      Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
+      with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
+      other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a

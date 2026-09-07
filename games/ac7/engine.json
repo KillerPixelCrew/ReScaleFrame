@@ -76,10 +76,16 @@
       "research": "docs/research/ac7-composed-scene-color.md"
     },
     "translucent_depth": {
-      "state": "implemented_synthetic_tested_game_unverified",
-      "how": "established_capture_and_source_evidence_with_synthetic_depth_readback",
-      "detail": "Immediately replay separate-layer geometry into preallocated reversed-Z depth seeded from opaque scene depth. Select it only when this frame selects composed colour reading the exact replayed layer with the same context and source depth. No composition keeps original depth. Startup full/half output extents only; unsupported draws or ambiguous layers fall back.",
+      "state": "implemented_game_tested_briefing",
+      "how": "established_capture_and_source_evidence_with_synthetic_depth_readback_then_game_run",
+      "detail": "Immediately replay separate-layer geometry into preallocated reversed-Z depth seeded from opaque scene depth. Select it only when this frame selects composed colour reading the exact replayed layer with the same context and source depth. No composition keeps original depth. Startup full/half output extents only; unsupported draws or ambiguous layers fall back. Game-tested 7 September in the briefing: 733,861 of 744,726 candidate draws replayed. Flight regression remains unverified.",
       "research": "docs/research/ac7-translucent-depth.md"
+    },
+    "separate_translucency_resolution": {
+      "state": "implemented_game_tested_briefing",
+      "how": "source_read_disassembly_and_game_run_with_capture",
+      "detail": "The layer's scale is a four byte immediate inside a patched instruction at RVA 0x10be330, four byte aligned so it can be rewritten while the game runs. Settings name a percentage of the presented resolution and the multiplier is derived from the render scale in effect, so it follows a quality level rather than being fixed. A frame is heavy when its layer receives more indices than a threshold, which is the briefing. Above 1.0 needs the engine to size the layer's depth to match, which four one byte patches enable by narrowing `Scale < 1.f` to `Scale == 1.f` at RVAs 0x1168f6f, 0x1097a0c, 0x109d03a and 0x109d061. Those four are no-ops for every scale the engine produces on its own. Game-tested 7 September: the briefing relief drew at 2048x1152 inside a 1024x576 scene with a matching depth. Flight, other heavy screens and the mission replay are unverified.",
+      "research": "docs/research/ac7-frame-capture.md"
     }
   },
   "overlay": {
