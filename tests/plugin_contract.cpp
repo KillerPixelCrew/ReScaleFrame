@@ -1,4 +1,5 @@
 #include <rescaleframe/game_api.h>
+#include <rescaleframe/game_frame.h>
 #include <windows.h>
 
 #include <cwchar>
@@ -84,6 +85,54 @@ int wmain(int argc, wchar_t* argv[])
                     "A missing fingerprint must not match.");
     passed &= check(api.detect(nullptr) == RSF_GAME_UNKNOWN,
                     "A null probe must not match.");
+
+    // The frame record's eligibility rules. They are asked in several places and the answer has to
+    // be the same in all of them, so they live in the header as inline functions and are pinned
+    // here rather than being restated by each caller.
+    {
+        rsf_frame_record record{};
+        record.struct_size = sizeof(record);
+        record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+
+        record.screen = RSF_SCREEN_FLIGHT;
+        passed &= check(rsf_frame_allows_sr(&record) && rsf_frame_allows_fg(&record),
+                        "Flight must allow both, which is the case the project exists for.");
+
+        record.screen = RSF_SCREEN_VIDEO;
+        passed &= check(!rsf_frame_allows_sr(&record) && !rsf_frame_allows_fg(&record),
+                        "A video must allow neither: reconstructing one softens it and "
+                        "interpolating one smears a cut.");
+
+        record.screen = RSF_SCREEN_LOADING;
+        passed &= check(!rsf_frame_allows_sr(&record), "Nor a loading screen.");
+
+        record.screen = RSF_SCREEN_MENU;
+        passed &= check(rsf_frame_allows_sr(&record) && !rsf_frame_allows_fg(&record),
+                        "A menu may be reconstructed but never interpolated: it holds still and "
+                        "then jumps, which is no motion to work from followed by a discontinuity "
+                        "to smear.");
+
+        record.screen = RSF_SCREEN_UNKNOWN;
+        passed &= check(!rsf_frame_allows_fg(&record),
+                        "And unknown is read conservatively rather than as flight, or a policy "
+                        "that has not recognised a cutscene will interpolate one.");
+
+        record.screen = RSF_SCREEN_FLIGHT;
+        record.flags = RSF_FRAME_FLAG_NO_FG;
+        passed &= check(rsf_frame_allows_sr(&record) && !rsf_frame_allows_fg(&record),
+                        "A per-frame refusal must be independent of the screen.");
+        record.flags = RSF_FRAME_FLAG_NO_SR;
+        passed &= check(!rsf_frame_allows_sr(&record) && !rsf_frame_allows_fg(&record),
+                        "And refusing reconstruction must refuse generation with it, since "
+                        "generation feeds on what reconstruction produced.");
+        record.flags = 0;
+
+        record.struct_size = 8;
+        passed &= check(!rsf_frame_allows_sr(&record) && !rsf_frame_allows_fg(&record),
+                        "A short record must refuse rather than read fields that may not be "
+                        "there: this header is compiled by plugins built against older versions.");
+    }
+
     FreeLibrary(module);
     return passed ? 0 : 1;
 }
