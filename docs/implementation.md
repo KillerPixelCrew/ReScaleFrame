@@ -171,9 +171,46 @@ classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
         describing rather than a callback per draw (`3039edc`).
   - [x] The loader wires creation to classification and reports the counts, `RSF_UI_CLASSIFY` on by
         default because it changes nothing.
-  - [ ] The run. Nothing here has been in front of the game, so no count in this list is a
-        measurement yet, and the screens are still reported by extent rather than by name: which
-        screen the game is on is M3's question.
+  - [x] The run, 7 Sep 2026. It killed two rules rather than confirming them: converter targets
+        cannot be found by descriptor shape (over 180 textures matched, and Slate also draws into a
+        1920x3304 target no size list would hold), and the frame's own target had been wired to the
+        composite rather than the back buffer. Both corrected; a converter target is now confirmed
+        by watching Slate write into it. Twelve Slate declarations were named correctly by their
+        element signature, and seventeen addresses were forgotten on reuse, so the registry's
+        eviction fires in a real frame.
+  - [x] Shader hashes printed in the trace and named from settings, so a wrong rule can be
+        corrected without a rebuild (`8ac6959`).
+  - [ ] A second run under the corrected rules. The counts from the first are superseded and are
+        not carried forward as measurements. Screens are still reported by extent rather than by
+        name: which screen the game is on is M3's question.
+
+M2, extraction. The layer, the compositor and the divert are built and synthetic-tested; the run
+that judges the picture has not happened.
+
+- [x] `fullscreen_pass`: one triangle, four modes, the premultiplied composite all three frame
+      generation SDKs specify. Verified by breaking it (`e1572f4`).
+- [x] `ui_layer`: `R8G8B8A8_UNORM` at back-buffer extent, cleared to zero, double buffered,
+      shareable. Its test measures under DXVK that Unreal's translucent blend leaves coverage at
+      zero and that the patched blend accumulates, which is what the divert rests on (`061f55b`).
+- [x] The divert primitive: retarget through the originals, viewport scaled by the fraction covered,
+      blend alpha patched from a cache, everything restored, refusals counted with a reason
+      (`a45ce13`).
+- [x] Wired end to end on F3 (`fd67216`).
+- [ ] The run: whether the interface arrives sharp, arrives at all, or arrives in the wrong place.
+- [ ] `scene_promote` replacing `scene_reinsert`. Deliberately not done before the run: interface
+      promotion is the fallback if extraction fails, and deleting it first would remove the only
+      thing that has produced a result.
+- [ ] egui drawn into the layer, so it rides generated frames later.
+
+M3 has its foundation only.
+
+- [x] `game_frame.h`: the frame record, the screen classes, the eligibility rules, and
+      `rsf_camera_frame` moved out of the orchestrator into the SDK where a plugin can see it
+      (`b23d18d`).
+- [ ] `screen_policy`: video, graphics context and loading facts from the game. Needs Ghidra work on
+      the `UManaComponent` anchors, and is better done with the extraction result in hand, because
+      it decides which screens extraction is armed on.
+- [ ] `graphics_settings`: the per-context render scale through `FGraphicsSettingsManager`.
 - [ ] M2. Divert into the UI layer and composite at present with FG off: the layer, `fullscreen_pass`,
       `composite`, the divert primitive with the alpha-op blend patch, `scene_promote` replacing
       `scene_reinsert` (interface targets deleted, chain targets added), egui in the layer.
