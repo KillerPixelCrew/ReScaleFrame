@@ -318,6 +318,10 @@ static void observer_note(void* user, const char* message)
    the observer is installed, which is before anything can call them. */
 static void register_overlay_actions(void);
 
+/* Defined next to the other console variable work, and called from the render scale paths above
+   it, which run whenever the scale is applied or restored. */
+static void set_separate_translucency_scale(void);
+
 static void start_observer(void)
 {
     if (read_number("RSF_OBSERVE", 0) == 0) {
@@ -647,6 +651,7 @@ static void set_screen_percentage(float value)
         note("screen percentage set to %d, value found at object offset 0x%lx", (int)value,
              (unsigned long)offset);
         set_jitter_sequence_length(value, offset);
+        set_separate_translucency_scale();
         return;
     }
 
@@ -746,6 +751,7 @@ static void keep_render_scale(void)
                               read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset) == RSF_DUMP_OK) {
         note("the game had reset the render scale, put back to %d", (int)value);
         set_jitter_sequence_length(value, offset);
+        set_separate_translucency_scale();
     }
 }
 
@@ -763,6 +769,43 @@ static unsigned long requested_scale_percent = 0;
 static void action_start_backend(void)
 {
     start_dlss();
+}
+
+/* Render separate translucency at the scene's resolution instead of half of it.
+
+   The briefing map's relief is separate translucency, and it arrives at 512x288 while the scene is
+   1024x576. No reconstruction recovers that: by the time anything sees the composite the layer is
+   already a doubling of a quarter resolution image. It is not a motion problem and it never was.
+
+   4.18's SetSeparateTranslucencyBufferSize explains it exactly:
+
+     const float CVarScale = Clamp(CVar->GetValueOnRenderThread() / 100.0f, 0.0f, 100.0f);
+     float EffectiveScale = CVarScale;
+     if (Abs(CVarScale - 1.0f) < .001f && bAnyViewWantsDownsampledSeparateTranslucency)
+         EffectiveScale = .5f;
+
+   At the default of 100 the scale is exactly 1.0, which is what arms the automatic halving. The
+   value has to sit outside a thousandth of 1.0 to escape it, so this asks for a hair over 100
+   rather than 100 itself: same resolution to any eye, and the branch no longer applies.
+
+   Written the same way as the render scale: replace the value only where the expected one is
+   found, so it does nothing while the setting is already ours and takes effect again when the game
+   puts its own back. */
+static void set_separate_translucency_scale(void)
+{
+    uint32_t offset = 0;
+    const float wanted = (float)read_number("RSF_SEPARATE_TRANSLUCENCY_PERCENT", 101);
+    if (wanted == 0.0f) {
+        return;
+    }
+    if (rsf_console_set_float("r.SeparateTranslucencyScreenPercentage", 100.0f, wanted,
+                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90),
+                              &offset) == RSF_DUMP_OK) {
+        note("separate translucency percentage set to %d at object offset 0x%lx, so the layer is "
+             "rendered at the scene's resolution rather than half of it",
+             (int)wanted, (unsigned long)offset);
+    }
 }
 
 static void action_set_render_scale(unsigned long percent)
