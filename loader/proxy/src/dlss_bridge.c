@@ -270,12 +270,6 @@ static struct {
     unsigned long ui_traced;
 } bridge;
 
-/* The configured draw sizes a converter rasterizes at. AC7's front end is a hardcoded 1920x1080
-   (`UWidgetToTextureConverter_Setup 0x1404d5c10`), and a second pair can be named without a
-   rebuild because the hangar and the briefing are not obliged to agree with it. */
-static unsigned long ui_draw_sizes[4] = {1920, 1080, 0, 0};
-static unsigned long ui_draw_size_pairs = 1;
-
 /* Publish the registry's sets to the tap, so its prefilter has something to match. Called after any
    change, which is rare: pipeline objects are created in bursts at load and then not at all. */
 static void publish_ui_candidates(void)
@@ -364,37 +358,29 @@ static void on_shader_created(void* user, void* shader, uint32_t stage, const vo
     (void)rsf_ui_shader_hash(bytecode, bytes);
 }
 
+/* A texture was created, so whatever used to live at that address does not any more.
+ *
+ * This is the only thing the texture hook does now, and it is not a small thing: a converter target
+ * recorded here and released later would otherwise leave the registry naming a live texture that
+ * is something else entirely. Which textures are converter targets is settled at the draw, by
+ * watching Slate write into one, for the reasons recorded there. */
 static void on_texture_created(void* user, void* texture, uint32_t width, uint32_t height,
                                uint32_t format, uint32_t mip_levels, uint32_t array_size,
                                uint32_t sample_count, uint32_t bind_flags, uint32_t misc_flags)
 {
-    rsf_ac7_texture_facts facts;
-    uint32_t sizes[4];
-    uint32_t index;
     (void)user;
+    (void)width;
+    (void)height;
+    (void)format;
+    (void)mip_levels;
+    (void)array_size;
+    (void)sample_count;
+    (void)bind_flags;
     (void)misc_flags;
     if (!bridge.ui || !texture) {
         return;
     }
     rsf_ui_registry_forget(bridge.ui, texture);
-
-    memset(&facts, 0, sizeof(facts));
-    facts.struct_size = sizeof(facts);
-    facts.width = width;
-    facts.height = height;
-    facts.mip_levels = mip_levels;
-    facts.array_size = array_size;
-    facts.sample_count = sample_count;
-    facts.format = format;
-    facts.is_render_target = (bind_flags & RSF_OBSERVER_BIND_RENDER_TARGET) != 0;
-    facts.is_shader_resource = (bind_flags & RSF_OBSERVER_BIND_SHADER_RESOURCE) != 0;
-    for (index = 0; index < ui_draw_size_pairs * 2 && index < 4; ++index) {
-        sizes[index] = (uint32_t)ui_draw_sizes[index];
-    }
-    if (rsf_ac7_ui_is_widget_target(&facts, sizes, (uint32_t)ui_draw_size_pairs)) {
-        rsf_ui_registry_add(bridge.ui, RSF_UI_SET_WIDGET_TARGET, texture);
-        publish_ui_candidates();
-    }
 }
 
 static void release_held(void)
@@ -693,9 +679,13 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     rules.force_shader_count = forced_count;
     rules.skip_shaders = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SKIP_SHADER, &skip_count);
     rules.skip_shader_count = skip_count;
-    /* The frame's own target, once the tail walk has found it. Null until then, which makes a Slate
-       draw UNKNOWN rather than classified on half a fact. */
-    rules.back_buffer = bridge.composite_found ? bridge.composite : NULL;
+    /* The frame's own target: the back buffer, not the composite.
+     *
+     * The first run of this got that wrong and the log said so plainly. A draw with Slate's
+     * declaration, six indices and a stride of 40, writing into the 2048x1152 back buffer, came
+     * back UNKNOWN, because it was being compared against a 1024x576 composite. That draw is the
+     * interface at native resolution and is the least ambiguous thing in the frame. */
+    rules.back_buffer = bridge.back_buffer;
 
     memset(&facts, 0, sizeof(facts));
     facts.struct_size = sizeof(facts);
@@ -729,6 +719,31 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     verdict = rsf_ac7_ui_classify(&rules, &facts);
     if (verdict < 7) {
         ++bridge.ui_class_counts[verdict];
+    }
+
+    /* Confirm a converter's target by watching Slate write into it, which is what the first run
+     * showed the descriptor cannot do.
+     *
+     * Asking for B8G8R8A8, one mip, no array, no multisampling, render target and shader resource,
+     * at 1920x1080 matched over a hundred and eighty textures in this game: thirty-two held and a
+     * hundred and fifty-one refused for want of room. A shape that common is not an identification,
+     * and this is the fifth time in this frame that a rule of the form "the one that matches" has
+     * matched something else as well.
+     *
+     * A Slate draw writing into a target is not a shape, it is the interface being made. It also
+     * removes the configured size list from the answer, which the same run showed to be wrong
+     * anyway: Slate draws into a 1920x3304 target, presumably something that scrolls, and no list
+     * of expected sizes was ever going to contain that.
+     *
+     * Ordering works out because the converter fills its texture before anything samples it, so by
+     * the time the quads are reached their input is already named. */
+    if (draw->render_target && draw->render_target != rules.back_buffer &&
+        rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, draw->input_layout) &&
+        !rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_WIDGET_TARGET, draw->render_target)) {
+        if (rsf_ui_registry_add(bridge.ui, RSF_UI_SET_WIDGET_TARGET, draw->render_target) ==
+            RSF_UI_OK) {
+            publish_ui_candidates();
+        }
     }
 
     if (verdict == RSF_AC7_DRAW_UI_WIDGET_QUAD) {
@@ -1434,17 +1449,13 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
     bridge.log_user = log_user;
 }
 
-int rsf_bridge_identify_ui(unsigned long widget_width, unsigned long widget_height)
+int rsf_bridge_identify_ui(void)
 {
     if (!bridge.ui) {
         bridge.ui = rsf_ui_registry_create(RSF_UI_IDENTIFY_ABI_VERSION);
         if (!bridge.ui) {
             return 0;
         }
-    }
-    if (widget_width != 0 && widget_height != 0) {
-        ui_draw_sizes[0] = widget_width;
-        ui_draw_sizes[1] = widget_height;
     }
     bridge.ui_classify = 1;
     return 1;
@@ -1777,13 +1788,17 @@ void rsf_bridge_report(void)
             bridge.ui_reported_counts[index] = bridge.ui_class_counts[index];
         }
         if (moved) {
-            say("ui: %lu candidate draws: slate %lu, widget quad %lu, canvas-into-frame %lu, "
-                "modulate %lu, converter raster %lu, unknown %lu, skipped %lu",
+            /* "scene" is the class named RSF_AC7_DRAW_SCENE: a draw that passed the prefilter and
+               turned out to be nothing of ours. The first run labelled this column
+               "canvas-into-frame", which is not a class at all, and made forty thousand scene
+               draws read as interface. */
+            say("ui: %lu candidate draws: slate %lu, widget quad %lu, converter raster %lu, "
+                "modulate %lu, scene %lu, unknown %lu, skipped %lu",
                 bridge.ui_candidate_draws, bridge.ui_class_counts[RSF_AC7_DRAW_UI_SLATE],
                 bridge.ui_class_counts[RSF_AC7_DRAW_UI_WIDGET_QUAD],
-                bridge.ui_class_counts[RSF_AC7_DRAW_SCENE],
-                bridge.ui_class_counts[RSF_AC7_DRAW_UI_MODULATE],
                 bridge.ui_class_counts[RSF_AC7_DRAW_WIDGET_RASTER],
+                bridge.ui_class_counts[RSF_AC7_DRAW_UI_MODULATE],
+                bridge.ui_class_counts[RSF_AC7_DRAW_SCENE],
                 bridge.ui_class_counts[RSF_AC7_DRAW_UNKNOWN],
                 bridge.ui_class_counts[RSF_AC7_DRAW_SKIP]);
             if (bridge.ui_widget_extent[0]) {

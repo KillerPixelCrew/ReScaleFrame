@@ -61,13 +61,17 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
 
    This changes no pixel. It answers which draws on a screen are the interface, by which producer,
    and how many looked like it and matched no rule, which is the number that decides whether
-   diverting them is safe to attempt. `widget_width` and `widget_height` name the size a converter
-   rasterizes at, zero meaning AC7's hardcoded 1920x1080. Returns zero if the registry could not be
-   created, in which case nothing is classified and the run says so.
+   diverting them is safe to attempt. Returns zero if the registry could not be created, in which
+   case nothing is classified and the run says so.
+
+   There is deliberately no expected size here. The first run asked for textures shaped like a
+   converter target at 1920x1080 and matched over a hundred and eighty of them, and also found Slate
+   drawing into a 1920x3304 target that no such list would have contained. A converter target is
+   confirmed by watching Slate write into it instead.
 
    Call before installing the observer: the three hooks below have to be in its options, because
    what an object is can only be learned as the game creates it. */
-int rsf_bridge_identify_ui(unsigned long widget_width, unsigned long widget_height);
+int rsf_bridge_identify_ui(void);
 
 rsf_observer_layout_fn rsf_bridge_layout_hook(void);
 rsf_observer_shader_fn rsf_bridge_shader_hook(void);

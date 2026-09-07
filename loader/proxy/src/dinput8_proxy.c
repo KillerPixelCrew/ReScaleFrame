@@ -372,13 +372,12 @@ static void start_observer(void)
        hooks are only patched when something asks for them, so turning it off costs the game
        nothing at all. */
     if (read_number("RSF_UI_CLASSIFY", 1) != 0) {
-        const unsigned long width = read_number("RSF_UI_WIDGET_WIDTH", 1920);
-        const unsigned long height = read_number("RSF_UI_WIDGET_HEIGHT", 1080);
-        if (rsf_bridge_identify_ui(width, height)) {
+        if (rsf_bridge_identify_ui()) {
             options.on_layout = rsf_bridge_layout_hook();
             options.on_shader = rsf_bridge_shader_hook();
             options.on_texture = rsf_bridge_texture_hook();
-            note("ui classification on, widget draw size %lux%lu", width, height);
+            note("ui classification on; converter targets are confirmed by what draws into them, "
+                 "not by their shape");
         } else {
             note("ui classification could not start; nothing will be classified this run");
         }
