@@ -150,11 +150,23 @@ vendor-neutral contract that DLSS, FSR and XeSS implement for super resolution a
 Each milestone ends deployed to the game and is judged by the log lines named in the plan. Status
 classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
 
-- [ ] M0. Compile again and decide the four uncommitted files. In progress.
-- [ ] M1. Classify every UI draw per screen, change nothing: creation hooks for layouts, shaders,
-      blend and depth states; the tap shadows the pixel shader, blend and depth-stencil state and
-      the vertex stride; `games/ac7` gains the classifier. One run answers which producer draws the
-      interface on each screen.
+- [x] M0. Compile again and decide the four uncommitted files. Built and synthetic-tested
+      (`ec7f156`).
+- [ ] M1. Classify every UI draw per screen, change nothing. The mechanism is built and
+      synthetic-tested; the run that answers the question has not happened.
+  - [x] The classifier as a pure function over shadowed facts, in `games/ac7/src/ui_rules.cpp`
+        with a no-device test (`445fc54`).
+  - [x] Vertex declaration and widget-target fingerprints, verified against UE 4.18.3 at
+        `0a14a8d537a3` rather than the checkout's default 5.8.2 branch, where the same structures
+        have a different shape (`0b16d2c`).
+  - [x] Observer creation hooks for input layouts and both shader stages, with the texture
+        descriptor reported for every texture rather than only filtered ones. Observer ABI 5
+        (`1599517`).
+  - [x] Re-entry counted rather than flagged, so a hook may issue context calls (`ad16848`).
+  - [x] The tap shadows the pixel shader, blend and depth-stencil state, and reports them with the
+        layout, vertex shader, stride and topology it already held. Frame tap ABI 7 (`cc64734`).
+  - [ ] Shader hashing and the registries that turn these reports into named sets.
+  - [ ] Per-screen classification counts in the run log, and the run itself.
 - [ ] M2. Divert into the UI layer and composite at present with FG off: the layer, `fullscreen_pass`,
       `composite`, the divert primitive with the alpha-op blend patch, `scene_promote` replacing
       `scene_reinsert` (interface targets deleted, chain targets added), egui in the layer.
