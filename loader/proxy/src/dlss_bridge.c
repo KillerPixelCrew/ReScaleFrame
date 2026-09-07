@@ -97,10 +97,11 @@ static struct {
     unsigned long frames_shown;
 
     /* Which pass within the current frame, and how many frames have been described.
-       The set is recognised more than once per frame and this integration takes the first, which
-       is how a reconstruction ended up with no sky in it: the sky is composited later than the
-       pass being tapped. Describing each qualifying pass of a few frames says how many there are
-       and what colour each carries, which is what choosing between them needs. */
+       The set is recognised more than once per frame and the last one wins, because on_pass
+       replaces what it holds. That is not the same as choosing correctly: a briefing capture shows
+       three qualifying passes whose colour is the same partial layer, while the content that is
+       missing is rendered by a pass that never qualifies at all. Describing each qualifying pass
+       of a few frames says how many there are and what colour each carries. */
     unsigned long pass_in_frame;
     unsigned long frames_described;
 

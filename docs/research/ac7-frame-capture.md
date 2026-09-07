@@ -99,6 +99,28 @@ Chunk 6714 is a run of draws sharing one output binding, not a single draw, so "
 
 The substitution that answer feeds is built: the composite and the interface's own target are replaced by output-resolution textures of the same format, scene colour is replaced by the reconstruction, and viewports and scissor rectangles are scaled while a replaced target is bound. Two parts of it follow from this document rather than from the code. Scene colour is substituted only after the composite has been bound in the frame, because the scene passes read scene colour while they are still writing it and the sky arrives roughly 27 draws after the pass that binds the reconstruction inputs. The reconstruction also runs at that gate rather than at Present: Present was right while the result was only drawn over the top, but the gate is the last point inside the frame before anything reads scene colour and the first where the scene is whole. The interface target is picked out by format, since 2181 is `R8G8B8A8` and the tail's scene targets are `B8G8R8A8`; that is one observed difference in one game, so an input that does not match leaves the interface magnified with the scene rather than promoted on a guess.
 
+## Menu screens render two scenes, and only one is reconstructed
+
+Captures `ac7_briefing_frame18425` and `ac7_hangar_frame51463`, 7 September 2026, taken at native scale with the proxy loaded but DLSS not started.
+
+In the briefing screen the reconstruction showed the coastline and the unit markers, and the mission-area relief was absent. It is absent from the DLSS input, not lost in the upscale: the dumped 1024×576 input and the 2048×1152 output hold the same content, so the backend reconstructed exactly what it was given.
+
+The frame contains two separate 3D renders:
+
+| Events | Target | Format | Draws / indices | Contents |
+| --- | --- | --- | --- | --- |
+| 1092–1446 | 1723 | `R11G11B10_FLOAT` | 24 / 21,033 | Deferred base pass and lighting: coastline and markers |
+| 1486–2015 | 46630 | `R16G16B16A16_FLOAT` | 59 / 540,030 | Contour relief, dotted terrain grid, markers |
+| 2146 | 46633 | `R11G11B10_FLOAT` | 1 / 3 | Fullscreen composite of both |
+
+The tap recognized three qualifying passes in this screen and holds the last, since `on_pass` replaces what it holds. All three carry the first layer. The relief pass never qualifies, so no choice among qualifying passes can reach it.
+
+Selection by resource id or by allocation age would be wrong. The complete target is 46633 in the briefing and 1723 in the hangar, where 60094 is allocated later and stays black. Across both captures the only consistent signal is write order: the last-written full-size scene-colour-format target holds the complete image.
+
+Consequences. A menu screen is not a smaller version of the flight frame, and reconstructing its first layer alone will always drop content. The second layer carries no velocity, so a temporal backend cannot reconstruct it from these inputs even if it were tapped. Either the composite result is what gets scaled in these screens, or reconstruction is declined there and they run at native. Nothing here says which, and neither has been tried.
+
+Unresolved: whether the relief pass writes depth or velocity at all, which needs its shader resource bindings rather than the render-target list used here; and whether flight frames have a second render of this kind, which the existing flight captures could answer without a new run.
+
 ## Masks, clouds, and droplets
 
 Resource #63083 was initially called velocity flattening because it was half-size, two-channel, and compute-written. Replay showed a mean near 0.55, no zero clear, a bimodal distribution, saturated sky, and an aircraft cutout. It is a mask. Its allocation neighbours include cloud resources 62989–63019, but its exact producer still needs identification.
