@@ -245,6 +245,65 @@ typedef struct rsf_frame_tap_candidates {
    costs a single load per draw. */
 rsf_frame_tap_result rsf_frame_tap_set_candidates(const rsf_frame_tap_candidates* candidates);
 
+/* What to do with a candidate draw, decided before it is forwarded.
+
+   The tap cannot decide this. Which draws are the interface is a game fact and lives in
+   `games/<id>`; what the tap owns is the mechanism, so the verdict comes back through this and the
+   retargeting is done here. */
+typedef uint32_t rsf_frame_tap_verdict;
+/* Leave the draw alone. Everything that is not the interface, which is almost everything. */
+#define RSF_FRAME_TAP_LEAVE ((rsf_frame_tap_verdict)0)
+/* Send it to the layer instead of to the target the game bound. */
+#define RSF_FRAME_TAP_DIVERT ((rsf_frame_tap_verdict)1)
+/* Divert, and patch the blend's alpha operations to `One / InvSrcAlpha` first.
+ *
+ * Needed for anything drawn with Unreal's base pass translucent blend, whose alpha factors are
+ * `Zero / InvSrcAlpha`: on a layer cleared to zero the alpha stays at zero however much colour
+ * lands, so the layer composites to nothing while looking, in a debug view, exactly like a divert
+ * that never happened. Slate's own blend already accumulates and must be left alone. The colour
+ * factors are never touched. */
+#define RSF_FRAME_TAP_DIVERT_PATCH_ALPHA ((rsf_frame_tap_verdict)2)
+
+/* Called before the game's draw is forwarded, for every draw that passes the candidate prefilter.
+   Runs on the render thread inside the hook; must not call into D3D11. */
+typedef rsf_frame_tap_verdict (*rsf_frame_tap_verdict_fn)(void* user,
+                                                          const rsf_frame_tap_target_draw* draw);
+
+/* Why a divert did not happen, most recent first in the status. Counted rather than logged: this
+   runs per draw and a refusal is normal, but a refusal that becomes common is a rule going wrong
+   and the counts are how that is noticed. */
+#define RSF_FRAME_TAP_REFUSED_NO_LAYER 1u
+/* Several render targets. Moving slot zero changes what the others mean. */
+#define RSF_FRAME_TAP_REFUSED_MULTIPLE_TARGETS 2u
+/* Unordered access views bound, which are written wherever the draw decides and cannot follow. */
+#define RSF_FRAME_TAP_REFUSED_UAV 3u
+/* The draw already writes the layer, so there is nothing to move. */
+#define RSF_FRAME_TAP_REFUSED_ALREADY_LAYER 4u
+/* The blend could not be patched, and diverting without the patch would produce a layer with no
+   coverage. Refusing leaves the interface in the scene, which is worse than sharp and better than
+   absent. */
+#define RSF_FRAME_TAP_REFUSED_BLEND 5u
+
+typedef struct rsf_frame_tap_divert_setup {
+    uint32_t struct_size;
+    /* `ID3D11RenderTargetView*` of the layer to divert into, or null to stop diverting. Borrowed:
+       the caller keeps it alive for as long as it is set. */
+    void* layer_target;
+    /* The layer's extent, so a draw into a render-resolution target can have its viewport scaled up
+       to cover the same fraction of the layer. */
+    uint32_t layer_width;
+    uint32_t layer_height;
+    /* Asked for each candidate before it is forwarded. Null stops diverting. */
+    rsf_frame_tap_verdict_fn verdict;
+    void* verdict_user;
+} rsf_frame_tap_divert_setup;
+
+/* Arm or disarm diverting. Null, or a null layer or verdict, disarms.
+
+   Nothing is diverted until this is called, so the classification milestone and the divert are the
+   same code with this switched off. */
+rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* setup);
+
 /* One texture the plan replaces.
 
    Every pointer here is a D3D11 interface the caller owns and keeps alive for as long as the plan
@@ -453,6 +512,12 @@ typedef struct rsf_frame_tap_status {
     uint32_t depth_mismatch_depth_width;
     uint32_t depth_mismatch_depth_height;
     uint32_t depth_mismatch_depth_format;
+    /* Appended in ABI 7. */
+    uint32_t candidate_draws;
+    uint32_t draws_diverted;
+    uint32_t blend_states_patched;
+    uint32_t divert_refused;
+    uint32_t divert_last_refusal;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.

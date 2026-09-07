@@ -144,6 +144,48 @@ void collect_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     candidates.push_back(report);
 }
 
+// The verdict the stand-in classifier gives, and how often it was asked.
+rsf_frame_tap_verdict verdict_to_give = RSF_FRAME_TAP_LEAVE;
+uint32_t verdicts_asked = 0;
+
+rsf_frame_tap_verdict decide_divert(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    (void)user;
+    (void)draw;
+    ++verdicts_asked;
+    return verdict_to_give;
+}
+
+// Whether one pixel of a texture was written. The test's shader emits a constant non-zero colour,
+// so a cleared pixel and a drawn one are told apart without caring what the colour is.
+bool pixel_written(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* texture,
+                   UINT x, UINT y)
+{
+    D3D11_TEXTURE2D_DESC description{};
+    texture->GetDesc(&description);
+    D3D11_TEXTURE2D_DESC staging = description;
+    staging.Usage = D3D11_USAGE_STAGING;
+    staging.BindFlags = 0;
+    staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging.MiscFlags = 0;
+    ID3D11Texture2D* readable = nullptr;
+    if (FAILED(device->CreateTexture2D(&staging, nullptr, &readable)) || !readable) {
+        return false;
+    }
+    context->CopyResource(readable, texture);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped)) || !mapped.pData) {
+        readable->Release();
+        return false;
+    }
+    const uint8_t* row = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch;
+    const uint8_t* pixel = row + size_t(x) * 4u;
+    const bool written = pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 0;
+    context->Unmap(readable, 0);
+    readable->Release();
+    return written;
+}
+
 uint32_t gates_seen = 0;
 
 void note_gate(void* user, void* context, void* texture)
@@ -1097,6 +1139,154 @@ int main()
         context->Draw(3, 0);
         check(candidates.empty(), "And nothing is a candidate afterwards.");
         context->PSSetShaderResources(0, 1, &unbind);
+    }
+
+    stage("diverting a draw into the layer");
+    {
+        // The layer stands in for the UI layer: a target of a different extent that the draw was
+        // never bound to. What is being checked is that the draw lands there, that everything the
+        // divert touched goes back, and that a refusal leaves the draw exactly where it was.
+        ID3D11Texture2D* layer = make_target(device, 512, 288, DXGI_FORMAT_R8G8B8A8_UNORM);
+        ID3D11RenderTargetView* layer_view = nullptr;
+        check(layer && SUCCEEDED(device->CreateRenderTargetView(layer, nullptr, &layer_view)),
+              "The stand-in layer must be created.");
+
+        void* layout_set[] = {test_layout};
+        rsf_frame_tap_candidates sets{};
+        sets.struct_size = sizeof(sets);
+        sets.layouts = layout_set;
+        sets.layout_count = 1;
+        rsf_frame_tap_set_candidates(&sets);
+
+        rsf_frame_tap_divert_setup divert{};
+        divert.struct_size = sizeof(divert);
+        divert.layer_target = layer_view;
+        divert.layer_width = 512;
+        divert.layer_height = 288;
+        divert.verdict = decide_divert;
+        check(rsf_frame_tap_set_divert(&divert) == RSF_FRAME_TAP_OK, "Arming must succeed.");
+
+        // A viewport covering half the width of a 256x144 target. After the divert it must cover
+        // half the width of the layer, because a draw covers a fraction of the frame and the
+        // fraction is what has to be preserved.
+        context->IASetInputLayout(test_layout);
+        context->OMSetRenderTargets(1, &composite_view, nullptr);
+        set_viewport(context, 128.0f, 144.0f);
+        const D3D11_RECT scissor = {0, 0, 128, 144};
+        context->RSSetScissorRects(1, &scissor);
+
+        const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        context->ClearRenderTargetView(layer_view, clear);
+        context->ClearRenderTargetView(composite_view, clear);
+
+        verdict_to_give = RSF_FRAME_TAP_DIVERT;
+        context->Draw(3, 0);
+
+        // Where the pixels went, which is the only proof that matters. The shader writes a
+        // constant colour, so a written pixel is non-zero and an untouched one is not.
+        check(pixel_written(device, context, layer, 8, 8),
+              "The draw must have landed in the layer. This is the whole primitive: the game asked "
+              "for one target and drew into another.");
+        check(!pixel_written(device, context, composite, 8, 8),
+              "And must not have landed in the target the game bound, or the interface is drawn "
+              "twice and the scene is not HUD-less after all.");
+
+        ID3D11RenderTargetView* after = nullptr;
+        ID3D11DepthStencilView* after_depth = nullptr;
+        context->OMGetRenderTargets(1, &after, &after_depth);
+        check(after == composite_view,
+              "And the game's own target must be back afterwards, or its next draw lands in ours.");
+        if (after) {
+            after->Release();
+        }
+        if (after_depth) {
+            after_depth->Release();
+        }
+
+        UINT viewport_count = 1;
+        D3D11_VIEWPORT viewport_after{};
+        context->RSGetViewports(&viewport_count, &viewport_after);
+        check(viewport_count == 1 && viewport_after.Width == 128.0f &&
+                  viewport_after.Height == 144.0f,
+              "The viewport must be restored, not left at the scaled one.");
+
+        UINT scissor_count = 1;
+        D3D11_RECT scissor_after{};
+        context->RSGetScissorRects(&scissor_count, &scissor_after);
+        check(scissor_count == 1 && scissor_after.right == 128,
+              "And the scissor rectangle, which the pass this grew from used to forget.");
+
+        rsf_frame_tap_status status{};
+        status.struct_size = sizeof(status);
+        rsf_frame_tap_get_status(&status);
+        check(status.draws_diverted == 1, "The divert must be counted.");
+
+        stage("the viewport is scaled by what the draw covered");
+        {
+            // The draw covered the left half of a 256 wide target. On a 512 wide layer it has to
+            // cover the left half again, not the left quarter: what a draw covers is a fraction of
+            // the frame, and preserving pixels instead would put the interface in the corner at a
+            // reduced render scale, which is the case this exists for.
+            check(pixel_written(device, context, layer, 200, 8),
+                  "A pixel inside the scaled half must be written.");
+            check(!pixel_written(device, context, layer, 400, 8),
+                  "And one beyond it must not: the fraction is preserved, not the pixel count.");
+        }
+
+        stage("a refusal leaves the draw where it was");
+        {
+            // Several targets: moving slot zero would change what the others mean.
+            ID3D11RenderTargetView* two[2] = {composite_view, other_view};
+            context->OMSetRenderTargets(2, two, nullptr);
+            context->ClearRenderTargetView(composite_view, clear);
+            verdict_to_give = RSF_FRAME_TAP_DIVERT;
+            context->Draw(3, 0);
+            check(pixel_written(device, context, composite, 8, 8),
+                  "A draw with several targets must be left where it was.");
+
+            rsf_frame_tap_status refused{};
+            refused.struct_size = sizeof(refused);
+            rsf_frame_tap_get_status(&refused);
+            check(refused.divert_refused >= 1 &&
+                      refused.divert_last_refusal == RSF_FRAME_TAP_REFUSED_MULTIPLE_TARGETS,
+                  "And the refusal must say which rule stopped it, because a refusal that becomes "
+                  "common is a rule going wrong and a bare count cannot say which.");
+            context->OMSetRenderTargets(1, &composite_view, nullptr);
+        }
+
+        stage("a verdict of leave changes nothing");
+        {
+            context->ClearRenderTargetView(composite_view, clear);
+            verdict_to_give = RSF_FRAME_TAP_LEAVE;
+            verdicts_asked = 0;
+            context->Draw(3, 0);
+            check(verdicts_asked == 1, "The classifier must have been asked.");
+            check(pixel_written(device, context, composite, 8, 8),
+                  "And its answer of no must cost nothing and change nothing, which is the answer "
+                  "for almost every draw in the frame.");
+        }
+
+        stage("disarming stops diverting");
+        {
+            check(rsf_frame_tap_set_divert(nullptr) == RSF_FRAME_TAP_OK, "Disarming must succeed.");
+            context->ClearRenderTargetView(composite_view, clear);
+            verdict_to_give = RSF_FRAME_TAP_DIVERT;
+            verdicts_asked = 0;
+            context->Draw(3, 0);
+            check(verdicts_asked == 0,
+                  "With the divert disarmed the classifier is not even asked, so the whole "
+                  "mechanism can be carried switched off.");
+            check(pixel_written(device, context, composite, 8, 8), "And the draw is untouched.");
+        }
+
+        rsf_frame_tap_set_candidates(nullptr);
+        context->IASetInputLayout(nullptr);
+        if (layer_view) {
+            layer_view->Release();
+        }
+        if (layer) {
+            layer->Release();
+        }
     }
 
     stage("exhausting the budget");

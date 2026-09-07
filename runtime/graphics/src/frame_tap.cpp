@@ -168,6 +168,51 @@ struct Tap {
     std::atomic<uint32_t> candidates_armed{0};
     std::atomic<uint64_t> candidate_draws{0};
 
+    // Diverting. Armed separately from the candidate sets, so classification can run for a whole
+    // milestone with nothing moved.
+    std::atomic<uint32_t> divert_armed{0};
+    ID3D11RenderTargetView* layer_target = nullptr;
+    ID3D11Texture2D* layer_texture = nullptr;
+    uint32_t layer_width = 0;
+    uint32_t layer_height = 0;
+    rsf_frame_tap_verdict_fn verdict = nullptr;
+    void* verdict_user = nullptr;
+    std::atomic<uint64_t> draws_diverted{0};
+    std::atomic<uint64_t> blend_states_patched{0};
+    std::atomic<uint64_t> divert_refused{0};
+    std::atomic<uint32_t> divert_last_refusal{0};
+
+    // Blend states with their alpha operations patched, keyed by the state the game bound.
+    //
+    // Keyed by pointer, which is only safe because a blend state that is released takes its entry
+    // with it: `forget_blend` is called from the release path. The alternative, rebuilding the
+    // patched state per draw, would create a device object inside a draw hook, which is the one
+    // place it must not happen.
+    struct PatchedBlend {
+        ID3D11BlendState* original;
+        ID3D11BlendState* patched;
+    };
+    static constexpr uint32_t max_patched_blends = 32;
+    PatchedBlend patched_blends[max_patched_blends]{};
+    uint32_t patched_blend_count = 0;
+
+    // What the divert replaced, restored after the draw is forwarded. Only ever written and read on
+    // the render thread between a draw's begin and end, so it needs no synchronisation.
+    struct DivertState {
+        bool active = false;
+        bool blend_patched = false;
+        ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+        ID3D11DepthStencilView* depth_view = nullptr;
+        ID3D11BlendState* blend = nullptr;
+        FLOAT blend_factor[4] = {};
+        UINT blend_mask = 0;
+        UINT viewport_count = 0;
+        D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+        UINT scissor_count = 0;
+        D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+    };
+    DivertState divert;
+
     // Watched render targets. Compared by pointer and never dereferenced, so these are plain
     // addresses rather than references: see the note on rsf_frame_tap_watch_target.
     //
@@ -477,6 +522,304 @@ void unbind_target_reads(Tap& self)
 // Called from the draw hooks after the game's draw has been forwarded, so the description is of a
 // draw that has already happened. Everything it reads is the shadow, which is why it costs a
 // pointer compare on the draws that do not match, which is all but a handful in a frame.
+/* Is this draw one of the handful in the frame worth a second look?
+ *
+ * Pointer comparisons over state already shadowed, guarded by a load that rejects everything until
+ * something has been named. This is what the rest of the frame pays, so it touches no memory the
+ * draw path had not already touched and calls nothing. */
+bool candidate_passes(const Tap& self)
+{
+    if (self.candidates_armed.load(std::memory_order_relaxed) == 0) {
+        return false;
+    }
+    const uint32_t layouts = self.candidate_layout_count.load(std::memory_order_acquire);
+    for (uint32_t index = 0; index < layouts; ++index) {
+        if (self.geometry.input_layout == self.candidate_layouts[index]) {
+            return true;
+        }
+    }
+    const uint32_t shaders = self.candidate_shader_count.load(std::memory_order_acquire);
+    for (uint32_t index = 0; index < shaders; ++index) {
+        if (self.pixel_shader == self.candidate_shaders[index] ||
+            self.geometry.vertex_shader == self.candidate_shaders[index]) {
+            return true;
+        }
+    }
+    const uint32_t targets = self.candidate_widget_target_count.load(std::memory_order_acquire);
+    for (uint32_t slot = 0; slot < RSF_FRAME_TAP_CANDIDATE_SLOTS && targets != 0; ++slot) {
+        ID3D11Texture2D* texture = self.slots[slot].texture;
+        if (!texture) {
+            continue;
+        }
+        for (uint32_t index = 0; index < targets; ++index) {
+            if (texture == self.candidate_widget_targets[index]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* The facts a verdict is decided from, filled from the shadow before the draw is forwarded.
+ *
+ * Deliberately not the full report `consider_target_draw` builds: that one asks the context for the
+ * viewport, which is a call this cannot afford on a path that runs before every candidate draw.
+ * What the classifier needs is what the shadow already holds. */
+void fill_divert_facts(const Tap& self, bool indexed, UINT element_count,
+                       rsf_frame_tap_target_draw& facts, rsf_frame_tap_input* inputs)
+{
+    facts = rsf_frame_tap_target_draw{};
+    facts.struct_size = sizeof(facts);
+    facts.watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
+    facts.render_target = self.target_texture;
+    facts.target_width = self.target_description.Width;
+    facts.target_height = self.target_description.Height;
+    facts.target_format = static_cast<uint32_t>(self.target_description.Format);
+    facts.target_count = self.target_count;
+    facts.target_samples = self.target_description.SampleDesc.Count;
+    facts.depth_bound = self.depth_bound ? 1u : 0u;
+    facts.indexed = indexed ? 1u : 0u;
+    facts.element_count = element_count;
+    facts.pixel_shader = self.pixel_shader;
+    facts.vertex_shader = self.geometry.vertex_shader;
+    facts.input_layout = self.geometry.input_layout;
+    facts.blend_state = self.blend_state;
+    facts.depth_stencil_state = self.depth_stencil_state;
+    facts.vertex_stride = self.geometry.strides[0];
+    facts.topology = static_cast<uint32_t>(self.geometry.topology);
+
+    uint32_t used = 0;
+    for (uint32_t slot = 0; slot < max_examined_views && used < RSF_FRAME_TAP_MAX_INPUTS; ++slot) {
+        if (!self.slots[slot].texture) {
+            continue;
+        }
+        inputs[used].slot = slot;
+        inputs[used].texture = self.slots[slot].texture;
+        inputs[used].width = self.slots[slot].description.Width;
+        inputs[used].height = self.slots[slot].description.Height;
+        inputs[used].format = static_cast<uint32_t>(self.slots[slot].description.Format);
+        ++used;
+    }
+    facts.input_count = used;
+    facts.inputs = inputs;
+}
+
+void refuse_divert(Tap& self, uint32_t reason)
+{
+    self.divert_refused.fetch_add(1, std::memory_order_relaxed);
+    self.divert_last_refusal.store(reason, std::memory_order_relaxed);
+}
+
+/* The game's blend with its alpha operations replaced, created once and cached.
+ *
+ * Colour factors are copied unchanged. Only `SrcBlendAlpha`, `DestBlendAlpha` and `BlendOpAlpha`
+ * move, to `One / InvSrcAlpha / Add`, which is the over operator on coverage: a1 + a2(1 - a1).
+ * Everything else about the draw, including which channels it writes, is the game's.
+ *
+ * Returns null when the state cannot be built, and the caller then refuses the divert rather than
+ * moving a draw whose coverage would be lost. */
+ID3D11BlendState* patched_blend_for(Tap& self, ID3D11DeviceContext* context,
+                                    ID3D11BlendState* original)
+{
+    for (uint32_t index = 0; index < self.patched_blend_count; ++index) {
+        if (self.patched_blends[index].original == original) {
+            return self.patched_blends[index].patched;
+        }
+    }
+    if (self.patched_blend_count >= Tap::max_patched_blends) {
+        return nullptr;
+    }
+
+    D3D11_BLEND_DESC description{};
+    if (original) {
+        original->GetDesc(&description);
+    } else {
+        // No blend state bound is D3D11's default: blending off, all channels written. Diverting
+        // such a draw still needs alpha, so the default is spelled out and then patched like any
+        // other, rather than treated as a case with no answer.
+        description.RenderTarget[0].BlendEnable = FALSE;
+        description.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    }
+    const UINT targets = description.IndependentBlendEnable ? 8u : 1u;
+    for (UINT index = 0; index < targets; ++index) {
+        D3D11_RENDER_TARGET_BLEND_DESC& target = description.RenderTarget[index];
+        if (!target.BlendEnable) {
+            // An opaque draw already writes alpha 1 where it covers, which is the coverage a layer
+            // wants. Nothing to patch, and enabling a blend here would change the colour.
+            continue;
+        }
+        target.SrcBlendAlpha = D3D11_BLEND_ONE;
+        target.DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    }
+
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    if (!device) {
+        return nullptr;
+    }
+    ID3D11BlendState* patched = nullptr;
+    const HRESULT made = device->CreateBlendState(&description, &patched);
+    device->Release();
+    if (FAILED(made) || !patched) {
+        return nullptr;
+    }
+    self.patched_blends[self.patched_blend_count].original = original;
+    self.patched_blends[self.patched_blend_count].patched = patched;
+    ++self.patched_blend_count;
+    self.blend_states_patched.fetch_add(1, std::memory_order_relaxed);
+    return patched;
+}
+
+/* Move this draw to the layer, if the caller says it is the interface and nothing makes that
+   unsafe. Returns true when the state below has to be put back afterwards. */
+bool begin_divert(Tap& self, ID3D11DeviceContext* context,
+                  const rsf_frame_tap_target_draw& facts)
+{
+    if (self.divert_armed.load(std::memory_order_relaxed) == 0 || !self.verdict) {
+        return false;
+    }
+    const rsf_frame_tap_verdict verdict = self.verdict(self.verdict_user, &facts);
+    if (verdict == RSF_FRAME_TAP_LEAVE) {
+        return false;
+    }
+    if (!self.layer_target) {
+        refuse_divert(self, RSF_FRAME_TAP_REFUSED_NO_LAYER);
+        return false;
+    }
+    if (self.target_count != 1) {
+        refuse_divert(self, RSF_FRAME_TAP_REFUSED_MULTIPLE_TARGETS);
+        return false;
+    }
+    if (self.target_texture && self.target_texture == self.layer_texture) {
+        refuse_divert(self, RSF_FRAME_TAP_REFUSED_ALREADY_LAYER);
+        return false;
+    }
+
+    Tap::DivertState& divert = self.divert;
+    divert = Tap::DivertState{};
+
+    // Saved from the context rather than from the shadow, because what has to be put back is
+    // exactly what was bound, and the shadow deliberately holds slot zero only.
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, divert.targets,
+                               &divert.depth_view);
+    context->OMGetBlendState(&divert.blend, divert.blend_factor, &divert.blend_mask);
+    divert.viewport_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    context->RSGetViewports(&divert.viewport_count, divert.viewports);
+    divert.scissor_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    context->RSGetScissorRects(&divert.scissor_count, divert.scissors);
+
+    ID3D11BlendState* blend = divert.blend;
+    if (verdict == RSF_FRAME_TAP_DIVERT_PATCH_ALPHA) {
+        blend = patched_blend_for(self, context, divert.blend);
+        if (!blend) {
+            // Put back what was taken and leave the draw where it was. A layer with colour and no
+            // coverage composites to nothing, so moving it would lose the interface outright.
+            for (auto* target : divert.targets) {
+                if (target) {
+                    target->Release();
+                }
+            }
+            if (divert.depth_view) {
+                divert.depth_view->Release();
+            }
+            if (divert.blend) {
+                divert.blend->Release();
+            }
+            divert = Tap::DivertState{};
+            refuse_divert(self, RSF_FRAME_TAP_REFUSED_BLEND);
+            return false;
+        }
+        divert.blend_patched = true;
+    }
+
+    // No depth stencil view. The interface is an overlay on the layer, and the scene's depth
+    // belongs to a target of another extent that this draw no longer writes.
+    ID3D11RenderTargetView* layer = self.layer_target;
+    self.original_set_targets(context, 1, &layer, nullptr);
+    context->OMSetBlendState(blend, divert.blend_factor, divert.blend_mask);
+
+    // The viewport scaled by what the draw covered of its own target. A quad drawn into a
+    // render-resolution layer covers the same fraction of the frame as it will of ours, so the
+    // fraction is preserved rather than the pixel count.
+    if (divert.viewport_count >= 1 && self.target_description.Width != 0 &&
+        self.target_description.Height != 0 && self.layer_width != 0 && self.layer_height != 0) {
+        const float scale_x =
+            static_cast<float>(self.layer_width) / static_cast<float>(self.target_description.Width);
+        const float scale_y = static_cast<float>(self.layer_height) /
+                              static_cast<float>(self.target_description.Height);
+        D3D11_VIEWPORT scaled[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+        for (UINT index = 0; index < divert.viewport_count; ++index) {
+            scaled[index] = divert.viewports[index];
+            scaled[index].TopLeftX *= scale_x;
+            scaled[index].TopLeftY *= scale_y;
+            scaled[index].Width *= scale_x;
+            scaled[index].Height *= scale_y;
+        }
+        context->RSSetViewports(divert.viewport_count, scaled);
+
+        if (divert.scissor_count >= 1) {
+            D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+            for (UINT index = 0; index < divert.scissor_count; ++index) {
+                scissors[index].left = LONG(divert.scissors[index].left * scale_x);
+                scissors[index].top = LONG(divert.scissors[index].top * scale_y);
+                scissors[index].right = LONG(divert.scissors[index].right * scale_x);
+                scissors[index].bottom = LONG(divert.scissors[index].bottom * scale_y);
+            }
+            context->RSSetScissorRects(divert.scissor_count, scissors);
+        }
+    }
+
+    divert.active = true;
+    self.draws_diverted.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+/* The whole pre-draw path: is this worth looking at, what is it, and does it move.
+ *
+ * Called with the re-entry guard already held, because everything below issues context calls that
+ * would otherwise be recognised as the game's own and written into the shadow. That is the case a
+ * flag rather than a depth could not survive, and it is now reachable. */
+bool try_divert(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT element_count)
+{
+    if (self.divert_armed.load(std::memory_order_relaxed) == 0 || !candidate_passes(self)) {
+        return false;
+    }
+    rsf_frame_tap_target_draw facts;
+    rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
+    fill_divert_facts(self, indexed, element_count, facts, inputs);
+    return begin_divert(self, context, facts);
+}
+
+void end_divert(Tap& self, ID3D11DeviceContext* context)
+{
+    Tap::DivertState& divert = self.divert;
+    if (!divert.active) {
+        return;
+    }
+    self.original_set_targets(context, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, divert.targets,
+                              divert.depth_view);
+    context->OMSetBlendState(divert.blend, divert.blend_factor, divert.blend_mask);
+    if (divert.viewport_count >= 1) {
+        context->RSSetViewports(divert.viewport_count, divert.viewports);
+    }
+    if (divert.scissor_count >= 1) {
+        context->RSSetScissorRects(divert.scissor_count, divert.scissors);
+    }
+    for (auto* target : divert.targets) {
+        if (target) {
+            target->Release();
+        }
+    }
+    if (divert.depth_view) {
+        divert.depth_view->Release();
+    }
+    if (divert.blend) {
+        divert.blend->Release();
+    }
+    divert = Tap::DivertState{};
+}
+
 void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
                           UINT element_count)
 {
@@ -546,32 +889,9 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     // path did not already touch.
     bool report_candidate = false;
     if (self.options.on_candidate_draw && context == self.observed_context &&
-        self.candidates_armed.load(std::memory_order_relaxed) != 0) {
-        const uint32_t layouts = self.candidate_layout_count.load(std::memory_order_acquire);
-        for (uint32_t index = 0; index < layouts && !report_candidate; ++index) {
-            report_candidate = self.geometry.input_layout == self.candidate_layouts[index];
-        }
-        const uint32_t shaders = self.candidate_shader_count.load(std::memory_order_acquire);
-        for (uint32_t index = 0; index < shaders && !report_candidate; ++index) {
-            report_candidate = self.pixel_shader == self.candidate_shaders[index] ||
-                               self.geometry.vertex_shader == self.candidate_shaders[index];
-        }
-        const uint32_t targets = self.candidate_widget_target_count.load(std::memory_order_acquire);
-        if (!report_candidate && targets != 0) {
-            for (uint32_t slot = 0; slot < RSF_FRAME_TAP_CANDIDATE_SLOTS && !report_candidate;
-                 ++slot) {
-                ID3D11Texture2D* texture = self.slots[slot].texture;
-                if (!texture) {
-                    continue;
-                }
-                for (uint32_t index = 0; index < targets && !report_candidate; ++index) {
-                    report_candidate = texture == self.candidate_widget_targets[index];
-                }
-            }
-        }
-        if (report_candidate) {
-            self.candidate_draws.fetch_add(1, std::memory_order_relaxed);
-        }
+        candidate_passes(self)) {
+        report_candidate = true;
+        self.candidate_draws.fetch_add(1, std::memory_order_relaxed);
     }
 
     bool report_target = false;
@@ -1414,11 +1734,19 @@ void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, 
 {
     auto& s = tap();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
-    reinterpret_cast<Fn>(s.extra_originals[6])(c, n, instances, start, base, first);
+    const auto forward = reinterpret_cast<Fn>(s.extra_originals[6]);
     if (inside_hook || c != s.observed_context) {
+        forward(c, n, instances, start, base, first);
         return;
     }
+    // The guard is taken before the divert rather than after the draw, because retargeting issues
+    // context calls of its own and they are not the game's.
     const ReentryGuard guard;
+    const bool moved = try_divert(s, c, true, n);
+    forward(c, n, instances, start, base, first);
+    if (moved) {
+        end_divert(s, c);
+    }
     report_geometry(s, c, 3, n, start, base, instances, first);
     consider_bound_set(s, c);
     consider_target_draw(s, c, true, n);
@@ -1428,11 +1756,17 @@ void STDMETHODCALLTYPE hooked_instanced(ID3D11DeviceContext* c, UINT n, UINT ins
 {
     auto& s = tap();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
-    reinterpret_cast<Fn>(s.extra_originals[7])(c, n, instances, start, first);
+    const auto forward = reinterpret_cast<Fn>(s.extra_originals[7]);
     if (inside_hook || c != s.observed_context) {
+        forward(c, n, instances, start, first);
         return;
     }
     const ReentryGuard guard;
+    const bool moved = try_divert(s, c, false, n);
+    forward(c, n, instances, start, first);
+    if (moved) {
+        end_divert(s, c);
+    }
     report_geometry(s, c, 2, n, start, 0, instances, first);
     consider_bound_set(s, c);
     consider_target_draw(s, c, false, n);
@@ -1524,11 +1858,16 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
     if (!forward) {
         return;
     }
-    forward(context, index_count, start_index, base_vertex);
     if (inside_hook || context != self.observed_context) {
+        forward(context, index_count, start_index, base_vertex);
         return;
     }
     const ReentryGuard guard;
+    const bool moved = try_divert(self, context, true, index_count);
+    forward(context, index_count, start_index, base_vertex);
+    if (moved) {
+        end_divert(self, context);
+    }
     report_geometry(self, context, 1, index_count, start_index, base_vertex);
     consider_bound_set(self, context);
     consider_target_draw(self, context, true, index_count);
@@ -1542,11 +1881,16 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
     if (!forward) {
         return;
     }
-    forward(context, vertex_count, start_vertex);
     if (inside_hook || context != self.observed_context) {
+        forward(context, vertex_count, start_vertex);
         return;
     }
     const ReentryGuard guard;
+    const bool moved = try_divert(self, context, false, vertex_count);
+    forward(context, vertex_count, start_vertex);
+    if (moved) {
+        end_divert(self, context);
+    }
     report_geometry(self, context, 0, vertex_count, start_vertex, 0);
     consider_bound_set(self, context);
     consider_target_draw(self, context, false, vertex_count);
@@ -1718,7 +2062,11 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         // Cleared before the vtable goes back, so a call already inside a hook stops substituting
         // rather than reaching for views the caller is about to release.
         self.plan_active.store(false, std::memory_order_relaxed);
-        for (size_t i = 0; i < 13; ++i) {
+        self.divert_armed.store(0, std::memory_order_relaxed);
+        // The array's own length, not a number written next to it. It was 13 while the table had
+        // thirteen entries and stayed 13 when the table grew to sixteen, which left the pixel
+        // shader, blend and depth stencil hooks patched into a vtable after uninstall.
+        for (size_t i = 0; i < sizeof(extra_slots) / sizeof(extra_slots[0]); ++i) {
             patch_slot(self.vtable, extra_slots[i], self.extra_originals[i], nullptr);
         }
         patch_slot(self.vtable, slot_ps_set_shader_resources,
@@ -1744,11 +2092,25 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         // reads them from the vtable again.
         constants = self.view_constants;
         self.view_constants = nullptr;
+        self.layer_target = nullptr;
+        self.layer_texture = nullptr;
+        self.verdict = nullptr;
         self.installed = false;
     }
     if (constants) {
         constants->Release();
     }
+
+    // The patched blend states are ours: created here, cached here, and released here. Keyed by the
+    // game's pointer, so leaving them across an uninstall would leave a cache that could answer for
+    // an address the game has since reused.
+    for (uint32_t index = 0; index < self.patched_blend_count; ++index) {
+        if (self.patched_blends[index].patched) {
+            self.patched_blends[index].patched->Release();
+        }
+        self.patched_blends[index] = Tap::PatchedBlend{};
+    }
+    self.patched_blend_count = 0;
 
     // The shadow holds one reference per occupied slot. Released after the vtable is restored, so a
     // hook still in flight cannot find a slot emptied underneath it, which narrows the same window
@@ -1873,6 +2235,48 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture)
     return RSF_FRAME_TAP_OK;
 }
 
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_divert(
+    const rsf_frame_tap_divert_setup* setup)
+{
+    Tap& self = tap();
+    if (!setup || !setup->layer_target || !setup->verdict) {
+        // Disarmed before the layer is dropped, so a draw in flight cannot find a target that is
+        // about to go away.
+        self.divert_armed.store(0, std::memory_order_release);
+        self.layer_target = nullptr;
+        self.layer_texture = nullptr;
+        self.verdict = nullptr;
+        self.verdict_user = nullptr;
+        return RSF_FRAME_TAP_OK;
+    }
+    if (setup->struct_size < sizeof(rsf_frame_tap_divert_setup)) {
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+
+    auto* target = static_cast<ID3D11RenderTargetView*>(setup->layer_target);
+    // The texture behind the view, resolved once here so the "already the layer" refusal is a
+    // pointer compare at the draw rather than a resource query.
+    ID3D11Resource* resource = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+    target->GetResource(&resource);
+    if (resource) {
+        resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        resource->Release();
+        if (texture) {
+            texture->Release();  // borrowed: the layer owns it and outlives this
+        }
+    }
+
+    self.layer_target = target;
+    self.layer_texture = texture;
+    self.layer_width = setup->layer_width;
+    self.layer_height = setup->layer_height;
+    self.verdict = setup->verdict;
+    self.verdict_user = setup->verdict_user;
+    self.divert_armed.store(1, std::memory_order_release);
+    return RSF_FRAME_TAP_OK;
+}
+
 extern "C" rsf_frame_tap_result rsf_frame_tap_set_candidates(
     const rsf_frame_tap_candidates* candidates)
 {
@@ -1981,5 +2385,14 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
         self.depth_mismatch_depth_height.load(std::memory_order_relaxed);
     status->depth_mismatch_depth_format =
         self.depth_mismatch_depth_format.load(std::memory_order_relaxed);
+    status->candidate_draws =
+        static_cast<uint32_t>(self.candidate_draws.load(std::memory_order_relaxed));
+    status->draws_diverted =
+        static_cast<uint32_t>(self.draws_diverted.load(std::memory_order_relaxed));
+    status->blend_states_patched =
+        static_cast<uint32_t>(self.blend_states_patched.load(std::memory_order_relaxed));
+    status->divert_refused =
+        static_cast<uint32_t>(self.divert_refused.load(std::memory_order_relaxed));
+    status->divert_last_refusal = self.divert_last_refusal.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }
