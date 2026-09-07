@@ -6,7 +6,9 @@
 
 #include <windowsx.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
@@ -56,6 +58,12 @@ struct State {
     std::mutex guard;
     float mouse_x = 0.0f;
     float mouse_y = 0.0f;
+    /* The previous report's raw position, and whether there has been one. The overlay's pointer
+       moves by the distance between reports rather than to the position in them, because a game
+       that warps the pointer makes the position meaningless. See record_mouse_position. */
+    float last_report_x = 0.0f;
+    float last_report_y = 0.0f;
+    bool have_last_report = false;
     uint32_t buttons = 0;
     float scroll = 0.0f;
 
@@ -136,15 +144,53 @@ uint32_t overlay_button_bit(uint32_t virtual_key)
     }
 }
 
-void record_mouse_position(State& self, LPARAM lparam)
+/* Follow the pointer by how far it moved, not by where it is.
+
+   Ace Combat 7 is played with a pad and steers with a locked mouse: it warps the pointer back to
+   the middle of the window every frame, so its absolute position is the centre no matter how the
+   mouse is moved, and a panel that trusted that position had a cursor pinned there.
+
+   What survives the warp is the distance between two reports, so the overlay keeps a pointer of its
+   own and moves it by that distance. The warp itself is the one report that must not count: it is
+   the game putting the pointer back, not the user moving it, and adding it would cancel the motion
+   that preceded it exactly. It is recognised by landing on the centre, which is where a warp goes
+   and where a hand almost never lands on the exact pixel. Losing one report when it does costs a
+   pixel of travel.
+
+   A game that does not warp never produces that report and the same arithmetic follows the pointer
+   normally, so this costs nothing where it is not needed. */
+void record_mouse_position(State& self, HWND window, LPARAM lparam)
 {
     // Client pixels, which is the coordinate space the overlay works in. See the assumption note in
     // rsf_overlay_input_collect: this module does not scale them.
     const float x = static_cast<float>(GET_X_LPARAM(lparam));
     const float y = static_cast<float>(GET_Y_LPARAM(lparam));
+
+    RECT client{};
+    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) {
+        std::lock_guard<std::mutex> lock(self.guard);
+        self.mouse_x = x;
+        self.mouse_y = y;
+        return;
+    }
+    const float width = static_cast<float>(client.right);
+    const float height = static_cast<float>(client.bottom);
+    const float centre_x = std::floor(width * 0.5f);
+    const float centre_y = std::floor(height * 0.5f);
+
     std::lock_guard<std::mutex> lock(self.guard);
-    self.mouse_x = x;
-    self.mouse_y = y;
+    const bool is_warp = x == centre_x && y == centre_y;
+    if (!self.have_last_report) {
+        self.have_last_report = true;
+    } else if (!is_warp) {
+        self.mouse_x += x - self.last_report_x;
+        self.mouse_y += y - self.last_report_y;
+        // Kept inside the window, or the pointer wanders off and takes several sweeps to come back.
+        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), width - 1.0f);
+        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), height - 1.0f);
+    }
+    self.last_report_x = x;
+    self.last_report_y = y;
 }
 
 void record_button(State& self, uint32_t virtual_key, bool down)
@@ -175,6 +221,9 @@ void seed_cursor_position(State& self)
     std::lock_guard<std::mutex> lock(self.guard);
     self.mouse_x = static_cast<float>(point.x);
     self.mouse_y = static_cast<float>(point.y);
+    /* Forget the previous report, so the first move after opening is measured from the report that
+       follows rather than from wherever the pointer was when the panel was last closed. */
+    self.have_last_report = false;
 }
 
 void apply_visibility(State& self, bool visible)
@@ -328,7 +377,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
 
     case WM_MOUSEMOVE:
         if (visible) {
-            record_mouse_position(self, lparam);
+            record_mouse_position(self, window, lparam);
             return 0;
         }
         // Nothing is recorded while hidden, deliberately. Moves are the highest rate message the
@@ -355,7 +404,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         if (visible) {
             // The position first: a click can arrive without a move before it, and the overlay
             // would otherwise apply it wherever the cursor was last seen.
-            record_mouse_position(self, lparam);
+            record_mouse_position(self, window, lparam);
             record_button(self, key, true);
             // The X button messages are documented as returning TRUE when handled.
             return (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) ? TRUE : 0;
@@ -378,7 +427,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         }
         const bool owed = release_is_owed_to_game(self, key);
         if (visible) {
-            record_mouse_position(self, lparam);
+            record_mouse_position(self, window, lparam);
             record_button(self, key, false);
             if (!owed) {
                 return message == WM_XBUTTONUP ? TRUE : 0;
