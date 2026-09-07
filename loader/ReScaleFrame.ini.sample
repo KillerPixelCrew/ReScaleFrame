@@ -56,9 +56,13 @@ RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 # RSF_RENDERDOC=1
 # RSF_RENDERDOC_DLL=
 
-# Let translucent geometry write motion vectors. Stock 4.18 excludes it, which is why the mission
-# map's relief and the vehicle symbols in replay have none. Untested against the game.
-# RSF_TRANSLUCENT_VELOCITY=1
+# Let translucent geometry write motion vectors. Stock 4.18 excludes it by blend mode, which is why
+# the mission map's relief and the vehicle symbols in replay have none. The material domain check,
+# the movable test and SupportsVelocity are all left in place, so a material with no usable velocity
+# permutation still refuses rather than drawing wrongly.
+#
+# Check the log for: translucent velocity gate patched at rva 0x11823de
+RSF_TRANSLUCENT_VELOCITY=1
 
 # What reinsertion (F6) does when a promoted target meets the game's own depth.
 #
