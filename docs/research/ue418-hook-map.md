@@ -63,6 +63,32 @@ Paths below are relative to the reference engine's `Engine/` directory. Exact re
 
 **Capture before all relevant HUD paths.** Stock `UGameViewportClient::Draw` submits the scene before calling HUD `PostRender` and flushing Canvas. Slate draws later through its own renderer. Capture must be ordered on the render/GPU work stream; returning from a game-thread enqueue does not mean rendering is finished. AC7's target markers, cockpit UI, subtitles, and trueSky ordering remain game-specific validation items.
 
+## Separate translucency carries no velocity, and what could be done about it
+
+Source read on 7 September 2026 against `4.18.3-release`, commit `0a14a8d`, prompted by the briefing screen losing its relief in reconstruction. See [the capture evidence](ac7-frame-capture.md).
+
+The second layer in that frame is stock separate translucency. `FSceneRenderTargets::GetSeparateTranslucency` allocates a pooled `PF_FloatRGBA` target cleared to black, which matches the captured `R16G16B16A16_FLOAT` target, its on-demand allocation, and the black unused one in the hangar. `BeginRenderingSeparateTranslucency` binds scene depth as `FExclusiveDepthStencil::DepthRead_StencilWrite`, so the layer tests depth and never writes it. Depth-based camera-motion reconstruction therefore cannot serve this layer: at those pixels the depth buffer describes whatever opaque surface is behind it.
+
+Velocity excludes it by blend mode in both paths of `FVelocityDrawingPolicyFactory`, at `VelocityRendering.cpp:507` for static meshes and `:544` for dynamic ones:
+
+```cpp
+if (BlendMode == BLEND_Opaque || BlendMode == BLEND_Masked)
+```
+
+The shader side is more permissive than that gate, which is what makes a patch plausible. `FVelocityVS::ShouldCache` compiles velocity shaders when the material is the special engine material, is masked, is opaque and two-sided, or may modify mesh position. The default material is a special engine material, so its velocity shaders exist in any cooked build. Both draw paths then substitute that default proxy when the material `WritesEveryPixel()`, is not two-sided, and does not modify mesh position.
+
+So cutting the gate is worth trying, with a known boundary. A translucent material that writes every pixel, is not two-sided, and does not modify mesh position falls into the default-material substitution and can be drawn with a shader the build already contains. A two-sided translucent material does not, and needs a permutation the cook had no reason to produce, so `SupportsVelocity()` is expected to refuse it. Sprite-like icons are the favourable case and large holographic sheets are the unfavourable one, which suits the mission-replay goal of moving vehicle symbols.
+
+4.27 shows Epic did not solve this by relaxing the gate. It adds `EMeshPass::TranslucentVelocity` with `FTranslucentVelocityMeshProcessor`, a per-material `IsTranslucencyWritingVelocity()` opt-in, and a matching permutation condition, while leaving the opaque gate as it was. A faithful backport would mean a new pass and new permutations; the gate cut is the cheap approximation of it, not the same thing.
+
+Reconstructing 4.27's pass and injecting it is not a route. It rests on the mesh-drawing architecture introduced in 4.22, so `FMeshPassProcessor`, `EMeshPass` and cached mesh draw commands have no counterpart in 4.18; `IsTranslucencyWritingVelocity()` reads a cooked material property AC7's materials do not carry; and the permutation it selects is compiled offline. Each of those needs the cook pipeline, not a runtime patch.
+
+Doing it ourselves at the D3D11 level, by re-issuing the translucent draws into the velocity target with our own shader, runs into the previous transform. In 4.18 `PreviousLocalToWorld` is not part of the primitive uniform buffer. `FVelocityVS::SetMesh` sets it as a loose shader parameter per draw, from `Scene->MotionBlurInfoData.GetPrimitiveMotionBlurInfo`, and only during the velocity pass. It is not bound while translucency draws, so intercepting those draws yields the current transform and not the previous one, and we would have to match draws across frames ourselves to recover it.
+
+That is the strongest argument for the gate cut over the alternatives: when the engine's own velocity pass runs, it supplies `PreviousLocalToWorld` from bookkeeping it already maintains. Whether translucent primitives are registered in `MotionBlurInfoData` at all is the open question, since nothing has ever needed them there; if they are not, the pass runs and writes zero motion.
+
+Untested. No address has been located in `Ace7Game.exe`, nothing has been patched, and whether AC7's icon materials meet the substitution conditions is unknown. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
+
 ## Implementation follow-up
 
 The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. Next, turn these stock-source leads into verified AC7 function/shader/frame identities and complete output reinsertion. The source inspection itself remains distinct from those later runtime results.
