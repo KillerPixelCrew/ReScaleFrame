@@ -8,7 +8,19 @@ Reference UE4 `4.18.3-release`, commit `0a14a8d537a31ecc77488ced41dbaa0166612ef8
 checkout was extended for this with `Engine/Private`, `SlateRHIRenderer` and `SlateCore`, since the
 question is not a renderer question and could not be answered from `Renderer` alone.
 
-## What stock 4.18 does, which is already the right thing
+## The observation this has to explain
+
+Pressing F8 downscales the whole composition, interface included. Two screenshots of the same
+briefing, one at native and one at a 50% render scale, show the same strings, `SWITCH OPERATION
+AREA`, `MISSION PREP`, `AIR(TGT)`, crisp in the first and visibly soft and chunky in the second.
+The interface is being rasterized at half resolution and upscaled with the scene.
+
+That is the fact this note exists to explain. An earlier revision led with the stock engine
+behaviour instead and said screen percentage "already leaves the interface alone", which reads as a
+denial of something directly visible and repeatable. The stock behaviour below is still worth
+writing down, but only as the thing AC7 departs from.
+
+## What stock 4.18 does
 
 Screen percentage in 4.18 shrinks the 3D scene and nothing else. It is a rectangle, not a buffer
 size: `FSceneView` carries both `ViewRect` and `UnscaledViewRect`, the scene renders into the first,
@@ -28,8 +40,27 @@ render target is `GetSizeXY()`, the window. `UGameViewportClient::Draw` calls
 `MyHUD->PostRender()` at `:1364` and the debug canvas at `:1381`. Slate widgets come later still,
 through the Slate renderer, against the same window-sized target.
 
-So the answer to the first question, for a stock 4.18 game, is that `r.ScreenPercentage` is already
-the wrench and it already leaves the interface alone. There is no second place to fasten it.
+So in a stock 4.18 game the interface would not follow the render scale. AC7's does, so AC7 is not
+doing this, and the mechanism is one step further back.
+
+`r.ScreenPercentage` shrinks `ViewRect`. `ViewFamily.FamilySizeX/Y` is computed from the view rects,
+and `FSceneRenderTargets::ComputeDesiredSize` at `SceneRenderTargets.cpp:281` sizes the scene buffers
+from that family size under both `RequestedSize` and `Grow`. So the scene buffer itself becomes
+1024x576, which is what this project measured independently when the separate translucency layer
+came out at half of it.
+
+Anything AC7 allocates against that buffer size shrinks with it. Its interface target is 1024x576
+in the same frames where the buffer is 1024x576, and its final pass upscales scene and interface
+together. That is the whole mechanism: the interface does not follow the *view rect*, it follows the
+*buffer*, and the engine hands the game a smaller buffer.
+
+**So there is no console variable that cranks the render resolution down without taking the
+interface with it.** The wrench is the size of the target the interface is rasterized into, which
+means the intervention has to be a render target substitution rather than a setting. That is exactly
+what reinsertion already does when it promotes the interface target to output resolution, and it is
+why the interface stopped being blown up once that path started working. The wrench is already in
+the right place. What is not yet right is that promoting the composite alongside it loses the 3D
+scene.
 
 ## What AC7 does instead, which is why the question came up
 
@@ -52,10 +83,50 @@ and upscales in one custom pass, and both the scene and whatever slot 1 is arriv
 resolution rather than native. That is the observed interface softness at a reduced render scale,
 and it is a game deviation, not an engine behaviour.
 
-Slot 1 is **assumed** to be the interface, not established. It was selected by format, being the only
-full-size `R8G8B8A8_UNORM` among `B8G8R8A8` scene targets, and slots 2 and 3 share that format at
-smaller sizes. Nothing has confirmed the game draws its interface into it. This matters because the
-reinsertion path promotes it.
+## The SDK names every one of those surfaces
+
+`references/ac7-sdk` settles what the tail is, and it should have been the first thing read rather
+than the last. `Nimbus.WidgetToTextureConverter` is the class:
+
+```cpp
+class UWidgetToTextureConverter : public UObject {
+    FIntPoint               DrawSize;              // 0x0028  (Edit)
+    UUserWidget*            Widget;                // 0x0030
+    UTextureRenderTarget2D* RenderTarget;          // 0x0048
+    UTextureRenderTarget2D* DownSampleRT;          // 0x00C0
+    UTextureRenderTarget2D* BlurXRT;               // 0x00C8
+    UTextureRenderTarget2D* BlurYRT;               // 0x00D0
+    UTextureRenderTarget2D* RenderTargetWithGlow;  // 0x00D8
+};
+```
+
+AC7 rasterizes a UMG widget tree into `RenderTarget` at `DrawSize`, then runs its own downsample and
+two-axis blur to make a glow, and composites the result. That chain is the tail's slots 1, 2 and 3
+exactly: 1024x576, then 256x144, then 128x72, all `R8G8B8A8_UNORM`. So slot 1 is the interface as a
+matter of record now, not an inference from its format.
+
+The instances say which surface belongs to which screen:
+
+| Field | Offset | Screen |
+| --- | --- | --- |
+| `FrontWindowConverter` | `0x0D48` | front end, which includes the briefing |
+| `HudWidgetConverter` | `0x0470` | in flight |
+| `HudPostProcessConverter` | `0x0478` | in flight |
+| `StereoWidgetConverter`, `OverlayTextureConverter` | `0x0370`, `0x0378` | VR |
+
+**`DrawSize` is the wrench.** It is the resolution the interface is rasterized at, it is a plain
+`FIntPoint` on a `UObject`, and it is per converter, so the briefing and the flight HUD can be
+pinned to native independently of each other and of the scene. Nothing in that path is a console
+variable.
+
+The SDK also explains a problem this project has been working around rather than solving.
+`EGraphicsScreenPercentageSettings` enumerates `Gameplay`, `NonGameplay`, `MPGameplay`,
+`VRGameplay`, `VRNonGameplay`, `VRAirShow` and `NoChange`, and
+`GraphicsSettingsWindowsBlueprintLibrary` carries `SetWindowsDrawScale` with
+`EGraphicsSettingsWindowsDrawScale`. AC7 keeps its own per-context render scale table and applies it
+on transitions. That is why loading a mission puts `r.ScreenPercentage` back to 100 and why
+`keep_render_scale` exists to keep re-writing it. Setting the game's own value means the game asks
+for our number itself, instead of being overruled once per screen change and reverting.
 
 ## The two candidate causes of the missing environment under F6
 
