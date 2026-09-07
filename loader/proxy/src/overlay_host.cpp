@@ -58,6 +58,15 @@ struct Host {
        left closed rather than reporting the same line sixty times a second. */
     bool stopped_after_failure = false;
 
+    /* How many drawn frames still announce each step before taking it.
+
+       The first frame of this path does several things no test reaches: it lays out egui for the
+       first time, uploads a whole font atlas, and issues draws into a game's frame. A crash in any
+       of them looks identical from outside, and note() writes and closes per line, so the last line
+       in the log is the step that did not survive. Only the first few frames, because after that
+       the same lines would bury the run. */
+    unsigned int trace_frames = 4;
+
     LARGE_INTEGER frequency{};
     LARGE_INTEGER last_frame{};
 
@@ -395,6 +404,12 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
         return 0;
     }
 
+    const bool trace = self.trace_frames > 0;
+    if (trace) {
+        say("overlay frame: target %ux%u, collecting input", description.Width,
+            description.Height);
+    }
+
     rsf_overlay_input input{};
     input.struct_size = sizeof(input);
     rsf_overlay_input_collect(&input, description.Width, description.Height,
@@ -405,6 +420,9 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
     rsf_overlay_intent decided{};
     decided.struct_size = sizeof(decided);
 
+    if (trace) {
+        say("overlay frame: laying out the panel");
+    }
     const rsf_overlay_result laid_out = self.frame(self.panel, &input, stats, &draw_data, &decided);
     if (laid_out != RSF_OVERLAY_OK) {
         target->Release();
@@ -415,17 +433,34 @@ extern "C" int rsf_overlay_host_present(void* context, void* swapchain,
         return 0;
     }
 
+    if (trace) {
+        say("overlay frame: laid out, %u vertices, %u indices, %u calls. Carrying textures",
+            draw_data.vertex_count, draw_data.index_count, draw_data.call_count);
+    }
     carry_textures(device_context);
 
+    if (trace) {
+        say("overlay frame: textures carried, saving targets and binding the back buffer");
+    }
     SavedTargets saved;
     save_targets(device_context, saved);
     device_context->OMSetRenderTargets(1, &target, nullptr);
 
+    if (trace) {
+        say("overlay frame: drawing");
+    }
     const rsf_overlay_renderer_result drawn = rsf_overlay_renderer_draw(
         self.renderer, device_context, &draw_data, description.Width, description.Height);
 
+    if (trace) {
+        say("overlay frame: drawn, result %d. Restoring targets", int(drawn));
+    }
     restore_targets(device_context, saved);
     target->Release();
+    if (trace) {
+        say("overlay frame: complete");
+        --self.trace_frames;
+    }
 
     if (drawn != RSF_OVERLAY_RENDERER_OK) {
         say("overlay: the panel laid out a frame the renderer would not draw, result %d",
