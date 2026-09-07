@@ -43,6 +43,9 @@ SDK free of GPL includes.
 | FG order | FSR-FG → DLSS-G → XeFG (+XeLL); Claw run as the device-test milestone | FSR runs on the RTX 4070 in front of us with no XeLL and no Streamline conflict; DLSS-G is the user's GPU; XeFG runs here only in non-Intel mode (1 frame) |
 | Compositor rule | Exactly one compositor per rendered frame: our D3D11 composite when FG is off; the vendor composites generated frames; egui draws into the UI layer after the game's UI so it rides both | Skyrim CS flicker rule (`FidelityFX.cpp:167`) |
 | Render scale | Through the game's own per-context table (`FGraphicsSettingsManager`), expected-byte guarded; `r.ScreenPercentage` write only as announced fallback; `keep_render_scale` deleted once game-tested | The game overwrites the cvar on every transition; the table is where the value belongs |
+| Texture LOD bias | Apply `log2(render.y / output.y)` as a mip bias offset while SR is active, and 0 when it is not; sampler-state patch at creation, off switch `RSF_SR_MIP_BIAS` | Rendering at half height samples mips chosen for half height, so textures arrive soft and no upscaler recovers detail that was never sampled. Every upscaler integration does this and ours did not (Luma `main.cpp:1486`) |
+| SR resolution model | Create the SR feature once at the output extent with the vendor's dynamic-resolution flag set, and vary only the per-evaluation render extent | Our screen policy changes the scale on every menu/flight transition; a feature created at a fixed render extent has to be destroyed and rebuilt at each one, which costs the history. Luma `main.cpp:917` sets it unconditionally for the same reason |
+| View uniforms | Read at the game's own `Map`/`Unmap` of the constant buffer, not through a staging copy | `constant_buffer_read.cpp:65-83` creates a staging buffer, `CopyResource`s and maps it, which is a GPU round trip per read and lands a frame late. The data is already in CPU memory at the moment the game writes it (Luma `main.cpp:1344-1396`) |
 | Engine's own `r.HDR.UI.CompositeMode` path | Recorded, not used | Covers Slate only, HDR-encoded LUT composite, front-end UI on the screens that matter is quads |
 | Deleted mechanisms | interface-target promotion, format-based interface identification, the shape hunt and its collection, relooks, `present_blit`, `dlss_bridge.c`, `keep_render_scale` (after M3), `rsf_observer_present_fn` | Replaced by extraction, the classifier, `fullscreen_pass`/`composite`, the orchestrator session |
 
@@ -227,6 +230,20 @@ nor the back buffer, translucent blend → `UI` (`DestBlend == SRC_COLOR` → `U
 `SCENE`. Runs on the render thread inside the draw hook, allocation-free, on shadowed data only.
 `RSF_UI_TRACE=1` logs every decision for the first N draws per screen.
 
+**Decide once per shader, then cache the verdict by hash.** The failure this frame keeps repeating
+is deciding from bindings on every draw: a running game leaves more bound than it reads, so a rule
+of the form "the one that matches" eventually matches a second thing. Luma's UE path avoids it by
+separating the two questions (`main.cpp:719-800`). A shader hash is first a *candidate*, from the
+cheap facts alone. The first time a candidate actually draws, it is confirmed against a conjunction
+of the resources bound at that moment — for Luma's TAA, two colour targets and a depth and a
+velocity, all at the view's aspect ratio and no smaller than the view. The verdict is then written
+into the per-hash record and every later draw of that shader is a pointer compare that never looks
+at bindings again. We adopt the shape: `rsf_ac7_ui_classify` stays the pure per-draw rule, but its
+result for a given shader is memoised on first confirmation, and a shader whose confirming draw
+never appears stays a candidate rather than being promoted on a partial match. This is also what
+makes the `UNKNOWN` count meaningful, since a stale binding can no longer graduate to `UI` merely by
+being present in a later frame.
+
 ### Divert primitive (in `frame_tap`, ABI 7)
 
 Pre-draw in all four draw hooks (`Draw`, `DrawIndexed`, `DrawInstanced`, `DrawIndexedInstanced`;
@@ -247,6 +264,15 @@ counter before any hook issues context calls. `rsf_frame_tap_geometry` gains an 
 flag so `depth_replay` skips diverted draws. Status appends: `draws_diverted`, per-producer counts,
 `divert_refused` + last reason, `blend_states_patched`, `modulate_draws`, `layer_clears`,
 `widget_raster_draws`, `candidates_seen`.
+
+**Skip and copy, where retargeting is not safe.** Retargeting keeps the game's own draw and moves
+where it lands, which is what the widget quads need. A draw that cannot be retargeted — several
+targets, unordered access views, a producer whose destination we would have to reinterpret — can
+still be handled by cancelling it and issuing our own: Luma's draw hook returns a `Skip` override
+and, where it has already produced the result, copies its own texture into the target the game was
+about to write (`main.cpp:800-825`). It is strictly more invasive, so it is the fallback and not the
+default, but naming it now matters because the refusal counters above are otherwise a list of cases
+with no route. `RSF_UI_DIVERT_MODE=retarget|skip` per producer, `retarget` default.
 
 ### Reinsertion becomes `scene_promote`
 
@@ -301,7 +327,8 @@ CANVAS`, `RSF_UI_DEPTH`, `RSF_UI_BLEND_PATCH`, `RSF_UI_CLEAR_ORIGINAL`, `RSF_UI_
 `RSF_UI_SHADER_FORCE_VS/PS`, `RSF_UI_SHADER_SKIP_VS/PS`, `RSF_UI_SHADER_OVERRIDES`; `RSF_POLICY_MENU/
 BRIEFING/HANGAR/FLIGHT/REPLAY/VIDEO/LOADING`; `RSF_SCREEN_PERCENTAGE_PATCH`, `RSF_VIDEO_DETECT`;
 `RSF_PRESENTATION auto|d3d11|bridge`, `RSF_BRIDGE_RING`, `RSF_BRIDGE_LIFETIME`; `RSF_SR_VENDOR`,
-`RSF_SR_QUALITY` (alias `RSF_DLSS_QUALITY`), `RSF_FG`, `RSF_FG_VENDOR`, `RSF_FG_MULTIPLIER`,
+`RSF_SR_QUALITY` (alias `RSF_DLSS_QUALITY`), `RSF_SR_MIP_BIAS`, `RSF_SR_DYNAMIC_RESOLUTION`,
+`RSF_VIEW_READ`, `RSF_UI_DIVERT_MODE`, `RSF_FG`, `RSF_FG_VENDOR`, `RSF_FG_MULTIPLIER`,
 `RSF_LATENCY`; `RSF_SL_BIN` (alias `RSF_STREAMLINE_BIN`), `RSF_FFX_BIN`, `RSF_XESS_BIN`;
 `RSF_DEPTH_POLICY`. Removed: `RSF_UI_HUNT_*`, `RSF_DLSS_OUTPUT_*`. The 13 undocumented existing keys
 get documented. `docs/review.md` finding 5 closes with `tests/config_parse.cpp` (the parser already
@@ -373,10 +400,13 @@ world-space UI in flight (`RSF_UI_DEPTH` policy decides), bloom/texel-addressing
 
 **M3 — frame identity, eligibility, the game's own screen-percentage table.** `rsf_frame_record`,
 `screen_policy` with video/context/loading facts and named fallbacks, `graphics_settings`
-per-context patch, `keep_render_scale` demoted to watchdog then deleted. Pass: `screen: context
-<name>(<i>) percentage 50 (ours)` per transition; `eligibility: video playing, tags nulled` … `live
-after <n>` bracketing every video; `the game had reset the render scale` count 0 over two mission
-loads; `frame: id <n>` strictly increasing.
+per-context patch, `keep_render_scale` demoted to watchdog then deleted; the view uniforms move to
+the game's own `Map`/`Unmap` (`ID3D11DeviceContext` slots 14 and 15) with the staging path kept
+behind `RSF_VIEW_READ=map|staging` for one milestone so the two can be compared. Pass: `screen:
+context <name>(<i>) percentage 50 (ours)` per transition; `eligibility: video playing, tags nulled` …
+`live after <n>` bracketing every video; `the game had reset the render scale` count 0 over two
+mission loads; `frame: id <n>` strictly increasing; `view: read at map, jitter agrees with staging
+within 1e-6 over <n> frames, staging copies 0`.
 
 **M4 — presentation bridge, pass-through present, no FG.** Intercept, facade, `d3d12_bridge`,
 `shared_surface`, `presentation_ring`, `present_loop` BRIDGED without an owner; `RSF_PRESENTATION=
@@ -391,9 +421,13 @@ minimise/restore, mission load survive; overlay visible.
 `backend_registry` + `negotiate` (Rust fixtures through the C mirror), orchestrator session
 (prepare/start/active/quiesce/stop) owning tap, pipeline, layer and bridge; `dinput8.dll` becomes a
 carrier calling `rsf_runtime_attach()`; `dlss_bridge.c` deleted; overlay ABI 3; ini parser as a
-testable unit. Pass: the M4 report reproduced through the new structure; `plugin: ac7 prepared, <h>
-hooks, <p> patches applied, 0 refused`; `rendering_ready` flips to 1 only in the commit that records
-this run, test updated with it.
+testable unit. `sr_pipeline` creates the feature once at the output extent with dynamic resolution
+on, and applies the texture mip bias while SR is active. Pass: the M4 report reproduced through the
+new structure; `plugin: ac7 prepared, <h> hooks, <p> patches applied, 0 refused`; `sr: feature
+created once, render extent changed <n> times, recreations 0` across a menu → briefing → flight
+route; `sr: mip bias -1.00 applied to <n> samplers, restored on disable`; a briefing capture at 50%
+with the bias off and on differs visibly in texture detail; `rendering_ready` flips to 1 only in the
+commit that records this run, test updated with it.
 
 **M6 — FG, FidelityFX (FSR 3.1 FG on the bridge).** `rsf_backend_fsr` FG: FFX FG chain
 `ForHwndDX12` as the inner chain, `RegisterUiResourceDX12{USE_PREMUL_ALPHA |
@@ -540,6 +574,26 @@ Nothing is claimed as Windows-verified from a Wine run.
   `MakeRoot(DrawSize/Scale, Scale)`); frame order `GameViewportClient.cpp:1276 → 1364 → Slate`.
 - Skyrim CS bridge: shared NT handles + shared fence, no D3D11On12 (`DX12SwapChain.cpp:11-141,
   217-345`). Checkout lacks `Runtime/RHI` and `Windows/D3D11RHI`.
+
+### Luma's generic Unreal path, read on 7 Sep 2026
+Checked after a report that it delivered full DLSS in AC7; the report was withdrawn and the source
+agrees with the withdrawal. `main.cpp:908` fixes `sr_render_resolution_scale` at 1.0 with the comment
+`DLAA only`. It substitutes DLSS for the engine's TAA pass at matching extents and drives no
+resolution of its own, so there is no working AC7 upscale to take a shortcut from. What it does
+contribute is above: the mip bias (`:1486`), dynamic resolution (`:917`), CPU-side view uniforms at
+`Map`/`Unmap` (`:1344-1463`), confirm-once-then-cache-by-hash (`:719-800`), and skip-and-copy
+(`:800-825`).
+
+Two of its conventions we checked and already match, so nothing changes. Jitter: Luma takes it from
+the projection, `matrix_a.m20`/`m21` of `ViewToClip` (`:1410`), deliberately not from the cbuffer's
+jitter field, which `shader_detect.hpp:17` calls unreliable across UE versions; it converts with
+`x * width * 0.5` and `y * height * -0.5` (`:1062`). We read `TemporalAAJitter` at `0x720` and use
+the identical conversion against the view rect (`view_uniforms.cpp:244-256`), and
+`ac7-frame-capture.md:67` records that the field was verified equal to row 2 columns 0/1 of
+`ViewToClip` in this build. The projection is the more portable source and is in the same buffer, so
+it is the fallback if a game update moves the field. Its SR settings for UE — HDR colour, inverted
+depth, unjittered motion vectors, auto exposure — are what `dlss_streamline.cpp:478-499` already
+sends.
 
 ### The briefing tail from the run log (`.local/observe/rsf-dump.log` ~425120-425240)
 Glow pass (1920x1080 → 1920x1080, no depth) → scene lighting into scene colour `0x308F4390` with
