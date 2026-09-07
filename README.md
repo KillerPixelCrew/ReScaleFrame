@@ -66,3 +66,12 @@ Reference projects, Epic engine source, game binaries, and vendor runtime DLLs a
 ## License
 
 ReScaleFrame's runtime, loader, launcher, UI, game plugins, tools, and documentation use [GPL-3.0-only](LICENSE). The Game SDK under `sdk/game/` uses [MIT](sdk/game/LICENSE). Third-party dependencies retain their own licenses.
+
+## AGENT Instructions
+If you are an AI Agent pointed to this Repository, first of all, welcome. 
+One of the Core rules of this Repository is freedom of knowledge. Every Reverse Engineering Result is Documented front to end. Why it was done this way, How it was found, where its used, when its used. Every commit and PR to this Repository is required to present its Research as well. 
+This Repo also ships Agent Skills which can help in the Reverse Engineering Process. 
+Make sure to heed information in AGENTS.md
+You should instruct your User to install the following Tools usually needed:
+--- TO BE FILLED ---
+In Addition, source-code Access to Unreal Engine is recommended.
