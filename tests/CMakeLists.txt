@@ -46,6 +46,12 @@ add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
+# The layer, and the alpha accumulation that decides whether diverting into it works at all.
+add_executable(rsf_ui_layer ui_layer.cpp)
+target_link_libraries(rsf_ui_layer PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME ui_layer COMMAND rsf_ui_layer)
+set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 # The composite's arithmetic, which nothing covered while it lived in present_blit.
 add_executable(rsf_fullscreen_pass fullscreen_pass.cpp)
 target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_build_options)
