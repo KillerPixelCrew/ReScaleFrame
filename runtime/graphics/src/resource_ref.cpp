@@ -22,6 +22,21 @@ extern "C" void rsf_resource_release(void* resource)
     }
 }
 
+extern "C" void* rsf_create_render_target_view(void* device, void* texture)
+{
+    if (!device || !texture) {
+        return nullptr;
+    }
+    ID3D11RenderTargetView* view = nullptr;
+    // A null descriptor means the texture's own format, which is right for a back buffer and
+    // refuses outright for a typeless one rather than picking an interpretation on its behalf.
+    if (FAILED(static_cast<ID3D11Device*>(device)->CreateRenderTargetView(
+            static_cast<ID3D11Resource*>(texture), nullptr, &view))) {
+        return nullptr;
+    }
+    return view;
+}
+
 extern "C" void* rsf_swapchain_back_buffer(void* swapchain)
 {
     if (!swapchain) {

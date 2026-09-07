@@ -1245,6 +1245,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int panel_down = 0;
     int reinsert_down = 0;
     int jitter_down = 0;
+    int extract_down = 0;
     int ticks = 0;
     int running = 1;
     while (running) {
@@ -1313,6 +1314,25 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
         }
         scale_down = scale;
+
+        {
+            /* Extraction, on a key rather than only in the settings, because the thing it changes
+               is the picture and the comparison that matters is before against after on the same
+               screen. It needs the presented size, which is only known once the game has a swap
+               chain, so it cannot simply be applied at attach. */
+            const int extract = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+            if (extract && !extract_down) {
+                rsf_observer_status status;
+                memset(&status, 0, sizeof(status));
+                status.struct_size = sizeof(status);
+                if (rsf_observer_get_status(&status) == RSF_OBSERVER_OK && status.present_width) {
+                    rsf_bridge_extract_ui(status.present_width, status.present_height);
+                } else {
+                    note("ui extract: the presented size is not known yet");
+                }
+            }
+            extract_down = extract;
+        }
 
         {
             /* Flip the jitter while looking at the screen that shows it. A shimmering front end

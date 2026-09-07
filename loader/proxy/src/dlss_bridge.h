@@ -73,6 +73,19 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
    what an object is can only be learned as the game creates it. */
 int rsf_bridge_identify_ui(void);
 
+/* Start extracting the interface: divert the draws the classifier names into a layer at `width` by
+   `height`, and composite that layer back over the finished frame at present.
+
+   This is the first thing in the project that changes the picture on purpose. What it is for is the
+   only route that can sharpen an interface AC7 rasterizes at a fixed size and then draws into the
+   scene as geometry, and the composite is the same premultiplied arithmetic every frame generation
+   SDK will later ask for, so the picture we make and the picture a vendor makes cannot drift.
+
+   Needs classification running. Returns zero and says why if the layer or the compositor could not
+   be built; both are refused together, because a layer with no compositor would take the interface
+   out of the frame and never put it back. */
+int rsf_bridge_extract_ui(unsigned long width, unsigned long height);
+
 rsf_observer_layout_fn rsf_bridge_layout_hook(void);
 rsf_observer_shader_fn rsf_bridge_shader_hook(void);
 rsf_observer_texture_fn rsf_bridge_texture_hook(void);

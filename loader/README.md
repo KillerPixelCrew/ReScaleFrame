@@ -20,6 +20,7 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
+| F3 | Extract the interface: divert it into a layer at output resolution and composite it back |
 | F4 | Open or close the engine's temporal jitter gate, live |
 | F5 | Open or close the egui overlay |
 | F6 | Reinsert the reconstruction into the game's own frame, or stop |

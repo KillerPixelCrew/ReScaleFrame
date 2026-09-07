@@ -32,6 +32,15 @@ void rsf_resource_release(void* resource);
    render target it means, and asking for it means two calls through vtables C cannot spell. */
 void* rsf_swapchain_back_buffer(void* swapchain);
 
+/* A render target view onto a texture, as an `ID3D11RenderTargetView*` the caller releases.
+
+   `device` is an `ID3D11Device*` and `texture` an `ID3D11Texture2D*`; the view uses the texture's
+   own format, so a typeless one is refused rather than guessed at. Null on failure.
+
+   Same reason again: drawing into the back buffer from C means creating a view, and creating one
+   means a vtable call C cannot spell. */
+void* rsf_create_render_target_view(void* device, void* texture);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

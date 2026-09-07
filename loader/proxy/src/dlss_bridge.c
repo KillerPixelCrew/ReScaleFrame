@@ -29,9 +29,11 @@
 #include <rescaleframe/depth_replay.h>
 #include <rescaleframe/present_blit.h>
 #include <rescaleframe/ac7_ui_rules.h>
+#include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
 #include <rescaleframe/scene_reinsert.h>
 #include <rescaleframe/ui_identify.h>
+#include <rescaleframe/ui_layer.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -268,6 +270,14 @@ static struct {
     unsigned long ui_layer_extent[2];
     unsigned long ui_reported_counts[7];
     unsigned long ui_traced;
+
+    /* Extraction: the layer the interface is diverted into and the pass that puts it back. Off
+       until asked for, because it changes the picture and everything above it does not. */
+    rsf_ui_layer* layer;
+    rsf_fullscreen_pass* composite_pass;
+    int ui_extract;
+    int ui_extract_failed;
+    unsigned long ui_composites;
 } bridge;
 
 /* Publish the registry's sets to the tap, so its prefilter has something to match. Called after any
@@ -647,7 +657,12 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
    producer, and the number that matters most is how many came back UNKNOWN. An UNKNOWN is a draw
    that looked like the interface and matched no rule, and diverting on a guess is exactly the
    mistake this frame has made four times. */
-static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
+/* Translate a tap report into the game's own facts and ask its rule what the draw is.
+ *
+ * Shared by the report, which only counts, and the verdict, which decides whether the draw moves.
+ * Sharing matters: a run that reports one classification and acts on another would be describing a
+ * frame nobody rendered. */
+static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* draw)
 {
     rsf_ac7_draw_facts facts;
     rsf_ac7_ui_registry rules;
@@ -660,12 +675,9 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     uint32_t index;
     uint32_t used = 0;
     rsf_ac7_draw_class verdict;
-    (void)user;
-
-    if (!draw || !bridge.ui || !bridge.ui_classify) {
-        return;
+    if (!draw || !bridge.ui) {
+        return RSF_AC7_DRAW_SCENE;
     }
-    ++bridge.ui_candidate_draws;
 
     memset(&rules, 0, sizeof(rules));
     rules.struct_size = sizeof(rules);
@@ -717,9 +729,6 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     facts.inputs = inputs;
 
     verdict = rsf_ac7_ui_classify(&rules, &facts);
-    if (verdict < 7) {
-        ++bridge.ui_class_counts[verdict];
-    }
 
     /* Confirm a converter's target by watching Slate write into it, which is what the first run
      * showed the descriptor cannot do.
@@ -759,6 +768,24 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
         bridge.ui_layer_extent[0] = draw->target_width;
         bridge.ui_layer_extent[1] = draw->target_height;
     }
+    return verdict;
+}
+
+/* Count what the classifier saw. Counting only: what moves is decided in `ui_verdict`, from the
+   same call, so the report and the picture cannot disagree. */
+static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    rsf_ac7_draw_class verdict;
+    (void)user;
+
+    if (!draw || !bridge.ui || !bridge.ui_classify) {
+        return;
+    }
+    ++bridge.ui_candidate_draws;
+    verdict = classify_candidate(draw);
+    if (verdict < 7) {
+        ++bridge.ui_class_counts[verdict];
+    }
 
     if (bridge.ui_traced < 24u && verdict != RSF_AC7_DRAW_SCENE) {
         ++bridge.ui_traced;
@@ -769,7 +796,7 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
             (unsigned long)draw->vertex_stride, draw->render_target,
             (unsigned long)draw->target_width, (unsigned long)draw->target_height,
             (unsigned long)draw->depth_bound, (unsigned long)draw->target_count,
-            (unsigned long)used);
+            (unsigned long)draw->input_count);
     }
 }
 
@@ -1178,6 +1205,163 @@ static void on_gate(void* user, void* context, void* texture)
     ++bridge.gate_evaluates;
 }
 
+/* Modules that log take a sink and a user pointer; this bridge's log is a single global. */
+static void bridge_layer_log(void* user, const char* message)
+{
+    (void)user;
+    say("%s", message);
+}
+
+/* A render target view onto the swap chain's current back buffer, cached.
+ *
+ * Created once per back buffer rather than per present, and dropped when the texture changes, which
+ * is what a resize looks like from here. Holding the view rather than the buffer keeps the
+ * reference this needs without the one that would make `ResizeBuffers` fail. */
+static void* back_buffer_view(void* swapchain)
+{
+    static void* cached_for = NULL;
+    static void* cached = NULL;
+    void* buffer;
+
+    (void)swapchain;
+    buffer = bridge.back_buffer;
+    if (!buffer || !bridge.device) {
+        return NULL;
+    }
+    if (buffer != cached_for) {
+        rsf_resource_release(cached);
+        cached = rsf_create_render_target_view(bridge.device, buffer);
+        cached_for = buffer;
+        if (!cached) {
+            say("ui extract: no view onto the back buffer, so nothing can be composited onto it");
+        }
+    }
+    return cached;
+}
+
+/* What the classifier's verdict means to the tap.
+ *
+ * Only two classes are moved. A Slate draw into the frame's own target is already at output
+ * resolution, so moving it gains nothing and risks the one thing in the frame that is currently
+ * right. A converter rasterizing its widget must stay where it is or the quads read an empty
+ * texture. Modulate is counted and never moved, because it writes colour only and a transparent
+ * layer keeps nothing of it. */
+static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    rsf_ac7_draw_class verdict;
+    (void)user;
+    if (!draw) {
+        return RSF_FRAME_TAP_LEAVE;
+    }
+    verdict = classify_candidate(draw);
+    if (verdict != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+        return RSF_FRAME_TAP_LEAVE;
+    }
+    /* Recorded here rather than after the fact: the tap can refuse the divert for reasons this does
+       not see, and a layer marked written that nothing wrote would composite a stale frame. The
+       count of composites against the count of diverts is what shows the two agreeing. */
+    rsf_ui_layer_mark_written(bridge.layer);
+    /* The quads are drawn with the base pass translucent blend, whose alpha factors leave a
+       transparent layer at zero coverage however much colour lands on it. Measured under DXVK in
+       tests/ui_layer.cpp rather than taken from the engine source. */
+    return RSF_FRAME_TAP_DIVERT_PATCH_ALPHA;
+}
+
+/* Bring up the layer and the compositor, once the device and the presented size are known. */
+static int start_extraction(unsigned long width, unsigned long height)
+{
+    rsf_ui_layer_setup layer;
+    rsf_fullscreen_setup pass;
+
+    if (bridge.layer || bridge.ui_extract_failed) {
+        return bridge.layer != NULL;
+    }
+    memset(&layer, 0, sizeof(layer));
+    layer.struct_size = sizeof(layer);
+    layer.abi_version = RSF_UI_LAYER_ABI_VERSION;
+    layer.width = (uint32_t)width;
+    layer.height = (uint32_t)height;
+    /* Shareable from the start: frame generation opens this on a D3D12 device later and the flag
+       cannot be added without recreating the texture. */
+    layer.shareable = 1;
+    layer.log = bridge_layer_log;
+    if (rsf_ui_layer_create(bridge.device, &layer, &bridge.layer) != RSF_UI_LAYER_OK) {
+        say("ui extract: the layer could not be created; the interface stays in the scene");
+        bridge.ui_extract_failed = 1;
+        return 0;
+    }
+
+    memset(&pass, 0, sizeof(pass));
+    pass.struct_size = sizeof(pass);
+    pass.abi_version = RSF_FULLSCREEN_PASS_ABI_VERSION;
+    pass.log = bridge_layer_log;
+    if (rsf_fullscreen_pass_create(bridge.device, &pass, &bridge.composite_pass) !=
+        RSF_FULLSCREEN_OK) {
+        /* A layer with no compositor is worse than no layer: the interface would be diverted out
+           of the frame and never put back. Refuse the whole thing rather than half of it. */
+        say("ui extract: the compositor could not be created; the interface stays in the scene");
+        rsf_ui_layer_destroy(bridge.layer);
+        bridge.layer = NULL;
+        bridge.ui_extract_failed = 1;
+        return 0;
+    }
+    say("ui extract: layer and compositor ready at %lux%lu", width, height);
+    return 1;
+}
+
+/* Put the interface back over the finished frame.
+ *
+ * Runs inside the present hook, after the game has finished drawing and before anything is shown,
+ * which is the one moment the frame exists complete and unseen. Skipped when nothing was diverted,
+ * so a frame with no interface on it costs nothing. */
+static void composite_ui(void* swapchain)
+{
+    rsf_ui_layer_status status;
+    rsf_fullscreen_draw parameters;
+    void* source;
+    void* target_view;
+
+    if (!bridge.layer || !bridge.composite_pass) {
+        return;
+    }
+    memset(&status, 0, sizeof(status));
+    status.struct_size = sizeof(status);
+    if (rsf_ui_layer_get_status(bridge.layer, &status) != RSF_UI_LAYER_OK) {
+        return;
+    }
+    if (status.written_this_frame) {
+        source = rsf_ui_layer_source(bridge.layer);
+        target_view = back_buffer_view(swapchain);
+        if (source && target_view) {
+            memset(&parameters, 0, sizeof(parameters));
+            parameters.struct_size = sizeof(parameters);
+            parameters.mode = RSF_FULLSCREEN_PREMULTIPLIED;
+            if (rsf_fullscreen_pass_draw(bridge.composite_pass, bridge.context, target_view, source,
+                                         &parameters) == RSF_FULLSCREEN_OK) {
+                ++bridge.ui_composites;
+            }
+        }
+    }
+    /* The next frame's slot, cleared here rather than after the composite, so a frame that presents
+       twice keeps a stale layer rather than losing the interface entirely. */
+    rsf_ui_layer_begin_frame(bridge.layer, bridge.context);
+
+    /* And point the divert at it. The layer alternates slots so that a vendor holding the previous
+       one is not reading the one being drawn, which means the target the tap writes into changes
+       every frame and arming it once would send every frame after the first into the slot being
+       composited from. */
+    if (bridge.ui_extract) {
+        rsf_frame_tap_divert_setup divert;
+        memset(&divert, 0, sizeof(divert));
+        divert.struct_size = sizeof(divert);
+        divert.layer_target = rsf_ui_layer_target(bridge.layer);
+        divert.layer_width = status.width;
+        divert.layer_height = status.height;
+        divert.verdict = ui_verdict;
+        rsf_frame_tap_set_divert(&divert);
+    }
+}
+
 /* The debug view: draw the reconstruction over the finished frame.
 
    It replaces a graded image that has an interface on it with an ungraded one that does not, so it
@@ -1375,6 +1559,13 @@ static void on_present(void* user, void* swapchain)
     }
     bridge.pass_in_frame = 0;
 
+    /* The interface goes back on before anything else looks at the frame, and independently of
+       whether a reconstruction is running: extraction is about where the interface is drawn, not
+       about super resolution, and it has to be judgeable on its own. */
+    if (bridge.ui_extract) {
+        composite_ui(swapchain);
+    }
+
     if (bridge.started) {
         watch_tail(swapchain);
         if (bridge.reinsert_on) {
@@ -1447,6 +1638,39 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
 {
     bridge.log = log;
     bridge.log_user = log_user;
+}
+
+int rsf_bridge_extract_ui(unsigned long width, unsigned long height)
+{
+    rsf_frame_tap_divert_setup divert;
+
+    if (!bridge.ui || !bridge.device) {
+        say("ui extract: nothing is being classified, so there is nothing to extract");
+        return 0;
+    }
+    if (!start_extraction(width, height)) {
+        return 0;
+    }
+    memset(&divert, 0, sizeof(divert));
+    divert.struct_size = sizeof(divert);
+    divert.layer_target = rsf_ui_layer_target(bridge.layer);
+    divert.layer_width = (uint32_t)width;
+    divert.layer_height = (uint32_t)height;
+    divert.verdict = ui_verdict;
+    if (!divert.layer_target) {
+        /* The first frame has not begun, so there is no current slot yet. Begin one here: the layer
+           is armed before the frame it belongs to rather than after. */
+        rsf_ui_layer_begin_frame(bridge.layer, bridge.context);
+        divert.layer_target = rsf_ui_layer_target(bridge.layer);
+    }
+    if (rsf_frame_tap_set_divert(&divert) != RSF_FRAME_TAP_OK) {
+        say("ui extract: the frame tap refused the divert");
+        return 0;
+    }
+    bridge.ui_extract = 1;
+    say("ui extract: on. Interface draws now go to a %lux%lu layer and are composited at present",
+        width, height);
+    return 1;
 }
 
 int rsf_bridge_identify_ui(void)
@@ -1801,6 +2025,23 @@ void rsf_bridge_report(void)
                 bridge.ui_class_counts[RSF_AC7_DRAW_SCENE],
                 bridge.ui_class_counts[RSF_AC7_DRAW_UNKNOWN],
                 bridge.ui_class_counts[RSF_AC7_DRAW_SKIP]);
+            if (bridge.ui_extract) {
+                rsf_frame_tap_status divert_status;
+                rsf_ui_layer_status layer_status;
+                memset(&divert_status, 0, sizeof(divert_status));
+                divert_status.struct_size = sizeof(divert_status);
+                rsf_frame_tap_get_status(&divert_status);
+                memset(&layer_status, 0, sizeof(layer_status));
+                layer_status.struct_size = sizeof(layer_status);
+                rsf_ui_layer_get_status(bridge.layer, &layer_status);
+                say("ui extract: %lu draws diverted, %lu blends patched, %lu refused (last reason "
+                    "%lu), %llu frames wrote the layer, %lu composited",
+                    (unsigned long)divert_status.draws_diverted,
+                    (unsigned long)divert_status.blend_states_patched,
+                    (unsigned long)divert_status.divert_refused,
+                    (unsigned long)divert_status.divert_last_refusal,
+                    (unsigned long long)layer_status.frames_written, bridge.ui_composites);
+            }
             if (bridge.ui_widget_extent[0]) {
                 say("ui: the interface is rasterized at %lux%lu and drawn into %lux%lu, which is "
                     "the gap promotion cannot close",
