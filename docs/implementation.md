@@ -176,6 +176,9 @@ the motion investigations above; none is a claim of completed implementation.
       Return an output-resolution result to downstream passes and preserve grading, effects, and
       an output-resolution HUD. Bypass only the original filtering/upscaling that SR replaces;
       investigate cloud-specific temporal accumulation before disabling any temporal pass.
+      The substitution and the output-resolution HUD path are built behind F6 and described in the
+      first working target above; what remains here is running it against the game, the bloom and
+      texel-addressing consequences recorded there, and the cloud temporal question.
 - [ ] Verify the engine's exposure and pre-exposure convention, frame alignment, and backend
       conversion. Identifying a 1x1 texture alone is insufficient. Compare against auto-exposure
       during bright/dark transitions and record the source and effective values in diagnostics.
