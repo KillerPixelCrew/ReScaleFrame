@@ -111,7 +111,45 @@ Proposed patch: at RVA `0x11823de`, replace the six bytes `0F 87 68 03 00 00` wi
 
 This is the dynamic path only. The static equivalent at `VelocityRendering.cpp:507`, inside `AddVelocityStaticMesh`, has not been located; it runs when a primitive is added to the scene rather than during rendering, and whichever path AC7's icons take decides whether one patch or both are needed.
 
-Untested. Nothing has been patched, and whether AC7's icon materials meet the substitution conditions is unknown. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
+### Game-tested: the icons write velocity
+
+7 September 2026, briefing screen, `RSF_TRANSLUCENT_VELOCITY=1`, render scale 50%. The gate patched
+on the expected bytes: `translucent velocity gate patched at rva 0x11823de, was 0f 87 68 03 00 00`.
+
+The velocity target went from empty to written. An F10 dump of the same screen minutes earlier, with
+the patch off, recorded `fraction_unwritten` 1.0000 and both ranges exactly zero at 1024×576 and at
+2048×1152. With the patch on, the render-resolution target recorded:
+
+| Target | Unwritten | x range | y range |
+| --- | --- | --- | --- |
+| 1024×576 | 0.9995 | −0.0010 to 0.0005 | −0.0010 to 0.0003 |
+| 2048×1152 | 1.0000 | 0 | 0 |
+
+The decoded preview places those pixels as small aircraft glyphs clustered where the enemy symbols
+and the `TRIGGER` marker sit on the map. They are the icons, and nothing else in the frame writes.
+
+So the blend-mode rejection was the only thing stopping them, the cook does contain a usable
+velocity permutation for those materials, and the engine supplies `PreviousLocalToWorld` for them
+once a draw reaches the pass. The default-material substitution reasoning holds for sprite-like
+icons.
+
+A prediction to retain, because it was wrong: this screen was expected to show nothing, on the
+grounds that its captures contained no velocity draws at all and a still map under a still camera
+would have no movable primitives for the patch to admit. Both halves of that were unsound. The
+captures were of the unpatched game, where the gate is exactly what removed those draws, so their
+absence could not say what happens once it is cut; and the icons are movable primitives whether or
+not the camera is.
+
+What it does not do. Coverage is 0.05% of the frame: the contour relief and the dotted terrain grid
+write nothing, which fits two-sided sheet materials having no velocity permutation to fall back on.
+The full-size target stays empty because the scene renders at half scale here. Magnitudes are around
+a thousandth of a screen width, near a pixel at this resolution, from a still camera, so this says
+the vectors exist and not that they are correct. Mission replay, where the camera and the symbols
+both move, is what would test that.
+
+The missing relief in the reconstruction is a separate problem and this does not address it: that
+layer is absent from the backend's input because of which colour target is tapped, not because of
+motion vectors. Before patching, establish whether the cooked shader library contains velocity permutations for those materials, since a gate cut that reaches an absent permutation gains nothing.
 
 ## Implementation follow-up
 
