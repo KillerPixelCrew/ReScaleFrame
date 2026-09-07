@@ -29,7 +29,10 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 - While the project is still scaffolding, commit to `main` directly. Rapid iteration matters more
   than review ceremony at this stage. Move to branches and pull requests once there is a working
   pipeline worth protecting.
-- Preserve unrelated work. Do not edit game installations or run injection as part of routine build verification.
+- Preserve unrelated work. Deploying the proxy into a game installation, injecting it, and loading
+  modding frameworks to inspect a running game are normal work here and are how anything gets
+  tested or found out. Do them when asked. What must not happen is routine build verification
+  reaching into a game install, or a change to one that nobody asked for. Back up what you replace.
 - Track implementation in `docs/implementation.md`. Distinguish built, synthetic-tested, game-tested, and device-tested results.
 - Run `eng/verify.ps1` for native/SDK/Rust changes. Use focused checks for documentation-only edits.
 - Keep component versions aligned through `VERSION` and the Cargo workspace version; verification checks the match.
