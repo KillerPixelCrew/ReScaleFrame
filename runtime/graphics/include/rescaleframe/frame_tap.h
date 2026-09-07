@@ -312,6 +312,26 @@ typedef struct rsf_frame_tap_options {
        guessing, so a caller that does not know the presented size yet will see no passes. */
     uint32_t output_width;
     uint32_t output_height;
+    /* Find the draws that read a texture of a given shape, wherever in the frame they are.
+
+       The watches above start from a texture whose address is already known. This starts from a
+       shape instead, which is what is needed when the question is "which surface is the interface"
+       and every rule based on format has been wrong once. AC7's widget converter rasterizes at a
+       hardcoded 1920x1080, so a draw reading a 1920x1080 R8G8B8A8 texture is compositing the
+       interface, whatever the target it writes into turns out to be. That target is the answer.
+
+       Zero in any of the three disables it. Matching costs no device calls: every shader resource
+       slot already carries its description in the shadow, so this is a comparison over data the tap
+       has anyway. Reports go to `on_hunt_draw` with the same structure a watched target draw uses,
+       so the reader sees the render target, its extent, the viewport and every bound input. */
+    uint32_t hunt_width;
+    uint32_t hunt_height;
+    uint32_t hunt_format;
+    rsf_frame_tap_target_fn on_hunt_draw;
+    void* on_hunt_draw_user;
+    /* How many hunt reports to make before going quiet. Zero means the default, which is enough to
+       describe a few frames and not enough to fill a log. */
+    uint32_t hunt_budget;
     /* Where watched render target draws are reported. Optional: leaving it null leaves
        `rsf_frame_tap_watch_target` with nowhere to send anything, and it says so. */
     rsf_frame_tap_target_fn on_target_draw;

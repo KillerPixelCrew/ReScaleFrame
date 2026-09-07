@@ -172,6 +172,10 @@ struct Tap {
     // Substituted bindings whose depth was the wrong size for the promoted target. The last pair is
     // kept alongside the count so a report can name it, since "some mismatched" and "a 1024x576
     // depth met a 2048x1152 target" are answers of very different use.
+    // Reports left to make for the shape hunt, and how many were made. Counted so a run that found
+    // nothing says so, which is a different answer from a run whose budget ran out.
+    std::atomic<uint32_t> hunt_budget{0};
+    std::atomic<uint32_t> hunt_draws{0};
     std::atomic<uint32_t> depth_mismatches{0};
     std::atomic<uint32_t> depth_mismatch_target_width{0};
     std::atomic<uint32_t> depth_mismatch_target_height{0};
@@ -456,6 +460,34 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     }
     const bool report_input = self.options.on_input_draw && self.input_watch_bound &&
                               context == self.observed_context;
+
+    // Whether this draw reads a texture of the hunted shape. Cached descriptions only, so it costs
+    // a walk over the shadow and no device calls. See `hunt_width` for why a shape rather than an
+    // address: the surface being looked for is the one whose identity is not yet known.
+    bool report_hunt = false;
+    if (self.options.on_hunt_draw && self.options.hunt_width && self.options.hunt_height &&
+        self.options.hunt_format && context == self.observed_context &&
+        self.hunt_budget.load(std::memory_order_relaxed) != 0) {
+        for (const Tap::Slot& slot : self.slots) {
+            if (slot.texture && slot.description.Width == self.options.hunt_width &&
+                slot.description.Height == self.options.hunt_height &&
+                uint32_t(slot.description.Format) == self.options.hunt_format) {
+                report_hunt = true;
+                break;
+            }
+        }
+        if (report_hunt) {
+            uint32_t budget = self.hunt_budget.load(std::memory_order_relaxed);
+            while (budget != 0 && !self.hunt_budget.compare_exchange_weak(
+                                      budget, budget - 1, std::memory_order_relaxed)) {
+            }
+            report_hunt = budget != 0;
+            if (report_hunt) {
+                self.hunt_draws.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
     bool report_target = false;
     if (watch_index != RSF_FRAME_TAP_WATCH_SLOTS && self.options.on_target_draw) {
         uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
@@ -468,7 +500,7 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
             }
         }
     }
-    if (!report_target && !report_input) {
+    if (!report_target && !report_input && !report_hunt) {
         return;
     }
 
@@ -525,6 +557,9 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
 
     // Not a count of what the caller was told: a report the caller ignores still happened, and a
     // watch that never fires is the thing this number exists to distinguish.
+    if (report_hunt) {
+        self.options.on_hunt_draw(self.options.on_hunt_draw_user, &report);
+    }
     if (report_target) {
         self.target_draws_reported.fetch_add(1, std::memory_order_relaxed);
         self.options.on_target_draw(self.options.on_target_draw_user, &report);
@@ -1454,6 +1489,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     }
 
     self.options = *options;
+    self.hunt_budget.store(options->hunt_budget ? options->hunt_budget : 64u,
+                           std::memory_order_relaxed);
     self.observed_context = static_cast<ID3D11DeviceContext*>(device_context);
     if (self.options.view_constant_bytes == 0) {
         self.options.view_constant_bytes = 4096;

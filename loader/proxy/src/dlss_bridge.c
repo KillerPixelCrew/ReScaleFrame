@@ -479,6 +479,37 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
 }
 
 /* Called by the frame tap, on the render thread, after a draw into a target this asked about. */
+/* A draw that reads the interface, found by the shape the binary states rather than by a format
+   rule. What matters is the target it writes into and at what size: that is the surface the
+   interface is composited into, and if it is at render resolution then a 1920x1080 interface is
+   being squashed into it and stretched back out by the frame's last draw.
+
+   Says which slot carried it, because a texture of that shape bound in some other slot and not read
+   would be the same false positive that every earlier identification fell for. */
+static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
+{
+    uint32_t index;
+    (void)user;
+    if (!draw) {
+        return;
+    }
+    for (index = 0; index < draw->input_count; ++index) {
+        if (draw->inputs[index].width != 1920 || draw->inputs[index].height != 1080) {
+            continue;
+        }
+        say("interface hunt: a 1920x1080 texture %p in slot %lu is read by a draw into target %p, "
+            "%lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, %lu targets bound, "
+            "depth %s",
+            draw->inputs[index].texture, (unsigned long)draw->inputs[index].slot,
+            draw->render_target, (unsigned long)draw->target_width,
+            (unsigned long)draw->target_height, (unsigned long)draw->target_format,
+            (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
+            (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
+            (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
+        break;
+    }
+}
+
 static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     (void)user;
@@ -1266,6 +1297,17 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.on_target_draw = on_target_draw;
     tap.on_input_draw = on_input_draw;
     tap.on_geometry = on_geometry;
+    /* Find whatever composites the interface, by the shape it reads rather than by a rule about
+       formats. `UWidgetToTextureConverter_Setup` is handed a hardcoded 1920x1080 at 0x1406243e0,
+       so a draw reading a 1920x1080 R8G8B8A8 texture is compositing the interface, and the target
+       it writes into is the one that has to be at output resolution. Every format rule tried so far
+       has picked the wrong surface at least once, which is why this starts from a size the binary
+       states rather than from a guess. 28 is DXGI_FORMAT_R8G8B8A8_UNORM. */
+    tap.hunt_width = 1920;
+    tap.hunt_height = 1080;
+    tap.hunt_format = 28;
+    tap.hunt_budget = 48;
+    tap.on_hunt_draw = on_hunt_draw;
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
