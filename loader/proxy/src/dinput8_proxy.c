@@ -273,6 +273,62 @@ static void apply_jitter_patch(void)
     }
 }
 
+/* Let translucent geometry into the velocity pass, so a reconstruction has vectors for it.
+
+   Separate translucency carries no motion vectors in stock 4.18, which is why the briefing map's
+   relief and the vehicle symbols in mission replay have none. The layer is drawn with scene depth
+   bound read only, so it writes no depth either, and depth based camera motion cannot serve it.
+   Velocity excludes it by blend mode in FVelocityDrawingPolicyFactory::DrawDynamicMesh:
+
+       call qword ptr [rax+0x198]          ; Material->GetBlendMode()
+       cmp  eax, 1                         ; BLEND_Opaque or BLEND_Masked
+       ja   <return false>                 ; the six bytes replaced below
+       call qword ptr [rax+0x20]           ; GetMaterialDomain, left alone
+
+   Only the blend mode rejection is removed. The material domain check just after it stays, because
+   excluding UI domain materials is wanted, and so do the movable test and SupportsVelocity further
+   in. A material whose cook produced no usable velocity permutation therefore still refuses rather
+   than drawing wrongly, which is what makes this safe to try.
+
+   4.18 compiles velocity shaders for the special engine material, and both draw paths substitute
+   that default proxy for a material that writes every pixel, is not two sided and does not move its
+   mesh. Sprite like icons should fall into that; two sided sheets should not, and are expected to
+   go on refusing. The engine supplies PreviousLocalToWorld itself once a draw reaches the pass,
+   which is the whole reason to do this here rather than reconstructing motion outside the game.
+
+   This is the dynamic mesh path. The static equivalent in AddVelocityStaticMesh has not been
+   located, so a primitive that renders from the static draw list is unaffected.
+
+   Untested against the game. See docs/research/ue418-hook-map.md. */
+static void apply_translucent_velocity_patch(void)
+{
+    if (read_number("RSF_TRANSLUCENT_VELOCITY", 0) == 0) {
+        return;
+    }
+    const DWORD rva = read_number("RSF_TRANSLUCENT_VELOCITY_RVA", 0x11823de);
+    /* ja rel32 */
+    const uint8_t expected[6] = {0x0F, 0x87, 0x68, 0x03, 0x00, 0x00};
+    /* The six byte canonical nop, so every blend mode falls through to the domain check. */
+    const uint8_t replacement[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    uint8_t previous[6] = {0};
+
+    const rsf_dump_result result =
+        rsf_patch_code(rva, replacement, sizeof(replacement),
+                       rva == 0x11823de ? expected : NULL, rva == 0x11823de ? sizeof(expected) : 0,
+                       previous);
+    if (result == RSF_DUMP_OK) {
+        note("translucent velocity gate patched at rva 0x%lx, was %02x %02x %02x %02x %02x %02x. "
+             "Translucent draws can now reach the velocity pass; whether any does is a question "
+             "for the velocity target, not for this line",
+             (unsigned long)rva, previous[0], previous[1], previous[2], previous[3], previous[4],
+             previous[5]);
+    } else {
+        note("translucent velocity gate NOT patched at rva 0x%lx, result %d (expected bytes did "
+             "not match?)",
+             (unsigned long)rva, (int)result);
+    }
+}
+
 static void report_and_dump(void)
 {
     rsf_observer_status status;
@@ -372,6 +428,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
        write into bytes about to be overwritten. */
     apply_jitter_patch();
+    apply_translucent_velocity_patch();
 
     note("result %d, entropy %d.%03d, sections %u, imports %u, iat references %u, bytes %llu",
          (int)result, (int)report.code_entropy,

@@ -38,6 +38,18 @@ change anything. The panel DLL is found through `RSF_OVERLAY_DLL`, or beside the
 
 F6 is that reinsertion, and it is off until asked for because a wrong substitution corrupts the frame. It needs the frame's tail identified first, which the loader learns from the draw into the back buffer over the first few frames after F8, so an immediate press reports what is still missing. It refuses when the game renders at the presented size, which is also what a mission load looks like from inside the frame. With F6 on, the reconstruction runs before the game's tonemap rather than at Present, the game grades it and draws its own interface over it at output resolution, and the last draw into the back buffer becomes a copy. The result has not been looked at yet.
 
+`RSF_TRANSLUCENT_VELOCITY=1` removes the blend-mode rejection in the velocity pass, so translucent
+geometry can write motion vectors. Stock 4.18 excludes it, which is why AC7's mission map relief and
+the vehicle symbols in replay have none, and why that layer also writes no depth to fall back on.
+Only the rejection is removed; the material-domain check, the movable test and `SupportsVelocity`
+still apply, so a material with no usable velocity permutation refuses rather than drawing wrongly.
+It patches after decryption and checks the expected bytes first, refusing on an unrecognised build.
+
+Whether anything is gained is a question for the velocity target, not the log line. Compare an F10
+dump with the patch off and on in the same scene: `captureNN_0` is the raw velocity target and its
+JSON records the unwritten fraction. The briefing screen cannot answer it, because nothing there
+writes velocity at all. Mission replay is the case this exists for.
+
 F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with the process and can overwrite earlier captures; use a new directory per run. Velocity previews show unwritten pixels in blue and zero motion in grey. The decoded dump should match the reference decode's range and unwritten fraction.
 
 ## Environment settings
@@ -54,6 +66,8 @@ F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with th
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
 | `RSF_ENABLE_JITTER` | `0`; set `1` to patch the AA gate after decryption |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
+| `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
+| `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
 | `RSF_SCREEN_PERCENTAGE` | `50`; applied by F8/F9 and maintained during the run |
 | `RSF_CONSOLE_SINGLETON_RVA` | Default address `0x3a8b290` |
 | `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
