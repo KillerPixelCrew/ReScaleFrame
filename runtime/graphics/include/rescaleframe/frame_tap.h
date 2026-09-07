@@ -57,7 +57,7 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 6u
+#define RSF_FRAME_TAP_ABI_VERSION 7u
 
 /* Render targets watched at once. Two, because the question this answers needs exactly two: the
    swap chain's back buffer, and whichever target the draw into it reads. */
@@ -189,6 +189,23 @@ typedef struct rsf_frame_tap_target_draw {
     float viewport_x;
     float viewport_y;
     uint32_t inputs_truncated;
+    /* Appended in ABI 7. What the pipeline had bound, by pointer.
+
+       These are the identity of a draw, and they are pointers rather than descriptions because
+       that is what makes the question cheap: what each object is was settled once when the game
+       created it, and at the draw the answer is a comparison against a set. Compare them, never
+       dereference them. A pointer is meaningful only while it is bound, and D3D11 reuses an
+       address as soon as an object is released, so a set built from these must evict on reuse.
+
+       `vertex_stride` is slot zero's, which is 40 for Slate's geometry and 44 for the canvas: a
+       check on the declaration rather than a substitute for it. */
+    void* pixel_shader;
+    void* vertex_shader;
+    void* input_layout;
+    void* blend_state;
+    void* depth_stencil_state;
+    uint32_t vertex_stride;
+    uint32_t topology;
 } rsf_frame_tap_target_draw;
 
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */

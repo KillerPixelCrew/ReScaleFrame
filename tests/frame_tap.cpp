@@ -59,6 +59,13 @@ struct Report {
     uint32_t indexed = 0;
     uint32_t element_count = 0;
     std::vector<rsf_frame_tap_input> inputs;
+    void* pixel_shader = nullptr;
+    void* vertex_shader = nullptr;
+    void* input_layout = nullptr;
+    void* blend_state = nullptr;
+    void* depth_stencil_state = nullptr;
+    uint32_t vertex_stride = 0;
+    uint32_t topology = 0;
 };
 
 std::vector<Report> reports;
@@ -89,6 +96,13 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     for (uint32_t index = 0; index < draw->input_count; ++index) {
         report.inputs.push_back(draw->inputs[index]);
     }
+    report.pixel_shader = draw->pixel_shader;
+    report.vertex_shader = draw->vertex_shader;
+    report.input_layout = draw->input_layout;
+    report.blend_state = draw->blend_state;
+    report.depth_stencil_state = draw->depth_stencil_state;
+    report.vertex_stride = draw->vertex_stride;
+    report.topology = draw->topology;
     reports.push_back(report);
 
     // Act like a divert: bind somewhere else and put it back, from inside the hook. This is the
@@ -909,11 +923,45 @@ int main()
         divert_rehearsal.other_target = other_view;
         divert_rehearsal.original_target = composite_view;
 
+        // The pipeline state a classifier decides on. Bound here so the report has something real
+        // to carry, since everything downstream identifies a draw by exactly these pointers.
+        D3D11_BLEND_DESC blend_description{};
+        blend_description.RenderTarget[0].BlendEnable = TRUE;
+        blend_description.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        blend_description.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blend_description.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blend_description.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blend_description.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        blend_description.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blend_description.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        ID3D11BlendState* blend = nullptr;
+        check(SUCCEEDED(device->CreateBlendState(&blend_description, &blend)),
+              "The test blend state must be created.");
+        const FLOAT factor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        context->OMSetBlendState(blend, factor, 0xffffffffu);
+        context->PSSetShader(pixel_shader, nullptr, 0);
+        context->VSSetShader(vertex_shader, nullptr, 0);
+
         context->OMSetRenderTargets(1, &composite_view, nullptr);
         context->PSSetShaderResources(2, 1, &source_view);
         context->Draw(3, 0);
         context->Draw(3, 0);
         divert_rehearsal.context = nullptr;
+
+        if (!reports.empty()) {
+            check(reports[0].pixel_shader == pixel_shader,
+                  "The report must name the bound pixel shader, which is half of what identifies "
+                  "a draw.");
+            check(reports[0].vertex_shader == vertex_shader,
+                  "And the vertex shader, which the tap already shadowed and never reported.");
+            check(reports[0].blend_state == blend,
+                  "And the blend state, which is what separates an interface draw that a "
+                  "premultiplied layer can represent from one it cannot.");
+        }
+        context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
+        if (blend) {
+            blend->Release();
+        }
 
         check(reports.size() == 2,
               "Both draws must be reported: a callback binding inside the hook must not stop the "

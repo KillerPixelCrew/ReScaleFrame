@@ -78,7 +78,7 @@ struct Tap {
     rsf_frame_tap_geometry geometry{};
     bool geometry_valid = false;
     ID3D11DepthStencilView* geometry_depth = nullptr;
-    void* extra_originals[13]{};
+    void* extra_originals[16]{};
     rsf_frame_tap_options options{};
     ID3D11DeviceContext* observed_context = nullptr;
     void* input_watch = nullptr;
@@ -138,6 +138,18 @@ struct Tap {
     // Draws into the current target since it was bound. Reset by a change of binding, so it counts
     // a pass rather than a frame.
     uint32_t draws_into_target = 0;
+
+    // The last three pieces of pipeline state a draw is identified by. The input layout, the vertex
+    // shader, the strides and the topology are already shadowed in `geometry`; these are what the
+    // classifier needs and nothing here had.
+    //
+    // None is retained. Each is exactly what the game currently has bound, and the game keeps its
+    // own bound state alive; a pointer here is only ever compared, never dereferenced. That also
+    // means a pointer is only meaningful while it is bound, which is why identity is settled at
+    // creation and looked up here rather than the other way round.
+    ID3D11PixelShader* pixel_shader = nullptr;
+    ID3D11BlendState* blend_state = nullptr;
+    ID3D11DepthStencilState* depth_stencil_state = nullptr;
 
     // Watched render targets. Compared by pointer and never dereferenced, so these are plain
     // addresses rather than references: see the note on rsf_frame_tap_watch_target.
@@ -564,6 +576,13 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     report.target_count = self.target_count;
     report.target_samples = self.target_description.SampleDesc.Count;
     report.inputs_truncated = occupied > reported ? 1u : 0u;
+    report.pixel_shader = self.pixel_shader;
+    report.vertex_shader = self.geometry.vertex_shader;
+    report.input_layout = self.geometry.input_layout;
+    report.blend_state = self.blend_state;
+    report.depth_stencil_state = self.depth_stencil_state;
+    report.vertex_stride = self.geometry.strides[0];
+    report.topology = static_cast<uint32_t>(self.geometry.topology);
 
     // The viewport, asked for only on a draw that is being reported. It is the one thing here that
     // the shadow cannot supply, because nothing hooks RSSetViewports, and a call per reported draw
@@ -1265,6 +1284,42 @@ void STDMETHODCALLTYPE hooked_layout(ID3D11DeviceContext* c, ID3D11InputLayout* 
         s.geometry.input_layout = l;
     }
 }
+// The pixel shader, the blend and the depth stencil state. Recorded and nothing more: what they
+// mean is a game question, and the answer is a pointer comparison against what was named at
+// creation. Deliberately not fetched at the draw, where an OMGetBlendState would cost a reference
+// count per draw in the frame for a value that changes a few dozen times.
+void STDMETHODCALLTYPE hooked_pixel_shader(ID3D11DeviceContext* c, ID3D11PixelShader* p,
+                                           ID3D11ClassInstance* const* classes, UINT count)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11PixelShader*,
+                                        ID3D11ClassInstance* const*, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[13])(c, p, classes, count);
+    if (!inside_hook && c == s.observed_context) {
+        s.pixel_shader = p;
+    }
+}
+void STDMETHODCALLTYPE hooked_blend_state(ID3D11DeviceContext* c, ID3D11BlendState* b,
+                                          const FLOAT factor[4], UINT mask)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11BlendState*, const FLOAT[4],
+                                        UINT);
+    reinterpret_cast<Fn>(s.extra_originals[14])(c, b, factor, mask);
+    if (!inside_hook && c == s.observed_context) {
+        s.blend_state = b;
+    }
+}
+void STDMETHODCALLTYPE hooked_depth_stencil_state(ID3D11DeviceContext* c,
+                                                  ID3D11DepthStencilState* d, UINT reference)
+{
+    auto& s = tap();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilState*, UINT);
+    reinterpret_cast<Fn>(s.extra_originals[15])(c, d, reference);
+    if (!inside_hook && c == s.observed_context) {
+        s.depth_stencil_state = d;
+    }
+}
 void STDMETHODCALLTYPE hooked_topology(ID3D11DeviceContext* c, D3D11_PRIMITIVE_TOPOLOGY t)
 {
     auto& s = tap();
@@ -1401,7 +1456,8 @@ void STDMETHODCALLTYPE hooked_auto(ID3D11DeviceContext* c)
     const ReentryGuard guard;
     report_geometry(s, c, 4, 0, 0, 0);
 }
-constexpr size_t extra_slots[] = {18, 19, 17, 24, 11, 7, 20, 21, 110, 58, 39, 40, 38};
+constexpr size_t extra_slots[] = {18, 19, 17, 24, 11, 7,  20, 21,
+                                  110, 58, 39, 40, 38, 9, 35, 36};
 
 void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT index_count,
                                            UINT start_index, INT base_vertex)
@@ -1549,6 +1605,11 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
          &self.extra_originals[10]},
         {extra_slots[11], reinterpret_cast<void*>(&hooked_indirect), &self.extra_originals[11]},
         {extra_slots[12], reinterpret_cast<void*>(&hooked_auto), &self.extra_originals[12]},
+        {extra_slots[13], reinterpret_cast<void*>(&hooked_pixel_shader),
+         &self.extra_originals[13]},
+        {extra_slots[14], reinterpret_cast<void*>(&hooked_blend_state), &self.extra_originals[14]},
+        {extra_slots[15], reinterpret_cast<void*>(&hooked_depth_stencil_state),
+         &self.extra_originals[15]},
 
         {slot_ps_set_shader_resources, reinterpret_cast<void*>(&hooked_ps_set_shader_resources),
          reinterpret_cast<void**>(&self.original_set_views)},
