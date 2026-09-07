@@ -202,6 +202,33 @@ that judges the picture has not happened.
       thing that has produced a result.
 - [ ] egui drawn into the layer, so it rides generated frames later.
 
+M4, the presentation bridge, has its riskiest piece answered as far as this machine can answer it.
+
+- [x] `shared_surface`: D3D11 textures and a fence created shareable and opened on D3D12, with the
+      export, open and signal round trip covered (`510281f`).
+- [x] Measured: WineD3D does not implement shared NT handles (`E_NOTIMPL`). That is a statement
+      about the plain Wine prefix and not about DXVK, whose measurement needs the dedicated prefix
+      the plan describes and is still open.
+- [ ] The swap chain facade, the ring, and the intercept.
+
+M5, the vendor-neutral contract, is built and tested without hardware.
+
+- [x] `backend.h`: reconstruction and generation providers, capabilities, resources with their
+      D3D12 states and lifetimes, and the swap chain ownership every vendor takes differently.
+- [x] `negotiate`: a pure function over what each vendor said, so the combinations nobody has the
+      hardware to try are decided and tested here. The Streamline single-session conflict, the
+      no-bridge refusal, the multiplier cap, and the two different causes that produce the same
+      D3D12 route (`fc54132`).
+- [ ] Wrapping today's Streamline path behind it, the orchestrator session, and SDK ABI 2.
+
+M6 and M8 have their vendor structure, with no implementation behind it.
+
+- [x] `rsf_backend_fsr` and `rsf_backend_xess`: providers that exist whether or not the SDK headers
+      do, answering `NOT_COMPILED` rather than failing to link, with capabilities filled from what
+      each SDK is rather than from what this machine has. Both branches compile (`fc54132`,
+      `7fa92f0`).
+- [ ] Everything that does the work.
+
 M3 has its foundation only.
 
 - [x] `game_frame.h`: the frame record, the screen classes, the eligibility rules, and
