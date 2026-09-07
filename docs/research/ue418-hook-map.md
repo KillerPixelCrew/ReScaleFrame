@@ -140,8 +140,24 @@ captures were of the unpatched game, where the gate is exactly what removed thos
 absence could not say what happens once it is cut; and the icons are movable primitives whether or
 not the camera is.
 
+Why the relief stays out, from AC7's own class layout. An SDK dump of the shipped build gives
+`Nimbus.CampaignBriefingWidget` three fields: `BriefingMesh` (`UStaticMesh`) at `0x0518`,
+`BriefingCloudMaterial` (`UMaterialInstanceConstant`) at `0x0520`, and `BriefingMeshActor`
+(`AStaticMeshActor`) at `0x0528`. The map is a static mesh actor.
+
+`AddVelocityStaticMesh` gates on `StaticMesh->PrimitiveSceneInfo->Proxy->IsMovable()` before it
+reaches the blend mode check at all, so a static mesh actor never enters the velocity draw list
+whatever is done to that check. The icons are separate movable objects, which is exactly why they
+gained vectors and the relief did not. Not a permutation problem, and not something a wider gate
+cut would reach.
+
+It also means the relief cannot want object velocity: nothing about it moves, only the camera does.
+What would cover it is camera motion reconstructed from depth, and separate translucency binds depth
+read only, so those pixels carry the depth of whatever opaque surface is behind them. That is the
+open question for its reconstruction quality, separate from getting it into the input at all.
+
 What it does not do. Coverage is 0.05% of the frame: the contour relief and the dotted terrain grid
-write nothing, which fits two-sided sheet materials having no velocity permutation to fall back on.
+write nothing.
 The full-size target stays empty because the scene renders at half scale here. Magnitudes are around
 a thousandth of a screen width, near a pixel at this resolution, from a still camera, so this says
 the vectors exist and not that they are correct. Mission replay, where the camera and the symbols
