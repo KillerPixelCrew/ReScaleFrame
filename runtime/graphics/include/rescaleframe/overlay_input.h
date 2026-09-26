@@ -109,6 +109,17 @@ rsf_overlay_input_result rsf_overlay_input_uninstall(void);
    frame. */
 uint32_t rsf_overlay_input_visible(void);
 
+/* Function keys pressed since the last call, as bits: bit n is F(n+1), so F1 is bit 0 and F12 is
+   bit 11. Taken, not read, so each press is reported once. `sources` receives, for the same bits,
+   which delivered it: bit 16 set means the window procedure saw a key message, bit 17 means raw
+   keyboard input, both may be set; it may be null.
+
+   This is a second route for a caller's hotkeys beside polling GetAsyncKeyState, which the first
+   Windows run showed does not always see a press the window does. A caller polling both has to
+   ignore a second trigger of the same key within a short time; the input module does not know
+   which the caller acted on. The toggle key is excluded, because this module acts on it itself. */
+uint32_t rsf_overlay_input_take_function_keys(uint32_t* sources);
+
 /* Open or close the overlay from code rather than from the toggle key. A transition either way
    drops the accumulated buttons and wheel, so a click held while the overlay opens is not delivered
    as a click on whatever appeared under the cursor. */

@@ -1348,8 +1348,13 @@ static void watch_for_stalled_plan(void)
     if (rsf_frame_tap_get_status(&tap) != RSF_FRAME_TAP_OK) {
         return;
     }
-    if (tap.targets_redirected != bridge.redirects_seen) {
-        bridge.redirects_seen = tap.targets_redirected;
+    /* Gates, not redirects. A gate opens only when the composite itself is bound, which is the
+       one thing a live plan cannot do without. Redirects count the interface layers too, and on
+       the first Windows run two layer redirects a frame kept a plan alive for 4,000 frames whose
+       composite was a surface the pool had already retired: zero gates, zero evaluations, and an
+       interface composited into the real, unpromoted composite, blurry. */
+    if (tap.gates_opened != bridge.redirects_seen) {
+        bridge.redirects_seen = tap.gates_opened;
         bridge.redirect_stall = 0;
         return;
     }
@@ -1360,8 +1365,8 @@ static void watch_for_stalled_plan(void)
     ++bridge.tail_restakes;
     bridge.redirect_stall = 0;
     bridge.tail_restaking = 1;
-    say("reinsert: nothing has been redirected for %lu frames, so the plan no longer names the "
-        "textures this frame uses. Looking for the tail again, restake %lu",
+    say("reinsert: the composite has not been bound for %lu frames, so the plan no longer names "
+        "the frame's composite. Looking for the tail again, restake %lu",
         RSF_REINSERT_STALL_FRAMES, bridge.tail_restakes);
     /* Let go of what the plan named before looking, so a stale composite cannot be re-found by
        being the thing already held. The tail walk re-identifies both from the frame itself. */
@@ -1956,9 +1961,63 @@ static void overlay_tick(void* swapchain)
 }
 
 /* Called before the game's own Present, from the observer. */
+/* Requests from the hotkey worker, run on this thread at the next present. */
+static volatile LONG pending_requests;
+
+void rsf_bridge_request(unsigned long requests)
+{
+    InterlockedOr(&pending_requests, (LONG)requests);
+}
+
+/* The swap chain's current size, for arming extraction without the worker's view of the observer. */
+static int swapchain_extent(void* swapchain, unsigned long* width, unsigned long* height)
+{
+    rsf_observer_status status;
+    (void)swapchain;
+    memset(&status, 0, sizeof(status));
+    status.struct_size = sizeof(status);
+    if (rsf_observer_get_status(&status) != RSF_OBSERVER_OK || status.present_width == 0) {
+        return 0;
+    }
+    *width = status.present_width;
+    *height = status.present_height;
+    return 1;
+}
+
+static void run_pending_requests(void* swapchain)
+{
+    const LONG requests = InterlockedExchange(&pending_requests, 0);
+    if (requests == 0) {
+        return;
+    }
+    if (requests & RSF_BRIDGE_REQUEST_START) {
+        if (bridge.actions.start_backend) {
+            bridge.actions.start_backend();
+        }
+    }
+    if (requests & RSF_BRIDGE_REQUEST_DISPLAY) {
+        rsf_bridge_toggle_display();
+    }
+    if (requests & RSF_BRIDGE_REQUEST_REINSERT) {
+        rsf_bridge_toggle_reinsert();
+    }
+    if (requests & RSF_BRIDGE_REQUEST_EXTRACT) {
+        unsigned long width = 0;
+        unsigned long height = 0;
+        if (swapchain_extent(swapchain, &width, &height)) {
+            rsf_bridge_extract_ui(width, height);
+        } else {
+            say("ui extract: the presented size is not known yet");
+        }
+    }
+}
+
 static void on_present(void* user, void* swapchain)
 {
     (void)user;
+
+    /* First, so a key pressed since the last frame acts on this one, on this thread. */
+    run_pending_requests(swapchain);
 
     /* Before anything reads it. The classifier compares against this on every candidate draw of the
        next frame, and a run where it is null classifies every Slate draw into the frame's own

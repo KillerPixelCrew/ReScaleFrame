@@ -49,6 +49,19 @@ void rsf_bridge_toggle_reinsert(void);
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 
+/* Ask for an action to run on the render thread at the next present, rather than on the caller's.
+
+   For the hotkey worker. Starting the backend, toggling reinsertion and arming extraction create
+   resources and touch the game's immediate context, which is not thread safe, and doing it from
+   the worker while the game was inside Present crashed the NVIDIA driver on the first Windows run
+   where F8 actually reached the proxy. The panel already applies its intents at the present; this
+   puts the keys on the same footing. Several requests may be combined; each runs once. */
+#define RSF_BRIDGE_REQUEST_START 0x1u
+#define RSF_BRIDGE_REQUEST_DISPLAY 0x2u
+#define RSF_BRIDGE_REQUEST_REINSERT 0x4u
+#define RSF_BRIDGE_REQUEST_EXTRACT 0x8u
+void rsf_bridge_request(unsigned long requests);
+
 /* Where this speaks, set at install rather than at F8.
 
    Starting the backend used to be the first thing that gave the bridge a log sink, which was fine

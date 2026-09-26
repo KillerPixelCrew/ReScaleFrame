@@ -102,6 +102,9 @@ struct State {
     int cursor_shows = 0;
     std::atomic<unsigned long> swallowed_warps{0};
     std::atomic<unsigned long> swallowed_hides{0};
+    /* Function keys seen pressed since the caller last took them, bit n for F(n+1), and which
+       route saw them: bit 16 the window procedure's key messages, bit 17 raw keyboard input. */
+    std::atomic<uint32_t> function_keys{0};
     /* The previous report's raw position, and whether there has been one. The overlay's pointer
        moves by the distance between reports rather than to the position in them, because a game
        that warps the pointer makes the position meaningless. See record_mouse_position. */
@@ -661,6 +664,34 @@ bool release_is_owed_to_game(State& self, uint32_t virtual_key)
     return true;
 }
 
+// Record a function key press for the caller's hotkeys, from whichever route saw it.
+void note_function_key(State& self, uint32_t key, uint32_t route_bit)
+{
+    if (key < VK_F1 || key > VK_F12 || key == self.toggle_key.load(std::memory_order_relaxed)) {
+        return;
+    }
+    self.function_keys.fetch_or((1u << (key - VK_F1)) | route_bit, std::memory_order_acq_rel);
+}
+
+// A key press in a raw input record, for the same purpose. Reads through the genuine function
+// where it is detoured, so reading it here does not depend on the detour's own rules.
+void note_raw_function_key(State& self, LPARAM lparam)
+{
+    RAWINPUT raw{};
+    UINT size = sizeof(raw);
+    const UINT read =
+        self.cursor.installed
+            ? self.cursor.get_raw_input_data(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw,
+                                             &size, sizeof(RAWINPUTHEADER))
+            : GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
+                              sizeof(RAWINPUTHEADER));
+    if (read == static_cast<UINT>(-1) || read < sizeof(RAWINPUTHEADER) ||
+        raw.header.dwType != RIM_TYPEKEYBOARD || (raw.data.keyboard.Flags & RI_KEY_BREAK) != 0) {
+        return;
+    }
+    note_function_key(self, raw.data.keyboard.VKey, 1u << 17);
+}
+
 LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     State& self = state();
@@ -689,6 +720,9 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
         const uint32_t key = static_cast<uint32_t>(wparam);
+        if ((lparam & 0x40000000) == 0) {
+            note_function_key(self, key, 1u << 16);
+        }
         if (key == toggle) {
             // Bit 30 is the previous key state. Holding the toggle down otherwise opens and closes
             // the overlay at the auto repeat rate.
@@ -838,6 +872,9 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         break;
 
     case WM_INPUT:
+        if (GET_RAWINPUT_CODE_WPARAM(wparam) == RIM_INPUT) {
+            note_raw_function_key(self, lparam);
+        }
         if (visible) {
             // Read before it is stopped. This is the movement the overlay's own pointer follows:
             // raw input is what the mouse reported, before the pointer was warped back to the
@@ -1008,6 +1045,15 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
 extern "C" uint32_t rsf_overlay_input_visible(void)
 {
     return state().visible.load(std::memory_order_acquire);
+}
+
+extern "C" uint32_t rsf_overlay_input_take_function_keys(uint32_t* sources)
+{
+    const uint32_t taken = state().function_keys.exchange(0, std::memory_order_acq_rel);
+    if (sources) {
+        *sources = taken & 0xFFFF0000u;
+    }
+    return taken & 0x0FFFu;
 }
 
 extern "C" void rsf_overlay_input_set_visible(uint32_t visible)

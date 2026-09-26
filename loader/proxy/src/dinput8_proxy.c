@@ -9,6 +9,7 @@
 #include <rescaleframe/module_dump.h>
 
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/overlay_input.h>
 #include <rescaleframe/texture_dump.h>
 
 #include "dlss_bridge.h"
@@ -1257,6 +1258,41 @@ static void register_overlay_actions(void)
     rsf_bridge_set_actions(&actions);
 }
 
+/* Whether a function key was pressed since the last look, from either route.
+
+   Polling GetAsyncKeyState was the only route until the first Windows run, where the user reported
+   the hotkeys doing nothing while the panel's own keys worked. So a press counts when the async
+   state shows a new press or when the game's window saw one, as a key message or as raw keyboard
+   input, and a second trigger of the same key within a quarter of a second is the same press seen
+   twice. The first few presses of each key say which route delivered them, so the log answers
+   which one this machine needs. */
+static int hotkey(int vk, int* down, uint32_t message_keys, uint32_t sources)
+{
+    static ULONGLONG last_fired[12];
+    static int said[12];
+    const int index = vk - VK_F1;
+    const int now_down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    const int async_edge = now_down && !*down;
+    const int message_edge = (int)((message_keys >> index) & 1u);
+    ULONGLONG now;
+    *down = now_down;
+    if (index < 0 || index >= 12 || (!async_edge && !message_edge)) {
+        return 0;
+    }
+    now = GetTickCount64();
+    if (last_fired[index] != 0 && now - last_fired[index] < 250) {
+        return 0;
+    }
+    last_fired[index] = now;
+    if (said[index] < 3) {
+        ++said[index];
+        note("hotkey: F%d, seen by%s%s%s", index + 1, async_edge ? " the async key state" : "",
+             (message_edge && (sources & (1u << 16))) ? " the window's key messages" : "",
+             (message_edge && (sources & (1u << 17))) ? " raw keyboard input" : "");
+    }
+    return 1;
+}
+
 static DWORD WINAPI observe_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -1271,11 +1307,14 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     int ticks = 0;
     int running = 1;
     while (running) {
-        const int dlss = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
-        if (dlss && !dlss_down) {
-            start_dlss();
+        uint32_t key_sources = 0;
+        const uint32_t message_keys = rsf_overlay_input_take_function_keys(&key_sources);
+        /* F8, F7, F6 and F3 touch the device and the game's immediate context, so they run at the
+           next present on the render thread, where the panel's own buttons run. Starting DLSS from
+           this thread while the game was inside Present crashed the driver. */
+        if (hotkey(VK_F8, &dlss_down, message_keys, key_sources)) {
+            rsf_bridge_request(RSF_BRIDGE_REQUEST_START);
         }
-        dlss_down = dlss;
 
         {
             /* The overlay's own toggle is the window procedure's, which is the right place for it:
@@ -1286,30 +1325,22 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
                Polling here as well costs nothing and does not depend on which window has focus.
                Both paths end in the same set_visible, and the input module ignores a transition to
                the state it is already in, so pressing F5 once cannot toggle twice. */
-            const int panel = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
-            if (panel && !panel_down) {
+            if (hotkey(VK_F5, &panel_down, message_keys, key_sources)) {
                 rsf_overlay_host_toggle();
             }
-            panel_down = panel;
         }
 
-        {
-            const int show = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
-            if (show && !show_down) {
-                rsf_bridge_toggle_display();
-            }
-            show_down = show;
+        if (hotkey(VK_F7, &show_down, message_keys, key_sources)) {
+            rsf_bridge_request(RSF_BRIDGE_REQUEST_DISPLAY);
         }
 
         {
             /* The real path, as against F7's debug view: the reconstruction goes into the game's
                own frame before the tonemap, so the grade and the interface are the game's. It needs
                the frame's tail identified first, which takes a few frames after F8. */
-            const int reinsert = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
-            if (reinsert && !reinsert_down) {
-                rsf_bridge_toggle_reinsert();
+            if (hotkey(VK_F6, &reinsert_down, message_keys, key_sources)) {
+                rsf_bridge_request(RSF_BRIDGE_REQUEST_REINSERT);
             }
-            reinsert_down = reinsert;
         }
 
         /* Report on a timer as well as on the key, because the report a key press produces is
@@ -1325,35 +1356,22 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
             rsf_bridge_report();
         }
 
-        const int down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-        if (down && !was_down && observe_directory[0]) {
+        if (hotkey(VK_F10, &was_down, message_keys, key_sources) && observe_directory[0]) {
             report_and_dump();
         }
-        was_down = down;
 
-        const int scale = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
-        if (scale && !scale_down) {
+        if (hotkey(VK_F9, &scale_down, message_keys, key_sources)) {
             set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
         }
-        scale_down = scale;
 
         {
             /* Extraction, on a key rather than only in the settings, because the thing it changes
                is the picture and the comparison that matters is before against after on the same
                screen. It needs the presented size, which is only known once the game has a swap
                chain, so it cannot simply be applied at attach. */
-            const int extract = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
-            if (extract && !extract_down) {
-                rsf_observer_status status;
-                memset(&status, 0, sizeof(status));
-                status.struct_size = sizeof(status);
-                if (rsf_observer_get_status(&status) == RSF_OBSERVER_OK && status.present_width) {
-                    rsf_bridge_extract_ui(status.present_width, status.present_height);
-                } else {
-                    note("ui extract: the presented size is not known yet");
-                }
+            if (hotkey(VK_F3, &extract_down, message_keys, key_sources)) {
+                rsf_bridge_request(RSF_BRIDGE_REQUEST_EXTRACT);
             }
-            extract_down = extract;
         }
 
         {
@@ -1361,11 +1379,9 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
                has two possible causes and they need different fixes: an offset nothing resolves,
                or a resolve that fails on elements with no motion vectors. Holding still on the
                main menu and pressing this separates them in one press, which no counter can. */
-            const int jitter = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
-            if (jitter && !jitter_down) {
+            if (hotkey(VK_F4, &jitter_down, message_keys, key_sources)) {
                 set_jitter_enabled(!jitter_patch.enabled);
             }
-            jitter_down = jitter;
         }
         Sleep(50);
     }
