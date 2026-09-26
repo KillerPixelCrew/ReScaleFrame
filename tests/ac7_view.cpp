@@ -11,6 +11,7 @@
 
 #include <rescaleframe/ac7_view.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -196,6 +197,76 @@ int read_directory(const char* directory)
     return found == 0 ? 2 : (passed ? 0 : 1);
 }
 
+
+// Row-vector 4x4 algebra, the engine's convention, for building view buffers to check against.
+struct Mat {
+    double m[4][4];
+};
+Mat mul(const Mat& a, const Mat& b)
+{
+    Mat r{};
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            for (int k = 0; k < 4; ++k)
+                r.m[i][j] += a.m[i][k] * b.m[k][j];
+    return r;
+}
+Mat inverse(Mat a)
+{
+    Mat r{};
+    for (int i = 0; i < 4; ++i) r.m[i][i] = 1.0;
+    for (int c = 0; c < 4; ++c) {
+        int pivot = c;
+        for (int i = c + 1; i < 4; ++i)
+            if (std::fabs(a.m[i][c]) > std::fabs(a.m[pivot][c])) pivot = i;
+        std::swap(a.m[c], a.m[pivot]);
+        std::swap(r.m[c], r.m[pivot]);
+        const double d = a.m[c][c];
+        for (int j = 0; j < 4; ++j) { a.m[c][j] /= d; r.m[c][j] /= d; }
+        for (int i = 0; i < 4; ++i) {
+            if (i == c) continue;
+            const double f = a.m[i][c];
+            for (int j = 0; j < 4; ++j) { a.m[i][j] -= f * a.m[c][j]; r.m[i][j] -= f * r.m[c][j]; }
+        }
+    }
+    return r;
+}
+void store(std::vector<unsigned char>& buffer, uint32_t offset, const Mat& a)
+{
+    float values[16];
+    for (int i = 0; i < 16; ++i) values[i] = float(a.m[i / 4][i % 4]);
+    std::memcpy(buffer.data() + offset, values, sizeof(values));
+}
+// A view buffer from a camera and projection, filled the way SceneView.cpp:2259 fills it.
+std::vector<unsigned char> view_buffer(const Mat& translated_world_to_view, const Mat& projection,
+                                       const double pre_view_translation[3], float jx, float jy)
+{
+    std::vector<unsigned char> buffer(RSF_AC7_VIEW_BUFFER_BYTES, 0);
+    Mat translate{};
+    for (int i = 0; i < 4; ++i) translate.m[i][i] = 1.0;
+    for (int i = 0; i < 3; ++i) translate.m[3][i] = pre_view_translation[i];
+    const Mat to_clip = mul(translated_world_to_view, projection);
+    const Mat world_to_clip = mul(translate, to_clip);
+    Mat screen{};
+    screen.m[0][0] = 1.0; screen.m[1][1] = 1.0;
+    screen.m[2][2] = projection.m[2][2]; screen.m[2][3] = 1.0; screen.m[3][2] = projection.m[3][2];
+    Mat sv{};
+    sv.m[0][0] = 2.0 / 1024.0; sv.m[1][1] = -2.0 / 576.0; sv.m[2][2] = 1.0;
+    sv.m[3][0] = -1.0; sv.m[3][1] = 1.0; sv.m[3][3] = 1.0;
+    const Mat screen_to_translated_world = mul(screen, inverse(to_clip));
+    store(buffer, 0x000, to_clip);
+    store(buffer, 0x040, world_to_clip);
+    store(buffer, 0x080, translated_world_to_view);
+    store(buffer, 0x180, projection);
+    store(buffer, 0x1C0, inverse(projection));
+    store(buffer, 0x200, inverse(to_clip));
+    store(buffer, 0x240, mul(sv, screen_to_translated_world));
+    store(buffer, 0x280, mul(screen, inverse(world_to_clip)));
+    store(buffer, 0x2C0, screen_to_translated_world);
+    const float jitter[4] = {jx, jy, 0.0f, 0.0f};
+    std::memcpy(buffer.data() + 0x720, jitter, sizeof(jitter));
+    return buffer;
+}
 } // namespace
 
 int main(int argc, char* argv[])
@@ -324,6 +395,62 @@ int main(int argc, char* argv[])
                             RSF_AC7_VIEW_ABI_VERSION, &target) ==
               RSF_AC7_VIEW_ERROR_NOT_A_VIEW_BUFFER,
           "A size not paired with its reciprocal must be refused.");
+
+    // Removing the jitter from a view buffer gives the buffer of the same camera without it, in
+    // every field the jitter went into.
+    {
+        Mat camera{};
+        const double angle = 0.4;
+        camera.m[0][0] = std::cos(angle); camera.m[0][2] = std::sin(angle);
+        camera.m[1][1] = 1.0;
+        camera.m[2][0] = -std::sin(angle); camera.m[2][2] = std::cos(angle);
+        camera.m[3][0] = 120.0; camera.m[3][1] = -40.0; camera.m[3][2] = 900.0; camera.m[3][3] = 1.0;
+        Mat projection{};
+        projection.m[0][0] = 1.2; projection.m[1][1] = 2.1;
+        projection.m[2][3] = 1.0; projection.m[3][2] = 10.0;
+        const double translation[3] = {-5000.0, 250.0, 1200.0};
+        const float jx = 0.00031f;
+        const float jy = -0.00052f;
+        Mat jittered_projection = projection;
+        jittered_projection.m[2][0] += jx;
+        jittered_projection.m[2][1] += jy;
+        const std::vector<unsigned char> jittered_buffer =
+            view_buffer(camera, jittered_projection, translation, jx, jy);
+        const std::vector<unsigned char> expected =
+            view_buffer(camera, projection, translation, 0.0f, 0.0f);
+        std::vector<unsigned char> removed(RSF_AC7_VIEW_BUFFER_BYTES, 0);
+        check(rsf_ac7_view_remove_jitter(jittered_buffer.data(), removed.data(),
+                                         RSF_AC7_VIEW_BUFFER_BYTES) == 1,
+              "A jittered perspective view must have its jitter removed.");
+        const uint32_t fields[] = {0x000, 0x040, 0x180, 0x1C0, 0x200, 0x240, 0x280, 0x2C0};
+        const char* names[] = {"TranslatedWorldToClip", "WorldToClip", "ViewToClip", "ClipToView",
+                               "ClipToTranslatedWorld", "SVPositionToTranslatedWorld",
+                               "ScreenToWorld", "ScreenToTranslatedWorld"};
+        for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); ++f) {
+            float got[16];
+            float want[16];
+            std::memcpy(got, removed.data() + fields[f], sizeof(got));
+            std::memcpy(want, expected.data() + fields[f], sizeof(want));
+            double worst = 0.0;
+            for (int i = 0; i < 16; ++i) {
+                const double scale = std::fabs(want[i]) > 1.0 ? std::fabs(want[i]) : 1.0;
+                worst = std::max(worst, std::fabs(double(got[i]) - double(want[i])) / scale);
+            }
+            if (worst > 1e-4) {
+                std::fprintf(stderr, "%s differs by %g after removal\n", names[f], worst);
+                passed = false;
+            }
+        }
+        float jitter_after[2];
+        std::memcpy(jitter_after, removed.data() + 0x720, sizeof(jitter_after));
+        check(jitter_after[0] == 0.0f && jitter_after[1] == 0.0f,
+              "The jitter field itself must read zero after removal.");
+        std::vector<unsigned char> untouched(RSF_AC7_VIEW_BUFFER_BYTES, 0);
+        check(rsf_ac7_view_remove_jitter(expected.data(), untouched.data(),
+                                         RSF_AC7_VIEW_BUFFER_BYTES) == 0 &&
+                  untouched == expected,
+              "A view without jitter must be copied unchanged.");
+    }
 
     return passed ? 0 : 1;
 }

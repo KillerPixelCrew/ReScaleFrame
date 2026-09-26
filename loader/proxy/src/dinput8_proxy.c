@@ -438,8 +438,8 @@ static struct {
     unsigned char* stub;
     volatile LONG* stub_width;
     volatile LONG* stub_height;
-    /* The main view the stub last let through, this frame, or null; how many views it let through
-       and turned away; and the width or height that last failed the test, for the report. */
+    /* The main view the stub last let through, kept for inspection in a dump; how many views it
+       let through and turned away; and the width or height that last failed the test. */
     void* volatile* stub_view;
     volatile LONG* stub_allowed;
     volatile LONG* stub_denied;
@@ -555,52 +555,6 @@ static int build_jitter_stub(DWORD rva)
     *jitter_patch.stub_last_denied = 0;
     FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
     return 1;
-}
-
-/* This frame's main-view jitter in render pixels, as the engine stored it on the view.
-
-   `TemporalJitterPixels` sits at view+0xAB4 and +0xAB8: the jitter code stores the sample there
-   just after the stub lets the view through, then adds it to the projection (disassembly at
-   0x14112b529). The view lives until the frame is presented, and the pointer is cleared at
-   present, so this reads the current frame's view or nothing. Guarded anyway, and a value outside
-   half a pixel is not a jitter sample. From the render thread, inside a draw. */
-static int action_jitter_pixels(float* x, float* y)
-{
-    const unsigned char* view;
-    float sample_x = 0.0f;
-    float sample_y = 0.0f;
-    if (!jitter_patch.stub_view || !jitter_patch.enabled) {
-        return 0;
-    }
-    view = (const unsigned char*)*jitter_patch.stub_view;
-    if (!view) {
-        return 0;
-    }
-#ifdef _MSC_VER
-    __try {
-        memcpy(&sample_x, view + 0xAB4, sizeof(sample_x));
-        memcpy(&sample_y, view + 0xAB8, sizeof(sample_y));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-#else
-    /* No structured exceptions in the MinGW build; the pointer is cleared at every present. */
-    memcpy(&sample_x, view + 0xAB4, sizeof(sample_x));
-    memcpy(&sample_y, view + 0xAB8, sizeof(sample_y));
-#endif
-    if (!(sample_x >= -0.51f && sample_x <= 0.51f && sample_y >= -0.51f && sample_y <= 0.51f)) {
-        return 0;
-    }
-    *x = sample_x;
-    *y = sample_y;
-    return 1;
-}
-
-static void action_jitter_frame_ended(void)
-{
-    if (jitter_patch.stub_view) {
-        *jitter_patch.stub_view = NULL;
-    }
 }
 
 /* Keep the stub's main-view size in step with the reconstruction. From the hotkey loop. */
@@ -1486,8 +1440,6 @@ static void register_overlay_actions(void)
     actions.set_jitter = action_set_jitter;
     actions.jitter_open = action_jitter_open;
     actions.jitter_available = action_jitter_available;
-    actions.jitter_pixels = action_jitter_pixels;
-    actions.jitter_frame_ended = action_jitter_frame_ended;
     rsf_bridge_set_actions(&actions);
 }
 

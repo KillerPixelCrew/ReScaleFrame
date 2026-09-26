@@ -118,6 +118,28 @@ typedef struct rsf_ac7_view {
 rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t bytes, uint32_t abi_version,
                                       rsf_ac7_view* out);
 
+/* Write `in` to `out` with the projection jitter taken out of every field it went into, as if the
+   engine had never added it. Returns 1 when a jitter was removed, 0 when there was none or the
+   projection is not a perspective one; `out` is a plain copy then. `bytes` covers the view buffer.
+
+   The interface is drawn with a view's projection into a layer the reconstruction never sees, so
+   a jittered view's panels wobble by the jitter and nothing resolves it. Drawing them with this
+   buffer instead is what an unjittered engine would have done, whatever their shader reads.
+
+   4.18 adds the clip-space jitter (TemporalAAJitter.xy) to ViewToClip[2][0] and [2][1] and derives
+   every other matrix from the result (SceneView.h:402, SceneView.cpp:2259). For a perspective
+   projection, whose column 3 is (0,0,1,0), that is ViewToClip' = ViewToClip * J with J the identity
+   plus (jx, jy) in row 3. Taken back out:
+     into clip (TranslatedWorldToClip, WorldToClip, ViewToClip): column 0 -= jx * column 3,
+       column 1 -= jy * column 3;
+     out of clip (ClipToView, ClipToTranslatedWorld): row 3 += jx * row 0 + jy * row 1;
+     screen to world (ScreenToWorld, ScreenToTranslatedWorld): row 2 += jx * row 0 + jy * row 1;
+     SVPositionToTranslatedWorld: row 2 += the same, from ScreenToTranslatedWorld's rows;
+     TemporalAAJitter.xy = 0.
+   The previous frame's matrices are left: they carry the previous jitter, which is what the
+   engine's own velocity uses. */
+uint32_t rsf_ac7_view_remove_jitter(const void* in, void* out, uint32_t bytes);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

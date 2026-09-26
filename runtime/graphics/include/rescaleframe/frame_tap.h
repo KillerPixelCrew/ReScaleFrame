@@ -315,19 +315,17 @@ typedef struct rsf_frame_tap_divert_setup {
    same code with this switched off. */
 rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* setup);
 
-/* Asked before a candidate draw is forwarded: how far to move it, in render-resolution pixels.
-   Return non-zero with the offset filled to move it; zero leaves it alone.
+/* Asked before a candidate draw is forwarded: whether to bind a different vertex-shader constant
+   buffer for that draw only. Return non-zero with `slot` and `buffer` (`ID3D11Buffer*`) filled.
 
-   For taking the projection jitter back out of a draw that is not reconstructed. AC7's interface
-   panels are drawn with the main camera's jittered projection into a layer the reconstruction
-   never sees, so they wobble by the jitter; moving their viewport by minus the jitter cancels it
-   exactly, since the jitter is a constant screen-space shift. The tap multiplies the offset by the
-   plan's viewport scale while a promoted target is bound, restores the viewport after the draw,
-   and counts every nudge in `draws_nudged`. Independent of diverting; a diverted draw is not
-   nudged. Appended in ABI 8, as a function rather than a field. */
-typedef int (*rsf_frame_tap_nudge_fn)(void* user, const rsf_frame_tap_target_draw* draw,
-                                      float* offset_x, float* offset_y);
-rsf_frame_tap_result rsf_frame_tap_set_nudge(rsf_frame_tap_nudge_fn nudge, void* user);
+   For drawing the interface with an unjittered copy of its view's uniform buffer. The tap binds
+   the buffer through the original entry, forwards the draw, and puts the game's own buffer back,
+   so its shadow and the game's state stay as the game set them. Counted in `draws_overridden`.
+   Independent of diverting; a diverted draw is not asked. Appended in ABI 8. */
+typedef int (*rsf_frame_tap_constant_override_fn)(void* user, const rsf_frame_tap_target_draw* draw,
+                                                  uint32_t* slot, void** buffer);
+rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_override_fn fn,
+                                                         void* user);
 
 /* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
    the Unmap is forwarded, for buffers exactly `bytes` wide. Unreal 4.18's D3D11 RHI writes every
@@ -538,8 +536,8 @@ typedef struct rsf_frame_tap_status {
        flush, and a run where it stays at zero while draws go unobserved is a run on a runtime this
        module has not met. See `rsf_frame_tap_refresh`. */
     uint32_t vtable_refreshes;
-    /* Draws moved by the nudge callback. */
-    uint32_t draws_nudged;
+    /* Draws given a different vertex constant buffer by the override callback. */
+    uint32_t draws_overridden;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.

@@ -275,3 +275,91 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
                             : 0u;
     return RSF_AC7_VIEW_OK;
 }
+
+namespace {
+
+// Offsets of the fields the jitter goes into, in the 4.18 order (SceneView.h:563) that the reader's
+// verified offsets above sit in: ViewToClip at 0x180 and ClipToView at 0x1C0 fix the rest.
+constexpr uint32_t offset_translated_world_to_clip = 0x000;
+constexpr uint32_t offset_world_to_clip = 0x040;
+constexpr uint32_t offset_clip_to_translated_world = 0x200;
+constexpr uint32_t offset_sv_position_to_translated_world = 0x240;
+constexpr uint32_t offset_screen_to_world = 0x280;
+constexpr uint32_t offset_screen_to_translated_world = 0x2C0;
+
+float* matrix_at(unsigned char* bytes, uint32_t offset)
+{
+    return reinterpret_cast<float*>(bytes + offset);
+}
+
+// M * J^-1 for a matrix into clip space.
+void unjitter_into_clip(float* m, float jx, float jy)
+{
+    for (int row = 0; row < 4; ++row) {
+        m[row * 4 + 0] -= jx * m[row * 4 + 3];
+        m[row * 4 + 1] -= jy * m[row * 4 + 3];
+    }
+}
+
+// Add jx * row a + jy * row b of `source` to row `target_row` of `m`.
+void add_rows(float* m, int target_row, const float* source, float jx, float jy)
+{
+    float row0[4];
+    float row1[4];
+    std::memcpy(row0, source + 0, sizeof(row0));
+    std::memcpy(row1, source + 4, sizeof(row1));
+    for (int column = 0; column < 4; ++column) {
+        m[target_row * 4 + column] += jx * row0[column] + jy * row1[column];
+    }
+}
+
+} // namespace
+
+extern "C" uint32_t rsf_ac7_view_remove_jitter(const void* in, void* out, uint32_t bytes)
+{
+    if (!in || !out || bytes < offset_view_size + 16) {
+        return 0;
+    }
+    std::memcpy(out, in, bytes);
+    auto* data = static_cast<unsigned char*>(out);
+    float jitter[2];
+    std::memcpy(jitter, data + offset_temporal_aa_jitter, sizeof(jitter));
+    const float jx = jitter[0];
+    const float jy = jitter[1];
+    if (jx == 0.0f && jy == 0.0f) {
+        return 0;
+    }
+    // Perspective only: column 3 of the projection is (0, 0, 1, 0), which is what makes the jitter
+    // a multiple of clip w. Anything else is left jittered rather than corrected wrongly.
+    const float* projection = matrix_at(data, offset_view_to_clip);
+    if (projection[0 * 4 + 3] != 0.0f || projection[1 * 4 + 3] != 0.0f ||
+        projection[2 * 4 + 3] != 1.0f || projection[3 * 4 + 3] != 0.0f) {
+        return 0;
+    }
+
+    unjitter_into_clip(matrix_at(data, offset_translated_world_to_clip), jx, jy);
+    unjitter_into_clip(matrix_at(data, offset_world_to_clip), jx, jy);
+    unjitter_into_clip(matrix_at(data, offset_view_to_clip), jx, jy);
+
+    float* clip_to_view = matrix_at(data, offset_clip_to_view);
+    add_rows(clip_to_view, 3, clip_to_view, jx, jy);
+    float* clip_to_translated_world = matrix_at(data, offset_clip_to_translated_world);
+    add_rows(clip_to_translated_world, 3, clip_to_translated_world, jx, jy);
+
+    // The screen matrices' rows 0 and 1 are the same before and after, so the correction for
+    // SVPositionToTranslatedWorld reads ScreenToTranslatedWorld's rows before that is corrected.
+    const float* screen_to_translated_world_before =
+        matrix_at(static_cast<unsigned char*>(const_cast<void*>(in)),
+                  offset_screen_to_translated_world);
+    add_rows(matrix_at(data, offset_sv_position_to_translated_world), 2,
+             screen_to_translated_world_before, jx, jy);
+    float* screen_to_world = matrix_at(data, offset_screen_to_world);
+    add_rows(screen_to_world, 2, screen_to_world, jx, jy);
+    float* screen_to_translated_world = matrix_at(data, offset_screen_to_translated_world);
+    add_rows(screen_to_translated_world, 2, screen_to_translated_world, jx, jy);
+
+    jitter[0] = 0.0f;
+    jitter[1] = 0.0f;
+    std::memcpy(data + offset_temporal_aa_jitter, jitter, sizeof(jitter));
+    return 1;
+}
