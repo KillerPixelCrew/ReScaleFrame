@@ -216,6 +216,10 @@ static struct {
        matching and reinsertion does nothing while still reporting itself as on. */
     unsigned long redirects_seen;
     unsigned long redirect_stall;
+    /* Whether the installed plan's composite has opened a gate since it was installed, and the
+       composite it was installed for, which a rebuild for a new layer keeps. */
+    int plan_proven;
+    void* plan_composite;
     unsigned long tail_restakes;
     int tail_restaking;
     /* The interface layers: the targets the classifier has seen widget quads drawn into, each
@@ -1237,9 +1241,10 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     }
     ++bridge.tail_draws;
 
-    /* Described only while the tail is being walked. A chain rescan watches the composite again
-       every few hundred frames and would otherwise write the same lines each time. */
-    if (bridge.tail_frames <= RSF_TAIL_STOP_FRAMES) {
+    /* Described only while the tail is being walked, and only for the first few walks. A chain
+       rescan watches the composite again every few hundred frames, and a quick restake on a
+       loading screen walks the tail every second; both would otherwise write the same lines. */
+    if (bridge.tail_frames <= RSF_TAIL_STOP_FRAMES && bridge.tail_restakes <= 5) {
         say("%s draw %lu: target %p %lux%lu format %lu, viewport %lux%lu, %s %lu, %lu inputs",
             draw->watch_index == 0 ? "back buffer" : "composite", (unsigned long)draw->draw_index,
             draw->render_target, (unsigned long)draw->target_width,
@@ -1322,10 +1327,13 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 /* Ask the frame about its own tail, for a bounded number of presents. */
 /* How many frames of redirecting nothing means the plan no longer describes the frame.
 
-   Generous, because a legitimately quiet stretch exists: a loading screen or a menu can go a while
-   without binding the composite. Restaking costs 32 frames of describing the tail again, so being
-   slow to react is cheaper than reacting to a pause. */
+   Generous for a plan that has worked, because a legitimately quiet stretch exists: a loading
+   screen can go a while without binding the composite. Quick for a plan that never has: the intro
+   images each change the pool, and a plan found at one that waited four seconds to be replaced was
+   always a screen behind, which left the title screen with a stale composite and a soft interface.
+   A plan that has not opened one gate in half a second is wrong, not paused. */
 #define RSF_REINSERT_STALL_FRAMES 240ul
+#define RSF_REINSERT_UNPROVEN_STALL_FRAMES 30ul
 
 /* Defined below, next to the toggle it shares its work with. Declared here because a stalled plan
    is noticed in the present hook, which runs long before that. */
@@ -1354,20 +1362,29 @@ static void watch_for_stalled_plan(void)
        composite was a surface the pool had already retired: zero gates, zero evaluations, and an
        interface composited into the real, unpromoted composite, blurry. */
     if (tap.gates_opened != bridge.redirects_seen) {
+        /* The install recorded the count, so any movement is a gate under this plan. */
+        bridge.plan_proven = 1;
         bridge.redirects_seen = tap.gates_opened;
         bridge.redirect_stall = 0;
         return;
     }
-    if (bridge.tail_restaking || ++bridge.redirect_stall < RSF_REINSERT_STALL_FRAMES) {
-        return;
+    {
+        const unsigned long patience =
+            bridge.plan_proven ? RSF_REINSERT_STALL_FRAMES : RSF_REINSERT_UNPROVEN_STALL_FRAMES;
+        if (bridge.tail_restaking || ++bridge.redirect_stall < patience) {
+            return;
+        }
+        ++bridge.tail_restakes;
+        bridge.redirect_stall = 0;
+        bridge.tail_restaking = 1;
+        /* Every restake of the first few and then one in twenty, because a loading screen restakes
+           a quick plan every second and the log is not the place to count them one by one. */
+        if (bridge.tail_restakes <= 5 || bridge.tail_restakes % 20 == 0) {
+            say("reinsert: the composite has not been bound for %lu frames, so the plan no longer "
+                "names the frame's composite. Looking for the tail again, restake %lu",
+                patience, bridge.tail_restakes);
+        }
     }
-
-    ++bridge.tail_restakes;
-    bridge.redirect_stall = 0;
-    bridge.tail_restaking = 1;
-    say("reinsert: the composite has not been bound for %lu frames, so the plan no longer names "
-        "the frame's composite. Looking for the tail again, restake %lu",
-        RSF_REINSERT_STALL_FRAMES, bridge.tail_restakes);
     /* Let go of what the plan named before looking, so a stale composite cannot be re-found by
        being the thing already held. The tail walk re-identifies both from the frame itself. */
     rsf_frame_tap_set_plan(NULL);
@@ -2405,6 +2422,20 @@ static int install_reinsert_plan(void)
        just because the previous plan's redirects are still the last thing counted. */
     bridge.redirect_stall = 0;
     bridge.plan_stale = 0;
+    /* Unproven until a gate opens under this plan, which the stall detector measures from the
+       count at this moment. A rebuild for a new layer keeps a composite that is already proven. */
+    {
+        rsf_frame_tap_status tap;
+        memset(&tap, 0, sizeof(tap));
+        tap.struct_size = sizeof(tap);
+        if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
+            if (bridge.plan_composite != bridge.composite) {
+                bridge.plan_proven = 0;
+            }
+            bridge.redirects_seen = tap.gates_opened;
+        }
+        bridge.plan_composite = bridge.composite;
+    }
     return 1;
 }
 
