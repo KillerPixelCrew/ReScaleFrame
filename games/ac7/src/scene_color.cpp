@@ -4,6 +4,26 @@
 
 #include <dxgiformat.h>
 
+// The layers the recombine reads. The depth of field layers are half size; separate translucency is
+// whatever size it is told to render at, which is the presented size when it stays out of the
+// reconstruction, so anything from half to double the scene's size with the scene's aspect counts.
+// The pool rounds rows up to a multiple of four, hence the tolerance on the aspect.
+static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_width,
+                            uint32_t scene_height)
+{
+    if (width == 0 || height == 0 || scene_width == 0 || scene_height == 0) {
+        return false;
+    }
+    if (width < (scene_width + 1) / 2 || width > scene_width * 2 ||
+        height < (scene_height + 1) / 2 || height > scene_height * 2 + 4) {
+        return false;
+    }
+    const uint64_t cross_a = uint64_t(width) * scene_height;
+    const uint64_t cross_b = uint64_t(height) * scene_width;
+    const uint64_t difference = cross_a > cross_b ? cross_a - cross_b : cross_b - cross_a;
+    return difference * 50u <= cross_b;
+}
+
 extern "C" void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
 {
     rsf_resource_release(state->source);
@@ -59,9 +79,7 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         }
         if (input.texture && input.texture != state->source &&
             input.format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
-            ((input.width == state->width && input.height == state->height) ||
-             (input.width == (state->width + 1) / 2 &&
-              input.height == (state->height + 1) / 2))) {
+            layer_size_fits(input.width, input.height, state->width, state->height)) {
             reads_layer = true;
             bool already = false;
             for (uint32_t seen = 0; seen < candidate_count; ++seen) {

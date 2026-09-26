@@ -255,8 +255,44 @@ int main()
     check(entry_for(smaller, layer_a) == nullptr && entry_for(smaller, chain) == nullptr,
           "It must not name a texture that was not identified.");
 
+    stage("the recombine route");
+    // Scene colour is R11G11B10 in the game; the recombined target has the same format. Neither is
+    // typeless, so neither needs a hint.
+    ID3D11Texture2D* composed = make_target(device, 256, 144, DXGI_FORMAT_R11G11B10_FLOAT);
+    check(composed != nullptr, "The recombined stand-in must be created.");
+    rsf_promote_frame_tail recombine = tail;
+    recombine.composed = composed;
+    check(rsf_promote_prepare(promote, &recombine) == RSF_PROMOTE_OK,
+          "A tail naming the recombine must prepare.");
+    check(rsf_promote_get_status(promote, &status) == RSF_PROMOTE_OK && status.at_recombine == 1,
+          "Status must say the reconstruction goes in at the recombine.");
+    rsf_frame_tap_plan routed{};
+    routed.struct_size = sizeof(routed);
+    check(rsf_promote_fill_plan(promote, &routed) == RSF_PROMOTE_OK,
+          "The recombine plan must build.");
+    const rsf_frame_tap_substitution* composed_item = entry_for(routed, composed);
+    check(composed_item && composed_item->render_view && composed_item->shader_view &&
+              composed_item->after_target == nullptr,
+          "The recombined target must be promoted from the start of the frame, both ways.");
+    const rsf_frame_tap_substitution* scene_whole = entry_for(routed, scene_color);
+    check(scene_whole && scene_whole->render_view && scene_whole->shader_view &&
+              scene_whole->after_target == composed,
+          "Scene colour must become a whole output size surface once the recombine is bound, so "
+          "the game's copy of the recombined result back into it lands at output size too.");
+    check(rsf_promote_seed(promote, context) == RSF_PROMOTE_OK,
+          "Seeding scene colour's stand-in with the reconstruction must succeed.");
+    check(rsf_promote_prepare(promote, &tail) == RSF_PROMOTE_OK &&
+              rsf_promote_get_status(promote, &status) == RSF_PROMOTE_OK &&
+              status.at_recombine == 0,
+          "A tail without the recombine must go back to the tonemap route.");
+    check(rsf_promote_seed(promote, context) == RSF_PROMOTE_OK,
+          "Seeding on the tonemap route must do nothing and succeed.");
+
     stage("releasing");
     rsf_promote_destroy(promote);
+    if (composed) {
+        composed->Release();
+    }
     reconstruction->Release();
     scene_color->Release();
     chain->Release();

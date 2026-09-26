@@ -122,3 +122,35 @@ the relief is a static mesh actor that never enters the velocity pass. A still c
 Moving the briefing camera, and mission replay, are what would show ghosting or smear if either
 convention is wrong. Flight behaviour is also unverified since this change, though the condition is
 false there in every capture examined.
+
+## Superseded: translucency stays out of the reconstruction
+
+26 September 2026. Handing DLSS the composed colour put the briefing relief and the aircraft
+symbols through a reconstruction that had no usable depth or motion for them, and on Windows they
+shimmered with the jitter while everything else resolved. A translucent depth replay sized to the
+layer did not change that.
+
+The route now follows the game's own frame order, measured in the briefing with the bridge's frame
+order trace: scene colour, the depth of field passes, then one three-vertex draw that reads scene
+colour, depth, both half-size depth of field layers and the separate translucency layer and writes
+the recombined colour, which the tonemap then reads back through scene colour.
+
+- **DLSS is evaluated at the recombine.** The gate opens when the recombined target is bound, before
+  translucency is in anything. The inputs are the scene colour, depth, motion and exposure the last
+  qualifying pass named, which are the same pooled targets every frame, and this frame's camera,
+  read from the main view's uniform buffer as the game uploads it.
+- **The reconstruction seeds scene colour.** Scene colour is promoted to output size from the
+  recombine onward and filled with the reconstruction by a copy pass. The recombined target is
+  promoted too, and the copy back into scene colour is redirected between the two stand-ins.
+- **Translucency renders at native size.** The separate translucency scale is always 100% of the
+  presented resolution. Its draws take the unjittered twin of the view, as the interface's do, so
+  the layer the recombine composites has no jitter for anything to resolve.
+- **The route follows the screen.** A plan on the recombine route that sees no recombine for twenty
+  frames goes back to evaluating at the tonemap, and returns when the recombine is seen again.
+
+Removed with this: the heavy frame switch on the layer's scale, the translucent depth replay, and
+the composed colour as the backend's input. Translucent velocity is off by default, since its only
+effect now would be to overwrite the scene's motion behind the layer.
+
+Unverified in game at the time of writing: the briefing relief and symbols without jitter, the
+hangar, flight, and the route switch on leaving the briefing.

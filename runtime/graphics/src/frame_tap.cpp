@@ -195,6 +195,12 @@ struct Tap {
     std::atomic<rsf_frame_tap_constant_override_fn> constant_override{nullptr};
     std::atomic<void*> constant_override_user{nullptr};
     std::atomic<uint32_t> draws_overridden{0};
+    std::atomic<uint32_t> copies_redirected{0};
+    std::atomic<uint32_t> copies_mismatched{0};
+    // Render targets whose draws are offered the constant override whether or not they pass the
+    // candidate prefilter: the separate translucency layer, which is scene geometry.
+    static constexpr uint32_t max_override_targets = 4;
+    std::atomic<void*> override_targets[max_override_targets]{};
     struct OverrideState {
         bool active = false;
         UINT slot = 0;
@@ -499,6 +505,23 @@ const rsf_frame_tap_substitution* find_entry(const Tap& self, void* texture, uin
 bool entry_applies(const Tap& self, uint32_t index)
 {
     return self.plan.items[index].after_target == nullptr || self.gate_open[index];
+}
+
+// The stand-in texture for a promoted resource whose substitution applies now, with a reference
+// the caller releases, or null.
+ID3D11Resource* promoted_resource(const Tap& self, ID3D11Resource* resource)
+{
+    if (!resource) {
+        return nullptr;
+    }
+    uint32_t index = 0;
+    const rsf_frame_tap_substitution* entry = find_entry(self, resource, index);
+    if (!entry || !entry->render_view || !entry_applies(self, index)) {
+        return nullptr;
+    }
+    ID3D11Resource* stand_in = nullptr;
+    static_cast<ID3D11RenderTargetView*>(entry->render_view)->GetResource(&stand_in);
+    return stand_in;
 }
 
 // Open any gate this render target opens, and tell the caller. Runs before the binding is
@@ -915,7 +938,19 @@ void begin_constant_override(Tap& self, ID3D11DeviceContext* context, bool index
     state.active = false;
     const rsf_frame_tap_constant_override_fn fn =
         self.constant_override.load(std::memory_order_acquire);
-    if (!fn || !candidate_passes(self) || !self.extra_originals[5]) {
+    if (!fn || !self.extra_originals[5]) {
+        return;
+    }
+    bool offered = false;
+    if (self.target_texture) {
+        for (const auto& target : self.override_targets) {
+            if (target.load(std::memory_order_relaxed) == self.target_texture) {
+                offered = true;
+                break;
+            }
+        }
+    }
+    if (!offered && !candidate_passes(self)) {
         return;
     }
     rsf_frame_tap_target_draw facts;
@@ -2104,7 +2139,32 @@ void STDMETHODCALLTYPE hooked_copy_resource(ID3D11DeviceContext* c, ID3D11Resour
 {
     Tap& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
-    reinterpret_cast<Fn>(s.pass_originals[6])(c, destination, source);
+    // A copy between textures the plan has promoted goes between their stand-ins, so a result the
+    // game copies from one promoted target into another arrives at output resolution. AC7 copies
+    // its recombined colour back into scene colour this way before the tonemap reads it.
+    ID3D11Resource* forwarded_destination = destination;
+    ID3D11Resource* forwarded_source = source;
+    if (!inside_hook && c == s.observed_context && s.plan_active.load(std::memory_order_relaxed)) {
+        const ReentryGuard guard;
+        ID3D11Resource* promoted_destination = promoted_resource(s, destination);
+        ID3D11Resource* promoted_source = promoted_resource(s, source);
+        if (promoted_destination && promoted_source) {
+            forwarded_destination = promoted_destination;
+            forwarded_source = promoted_source;
+            s.copies_redirected.fetch_add(1, std::memory_order_relaxed);
+        } else if (promoted_destination || promoted_source) {
+            // Half a pair would copy between different sizes, which D3D11 drops. Counted, so a
+            // run can say the case exists.
+            s.copies_mismatched.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (promoted_destination) {
+            promoted_destination->Release();
+        }
+        if (promoted_source) {
+            promoted_source->Release();
+        }
+    }
+    reinterpret_cast<Fn>(s.pass_originals[6])(c, forwarded_destination, forwarded_source);
     refresh_hooks(s);
 }
 void STDMETHODCALLTYPE hooked_update_subresource(ID3D11DeviceContext* c,
@@ -2661,6 +2721,16 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes,
     return RSF_FRAME_TAP_OK;
 }
 
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* texture)
+{
+    Tap& self = tap();
+    if (index >= Tap::max_override_targets) {
+        return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    }
+    self.override_targets[index].store(texture, std::memory_order_release);
+    return RSF_FRAME_TAP_OK;
+}
+
 extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_override(
     rsf_frame_tap_constant_override_fn fn, void* user)
 {
@@ -2831,5 +2901,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->divert_last_refusal = self.divert_last_refusal.load(std::memory_order_relaxed);
     status->vtable_refreshes = self.vtable_refreshes.load(std::memory_order_relaxed);
     status->draws_overridden = self.draws_overridden.load(std::memory_order_relaxed);
+    status->copies_redirected = self.copies_redirected.load(std::memory_order_relaxed);
+    status->copies_mismatched = self.copies_mismatched.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

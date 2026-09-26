@@ -175,6 +175,11 @@ static struct {
     unsigned long translucent_draws_last;
     unsigned long depth_handover_traced;
     unsigned long depth_replay_width[2];
+    /* The separate translucency layer as the last candidate draw named it, and how many draws
+       reading the scene colour are still to be described after the layer first appeared on a
+       screen: the order between the translucency composite and the tonemap, read from the game. */
+    void* translucency_layer;
+    unsigned long order_trace;
     /* The present each replay target last took a draw in, so a size the layer no longer uses is
        the one rebuilt when a new size appears. */
     unsigned long depth_replay_used[2];
@@ -189,6 +194,23 @@ static struct {
     rsf_camera_frame held_camera;
     unsigned long held_width;
     unsigned long held_height;
+    /* The recombine route evaluates before this frame's qualifying pass has happened, so it works
+       from the textures the last pass named, which are the same pooled targets every frame, and
+       from this frame's camera, read from the main view's uniform buffer as the game uploads it. */
+    void* last_depth;
+    void* last_motion;
+    void* last_exposure;
+    rsf_camera_frame upload_camera;
+    unsigned long upload_width;
+    unsigned long upload_height;
+    int upload_camera_valid;
+    /* Which route the plan takes. The recombine exists on screens with separate translucency, the
+       briefing among them, and not on every menu; a plan waiting for a recombine that never comes
+       never evaluates. So the route follows the frame: the recombine route while its gate opens,
+       the composite route once it has stayed shut, and back when the recombine is seen again. */
+    int recombine_gate_this_frame;
+    unsigned long recombine_missing;
+    int recombine_off;
     /* The main view's render size from the last qualifying pass, kept past the frame, for the
        jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
     volatile LONG view_width;
@@ -684,6 +706,21 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     rsf_resource_retain(bridge.held_motion);
     rsf_resource_retain(bridge.held_exposure);
     bridge.held_camera = camera;
+    if (bridge.last_depth != pass->depth) {
+        rsf_resource_release(bridge.last_depth);
+        bridge.last_depth = pass->depth;
+        rsf_resource_retain(bridge.last_depth);
+    }
+    if (bridge.last_motion != pass->motion) {
+        rsf_resource_release(bridge.last_motion);
+        bridge.last_motion = pass->motion;
+        rsf_resource_retain(bridge.last_motion);
+    }
+    if (bridge.last_exposure != pass->exposure) {
+        rsf_resource_release(bridge.last_exposure);
+        bridge.last_exposure = pass->exposure;
+        rsf_resource_retain(bridge.last_exposure);
+    }
     bridge.held_width = pass->render_width;
     bridge.held_height = pass->render_height;
     bridge.have_held = 1;
@@ -714,7 +751,6 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
 
 static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
-    unsigned int i;
     unsigned int rejects[2];
     (void)user;
     if (!bridge.started) {
@@ -737,6 +773,12 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
         return;
     }
     ++bridge.depth_candidates;
+    if (draw->target != bridge.translucency_layer) {
+        bridge.translucency_layer = draw->target;
+        rsf_frame_tap_set_override_target(0, draw->target);
+        say("translucency layer %p %lux%lu: its draws take the unjittered view", draw->target,
+            (unsigned long)draw->width, (unsigned long)draw->height);
+    }
     bridge.depth_candidate_width = draw->width;
     bridge.depth_candidate_height = draw->height;
     bridge.depth_candidate_samples = draw->samples;
@@ -747,14 +789,8 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
     bridge.translucent_indices +=
         (unsigned long)draw->count * (draw->instances ? (unsigned long)draw->instances : 1ul);
 
-    for (i = 0; i < 2; ++i) {
-        const uint32_t replayed = rsf_depth_replay_draw(bridge.depth_replay[i], draw);
-        bridge.depth_replayed += replayed;
-        if (replayed) {
-            bridge.depth_replay_used[i] = bridge.presents;
-        }
-        rejects[i] = replayed ? 0u : rsf_depth_replay_last_reject(bridge.depth_replay[i]);
-    }
+    rejects[0] = 0;
+    rejects[1] = 0;
 
     if (bridge.geometry_traced < RSF_GEOMETRY_TRACE_DRAWS) {
         ++bridge.geometry_traced;
@@ -771,6 +807,8 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
             (unsigned long)rejects[0], (unsigned long)rejects[1]);
     }
 }
+
+static void describe_inputs(const rsf_frame_tap_target_draw* draw);
 
 static void on_input_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
@@ -792,7 +830,12 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
         say("    slot %lu: %p %lux%lu format %lu%s", (unsigned long)input->slot, input->texture,
             (unsigned long)input->width, (unsigned long)input->height,
             (unsigned long)input->format,
-            (input->texture && input->texture == bridge.held_color) ? "  <- scene colour" : "");
+            (input->texture && input->texture == bridge.held_color) ? "  <- scene colour"
+            : (input->texture && input->texture == bridge.translucency_layer)
+                ? "  <- translucency layer"
+            : (input->texture && input->texture == bridge.color_selection.composed)
+                ? "  <- recombined colour"
+                : "");
     }
 }
 
@@ -1368,6 +1411,49 @@ static int install_reinsert_plan(void);
    stops matching. Nothing about that is visible from inside the game, and nothing about it is
    visible in the counters either, because they do not fall, they simply stop rising. That is what
    was happening when reinsertion reported itself on for 18,000 frames having opened 569 gates. */
+/* Frames without a recombine before the plan leaves the recombine route. Under the unproven stall
+   patience, so a menu reached from the briefing switches routes rather than restaking. */
+#define RSF_RECOMBINE_ABSENT_FRAMES 20u
+
+static void follow_recombine(void)
+{
+    rsf_promote_status status;
+    const int seen = bridge.recombine_gate_this_frame;
+
+    bridge.recombine_gate_this_frame = 0;
+    if (!bridge.promote || bridge.plan_stale) {
+        return;
+    }
+    memset(&status, 0, sizeof(status));
+    status.struct_size = sizeof(status);
+    if (rsf_promote_get_status(bridge.promote, &status) != RSF_PROMOTE_OK || !status.ready) {
+        return;
+    }
+    if (status.at_recombine) {
+        if (seen) {
+            bridge.recombine_missing = 0;
+            return;
+        }
+        if (++bridge.recombine_missing < RSF_RECOMBINE_ABSENT_FRAMES) {
+            return;
+        }
+        bridge.recombine_missing = 0;
+        bridge.recombine_off = 1;
+        bridge.plan_stale = 1;
+        say("reinsert: no recombine for %u frames, so the reconstruction goes in at the tonemap",
+            RSF_RECOMBINE_ABSENT_FRAMES);
+        return;
+    }
+    /* The composite route. The recombine rule matches here because nothing it reads is promoted. */
+    if (bridge.color_selection.composed_this_frame && bridge.color_selection.composed) {
+        bridge.recombine_off = 0;
+        bridge.recombine_missing = 0;
+        bridge.plan_stale = 1;
+        say("reinsert: the recombine is back, so the reconstruction goes in there and separate "
+            "translucency stays out of it");
+    }
+}
+
 static void watch_for_stalled_plan(void)
 {
     rsf_frame_tap_status tap;
@@ -1491,66 +1577,15 @@ static void evaluate_held(void* context)
         return;
     }
 
+    /* The scene colour and depth the qualifying pass bound. Separate translucency is not the
+       reconstruction's business any more: it is rendered at full size and composited over the
+       reconstruction by the game's own recombine, so it neither goes through DLSS nor needs a
+       depth of its own there. */
     memset(&frame, 0, sizeof(frame));
     frame.struct_size = sizeof(frame);
     frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    frame.scene_color = rsf_ac7_scene_color_selected(&bridge.color_selection, bridge.held_color);
-    if (frame.scene_color != bridge.held_color) {
-        if (bridge.composed_evaluations < 4) {
-            say("composed scene colour: %p -> %p at %lux%lu", bridge.held_color,
-                frame.scene_color, bridge.held_width, bridge.held_height);
-        }
-        ++bridge.composed_evaluations;
-    }
+    frame.scene_color = bridge.held_color;
     frame.depth = bridge.held_depth;
-    if (frame.scene_color != bridge.held_color) {
-        unsigned int i;
-        for (i = 0; i < 2; ++i) {
-            /* Against every layer the recombine reads, not one chosen for it. The replay knows
-               which texture it drew into, so the match is that texture appearing among this
-               frame's inputs, and there is nothing left to guess. */
-            uint32_t candidate;
-            for (candidate = 0; candidate < bridge.color_selection.composed_layer_count;
-                 ++candidate) {
-                void* selected = rsf_depth_replay_selected(
-                    bridge.depth_replay[i], context, bridge.held_depth,
-                    bridge.color_selection.composed_layers[candidate]);
-                if (selected != bridge.held_depth) {
-                    frame.depth = selected;
-                    break;
-                }
-            }
-        }
-        if (frame.depth != bridge.held_depth) {
-            if (bridge.depth_evaluations < 4) {
-                say("translucent depth: %p -> %p at %lux%lu", bridge.held_depth, frame.depth,
-                    bridge.held_width, bridge.held_height);
-            }
-            ++bridge.depth_evaluations;
-        } else if (bridge.depth_handover_traced < 8) {
-            /* Both sides of the comparison, here rather than in the periodic report.
-
-               The report runs on a timer and end_frame clears the layer, the depth and the context
-               the moment the frame finishes, so every field read there was null and said nothing.
-               This is the one place where both sides exist at once. */
-            unsigned int slot;
-            ++bridge.depth_handover_traced;
-            for (slot = 0; slot < 2; ++slot) {
-                rsf_depth_replay_detail detail;
-                memset(&detail, 0, sizeof(detail));
-                rsf_depth_replay_get_detail(bridge.depth_replay[slot], &detail);
-                say("translucent depth: replay %u holds layer %p source %p context %p, %lu draws, "
-                    "refused %lu; the frame offers %lu layers, first %p, depth %p context %p",
-                    slot, detail.layer, detail.source, detail.context, (unsigned long)detail.draws,
-                    (unsigned long)detail.refused,
-                    (unsigned long)bridge.color_selection.composed_layer_count,
-                    bridge.color_selection.composed_layer_count
-                        ? bridge.color_selection.composed_layers[0]
-                        : NULL,
-                    bridge.held_depth, context);
-            }
-        }
-    }
     frame.game_motion = bridge.held_motion;
     frame.exposure = bridge.held_exposure;
     frame.render_width = (uint32_t)bridge.held_width;
@@ -1578,13 +1613,65 @@ static void evaluate_held(void* context)
    The price of being here rather than at Present is that the game is midway through its frame and
    will not rebind what it believes is still bound. Streamline says it does not restore state, so
    the whole pipeline is saved and put back around the evaluate. */
+/* Evaluate at the recombine: scene colour is finished and translucency is not in it yet.
+
+   The qualifying pass comes later in the frame, so this takes the textures the last pass named and
+   this frame's camera from the main view's upload. Returns whether an evaluation happened. */
+static int evaluate_at_recombine(void* context)
+{
+    rsf_dlss_pipeline_frame frame;
+    rsf_dlss_pipeline_result result;
+    if (!bridge.upload_camera_valid || !bridge.scene_color || !bridge.last_depth ||
+        !bridge.last_motion || bridge.upload_width == 0 || bridge.upload_height == 0) {
+        ++bridge.refused;
+        return 0;
+    }
+    memset(&frame, 0, sizeof(frame));
+    frame.struct_size = sizeof(frame);
+    frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
+    frame.scene_color = bridge.scene_color;
+    frame.depth = bridge.last_depth;
+    frame.game_motion = bridge.last_motion;
+    frame.exposure = bridge.last_exposure;
+    frame.render_width = (uint32_t)bridge.upload_width;
+    frame.render_height = (uint32_t)bridge.upload_height;
+    frame.camera = &bridge.upload_camera;
+    result = rsf_dlss_pipeline_on_frame(context, &frame);
+    bridge.last_result = (long)result;
+    if (result != RSF_DLSS_PIPELINE_OK) {
+        ++bridge.refused;
+        return 0;
+    }
+    ++bridge.evaluated;
+    return 1;
+}
+
 static void on_gate(void* user, void* context, void* texture)
 {
     rsf_d3d11_state state;
+    rsf_promote_status status;
 
     (void)user;
     (void)texture;
-    if (!bridge.have_held || !context) {
+    if (!context) {
+        return;
+    }
+    memset(&status, 0, sizeof(status));
+    status.struct_size = sizeof(status);
+    if (bridge.promote && rsf_promote_get_status(bridge.promote, &status) == RSF_PROMOTE_OK &&
+        status.at_recombine) {
+        if (!rsf_d3d11_state_save(context, &state)) {
+            return;
+        }
+        bridge.recombine_gate_this_frame = 1;
+        if (evaluate_at_recombine(context)) {
+            rsf_promote_seed(bridge.promote, context);
+        }
+        rsf_d3d11_state_restore(context, &state);
+        ++bridge.gate_evaluates;
+        return;
+    }
+    if (!bridge.have_held) {
         return;
     }
     if (!rsf_d3d11_state_save(context, &state)) {
@@ -1688,7 +1775,23 @@ static unsigned char twin_scratch[RSF_AC7_VIEW_BUFFER_BYTES];
 static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
 {
     (void)user;
-    if (!view_twins || bytes != RSF_AC7_VIEW_BUFFER_BYTES) {
+    if (bytes != RSF_AC7_VIEW_BUFFER_BYTES) {
+        return;
+    }
+    {
+        rsf_ac7_view main_view;
+        memset(&main_view, 0, sizeof(main_view));
+        main_view.struct_size = sizeof(main_view);
+        if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &main_view) ==
+                RSF_AC7_VIEW_OK &&
+            main_view.is_main_view && main_view.has_jitter) {
+            fill_camera(&main_view, &bridge.upload_camera);
+            bridge.upload_width = main_view.view_width;
+            bridge.upload_height = main_view.view_height;
+            bridge.upload_camera_valid = 1;
+        }
+    }
+    if (!view_twins) {
         return;
     }
     /* Only a real view buffer with a jitter gets a twin: the reader's checks refuse anything else
@@ -1715,7 +1818,13 @@ static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* dra
 {
     uint32_t index;
     (void)user;
-    if (!draw || !view_twins || classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+    if (!draw || !view_twins) {
+        return 0;
+    }
+    /* The separate translucency layer is composited after the reconstruction, so nothing resolves
+       its jitter either: its draws take the unjittered view as the interface's do. */
+    if (!(draw->render_target && draw->render_target == bridge.translucency_layer) &&
+        classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
         return 0;
     }
     for (index = 0; index < 14; ++index) {
@@ -2089,48 +2198,6 @@ static void overlay_tick(void* swapchain)
     }
 }
 
-/* Build the translucent depth replay at the size the layer actually has.
-
-   The replay targets were sized from the output at startup, full and half. Measured 26 September
-   2026 at 1600x900: the pool rounds the 450-row render height to 452, so the separate translucency
-   layer, at twice the scene on heavy frames, is 1600x904, and the replay refused all 2.2 million
-   briefing relief draws for their size. DLSS then saw the floor's depth under the hologram, could
-   not follow the relief from frame to frame, and showed its jitter unresolved. It worked on
-   7 September only because 2048x1152 halves without rounding.
-
-   Here, between frames, where no draw is in flight: when the layer's last size matches neither
-   target, the one used longest ago is rebuilt at that size. The layer alternates between full size
-   on heavy frames and render size on light ones, so the two targets settle on those two. */
-static void resize_depth_replay(void)
-{
-    const unsigned long width = bridge.depth_candidate_width;
-    const unsigned long height = bridge.depth_candidate_height;
-    unsigned int slot;
-    rsf_depth_replay* rebuilt;
-    if (!bridge.started || !bridge.device || width == 0 || height == 0 ||
-        bridge.depth_candidate_samples != 1) {
-        return;
-    }
-    if ((bridge.depth_replay_width[0] == width && bridge.depth_replay_height[0] == height) ||
-        (bridge.depth_replay_width[1] == width && bridge.depth_replay_height[1] == height)) {
-        return;
-    }
-    slot = bridge.depth_replay_used[0] <= bridge.depth_replay_used[1] ? 0u : 1u;
-    rebuilt = rsf_depth_replay_create(bridge.device, (uint32_t)width, (uint32_t)height);
-    if (!rebuilt) {
-        say("translucent depth: no replay target could be made at %lux%lu", width, height);
-        bridge.depth_candidate_width = 0;
-        return;
-    }
-    say("translucent depth: the layer is %lux%lu, replay %u rebuilt at that size (was %lux%lu)",
-        width, height, slot, bridge.depth_replay_width[slot], bridge.depth_replay_height[slot]);
-    rsf_depth_replay_destroy(bridge.depth_replay[slot]);
-    bridge.depth_replay[slot] = rebuilt;
-    bridge.depth_replay_width[slot] = width;
-    bridge.depth_replay_height[slot] = height;
-    bridge.depth_replay_used[slot] = bridge.presents;
-}
-
 /* Called before the game's own Present, from the observer. */
 /* Requests from the hotkey worker, run on this thread at the next present. */
 static volatile LONG pending_requests;
@@ -2217,6 +2284,7 @@ static void on_present(void* user, void* swapchain)
         composite_ui(swapchain);
     }
 
+    bridge.upload_camera_valid = 0;
     if (bridge.started) {
         ++bridge.presents;
         /* The runtime flushes at Present and rewrites its vtable when it does, which takes the
@@ -2230,6 +2298,7 @@ static void on_present(void* user, void* swapchain)
                reach the game's own tonemap. All that is left is to let go of the frame's inputs and
                to close the gates so the next frame opens them again. */
             ++bridge.reinsert_frames;
+            follow_recombine();
             watch_for_stalled_plan();
             /* A layer or a chain target came or went since the plan was built. Rebuilt here, on
                the thread that drives the frames, rather than inside the draw hook that noticed. */
@@ -2260,7 +2329,6 @@ static void on_present(void* user, void* swapchain)
     rsf_ac7_scene_color_end_frame(&bridge.color_selection);
     rsf_depth_replay_end_frame(bridge.depth_replay[0]);
     rsf_depth_replay_end_frame(bridge.depth_replay[1]);
-    resize_depth_replay();
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
@@ -2539,6 +2607,9 @@ static int install_reinsert_plan(void)
     tail.render_width = (uint32_t)bridge.held_width;
     tail.render_height = (uint32_t)bridge.held_height;
     tail.composite_view_format = bridge.composite_view_format;
+    /* The recombine, when the game's recombine has been seen: the reconstruction goes in there and
+       the game composites its full-size translucency over it. */
+    tail.composed = bridge.recombine_off ? NULL : bridge.color_selection.composed;
     tail.ui_target_view_format = bridge.ui_target_view_format;
     tail.chain_view_format = bridge.chain_view_format;
     /* Preparing releases the previous replacements, and the tap must not be left holding views
@@ -2671,22 +2742,8 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.output_width = (uint32_t)output_width;
     tap.output_height = (uint32_t)output_height;
 
-    /* Called from the setup worker. Allocate once, before hooks can replay a draw. The recorded
-       full/50% sizes are supported; a different extent safely uses the original depth. */
-    bridge.depth_replay[0] =
-        rsf_depth_replay_create(bridge.device, (uint32_t)output_width, (uint32_t)output_height);
-    bridge.depth_replay[1] = rsf_depth_replay_create(bridge.device, (uint32_t)output_width / 2,
-                                                     (uint32_t)output_height / 2);
-    bridge.depth_replay_width[0] = output_width;
-    bridge.depth_replay_height[0] = output_height;
-    bridge.depth_replay_width[1] = output_width / 2;
-    bridge.depth_replay_height[1] = output_height / 2;
-    say("translucent depth: replay targets built at %lux%lu and %lux%lu", output_width,
-        output_height, output_width / 2, output_height / 2);
-    if (!bridge.depth_replay[0] || !bridge.depth_replay[1]) {
-        say("translucent depth: a startup target could not be prepared; that size will fall back");
-    }
-
+    /* No translucent depth replay: the translucency layer renders at output size against the
+       reconstruction's promoted scene, so it never needs a depth of another size. */
     tapped = rsf_frame_tap_install(bridge.context, &tap);
 
     if (tapped != RSF_FRAME_TAP_OK) {
@@ -2919,12 +2976,11 @@ void rsf_bridge_set_unjitter(int on)
         view_twins = rsf_constant_twins_create(bridge.device, RSF_AC7_VIEW_BUFFER_BYTES);
         if (!view_twins) {
             say("ui: no twin buffers could be made, so the interface keeps its view's jitter");
-            return;
         }
     }
-    rsf_frame_tap_set_constant_override(on ? ui_constant_override : NULL, NULL);
-    rsf_frame_tap_set_constant_watch(on ? RSF_AC7_VIEW_BUFFER_BYTES : 0u,
-                                     on ? on_view_constants : NULL, NULL);
+    rsf_frame_tap_set_constant_override(on && view_twins ? ui_constant_override : NULL, NULL);
+    /* Always: the recombine route takes this frame's camera from the upload. */
+    rsf_frame_tap_set_constant_watch(RSF_AC7_VIEW_BUFFER_BYTES, on_view_constants, NULL);
     say("ui: interface drawn with %s", on ? "an unjittered twin of its view" : "its view as the game uploaded it");
 }
 

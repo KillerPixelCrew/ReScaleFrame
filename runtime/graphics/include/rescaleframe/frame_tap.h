@@ -75,8 +75,9 @@ extern "C" {
 /* Eight, because four was exactly the composite, scene colour and one interface target with one to
    spare, and the interface turned out to be composited into more than one surface. A plan that
    describes the frame correctly and is then refused for being one entry too long is a silent
-   failure: reinsertion reports itself on and nothing is substituted. */
-#define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 8u
+   failure: reinsertion reports itself on and nothing is substituted. Twelve since the recombine
+   route adds the recombined target and scene colour as whole surfaces. */
+#define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 12u
 
 typedef int32_t rsf_frame_tap_result;
 #define RSF_FRAME_TAP_OK ((rsf_frame_tap_result)0)
@@ -327,6 +328,11 @@ typedef int (*rsf_frame_tap_constant_override_fn)(void* user, const rsf_frame_ta
 rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_override_fn fn,
                                                          void* user);
 
+/* Offer the constant override for every draw into `texture`, an `ID3D11Texture2D*`, as well as for
+   the candidates. Four slots; a null texture clears one. For scene geometry whose projection must
+   not carry the jitter, such as a separate translucency layer composited after the reconstruction. */
+rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* texture);
+
 /* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
    the Unmap is forwarded, for buffers exactly `bytes` wide. Unreal 4.18's D3D11 RHI writes every
    pooled uniform buffer that way (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform
@@ -538,6 +544,10 @@ typedef struct rsf_frame_tap_status {
     uint32_t vtable_refreshes;
     /* Draws given a different vertex constant buffer by the override callback. */
     uint32_t draws_overridden;
+    /* CopyResource calls between two promoted textures sent between their stand-ins, and calls
+       with only one side promoted, which D3D11 would drop for the size difference. */
+    uint32_t copies_redirected;
+    uint32_t copies_mismatched;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.

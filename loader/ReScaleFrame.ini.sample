@@ -87,8 +87,11 @@ RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 # the movable test and SupportsVelocity are all left in place, so a material with no usable velocity
 # permutation still refuses rather than drawing wrongly.
 #
+# Off by default: separate translucency no longer goes through DLSS, so its motion would only
+# overwrite the motion of the scene behind it.
+#
 # Check the log for: translucent velocity gate patched at rva 0x11823de
-RSF_TRANSLUCENT_VELOCITY=1
+RSF_TRANSLUCENT_VELOCITY=0
 
 # What reinsertion (F6) does when a promoted target meets the game's own depth.
 #
@@ -111,26 +114,14 @@ RSF_TRANSLUCENT_VELOCITY=1
 # scale the mission map's relief is a quarter resolution image by the time anything sees it. The
 # proxy patches the halving out; these decide what it renders at instead.
 #
-# Both targets are percentages of the presented resolution, not of the scene, because the scene
-# moves: DLSS, XeSS and FSR each pick a different render scale per quality level, and a fixed
-# multiplier would mean a different translucency resolution for every one of them. The multiplier
-# is derived from whichever render scale is in effect.
-#
-# 0 means "match the scene", which is the ordinary case and costs nothing over the current
-# behaviour. The heavy target applies to a frame whose translucent layer is carrying scene
-# geometry rather than a few effects, which in practice is the mission briefing: its relief is the
-# scene and reconstructing it from half of a half is what made it look unupscaled. 100 there draws
-# it at native however low the render scale is set.
-# RSF_TRANSLUCENCY_TARGET=0
-# RSF_TRANSLUCENCY_TARGET_HEAVY=100
+# The target is a percentage of the presented resolution, not of the scene, and it defaults to 100:
+# the layer renders at native whatever the render scale. It does not go through DLSS. The bridge
+# evaluates the reconstruction at the game's recombine, before translucency is composited, and the
+# recombine lays the native layer over the reconstruction, drawn with the unjittered view. 0 means
+# "match the scene" and puts the layer back at render resolution, jitter and all.
+# RSF_TRANSLUCENCY_TARGET=100
 
-# What counts as heavy, in indices drawn into the layer in one frame. The captured briefing is
-# 540,030 across 59 draws; gameplay effects are orders of magnitude below that. The log names the
-# count each time it crosses, so this can be set from what the game draws rather than guessed.
-# RSF_TRANSLUCENCY_HEAVY_INDICES=100000
-
-# A direct multiplier in percent, overriding both targets when it is not zero. For pinning the
-# layer to one resolution regardless of render scale.
+# A direct multiplier in percent of the scene, overriding the target when it is not zero.
 # RSF_TRANSLUCENCY_SCALE=0
 
 # Going above the scene's resolution needs the engine to build a depth to match, which stock 4.18

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <rescaleframe/scene_promote.h>
+#include <rescaleframe/fullscreen_pass.h>
 
 #include <windows.h>
 
@@ -14,7 +15,7 @@
 // The plan has to hold every promoted surface at once: the composite, the scene colour, and both
 // sets. A plan that describes the frame correctly and is refused for being one entry too long is
 // the worst kind of failure, because it reports itself on, and it has happened once.
-static_assert(2u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
+static_assert(3u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
                   RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
               "the frame tap's plan cannot hold everything promotion may name");
 
@@ -66,6 +67,11 @@ struct rsf_promote {
     void* log_user = nullptr;
 
     Replacement composite;
+    // The recombine route: the recombined target and scene colour as a whole surface, and the pass
+    // that seeds scene colour's stand-in with the reconstruction.
+    Replacement composed;
+    Replacement scene;
+    rsf_fullscreen_pass* seed_pass = nullptr;
     Replacement ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
     uint32_t ui_target_count = 0;
     Replacement chain_targets[RSF_PROMOTE_MAX_CHAIN_TARGETS];
@@ -222,6 +228,8 @@ void release_everything(rsf_promote* promote)
     release_set(promote->ui_targets, promote->ui_target_count);
     release_set(promote->chain_targets, promote->chain_target_count);
     release_replacement(promote->composite);
+    release_replacement(promote->composed);
+    release_replacement(promote->scene);
     promote->ready = false;
 }
 
@@ -302,6 +310,26 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
         release_everything(promote);
         return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
     }
+    if (tail->composed) {
+        if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composed),
+                               promote->composed, "recombined colour", 0) ||
+            !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
+                               promote->scene, "scene colour", 0)) {
+            release_everything(promote);
+            return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+        }
+        if (!promote->seed_pass) {
+            rsf_fullscreen_setup pass{};
+            pass.struct_size = sizeof(pass);
+            pass.abi_version = RSF_FULLSCREEN_PASS_ABI_VERSION;
+            if (rsf_fullscreen_pass_create(promote->device, &pass, &promote->seed_pass) !=
+                RSF_FULLSCREEN_OK) {
+                say(promote, "promote: the seed pass could not be created");
+                release_everything(promote);
+                return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+            }
+        }
+    }
     if (promote->ui_target_count == 0) {
         say(promote,
             "promote: no interface layer has been named, so the interface is magnified with the "
@@ -366,11 +394,45 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
     // while they are still writing it. An ungated substitution here hands a lighting pass a
     // reconstruction of the frame it has not finished, which is a feedback loop rather than an
     // upscale, and it would look like a smear that gets worse the longer the camera holds still.
+    if (promote->composed.original && promote->scene.original) {
+        // The recombine route. The recombined target is promoted from the start of the frame, like
+        // the composite. Scene colour becomes its stand-in once the recombined target is bound: the
+        // gate is where the reconstruction runs and is drawn into that stand-in, so the recombine
+        // reads it, the game's copy of the recombined result back into scene colour lands in it,
+        // and the tonemap reads output resolution colour with full-size translucency on top.
+        rsf_frame_tap_substitution& composed = plan->items[plan->count++];
+        composed.texture = promote->composed.original;
+        composed.shader_view = promote->composed.shader_view;
+        composed.render_view = promote->composed.target_view;
+        rsf_frame_tap_substitution& scene = plan->items[plan->count++];
+        scene.texture = promote->scene.original;
+        scene.shader_view = promote->scene.shader_view;
+        scene.render_view = promote->scene.target_view;
+        scene.after_target = promote->composed.original;
+        return RSF_PROMOTE_OK;
+    }
     rsf_frame_tap_substitution& scene = plan->items[plan->count++];
     scene.texture = promote->scene_color;
     scene.shader_view = promote->reconstruction_view;
     scene.after_target = promote->composite.original;
     return RSF_PROMOTE_OK;
+}
+
+extern "C" rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context)
+{
+    if (!promote || !context || !promote->ready) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    if (!promote->scene.target_view || !promote->seed_pass || !promote->reconstruction_view) {
+        return RSF_PROMOTE_OK;
+    }
+    rsf_fullscreen_draw draw{};
+    draw.struct_size = sizeof(draw);
+    draw.mode = RSF_FULLSCREEN_COPY;
+    return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view,
+                                    promote->reconstruction_view, &draw) == RSF_FULLSCREEN_OK
+               ? RSF_PROMOTE_OK
+               : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
 }
 
 extern "C" rsf_promote_result rsf_promote_get_status(rsf_promote* promote,
@@ -382,6 +444,7 @@ extern "C" rsf_promote_result rsf_promote_get_status(rsf_promote* promote,
     status->ready = promote->ready ? 1u : 0u;
     status->ui_targets_promoted = promote->ui_target_count;
     status->chain_targets_promoted = promote->chain_target_count;
+    status->at_recombine = (promote->composed.original && promote->scene.original) ? 1u : 0u;
     status->render_width = promote->render_width;
     status->render_height = promote->render_height;
     status->output_width = promote->output_width;
@@ -398,6 +461,7 @@ extern "C" void rsf_promote_destroy(rsf_promote* promote)
     // it: the views are the tap's to stop using, and releasing them while a plan still names them
     // would take the game down inside a binding call rather than here.
     release_everything(promote);
+    rsf_fullscreen_pass_destroy(promote->seed_pass);
     if (promote->device) {
         promote->device->Release();
     }

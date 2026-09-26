@@ -1080,9 +1080,6 @@ static void action_start_backend(void)
    valid floats and neither can be half of the other's bits. */
 static volatile uint32_t* translucency_scale_slot;
 static float translucency_scale_now;
-/* Set by the bridge when this frame's separate translucency layer carried real geometry rather
-   than a handful of particles. See action_translucent_geometry. */
-static int translucency_layer_heavy;
 
 /* Choose the separate translucency scale for the render scale that is now in effect.
 
@@ -1094,13 +1091,14 @@ static int translucency_layer_heavy;
 
    So the settings are percentages of the presented resolution, and the multiplier is derived:
 
-     RSF_TRANSLUCENCY_TARGET        percent of native, 0 means "match the scene" (scale 1.0)
-     RSF_TRANSLUCENCY_TARGET_HEAVY  the same, for a frame whose layer is carrying scene geometry
-     RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding both when nonzero
+     RSF_TRANSLUCENCY_TARGET        percent of native, default 100; 0 means "match the scene"
+     RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding it when nonzero
 
-   The heavy target defaults to 100, which is the briefing case: the relief there is the scene, not
-   a decoration over it, and reconstructing it from half of a half was the thing that made it look
-   unupscaled. Rendering that layer at native costs a briefing screen nothing worth having. */
+   The target is native, always. Separate translucency does not go through the reconstruction: the
+   bridge evaluates DLSS at the game's recombine, before translucency is composited, and the
+   recombine then lays the layer over the reconstruction at output size, drawn with the unjittered
+   view. A layer at native needs no upscaler and has no jitter for one to resolve, which is what the
+   briefing relief needed and what every earlier attempt to push it through DLSS could not give. */
 static void set_separate_translucency_scale(void)
 {
     union {
@@ -1123,8 +1121,7 @@ static void set_separate_translucency_scale(void)
     if (render_percent == 0) {
         render_percent = 100;
     }
-    target = translucency_layer_heavy ? read_number("RSF_TRANSLUCENCY_TARGET_HEAVY", 100)
-                                      : read_number("RSF_TRANSLUCENCY_TARGET", 0);
+    target = read_number("RSF_TRANSLUCENCY_TARGET", 100);
 
     if (override_percent != 0) {
         scale.value = (float)override_percent / 100.0f;
@@ -1176,9 +1173,9 @@ static void set_separate_translucency_scale(void)
     FlushInstructionCache(GetCurrentProcess(), (LPCVOID)translucency_scale_slot, sizeof(uint32_t));
     translucency_scale_now = scale.value;
     note("separate translucency scale now %d%% of the scene, which at a %lu%% render scale is "
-         "%d%% of native (%s layer)",
+         "%d%% of native",
          (int)(scale.value * 100.0f), render_percent,
-         (int)(scale.value * (float)render_percent), translucency_layer_heavy ? "heavy" : "light");
+         (int)(scale.value * (float)render_percent));
 }
 
 /* Render separate translucency at the scene's resolution, by taking the halving out.
@@ -1385,35 +1382,6 @@ static unsigned long action_capture_count(void)
 #endif
 }
 
-/* How much geometry went into the separate translucency layer this frame, from the bridge.
-
-   The briefing relief and a burst of cannon tracers are the same kind of surface to the engine and
-   are told apart by how much of it there is: the captured briefing layer is 59 draws and 540,030
-   indices, and gameplay effects are orders of magnitude below that. So the rule is a threshold on
-   the count rather than any attempt to recognise a screen, and the count is logged the first few
-   times it crosses so the threshold can be set from what the game actually draws.
-
-   The scale it selects lands on the next frame's buffer allocation, not this one. A briefing lasts
-   thousands of frames and a tracer burst lasts tens, so a frame of latency is invisible in the one
-   case and is the reason the other never triggers a resize storm. */
-static void action_translucent_geometry(unsigned long indices)
-{
-    static unsigned long crossings;
-    const unsigned long threshold = read_number("RSF_TRANSLUCENCY_HEAVY_INDICES", 100000);
-    const int heavy = threshold != 0 && indices >= threshold;
-    if (heavy == translucency_layer_heavy) {
-        return;
-    }
-    translucency_layer_heavy = heavy;
-    if (crossings < 8) {
-        ++crossings;
-        note("separate translucency layer became %s: %lu indices this frame against a threshold "
-             "of %lu",
-             heavy ? "heavy" : "light", indices, threshold);
-    }
-    set_separate_translucency_scale();
-}
-
 /* What reinsertion does when a promoted target meets the game's render resolution depth.
 
    0 drops the depth, so the pass draws without its depth test. 1 forwards both, which is an invalid
@@ -1430,7 +1398,6 @@ static void register_overlay_actions(void)
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = action_start_backend;
-    actions.translucent_geometry = action_translucent_geometry;
     actions.reinsert_depth_policy = action_reinsert_depth_policy;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;

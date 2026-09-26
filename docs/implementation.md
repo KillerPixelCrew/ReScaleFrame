@@ -63,6 +63,11 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
       with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
       other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
+- [ ] Separate translucency outside the reconstruction. DLSS is evaluated at the game's recombine,
+      the reconstruction seeds a promoted scene colour, and the layer renders at native size with
+      the unjittered view before the recombine composites it. Replaces the composed-colour input,
+      the heavy-frame scale switch and the translucent depth replay. Built and unit-tested on
+      26 September; not yet game-tested. [Decision](research/ac7-composed-scene-color.md).
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a

@@ -83,7 +83,11 @@ extern "C" {
    5: the tail carries the view formats the game binds each surface with, because the surfaces are
    typeless and a view on a typeless texture has to be told its format; the first Windows run
    failed every promotion on exactly that. */
-#define RSF_PROMOTE_ABI_VERSION 5u
+/* 6: the recombine as the point the reconstruction goes in. With `composed` named, scene colour is
+   promoted as a whole surface from the moment the recombined target is bound, seeded with the
+   reconstruction by `rsf_promote_seed`, and the recombined target is promoted; the game's own
+   recombine then composites its full-size separate translucency over the reconstruction. */
+#define RSF_PROMOTE_ABI_VERSION 6u
 /* How many interface layers may be promoted. AC7 alternates between two allocations from frame to
    frame on the briefing, and a screen with more of them should lose none rather than lose the ones
    found last. */
@@ -153,6 +157,10 @@ typedef struct rsf_promote_frame_tail {
     uint32_t composite_view_format;
     uint32_t ui_target_view_format;
     uint32_t chain_view_format;
+    /* Appended in ABI 6. The render resolution target the game's recombine writes: scene colour
+       with the separate translucency layer composited over it. Null keeps the older route, where
+       the reconstruction includes translucency and replaces scene colour at the tonemap. */
+    void* composed;
 } rsf_promote_frame_tail;
 
 typedef struct rsf_promote_status {
@@ -165,6 +173,8 @@ typedef struct rsf_promote_status {
     /* How many intermediates are promoted. Zero means the scene is downsampled between the tonemap
        and the interface composite, and the composite's promotion buys nothing visible. */
     uint32_t chain_targets_promoted;
+    /* Appended in ABI 6: whether the reconstruction goes in at the recombine. */
+    uint32_t at_recombine;
     uint32_t render_width;
     uint32_t render_height;
     uint32_t output_width;
@@ -192,6 +202,11 @@ rsf_promote_result rsf_promote_prepare(rsf_promote* promote, const rsf_promote_f
 rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_frame_tap_plan* plan);
 
 rsf_promote_result rsf_promote_get_status(rsf_promote* promote, rsf_promote_status* status);
+
+/* Draw the reconstruction into scene colour's stand-in, on `context`, the immediate one. Call it at
+   the gate, after the reconstruction was evaluated and before the recombine reads scene colour;
+   the caller saves and restores the context around it. Does nothing on the older route. */
+rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context);
 
 void rsf_promote_destroy(rsf_promote* promote);
 
