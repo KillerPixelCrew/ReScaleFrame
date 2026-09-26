@@ -279,13 +279,15 @@ int main()
               scene_whole->after_target == composed,
           "Scene colour must become a whole output size surface once the recombine is bound, so "
           "the game's copy of the recombined result back into it lands at output size too.");
-    check(rsf_promote_seed(promote, context) == RSF_PROMOTE_OK,
+    check(rsf_promote_seed(promote, context, 1) == RSF_PROMOTE_OK,
           "Seeding scene colour's stand-in with the reconstruction must succeed.");
+    check(rsf_promote_seed(promote, context, 0) == RSF_PROMOTE_OK,
+          "Seeding it with the game's own scene colour, for a refused frame, must succeed.");
     check(rsf_promote_prepare(promote, &tail) == RSF_PROMOTE_OK &&
               rsf_promote_get_status(promote, &status) == RSF_PROMOTE_OK &&
               status.at_recombine == 0,
           "A tail without the recombine must go back to the tonemap route.");
-    check(rsf_promote_seed(promote, context) == RSF_PROMOTE_OK,
+    check(rsf_promote_seed(promote, context, 1) == RSF_PROMOTE_OK,
           "Seeding on the tonemap route must do nothing and succeed.");
 
     stage("releasing");

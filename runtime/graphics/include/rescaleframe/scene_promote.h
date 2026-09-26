@@ -203,10 +203,14 @@ rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_frame_tap_pla
 
 rsf_promote_result rsf_promote_get_status(rsf_promote* promote, rsf_promote_status* status);
 
-/* Draw the reconstruction into scene colour's stand-in, on `context`, the immediate one. Call it at
-   the gate, after the reconstruction was evaluated and before the recombine reads scene colour;
-   the caller saves and restores the context around it. Does nothing on the older route. */
-rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context);
+/* Fill scene colour's stand-in, on `context`, the immediate one. Call it at the gate, before the
+   recombine reads scene colour, every time the gate opens; the caller saves and restores the
+   context around it. Does nothing on the older route.
+
+   With `reconstructed` nonzero the stand-in gets the reconstruction. With zero it gets the game's
+   own render resolution scene colour stretched to output size, so a frame the reconstruction was
+   refused for is soft rather than whatever the stand-in held before. */
+rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context, uint32_t reconstructed);
 
 void rsf_promote_destroy(rsf_promote* promote);
 

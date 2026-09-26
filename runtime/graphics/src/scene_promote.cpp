@@ -82,6 +82,9 @@ struct rsf_promote {
     ID3D11Texture2D* scene_color = nullptr;
     ID3D11Texture2D* reconstruction = nullptr;
     ID3D11ShaderResourceView* reconstruction_view = nullptr;
+    // The recombine route's fallback: the game's own scene colour, readable, for a frame without a
+    // reconstruction.
+    ID3D11ShaderResourceView* scene_source_view = nullptr;
 
     uint32_t render_width = 0;
     uint32_t render_height = 0;
@@ -225,6 +228,10 @@ void release_everything(rsf_promote* promote)
         promote->reconstruction_view->Release();
         promote->reconstruction_view = nullptr;
     }
+    if (promote->scene_source_view) {
+        promote->scene_source_view->Release();
+        promote->scene_source_view = nullptr;
+    }
     release_set(promote->ui_targets, promote->ui_target_count);
     release_set(promote->chain_targets, promote->chain_target_count);
     release_replacement(promote->composite);
@@ -315,6 +322,19 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
                                promote->composed, "recombined colour", 0) ||
             !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
                                promote->scene, "scene colour", 0)) {
+            release_everything(promote);
+            return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+        }
+        D3D11_TEXTURE2D_DESC scene_description{};
+        static_cast<ID3D11Texture2D*>(tail->scene_color)->GetDesc(&scene_description);
+        D3D11_SHADER_RESOURCE_VIEW_DESC source_description{};
+        source_description.Format = typed_view_format(scene_description.Format, 0);
+        source_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        source_description.Texture2D.MipLevels = 1;
+        if (FAILED(promote->device->CreateShaderResourceView(
+                static_cast<ID3D11Resource*>(tail->scene_color), &source_description,
+                &promote->scene_source_view))) {
+            say(promote, "promote: scene colour could not be made readable for the fallback seed");
             release_everything(promote);
             return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
         }
@@ -418,19 +438,22 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
     return RSF_PROMOTE_OK;
 }
 
-extern "C" rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context)
+extern "C" rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context,
+                                               uint32_t reconstructed)
 {
     if (!promote || !context || !promote->ready) {
         return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
     }
-    if (!promote->scene.target_view || !promote->seed_pass || !promote->reconstruction_view) {
+    ID3D11ShaderResourceView* source =
+        reconstructed ? promote->reconstruction_view : promote->scene_source_view;
+    if (!promote->scene.target_view || !promote->seed_pass || !source) {
         return RSF_PROMOTE_OK;
     }
     rsf_fullscreen_draw draw{};
     draw.struct_size = sizeof(draw);
     draw.mode = RSF_FULLSCREEN_COPY;
     return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view,
-                                    promote->reconstruction_view, &draw) == RSF_FULLSCREEN_OK
+                                    source, &draw) == RSF_FULLSCREEN_OK
                ? RSF_PROMOTE_OK
                : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
 }

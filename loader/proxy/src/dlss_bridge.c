@@ -1664,9 +1664,9 @@ static void on_gate(void* user, void* context, void* texture)
             return;
         }
         bridge.recombine_gate_this_frame = 1;
-        if (evaluate_at_recombine(context)) {
-            rsf_promote_seed(bridge.promote, context);
-        }
+        /* Seeded every time: with the reconstruction, or with the game's own scene colour when
+           the evaluation was refused, so the stand-in never shows a stale frame. */
+        rsf_promote_seed(bridge.promote, context, evaluate_at_recombine(context) ? 1u : 0u);
         rsf_d3d11_state_restore(context, &state);
         ++bridge.gate_evaluates;
         return;
@@ -1784,7 +1784,16 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
         main_view.struct_size = sizeof(main_view);
         if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &main_view) ==
                 RSF_AC7_VIEW_OK &&
-            main_view.is_main_view && main_view.has_jitter) {
+            main_view.is_main_view && main_view.has_jitter &&
+            /* The render size the qualifying pass reported. UE builds the separate translucency
+               view from the main one at the layer's size, 1600x904 in a 1600x900 briefing, and
+               that upload is main and jittered too; handed to DLSS as the render size it made
+               every evaluation fail. */
+            /* The pass reports the pooled motion target's size, which the pool rounds up by a
+               few rows, so the view has to fit inside it rather than equal it. */
+            (bridge.held_width == 0 ||
+             (main_view.view_width <= bridge.held_width &&
+              main_view.view_height <= bridge.held_height))) {
             fill_camera(&main_view, &bridge.upload_camera);
             bridge.upload_width = main_view.view_width;
             bridge.upload_height = main_view.view_height;
