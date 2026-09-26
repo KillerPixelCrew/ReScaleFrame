@@ -3003,10 +3003,10 @@ void rsf_bridge_report(void)
             (unsigned long)tap.draws_overridden);
         say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
             "redirected between stand-ins, %lu copies with one side promoted, %lu uploads for the "
-            "recombine had %lu size constants promoted",
+            "recombine had %lu size constants promoted, %lu constant uploads watched",
             bridge.finishes, (unsigned long)tap.copies_redirected,
             (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
-            bridge.sizes_patched);
+            bridge.sizes_patched, (unsigned long)tap.updates_watched);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks

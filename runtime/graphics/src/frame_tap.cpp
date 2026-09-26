@@ -210,6 +210,7 @@ struct Tap {
     std::atomic<rsf_frame_tap_constants_fn> constant_watch{nullptr};
     std::atomic<void*> constant_watch_user{nullptr};
     std::atomic<uint32_t> constant_watch_bytes{0};
+    std::atomic<uint32_t> updates_watched{0};
     struct PendingMap {
         ID3D11Resource* resource = nullptr;
         void* data = nullptr;
@@ -2170,6 +2171,44 @@ void STDMETHODCALLTYPE hooked_copy_resource(ID3D11DeviceContext* c, ID3D11Resour
     reinterpret_cast<Fn>(s.pass_originals[6])(c, forwarded_destination, forwarded_source);
     refresh_hooks(s);
 }
+// A shader's own constants, on their way to the GPU. Unreal 4.18's D3D11 RHI sends them with
+// UpdateSubresource from its CPU shadow (WindowsD3D11ConstantBuffer.cpp:90), whole sub-buffer at a
+// time, right before the draw; only pooled uniform buffers go through Map. The watch sees these
+// too, on a copy: the game's shadow is the game's, and what it asked to upload is what the next
+// upload must start from.
+const void* watch_update(Tap& s, ID3D11DeviceContext* c, ID3D11Resource* destination,
+                         UINT subresource, const D3D11_BOX* box, const void* data,
+                         UINT row_pitch, void* scratch)
+{
+    const rsf_frame_tap_constants_fn watch = s.constant_watch.load(std::memory_order_acquire);
+    if (!watch || inside_hook || c != s.observed_context || !destination || !data || box ||
+        subresource != 0 || row_pitch == 0 || row_pitch > 4096u) {
+        return data;
+    }
+    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    destination->GetType(&dimension);
+    if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+        return data;
+    }
+    D3D11_BUFFER_DESC description{};
+    static_cast<ID3D11Buffer*>(destination)->GetDesc(&description);
+    const uint32_t watched = s.constant_watch_bytes.load(std::memory_order_relaxed);
+    const bool wanted =
+        watched == 0 ? description.ByteWidth <= 4096u : description.ByteWidth == watched;
+    if (!wanted || (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0 ||
+        row_pitch > description.ByteWidth) {
+        return data;
+    }
+    std::memcpy(scratch, data, row_pitch);
+    {
+        const ReentryGuard guard;
+        watch(s.constant_watch_user.load(std::memory_order_relaxed), destination, scratch,
+              row_pitch);
+    }
+    s.updates_watched.fetch_add(1, std::memory_order_relaxed);
+    return scratch;
+}
+
 void STDMETHODCALLTYPE hooked_update_subresource(ID3D11DeviceContext* c,
                                                  ID3D11Resource* destination, UINT subresource,
                                                  const D3D11_BOX* box, const void* data,
@@ -2178,6 +2217,8 @@ void STDMETHODCALLTYPE hooked_update_subresource(ID3D11DeviceContext* c,
     Tap& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT,
                                         const D3D11_BOX*, const void*, UINT, UINT);
+    alignas(16) unsigned char scratch[4096];
+    data = watch_update(s, c, destination, subresource, box, data, row_pitch, scratch);
     reinterpret_cast<Fn>(s.pass_originals[7])(c, destination, subresource, box, data, row_pitch,
                                               depth_pitch);
     refresh_hooks(s);
@@ -2264,6 +2305,8 @@ void STDMETHODCALLTYPE hooked_update_subresource1(ID3D11DeviceContext* c,
     Tap& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT,
                                         const D3D11_BOX*, const void*, UINT, UINT, UINT);
+    alignas(16) unsigned char scratch[4096];
+    data = watch_update(s, c, destination, subresource, box, data, row_pitch, scratch);
     reinterpret_cast<Fn>(s.pass_originals[15])(c, destination, subresource, box, data, row_pitch,
                                                depth_pitch, flags);
     refresh_hooks(s);
@@ -2911,5 +2954,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->draws_overridden = self.draws_overridden.load(std::memory_order_relaxed);
     status->copies_redirected = self.copies_redirected.load(std::memory_order_relaxed);
     status->copies_mismatched = self.copies_mismatched.load(std::memory_order_relaxed);
+    status->updates_watched = self.updates_watched.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

@@ -339,8 +339,9 @@ rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* tex
 /* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
    the Unmap is forwarded. Unreal 4.18's D3D11 RHI writes every pooled uniform buffer that way
    (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform buffer as the frame fills it, and
-   it writes each shader's own constants the same way, into a sub-buffer sized to the upload
-   (`WindowsD3D11ConstantBuffer.cpp:52`), right before the draw that uses them. `contents` is the
+   it sends each shader's own constants with UpdateSubresource from its CPU shadow, a whole
+   sub-buffer sized to the upload (`WindowsD3D11ConstantBuffer.cpp:90`), right before the draw
+   that uses them; the watch sees those on a copy that is then uploaded in the shadow's place. `contents` is the
    mapped memory itself and `bytes` the buffer's width: the callback may write into it, and what it
    writes is what the game's draw reads. Render thread; must not call into the context.
 
@@ -561,6 +562,8 @@ typedef struct rsf_frame_tap_status {
        with only one side promoted, which D3D11 would drop for the size difference. */
     uint32_t copies_redirected;
     uint32_t copies_mismatched;
+    /* Appended in ABI 9: constant uploads by UpdateSubresource handed to the watch. */
+    uint32_t updates_watched;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.
