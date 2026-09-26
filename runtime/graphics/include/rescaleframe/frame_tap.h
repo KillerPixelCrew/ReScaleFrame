@@ -40,7 +40,7 @@
    of them is bound as something else, a render target view onto one is bound as something else,
    and viewports and scissor rectangles are scaled while a substituted target is bound. That is
    enough to make the game draw its own tail at output resolution over a reconstructed scene, and
-   `scene_reinsert.h` is what decides which textures those are and creates the replacements.
+   `scene_promote.h` is what decides which textures those are and creates the replacements.
 
    The watch is an observer and the plan is not, so the honest split is per call rather than per
    module: a binding named by the plan is altered before it is forwarded, and everything else is
@@ -57,11 +57,13 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 7u
+#define RSF_FRAME_TAP_ABI_VERSION 8u
 
-/* Render targets watched at once. Two, because the question this answers needs exactly two: the
-   swap chain's back buffer, and whichever target the draw into it reads. */
-#define RSF_FRAME_TAP_WATCH_SLOTS 2u
+/* Render targets watched at once. The first two answer the tail's question: the swap chain's back
+   buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
+   intermediates a composite draw reads, by describing the draw that writes each one. Raised from
+   two in ABI 8, when the shape hunt was removed. */
+#define RSF_FRAME_TAP_WATCH_SLOTS 4u
 
 /* Pixel shader resources reported per watched draw. Sixteen covers every post process pass in this
    game's frame; a pass binding more is reported truncated, with `input_count` saying so, rather
@@ -431,26 +433,6 @@ typedef struct rsf_frame_tap_options {
        guessing, so a caller that does not know the presented size yet will see no passes. */
     uint32_t output_width;
     uint32_t output_height;
-    /* Find the draws that read a texture of a given shape, wherever in the frame they are.
-
-       The watches above start from a texture whose address is already known. This starts from a
-       shape instead, which is what is needed when the question is "which surface is the interface"
-       and every rule based on format has been wrong once. AC7's widget converter rasterizes at a
-       hardcoded 1920x1080, so a draw reading a 1920x1080 R8G8B8A8 texture is compositing the
-       interface, whatever the target it writes into turns out to be. That target is the answer.
-
-       Zero in any of the three disables it. Matching costs no device calls: every shader resource
-       slot already carries its description in the shadow, so this is a comparison over data the tap
-       has anyway. Reports go to `on_hunt_draw` with the same structure a watched target draw uses,
-       so the reader sees the render target, its extent, the viewport and every bound input. */
-    uint32_t hunt_width;
-    uint32_t hunt_height;
-    uint32_t hunt_format;
-    rsf_frame_tap_target_fn on_hunt_draw;
-    void* on_hunt_draw_user;
-    /* How many hunt reports to make before going quiet. Zero means the default, which is enough to
-       describe a few frames and not enough to fill a log. */
-    uint32_t hunt_budget;
     /* Where watched render target draws are reported. Optional: leaving it null leaves
        `rsf_frame_tap_watch_target` with nowhere to send anything, and it says so. */
     rsf_frame_tap_target_fn on_target_draw;
@@ -523,6 +505,11 @@ typedef struct rsf_frame_tap_status {
     uint32_t blend_states_patched;
     uint32_t divert_refused;
     uint32_t divert_last_refusal;
+    /* Appended in ABI 8. How many times the runtime rewrote its vtable underneath the hooks and
+       they were put back. Zero under DXVK, whose table is static; on Windows it climbs with every
+       flush, and a run where it stays at zero while draws go unobserved is a run on a runtime this
+       module has not met. See `rsf_frame_tap_refresh`. */
+    uint32_t vtable_refreshes;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.
@@ -576,14 +563,19 @@ rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
    frame that half works. Safe to call from any thread; it takes effect on the next binding. */
 rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
 
-/* Give the shape hunt a fresh budget, so it describes the frame that is on screen now.
+/* Put the hooks back if the runtime has rewritten its vtable underneath them.
 
-   The surfaces it finds are pooled allocations named by address, and a screen change retires them.
-   Whatever was found during an intro is not what a title screen composites into, and a hunt whose
-   budget ran out during the intro will never say so: it simply stops reporting, and the stale set
-   goes on being promoted while nothing is drawn into it. Anything that re-identifies the frame has
-   to re-run this too. */
-rsf_frame_tap_result rsf_frame_tap_reset_hunt(uint32_t budget);
+   The Windows D3D11 runtime keeps the immediate context's vtable on the heap and rewrites the
+   whole work-submission family of entries, draws, dispatches, copies and clears, whenever a
+   flush-class call runs and again on the next piece of work, flipping between two sets of
+   implementations. Every rewrite discards whatever was patched into those slots. Measured on
+   Windows 11 on 26 September 2026; DXVK's static table never does this, which is why every Wine
+   run of this module passed and no Windows run observed a draw after the first Map.
+
+   Every hook already checks for this on the way in and the work-submission hooks check again on
+   the way out, so this exists for the one flip nothing here can see: the one Present causes.
+   Call it from the present hook. Cheap when nothing changed: one comparison. */
+rsf_frame_tap_result rsf_frame_tap_refresh(void);
 
 /* Close every gate a plan opened, so the next frame opens them again.
 

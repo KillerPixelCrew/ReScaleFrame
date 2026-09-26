@@ -7,7 +7,7 @@ add_library(rsf_graphics STATIC
     src/frame_tap.cpp
     src/depth_replay.cpp
     src/d3d11_state.cpp
-    src/scene_reinsert.cpp
+    src/scene_promote.cpp
     src/present_blit.cpp
     src/fullscreen_pass.cpp
     src/ui_layer.cpp

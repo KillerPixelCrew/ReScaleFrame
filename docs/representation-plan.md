@@ -48,7 +48,7 @@ SDK free of GPL includes.
 | SR resolution model | Create the SR feature once at the output extent with the vendor's dynamic-resolution flag set, and vary only the per-evaluation render extent | Our screen policy changes the scale on every menu/flight transition; a feature created at a fixed render extent has to be destroyed and rebuilt at each one, which costs the history. Luma `main.cpp:917` sets it unconditionally for the same reason |
 | View uniforms | Read at the game's own `Map`/`Unmap` of the constant buffer, not through a staging copy | `constant_buffer_read.cpp:65-83` creates a staging buffer, `CopyResource`s and maps it, which is a GPU round trip per read and lands a frame late. The data is already in CPU memory at the moment the game writes it (Luma `main.cpp:1344-1396`) |
 | Engine's own `r.HDR.UI.CompositeMode` path | Recorded, not used | Covers Slate only, HDR-encoded LUT composite, front-end UI on the screens that matter is quads |
-| Deleted mechanisms | interface-target promotion, format-based interface identification, the shape hunt and its collection, relooks, `present_blit`, `dlss_bridge.c`, `keep_render_scale` (after M3), `rsf_observer_present_fn` | Replaced by extraction, the classifier, `fullscreen_pass`/`composite`, the orchestrator session |
+| Deleted mechanisms | format-based interface identification, the shape hunt and its collection, relooks (all gone 26 September), `present_blit`, `dlss_bridge.c`, `keep_render_scale` (after M3), `rsf_observer_present_fn` | Replaced by the classifier naming the layers, `fullscreen_pass`/`composite`, the orchestrator session. Interface-layer promotion was on this list and is back, because extraction was measured to discolour the frame; see the M2 notes in the tracker |
 
 ## Architecture
 
@@ -277,14 +277,19 @@ with no route. `RSF_UI_DIVERT_MODE=retarget|skip` per producer, `retarget` defau
 
 ### Reinsertion becomes `scene_promote`
 
-Tail = `{composite, chain_targets[], scene_color, reconstruction, render size}`; interface targets
-gone. `chain_targets` are the eight-bit render-resolution targets between the tonemap and the
-back-buffer draw that are neither the composite nor a widget-quad destination (`0x308E2770` in the
-log); the tail walk records every draw into the composite after the tonemap and points the target
-watch at each candidate; a `CopyResource` hook (context slot 47) covers an intermediate filled by
-copy. `depth_policy` stays (`RSF_DEPTH_POLICY drop|keep|refuse`, `RSF_REINSERT_DEPTH` alias);
-`depth_mismatches` should read zero once quads no longer reach a promoted target. Restake keeps its
-240-frame trigger, clears the chain set with the composite; diversion is independent of the plan.
+Built 26 September, after M2's runs reversed the premise (see the tracker). Tail =
+`{composite, ui_targets[], chain_targets[], scene_color, reconstruction, render size}`. The
+`ui_targets` are back, and named differently: each is a target the classifier saw a widget quad
+drawn into, collected on every candidate draw, aged out after 120 presents without one, and never
+found by a format or shape rule. `chain_targets` are the eight-bit render-resolution inputs of
+composite draws that are neither the composite nor a layer (`0x308E2770` in the log), each
+confirmed by a watch on the draw that writes it reading the composite, with the composite watched
+again every 300 presents; an intermediate filled by copy is reported as never drawn into while
+watched, and the `CopyResource` hook (context slot 47) that would cover it exists as a pass-through
+for the vtable refresh and does not yet redirect. `depth_policy` stays (`RSF_REINSERT_DEPTH`); the
+quads bind the scene's depth, so `depth_mismatches` climbs by design and the default drops the
+depth at that binding. Restake keeps its 240-frame trigger and clears the chain with the composite;
+the layers age out on their own; the relooks are gone; diversion is independent of the plan.
 
 ## Game plugin: `games/ac7`
 
@@ -390,7 +395,7 @@ change.
 
 **M2 — divert into the UI layer and composite at present, FG off.** `ui_layer`, `fullscreen_pass`,
 `composite` (PASSTHROUGH facade or, until the facade lands, the present hook); divert primitive with
-blend patch; `scene_promote` replaces `scene_reinsert` (interface targets deleted, chain targets
+blend patch; `scene_promote` replaces `scene_reinsert` (interface layers from the classifier, chain targets
 added); egui into the layer/after the composite; alpha-accumulation check every 30 frames
 (`GenerateMips` on a twin, read the last mip through staging). Keys `RSF_UI_*`. Pass: briefing and
 hangar at 50% with F6 on: `ui: diverted <n> (slate a, quad c), leaked 0, blend patched <p>, layer

@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include <rescaleframe/scene_promote.h>
+
+#include <windows.h>
+
+#include <d3d11.h>
+
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <new>
+
+// The plan has to hold every promoted surface at once: the composite, the scene colour, and both
+// sets. A plan that describes the frame correctly and is refused for being one entry too long is
+// the worst kind of failure, because it reports itself on, and it has happened once.
+static_assert(2u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
+                  RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
+              "the frame tap's plan cannot hold everything promotion may name");
+
+namespace {
+
+// One texture promoted to output resolution, with the views the substitution binds in its place.
+//
+// Both views exist even where only one is used. A render target view and a shader resource view on
+// the same texture cost nothing to hold, the composite genuinely needs both, and a replacement that
+// could only be written or only be read would fail the first time the frame did the other.
+struct Replacement {
+    // The game's texture this stands in for, held by address only. Comparing is all this does with
+    // it, and retaining a pooled engine target would change when the engine may reuse it.
+    ID3D11Texture2D* original = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+    ID3D11RenderTargetView* target_view = nullptr;
+    ID3D11ShaderResourceView* shader_view = nullptr;
+};
+
+void release_replacement(Replacement& replacement)
+{
+    if (replacement.shader_view) {
+        replacement.shader_view->Release();
+    }
+    if (replacement.target_view) {
+        replacement.target_view->Release();
+    }
+    if (replacement.texture) {
+        replacement.texture->Release();
+    }
+    replacement = Replacement{};
+}
+
+void release_set(Replacement* set, uint32_t& count)
+{
+    for (uint32_t index = 0; index < count; ++index) {
+        release_replacement(set[index]);
+    }
+    count = 0;
+}
+
+} // namespace
+
+struct rsf_promote {
+    ID3D11Device* device = nullptr;
+    uint32_t output_width = 0;
+    uint32_t output_height = 0;
+    rsf_promote_log_fn log = nullptr;
+    void* log_user = nullptr;
+
+    Replacement composite;
+    Replacement ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
+    uint32_t ui_target_count = 0;
+    Replacement chain_targets[RSF_PROMOTE_MAX_CHAIN_TARGETS];
+    uint32_t chain_target_count = 0;
+
+    // Not a replacement: the reconstruction already exists at output resolution and belongs to
+    // whoever produced it. All this owns is a way to read it.
+    ID3D11Texture2D* scene_color = nullptr;
+    ID3D11Texture2D* reconstruction = nullptr;
+    ID3D11ShaderResourceView* reconstruction_view = nullptr;
+
+    uint32_t render_width = 0;
+    uint32_t render_height = 0;
+    bool ready = false;
+};
+
+namespace {
+
+void say(const rsf_promote* promote, const char* format, ...)
+{
+    if (!promote || !promote->log) {
+        return;
+    }
+    char message[512];
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    promote->log(promote->log_user, message);
+}
+
+// Build an output resolution stand-in for one of the game's render resolution targets.
+//
+// The format is copied from the original rather than chosen. What goes into these targets is the
+// game's own tonemapped output and its own interface, drawn by the game's own shaders, so the
+// target they write has to be the one they expect in everything except its size.
+bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacement& out,
+                       const char* what)
+{
+    release_replacement(out);
+    if (!original) {
+        return true;  // not identified, which is a stated outcome rather than a failure
+    }
+
+    D3D11_TEXTURE2D_DESC description{};
+    original->GetDesc(&description);
+    say(promote, "promote: the %s %p, %ux%u format %u, becomes %ux%u", what,
+        static_cast<void*>(original), description.Width, description.Height,
+        unsigned(description.Format), promote->output_width, promote->output_height);
+
+    description.Width = promote->output_width;
+    description.Height = promote->output_height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    description.SampleDesc.Count = 1;
+    description.SampleDesc.Quality = 0;
+    description.Usage = D3D11_USAGE_DEFAULT;
+    // Both, whatever the original declared. The composite is written by the tonemap and read by the
+    // last draw, and a replacement that inherited a write-only original could not be read back.
+    description.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    description.CPUAccessFlags = 0;
+    description.MiscFlags = 0;
+
+    if (FAILED(promote->device->CreateTexture2D(&description, nullptr, &out.texture)) ||
+        !out.texture) {
+        say(promote, "promote: the %s replacement could not be created", what);
+        release_replacement(out);
+        return false;
+    }
+    if (FAILED(promote->device->CreateRenderTargetView(out.texture, nullptr, &out.target_view)) ||
+        FAILED(promote->device->CreateShaderResourceView(out.texture, nullptr, &out.shader_view))) {
+        say(promote, "promote: the %s replacement views could not be created", what);
+        release_replacement(out);
+        return false;
+    }
+    out.original = original;
+    return true;
+}
+
+// Build replacements for a whole set, skipping null entries and refusing duplicates, which a caller
+// collecting targets from several frames can easily hand over twice.
+bool build_set(rsf_promote* promote, void* const* originals, uint32_t offered, Replacement* set,
+               uint32_t capacity, uint32_t& count, const char* what)
+{
+    release_set(set, count);
+    for (uint32_t index = 0; index < offered && index < capacity; ++index) {
+        auto* original = static_cast<ID3D11Texture2D*>(originals[index]);
+        if (!original) {
+            continue;
+        }
+        bool seen = false;
+        for (uint32_t previous = 0; previous < count; ++previous) {
+            if (set[previous].original == original) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+        if (!build_replacement(promote, original, set[count], what)) {
+            release_set(set, count);
+            return false;
+        }
+        ++count;
+    }
+    return true;
+}
+
+void release_everything(rsf_promote* promote)
+{
+    if (promote->reconstruction_view) {
+        promote->reconstruction_view->Release();
+        promote->reconstruction_view = nullptr;
+    }
+    release_set(promote->ui_targets, promote->ui_target_count);
+    release_set(promote->chain_targets, promote->chain_target_count);
+    release_replacement(promote->composite);
+    promote->ready = false;
+}
+
+void add_promoted(rsf_frame_tap_plan* plan, const Replacement* set, uint32_t count)
+{
+    for (uint32_t index = 0; index < count && plan->count < RSF_FRAME_TAP_MAX_SUBSTITUTIONS;
+         ++index) {
+        if (!set[index].original) {
+            continue;
+        }
+        rsf_frame_tap_substitution& item = plan->items[plan->count++];
+        item.texture = set[index].original;
+        item.shader_view = set[index].shader_view;
+        item.render_view = set[index].target_view;
+    }
+}
+
+} // namespace
+
+extern "C" rsf_promote_result rsf_promote_create(const rsf_promote_setup* setup,
+                                                 rsf_promote** out)
+{
+    if (!setup || !out || setup->struct_size < sizeof(rsf_promote_setup) || !setup->device ||
+        setup->output_width == 0 || setup->output_height == 0) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    if (setup->abi_version != RSF_PROMOTE_ABI_VERSION) {
+        return RSF_PROMOTE_ERROR_ABI_MISMATCH;
+    }
+    auto* promote = new (std::nothrow) rsf_promote{};
+    if (!promote) {
+        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+    }
+    promote->device = static_cast<ID3D11Device*>(setup->device);
+    promote->device->AddRef();
+    promote->output_width = setup->output_width;
+    promote->output_height = setup->output_height;
+    promote->log = setup->log;
+    promote->log_user = setup->log_user;
+    *out = promote;
+    return RSF_PROMOTE_OK;
+}
+
+extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
+                                                  const rsf_promote_frame_tail* tail)
+{
+    if (!promote || !tail || tail->struct_size < sizeof(rsf_promote_frame_tail) ||
+        !tail->composite || !tail->scene_color || !tail->reconstruction ||
+        tail->render_width == 0 || tail->render_height == 0) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    // Substituting a texture for one of its own size changes nothing except how many textures the
+    // frame has. Saying so is the difference between a run that shows no improvement and a run that
+    // was never upscaling: the game puts its own screen percentage back when a mission loads, and
+    // that is exactly what this looks like from inside the frame.
+    if (tail->render_width >= promote->output_width ||
+        tail->render_height >= promote->output_height) {
+        say(promote,
+            "promote: the game is rendering at %ux%u against an output of %ux%u, so there is "
+            "nothing to promote",
+            tail->render_width, tail->render_height, promote->output_width,
+            promote->output_height);
+        return RSF_PROMOTE_ERROR_NOT_SCALED;
+    }
+
+    release_everything(promote);
+
+    if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composite),
+                           promote->composite, "composite")) {
+        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+    }
+    if (!build_set(promote, tail->ui_targets, tail->ui_target_count, promote->ui_targets,
+                   RSF_PROMOTE_MAX_UI_TARGETS, promote->ui_target_count, "interface layer") ||
+        !build_set(promote, tail->chain_targets, tail->chain_target_count, promote->chain_targets,
+                   RSF_PROMOTE_MAX_CHAIN_TARGETS, promote->chain_target_count,
+                   "chain target")) {
+        release_everything(promote);
+        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+    }
+    if (promote->ui_target_count == 0) {
+        say(promote,
+            "promote: no interface layer has been named, so the interface is magnified with the "
+            "scene rather than drawn at output resolution");
+    }
+    if (promote->chain_target_count == 0) {
+        say(promote,
+            "promote: no chain target has been named, so the scene is downsampled between the "
+            "tonemap and the interface composite and the composite's promotion buys nothing "
+            "visible");
+    }
+
+    if (FAILED(promote->device->CreateShaderResourceView(
+            static_cast<ID3D11Resource*>(tail->reconstruction), nullptr,
+            &promote->reconstruction_view))) {
+        say(promote, "promote: the reconstruction could not be made readable");
+        release_everything(promote);
+        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+    }
+
+    promote->scene_color = static_cast<ID3D11Texture2D*>(tail->scene_color);
+    promote->reconstruction = static_cast<ID3D11Texture2D*>(tail->reconstruction);
+    promote->render_width = tail->render_width;
+    promote->render_height = tail->render_height;
+    promote->ready = true;
+    say(promote, "promote: ready, %ux%u up to %ux%u, %u interface layer%s, %u chain target%s",
+        tail->render_width, tail->render_height, promote->output_width, promote->output_height,
+        promote->ui_target_count, promote->ui_target_count == 1 ? "" : "s",
+        promote->chain_target_count, promote->chain_target_count == 1 ? "" : "s");
+    return RSF_PROMOTE_OK;
+}
+
+extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_frame_tap_plan* plan)
+{
+    if (!promote || !plan || plan->struct_size < sizeof(rsf_frame_tap_plan)) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    if (!promote->ready) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+
+    const uint32_t size = plan->struct_size;
+    *plan = rsf_frame_tap_plan{};
+    plan->struct_size = size;
+    plan->viewport_scale_x = float(promote->output_width) / float(promote->render_width);
+    plan->viewport_scale_y = float(promote->output_height) / float(promote->render_height);
+
+    // The composite first, and ungated: everything drawn into it has to land at output resolution,
+    // including the interface composite that runs after the tonemap.
+    rsf_frame_tap_substitution& composite = plan->items[plan->count++];
+    composite.texture = promote->composite.original;
+    composite.shader_view = promote->composite.shader_view;
+    composite.render_view = promote->composite.target_view;
+
+    // The interface layers and the chain, ungated for the same reason: the quads draw before the
+    // tonemap and the chain is filled after it, and both have to be at output resolution whenever
+    // they are touched.
+    add_promoted(plan, promote->ui_targets, promote->ui_target_count);
+    add_promoted(plan, promote->chain_targets, promote->chain_target_count);
+
+    // Scene colour last and gated on the composite, because the scene passes read scene colour
+    // while they are still writing it. An ungated substitution here hands a lighting pass a
+    // reconstruction of the frame it has not finished, which is a feedback loop rather than an
+    // upscale, and it would look like a smear that gets worse the longer the camera holds still.
+    rsf_frame_tap_substitution& scene = plan->items[plan->count++];
+    scene.texture = promote->scene_color;
+    scene.shader_view = promote->reconstruction_view;
+    scene.after_target = promote->composite.original;
+    return RSF_PROMOTE_OK;
+}
+
+extern "C" rsf_promote_result rsf_promote_get_status(rsf_promote* promote,
+                                                     rsf_promote_status* status)
+{
+    if (!promote || !status || status->struct_size < sizeof(rsf_promote_status)) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    status->ready = promote->ready ? 1u : 0u;
+    status->ui_targets_promoted = promote->ui_target_count;
+    status->chain_targets_promoted = promote->chain_target_count;
+    status->render_width = promote->render_width;
+    status->render_height = promote->render_height;
+    status->output_width = promote->output_width;
+    status->output_height = promote->output_height;
+    return RSF_PROMOTE_OK;
+}
+
+extern "C" void rsf_promote_destroy(rsf_promote* promote)
+{
+    if (!promote) {
+        return;
+    }
+    // The caller clears the tap's plan before this, which the header says. Nothing here can check
+    // it: the views are the tap's to stop using, and releasing them while a plan still names them
+    // would take the game down inside a binding call rather than here.
+    release_everything(promote);
+    if (promote->device) {
+        promote->device->Release();
+    }
+    delete promote;
+}

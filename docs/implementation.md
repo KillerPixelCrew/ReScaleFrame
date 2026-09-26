@@ -10,6 +10,19 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] Architecture, UE4.18 source leads, and presentation research retained in the repository.
 - [x] Local Release build, C/C++ SDK compatibility, plugin contract checks, Rust formatting, and Clippy verification.
 - [x] GitHub Actions workflow for native and Rust verification; individual run results are tracked in Actions.
+      Every run from 7 to 8 September failed at the first MSVC warning, the secure-CRT deprecation
+      of `fopen`, because nothing in the tree had ever been built with MSVC. Fixed 26 September
+      along with the three other things MSVC refused: a test variable named `small`, which a
+      Windows header defines as a macro; a fixture that added `dllexport` to functions its header
+      declared plainly; and a missing `stdlib.h`. The suite then passes on Windows, 22 of 22, with
+      Visual Studio 2026 through the `-VS2026` presets. CI has not run since.
+- [x] The frame tap survives the Windows D3D11 runtime. First MSVC run of `tests/frame_tap.cpp`
+      failed 23 checks that had always passed under Wine, and the cause is a property of the stock
+      runtime rather than of the tree: it rewrites the work-submission entries of its heap vtable on
+      every flush, which discards patched hooks, so no Windows run of this project could ever have
+      observed a draw after the first read-back. Measured with a probe on 26 September, fixed by a
+      sentinel check on every hook entry and pass-through hooks on the flush-class calls, tap ABI 8.
+      [Evidence](research/d3d11-runtime-vtable-rewrite.md).
 
 ## First working target
 
@@ -76,13 +89,16 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       and left the picture cleaner but the interface soft, with the briefing's 3D environment
       missing under F6.
 
-      Superseded, 7 September. The interface was never a target to promote. AC7 rasterizes it at a
-      fixed 1920x1080 and, on the briefing and hangar, draws it as world-space widget quads into its
-      own render-resolution `R8G8B8A8` layer, depth-tested against the scene, before compositing it
-      itself. Promotion cannot sharpen that; extraction can. The mechanism below is replaced by the
-      [representation plan](representation-plan.md): a mod-owned premultiplied UI layer, a HUD-less
-      scene, and a composite at present. The account of the three runs stays because the failures
-      were all the same mistake about bindings.
+      Superseded, 7 September, and then reversed. The interface was never a target to promote by
+      format: AC7 rasterizes it at a fixed 1920x1080 and, on the briefing and hangar, draws it as
+      world-space widget quads into its own render-resolution `R8G8B8A8` layer, depth-tested
+      against the scene, before compositing it itself. Extraction into a layer of our own was built
+      and run under M2 below, and it showed the opposite of what was assumed here: the quads read
+      the scene and its glow chain and the game keeps processing them, so taking them out
+      discolours the frame. Promoting the layer they draw into, with the viewport scaled, is the
+      route again, now as `scene_promote` with the layers named by the classifier rather than by a
+      rule about formats. The account of the three runs stays because the failures were all the
+      same mistake about bindings.
 
       Finding the tail: the frame tap shadows the output merger and describes the draws into a
       render target it is asked to watch, with extent, viewport, ordinal within the pass, and every
@@ -205,15 +221,29 @@ insertion point is wrong. Five runs on 7 September 2026.
       `ONE / INV_SRC_ALPHA` on colour and alpha with write mask `0xf`, so coverage was never the
       problem. The quads read the scene and its blur and glow chain as inputs, at render resolution,
       which makes them composites rather than overlays.
-- [ ] **The route changes.** Compositing at present skips AC7's own UI composite, its glow and its
+- [x] **The route changes.** Compositing at present skips AC7's own UI composite, its glow and its
       grade, and on the title screen the diverted widget texture is the whole picture, so the frame
       comes out flat and discoloured. Promotion of AC7's interface target is the correction: the
       game composites it, so the colour and the glow are the game's, and the promoted target is
       itself the premultiplied layer frame generation wants. The argument recorded here against
       promotion was wrong on its premise and is marked superseded rather than deleted.
-- [ ] `scene_promote` replacing `scene_reinsert`. Deliberately not done before the run: interface
-      promotion is the fallback if extraction fails, and deleting it first would remove the only
-      thing that has produced a result.
+- [x] `scene_promote` replacing `scene_reinsert`, 26 September. The plan promotes the composite,
+      the interface layers and the chain. A layer is a target the classifier has seen a widget quad
+      drawn into, refreshed every frame and dropped after 120 presents without one, so a layer the
+      pool retires ages out instead of holding a plan slot; a chain target is an eight-bit
+      render-resolution input of a composite draw, confirmed by watching the draw that writes it
+      read the composite, with the composite watched again every 300 presents so a chain that
+      appears after the tail walk still rebuilds the plan. Every set change rebuilds the plan on the
+      present thread. Deleted with it: the shape hunt and its collection, the format rule for the
+      interface target, and the tail relooks; the tap has four watch slots and no hunt. Built and
+      synthetic-tested with MSVC on Windows. Not game-tested. The run has to answer two things the
+      code cannot: whether the intermediate between the tonemap and the UI composite is filled by a
+      draw (then it is promoted) or by a copy (then the log says it was never drawn into while
+      watched, and a `CopyResource` hook is the next piece), and whether dropping the scene depth at
+      the quads costs anything visible on the briefing.
+- [ ] The run: F6 on the title screen and the briefing, judged on two things separately: the front
+      end sharp, and the menu shimmer gone without closing the jitter gate. The first Windows game
+      run of any of this; see the vtable finding above for why none could have worked before.
 - [ ] egui drawn into the layer, so it rides generated frames later.
 
 M4, the presentation bridge, has its riskiest piece answered as far as this machine can answer it.

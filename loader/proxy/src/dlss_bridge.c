@@ -31,7 +31,7 @@
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
-#include <rescaleframe/scene_reinsert.h>
+#include <rescaleframe/scene_promote.h>
 #include <rescaleframe/ui_identify.h>
 #include <rescaleframe/ui_layer.h>
 
@@ -60,35 +60,30 @@
    hazard, so it is watched for longer. */
 #define RSF_TAIL_ARM_FRAMES 6ul
 #define RSF_TAIL_STOP_FRAMES 32ul
-/* How many times a restake will look again before settling for what it can see. A video is a few
-   seconds and each look is 32 frames, so this outlasts one without spinning forever if a screen
-   genuinely has no interface. */
-#define RSF_TAIL_MAX_RELOOKS 12ul
-/* How many draws the interface hunt looks at per screen.
-
-   Large, because the budget is spent by every draw that reads the interface and most of them are
-   not squashes: the interface composites itself over several 1920x1080 passes before anything
-   downsamples it. Forty-eight was enough on a menu and ran out on a briefing before a squash
-   appeared, which reads exactly like a screen whose interface cannot be found. The matching itself
-   is a comparison against descriptions the tap already holds, so looking is nearly free and only
-   the reporting needs restraint. */
-#define RSF_UI_HUNT_DRAWS 20000u
-/* How many of those to describe in the log, which is the part that actually costs something. */
-#define RSF_UI_HUNT_LOGGED 24u
+/* Chain targets: the eight bit render resolution intermediates between the tonemap and the game's
+   own interface composite. A composite draw's inputs name the candidates, and a candidate is
+   confirmed by watching the draw that writes it and seeing it read the composite. Confirmation
+   gets a few draws, because the writer is one draw per frame; one candidate per spare watch slot. */
+#define RSF_CHAIN_CANDIDATES (RSF_FRAME_TAP_WATCH_SLOTS - 2u)
+#define RSF_CHAIN_CONFIRM_DRAWS 4u
+/* How often the composite is watched again after the tail walk, in presents, so a chain that
+   appears later is still found without describing the whole tail again: a tail found mid video
+   has a composite and no chain, and the relooks that used to repeat the walk for that case are
+   gone. Sixteen draws is a few frames of the composite's traffic. */
+#define RSF_CHAIN_RESCAN_FRAMES 300ul
+#define RSF_CHAIN_RESCAN_DRAWS 16u
+/* How many chain lines to write per look, which is the part that costs something. */
+#define RSF_CHAIN_SAID 24u
+/* How long an interface layer stays promoted after the classifier last saw a quad drawn into it.
+   The pool retires a layer on a screen change and hands the role to another allocation, and a
+   promoted layer nothing draws into holds a plan entry the live one needs. Two seconds at sixty. */
+#define RSF_UI_TARGET_STALE_FRAMES 120ul
 /* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
    spans several frames. The composite takes the whole interface on top of the scene, so it takes
    more, and the ordinal in each report says which draw of the pass it was. */
 #define RSF_TAIL_BACK_BUFFER_DRAWS 8u
 #define RSF_TAIL_COMPOSITE_DRAWS 64u
 
-/* DXGI_FORMAT_R8G8B8A8_UNORM, written as a number because this file has no D3D headers.
-
-   It is how the interface's own target is told apart from the scene's. The replayed captures in
-   ac7-frame-capture.md have every scene target in the tail as B8G8R8A8 and the interface alone, on
-   a transparent background, as R8G8B8A8. That is one observed difference in one game and not a
-   rule about engines, which is why an input that does not match leaves the interface unpromoted
-   rather than being promoted on a guess. */
-#define RSF_FORMAT_R8G8B8A8_UNORM 28ul
 
 /* Eight bit colour, in every spelling this game's tail uses.
 
@@ -112,13 +107,6 @@ static int is_eight_bit_colour(unsigned long format)
     }
 }
 
-/* The R8G8B8A8 family alone, which is how the interface's own target is told from the scene's.
-   The replayed capture has every scene target in the tail as B8G8R8A8 and the interface alone, on
-   a transparent background, as R8G8B8A8. Same reason for the typeless entry as above. */
-static int is_interface_colour(unsigned long format)
-{
-    return format == 27ul || format == 28ul || format == 29ul;
-}
 
 static struct {
     int started;
@@ -229,28 +217,40 @@ static struct {
     unsigned long redirects_seen;
     unsigned long redirect_stall;
     unsigned long tail_restakes;
-    unsigned long tail_relooks;
     int tail_restaking;
-    /* The surfaces the interface is composited into, found by the shape hunt rather than by the
-       tail's format rule. Retained, because the plan names them by address. */
-    void* interface_targets[RSF_REINSERT_MAX_INTERFACE_TARGETS];
-    uint32_t interface_target_count;
-    unsigned long hunt_logged;
+    /* The interface layers: the targets the classifier has seen widget quads drawn into, each
+       retained because the plan names it by address, with the present it was last seen in so a
+       layer the pool has retired ages out of the plan instead of holding a slot forever. */
+    void* ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
+    unsigned long ui_target_seen[RSF_PROMOTE_MAX_UI_TARGETS];
+    uint32_t ui_target_count;
+    int ui_targets_overflowed;
+    /* Chain candidates, named by a composite draw's inputs and each watched for the draw that
+       writes it, indexed by the watch slot above the tail's two; and the confirmed chain, which is
+       what the plan promotes. All retained. */
+    void* chain_candidates[RSF_CHAIN_CANDIDATES];
+    void* chain_targets[RSF_PROMOTE_MAX_CHAIN_TARGETS];
+    uint32_t chain_target_count;
+    unsigned long chain_said;
+    unsigned long chain_rescan_countdown;
+    /* Set when either set changes under an installed plan, so the present hook rebuilds it. */
+    int plan_stale;
+    unsigned long presents;
     /* The presented size, kept here so a per-draw callback can judge against it without asking the
        pipeline for its status on every draw. */
     unsigned long output_width;
     unsigned long output_height;
     unsigned long tail_draws;
 
-    /* The interface's own target, and the scene colour, both taken from the frame and both held.
-       The plan names them by address and the tap never dereferences them, so a reference of our own
-       is what keeps that address meaning what it meant when it was learned. */
-    void* interface_target;
+    /* The scene colour, taken from the frame and held. The plan names it by address and the tap
+       never dereferences it, so a reference of our own is what keeps that address meaning what it
+       meant when it was learned. */
     void* scene_color;
 
-    /* Reinsertion proper. Off until asked for: it changes what the game draws, and a wrong
-       substitution is a corrupted frame or a dead process rather than a diagnostic nobody reads. */
-    rsf_reinsert* reinsert;
+    /* Promotion proper, still switched by the F6 "reinsert" toggle the panel and the notes name.
+       Off until asked for: it changes what the game draws, and a wrong substitution is a
+       corrupted frame or a dead process rather than a diagnostic nobody reads. */
+    rsf_promote* promote;
     int reinsert_on;
     unsigned long reinsert_frames;
     unsigned long gate_evaluates;
@@ -765,14 +765,283 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
     }
 }
 
-/* Called by the frame tap, on the render thread, after a draw into a target this asked about. */
-/* A draw that reads the interface, found by the shape the binary states rather than by a format
-   rule. What matters is the target it writes into and at what size: that is the surface the
-   interface is composited into, and if it is at render resolution then a 1920x1080 interface is
-   being squashed into it and stretched back out by the frame's last draw.
+/* The interface layers and the chain, which is what promotion names beyond the composite.
 
-   Says which slot carried it, because a texture of that shape bound in some other slot and not read
-   would be the same false positive that every earlier identification fell for. */
+   Both are observations rather than rules. A layer is a target the classifier saw a widget quad
+   drawn into. A chain target is an eight bit render resolution input of a composite draw whose own
+   writer was watched and seen to read the composite. Every rule of the form "the one that matches"
+   tried on this frame matched something else as well, so nothing here is named from a format or a
+   size alone, and each set says in the log how it was filled. */
+
+static void forget_chain_candidate(void* target);
+
+static int is_ui_target(const void* texture)
+{
+    uint32_t index;
+    for (index = 0; index < bridge.ui_target_count; ++index) {
+        if (bridge.ui_targets[index] == texture) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int is_chain_target(const void* texture)
+{
+    uint32_t index;
+    for (index = 0; index < bridge.chain_target_count; ++index) {
+        if (bridge.chain_targets[index] == texture) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A widget quad was drawn into this target. Called on the render thread from inside a draw hook,
+   so it compares, retains and sets a flag; the present hook creates the replacement. */
+static void note_ui_target(void* target)
+{
+    uint32_t index;
+    if (!target || target == bridge.present_target) {
+        return;
+    }
+    for (index = 0; index < bridge.ui_target_count; ++index) {
+        if (bridge.ui_targets[index] == target) {
+            bridge.ui_target_seen[index] = bridge.presents;
+            return;
+        }
+    }
+    if (bridge.ui_target_count >= RSF_PROMOTE_MAX_UI_TARGETS) {
+        if (!bridge.ui_targets_overflowed) {
+            bridge.ui_targets_overflowed = 1;
+            say("interface layer: %p is one more than the %u there is room for, so it stays at "
+                "render resolution",
+                target, (unsigned)RSF_PROMOTE_MAX_UI_TARGETS);
+        }
+        return;
+    }
+    rsf_resource_retain(target);
+    bridge.ui_targets[bridge.ui_target_count] = target;
+    bridge.ui_target_seen[bridge.ui_target_count] = bridge.presents;
+    ++bridge.ui_target_count;
+    bridge.plan_stale = 1;
+    say("interface layer: widget quads draw into %p, now one of %u to promote", target,
+        (unsigned)bridge.ui_target_count);
+    /* A layer is written by the quads and not from the composite, so it is not a chain target
+       whatever the composite watch made of it before the classifier saw a quad. */
+    forget_chain_candidate(target);
+}
+
+/* Drop the layers nothing has drawn into for a while. The pool retires a layer on a screen change
+   and hands the role to another allocation, and a plan that still names the old one looks healthy
+   while the interface goes back to being magnified. That is what the title screen after the intro
+   looked like when the set was only cleared on a restake. */
+static void age_ui_targets(void)
+{
+    uint32_t index = 0;
+    while (index < bridge.ui_target_count) {
+        if (bridge.presents - bridge.ui_target_seen[index] <= RSF_UI_TARGET_STALE_FRAMES) {
+            ++index;
+            continue;
+        }
+        say("interface layer: %p has not been drawn into for %lu presents, no longer promoted",
+            bridge.ui_targets[index], RSF_UI_TARGET_STALE_FRAMES);
+        rsf_resource_release(bridge.ui_targets[index]);
+        --bridge.ui_target_count;
+        bridge.ui_targets[index] = bridge.ui_targets[bridge.ui_target_count];
+        bridge.ui_target_seen[index] = bridge.ui_target_seen[bridge.ui_target_count];
+        bridge.ui_targets[bridge.ui_target_count] = NULL;
+        bridge.ui_targets_overflowed = 0;
+        bridge.plan_stale = 1;
+    }
+}
+
+static void forget_chain_candidate(void* target)
+{
+    uint32_t index;
+    for (index = 0; index < RSF_CHAIN_CANDIDATES; ++index) {
+        if (bridge.chain_candidates[index] == target) {
+            rsf_frame_tap_watch_target(2u + index, NULL, 0);
+            rsf_resource_release(target);
+            bridge.chain_candidates[index] = NULL;
+        }
+    }
+    index = 0;
+    while (index < bridge.chain_target_count) {
+        if (bridge.chain_targets[index] != target) {
+            ++index;
+            continue;
+        }
+        say("chain target: %p turned out to be an interface layer, no longer promoted as chain",
+            target);
+        rsf_resource_release(target);
+        --bridge.chain_target_count;
+        bridge.chain_targets[index] = bridge.chain_targets[bridge.chain_target_count];
+        bridge.chain_targets[bridge.chain_target_count] = NULL;
+        bridge.plan_stale = 1;
+    }
+}
+
+/* Stop watching and let go of everything the chain holds. The chain belongs to the composite and
+   goes stale with it. */
+static void clear_chain(void)
+{
+    uint32_t index;
+    for (index = 0; index < RSF_CHAIN_CANDIDATES; ++index) {
+        if (bridge.chain_candidates[index]) {
+            rsf_frame_tap_watch_target(2u + index, NULL, 0);
+            rsf_resource_release(bridge.chain_candidates[index]);
+            bridge.chain_candidates[index] = NULL;
+        }
+    }
+    for (index = 0; index < bridge.chain_target_count; ++index) {
+        rsf_resource_release(bridge.chain_targets[index]);
+        bridge.chain_targets[index] = NULL;
+    }
+    bridge.chain_target_count = 0;
+    bridge.chain_said = 0;
+}
+
+/* A composite draw's inputs name the candidates: eight bit, the composite's own size, and none of
+   the surfaces already accounted for. Each one gets a watch of its own, so the draw that writes it
+   can say whether it is produced from the composite. */
+static void note_chain_candidates(const rsf_frame_tap_target_draw* draw)
+{
+    uint32_t index;
+    for (index = 0; index < draw->input_count; ++index) {
+        const rsf_frame_tap_input* input = &draw->inputs[index];
+        uint32_t slot;
+        if (!input->texture || !is_eight_bit_colour(input->format) ||
+            input->width != draw->target_width || input->height != draw->target_height ||
+            input->texture == bridge.composite || input->texture == bridge.scene_color ||
+            is_ui_target(input->texture) || is_chain_target(input->texture)) {
+            continue;
+        }
+        for (slot = 0; slot < RSF_CHAIN_CANDIDATES; ++slot) {
+            if (bridge.chain_candidates[slot] == input->texture) {
+                break;
+            }
+        }
+        if (slot < RSF_CHAIN_CANDIDATES) {
+            continue; /* already being watched */
+        }
+        for (slot = 0; slot < RSF_CHAIN_CANDIDATES; ++slot) {
+            if (!bridge.chain_candidates[slot]) {
+                break;
+            }
+        }
+        if (slot == RSF_CHAIN_CANDIDATES) {
+            if (bridge.chain_said < RSF_CHAIN_SAID) {
+                ++bridge.chain_said;
+                say("chain candidate: %p is read by a composite draw and every confirmation watch "
+                    "is busy, so it waits for the next look",
+                    input->texture);
+            }
+            continue;
+        }
+        rsf_resource_retain(input->texture);
+        bridge.chain_candidates[slot] = input->texture;
+        rsf_frame_tap_watch_target(2u + slot, input->texture, RSF_CHAIN_CONFIRM_DRAWS);
+        if (bridge.chain_said < RSF_CHAIN_SAID) {
+            ++bridge.chain_said;
+            say("chain candidate: %p, %lux%lu format %lu in slot %lu of a composite draw. Watching "
+                "what writes it",
+                input->texture, (unsigned long)input->width, (unsigned long)input->height,
+                (unsigned long)input->format, (unsigned long)input->slot);
+        }
+    }
+}
+
+/* The draw that writes a candidate. Reading the composite, or a target already in the chain, is
+   what makes it chain; anything else is some other surface that happened to be eight bit and the
+   size of the frame, and promoting it would move a pass whose role is unknown. Bindings establish
+   possible reads rather than reads, so the inputs are described for a reader to judge. */
+static void confirm_chain_candidate(const rsf_frame_tap_target_draw* draw)
+{
+    const uint32_t slot = draw->watch_index - 2u;
+    void* candidate;
+    uint32_t index;
+    int reads_chain = 0;
+
+    if (slot >= RSF_CHAIN_CANDIDATES || !bridge.chain_candidates[slot]) {
+        return;
+    }
+    candidate = bridge.chain_candidates[slot];
+    for (index = 0; index < draw->input_count; ++index) {
+        const void* texture = draw->inputs[index].texture;
+        if (texture && (texture == bridge.composite || is_chain_target(texture))) {
+            reads_chain = 1;
+            break;
+        }
+    }
+    rsf_frame_tap_watch_target(2u + slot, NULL, 0);
+    bridge.chain_candidates[slot] = NULL;
+    if (!reads_chain) {
+        if (bridge.chain_said < RSF_CHAIN_SAID) {
+            ++bridge.chain_said;
+            say("chain candidate: %p is written by a draw that reads no part of the chain, %s %lu "
+                "with %lu inputs, so it is not promoted",
+                candidate, draw->indexed ? "indices" : "vertices",
+                (unsigned long)draw->element_count, (unsigned long)draw->input_count);
+            describe_inputs(draw);
+        }
+        rsf_resource_release(candidate);
+        return;
+    }
+    if (bridge.chain_target_count >= RSF_PROMOTE_MAX_CHAIN_TARGETS) {
+        say("chain target: %p is produced from the composite and there is no room for a %uth, so "
+            "it stays at render resolution",
+            candidate, (unsigned)(RSF_PROMOTE_MAX_CHAIN_TARGETS + 1u));
+        rsf_resource_release(candidate);
+        return;
+    }
+    /* Keeps the candidate's retain. */
+    bridge.chain_targets[bridge.chain_target_count++] = candidate;
+    bridge.plan_stale = 1;
+    say("chain target: %p is produced from the composite by a draw with %lu inputs, now one of %u "
+        "to promote",
+        candidate, (unsigned long)draw->input_count, (unsigned)bridge.chain_target_count);
+    describe_inputs(draw);
+}
+
+/* The end of a look. A candidate still waiting has had no draw into it while its watch was armed,
+   which is what a surface filled by a copy, or before the tail, looks like. Said, because a chain
+   target filled by CopyResource would need a hook this build does not have, and a run has to be
+   able to tell that case from a chain that was simply not there. */
+static void settle_chain_candidates(void)
+{
+    uint32_t slot;
+    for (slot = 0; slot < RSF_CHAIN_CANDIDATES; ++slot) {
+        if (!bridge.chain_candidates[slot]) {
+            continue;
+        }
+        if (bridge.chain_said < RSF_CHAIN_SAID) {
+            ++bridge.chain_said;
+            say("chain candidate: %p was never drawn into while watched, so it is filled by a copy "
+                "or before the tail, and is not promoted",
+                bridge.chain_candidates[slot]);
+        }
+        rsf_frame_tap_watch_target(2u + slot, NULL, 0);
+        rsf_resource_release(bridge.chain_candidates[slot]);
+        bridge.chain_candidates[slot] = NULL;
+    }
+}
+
+/* Watch the composite again, briefly and periodically, once the tail walk is over. */
+static void chain_rescan_tick(void)
+{
+    if (!bridge.composite || bridge.tail_frames <= RSF_TAIL_STOP_FRAMES) {
+        return;
+    }
+    if (bridge.chain_rescan_countdown > 0) {
+        --bridge.chain_rescan_countdown;
+        return;
+    }
+    bridge.chain_rescan_countdown = RSF_CHAIN_RESCAN_FRAMES;
+    settle_chain_candidates();
+    rsf_frame_tap_watch_target(1, bridge.composite, RSF_CHAIN_RESCAN_DRAWS);
+}
+
 /* Every draw the tap's prefilter let through, classified and counted. Nothing else.
 
    This is what M1 is for: a run says how many draws on each screen are the interface and by which
@@ -889,6 +1158,8 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
         }
         bridge.ui_layer_extent[0] = draw->target_width;
         bridge.ui_layer_extent[1] = draw->target_height;
+        /* And the target itself: it is one of AC7's interface layers, and promotion names it. */
+        note_ui_target(draw->render_target);
     }
     return verdict;
 }
@@ -942,98 +1213,37 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     }
 }
 
-static void on_hunt_draw(void* user, const rsf_frame_tap_target_draw* draw)
-{
-    uint32_t index;
-    (void)user;
-    if (!draw) {
-        return;
-    }
-    for (index = 0; index < draw->input_count; ++index) {
-        if (draw->inputs[index].width != 1920 || draw->inputs[index].height != 1080) {
-            continue;
-        }
-        if (bridge.hunt_logged < RSF_UI_HUNT_LOGGED) {
-            ++bridge.hunt_logged;
-            say("interface hunt: a 1920x1080 format %lu texture %p in slot %lu is read by a draw "
-                "into target %p, %lux%lu format %lu, viewport %lux%lu at %d,%d, %lu elements, "
-                "%lu targets bound, depth %s",
-                (unsigned long)draw->inputs[index].format, draw->inputs[index].texture,
-                (unsigned long)draw->inputs[index].slot, draw->render_target,
-                (unsigned long)draw->target_width,
-                (unsigned long)draw->target_height, (unsigned long)draw->target_format,
-                (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
-                (int)draw->viewport_x, (int)draw->viewport_y, (unsigned long)draw->element_count,
-                (unsigned long)draw->target_count, draw->depth_bound ? "bound" : "none");
-        }
-        /* Remember it, but only when this draw is actually a squash.
-
-           The interface's own compositing runs at 1920x1080 and writes 1920x1080, and reads the
-           interface while doing it, so it matches the hunt exactly as much as the squash does.
-           Promoting those targets is meaningless and it costs plan entries that the real ones need.
-           The rule that separates them needs no sizes from elsewhere: a draw that writes a target
-           smaller than the texture it is reading is losing detail, and that is the definition of
-           the thing being looked for. */
-        if (draw->render_target && (draw->target_width < draw->inputs[index].width ||
-                                    draw->target_height < draw->inputs[index].height)) {
-            uint32_t seen;
-            for (seen = 0; seen < bridge.interface_target_count; ++seen) {
-                if (bridge.interface_targets[seen] == draw->render_target) {
-                    break;
-                }
-            }
-            if (seen == bridge.interface_target_count &&
-                bridge.interface_target_count < RSF_REINSERT_MAX_INTERFACE_TARGETS) {
-                rsf_resource_retain(draw->render_target);
-                bridge.interface_targets[bridge.interface_target_count++] = draw->render_target;
-                say("interface hunt: target %p %lux%lu is where the interface is squashed, and is "
-                    "now one of %lu to promote",
-                    draw->render_target, (unsigned long)draw->target_width,
-                    (unsigned long)draw->target_height,
-                    (unsigned long)bridge.interface_target_count);
-            }
-        }
-        break;
-    }
-}
-
 static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     (void)user;
     if (!draw) {
         return;
     }
+    /* The slots above the tail's two are chain confirmation watches, one draw each. */
+    if (draw->watch_index >= 2) {
+        confirm_chain_candidate(draw);
+        return;
+    }
     ++bridge.tail_draws;
 
-    say("%s draw %lu: target %p %lux%lu format %lu, viewport %lux%lu, %s %lu, %lu inputs",
-        draw->watch_index == 0 ? "back buffer" : "composite", (unsigned long)draw->draw_index,
-        draw->render_target, (unsigned long)draw->target_width,
-        (unsigned long)draw->target_height, (unsigned long)draw->target_format,
-        (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
-        draw->indexed ? "indices" : "vertices", (unsigned long)draw->element_count,
-        (unsigned long)draw->input_count);
-    describe_inputs(draw);
+    /* Described only while the tail is being walked. A chain rescan watches the composite again
+       every few hundred frames and would otherwise write the same lines each time. */
+    if (bridge.tail_frames <= RSF_TAIL_STOP_FRAMES) {
+        say("%s draw %lu: target %p %lux%lu format %lu, viewport %lux%lu, %s %lu, %lu inputs",
+            draw->watch_index == 0 ? "back buffer" : "composite", (unsigned long)draw->draw_index,
+            draw->render_target, (unsigned long)draw->target_width,
+            (unsigned long)draw->target_height, (unsigned long)draw->target_format,
+            (unsigned long)draw->viewport_width, (unsigned long)draw->viewport_height,
+            draw->indexed ? "indices" : "vertices", (unsigned long)draw->element_count,
+            (unsigned long)draw->input_count);
+        describe_inputs(draw);
+    }
 
-    /* A draw into the composite. One of its inputs is the interface's own target, which is what has
-       to be promoted for the HUD to be drawn at output resolution instead of magnified with the
-       scene. It is told apart by its format: every scene target in this tail is B8G8R8A8 and the
-       interface alone is R8G8B8A8. Nothing else in a composite draw's inputs matches that, and an
-       input that does not match leaves it unidentified rather than guessed at. */
-    if (draw->watch_index == 1 && !bridge.interface_target) {
-        uint32_t index;
-        for (index = 0; index < draw->input_count; ++index) {
-            const rsf_frame_tap_input* input = &draw->inputs[index];
-            if (!input->texture || !is_interface_colour(input->format)) {
-                continue;
-            }
-            bridge.interface_target = input->texture;
-            rsf_resource_retain(bridge.interface_target);
-            say("  slot %lu is the interface's own target at %lux%lu, so the HUD can be drawn at "
-                "output resolution rather than magnified with the scene",
-                (unsigned long)input->slot, (unsigned long)input->width,
-                (unsigned long)input->height);
-            break;
-        }
+    /* A draw into the composite. Its eight bit inputs at the composite's own size are the chain
+       candidates: the intermediates between the tonemap and the interface composite that would
+       otherwise downsample the promoted composite back to render resolution. */
+    if (draw->watch_index == 1) {
+        note_chain_candidates(draw);
     }
 
     /* What the back buffer draw reads is the composite. At a reduced render scale it reads exactly
@@ -1144,23 +1354,12 @@ static void watch_for_stalled_plan(void)
     rsf_frame_tap_set_plan(NULL);
     rsf_resource_release(bridge.composite);
     bridge.composite = NULL;
-    rsf_resource_release(bridge.interface_target);
-    bridge.interface_target = NULL;
-    /* And the hunt's findings, which go stale the same way and for the same reason. Keeping them
-       is worse than having none: the composite is re-identified and promoted while the interface
-       targets still name allocations from the previous screen, so the plan looks healthy, the
-       counters climb, and the interface is squashed exactly as it was. That is what a title screen
-       after an intro looked like. */
-    {
-        uint32_t index;
-        for (index = 0; index < bridge.interface_target_count; ++index) {
-            rsf_resource_release(bridge.interface_targets[index]);
-            bridge.interface_targets[index] = NULL;
-        }
-        bridge.interface_target_count = 0;
-    }
-    bridge.hunt_logged = 0;
-    rsf_frame_tap_reset_hunt(RSF_UI_HUNT_DRAWS);
+    /* And the chain, which belongs to the composite and goes stale with it. Keeping half of what
+       was found is worse than keeping none: a plan that is half stale still redirects and so never
+       looks stalled again, which is what a title screen after an intro looked like. The interface
+       layers are not cleared here, because the classifier refreshes them every frame and a
+       retired one ages out on its own. */
+    clear_chain();
     bridge.tail_frames = 0;
     bridge.tail_draws = 0;
 }
@@ -1174,36 +1373,27 @@ static void watch_tail(void* swapchain)
         return;
     }
     if (bridge.tail_frames == RSF_TAIL_STOP_FRAMES) {
-        /* The watch stops; the references do not. The composite and the interface target are what
-           the reinsertion plan names, and an engine pooled target is not made harder to reuse by
-           one more reference the way a swap chain buffer is. */
+        /* The watch stops; the references do not. The composite and the chain are what the plan
+           names, and an engine pooled target is not made harder to reuse by one more reference the
+           way a swap chain buffer is. */
         rsf_frame_tap_watch_target(1, NULL, 0);
-        say("frame tail: done looking, %lu draws described, composite %s, interface target %s",
+        settle_chain_candidates();
+        say("frame tail: done looking, %lu draws described, composite %s, %u chain target%s, %u "
+            "interface layer%s",
             bridge.tail_draws, bridge.composite ? "found" : "not found",
-            bridge.interface_target ? "found" : "not found");
+            (unsigned)bridge.chain_target_count, bridge.chain_target_count == 1 ? "" : "s",
+            (unsigned)bridge.ui_target_count, bridge.ui_target_count == 1 ? "" : "s");
+        bridge.chain_rescan_countdown = RSF_CHAIN_RESCAN_FRAMES;
         /* Looking again is only ever asked for by a stalled plan, so a plan is what it owes.
 
-           Unless the frame it looked at was not the one worth describing. A restake fires 240
-           frames after the plan went quiet, which during a screen change lands in whatever is on
-           screen at that moment, and the user's run caught one mid video: 38 draws, composite
-           found, interface target not found. Installing that leaves the interface at render
-           resolution for the whole briefing that follows, which is exactly the symptom reported.
-
-           So an incomplete tail is not accepted. Looking again costs 32 frames and the alternative
-           is being wrong until the next stall, which is another 240 frames away at best and never
-           at worst, because a partial plan still redirects and so never looks stalled. */
+           A restake fires 240 frames after the plan went quiet, which during a screen change lands
+           in whatever is on screen at that moment, and one run caught it mid video: composite
+           found, nothing else. That plan used to be refused and the walk repeated, up to twelve
+           times. Now it is installed as it is, because the pieces it lacks arrive on their own: the
+           classifier names the interface layers every frame, and the chain rescan watches the
+           composite again every few hundred frames, and either one rebuilds the plan. */
         if (bridge.tail_restaking) {
-            if (!bridge.interface_target && bridge.tail_relooks < RSF_TAIL_MAX_RELOOKS) {
-                ++bridge.tail_relooks;
-                say("frame tail: no interface target in that frame, which is what a video or a "
-                    "screen change looks like. Looking again, attempt %lu of %lu",
-                    bridge.tail_relooks, RSF_TAIL_MAX_RELOOKS);
-                bridge.tail_frames = 0;
-                bridge.tail_draws = 0;
-                return;
-            }
             bridge.tail_restaking = 0;
-            bridge.tail_relooks = 0;
             install_reinsert_plan();
         }
         return;
@@ -1763,13 +1953,24 @@ static void on_present(void* user, void* swapchain)
     }
 
     if (bridge.started) {
+        ++bridge.presents;
+        /* The runtime flushes at Present and rewrites its vtable when it does, which takes the
+           tap's hooks with it; this puts them back before the next frame's first draw. */
+        rsf_frame_tap_refresh();
         watch_tail(swapchain);
+        age_ui_targets();
+        chain_rescan_tick();
         if (bridge.reinsert_on) {
             /* The evaluate already happened, at the gate, where it has to happen for the result to
                reach the game's own tonemap. All that is left is to let go of the frame's inputs and
                to close the gates so the next frame opens them again. */
             ++bridge.reinsert_frames;
             watch_for_stalled_plan();
+            /* A layer or a chain target came or went since the plan was built. Rebuilt here, on
+               the thread that drives the frames, rather than inside the draw hook that noticed. */
+            if (bridge.plan_stale && !bridge.tail_restaking) {
+                install_reinsert_plan();
+            }
             release_held();
             rsf_frame_tap_end_frame();
         } else {
@@ -1968,7 +2169,7 @@ static void stop_reinsert(void)
 
 void rsf_bridge_toggle_reinsert(void)
 {
-    rsf_reinsert_setup setup;
+    rsf_promote_setup setup;
     rsf_dlss_pipeline_status pipeline;
     void* reconstruction;
 
@@ -2009,17 +2210,17 @@ void rsf_bridge_toggle_reinsert(void)
         return;
     }
 
-    if (!bridge.reinsert) {
+    if (!bridge.promote) {
         memset(&setup, 0, sizeof(setup));
         setup.struct_size = sizeof(setup);
-        setup.abi_version = RSF_REINSERT_ABI_VERSION;
+        setup.abi_version = RSF_PROMOTE_ABI_VERSION;
         setup.device = bridge.device;
         setup.output_width = pipeline.output_width;
         setup.output_height = pipeline.output_height;
         setup.log = bridge.log;
         setup.log_user = bridge.log_user;
-        if (rsf_reinsert_create(&setup, &bridge.reinsert) != RSF_REINSERT_OK) {
-            say("reinsert: could not be created");
+        if (rsf_promote_create(&setup, &bridge.promote) != RSF_PROMOTE_OK) {
+            say("reinsert: promotion could not be created");
             return;
         }
     }
@@ -2041,13 +2242,13 @@ void rsf_bridge_toggle_reinsert(void)
    being drawn now. */
 static int install_reinsert_plan(void)
 {
-    rsf_reinsert_frame_tail tail;
+    rsf_promote_frame_tail tail;
     rsf_frame_tap_plan plan;
-    rsf_reinsert_result prepared;
+    rsf_promote_result prepared;
     uint32_t index;
     void* reconstruction = rsf_dlss_pipeline_output_texture();
 
-    if (!bridge.reinsert || !bridge.composite || !bridge.scene_color || !reconstruction ||
+    if (!bridge.promote || !bridge.composite || !bridge.scene_color || !reconstruction ||
         bridge.held_width == 0 || bridge.held_height == 0) {
         say("reinsert: the plan cannot be built, composite %s, scene colour %s, reconstruction %s, "
             "render size %lux%lu",
@@ -2059,32 +2260,34 @@ static int install_reinsert_plan(void)
     memset(&tail, 0, sizeof(tail));
     tail.struct_size = sizeof(tail);
     tail.composite = bridge.composite;
-    /* The hunt's findings first, because they are an observation rather than a rule: each one is a
-       target a draw reading the 1920x1080 interface actually wrote into. The tail's own guess is
-       taken only when the hunt has found nothing yet, and only if it is not already in the set. */
-    for (index = 0; index < bridge.interface_target_count; ++index) {
-        tail.interface_targets[tail.interface_target_count++] = bridge.interface_targets[index];
+    /* The interface layers the classifier has seen quads drawn into, and the chain the composite
+       watch confirmed. Both are observations of this frame rather than rules about it. */
+    for (index = 0; index < bridge.ui_target_count; ++index) {
+        tail.ui_targets[tail.ui_target_count++] = bridge.ui_targets[index];
     }
-    if (bridge.interface_target && tail.interface_target_count == 0) {
-        tail.interface_targets[tail.interface_target_count++] = bridge.interface_target;
+    for (index = 0; index < bridge.chain_target_count; ++index) {
+        tail.chain_targets[tail.chain_target_count++] = bridge.chain_targets[index];
     }
     tail.scene_color = bridge.scene_color;
     tail.reconstruction = reconstruction;
     tail.render_width = (uint32_t)bridge.held_width;
     tail.render_height = (uint32_t)bridge.held_height;
-    prepared = rsf_reinsert_prepare(bridge.reinsert, &tail);
-    if (prepared == RSF_REINSERT_ERROR_NOT_SCALED) {
+    /* Preparing releases the previous replacements, and the tap must not be left holding views
+       onto textures that are gone. Cleared first; the new plan follows within this call. */
+    rsf_frame_tap_set_plan(NULL);
+    prepared = rsf_promote_prepare(bridge.promote, &tail);
+    if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
         say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
         return 0;
     }
-    if (prepared != RSF_REINSERT_OK) {
+    if (prepared != RSF_PROMOTE_OK) {
         say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
         return 0;
     }
 
     memset(&plan, 0, sizeof(plan));
     plan.struct_size = sizeof(plan);
-    if (rsf_reinsert_fill_plan(bridge.reinsert, &plan) != RSF_REINSERT_OK) {
+    if (rsf_promote_fill_plan(bridge.promote, &plan) != RSF_PROMOTE_OK) {
         say("reinsert: the plan could not be built");
         return 0;
     }
@@ -2104,6 +2307,7 @@ static int install_reinsert_plan(void)
     /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
        just because the previous plan's redirects are still the last thing counted. */
     bridge.redirect_stall = 0;
+    bridge.plan_stale = 0;
     return 1;
 }
 
@@ -2168,24 +2372,8 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.on_target_draw = on_target_draw;
     tap.on_input_draw = on_input_draw;
     tap.on_geometry = on_geometry;
-    /* Find whatever composites the interface, by the shape it reads rather than by a rule about
-       formats. `UWidgetToTextureConverter_Setup` is handed a hardcoded 1920x1080 at 0x1406243e0,
-       so a draw reading a 1920x1080 R8G8B8A8 texture is compositing the interface, and the target
-       it writes into is the one that has to be at output resolution. Every format rule tried so far
-       has picked the wrong surface at least once, which is why this starts from a size the binary
-       states rather than from a guess. 28 is DXGI_FORMAT_R8G8B8A8_UNORM. */
     bridge.output_width = output_width;
     bridge.output_height = output_height;
-    tap.hunt_width = 1920;
-    tap.hunt_height = 1080;
-    /* Any format. The first attempt asked for R8G8B8A8_UNORM, which is 28, and found nothing across
-       a whole session: the shadow carries the texture's own format and AC7's colour targets are
-       created typeless, 27, for the view to reinterpret. Naming a format here is how the hunt
-       reproduced the mistake it exists to avoid. The size comes from the binary; the format is
-       reported rather than assumed. */
-    tap.hunt_format = 0;
-    tap.hunt_budget = RSF_UI_HUNT_DRAWS;
-    tap.on_hunt_draw = on_hunt_draw;
     tap.on_candidate_draw = on_candidate_draw;
     tap.log = log;
     tap.log_user = log_user;
@@ -2310,10 +2498,11 @@ void rsf_bridge_report(void)
                 }
             }
             if (bridge.ui_widget_extent[0]) {
-                say("ui: the interface is rasterized at %lux%lu and drawn into %lux%lu, which is "
-                    "the gap promotion cannot close",
+                say("ui: the interface is rasterized at %lux%lu and drawn into %lux%lu layers, "
+                    "%u of them promoted",
                     bridge.ui_widget_extent[0], bridge.ui_widget_extent[1],
-                    bridge.ui_layer_extent[0], bridge.ui_layer_extent[1]);
+                    bridge.ui_layer_extent[0], bridge.ui_layer_extent[1],
+                    (unsigned)bridge.ui_target_count);
             }
         }
     }
@@ -2365,10 +2554,12 @@ void rsf_bridge_report(void)
 
     /* Whether the frame's tail was ever described. Zero draws with a watch that was set is a
        different fault from a watch that was never armed, and both look like silence otherwise. */
-    say("frame tail: %lu presents watched, %lu draws described, composite %s, interface target %s",
+    say("frame tail: %lu presents watched, %lu draws described, composite %s, %u chain target%s, "
+        "%u interface layer%s",
         bridge.tail_frames, bridge.tail_draws,
         bridge.composite_found ? "identified" : "not identified yet",
-        bridge.interface_target ? "identified" : "not identified");
+        (unsigned)bridge.chain_target_count, bridge.chain_target_count == 1 ? "" : "s",
+        (unsigned)bridge.ui_target_count, bridge.ui_target_count == 1 ? "" : "s");
 
     /* What the substitution is actually doing, which the tap counts because it is the only thing
        that sees every binding. Reinsertion on with nothing redirected means the plan names a

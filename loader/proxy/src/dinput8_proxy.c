@@ -5,6 +5,7 @@
    dinput8 is the carrier because AC7 imports exactly one function from it and nothing else in the
    process does, so the forwarding surface is one export and DXVK is left alone. */
 
+#include <stdlib.h>
 #include <rescaleframe/module_dump.h>
 
 #include <rescaleframe/d3d11_observer.h>

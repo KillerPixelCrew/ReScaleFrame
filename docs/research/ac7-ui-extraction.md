@@ -200,4 +200,32 @@ resolution and still being jittered, which points at the projection rather than 
 
 The gate following the reconstruction (`RSF_ENABLE_JITTER=1`) is a mitigation and not the fix. The
 fix is that nothing needing jitter should be drawn at a resolution nothing resolves it at, which is
-what the screen policy decides and what extraction removes the need for on the front end.
+what the screen policy decides and what promotion of the layers removes the need for on the front
+end.
+
+### Built: promotion of the layers the classifier names, 26 September 2026
+
+`runtime/graphics/scene_promote` replaces `scene_reinsert`. The plan promotes the composite, the
+interface layers and the chain, and gates scene colour on the composite as before. What changed is
+where the layers come from: `classify_candidate` in the loader records the render target of every
+draw the rule classifies as a widget quad, retains it, and rebuilds the plan on the next present.
+A layer nothing has drawn into for 120 presents is dropped, which is what the title screen after
+the intro needed. The chain is the eight-bit render-resolution input of a composite draw that is
+neither the composite nor a layer, confirmed by a watch on the draw that writes it reading the
+composite; the composite is watched again every 300 presents so a chain that appears after the
+tail walk, which a tail found mid video lacks, still lands in the plan. The shape hunt, the format
+rule and the relooks are gone.
+
+The divert's per-draw viewport scaling was the piece the correction above named as missing, and it
+turns out the plan path had it all along: `apply_viewport_policy` scales every viewport and scissor
+while a promoted target is bound. What the earlier promotion runs lacked was the layers being the
+right surfaces and staying right across screens, which the classifier and the aging now do, and
+the chain, without which the promoted composite was downsampled before the interface composite
+read it.
+
+Not run. Built and synthetic-tested with MSVC on Windows, which is itself new: the suite had never
+been built with MSVC, and the frame tap's test then failed on a property of the Windows runtime that
+would have blinded every game run here (see
+[the vtable note](d3d11-runtime-vtable-rewrite.md)). The run has to answer what the code cannot:
+whether the intermediate `0x308E2770` is filled by a draw or a copy, which the log will say either
+way, and whether dropping the scene's depth at the quads costs anything visible on the briefing.

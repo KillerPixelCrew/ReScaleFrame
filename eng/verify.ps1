@@ -1,4 +1,10 @@
-param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug')
+# -VS2026 selects the Visual Studio 2026 generator presets for a machine that has no 2022. CI's
+# windows-2022 runner uses the default presets, so the two stay separate rather than one preset
+# silently picking whichever studio is installed.
+param(
+    [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
+    [switch]$VS2026
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -18,8 +24,9 @@ try {
     if ($version -ne $cargoVersion) {
         throw 'VERSION and the Cargo workspace version must match.'
     }
-    $preset = 'windows-' + $Configuration.ToLowerInvariant()
-    Invoke-Checked cmake @('--preset', 'windows-x64')
+    $suffix = if ($VS2026) { '-vs18' } else { '' }
+    $preset = 'windows-' + $Configuration.ToLowerInvariant() + $suffix
+    Invoke-Checked cmake @('--preset', ('windows-x64' + $suffix))
     Invoke-Checked cmake @('--build', '--preset', $preset)
     Invoke-Checked ctest @('--preset', $preset)
     Invoke-Checked cargo @('fmt', '--all', '--', '--check')

@@ -4,12 +4,12 @@ Check what is already installed and recommend only the tools needed for the curr
 
 ## Build
 
-The repository pins Rust in `rust-toolchain.toml` and selects Visual Studio 2022 in `CMakePresets.json`.
+The repository pins Rust in `rust-toolchain.toml` and selects Visual Studio 2022 in `CMakePresets.json`, which is what CI's `windows-2022` runner has. A machine with Visual Studio 2026 instead uses the `windows-x64-vs18` presets, or `eng/verify.ps1 -VS2026`; the build is otherwise the same.
 
 | Tool | Purpose |
 | --- | --- |
 | [Git](https://git-scm.com/downloads) | Repository and reference revisions |
-| [Visual Studio / C++ Build Tools](https://visualstudio.microsoft.com/downloads/) | VS 2022 C++ tools and Windows SDK for the reference x64 build |
+| [Visual Studio / C++ Build Tools](https://visualstudio.microsoft.com/downloads/) | VS 2022 or 2026 C++ tools and Windows SDK for the reference x64 build |
 | [CMake](https://cmake.org/download/) | 3.25+ for the checked-in presets |
 | [Rust via rustup](https://rustup.rs/) | Pinned Rust toolchain and egui tests |
 | [PowerShell](https://github.com/PowerShell/PowerShell) | `eng/verify.ps1` |

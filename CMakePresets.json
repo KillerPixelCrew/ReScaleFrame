@@ -11,6 +11,13 @@
       "cacheVariables": { "BUILD_TESTING": "ON" }
     },
     {
+      "name": "windows-x64-vs18",
+      "displayName": "Windows x64 (VS 2026)",
+      "description": "The same build through the Visual Studio 2026 generator, for a machine without 2022. CI's windows-2022 runner keeps the preset above.",
+      "inherits": "windows-x64",
+      "generator": "Visual Studio 18 2026"
+    },
+    {
       "name": "linux-cross-x64",
       "displayName": "Windows x64 cross build (mingw-w64)",
       "description": "Development convenience for Linux checkouts. MSVC on Windows stays the reference build.",
@@ -23,11 +30,15 @@
   "buildPresets": [
     { "name": "windows-debug", "configurePreset": "windows-x64", "configuration": "Debug" },
     { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release" },
+    { "name": "windows-debug-vs18", "configurePreset": "windows-x64-vs18", "configuration": "Debug" },
+    { "name": "windows-release-vs18", "configurePreset": "windows-x64-vs18", "configuration": "Release" },
     { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64" }
   ],
   "testPresets": [
     { "name": "windows-debug", "configurePreset": "windows-x64", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "windows-release", "configurePreset": "windows-x64", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "windows-debug-vs18", "configurePreset": "windows-x64-vs18", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-release-vs18", "configurePreset": "windows-x64-vs18", "configuration": "Release", "output": { "outputOnFailure": true } },
     { "name": "linux-cross-debug", "configurePreset": "linux-cross-x64", "output": { "outputOnFailure": true } },
     {
       "name": "linux-cross-dxvk",

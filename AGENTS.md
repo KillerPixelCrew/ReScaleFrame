@@ -47,7 +47,11 @@ version, configures, builds, and tests the native tree, then runs `cargo fmt --c
 ```powershell
 ./eng/verify.ps1                        # Debug
 ./eng/verify.ps1 -Configuration Release # what .github/workflows/verify.yml runs
+./eng/verify.ps1 -VS2026                # a machine with Visual Studio 2026 and no 2022
 ```
+
+The `-VS2026` switch selects the `windows-x64-vs18` presets, which differ from the default ones only
+in the generator. CI keeps the 2022 generator because that is what its runner has.
 
 Native only:
 

@@ -96,10 +96,10 @@ target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_scene_reinsert scene_reinsert.cpp)
-target_link_libraries(rsf_scene_reinsert PRIVATE ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME scene_reinsert COMMAND rsf_scene_reinsert)
-set_tests_properties(scene_reinsert PROPERTIES TIMEOUT 120)
+add_executable(rsf_scene_promote scene_promote.cpp)
+target_link_libraries(rsf_scene_promote PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME scene_promote COMMAND rsf_scene_promote)
+set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_d3d11_observer d3d11_observer.cpp)
 target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
@@ -110,7 +110,9 @@ set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
 add_library(rsf_overlay_panel_fixture SHARED overlay_panel_fixture.cpp)
 target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics rsf_build_options)
-set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "")
+# Exported by property rather than by dllexport on each definition: the header declares the
+# functions plainly, and MSVC refuses a definition whose linkage differs from its declaration.
+set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_executable(rsf_overlay_host overlay_host.cpp ../loader/proxy/src/overlay_host.cpp)
 target_link_libraries(rsf_overlay_host PRIVATE ReScaleFrame::Graphics rsf_build_options)
 target_compile_definitions(rsf_overlay_host PRIVATE _CRT_SECURE_NO_WARNINGS)

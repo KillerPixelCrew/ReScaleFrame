@@ -314,7 +314,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     ID3D11Texture2D* later = make_target(device, 256, 144, DXGI_FORMAT_R11G11B10_FLOAT);
     ID3D11Texture2D* layer = make_target(device, 128, 72, DXGI_FORMAT_R16G16B16A16_FLOAT);
     ID3D11Texture2D* tonemap = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_UNORM);
-    ID3D11Texture2D* small = make_target(device, 128, 72, DXGI_FORMAT_R11G11B10_FLOAT);
+    ID3D11Texture2D* quarter = make_target(device, 128, 72, DXGI_FORMAT_R11G11B10_FLOAT);
     ID3D11ShaderResourceView* base_srv = nullptr;
     ID3D11ShaderResourceView* layer_srv = nullptr;
     ID3D11ShaderResourceView* composed_srv = nullptr;
@@ -322,10 +322,10 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     ID3D11RenderTargetView* composed_rtv = nullptr;
     ID3D11RenderTargetView* later_rtv = nullptr;
     ID3D11RenderTargetView* tonemap_rtv = nullptr;
-    ID3D11RenderTargetView* small_rtv = nullptr;
-    check(base && composed && later && layer && tonemap && small,
+    ID3D11RenderTargetView* quarter_rtv = nullptr;
+    check(base && composed && later && layer && tonemap && quarter,
           "Composition fixture textures must be created.");
-    if (!base || !composed || !later || !layer || !tonemap || !small) {
+    if (!base || !composed || !later || !layer || !tonemap || !quarter) {
         return;
     }
     check(SUCCEEDED(device->CreateShaderResourceView(base, nullptr, &base_srv)) &&
@@ -335,7 +335,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
               SUCCEEDED(device->CreateRenderTargetView(composed, nullptr, &composed_rtv)) &&
               SUCCEEDED(device->CreateRenderTargetView(later, nullptr, &later_rtv)) &&
               SUCCEEDED(device->CreateRenderTargetView(tonemap, nullptr, &tonemap_rtv)) &&
-              SUCCEEDED(device->CreateRenderTargetView(small, nullptr, &small_rtv)),
+              SUCCEEDED(device->CreateRenderTargetView(quarter, nullptr, &quarter_rtv)),
           "Composition fixture views must be created.");
     D3D11_TEXTURE2D_DESC depth_desc{};
     depth_desc.Width = 256;
@@ -368,7 +368,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     check(rsf_ac7_scene_color_selected(&selection, base) == base,
           "A partial viewport is not the full scene.");
     set_viewport(context, 256, 144);
-    context->OMSetRenderTargets(1, &small_rtv, nullptr);
+    context->OMSetRenderTargets(1, &quarter_rtv, nullptr);
     context->DrawIndexed(3, 0, 0);
     check(rsf_ac7_scene_color_selected(&selection, base) == base,
           "A downsample must not replace scene colour.");
@@ -450,7 +450,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     context->OMSetRenderTargets(0, nullptr, nullptr);
     dsv->Release();
     depth->Release();
-    small_rtv->Release();
+    quarter_rtv->Release();
     tonemap_rtv->Release();
     later_rtv->Release();
     composed_rtv->Release();
@@ -458,7 +458,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     composed_srv->Release();
     layer_srv->Release();
     base_srv->Release();
-    small->Release();
+    quarter->Release();
     tonemap->Release();
     layer->Release();
     later->Release();
@@ -468,11 +468,13 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
 
 rsf_depth_replay* depth_fixture = nullptr;
 rsf_frame_tap_geometry last_geometry{};
-uint32_t geometry_reports = 0, depth_draws = 0;
+uint32_t geometry_reports = 0, depth_draws = 0, geometry_calls = 0, geometry_rejected = 0;
 
 void collect_geometry(void*, const rsf_frame_tap_geometry* draw)
 {
+    ++geometry_calls;
     if (!depth_fixture || !rsf_ac7_scene_depth_candidate(draw)) {
+        ++geometry_rejected;
         return;
     }
     last_geometry = *draw;
@@ -657,6 +659,15 @@ float4 ps() : SV_Target { return float4(1,0,0,1); }
     transform(0.45f, 0.8f);
     context->DrawIndexedInstanced(3, 1, 1, 1, 0);
     check(depth_draws == 2 && last_geometry.kind == 3, "Indexed instanced draws must replay once.");
+    {
+        rsf_depth_replay_detail detail{};
+        rsf_depth_replay_get_detail(depth_fixture, &detail);
+        std::fprintf(stderr,
+                     "  [depth_draws=%u kind=%u geometry_calls=%u rejected_by_candidate=%u "
+                     "replay_draws=%u replay_refused=%u]\n",
+                     (unsigned)depth_draws, (unsigned)last_geometry.kind, geometry_calls,
+                     geometry_rejected, (unsigned)detail.draws, (unsigned)detail.refused);
+    }
     check(
         read(augmented, 18, 32) == 0.6f && read(augmented, 46, 32) == 0.8f,
         "Immediate replay must preserve each draw's constants, and accumulate without reseeding.");
@@ -952,6 +963,7 @@ int main()
     context->DrawIndexed(12, 0, 0);
 
     check(reports.size() == 3, "Three draws into the watched target must produce three reports.");
+    std::fprintf(stderr, "  [reports.size()=%u]\n", (unsigned)reports.size());
     if (reports.size() == 3) {
         for (size_t index = 0; index < reports.size(); ++index) {
             const Report& report = reports[index];
@@ -1220,6 +1232,10 @@ int main()
         status.struct_size = sizeof(status);
         rsf_frame_tap_get_status(&status);
         check(status.draws_diverted == 1, "The divert must be counted.");
+    std::fprintf(stderr,
+                 "  [draws_diverted=%u divert_refused=%u last_refusal=%u candidate_draws=%u]\n",
+                 status.draws_diverted, status.divert_refused, status.divert_last_refusal,
+                 status.candidate_draws);
 
         stage("the viewport is scaled by what the draw covered");
         {
@@ -1261,6 +1277,7 @@ int main()
             verdicts_asked = 0;
             context->Draw(3, 0);
             check(verdicts_asked == 1, "The classifier must have been asked.");
+    std::fprintf(stderr, "  [verdicts_asked=%u]\n", (unsigned)verdicts_asked);
             check(pixel_written(device, context, composite, 8, 8),
                   "And its answer of no must cost nothing and change nothing, which is the answer "
                   "for almost every draw in the frame.");
@@ -1305,6 +1322,7 @@ int main()
     context->OMSetRenderTargets(1, &composite_view, nullptr);
     context->Draw(3, 0);
     check(reports.size() == 1, "Binding the watched target again must resume reporting.");
+    std::fprintf(stderr, "  [reports.size()=%u]\n", (unsigned)reports.size());
     if (reports.size() == 1) {
         check(reports[0].draw_index == 0,
               "The draw ordinal must restart when the target is bound again.");
@@ -1426,6 +1444,17 @@ int main()
     check(status.installed == 1, "Status must say the tap is installed.");
     check(status.target_draws_reported == 6,
           "Status must count every reported draw, across watches and re-arms.");
+    std::fprintf(stderr,
+                 "  [target_draws_reported=%u candidate_draws=%u draws_diverted=%u calls_seen=%u "
+                 "vtable_refreshes=%u]\n",
+                 status.target_draws_reported, status.candidate_draws, status.draws_diverted,
+                 status.calls_seen, status.vtable_refreshes);
+    // Zero under DXVK, whose table is static. On the Windows runtime the Map in the depth replay
+    // stage rewrote the table and every draw after it went unobserved until the refresh existed,
+    // so a Windows run reporting zero here while the draw checks above passed would be a runtime
+    // this test has not met.
+    std::fprintf(stderr, "  [runtime rewrote its vtable %u time%s]\n", status.vtable_refreshes,
+                 status.vtable_refreshes == 1 ? "" : "s");
 
     stage("uninstalling");
     check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK, "Uninstalling must succeed.");

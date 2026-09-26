@@ -9,7 +9,7 @@ D3D11 utilities shared by the research proxy and runtime. Game-specific view int
 | `resource_ref` | Retain and release COM resources across the C ABI |
 | `constant_buffer_read` | Stage and read a buffer with type/device checks |
 | `motion_decode` | Convert biased velocity to float motion and preserve unwritten pixels |
-| `scene_reinsert` | Put a reconstructed scene back into the game's frame by promoting its composite; becomes `scene_promote` in the representation plan, with the interface-target promotion removed |
+| `scene_promote` | Put a reconstructed scene back into the game's frame by promoting its composite, the interface layers the classifier names, and the chain between the tonemap and the interface composite, all to output resolution |
 | `depth_replay` | Replay the separate translucency layer's draws depth-only into an output-resolution copy of scene depth, for the backend's camera-motion resolve |
 | `d3d11_state` | Save everything the device context has bound, and put it back |
 | `texture_dump` | Read supported texture formats into diagnostic TGA/JSON files |
@@ -38,23 +38,28 @@ inputs, so they are composites rather than overlays, and on the title screen the
 the entire visible image. Diverting them takes content out of the frame that AC7 is still going to
 process, and compositing it back at present skips that processing.
 
-So the mechanism stays and the insertion point changes: promote AC7's own interface target and let
-the game composite it, which keeps the colour and the glow, and take the frame generation layer from
-that promoted target, which already holds premultiplied colour with coverage. See
+So the mechanism stays and the insertion point changes: promote AC7's own interface layers and let
+the game composite them, which keeps the colour and the glow, and take the frame generation layer
+from a promoted layer later, since it already holds premultiplied colour with coverage. See
 [the extraction note](../../docs/research/ac7-ui-extraction.md) for the measurements and for the
 argument this reverses.
 
-## Scene reinsertion
+## Scene promotion
 
-The debug view draws the reconstruction over the finished frame, so the image is ungraded and everything the game composited after it, the interface included, is gone. `scene_reinsert` builds the substitution instead: it promotes the composite and the interface's own target to output resolution, points scene colour at the reconstruction, and hands the tap a plan. `rsf_frame_tap_set_plan` swaps those bindings before forwarding them, in the output merger, in the pixel stage, and in `ClearRenderTargetView`, and scales viewports and scissor rectangles while a promoted target is bound. The game then grades the reconstruction with its own shaders, draws its own interface over it at output resolution, and its final upscale into the back buffer becomes a copy. Nothing is removed from the frame.
+The debug view draws the reconstruction over the finished frame, so the image is ungraded and everything the game composited after it, the interface included, is gone. `scene_promote` builds the substitution instead: it promotes the composite, the interface layers and the chain to output resolution, points scene colour at the reconstruction, and hands the tap a plan. `rsf_frame_tap_set_plan` swaps those bindings before forwarding them, in the output merger, in the pixel stage, and in `ClearRenderTargetView`, and scales viewports and scissor rectangles while a promoted target is bound. The game then grades the reconstruction with its own shaders, rasterizes its widget quads at output resolution into its own layers, composites them itself, and its final upscale into the back buffer becomes a copy. Nothing is removed from the frame.
 
-Three parts of that plan are decisions rather than mechanics:
+Four parts of that plan are decisions rather than mechanics:
 
 - Scene colour is gated on the composite being bound. The scene passes read scene colour while they are still writing it, so an ungated substitution hands a lighting pass a reconstruction of a frame it has not finished, which is a feedback loop rather than an upscale.
 - The gate is also where the reconstruction runs. It is the last point before anything reads scene colour and the first where the scene is whole; evaluating at Present would leave the scene a frame behind the grade and interface drawn over it. The price is a mid-frame evaluate, where the game will not rebind what it believes is still bound, which is what `d3d11_state` is for.
-- The interface target used to be identified by format, `R8G8B8A8` against `B8G8R8A8` scene targets. That rule is retired: the surface it picked is AC7's own render-resolution UI layer, which the widget quads draw into and the game composites itself, and promoting it cannot sharpen an interface that is rasterized as scene geometry. The interface is extracted instead; see the [representation plan](../../docs/representation-plan.md) and [AC7 UI extraction](../../docs/research/ac7-ui-extraction.md). The code still carries the set until M2 replaces it.
+- The interface layers are named by the draw classifier in `games/ac7`, as the targets it sees widget quads drawn into, and by nothing else. Every rule of the form "the surface with this format" or "the one read by a draw of this shape" picked something else as well at least once; the classifier's answer is a draw the game actually made. The loader keeps each layer for as long as quads keep landing in it and drops it after two seconds without, because the engine's pool retires a layer on a screen change and a plan naming a retired one looks healthy while the interface goes back to being magnified.
+- The chain, the eight-bit intermediate between the tonemap and the interface composite, is named by a composite draw's inputs and confirmed by watching the draw that writes it read the composite. Without it the promoted composite is downsampled back to render resolution on its way to the interface composite, which is what made the first promotion runs cleaner but not sharper.
 
-Not fixed by any of it: bloom is still computed from the render-resolution scene, so the glow composited over the reconstruction is low resolution, and post-process shaders addressing texels rather than sampling normalized will address the wrong ones, because their constants still describe the buffer the engine believes it has. Both are visible only in a rendered result and neither has been looked at. The plan also promotes the chain targets between the tonemap and the back-buffer draw, which reinsertion has been leaving at render resolution.
+Not fixed by any of it: bloom is still computed from the render-resolution scene, so the glow composited over the reconstruction is low resolution, and the quads read that scene-sized blur chain alongside their widget texture, so the glow around the interface is low resolution too. Post-process shaders addressing texels rather than sampling normalized will address the wrong ones, because their constants still describe the buffer the engine believes it has. The quads bind the scene's depth, and the tap's default policy drops it at a promoted binding, so a panel is never occluded by scene geometry in front of it. All of it is visible only in a rendered result and none of it has been looked at with this plan.
+
+## The Windows runtime rewrites its vtable
+
+The stock D3D11 runtime keeps the immediate context's vtable on the heap and rewrites the whole work-submission family of entries, draws, dispatches, copies and clears, whenever a flush-class call runs and again on the next piece of work, flipping between two implementations. Each rewrite discards patched hooks. DXVK's table is static, which is why every Wine run of the tap's test passed and why no Windows run of this project could have observed a draw after the first read-back. Every hook now checks a sentinel slot on entry and re-applies the table when it is gone, the work-submission hooks check again on the way out, the flush-class calls are hooked as pass-throughs for that check, and `rsf_frame_tap_refresh` covers the flush inside Present. `vtable_refreshes` in the status counts it. [The measurement](../../docs/research/d3d11-runtime-vtable-rewrite.md) has the slot table.
 
 Run context work on the owning render thread. Save and restore all affected graphics state around injected work. Hook installation, rollback, and teardown must account for callbacks already in flight. Current gaps are in [the review](../../docs/review.md).
 

@@ -20,21 +20,25 @@ The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the
 
 | Key | Action |
 | --- | --- |
-| F3 | Extract the interface: divert it into a layer at output resolution and composite it back. Sharpens the interface and discolours the frame; see the note below |
+| F3 | Extract the interface: divert it into a layer at output resolution and composite it back. A measurement, not the route; see the note below |
 | F4 | Open or close the engine's temporal jitter gate, live |
 | F5 | Open or close the egui overlay |
-| F6 | Reinsert the reconstruction into the game's own frame, or stop |
+| F6 | Reinsert the reconstruction into the game's own frame by promoting its tail, the interface layers included, or stop |
 | F8 | Start DLSS after the game has a device; later presses report counters |
 | F7 | Toggle the reconstructed debug image over the back buffer |
 | F9 | Apply render scale and the corresponding jitter sequence length |
 | F10 | Dump retained velocity/view data and, while DLSS runs, matched colour/output |
 | F11 | Trigger RenderDoc when capture support is available |
 
-F3 does what it says and the result is not yet usable. The interface arrives at native resolution,
-which is the point of it, and the frame arrives flat and discoloured, because AC7's interface draws
-read the scene and its glow chain and are composited by the game afterwards. Compositing at present
-skips that. The route is being changed to promote the game's own interface target instead; until
-then F3 is a measurement rather than a feature.
+F3 does what it says and the result is not usable as a picture. The interface arrives at native
+resolution, which is the point of it, and the frame arrives flat and discoloured, because AC7's
+interface draws read the scene and its glow chain and are composited by the game afterwards.
+Compositing at present skips that. F6 is the route instead: it promotes the layers the classifier
+sees the widget quads drawn into, along with the composite and the chain between the tonemap and
+the game's own interface composite, so the quads rasterize at output resolution and the game
+composites them. The log names each layer and chain target as it is found, and says when the
+interface is being magnified because no layer has been seen yet. F3 stays as the measurement it is;
+do not hold both on at once, since a diverted quad never reaches the promoted layer.
 
 F4 answered a question and is kept for the next one like it. The front end shimmers at a reduced
 render scale and holds still at 100%, and toggling the gate on the main menu stops and starts it, so

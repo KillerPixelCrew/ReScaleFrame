@@ -6,17 +6,17 @@ struct rsf_overlay {
     bool uploaded = false;
 };
 
-extern "C" __declspec(dllexport) rsf_overlay* rsf_overlay_create(uint32_t abi)
+extern "C" rsf_overlay* rsf_overlay_create(uint32_t abi)
 {
     return abi == RSF_OVERLAY_ABI_VERSION ? new rsf_overlay() : nullptr;
 }
 
-extern "C" __declspec(dllexport) void rsf_overlay_destroy(rsf_overlay* panel)
+extern "C" void rsf_overlay_destroy(rsf_overlay* panel)
 {
     delete panel;
 }
 
-extern "C" __declspec(dllexport) rsf_overlay_result rsf_overlay_frame(
+extern "C" rsf_overlay_result rsf_overlay_frame(
     rsf_overlay*, const rsf_overlay_input*, const rsf_overlay_stats*, rsf_overlay_draw_data* data,
     rsf_overlay_intent*)
 {
@@ -30,7 +30,7 @@ extern "C" __declspec(dllexport) rsf_overlay_result rsf_overlay_frame(
     return RSF_OVERLAY_OK;
 }
 
-extern "C" __declspec(dllexport) uint32_t rsf_overlay_texture_updates(
+extern "C" uint32_t rsf_overlay_texture_updates(
     rsf_overlay* panel, rsf_overlay_texture_update* updates, uint32_t capacity)
 {
     if (panel->uploaded || capacity == 0) {
@@ -42,7 +42,7 @@ extern "C" __declspec(dllexport) uint32_t rsf_overlay_texture_updates(
     return 1;
 }
 
-extern "C" __declspec(dllexport) uint32_t rsf_overlay_textures_to_free(
+extern "C" uint32_t rsf_overlay_textures_to_free(
     rsf_overlay*, uint64_t*, uint32_t)
 {
     return 0;

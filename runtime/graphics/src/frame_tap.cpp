@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <d3d11_1.h>
 
 #include <atomic>
 #include <cstdarg>
@@ -80,6 +81,22 @@ struct Tap {
     bool geometry_valid = false;
     ID3D11DepthStencilView* geometry_depth = nullptr;
     void* extra_originals[16]{};
+    // Originals of the pass-through hooks: the flush-class calls and the members of the
+    // work-submission family nothing else needed. Indexed as `pass_hooks` lists them.
+    void* pass_originals[16]{};
+    // Every slot patched, with where its original lives, so the whole table can be re-applied when
+    // the runtime rewrites it and restored as a unit on uninstall. See `refresh_hooks`.
+    struct Patch {
+        size_t slot = 0;
+        void* replacement = nullptr;
+        void** original = nullptr;
+    };
+    Patch patches[64]{};
+    size_t patch_count = 0;
+    // What slot 13 holds while the hooks are in place. One comparison against it says whether the
+    // runtime has rewritten the family since the last look.
+    void* sentinel_replacement = nullptr;
+    std::atomic<uint32_t> vtable_refreshes{0};
     rsf_frame_tap_options options{};
     ID3D11DeviceContext* observed_context = nullptr;
     void* input_watch = nullptr;
@@ -248,10 +265,6 @@ struct Tap {
     // Substituted bindings whose depth was the wrong size for the promoted target. The last pair is
     // kept alongside the count so a report can name it, since "some mismatched" and "a 1024x576
     // depth met a 2048x1152 target" are answers of very different use.
-    // Reports left to make for the shape hunt, and how many were made. Counted so a run that found
-    // nothing says so, which is a different answer from a run whose budget ran out.
-    std::atomic<uint32_t> hunt_budget{0};
-    std::atomic<uint32_t> hunt_draws{0};
     std::atomic<uint32_t> depth_mismatches{0};
     std::atomic<uint32_t> depth_mismatch_target_width{0};
     std::atomic<uint32_t> depth_mismatch_target_height{0};
@@ -335,6 +348,59 @@ bool patch_slot(void** vtable, size_t index, void* replacement, void** previous)
     DWORD restored = 0;
     VirtualProtect(&vtable[index], sizeof(void*), protection, &restored);
     return true;
+}
+
+// The runtime rewrites its own vtable, and the hooks have to survive that.
+//
+// Measured on Windows 11 with the stock d3d11.dll on 26 September 2026, with a scratch probe that
+// snapshotted the table after every call: the immediate context's vtable lives on the heap, and the
+// runtime rewrites the whole work-submission family of entries, slots 12, 13, 20, 21, 38 to 42,
+// 46 to 54, 57, 115 and 116, whenever a flush-class call runs (a Map for reading, Flush) and again
+// on the next draw, dispatch, copy or clear, flipping between two sets of implementations. Each
+// rewrite discards whatever was patched into those slots. DXVK's table is static and never
+// rewritten, which is why every Wine run of this module passed and no Windows run observed a draw
+// after the first Map.
+//
+// So every hook checks one sentinel entry on the way in and re-applies the whole table when it is
+// gone, recording what the runtime had written as the new original. That is the right thing to
+// forward to: whatever variant is in the slot is the one for the runtime's current state, and the
+// runtime rewrites the slot again, removing the hook, before that state changes. The flush-class
+// calls and every member of the family are hooked as well, as pass-throughs where nothing needed
+// to observe them, so the flip that happens inside a call is noticed by that call's own epilogue
+// rather than by the next binding. The one flip nothing here sees is the one Present causes, and
+// `rsf_frame_tap_refresh` exists for the present hook to call.
+void refresh_hooks_slow(Tap& self)
+{
+    uint32_t rewritten = 0;
+    for (size_t index = 0; index < self.patch_count; ++index) {
+        Tap::Patch& patch = self.patches[index];
+        if (self.vtable[patch.slot] == patch.replacement) {
+            continue;
+        }
+        if (patch_slot(self.vtable, patch.slot, patch.replacement, patch.original)) {
+            ++rewritten;
+        }
+    }
+    if (rewritten) {
+        self.vtable_refreshes.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+inline void refresh_hooks(Tap& self)
+{
+    if (!self.installed || !self.vtable ||
+        self.vtable[slot_draw] == self.sentinel_replacement) {
+        return;
+    }
+    refresh_hooks_slow(self);
+}
+
+// What every hook goes through on the way in. The tap, after the table has been checked.
+inline Tap& enter_hook()
+{
+    Tap& self = tap();
+    refresh_hooks(self);
+    return self;
 }
 
 // The texture behind a view, with a reference the caller owns. Both GetResource and QueryInterface
@@ -889,39 +955,6 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     const bool report_input = self.options.on_input_draw && self.input_watch_bound &&
                               context == self.observed_context;
 
-    // Whether this draw reads a texture of the hunted shape. Cached descriptions only, so it costs
-    // a walk over the shadow and no device calls. See `hunt_width` for why a shape rather than an
-    // address: the surface being looked for is the one whose identity is not yet known.
-    bool report_hunt = false;
-    if (self.options.on_hunt_draw && self.options.hunt_width && self.options.hunt_height &&
-        context == self.observed_context &&
-        self.hunt_budget.load(std::memory_order_relaxed) != 0) {
-        for (const Tap::Slot& slot : self.slots) {
-            // Format zero means any, and it is the sensible default rather than a convenience. The
-            // shadow records the texture's own format, which for a render target is routinely the
-            // typeless one the view reinterprets, so a hunt named after the view's format misses
-            // the texture entirely. Asking only for a size and reporting what format turned up
-            // cannot make that mistake.
-            if (slot.texture && slot.description.Width == self.options.hunt_width &&
-                slot.description.Height == self.options.hunt_height &&
-                (self.options.hunt_format == 0 ||
-                 uint32_t(slot.description.Format) == self.options.hunt_format)) {
-                report_hunt = true;
-                break;
-            }
-        }
-        if (report_hunt) {
-            uint32_t budget = self.hunt_budget.load(std::memory_order_relaxed);
-            while (budget != 0 && !self.hunt_budget.compare_exchange_weak(
-                                      budget, budget - 1, std::memory_order_relaxed)) {
-            }
-            report_hunt = budget != 0;
-            if (report_hunt) {
-                self.hunt_draws.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-    }
-
     // Is this one of the handful of draws in the frame worth describing? Pointer comparisons over
     // the shadow, guarded by a single load that rejects everything until something has been named.
     // The sets are small by construction, so these loops are a few compares and no memory the draw
@@ -945,7 +978,7 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
             }
         }
     }
-    if (!report_target && !report_input && !report_hunt && !report_candidate) {
+    if (!report_target && !report_input && !report_candidate) {
         return;
     }
 
@@ -1010,9 +1043,6 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
 
     // Not a count of what the caller was told: a report the caller ignores still happened, and a
     // watch that never fires is the thing this number exists to distinguish.
-    if (report_hunt) {
-        self.options.on_hunt_draw(self.options.on_hunt_draw_user, &report);
-    }
     if (report_target) {
         self.target_draws_reported.fetch_add(1, std::memory_order_relaxed);
         self.options.on_target_draw(self.options.on_target_draw_user, &report);
@@ -1053,7 +1083,7 @@ void STDMETHODCALLTYPE hooked_ps_set_shader_resources(ID3D11DeviceContext* conte
                                                       UINT count,
                                                       ID3D11ShaderResourceView* const* views)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     // Forwarded first unless the plan says otherwise. The game's binding has to happen whether or
     // not this recognises it, and it has to be in place before a callback that may bind something
     // else and restore it.
@@ -1244,7 +1274,7 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets(ID3D11DeviceContext* context
                                                     ID3D11RenderTargetView* const* views,
                                                     ID3D11DepthStencilView* depth)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const om_set_render_targets_fn forward = self.original_set_targets;
     if (!forward) {
         return;
@@ -1276,7 +1306,7 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
     ID3D11DepthStencilView* depth, UINT uav_start, UINT uav_count,
     ID3D11UnorderedAccessView* const* uavs, const UINT* initial_counts)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const om_set_render_targets_and_uavs_fn forward = self.original_set_targets_and_uavs;
     if (!forward) {
         return;
@@ -1308,7 +1338,7 @@ void STDMETHODCALLTYPE hooked_om_set_render_targets_and_uavs(
 void STDMETHODCALLTYPE hooked_rs_set_viewports(ID3D11DeviceContext* context, UINT count,
                                                const D3D11_VIEWPORT* viewports)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const rs_set_viewports_fn forward = self.original_set_viewports;
     if (!forward) {
         return;
@@ -1340,7 +1370,7 @@ void STDMETHODCALLTYPE hooked_rs_set_viewports(ID3D11DeviceContext* context, UIN
 void STDMETHODCALLTYPE hooked_rs_set_scissor_rects(ID3D11DeviceContext* context, UINT count,
                                                    const D3D11_RECT* rectangles)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const rs_set_scissor_rects_fn forward = self.original_set_scissors;
     if (!forward) {
         return;
@@ -1374,7 +1404,7 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
                                                        ID3D11RenderTargetView* view,
                                                        const FLOAT colour[4])
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const clear_render_target_view_fn forward = self.original_clear_target;
     if (!forward) {
         return;
@@ -1394,6 +1424,7 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
         }
     }
     forward(context, target, colour);
+    refresh_hooks(self);
 }
 
 // Look at what is bound now and, if it is the set, hand it to the caller.
@@ -1666,7 +1697,7 @@ void STDMETHODCALLTYPE hooked_vertex_buffers(ID3D11DeviceContext* c, UINT start,
                                              ID3D11Buffer* const* b, const UINT* strides,
                                              const UINT* offsets)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*,
                                         const UINT*, const UINT*);
     reinterpret_cast<Fn>(s.extra_originals[0])(c, start, count, b, strides, offsets);
@@ -1682,7 +1713,7 @@ void STDMETHODCALLTYPE hooked_vertex_buffers(ID3D11DeviceContext* c, UINT start,
 void STDMETHODCALLTYPE hooked_index_buffer(ID3D11DeviceContext* c, ID3D11Buffer* b, DXGI_FORMAT f,
                                            UINT o)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, DXGI_FORMAT, UINT);
     reinterpret_cast<Fn>(s.extra_originals[1])(c, b, f, o);
     if (inside_hook || c != s.observed_context) {
@@ -1694,7 +1725,7 @@ void STDMETHODCALLTYPE hooked_index_buffer(ID3D11DeviceContext* c, ID3D11Buffer*
 }
 void STDMETHODCALLTYPE hooked_layout(ID3D11DeviceContext* c, ID3D11InputLayout* l)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11InputLayout*);
     reinterpret_cast<Fn>(s.extra_originals[2])(c, l);
     if (!inside_hook && c == s.observed_context) {
@@ -1708,7 +1739,7 @@ void STDMETHODCALLTYPE hooked_layout(ID3D11DeviceContext* c, ID3D11InputLayout* 
 void STDMETHODCALLTYPE hooked_pixel_shader(ID3D11DeviceContext* c, ID3D11PixelShader* p,
                                            ID3D11ClassInstance* const* classes, UINT count)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11PixelShader*,
                                         ID3D11ClassInstance* const*, UINT);
     reinterpret_cast<Fn>(s.extra_originals[13])(c, p, classes, count);
@@ -1719,7 +1750,7 @@ void STDMETHODCALLTYPE hooked_pixel_shader(ID3D11DeviceContext* c, ID3D11PixelSh
 void STDMETHODCALLTYPE hooked_blend_state(ID3D11DeviceContext* c, ID3D11BlendState* b,
                                           const FLOAT factor[4], UINT mask)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11BlendState*, const FLOAT[4],
                                         UINT);
     reinterpret_cast<Fn>(s.extra_originals[14])(c, b, factor, mask);
@@ -1730,7 +1761,7 @@ void STDMETHODCALLTYPE hooked_blend_state(ID3D11DeviceContext* c, ID3D11BlendSta
 void STDMETHODCALLTYPE hooked_depth_stencil_state(ID3D11DeviceContext* c,
                                                   ID3D11DepthStencilState* d, UINT reference)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilState*, UINT);
     reinterpret_cast<Fn>(s.extra_originals[15])(c, d, reference);
     if (!inside_hook && c == s.observed_context) {
@@ -1739,7 +1770,7 @@ void STDMETHODCALLTYPE hooked_depth_stencil_state(ID3D11DeviceContext* c,
 }
 void STDMETHODCALLTYPE hooked_topology(ID3D11DeviceContext* c, D3D11_PRIMITIVE_TOPOLOGY t)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, D3D11_PRIMITIVE_TOPOLOGY);
     reinterpret_cast<Fn>(s.extra_originals[3])(c, t);
     if (!inside_hook && c == s.observed_context) {
@@ -1749,7 +1780,7 @@ void STDMETHODCALLTYPE hooked_topology(ID3D11DeviceContext* c, D3D11_PRIMITIVE_T
 void STDMETHODCALLTYPE hooked_vertex_shader(ID3D11DeviceContext* c, ID3D11VertexShader* v,
                                             ID3D11ClassInstance* const* classes, UINT count)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11VertexShader*,
                                         ID3D11ClassInstance* const*, UINT);
     reinterpret_cast<Fn>(s.extra_originals[4])(c, v, classes, count);
@@ -1760,7 +1791,7 @@ void STDMETHODCALLTYPE hooked_vertex_shader(ID3D11DeviceContext* c, ID3D11Vertex
 void STDMETHODCALLTYPE hooked_vertex_constants(ID3D11DeviceContext* c, UINT start, UINT count,
                                                ID3D11Buffer* const* b)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     reinterpret_cast<ps_set_constant_buffers_fn>(s.extra_originals[5])(c, start, count, b);
     if (inside_hook || c != s.observed_context) {
         return;
@@ -1772,11 +1803,12 @@ void STDMETHODCALLTYPE hooked_vertex_constants(ID3D11DeviceContext* c, UINT star
 void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, UINT instances,
                                                 UINT start, INT base, UINT first)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
     const auto forward = reinterpret_cast<Fn>(s.extra_originals[6]);
     if (inside_hook || c != s.observed_context) {
         forward(c, n, instances, start, base, first);
+        refresh_hooks(s);
         return;
     }
     // The guard is taken before the divert rather than after the draw, because retargeting issues
@@ -1784,6 +1816,7 @@ void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, 
     const ReentryGuard guard;
     const bool moved = try_divert(s, c, true, n);
     forward(c, n, instances, start, base, first);
+    refresh_hooks(s);
     if (moved) {
         end_divert(s, c);
     }
@@ -1794,16 +1827,18 @@ void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, 
 void STDMETHODCALLTYPE hooked_instanced(ID3D11DeviceContext* c, UINT n, UINT instances, UINT start,
                                         UINT first)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
     const auto forward = reinterpret_cast<Fn>(s.extra_originals[7]);
     if (inside_hook || c != s.observed_context) {
         forward(c, n, instances, start, first);
+        refresh_hooks(s);
         return;
     }
     const ReentryGuard guard;
     const bool moved = try_divert(s, c, false, n);
     forward(c, n, instances, start, first);
+    refresh_hooks(s);
     if (moved) {
         end_divert(s, c);
     }
@@ -1838,7 +1873,7 @@ void invalidate_geometry(Tap& s)
 }
 void STDMETHODCALLTYPE hooked_clear_state(ID3D11DeviceContext* c)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
     reinterpret_cast<Fn>(s.extra_originals[8])(c);
     if (!inside_hook && c == s.observed_context) {
@@ -1847,7 +1882,7 @@ void STDMETHODCALLTYPE hooked_clear_state(ID3D11DeviceContext* c)
 }
 void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* c, ID3D11CommandList* list, BOOL restore)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
     reinterpret_cast<Fn>(s.extra_originals[9])(c, list, restore);
     if (!inside_hook && c == s.observed_context && !restore) {
@@ -1856,9 +1891,10 @@ void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* c, ID3D11CommandList*
 }
 void STDMETHODCALLTYPE hooked_indexed_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, UINT offset)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
     reinterpret_cast<Fn>(s.extra_originals[10])(c, b, offset);
+    refresh_hooks(s);
     if (inside_hook || c != s.observed_context) {
         return;
     }
@@ -1867,9 +1903,10 @@ void STDMETHODCALLTYPE hooked_indexed_indirect(ID3D11DeviceContext* c, ID3D11Buf
 }
 void STDMETHODCALLTYPE hooked_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, UINT offset)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
     reinterpret_cast<Fn>(s.extra_originals[11])(c, b, offset);
+    refresh_hooks(s);
     if (inside_hook || c != s.observed_context) {
         return;
     }
@@ -1878,9 +1915,10 @@ void STDMETHODCALLTYPE hooked_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, 
 }
 void STDMETHODCALLTYPE hooked_auto(ID3D11DeviceContext* c)
 {
-    auto& s = tap();
+    auto& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
     reinterpret_cast<Fn>(s.extra_originals[12])(c);
+    refresh_hooks(s);
     if (inside_hook || c != s.observed_context) {
         return;
     }
@@ -1890,21 +1928,219 @@ void STDMETHODCALLTYPE hooked_auto(ID3D11DeviceContext* c)
 constexpr size_t extra_slots[] = {18, 19, 17, 24, 11, 7,  20, 21,
                                   110, 58, 39, 40, 38, 9, 35, 36};
 
+// Pass-through hooks for the flush-class calls and for the rest of the work-submission family.
+//
+// None of these is observed. Each exists so the vtable rewrite a call of its kind causes is noticed
+// on the way out, by `refresh_hooks`, rather than by whatever hooked call the game happens to make
+// next, which for a draw right after a clear may be nothing. Indices are positions in
+// `pass_originals`, in the order `pass_hooks` lists them at install.
+HRESULT STDMETHODCALLTYPE hooked_map(ID3D11DeviceContext* c, ID3D11Resource* resource,
+                                     UINT subresource, D3D11_MAP kind, UINT flags,
+                                     D3D11_MAPPED_SUBRESOURCE* mapped)
+{
+    Tap& s = enter_hook();
+    using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP,
+                                           UINT, D3D11_MAPPED_SUBRESOURCE*);
+    const HRESULT result =
+        reinterpret_cast<Fn>(s.pass_originals[0])(c, resource, subresource, kind, flags, mapped);
+    refresh_hooks(s);
+    return result;
+}
+void STDMETHODCALLTYPE hooked_unmap(ID3D11DeviceContext* c, ID3D11Resource* resource,
+                                    UINT subresource)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[1])(c, resource, subresource);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_flush(ID3D11DeviceContext* c)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
+    reinterpret_cast<Fn>(s.pass_originals[2])(c);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UINT z)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[3])(c, x, y, z);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_dispatch_indirect(ID3D11DeviceContext* c, ID3D11Buffer* arguments,
+                                                UINT offset)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[4])(c, arguments, offset);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_copy_subresource_region(ID3D11DeviceContext* c,
+                                                      ID3D11Resource* destination,
+                                                      UINT destination_subresource, UINT x, UINT y,
+                                                      UINT z, ID3D11Resource* source,
+                                                      UINT source_subresource,
+                                                      const D3D11_BOX* box)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, UINT, UINT,
+                                        UINT, ID3D11Resource*, UINT, const D3D11_BOX*);
+    reinterpret_cast<Fn>(s.pass_originals[5])(c, destination, destination_subresource, x, y, z,
+                                              source, source_subresource, box);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_copy_resource(ID3D11DeviceContext* c, ID3D11Resource* destination,
+                                            ID3D11Resource* source)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
+    reinterpret_cast<Fn>(s.pass_originals[6])(c, destination, source);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_update_subresource(ID3D11DeviceContext* c,
+                                                 ID3D11Resource* destination, UINT subresource,
+                                                 const D3D11_BOX* box, const void* data,
+                                                 UINT row_pitch, UINT depth_pitch)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT,
+                                        const D3D11_BOX*, const void*, UINT, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[7])(c, destination, subresource, box, data, row_pitch,
+                                              depth_pitch);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_copy_structure_count(ID3D11DeviceContext* c,
+                                                   ID3D11Buffer* destination, UINT offset,
+                                                   ID3D11UnorderedAccessView* source)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT,
+                                        ID3D11UnorderedAccessView*);
+    reinterpret_cast<Fn>(s.pass_originals[8])(c, destination, offset, source);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_clear_uav_uint(ID3D11DeviceContext* c,
+                                             ID3D11UnorderedAccessView* view, const UINT values[4])
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11UnorderedAccessView*,
+                                        const UINT[4]);
+    reinterpret_cast<Fn>(s.pass_originals[9])(c, view, values);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_clear_uav_float(ID3D11DeviceContext* c,
+                                              ID3D11UnorderedAccessView* view,
+                                              const FLOAT values[4])
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11UnorderedAccessView*,
+                                        const FLOAT[4]);
+    reinterpret_cast<Fn>(s.pass_originals[10])(c, view, values);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_clear_depth_stencil_view(ID3D11DeviceContext* c,
+                                                       ID3D11DepthStencilView* view, UINT flags,
+                                                       FLOAT depth, UINT8 stencil)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT,
+                                        UINT8);
+    reinterpret_cast<Fn>(s.pass_originals[11])(c, view, flags, depth, stencil);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_generate_mips(ID3D11DeviceContext* c,
+                                            ID3D11ShaderResourceView* view)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11ShaderResourceView*);
+    reinterpret_cast<Fn>(s.pass_originals[12])(c, view);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_resolve_subresource(ID3D11DeviceContext* c,
+                                                  ID3D11Resource* destination,
+                                                  UINT destination_subresource,
+                                                  ID3D11Resource* source, UINT source_subresource,
+                                                  DXGI_FORMAT format)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT,
+                                        ID3D11Resource*, UINT, DXGI_FORMAT);
+    reinterpret_cast<Fn>(s.pass_originals[13])(c, destination, destination_subresource, source,
+                                               source_subresource, format);
+    refresh_hooks(s);
+}
+// ID3D11DeviceContext1's two members of the family. Patched only where the context has that
+// interface, because a table for the base interface has no slot 115.
+void STDMETHODCALLTYPE hooked_copy_subresource_region1(
+    ID3D11DeviceContext* c, ID3D11Resource* destination, UINT destination_subresource, UINT x,
+    UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box,
+    UINT flags)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, UINT, UINT,
+                                        UINT, ID3D11Resource*, UINT, const D3D11_BOX*, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[14])(c, destination, destination_subresource, x, y, z,
+                                               source, source_subresource, box, flags);
+    refresh_hooks(s);
+}
+void STDMETHODCALLTYPE hooked_update_subresource1(ID3D11DeviceContext* c,
+                                                  ID3D11Resource* destination, UINT subresource,
+                                                  const D3D11_BOX* box, const void* data,
+                                                  UINT row_pitch, UINT depth_pitch, UINT flags)
+{
+    Tap& s = enter_hook();
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT,
+                                        const D3D11_BOX*, const void*, UINT, UINT, UINT);
+    reinterpret_cast<Fn>(s.pass_originals[15])(c, destination, subresource, box, data, row_pitch,
+                                               depth_pitch, flags);
+    refresh_hooks(s);
+}
+
+// Slot, hook and index into `pass_originals`, and whether the slot only exists on
+// ID3D11DeviceContext1. Slot numbers count the three IUnknown and four ID3D11DeviceChild entries.
+struct PassHook {
+    size_t slot;
+    void* replacement;
+    size_t original;
+    bool context1;
+};
+const PassHook pass_hooks[] = {
+    {14, reinterpret_cast<void*>(&hooked_map), 0, false},
+    {15, reinterpret_cast<void*>(&hooked_unmap), 1, false},
+    {111, reinterpret_cast<void*>(&hooked_flush), 2, false},
+    {41, reinterpret_cast<void*>(&hooked_dispatch), 3, false},
+    {42, reinterpret_cast<void*>(&hooked_dispatch_indirect), 4, false},
+    {46, reinterpret_cast<void*>(&hooked_copy_subresource_region), 5, false},
+    {47, reinterpret_cast<void*>(&hooked_copy_resource), 6, false},
+    {48, reinterpret_cast<void*>(&hooked_update_subresource), 7, false},
+    {49, reinterpret_cast<void*>(&hooked_copy_structure_count), 8, false},
+    {51, reinterpret_cast<void*>(&hooked_clear_uav_uint), 9, false},
+    {52, reinterpret_cast<void*>(&hooked_clear_uav_float), 10, false},
+    {53, reinterpret_cast<void*>(&hooked_clear_depth_stencil_view), 11, false},
+    {54, reinterpret_cast<void*>(&hooked_generate_mips), 12, false},
+    {57, reinterpret_cast<void*>(&hooked_resolve_subresource), 13, false},
+    {115, reinterpret_cast<void*>(&hooked_copy_subresource_region1), 14, true},
+    {116, reinterpret_cast<void*>(&hooked_update_subresource1), 15, true},
+};
+
 void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT index_count,
                                            UINT start_index, INT base_vertex)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const draw_indexed_fn forward = self.original_draw_indexed;
     if (!forward) {
         return;
     }
     if (inside_hook || context != self.observed_context) {
         forward(context, index_count, start_index, base_vertex);
+        refresh_hooks(self);
         return;
     }
     const ReentryGuard guard;
     const bool moved = try_divert(self, context, true, index_count);
     forward(context, index_count, start_index, base_vertex);
+    refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
     }
@@ -1916,18 +2152,20 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
 void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_count,
                                    UINT start_vertex)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const draw_fn forward = self.original_draw;
     if (!forward) {
         return;
     }
     if (inside_hook || context != self.observed_context) {
         forward(context, vertex_count, start_vertex);
+        refresh_hooks(self);
         return;
     }
     const ReentryGuard guard;
     const bool moved = try_divert(self, context, false, vertex_count);
     forward(context, vertex_count, start_vertex);
+    refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
     }
@@ -1939,7 +2177,7 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
 void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* context, UINT start_slot,
                                                       UINT count, ID3D11Buffer* const* buffers)
 {
-    Tap& self = tap();
+    Tap& self = enter_hook();
     const ps_set_constant_buffers_fn forward = self.original_set_constants;
     if (!forward) {
         return;
@@ -2009,8 +2247,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     }
 
     self.options = *options;
-    self.hunt_budget.store(options->hunt_budget ? options->hunt_budget : 64u,
-                           std::memory_order_relaxed);
     self.observed_context = static_cast<ID3D11DeviceContext*>(device_context);
     if (self.options.view_constant_bytes == 0) {
         self.options.view_constant_bytes = 4096;
@@ -2072,21 +2308,61 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
         {slot_clear_render_target_view, reinterpret_cast<void*>(&hooked_clear_render_target_view),
          reinterpret_cast<void**>(&self.original_clear_target)},
     };
-    constexpr size_t patch_count = sizeof(patches) / sizeof(patches[0]);
+    constexpr size_t fixed_count = sizeof(patches) / sizeof(patches[0]);
 
-    for (size_t applied = 0; applied < patch_count; ++applied) {
-        if (patch_slot(self.vtable, patches[applied].index, patches[applied].replacement,
-                       patches[applied].original)) {
+    // Gathered into one table the refresh and the uninstall walk as a unit: the observed hooks
+    // above, then the pass-throughs, of which ID3D11DeviceContext1's two only where the context
+    // has that interface.
+    self.patch_count = 0;
+    for (size_t index = 0; index < fixed_count; ++index) {
+        self.patches[self.patch_count++] =
+            Tap::Patch{patches[index].index, patches[index].replacement, patches[index].original};
+    }
+    bool context1 = false;
+    {
+        ID3D11DeviceContext1* extended = nullptr;
+        if (SUCCEEDED(self.observed_context->QueryInterface(
+                __uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&extended))) &&
+            extended) {
+            context1 = true;
+            extended->Release();
+        }
+    }
+    for (const PassHook& pass : pass_hooks) {
+        if (pass.context1 && !context1) {
+            continue;
+        }
+        self.patches[self.patch_count++] =
+            Tap::Patch{pass.slot, pass.replacement, &self.pass_originals[pass.original]};
+    }
+    self.sentinel_replacement = reinterpret_cast<void*>(&hooked_draw);
+
+    for (size_t applied = 0; applied < self.patch_count; ++applied) {
+        Tap::Patch& patch = self.patches[applied];
+        if (patch_slot(self.vtable, patch.slot, patch.replacement, patch.original)) {
             continue;
         }
         while (applied-- > 0) {
-            patch_slot(self.vtable, patches[applied].index, *patches[applied].original, nullptr);
-            *patches[applied].original = nullptr;
+            patch_slot(self.vtable, self.patches[applied].slot, *self.patches[applied].original,
+                       nullptr);
+            *self.patches[applied].original = nullptr;
         }
+        self.patch_count = 0;
         return RSF_FRAME_TAP_ERROR_PATCH_FAILED;
     }
 
+    self.vtable_refreshes.store(0, std::memory_order_relaxed);
     self.installed = true;
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_refresh(void)
+{
+    Tap& self = tap();
+    if (!self.installed) {
+        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    }
+    refresh_hooks(self);
     return RSF_FRAME_TAP_OK;
 }
 
@@ -2103,29 +2379,17 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         // rather than reaching for views the caller is about to release.
         self.plan_active.store(false, std::memory_order_relaxed);
         self.divert_armed.store(0, std::memory_order_relaxed);
-        // The array's own length, not a number written next to it. It was 13 while the table had
-        // thirteen entries and stayed 13 when the table grew to sixteen, which left the pixel
-        // shader, blend and depth stencil hooks patched into a vtable after uninstall.
-        for (size_t i = 0; i < sizeof(extra_slots) / sizeof(extra_slots[0]); ++i) {
-            patch_slot(self.vtable, extra_slots[i], self.extra_originals[i], nullptr);
+        // Off before the table goes back, so a hook still in flight cannot re-apply what this is
+        // removing. Then everything the table names, the pass-throughs included, back to whatever
+        // the runtime last had there. On a runtime that rewrites its table that is the variant for
+        // its current state: a rewrite since would have removed the hook, and the refresh that put
+        // it back recorded the new one.
+        self.installed = false;
+        for (size_t index = 0; index < self.patch_count; ++index) {
+            patch_slot(self.vtable, self.patches[index].slot, *self.patches[index].original,
+                       nullptr);
         }
-        patch_slot(self.vtable, slot_ps_set_shader_resources,
-                   reinterpret_cast<void*>(self.original_set_views), nullptr);
-        patch_slot(self.vtable, slot_ps_set_constant_buffers,
-                   reinterpret_cast<void*>(self.original_set_constants), nullptr);
-        patch_slot(self.vtable, slot_draw_indexed,
-                   reinterpret_cast<void*>(self.original_draw_indexed), nullptr);
-        patch_slot(self.vtable, slot_draw, reinterpret_cast<void*>(self.original_draw), nullptr);
-        patch_slot(self.vtable, slot_om_set_render_targets,
-                   reinterpret_cast<void*>(self.original_set_targets), nullptr);
-        patch_slot(self.vtable, slot_om_set_render_targets_and_uavs,
-                   reinterpret_cast<void*>(self.original_set_targets_and_uavs), nullptr);
-        patch_slot(self.vtable, slot_rs_set_viewports,
-                   reinterpret_cast<void*>(self.original_set_viewports), nullptr);
-        patch_slot(self.vtable, slot_rs_set_scissor_rects,
-                   reinterpret_cast<void*>(self.original_set_scissors), nullptr);
-        patch_slot(self.vtable, slot_clear_render_target_view,
-                   reinterpret_cast<void*>(self.original_clear_target), nullptr);
+        self.patch_count = 0;
         // The originals are deliberately kept. A call that entered a hook before the vtable was
         // restored still has to forward, and clearing them turns that race from a stale hook into a
         // null call. They stay valid for as long as the runtime is loaded, and a later install
@@ -2195,16 +2459,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     self.target_substituted = false;
     self.game_viewport_count = 0;
     self.game_scissor_count = 0;
-    return RSF_FRAME_TAP_OK;
-}
-
-extern "C" rsf_frame_tap_result rsf_frame_tap_reset_hunt(uint32_t budget)
-{
-    Tap& self = tap();
-    if (!self.installed) {
-        return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
-    }
-    self.hunt_budget.store(budget ? budget : 64u, std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }
 
@@ -2434,5 +2688,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->divert_refused =
         static_cast<uint32_t>(self.divert_refused.load(std::memory_order_relaxed));
     status->divert_last_refusal = self.divert_last_refusal.load(std::memory_order_relaxed);
+    status->vtable_refreshes = self.vtable_refreshes.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }
