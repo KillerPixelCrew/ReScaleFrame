@@ -81,6 +81,9 @@ RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
 # renderdoc.dll is found beside the proxy; the path is only for a copy kept elsewhere.
 # RSF_RENDERDOC=1
 # RSF_RENDERDOC_DLL=
+# Where captures are written, as RenderDoc's file path template: the frame number and .rdc are
+# appended. Unset, RenderDoc picks its own temporary folder.
+# RSF_CAPTURE_PREFIX=D:/captures/ac7
 
 # Let translucent geometry write motion vectors. Stock 4.18 excludes it by blend mode, which is why
 # the mission map's relief and the vehicle symbols in replay have none. The material domain check,
