@@ -904,15 +904,6 @@ void begin_nudge(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT ele
     if (!nudge || !candidate_passes(self)) {
         return;
     }
-    rsf_frame_tap_target_draw facts;
-    rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
-    fill_divert_facts(self, indexed, element_count, facts, inputs);
-    float offset_x = 0.0f;
-    float offset_y = 0.0f;
-    if (!nudge(self.nudge_user.load(std::memory_order_relaxed), &facts, &offset_x, &offset_y) ||
-        (offset_x == 0.0f && offset_y == 0.0f)) {
-        return;
-    }
     state.viewport_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
     context->RSGetViewports(&state.viewport_count, state.viewports);
     if (state.viewport_count == 0 || !self.original_set_viewports) {
@@ -922,6 +913,21 @@ void begin_nudge(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT ele
     // plan's scale applied to the game's viewport.
     const float scale_x = self.target_substituted ? self.plan.viewport_scale_x : 1.0f;
     const float scale_y = self.target_substituted ? self.plan.viewport_scale_y : 1.0f;
+    rsf_frame_tap_target_draw facts;
+    rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
+    fill_divert_facts(self, indexed, element_count, facts, inputs);
+    // The viewport as the game set it, which says which view the draw belongs to: only the view
+    // whose size is the main view's is jittered, so only its draws may be moved back.
+    facts.viewport_x = state.viewports[0].TopLeftX / scale_x;
+    facts.viewport_y = state.viewports[0].TopLeftY / scale_y;
+    facts.viewport_width = uint32_t(state.viewports[0].Width / scale_x + 0.5f);
+    facts.viewport_height = uint32_t(state.viewports[0].Height / scale_y + 0.5f);
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    if (!nudge(self.nudge_user.load(std::memory_order_relaxed), &facts, &offset_x, &offset_y) ||
+        (offset_x == 0.0f && offset_y == 0.0f)) {
+        return;
+    }
     D3D11_VIEWPORT moved[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
     for (UINT index = 0; index < state.viewport_count; ++index) {
         moved[index] = state.viewports[index];

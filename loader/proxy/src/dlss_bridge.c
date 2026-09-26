@@ -1667,8 +1667,17 @@ static int ui_nudge(void* user, const rsf_frame_tap_target_draw* draw, float* of
 {
     float x = 0.0f;
     float y = 0.0f;
+    const long view_width = InterlockedCompareExchange(&bridge.view_width, 0, 0);
+    const long view_height = InterlockedCompareExchange(&bridge.view_height, 0, 0);
     (void)user;
-    if (!draw || !bridge.actions.jitter_pixels || !bridge.actions.jitter_pixels(&x, &y) ||
+    /* Only a draw in the main view carries the jitter: the stub jitters no view of another size.
+       Nudging every quad moved the main menu's background panels, which belong to another view,
+       by a jitter they never had; the same size test on both sides keeps the two in agreement. */
+    if (!draw || view_width == 0 || labs((long)draw->viewport_width - view_width) > 1 ||
+        labs((long)draw->viewport_height - view_height) > 1) {
+        return 0;
+    }
+    if (!bridge.actions.jitter_pixels || !bridge.actions.jitter_pixels(&x, &y) ||
         classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
         return 0;
     }
