@@ -64,7 +64,11 @@ extern "C" {
    buffer bound in its slot until something replaces it, so a draw arrives with the view buffers of
    earlier draws still in other slots, and replacing the first one found could leave the one the
    shader reads untouched. */
-#define RSF_FRAME_TAP_ABI_VERSION 10u
+/* 11: a gate callback says whether it took the gate. One that returns zero leaves the gate shut,
+   so the next binding of the same target in the frame asks again. A frame that renders the same
+   scene several times, the briefing's among them, binds the recombined target once per render,
+   and only the main view's is the one to reconstruct at. */
+#define RSF_FRAME_TAP_ABI_VERSION 11u
 
 /* Render targets watched at once. The first two answer the tail's question: the swap chain's back
    buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
@@ -396,7 +400,7 @@ typedef struct rsf_frame_tap_substitution {
    is where a reconstruction has to run. Whatever it does to the device context it must put back:
    the game is midway through its frame and will not rebind what it believes is still there.
    `d3d11_state.h` exists for that. */
-typedef void (*rsf_frame_tap_gate_fn)(void* user, void* context, void* texture);
+typedef int (*rsf_frame_tap_gate_fn)(void* user, void* context, void* texture);
 
 typedef struct rsf_frame_tap_plan {
     uint32_t struct_size;
@@ -570,6 +574,8 @@ typedef struct rsf_frame_tap_status {
     uint32_t copies_mismatched;
     /* Appended in ABI 9: constant uploads by UpdateSubresource handed to the watch. */
     uint32_t updates_watched;
+    /* Appended in ABI 11: gate bindings the callback declined. */
+    uint32_t gates_declined;
 } rsf_frame_tap_status;
 
 /* Patch the device context vtable. `device_context` is the immediate `ID3D11DeviceContext*`.

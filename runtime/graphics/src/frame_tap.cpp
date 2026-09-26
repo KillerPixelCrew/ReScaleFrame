@@ -212,6 +212,7 @@ struct Tap {
     std::atomic<void*> constant_watch_user{nullptr};
     std::atomic<uint32_t> constant_watch_bytes{0};
     std::atomic<uint32_t> updates_watched{0};
+    std::atomic<uint32_t> gates_declined{0};
     struct PendingMap {
         ID3D11Resource* resource = nullptr;
         void* data = nullptr;
@@ -539,13 +540,17 @@ void open_gates_for(Tap& self, ID3D11DeviceContext* context, void* texture)
         if (self.plan.items[index].after_target != texture || self.gate_open[index]) {
             continue;
         }
-        self.gate_open[index] = true;
-        self.gates_opened.fetch_add(1, std::memory_order_relaxed);
         if (self.plan.on_gate) {
             // Under the reentry guard the caller set up, so whatever this binds comes back through
-            // these hooks as the tap's own work rather than as the game's.
-            self.plan.on_gate(self.plan.on_gate_user, context, texture);
+            // these hooks as the tap's own work rather than as the game's. A callback that declines
+            // leaves the gate shut for the next binding of this target.
+            if (!self.plan.on_gate(self.plan.on_gate_user, context, texture)) {
+                self.gates_declined.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
         }
+        self.gate_open[index] = true;
+        self.gates_opened.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -2972,5 +2977,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
     status->copies_redirected = self.copies_redirected.load(std::memory_order_relaxed);
     status->copies_mismatched = self.copies_mismatched.load(std::memory_order_relaxed);
     status->updates_watched = self.updates_watched.load(std::memory_order_relaxed);
+    status->gates_declined = self.gates_declined.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

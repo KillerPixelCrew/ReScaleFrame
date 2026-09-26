@@ -214,6 +214,16 @@ static struct {
     int recombine_off;
     unsigned long finishes;
     unsigned long layer_draws_twinned;
+    /* Which recombine is the main view's. The briefing renders the scene more than once a frame
+       (three qualifying passes a frame against one on the menus), and every render binds a
+       recombined target; the pool hands them the same allocation, so the gate opens at the first.
+       The main view is the one whose tonemap writes the composite, and the pass right before that
+       is its temporal pass, so its camera is the reference: the recombine whose camera continues
+       it is the one to reconstruct at, and the others are declined and asked again. */
+    rsf_camera_frame main_camera_ref;
+    int main_camera_ref_valid;
+    unsigned long gates_declined_camera;
+    unsigned long gate_decisions_logged;
     unsigned long layer_draws_untwinned;
     /* The recombine route's one correction to the game's own shading. The recombine (Unreal 4.18
        PostProcessDOF.usf, MainRecombinePS) addresses scene colour and the separate translucency
@@ -698,9 +708,14 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
            the passes differ in what their colour holds, so which one is being taken is the
            question: a capture replay puts the sky twenty seven draws after the lighting, and a
            colour taken before those has no sky in it. */
-        say("  pass %lu of this frame: colour %p format %lu at %ux%u, %s exposure",
+        say("  pass %lu of this frame: colour %p format %lu at %ux%u, %s exposure, view %ux%u in "
+            "%ux%u, camera at %.0f %.0f %.0f looking %.2f %.2f %.2f, jitter %.2f %.2f px",
             bridge.pass_in_frame, pass->scene_color, (unsigned long)pass->scene_color_format,
-            pass->render_width, pass->render_height, pass->exposure ? "with" : "no");
+            pass->render_width, pass->render_height, pass->exposure ? "with" : "no",
+            view.view_width, view.view_height, view.buffer_width, view.buffer_height,
+            view.camera_position[0], view.camera_position[1], view.camera_position[2],
+            view.camera_forward[0], view.camera_forward[1], view.camera_forward[2],
+            view.jitter_pixels[0], view.jitter_pixels[1]);
     }
 
     fill_camera(&view, &camera);
@@ -1661,7 +1676,42 @@ static int evaluate_at_recombine(void* context)
     return 1;
 }
 
-static void on_gate(void* user, void* context, void* texture)
+/* Whether `candidate` is the main view's camera a frame on from `reference`: the same lens, looking
+   the same way to within a few degrees, from nearby. A camera turns a degree or two a frame at the
+   fastest and moves metres, not the tens of metres between a scene and a capture of it. */
+static int camera_continues(const rsf_camera_frame* candidate, const rsf_camera_frame* reference)
+{
+    float dot = 0.0f;
+    float distance = 0.0f;
+    int axis;
+    for (axis = 0; axis < 3; ++axis) {
+        const float delta = candidate->camera_position[axis] - reference->camera_position[axis];
+        dot += candidate->camera_forward[axis] * reference->camera_forward[axis];
+        distance += delta * delta;
+    }
+    return fabsf(candidate->vertical_fov - reference->vertical_fov) < 0.02f &&
+           dot > 0.9962f /* cos 5 degrees */ && distance < 2000.0f * 2000.0f;
+}
+
+static void log_gate_decision(const char* verdict)
+{
+    if (bridge.gate_decisions_logged >= 12) {
+        return;
+    }
+    ++bridge.gate_decisions_logged;
+    say("recombine gate %s: camera at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f; the main "
+        "view's %s at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f",
+        verdict, bridge.upload_camera.camera_position[0], bridge.upload_camera.camera_position[1],
+        bridge.upload_camera.camera_position[2], bridge.upload_camera.camera_forward[0],
+        bridge.upload_camera.camera_forward[1], bridge.upload_camera.camera_forward[2],
+        bridge.upload_camera.vertical_fov, bridge.main_camera_ref_valid ? "was" : "is unknown, so",
+        bridge.main_camera_ref.camera_position[0], bridge.main_camera_ref.camera_position[1],
+        bridge.main_camera_ref.camera_position[2], bridge.main_camera_ref.camera_forward[0],
+        bridge.main_camera_ref.camera_forward[1], bridge.main_camera_ref.camera_forward[2],
+        bridge.main_camera_ref.vertical_fov);
+}
+
+static int on_gate(void* user, void* context, void* texture)
 {
     rsf_d3d11_state state;
     rsf_promote_status status;
@@ -1669,22 +1719,40 @@ static void on_gate(void* user, void* context, void* texture)
     (void)user;
     (void)texture;
     if (!context) {
-        return;
+        return 1;
     }
     memset(&status, 0, sizeof(status));
     status.struct_size = sizeof(status);
     if (bridge.promote && rsf_promote_get_status(bridge.promote, &status) == RSF_PROMOTE_OK &&
         status.at_recombine) {
-        if (!rsf_d3d11_state_save(context, &state)) {
-            return;
-        }
         if (texture && texture == bridge.composite) {
             /* The tonemap's gate: temporal AA wrote the scratch target, and scene colour gets the
-               recombined result instead. */
+               recombined result instead. The pass just before this is the main view's temporal
+               pass, so its camera is next frame's reference. */
+            if (!rsf_d3d11_state_save(context, &state)) {
+                return 1;
+            }
             rsf_promote_finish(bridge.promote, context);
             rsf_d3d11_state_restore(context, &state);
             ++bridge.finishes;
-            return;
+            if (bridge.have_held) {
+                bridge.main_camera_ref = bridge.held_camera;
+                bridge.main_camera_ref_valid = 1;
+            }
+            return 1;
+        }
+        /* The recombine's gate. Only the main view's, judged by its camera continuing the
+           reference; any other render's is declined and the gate asked again at the next. Without
+           a reference, the first is taken and the composite gate establishes one. */
+        if (bridge.main_camera_ref_valid && bridge.upload_camera_valid &&
+            !camera_continues(&bridge.upload_camera, &bridge.main_camera_ref)) {
+            ++bridge.gates_declined_camera;
+            log_gate_decision("declined");
+            return 0;
+        }
+        log_gate_decision("taken");
+        if (!rsf_d3d11_state_save(context, &state)) {
+            return 1;
         }
         bridge.recombine_gate_this_frame = 1;
         /* Seeded every time: with the reconstruction, or with the game's own scene colour when
@@ -1692,17 +1760,18 @@ static void on_gate(void* user, void* context, void* texture)
         rsf_promote_seed(bridge.promote, context, evaluate_at_recombine(context) ? 1u : 0u);
         rsf_d3d11_state_restore(context, &state);
         ++bridge.gate_evaluates;
-        return;
+        return 1;
     }
     if (!bridge.have_held) {
-        return;
+        return 1;
     }
     if (!rsf_d3d11_state_save(context, &state)) {
-        return;
+        return 1;
     }
     evaluate_held(context);
     rsf_d3d11_state_restore(context, &state);
     ++bridge.gate_evaluates;
+    return 1;
 }
 
 /* Which transfer function the composite applies to the layer on its way onto the back buffer.
@@ -2739,6 +2808,11 @@ static int install_reinsert_plan(void)
     }
     /* The recombine's size constants follow the plan: promoted while its target is bound. */
     bridge.size_patch_target = tail.composed;
+    /* A fresh plan describes its first frames' passes and gate decisions, so a log of a screen
+       says what that screen renders. */
+    bridge.frames_described = 0;
+    bridge.gate_decisions_logged = 0;
+    bridge.main_camera_ref_valid = 0;
     /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
        just because the previous plan's redirects are still the last thing counted. */
     bridge.redirect_stall = 0;
@@ -3019,10 +3093,12 @@ void rsf_bridge_report(void)
             (unsigned long)tap.draws_overridden);
         say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
             "redirected between stand-ins, %lu copies with one side promoted, %lu uploads for the "
-            "recombine had %lu size constants promoted, %lu constant uploads watched",
+            "recombine had %lu size constants promoted, %lu constant uploads watched, %lu "
+            "recombine gates declined as another render's camera",
             bridge.finishes, (unsigned long)tap.copies_redirected,
             (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
-            bridge.sizes_patched, (unsigned long)tap.updates_watched);
+            bridge.sizes_patched, (unsigned long)tap.updates_watched,
+            bridge.gates_declined_camera);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks

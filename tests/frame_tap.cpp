@@ -188,12 +188,13 @@ bool pixel_written(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Tex
 
 uint32_t gates_seen = 0;
 
-void note_gate(void* user, void* context, void* texture)
+int note_gate(void* user, void* context, void* texture)
 {
     (void)user;
     (void)context;
     (void)texture;
     ++gates_seen;
+    return 1;
 }
 
 // What the runtime actually has bound, as against what the test asked for. The two differing is
