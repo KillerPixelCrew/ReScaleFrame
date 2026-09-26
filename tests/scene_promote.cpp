@@ -277,12 +277,21 @@ int main()
     const rsf_frame_tap_substitution* scene_whole = entry_for(routed, scene_color);
     check(scene_whole && scene_whole->render_view && scene_whole->shader_view &&
               scene_whole->after_target == composed,
-          "Scene colour must become a whole output size surface once the recombine is bound, so "
-          "the game's copy of the recombined result back into it lands at output size too.");
+          "Scene colour must be read from and written to output size surfaces once the recombine "
+          "is bound.");
+    bool finish_gate = false;
+    for (uint32_t index = 0; index < routed.count; ++index) {
+        finish_gate = finish_gate || (routed.items[index].after_target == composite &&
+                                      routed.items[index].texture != scene_color);
+    }
+    check(finish_gate, "The composite must open a gate for putting the recombined result into "
+                       "scene colour before the tonemap.");
     check(rsf_promote_seed(promote, context, 1) == RSF_PROMOTE_OK,
           "Seeding scene colour's stand-in with the reconstruction must succeed.");
     check(rsf_promote_seed(promote, context, 0) == RSF_PROMOTE_OK,
           "Seeding it with the game's own scene colour, for a refused frame, must succeed.");
+    check(rsf_promote_finish(promote, context) == RSF_PROMOTE_OK,
+          "Finishing, the copy of the recombined result into scene colour, must succeed.");
     check(rsf_promote_prepare(promote, &tail) == RSF_PROMOTE_OK &&
               rsf_promote_get_status(promote, &status) == RSF_PROMOTE_OK &&
               status.at_recombine == 0,

@@ -84,9 +84,17 @@ extern "C" {
    typeless and a view on a typeless texture has to be told its format; the first Windows run
    failed every promotion on exactly that. */
 /* 6: the recombine as the point the reconstruction goes in. With `composed` named, scene colour is
-   promoted as a whole surface from the moment the recombined target is bound, seeded with the
-   reconstruction by `rsf_promote_seed`, and the recombined target is promoted; the game's own
-   recombine then composites its full-size separate translucency over the reconstruction. */
+   read from an output size stand-in from the moment the recombined target is bound, seeded with
+   the reconstruction by `rsf_promote_seed`, and the recombined target is promoted; the game's own
+   recombine then composites its full-size separate translucency over the reconstruction.
+
+   Unreal 4.18 runs temporal AA after the recombine (PostProcessing.cpp adds it after the depth of
+   field and separate translucency recombine), and its output lands in scene colour, which the
+   tonemap reads. Temporal AA is exactly what the reconstruction replaces, and at render resolution
+   inside an output size target it addresses texels for the wrong size. So on this route what the
+   game writes into scene colour after the recombine goes to a scratch target, and when the
+   composite is bound for the tonemap the recombined stand-in is copied into scene colour's stand-in
+   by `rsf_promote_finish`. */
 #define RSF_PROMOTE_ABI_VERSION 6u
 /* How many interface layers may be promoted. AC7 alternates between two allocations from frame to
    frame on the briefing, and a screen with more of them should lose none rather than lose the ones
@@ -211,6 +219,11 @@ rsf_promote_result rsf_promote_get_status(rsf_promote* promote, rsf_promote_stat
    own render resolution scene colour stretched to output size, so a frame the reconstruction was
    refused for is soft rather than whatever the stand-in held before. */
 rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context, uint32_t reconstructed);
+
+/* Put the recombined result, reconstruction with full-size translucency over it, where the tonemap
+   reads scene colour. Call it at the gate the composite opens, on the recombine route. Does nothing
+   on the older route. */
+rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* context);
 
 void rsf_promote_destroy(rsf_promote* promote);
 

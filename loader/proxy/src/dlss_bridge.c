@@ -211,6 +211,7 @@ static struct {
     int recombine_gate_this_frame;
     unsigned long recombine_missing;
     int recombine_off;
+    unsigned long finishes;
     /* The main view's render size from the last qualifying pass, kept past the frame, for the
        jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
     volatile LONG view_width;
@@ -1663,6 +1664,14 @@ static void on_gate(void* user, void* context, void* texture)
         if (!rsf_d3d11_state_save(context, &state)) {
             return;
         }
+        if (texture && texture == bridge.composite) {
+            /* The tonemap's gate: temporal AA wrote the scratch target, and scene colour gets the
+               recombined result instead. */
+            rsf_promote_finish(bridge.promote, context);
+            rsf_d3d11_state_restore(context, &state);
+            ++bridge.finishes;
+            return;
+        }
         bridge.recombine_gate_this_frame = 1;
         /* Seeded every time: with the reconstruction, or with the game's own scene colour when
            the evaluation was refused, so the stand-in never shows a stale frame. */
@@ -2929,6 +2938,10 @@ void rsf_bridge_report(void)
             bridge.reinsert_frames, bridge.gate_evaluates, (unsigned long)tap.inputs_substituted,
             (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened,
             (unsigned long)tap.draws_overridden);
+        say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
+            "redirected between stand-ins, %lu copies with one side promoted",
+            bridge.finishes, (unsigned long)tap.copies_redirected,
+            (unsigned long)tap.copies_mismatched);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks

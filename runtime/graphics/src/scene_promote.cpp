@@ -15,7 +15,7 @@
 // The plan has to hold every promoted surface at once: the composite, the scene colour, and both
 // sets. A plan that describes the frame correctly and is refused for being one entry too long is
 // the worst kind of failure, because it reports itself on, and it has happened once.
-static_assert(3u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
+static_assert(4u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
                   RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
               "the frame tap's plan cannot hold everything promotion may name");
 
@@ -71,6 +71,9 @@ struct rsf_promote {
     // that seeds scene colour's stand-in with the reconstruction.
     Replacement composed;
     Replacement scene;
+    // Where the game's own writes into scene colour go after the recombine: temporal AA's output,
+    // which the reconstruction replaces. Never read.
+    Replacement scratch;
     rsf_fullscreen_pass* seed_pass = nullptr;
     Replacement ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
     uint32_t ui_target_count = 0;
@@ -237,6 +240,7 @@ void release_everything(rsf_promote* promote)
     release_replacement(promote->composite);
     release_replacement(promote->composed);
     release_replacement(promote->scene);
+    release_replacement(promote->scratch);
     promote->ready = false;
 }
 
@@ -321,7 +325,9 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
         if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composed),
                                promote->composed, "recombined colour", 0) ||
             !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
-                               promote->scene, "scene colour", 0)) {
+                               promote->scene, "scene colour", 0) ||
+            !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
+                               promote->scratch, "scene colour's discarded writes", 0)) {
             release_everything(promote);
             return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
         }
@@ -427,8 +433,15 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
         rsf_frame_tap_substitution& scene = plan->items[plan->count++];
         scene.texture = promote->scene.original;
         scene.shader_view = promote->scene.shader_view;
-        scene.render_view = promote->scene.target_view;
+        scene.render_view = promote->scratch.target_view;
         scene.after_target = promote->composed.original;
+        // A gate and nothing else: keyed on the scratch texture, which the game never binds, and
+        // opened when the composite is bound for the tonemap. That is where `rsf_promote_finish`
+        // puts the recombined result into scene colour's stand-in.
+        rsf_frame_tap_substitution& finish = plan->items[plan->count++];
+        finish.texture = promote->scratch.texture;
+        finish.shader_view = promote->scratch.shader_view;
+        finish.after_target = promote->composite.original;
         return RSF_PROMOTE_OK;
     }
     rsf_frame_tap_substitution& scene = plan->items[plan->count++];
@@ -454,6 +467,35 @@ extern "C" rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* conte
     draw.mode = RSF_FULLSCREEN_COPY;
     return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view,
                                     source, &draw) == RSF_FULLSCREEN_OK
+               ? RSF_PROMOTE_OK
+               : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
+}
+
+extern "C" rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* context)
+{
+    if (!promote || !context || !promote->ready) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    if (!promote->scene.texture || !promote->composed.texture) {
+        return RSF_PROMOTE_OK;
+    }
+    D3D11_TEXTURE2D_DESC scene{};
+    D3D11_TEXTURE2D_DESC composed{};
+    promote->scene.texture->GetDesc(&scene);
+    promote->composed.texture->GetDesc(&composed);
+    if (scene.Format == composed.Format) {
+        static_cast<ID3D11DeviceContext*>(context)->CopyResource(promote->scene.texture,
+                                                                 promote->composed.texture);
+        return RSF_PROMOTE_OK;
+    }
+    if (!promote->seed_pass || !promote->scene.target_view || !promote->composed.shader_view) {
+        return RSF_PROMOTE_OK;
+    }
+    rsf_fullscreen_draw draw{};
+    draw.struct_size = sizeof(draw);
+    draw.mode = RSF_FULLSCREEN_COPY;
+    return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view,
+                                    promote->composed.shader_view, &draw) == RSF_FULLSCREEN_OK
                ? RSF_PROMOTE_OK
                : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
 }
