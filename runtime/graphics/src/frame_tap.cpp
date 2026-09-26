@@ -190,6 +190,15 @@ struct Tap {
     // Diverting. Armed separately from the candidate sets, so classification can run for a whole
     // milestone with nothing moved.
     std::atomic<uint32_t> divert_armed{0};
+    // The nudge: asked before a candidate draw, moves its viewport for that draw only.
+    std::atomic<rsf_frame_tap_nudge_fn> nudge{nullptr};
+    std::atomic<void*> nudge_user{nullptr};
+    std::atomic<uint32_t> draws_nudged{0};
+    struct NudgeState {
+        bool active = false;
+        UINT viewport_count = 0;
+        D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+    } nudge_state;
     ID3D11RenderTargetView* layer_target = nullptr;
     ID3D11Texture2D* layer_texture = nullptr;
     uint32_t layer_width = 0;
@@ -885,6 +894,55 @@ bool begin_divert(Tap& self, ID3D11DeviceContext* context,
  * Called with the re-entry guard already held, because everything below issues context calls that
  * would otherwise be recognised as the game's own and written into the shadow. That is the case a
  * flag rather than a depth could not survive, and it is now reachable. */
+// Move a candidate draw's viewport by what the nudge callback asks, for that draw only. See
+// `rsf_frame_tap_set_nudge`. Called after try_divert declined, with the guard held.
+void begin_nudge(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT element_count)
+{
+    Tap::NudgeState& state = self.nudge_state;
+    state.active = false;
+    const rsf_frame_tap_nudge_fn nudge = self.nudge.load(std::memory_order_acquire);
+    if (!nudge || !candidate_passes(self)) {
+        return;
+    }
+    rsf_frame_tap_target_draw facts;
+    rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
+    fill_divert_facts(self, indexed, element_count, facts, inputs);
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    if (!nudge(self.nudge_user.load(std::memory_order_relaxed), &facts, &offset_x, &offset_y) ||
+        (offset_x == 0.0f && offset_y == 0.0f)) {
+        return;
+    }
+    state.viewport_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    context->RSGetViewports(&state.viewport_count, state.viewports);
+    if (state.viewport_count == 0 || !self.original_set_viewports) {
+        return;
+    }
+    // Render pixels to the pixels of whatever is bound: a promoted target is drawn with the
+    // plan's scale applied to the game's viewport.
+    const float scale_x = self.target_substituted ? self.plan.viewport_scale_x : 1.0f;
+    const float scale_y = self.target_substituted ? self.plan.viewport_scale_y : 1.0f;
+    D3D11_VIEWPORT moved[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    for (UINT index = 0; index < state.viewport_count; ++index) {
+        moved[index] = state.viewports[index];
+        moved[index].TopLeftX += offset_x * scale_x;
+        moved[index].TopLeftY += offset_y * scale_y;
+    }
+    self.original_set_viewports(context, state.viewport_count, moved);
+    state.active = true;
+    self.draws_nudged.fetch_add(1, std::memory_order_relaxed);
+}
+
+void end_nudge(Tap& self, ID3D11DeviceContext* context)
+{
+    Tap::NudgeState& state = self.nudge_state;
+    if (!state.active) {
+        return;
+    }
+    self.original_set_viewports(context, state.viewport_count, state.viewports);
+    state.active = false;
+}
+
 bool try_divert(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT element_count)
 {
     if (self.divert_armed.load(std::memory_order_relaxed) == 0 || !candidate_passes(self)) {
@@ -1815,11 +1873,15 @@ void STDMETHODCALLTYPE hooked_indexed_instanced(ID3D11DeviceContext* c, UINT n, 
     // context calls of its own and they are not the game's.
     const ReentryGuard guard;
     const bool moved = try_divert(s, c, true, n);
+    if (!moved) {
+        begin_nudge(s, c, true, n);
+    }
     forward(c, n, instances, start, base, first);
     refresh_hooks(s);
     if (moved) {
         end_divert(s, c);
     }
+    end_nudge(s, c);
     report_geometry(s, c, 3, n, start, base, instances, first);
     consider_bound_set(s, c);
     consider_target_draw(s, c, true, n);
@@ -1837,11 +1899,15 @@ void STDMETHODCALLTYPE hooked_instanced(ID3D11DeviceContext* c, UINT n, UINT ins
     }
     const ReentryGuard guard;
     const bool moved = try_divert(s, c, false, n);
+    if (!moved) {
+        begin_nudge(s, c, false, n);
+    }
     forward(c, n, instances, start, first);
     refresh_hooks(s);
     if (moved) {
         end_divert(s, c);
     }
+    end_nudge(s, c);
     report_geometry(s, c, 2, n, start, 0, instances, first);
     consider_bound_set(s, c);
     consider_target_draw(s, c, false, n);
@@ -2139,11 +2205,15 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
     }
     const ReentryGuard guard;
     const bool moved = try_divert(self, context, true, index_count);
+    if (!moved) {
+        begin_nudge(self, context, true, index_count);
+    }
     forward(context, index_count, start_index, base_vertex);
     refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
     }
+    end_nudge(self, context);
     report_geometry(self, context, 1, index_count, start_index, base_vertex);
     consider_bound_set(self, context);
     consider_target_draw(self, context, true, index_count);
@@ -2164,11 +2234,15 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
     }
     const ReentryGuard guard;
     const bool moved = try_divert(self, context, false, vertex_count);
+    if (!moved) {
+        begin_nudge(self, context, false, vertex_count);
+    }
     forward(context, vertex_count, start_vertex);
     refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
     }
+    end_nudge(self, context);
     report_geometry(self, context, 0, vertex_count, start_vertex, 0);
     consider_bound_set(self, context);
     consider_target_draw(self, context, false, vertex_count);
@@ -2379,6 +2453,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         // rather than reaching for views the caller is about to release.
         self.plan_active.store(false, std::memory_order_relaxed);
         self.divert_armed.store(0, std::memory_order_relaxed);
+        self.nudge.store(nullptr, std::memory_order_relaxed);
         // Off before the table goes back, so a hook still in flight cannot re-apply what this is
         // removing. Then everything the table names, the pass-throughs included, back to whatever
         // the runtime last had there. On a runtime that rewrites its table that is the variant for
@@ -2526,6 +2601,15 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture)
     }
     self.input_watch = texture;
     self.input_watch_dirty = true;
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_nudge(rsf_frame_tap_nudge_fn nudge, void* user)
+{
+    Tap& self = tap();
+    // The user first, so a draw that sees the new callback sees its user too.
+    self.nudge_user.store(user, std::memory_order_relaxed);
+    self.nudge.store(nudge, std::memory_order_release);
     return RSF_FRAME_TAP_OK;
 }
 
@@ -2689,5 +2773,6 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* s
         static_cast<uint32_t>(self.divert_refused.load(std::memory_order_relaxed));
     status->divert_last_refusal = self.divert_last_refusal.load(std::memory_order_relaxed);
     status->vtable_refreshes = self.vtable_refreshes.load(std::memory_order_relaxed);
+    status->draws_nudged = self.draws_nudged.load(std::memory_order_relaxed);
     return RSF_FRAME_TAP_OK;
 }

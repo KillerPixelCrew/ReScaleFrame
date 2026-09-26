@@ -165,6 +165,12 @@ typedef struct rsf_bridge_actions {
     void (*set_jitter)(unsigned long open);
     unsigned long (*jitter_open)(void);
     unsigned long (*jitter_available)(void);
+    /* This frame's main-view jitter in render pixels, as the engine stored it on the view, or zero
+       when there is none this frame. Called on the render thread from inside a draw, so it must
+       not block. `jitter_frame_ended` forgets the view at present, so a view from an earlier frame
+       is never read. */
+    int (*jitter_pixels)(float* x, float* y);
+    void (*jitter_frame_ended)(void);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);

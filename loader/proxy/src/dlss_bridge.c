@@ -1654,6 +1654,29 @@ static void* back_buffer_view(void* swapchain)
  * right. A converter rasterizing its widget must stay where it is or the quads read an empty
  * texture. Modulate is counted and never moved, because it writes colour only and a transparent
  * layer keeps nothing of it. */
+/* Take the main view's jitter back out of a widget quad.
+
+   Measured 26 September 2026 from a recording of the main menu with promotion on: the menu text
+   moved by about two output pixels between consecutive frames while the background held still.
+   AC7's interface panels are geometry drawn with the main camera's projection, which carries the
+   jitter, into a layer the reconstruction never sees, so nothing resolves it. The jitter is a
+   constant screen-space shift by the sample the engine stored on the view, so moving the draw's
+   viewport by minus that sample puts the panel back where an unjittered projection would. */
+static int ui_nudge(void* user, const rsf_frame_tap_target_draw* draw, float* offset_x,
+                    float* offset_y)
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    (void)user;
+    if (!draw || !bridge.actions.jitter_pixels || !bridge.actions.jitter_pixels(&x, &y) ||
+        classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+        return 0;
+    }
+    *offset_x = -x;
+    *offset_y = -y;
+    return 1;
+}
+
 static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_draw* draw)
 {
     rsf_ac7_draw_class verdict;
@@ -2140,6 +2163,10 @@ static void on_present(void* user, void* swapchain)
     bridge.translucent_draws = 0;
 
     rsf_ac7_scene_color_end_frame(&bridge.color_selection);
+    /* The engine's view for this frame is gone after present; the next frame records its own. */
+    if (bridge.actions.jitter_frame_ended) {
+        bridge.actions.jitter_frame_ended();
+    }
     rsf_depth_replay_end_frame(bridge.depth_replay[0]);
     rsf_depth_replay_end_frame(bridge.depth_replay[1]);
     show_result(swapchain);
@@ -2569,6 +2596,9 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     }
 
     tapped = rsf_frame_tap_install(bridge.context, &tap);
+    if (tapped == RSF_FRAME_TAP_OK) {
+        rsf_frame_tap_set_nudge(ui_nudge, NULL);
+    }
     if (tapped != RSF_FRAME_TAP_OK) {
         rsf_depth_replay_destroy(bridge.depth_replay[0]);
         rsf_depth_replay_destroy(bridge.depth_replay[1]);
@@ -2737,9 +2767,10 @@ void rsf_bridge_report(void)
        what it always drew. */
     if (bridge.reinsert_on) {
         say("reinsert: on, %lu frames, %lu evaluates at the gate, %lu bindings substituted, "
-            "%lu targets redirected, %lu gates opened",
+            "%lu targets redirected, %lu gates opened, %lu interface draws unjittered",
             bridge.reinsert_frames, bridge.gate_evaluates, (unsigned long)tap.inputs_substituted,
-            (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened);
+            (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened,
+            (unsigned long)tap.draws_nudged);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks
