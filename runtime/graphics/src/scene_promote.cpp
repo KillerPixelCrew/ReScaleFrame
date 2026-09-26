@@ -97,13 +97,40 @@ void say(const rsf_promote* promote, const char* format, ...)
     promote->log(promote->log_user, message);
 }
 
+// The format a view on a texture takes: the one the game binds with, where the tail says, and
+// otherwise the texture's own format with a typeless family resolved to its plain UNORM member,
+// because a view on a typeless texture has to name one.
+DXGI_FORMAT typed_view_format(DXGI_FORMAT texture_format, uint32_t hint)
+{
+    if (hint != 0) {
+        return static_cast<DXGI_FORMAT>(hint);
+    }
+    switch (texture_format) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+        return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+        return DXGI_FORMAT_B8G8R8X8_UNORM;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+        return DXGI_FORMAT_R10G10B10A2_UNORM;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+        return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case DXGI_FORMAT_R11G11B10_FLOAT:
+    default:
+        return texture_format;
+    }
+}
+
 // Build an output resolution stand-in for one of the game's render resolution targets.
 //
 // The format is copied from the original rather than chosen. What goes into these targets is the
 // game's own tonemapped output and its own interface, drawn by the game's own shaders, so the
-// target they write has to be the one they expect in everything except its size.
+// target they write has to be the one they expect in everything except its size. The views are
+// typed, see `typed_view_format`: the first Windows run refused every promotion because a view on
+// a typeless texture cannot be created without a format.
 bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacement& out,
-                       const char* what)
+                       const char* what, uint32_t view_format_hint)
 {
     release_replacement(out);
     if (!original) {
@@ -135,9 +162,20 @@ bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacem
         release_replacement(out);
         return false;
     }
-    if (FAILED(promote->device->CreateRenderTargetView(out.texture, nullptr, &out.target_view)) ||
-        FAILED(promote->device->CreateShaderResourceView(out.texture, nullptr, &out.shader_view))) {
-        say(promote, "promote: the %s replacement views could not be created", what);
+    const DXGI_FORMAT view_format = typed_view_format(description.Format, view_format_hint);
+    D3D11_RENDER_TARGET_VIEW_DESC target_description{};
+    target_description.Format = view_format;
+    target_description.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    D3D11_SHADER_RESOURCE_VIEW_DESC shader_description{};
+    shader_description.Format = view_format;
+    shader_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    shader_description.Texture2D.MipLevels = 1;
+    if (FAILED(promote->device->CreateRenderTargetView(out.texture, &target_description,
+                                                       &out.target_view)) ||
+        FAILED(promote->device->CreateShaderResourceView(out.texture, &shader_description,
+                                                         &out.shader_view))) {
+        say(promote, "promote: the %s replacement views could not be created with view format %u",
+            what, unsigned(view_format));
         release_replacement(out);
         return false;
     }
@@ -148,7 +186,7 @@ bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacem
 // Build replacements for a whole set, skipping null entries and refusing duplicates, which a caller
 // collecting targets from several frames can easily hand over twice.
 bool build_set(rsf_promote* promote, void* const* originals, uint32_t offered, Replacement* set,
-               uint32_t capacity, uint32_t& count, const char* what)
+               uint32_t capacity, uint32_t& count, const char* what, uint32_t view_format_hint)
 {
     release_set(set, count);
     for (uint32_t index = 0; index < offered && index < capacity; ++index) {
@@ -166,7 +204,7 @@ bool build_set(rsf_promote* promote, void* const* originals, uint32_t offered, R
         if (seen) {
             continue;
         }
-        if (!build_replacement(promote, original, set[count], what)) {
+        if (!build_replacement(promote, original, set[count], what, view_format_hint)) {
             release_set(set, count);
             return false;
         }
@@ -252,14 +290,15 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
     release_everything(promote);
 
     if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composite),
-                           promote->composite, "composite")) {
+                           promote->composite, "composite", tail->composite_view_format)) {
         return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
     }
     if (!build_set(promote, tail->ui_targets, tail->ui_target_count, promote->ui_targets,
-                   RSF_PROMOTE_MAX_UI_TARGETS, promote->ui_target_count, "interface layer") ||
+                   RSF_PROMOTE_MAX_UI_TARGETS, promote->ui_target_count, "interface layer",
+                   tail->ui_target_view_format) ||
         !build_set(promote, tail->chain_targets, tail->chain_target_count, promote->chain_targets,
-                   RSF_PROMOTE_MAX_CHAIN_TARGETS, promote->chain_target_count,
-                   "chain target")) {
+                   RSF_PROMOTE_MAX_CHAIN_TARGETS, promote->chain_target_count, "chain target",
+                   tail->chain_view_format)) {
         release_everything(promote);
         return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
     }

@@ -6,6 +6,8 @@
 
 #include <windowsx.h>
 
+#include <MinHook.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -56,8 +58,50 @@ struct State {
     // the game's own message dispatch, so anything that could send a message or re-enter the
     // procedure would be re-entering the lock with it.
     std::mutex guard;
+    /* The pointer, in the pixels of the image being presented rather than of the window's client
+       area. The two differ under a DPI scale the process did not opt into: Windows then reports
+       the client area and window messages in logical pixels while the back buffer is the physical
+       size, 1067x600 against 1600x900 at 150 percent, and a pointer kept in client pixels could
+       reach only two thirds of the panel. Raw mouse movement is in physical pixels already;
+       window messages are scaled by the ratio on the way in. The display size is what the last
+       collect passed in, zero until then, in which case client pixels are all there is. */
     float mouse_x = 0.0f;
     float mouse_y = 0.0f;
+    float display_width = 0.0f;
+    float display_height = 0.0f;
+
+    /* The user32 detours that make the real cursor usable while the panel is open.
+
+       This is what SpecialK, ReShade and OptiScaler do, and it is why their panels take a mouse in
+       a game that locks it (ReShade `input_windows.cpp`, SpecialK `input/cursor.cpp` and
+       `input/raw_input.cpp`, read 26 September 2026). A game like AC7 warps the pointer to the
+       centre every frame with SetCursorPos, keeps it inside the window with ClipCursor, hides it
+       with ShowCursor and SetCursor, and steers from raw input. Following raw deltas around all of
+       that, which this module did first, was chunky at best and unusable under a DPI scale. So
+       while the panel is open: the warps are swallowed, the clip is lifted, the cursor is shown,
+       the game is handed the position the cursor had when the panel opened, and the mouse fields of
+       the raw input it reads are zeroed. The real cursor then moves freely and visibly, and the
+       panel reads its absolute position each frame. Everything is put back on close. */
+    struct CursorHooks {
+        bool installed = false;
+        BOOL(WINAPI* set_cursor_pos)(int, int) = nullptr;
+        BOOL(WINAPI* clip_cursor)(const RECT*) = nullptr;
+        BOOL(WINAPI* get_cursor_pos)(LPPOINT) = nullptr;
+        int(WINAPI* show_cursor)(BOOL) = nullptr;
+        HCURSOR(WINAPI* set_cursor)(HCURSOR) = nullptr;
+        UINT(WINAPI* get_raw_input_data)(HRAWINPUT, UINT, LPVOID, PUINT, UINT) = nullptr;
+        UINT(WINAPI* get_raw_input_buffer)(PRAWINPUT, PUINT, UINT) = nullptr;
+        void* targets[7]{};
+        size_t target_count = 0;
+    } cursor;
+    std::mutex cursor_guard;
+    RECT last_clip{};
+    bool have_clip = false;
+    POINT frozen{};
+    bool have_frozen = false;
+    int cursor_shows = 0;
+    std::atomic<unsigned long> swallowed_warps{0};
+    std::atomic<unsigned long> swallowed_hides{0};
     /* The previous report's raw position, and whether there has been one. The overlay's pointer
        moves by the distance between reports rather than to the position in them, because a game
        that warps the pointer makes the position meaningless. See record_mouse_position. */
@@ -164,6 +208,11 @@ uint32_t overlay_button_bit(uint32_t virtual_key)
    from it: while the panel is open, raw movement must not also steer the aircraft. */
 void record_raw_mouse(State& self, HWND window, LPARAM lparam)
 {
+    // With the cursor freed by the detours, the panel reads the real pointer each frame and raw
+    // deltas would count every movement twice. This path is the fallback for when they are not.
+    if (self.cursor.installed) {
+        return;
+    }
     UINT size = 0;
     if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, nullptr, &size,
                         sizeof(RAWINPUTHEADER)) != 0 ||
@@ -196,9 +245,12 @@ void record_raw_mouse(State& self, HWND window, LPARAM lparam)
     self.have_raw_input.store(true, std::memory_order_release);
     self.mouse_x += static_cast<float>(dx);
     self.mouse_y += static_cast<float>(dy);
-    if (have_client) {
-        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), width - 1.0f);
-        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), height - 1.0f);
+    // Raw movement is physical, so the bound is the presented image where that is known.
+    const float bound_x = self.display_width > 0.0f ? self.display_width : width;
+    const float bound_y = self.display_height > 0.0f ? self.display_height : height;
+    if (bound_x > 0.0f && bound_y > 0.0f) {
+        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), bound_x - 1.0f);
+        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), bound_y - 1.0f);
     }
 }
 
@@ -224,6 +276,10 @@ void record_mouse_position(State& self, HWND window, LPARAM lparam)
     const float x = static_cast<float>(GET_X_LPARAM(lparam));
     const float y = static_cast<float>(GET_Y_LPARAM(lparam));
 
+    // The freed cursor is polled each frame instead. See the detours.
+    if (self.cursor.installed) {
+        return;
+    }
     // Raw input has taken over, and following both would count every movement twice.
     if (self.have_raw_input.load(std::memory_order_acquire)) {
         return;
@@ -242,15 +298,21 @@ void record_mouse_position(State& self, HWND window, LPARAM lparam)
     const float centre_y = std::floor(height * 0.5f);
 
     std::lock_guard<std::mutex> lock(self.guard);
+    // Client pixels to presented pixels. One where the two agree, which they do in a DPI-aware
+    // process and in exclusive fullscreen.
+    const float scale_x = self.display_width > 0.0f ? self.display_width / width : 1.0f;
+    const float scale_y = self.display_height > 0.0f ? self.display_height / height : 1.0f;
+    const float bound_x = self.display_width > 0.0f ? self.display_width : width;
+    const float bound_y = self.display_height > 0.0f ? self.display_height : height;
     const bool is_warp = x == centre_x && y == centre_y;
     if (!self.have_last_report) {
         self.have_last_report = true;
     } else if (!is_warp) {
-        self.mouse_x += x - self.last_report_x;
-        self.mouse_y += y - self.last_report_y;
+        self.mouse_x += (x - self.last_report_x) * scale_x;
+        self.mouse_y += (y - self.last_report_y) * scale_y;
         // Kept inside the window, or the pointer wanders off and takes several sweeps to come back.
-        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), width - 1.0f);
-        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), height - 1.0f);
+        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), bound_x - 1.0f);
+        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), bound_y - 1.0f);
     }
     self.last_report_x = x;
     self.last_report_y = y;
@@ -276,17 +338,268 @@ void seed_cursor_position(State& self)
 {
     HWND window = self.window.load(std::memory_order_relaxed);
     POINT point{};
-    if (!window || !GetCursorPos(&point) || !ScreenToClient(window, &point)) {
+    // The genuine GetCursorPos where it is detoured: the detour would answer with the frozen
+    // position, which is exactly the one the panel must not start from.
+    const bool have_point = self.cursor.installed ? self.cursor.get_cursor_pos(&point) != FALSE
+                                                  : GetCursorPos(&point) != FALSE;
+    if (!window || !have_point || !ScreenToClient(window, &point)) {
         return;
     }
     // Whatever the game left the cursor at. A game that hid and centred it reports the centre,
-    // which is as good an answer as exists before the first move.
+    // which is as good an answer as exists before the first move. Scaled from client pixels to
+    // presented pixels like a window message.
+    RECT client{};
+    const bool have_client = GetClientRect(window, &client) && client.right > 0 && client.bottom > 0;
     std::lock_guard<std::mutex> lock(self.guard);
-    self.mouse_x = static_cast<float>(point.x);
-    self.mouse_y = static_cast<float>(point.y);
+    const float scale_x = have_client && self.display_width > 0.0f
+                              ? self.display_width / static_cast<float>(client.right)
+                              : 1.0f;
+    const float scale_y = have_client && self.display_height > 0.0f
+                              ? self.display_height / static_cast<float>(client.bottom)
+                              : 1.0f;
+    self.mouse_x = static_cast<float>(point.x) * scale_x;
+    self.mouse_y = static_cast<float>(point.y) * scale_y;
     /* Forget the previous report, so the first move after opening is measured from the report that
        follows rather than from wherever the pointer was when the panel was last closed. */
     self.have_last_report = false;
+}
+
+// The detours. Each forwards to the genuine function through MinHook's trampoline unless the panel
+// is open and the call is one the game makes to own the mouse.
+
+BOOL WINAPI hooked_set_cursor_pos(int x, int y)
+{
+    State& self = state();
+    if (self.visible.load(std::memory_order_acquire)) {
+        // The warp to the centre. Swallowed, and the game is told it worked.
+        self.swallowed_warps.fetch_add(1, std::memory_order_relaxed);
+        return TRUE;
+    }
+    return self.cursor.set_cursor_pos(x, y);
+}
+
+BOOL WINAPI hooked_clip_cursor(const RECT* rect)
+{
+    State& self = state();
+    {
+        std::lock_guard<std::mutex> lock(self.cursor_guard);
+        if (rect) {
+            self.last_clip = *rect;
+            self.have_clip = true;
+        } else {
+            self.have_clip = false;
+        }
+    }
+    if (self.visible.load(std::memory_order_acquire)) {
+        // Some games clip to a single pixel to keep the pointer still. Lifted for the panel; what
+        // the game asked for is remembered and put back on close.
+        return self.cursor.clip_cursor(nullptr);
+    }
+    return self.cursor.clip_cursor(rect);
+}
+
+BOOL WINAPI hooked_get_cursor_pos(LPPOINT point)
+{
+    State& self = state();
+    if (point && self.visible.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(self.cursor_guard);
+        if (self.have_frozen) {
+            // The game sees the pointer where it was when the panel opened, so nothing it derives
+            // from the position moves while the panel is used.
+            *point = self.frozen;
+            return TRUE;
+        }
+    }
+    return self.cursor.get_cursor_pos(point);
+}
+
+int WINAPI hooked_show_cursor(BOOL show)
+{
+    State& self = state();
+    if (!show && self.visible.load(std::memory_order_acquire)) {
+        // The game hiding the cursor, often every frame. Not applied; the count it would have seen
+        // is reported so its own bookkeeping stays consistent.
+        self.swallowed_hides.fetch_add(1, std::memory_order_relaxed);
+        const int count = self.cursor.show_cursor(TRUE);
+        self.cursor.show_cursor(FALSE);
+        return count - 1;
+    }
+    return self.cursor.show_cursor(show);
+}
+
+HCURSOR WINAPI hooked_set_cursor(HCURSOR handle)
+{
+    State& self = state();
+    if (self.visible.load(std::memory_order_acquire) && !handle) {
+        // A null cursor is the other way a game hides it. The panel wants an arrow.
+        return self.cursor.set_cursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
+    }
+    return self.cursor.set_cursor(handle);
+}
+
+// Zero the mouse in one raw input record, so a game steering from it holds still under the panel.
+// Buttons too: a click on the panel must not fire the cannon.
+void neutralise_raw_mouse(RAWINPUT* raw, size_t bytes)
+{
+    if (bytes >= sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE) && raw->header.dwType == RIM_TYPEMOUSE) {
+        raw->data.mouse.lLastX = 0;
+        raw->data.mouse.lLastY = 0;
+        raw->data.mouse.usButtonFlags = 0;
+        raw->data.mouse.usButtonData = 0;
+    }
+}
+
+UINT WINAPI hooked_get_raw_input_data(HRAWINPUT handle, UINT command, LPVOID data, PUINT size,
+                                      UINT header_size)
+{
+    State& self = state();
+    const UINT result = self.cursor.get_raw_input_data(handle, command, data, size, header_size);
+    if (result != static_cast<UINT>(-1) && data && command == RID_INPUT &&
+        self.visible.load(std::memory_order_acquire)) {
+        neutralise_raw_mouse(static_cast<RAWINPUT*>(data), result);
+    }
+    return result;
+}
+
+UINT WINAPI hooked_get_raw_input_buffer(PRAWINPUT data, PUINT size, UINT header_size)
+{
+    State& self = state();
+    const UINT result = self.cursor.get_raw_input_buffer(data, size, header_size);
+    if (result == static_cast<UINT>(-1) || !data || result == 0 ||
+        !self.visible.load(std::memory_order_acquire)) {
+        return result;
+    }
+    using QWORD = UINT64; // NEXTRAWINPUTBLOCK expects the name
+    RAWINPUT* record = data;
+    for (UINT index = 0; index < result; ++index) {
+        neutralise_raw_mouse(record, record->header.dwSize);
+        record = NEXTRAWINPUTBLOCK(record);
+    }
+    return result;
+}
+
+bool install_cursor_hooks(State& self)
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        say(self, "overlay input: user32 is not loaded, so the cursor stays the game's");
+        return false;
+    }
+    const MH_STATUS initialised = MH_Initialize();
+    if (initialised != MH_OK && initialised != MH_ERROR_ALREADY_INITIALIZED) {
+        say(self, "overlay input: MinHook did not initialise (%d), so the cursor stays the game's",
+            static_cast<int>(initialised));
+        return false;
+    }
+    struct Hook {
+        const char* name;
+        void* detour;
+        void** original;
+    };
+    const Hook hooks[] = {
+        {"SetCursorPos", reinterpret_cast<void*>(&hooked_set_cursor_pos),
+         reinterpret_cast<void**>(&self.cursor.set_cursor_pos)},
+        {"ClipCursor", reinterpret_cast<void*>(&hooked_clip_cursor),
+         reinterpret_cast<void**>(&self.cursor.clip_cursor)},
+        {"GetCursorPos", reinterpret_cast<void*>(&hooked_get_cursor_pos),
+         reinterpret_cast<void**>(&self.cursor.get_cursor_pos)},
+        {"ShowCursor", reinterpret_cast<void*>(&hooked_show_cursor),
+         reinterpret_cast<void**>(&self.cursor.show_cursor)},
+        {"SetCursor", reinterpret_cast<void*>(&hooked_set_cursor),
+         reinterpret_cast<void**>(&self.cursor.set_cursor)},
+        {"GetRawInputData", reinterpret_cast<void*>(&hooked_get_raw_input_data),
+         reinterpret_cast<void**>(&self.cursor.get_raw_input_data)},
+        {"GetRawInputBuffer", reinterpret_cast<void*>(&hooked_get_raw_input_buffer),
+         reinterpret_cast<void**>(&self.cursor.get_raw_input_buffer)},
+    };
+    self.cursor.target_count = 0;
+    for (const Hook& hook : hooks) {
+        void* target = reinterpret_cast<void*>(GetProcAddress(user32, hook.name));
+        MH_STATUS status = target ? MH_CreateHook(target, hook.detour, hook.original)
+                                  : MH_ERROR_FUNCTION_NOT_FOUND;
+        if (status == MH_OK) {
+            status = MH_EnableHook(target);
+            if (status != MH_OK) {
+                MH_RemoveHook(target);
+            }
+        }
+        if (status != MH_OK) {
+            say(self, "overlay input: %s could not be detoured (%d), so the cursor stays the game's",
+                hook.name, static_cast<int>(status));
+            for (size_t index = 0; index < self.cursor.target_count; ++index) {
+                MH_DisableHook(self.cursor.targets[index]);
+                MH_RemoveHook(self.cursor.targets[index]);
+            }
+            self.cursor.target_count = 0;
+            return false;
+        }
+        self.cursor.targets[self.cursor.target_count++] = target;
+    }
+    self.cursor.installed = true;
+    say(self, "overlay input: cursor detours in place, %zu user32 functions", self.cursor.target_count);
+    return true;
+}
+
+void remove_cursor_hooks(State& self)
+{
+    if (!self.cursor.installed) {
+        return;
+    }
+    self.cursor.installed = false;
+    for (size_t index = 0; index < self.cursor.target_count; ++index) {
+        MH_DisableHook(self.cursor.targets[index]);
+        MH_RemoveHook(self.cursor.targets[index]);
+    }
+    self.cursor.target_count = 0;
+}
+
+// Take the cursor for the panel, or give it back. Always through the genuine functions.
+void set_cursor_capture(State& self, bool on)
+{
+    if (!self.cursor.installed) {
+        return;
+    }
+    if (on) {
+        POINT point{};
+        if (self.cursor.get_cursor_pos(&point)) {
+            std::lock_guard<std::mutex> lock(self.cursor_guard);
+            self.frozen = point;
+            self.have_frozen = true;
+        }
+        self.cursor.clip_cursor(nullptr);
+        int count = self.cursor.show_cursor(TRUE);
+        int shows = 1;
+        while (count < 0 && shows < 64) {
+            count = self.cursor.show_cursor(TRUE);
+            ++shows;
+        }
+        self.cursor_shows = shows;
+        self.cursor.set_cursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
+        self.swallowed_warps.store(0, std::memory_order_relaxed);
+        self.swallowed_hides.store(0, std::memory_order_relaxed);
+        say(self, "overlay input: cursor freed for the panel, shown after %d call%s", shows,
+            shows == 1 ? "" : "s");
+    } else {
+        for (int index = 0; index < self.cursor_shows; ++index) {
+            self.cursor.show_cursor(FALSE);
+        }
+        self.cursor_shows = 0;
+        RECT clip{};
+        bool restore = false;
+        {
+            std::lock_guard<std::mutex> lock(self.cursor_guard);
+            self.have_frozen = false;
+            restore = self.have_clip;
+            clip = self.last_clip;
+        }
+        if (restore) {
+            self.cursor.clip_cursor(&clip);
+        }
+        say(self, "overlay input: cursor returned to the game; swallowed %lu warps and %lu hides "
+                  "while the panel was open",
+            self.swallowed_warps.load(std::memory_order_relaxed),
+            self.swallowed_hides.load(std::memory_order_relaxed));
+    }
 }
 
 void apply_visibility(State& self, bool visible)
@@ -313,6 +626,7 @@ void apply_visibility(State& self, bool visible)
     }
     self.last_visibility_change.store(now, std::memory_order_release);
     clear_transient_input(self);
+    set_cursor_capture(self, visible);
     if (visible) {
         seed_cursor_position(self);
     }
@@ -634,6 +948,9 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
         say(self, "overlay input: window procedure changed during install, forwarding to the "
                   "displaced one");
     }
+    // The cursor detours are not a reason to fail: without them the message path still works, as
+    // far as it ever did, and the log has said which it is.
+    install_cursor_hooks(self);
     return RSF_OVERLAY_INPUT_OK;
 }
 
@@ -675,6 +992,10 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
     // the A variants named in the install log would undo that, and they are untested.
     SetWindowLongPtrW(target, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(
                                                 self.original.load(std::memory_order_acquire)));
+    if (self.visible.load(std::memory_order_acquire)) {
+        set_cursor_capture(self, false);
+    }
+    remove_cursor_hooks(self);
     self.installed.store(false, std::memory_order_release);
     self.visible.store(0, std::memory_order_release);
     self.window.store(nullptr, std::memory_order_relaxed);
@@ -726,18 +1047,37 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
 
     out->visible = self.visible.load(std::memory_order_acquire);
     {
-        // Mouse position is passed through in client pixels with no scaling, which assumes the
-        // client area maps one to one onto the image being presented. That holds for a borderless
-        // window at the desktop resolution and for exclusive fullscreen at the native mode, and it
-        // is why the display size comes from the caller: this module has no view of the swap chain
-        // and would otherwise be guessing at the same number the renderer already knows.
-        //
-        // It does not hold when DXGI stretches a smaller back buffer to the window, when the game
-        // letterboxes to keep an aspect ratio, or under a per monitor DPI scale the process did not
-        // opt into. In those cases clicks land offset from the cursor. Correcting it needs the
-        // rectangle the back buffer occupies inside the client area, which is the renderer's
-        // knowledge, not this module's. Untested against the game either way.
+        // The pointer is kept in the pixels of the presented image, which is why the display size
+        // comes from the caller: this module has no view of the swap chain and would otherwise be
+        // guessing at the same number the renderer already knows. Window messages arrive in client
+        // pixels and are scaled by the ratio of the two on the way in, which is what a DPI scale
+        // the process did not opt into needs (AC7 on a 150 percent desktop: a 1067x600 client area
+        // presenting 1600x900). A game that letterboxes inside its client area would still need the
+        // rectangle the back buffer occupies, which nothing here knows.
         std::lock_guard<std::mutex> lock(self.guard);
+        // Remembered for the message handlers, which scale client pixels to this. The pointer is
+        // already in presented pixels, so it passes through.
+        self.display_width = static_cast<float>(display_width);
+        self.display_height = static_cast<float>(display_height);
+        if (out->visible && self.cursor.installed) {
+            // The real cursor, freed by the detours: read where it is, every frame, through the
+            // genuine function, and scaled from client pixels to presented pixels. Nothing here
+            // sends a message, so the lock is safe to hold.
+            HWND window = self.window.load(std::memory_order_relaxed);
+            POINT point{};
+            RECT client{};
+            if (window && self.cursor.get_cursor_pos(&point) && ScreenToClient(window, &point) &&
+                GetClientRect(window, &client) && client.right > 0 && client.bottom > 0) {
+                const float scale_x = self.display_width > 0.0f
+                                          ? self.display_width / static_cast<float>(client.right)
+                                          : 1.0f;
+                const float scale_y = self.display_height > 0.0f
+                                          ? self.display_height / static_cast<float>(client.bottom)
+                                          : 1.0f;
+                self.mouse_x = static_cast<float>(point.x) * scale_x;
+                self.mouse_y = static_cast<float>(point.y) * scale_y;
+            }
+        }
         out->mouse_x = self.mouse_x;
         out->mouse_y = self.mouse_y;
         out->mouse_buttons = self.buttons;

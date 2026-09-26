@@ -241,9 +241,20 @@ insertion point is wrong. Five runs on 7 September 2026.
       draw (then it is promoted) or by a copy (then the log says it was never drawn into while
       watched, and a `CopyResource` hook is the next piece), and whether dropping the scene depth at
       the quads costs anything visible on the briefing.
-- [ ] The run: F6 on the title screen and the briefing, judged on two things separately: the front
-      end sharp, and the menu shimmer gone without closing the jitter gate. The first Windows game
-      run of any of this; see the vtable finding above for why none could have worked before.
+- [x] The first Windows game run, 26 September, which took the day: the game crashed at launch
+      (Steam's overlay and our vtable hook on Present forwarding to each other), then presented
+      nothing (the genuine entry is patched too, by RivaTuner on this machine), then found no
+      scene pass (the swap chain size was read once, at its DPI-scaled startup size), then
+      refused every F6 (typeless surfaces need typed views). Each is measured and fixed in
+      [the coexistence note](research/windows-present-hook-coexistence.md). At the end of it:
+      Streamline 2.14.1 loads, DLSS evaluates every frame at 800x450 to 1600x900 with zero
+      refusals, the panel's mouse works the way SpecialK's does, and F6 promotion ran for over
+      13,000 frames with the composite, the chain target and two interface layers promoted, two
+      depth mismatches per frame where the quads drop the scene's depth, and the layers aging out
+      of the plan when the game moved to a screen without widget quads. Whether the picture is
+      right is the next line.
+- [ ] The judgement: the front end sharp, and the menu shimmer gone without closing the jitter
+      gate. Not yet written down; the run above ended with the picture in front of the user.
 - [ ] egui drawn into the layer, so it rides generated frames later.
 
 M4, the presentation bridge, has its riskiest piece answered as far as this machine can answer it.

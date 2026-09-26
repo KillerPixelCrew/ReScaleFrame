@@ -83,6 +83,38 @@ extern "C" rsf_ui_result rsf_ui_registry_add(rsf_ui_registry* registry, rsf_ui_s
     return RSF_UI_OK;
 }
 
+extern "C" int rsf_ui_registry_note_recent(rsf_ui_registry* registry, rsf_ui_set set,
+                                           void* object)
+{
+    if (!registry || !object || set >= RSF_UI_SET_COUNT) {
+        return 0;
+    }
+    Set& target = registry->sets[set];
+    // The same target again, which is nearly every call: a converter fills its target with many
+    // Slate draws in a row. The back of the set is checked first so that costs one comparison.
+    if (target.count != 0 && target.entries[target.count - 1] == object) {
+        return 0;
+    }
+    for (uint32_t index = 0; index < target.count; ++index) {
+        if (target.entries[index] != object) {
+            continue;
+        }
+        std::memmove(&target.entries[index], &target.entries[index + 1],
+                     (target.count - 1 - index) * sizeof(void*));
+        target.entries[target.count - 1] = object;
+        return 0;
+    }
+    if (target.count >= capacity_for(set)) {
+        // The front is the one seen longest ago.
+        std::memmove(&target.entries[0], &target.entries[1], (target.count - 1) * sizeof(void*));
+        --target.count;
+        ++registry->counters.evicted[set];
+    }
+    target.entries[target.count++] = object;
+    ++registry->counters.recorded[set];
+    return 1;
+}
+
 extern "C" void rsf_ui_registry_forget(rsf_ui_registry* registry, void* object)
 {
     if (!registry || !object) {

@@ -135,6 +135,39 @@ int main()
               "being a guess.");
     }
 
+    stage("a working set evicts the least recent instead of refusing");
+    {
+        rsf_ui_registry* working = rsf_ui_registry_create(RSF_UI_IDENTIFY_ABI_VERSION);
+        static char targets[RSF_UI_MAX_WIDGET_TARGETS + 2];
+        int changed = 0;
+        for (uint32_t index = 0; index < RSF_UI_MAX_WIDGET_TARGETS; ++index) {
+            changed += rsf_ui_registry_note_recent(working, RSF_UI_SET_WIDGET_TARGET,
+                                                   &targets[index]);
+        }
+        check(changed == int(RSF_UI_MAX_WIDGET_TARGETS),
+              "Every new target changes the membership.");
+        // The first one is seen again, so it becomes the most recent and the second is now oldest.
+        check(rsf_ui_registry_note_recent(working, RSF_UI_SET_WIDGET_TARGET, &targets[0]) == 0,
+              "Seeing a member again changes nothing a caller has to republish.");
+        check(rsf_ui_registry_note_recent(working, RSF_UI_SET_WIDGET_TARGET,
+                                          &targets[RSF_UI_MAX_WIDGET_TARGETS]) == 1,
+              "A new target on a full set is taken, not refused: this is what the briefing needed.");
+        check(rsf_ui_registry_contains(working, RSF_UI_SET_WIDGET_TARGET,
+                                       &targets[RSF_UI_MAX_WIDGET_TARGETS]),
+              "The new target must be a member.");
+        check(rsf_ui_registry_contains(working, RSF_UI_SET_WIDGET_TARGET, &targets[0]),
+              "The target seen again must have survived.");
+        check(!rsf_ui_registry_contains(working, RSF_UI_SET_WIDGET_TARGET, &targets[1]),
+              "The one seen longest ago must be the one that went.");
+        rsf_ui_registry_counters counters{};
+        counters.struct_size = sizeof(counters);
+        rsf_ui_registry_get_counters(working, &counters);
+        check(counters.evicted[RSF_UI_SET_WIDGET_TARGET] == 1 &&
+                  counters.refused_full[RSF_UI_SET_WIDGET_TARGET] == 0,
+              "The eviction is counted, and nothing was refused.");
+        rsf_ui_registry_destroy(working);
+    }
+
     stage("arguments are checked");
     {
         check(rsf_ui_registry_add(nullptr, RSF_UI_SET_SLATE_LAYOUT, &scene) ==

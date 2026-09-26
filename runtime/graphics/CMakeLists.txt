@@ -21,4 +21,9 @@ target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/i
 target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
 target_link_libraries(rsf_graphics PUBLIC d3d11 dxgi)
+target_link_libraries(rsf_graphics PRIVATE minhook)
+# MinHook's length disassembler, for building a trampoline over a function's bytes as the file has
+# them rather than as memory has them. It is compiled into the library but not exported by its
+# public header.
+target_include_directories(rsf_graphics PRIVATE "${minhook_SOURCE_DIR}/src/hde")
 add_library(ReScaleFrame::Graphics ALIAS rsf_graphics)

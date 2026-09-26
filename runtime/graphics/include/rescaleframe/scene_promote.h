@@ -79,8 +79,11 @@ extern "C" {
 #endif
 
 /* 4: the interface targets found by shape became the ui targets the classifier names, and the
-   chain targets between the tonemap and the interface composite were added. */
-#define RSF_PROMOTE_ABI_VERSION 4u
+   chain targets between the tonemap and the interface composite were added.
+   5: the tail carries the view formats the game binds each surface with, because the surfaces are
+   typeless and a view on a typeless texture has to be told its format; the first Windows run
+   failed every promotion on exactly that. */
+#define RSF_PROMOTE_ABI_VERSION 5u
 /* How many interface layers may be promoted. AC7 alternates between two allocations from frame to
    frame on the briefing, and a screen with more of them should lose none rather than lose the ones
    found last. */
@@ -142,6 +145,14 @@ typedef struct rsf_promote_frame_tail {
     /* What the game is rendering at, which is what viewports have to be scaled from. */
     uint32_t render_width;
     uint32_t render_height;
+    /* The DXGI format of the render target view the game binds each surface with, as the frame
+       tap reports it. Unreal allocates its targets typeless and decides sRGB or not per view, so
+       the replacement's views take this format rather than the texture's; zero means derive it,
+       which maps a typeless family to its plain UNORM member and leaves a typed format alone.
+       Getting it wrong is not a failure but a picture with the wrong transfer curve. */
+    uint32_t composite_view_format;
+    uint32_t ui_target_view_format;
+    uint32_t chain_view_format;
 } rsf_promote_frame_tail;
 
 typedef struct rsf_promote_status {

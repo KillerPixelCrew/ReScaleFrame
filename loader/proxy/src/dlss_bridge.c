@@ -233,6 +233,12 @@ static struct {
     uint32_t chain_target_count;
     unsigned long chain_said;
     unsigned long chain_rescan_countdown;
+    /* The render target view formats the game binds each promoted surface with, from the tap's
+       reports, because the surfaces are typeless and the replacements' views need a format. Zero
+       until seen, which promotion resolves to the plain UNORM member of the family. */
+    uint32_t composite_view_format;
+    uint32_t ui_target_view_format;
+    uint32_t chain_view_format;
     /* Set when either set changes under an installed plan, so the present hook rebuilds it. */
     int plan_stale;
     unsigned long presents;
@@ -997,6 +1003,7 @@ static void confirm_chain_candidate(const rsf_frame_tap_target_draw* draw)
     }
     /* Keeps the candidate's retain. */
     bridge.chain_targets[bridge.chain_target_count++] = candidate;
+    bridge.chain_view_format = draw->target_view_format;
     bridge.plan_stale = 1;
     say("chain target: %p is produced from the composite by a draw with %lu inputs, now one of %u "
         "to promote",
@@ -1137,11 +1144,14 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
      *
      * Ordering works out because the converter fills its texture before anything samples it, so by
      * the time the quads are reached their input is already named. */
+    /* Every such draw, not only the first into a target: the set is a working set of the targets
+       in use now, and a draw into one is what keeps it there. The first Windows run filled a set
+       that only ever added with the menus' 32 targets and refused every one the briefing needed,
+       so the briefing's quads never classified and its interface stayed magnified. */
     if (draw->render_target && draw->render_target != rules.back_buffer &&
-        rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, draw->input_layout) &&
-        !rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_WIDGET_TARGET, draw->render_target)) {
-        if (rsf_ui_registry_add(bridge.ui, RSF_UI_SET_WIDGET_TARGET, draw->render_target) ==
-            RSF_UI_OK) {
+        rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, draw->input_layout)) {
+        if (rsf_ui_registry_note_recent(bridge.ui, RSF_UI_SET_WIDGET_TARGET,
+                                        draw->render_target)) {
             publish_ui_candidates();
         }
     }
@@ -1160,6 +1170,7 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
         bridge.ui_layer_extent[1] = draw->target_height;
         /* And the target itself: it is one of AC7's interface layers, and promotion names it. */
         note_ui_target(draw->render_target);
+        bridge.ui_target_view_format = draw->target_view_format;
     }
     return verdict;
 }
@@ -1243,6 +1254,9 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
        candidates: the intermediates between the tonemap and the interface composite that would
        otherwise downsample the promoted composite back to render resolution. */
     if (draw->watch_index == 1) {
+        if (!bridge.composite_view_format) {
+            bridge.composite_view_format = draw->target_view_format;
+        }
         note_chain_candidates(draw);
     }
 
@@ -1354,6 +1368,7 @@ static void watch_for_stalled_plan(void)
     rsf_frame_tap_set_plan(NULL);
     rsf_resource_release(bridge.composite);
     bridge.composite = NULL;
+    bridge.composite_view_format = 0;
     /* And the chain, which belongs to the composite and goes stale with it. Keeping half of what
        was found is worse than keeping none: a plan that is half stale still redirects and so never
        looks stalled again, which is what a title screen after an intro looked like. The interface
@@ -1824,6 +1839,26 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->reinsert_available =
         (uint32_t)(bridge.started && bridge.composite_found && bridge.scene_color != NULL &&
                    bridge.evaluated > 0);
+    /* Said when it changes, because the panel can only say "not available" and a run where the
+       switch stayed grey had no way to tell which of the four facts was the missing one. */
+    {
+        static unsigned last_reason = 0xffu;
+        const unsigned reason = bridge.started ? 0u : 1u | (bridge.composite_found ? 0u : 2u) |
+                                (bridge.scene_color != NULL ? 0u : 4u) |
+                                (bridge.evaluated > 0 ? 0u : 8u);
+        if (reason != last_reason) {
+            last_reason = reason;
+            if (reason == 0) {
+                say("reinsert: available, the panel switch and F6 will take it");
+            } else {
+                say("reinsert: not available yet: %s%s%s%s",
+                    (reason & 1u) ? "backend not started; " : "",
+                    (reason & 2u) ? "composite not identified; " : "",
+                    (reason & 4u) ? "no scene colour retained; " : "",
+                    (reason & 8u) ? "nothing evaluated yet; " : "");
+            }
+        }
+    }
     stats->render_scale_percent =
         bridge.actions.render_scale_percent ? (uint32_t)bridge.actions.render_scale_percent() : 0u;
     stats->captures_written =
@@ -2272,6 +2307,9 @@ static int install_reinsert_plan(void)
     tail.reconstruction = reconstruction;
     tail.render_width = (uint32_t)bridge.held_width;
     tail.render_height = (uint32_t)bridge.held_height;
+    tail.composite_view_format = bridge.composite_view_format;
+    tail.ui_target_view_format = bridge.ui_target_view_format;
+    tail.chain_view_format = bridge.chain_view_format;
     /* Preparing releases the previous replacements, and the tap must not be left holding views
        onto textures that are gone. Cleared first; the new plan follows within this call. */
     rsf_frame_tap_set_plan(NULL);
@@ -2446,12 +2484,13 @@ void rsf_bridge_report(void)
         rsf_ui_registry_view(bridge.ui, RSF_UI_SET_CANVAS_LAYOUT, &canvas);
         rsf_ui_registry_view(bridge.ui, RSF_UI_SET_WIDGET_TARGET, &widget);
         say("ui: named %lu slate layouts, %lu canvas layouts, %lu widget targets; %lu addresses "
-            "forgotten on reuse, %lu adds refused full",
+            "forgotten on reuse, %lu adds refused full, %lu widget targets evicted as stale",
             (unsigned long)slate, (unsigned long)canvas, (unsigned long)widget,
             (unsigned long)counters.forgotten_on_reuse,
             (unsigned long)(counters.refused_full[RSF_UI_SET_SLATE_LAYOUT] +
                             counters.refused_full[RSF_UI_SET_CANVAS_LAYOUT] +
-                            counters.refused_full[RSF_UI_SET_WIDGET_TARGET]));
+                            counters.refused_full[RSF_UI_SET_WIDGET_TARGET]),
+            (unsigned long)counters.evicted[RSF_UI_SET_WIDGET_TARGET]);
         /* Quiet when nothing has changed, like the rest of this report: a screen that is holding
            still should stop writing rather than filling the log with the same line. */
         for (index = 0; index < 7; ++index) {

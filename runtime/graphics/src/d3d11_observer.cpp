@@ -8,9 +8,13 @@
 
 #include <d3d11.h>
 
+#include <MinHook.h>
+#include <hde64.h>
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -53,6 +57,22 @@ struct Observer {
     create_texture2d_fn original_create = nullptr;
     create_buffer_fn original_create_buffer = nullptr;
     present_fn original_present = nullptr;
+    // Present by detour, which is the route wherever the genuine function could be found.
+    // `present_entry` is the function actually detoured: the outermost foreign hook's own function
+    // when the entry of dxgi's Present is patched, dxgi's Present itself when it is not. See
+    // `install_present_detour` for why it is never the patched entry.
+    bool present_detoured = false;
+    void* present_entry = nullptr;
+    // MinHook's trampoline over the detoured function's own prologue: the rest of that function,
+    // whatever it forwards to, and the genuine body at the end. Where this hook forwards.
+    present_fn present_chain = nullptr;
+    // A trampoline of this module's own over the bytes the file has for the entry, reaching the
+    // genuine body without passing any hook. Where this forwards once another hook has re-patched
+    // the entry over it, and the way out of a loop. Freed on uninstall.
+    present_fn present_genuine = nullptr;
+    void* present_genuine_block = nullptr;
+    // The hook this displaced at the entry, for the log.
+    void* present_displaced = nullptr;
     create_input_layout_fn original_create_input_layout = nullptr;
     create_vertex_shader_fn original_create_vertex_shader = nullptr;
     create_pixel_shader_fn original_create_pixel_shader = nullptr;
@@ -498,9 +518,29 @@ void perform_pending_dump(Observer& self)
     self.constant_bytes_written = constant_bytes;
 }
 
+// Whether this thread is already inside the Present hook. Another hook chaining back into this
+// one is the recursion `genuine_slot` exists to prevent; if it happens anyway, the inner call is
+// refused rather than forwarded, which costs that frame and saves the process.
+thread_local uint32_t present_depth = 0;
+
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interval, UINT flags)
 {
     Observer& self = observer();
+    if (present_depth != 0) {
+        static bool said = false;
+        if (!said && self.options.log) {
+            said = true;
+            self.options.log(self.options.log_user,
+                             "observer: Present re-entered from inside its own hook, so another "
+                             "hook forwards to this one. The inner call goes straight to the "
+                             "genuine Present where that is known, and is refused otherwise");
+        }
+        return self.present_detoured ? self.present_genuine(swapchain, interval, flags) : S_OK;
+    }
+    struct Depth {
+        Depth() { ++present_depth; }
+        ~Depth() { --present_depth; }
+    } depth;
 
     bool need_details = false;
     {
@@ -513,18 +553,36 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
     // Recorded under the lock and reported outside it, because everything in this file is.
     void* replaced_device = nullptr;
     void* presenting_device = nullptr;
-    if (need_details) {
+    // The presented size, from the swap chain on every present rather than once. AC7 creates its
+    // window at the desktop's DPI-scaled size, 1707x1067 on a 2560x1600 desktop at 150 percent,
+    // presents a few frames, and only then resizes the chain to the 1600x900 its settings say. A
+    // size taken once at the first present was the wrong one for the whole run: DLSS was created
+    // for an output that did not exist and every scene target failed the size judgement against it.
+    {
         DXGI_SWAP_CHAIN_DESC desc{};
-        const bool described = SUCCEEDED(swapchain->GetDesc(&desc));
+        if (SUCCEEDED(swapchain->GetDesc(&desc)) && desc.BufferDesc.Width != 0 &&
+            (desc.BufferDesc.Width != self.present_width ||
+             desc.BufferDesc.Height != self.present_height)) {
+            std::lock_guard<std::mutex> lock(self.guard);
+            const uint32_t previous_width = self.present_width;
+            const uint32_t previous_height = self.present_height;
+            self.present_width = desc.BufferDesc.Width;
+            self.present_height = desc.BufferDesc.Height;
+            if (previous_width != 0 && self.options.log) {
+                char message[160];
+                std::snprintf(message, sizeof(message),
+                              "observer: the swap chain is now %ux%u, was %ux%u", self.present_width,
+                              self.present_height, previous_width, previous_height);
+                self.options.log(self.options.log_user, message);
+            }
+        }
+    }
+    if (need_details) {
         ID3D11Device* device = nullptr;
         // A device reached this way covers the case where every texture predates installation.
         swapchain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&device));
 
         std::lock_guard<std::mutex> lock(self.guard);
-        if (described && self.present_width == 0) {
-            self.present_width = desc.BufferDesc.Width;
-            self.present_height = desc.BufferDesc.Height;
-        }
         if (device) {
             /* The presenting device wins, always, even over one already chosen.
 
@@ -575,7 +633,403 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interva
     if (self.options.on_present) {
         self.options.on_present(self.options.on_present_user, swapchain);
     }
-    return self.original_present(swapchain, interval, flags);
+    if (!self.present_detoured) {
+        return self.original_present(swapchain, interval, flags);
+    }
+    // Down the chain: the trampoline over the function this detoured, which continues into
+    // whatever that function forwards to and ends in the genuine body. See
+    // `install_present_detour` for why this is never a function whose entry someone re-asserts.
+    return self.present_chain(swapchain, interval, flags);
+}
+
+// The function a module's own image has in a vtable slot, for a slot another hook has patched.
+//
+// Never forward to another hook. Measured on 26 September 2026, first Windows run: Steam's overlay
+// (`gameoverlayrenderer64.dll`) hooks `IDXGISwapChain::Present` in the same table, notices when its
+// entry is displaced, and re-hooks, taking whatever it displaced as its original. With this
+// module's hook in the slot that made the two forward to each other, and every Present recursed
+// until the stack ran out, sixty-four frames deep in the crash report. The genuine function is not
+// in the table any more by then, but it is in the module on disk: the table is read-only data in
+// `dxgi.dll`, so the slot's unrelocated value can be read from the file at the same RVA and
+// relocated to the loaded base. `current` is what the slot held before this module patched it;
+// it is returned as-is when it already lies inside the owning module.
+// A module's file, read whole, with the module's loaded base and image size beside it.
+struct ModuleImage {
+    HMODULE module = nullptr;
+    const unsigned char* base = nullptr;
+    size_t image_size = 0;
+    uint64_t preferred_base = 0;
+    wchar_t path[MAX_PATH] = L"?";
+    std::vector<unsigned char> bytes;
+};
+
+bool read_module_image(const void* inside, ModuleImage& out, char* message, size_t size)
+{
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            static_cast<LPCWSTR>(inside), &out.module)) {
+        std::snprintf(message, size, "%p is not inside any module", inside);
+        return false;
+    }
+    out.base = reinterpret_cast<const unsigned char*>(out.module);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(out.base);
+    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(out.base + dos->e_lfanew);
+    out.image_size = headers->OptionalHeader.SizeOfImage;
+    if (!GetModuleFileNameW(out.module, out.path, MAX_PATH)) {
+        std::snprintf(message, size, "the module's path could not be read");
+        return false;
+    }
+    HANDLE file = CreateFileW(out.path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        std::snprintf(message, size, "%ls could not be opened", out.path);
+        return false;
+    }
+    LARGE_INTEGER length{};
+    if (GetFileSizeEx(file, &length) && length.QuadPart > 0 && length.QuadPart < (1 << 28)) {
+        out.bytes.resize(static_cast<size_t>(length.QuadPart));
+        DWORD read = 0;
+        if (!ReadFile(file, out.bytes.data(), static_cast<DWORD>(out.bytes.size()), &read,
+                      nullptr) ||
+            read != out.bytes.size()) {
+            out.bytes.clear();
+        }
+    }
+    CloseHandle(file);
+    if (out.bytes.size() < sizeof(IMAGE_DOS_HEADER)) {
+        std::snprintf(message, size, "%ls could not be read", out.path);
+        return false;
+    }
+    const auto* file_dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(out.bytes.data());
+    if (static_cast<size_t>(file_dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > out.bytes.size()) {
+        std::snprintf(message, size, "%ls has no usable headers", out.path);
+        return false;
+    }
+    const auto* file_headers =
+        reinterpret_cast<const IMAGE_NT_HEADERS64*>(out.bytes.data() + file_dos->e_lfanew);
+    out.preferred_base = file_headers->OptionalHeader.ImageBase;
+    return true;
+}
+
+// The file's bytes for `count` bytes at a loaded address, or null when no section covers them.
+const unsigned char* disk_bytes(const ModuleImage& image, const void* address, size_t count)
+{
+    const auto* file_dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image.bytes.data());
+    const auto* file_headers =
+        reinterpret_cast<const IMAGE_NT_HEADERS64*>(image.bytes.data() + file_dos->e_lfanew);
+    const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(file_headers);
+    const uintptr_t rva = static_cast<const unsigned char*>(address) - image.base;
+    for (WORD index = 0; index < file_headers->FileHeader.NumberOfSections; ++index, ++section) {
+        const uintptr_t start = section->VirtualAddress;
+        const uintptr_t extent = section->Misc.VirtualSize > section->SizeOfRawData
+                                     ? section->Misc.VirtualSize
+                                     : section->SizeOfRawData;
+        if (rva < start || rva + count > start + extent) {
+            continue;
+        }
+        const size_t offset = rva - start + section->PointerToRawData;
+        if (offset + count > image.bytes.size()) {
+            return nullptr;
+        }
+        return image.bytes.data() + offset;
+    }
+    return nullptr;
+}
+
+void* genuine_slot(void** vtable, size_t slot, void* current, char* message, size_t size)
+{
+    ModuleImage image;
+    if (!read_module_image(vtable, image, message, size)) {
+        return nullptr;
+    }
+    const auto* candidate = static_cast<const unsigned char*>(current);
+    if (candidate >= image.base && candidate < image.base + image.image_size) {
+        return current;
+    }
+    const unsigned char* stored = disk_bytes(image, vtable + slot, sizeof(uint64_t));
+    if (!stored) {
+        std::snprintf(message, size, "no section of %ls covers the table", image.path);
+        return nullptr;
+    }
+    uint64_t unrelocated = 0;
+    std::memcpy(&unrelocated, stored, sizeof(unrelocated));
+    if (unrelocated < image.preferred_base ||
+        unrelocated - image.preferred_base >= image.image_size) {
+        std::snprintf(message, size, "%ls holds 0x%llx in that slot, which is not inside it",
+                      image.path, static_cast<unsigned long long>(unrelocated));
+        return nullptr;
+    }
+    return const_cast<unsigned char*>(image.base + (unrelocated - image.preferred_base));
+}
+
+// The target and length of a jump another hook wrote at a function's entry. `bytes` are the
+// entry's bytes, `entry` is where they live, which relative jumps are measured from. Null with a
+// length of zero when the bytes are not a jump this recognises: the three forms hooking libraries
+// write are a near jump, an indirect jump through a pointer after it, and a move into rax followed
+// by a jump through it.
+void* decode_jump(const unsigned char* bytes, const unsigned char* entry, size_t& length)
+{
+    if (bytes[0] == 0xE9) {
+        int32_t displacement = 0;
+        std::memcpy(&displacement, bytes + 1, sizeof(displacement));
+        length = 5;
+        return const_cast<unsigned char*>(entry + 5 + displacement);
+    }
+    if (bytes[0] == 0xFF && bytes[1] == 0x25) {
+        int32_t displacement = 0;
+        std::memcpy(&displacement, bytes + 2, sizeof(displacement));
+        void* target = nullptr;
+        std::memcpy(&target, entry + 6 + displacement, sizeof(target));
+        length = 14;
+        return target;
+    }
+    if (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) {
+        void* target = nullptr;
+        std::memcpy(&target, bytes + 2, sizeof(target));
+        length = 12;
+        return target;
+    }
+    length = 0;
+    return nullptr;
+}
+
+// Executable memory within a near jump of `near`, or null. Walks down from the address in
+// allocation-granularity steps until the system gives a block, which is what a trampoline needs
+// when the instructions it carries address memory relative to where they used to be.
+void* allocate_near(const void* anchor, size_t size)
+{
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    const uintptr_t granularity = info.dwAllocationGranularity ? info.dwAllocationGranularity
+                                                                : 0x10000;
+    const uintptr_t origin = reinterpret_cast<uintptr_t>(anchor) & ~(granularity - 1);
+    const uintptr_t lowest = origin > 0x70000000 ? origin - 0x70000000 : granularity;
+    for (uintptr_t candidate = origin - granularity; candidate > lowest;
+         candidate -= granularity) {
+        void* block = VirtualAlloc(reinterpret_cast<void*>(candidate), size,
+                                   MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (block) {
+            return block;
+        }
+    }
+    return nullptr;
+}
+
+// A trampoline over a function's bytes as the file has them, so calling it reaches the function's
+// body without passing anything patched at its entry.
+//
+// Copies whole instructions from the file's bytes until at least `covered` bytes are past, which
+// has to be the longest patch anyone has at the entry, then jumps to the entry past that length.
+// Instructions that address memory relative to the instruction pointer are re-pointed, which is
+// why the block is allocated near; a relative jump or call this early in a function is refused,
+// because relocating one is more than a prologue should need.
+void* build_genuine_trampoline(const unsigned char* entry, const unsigned char* file_bytes,
+                               size_t available, size_t covered, char* message, size_t size)
+{
+    constexpr size_t block_size = 64;
+    auto* block = static_cast<unsigned char*>(allocate_near(entry, block_size));
+    if (!block) {
+        std::snprintf(message, size, "no executable memory near %p for a trampoline",
+                      static_cast<const void*>(entry));
+        return nullptr;
+    }
+    size_t copied = 0;
+    while (copied < covered) {
+        hde64s instruction{};
+        const unsigned int length = hde64_disasm(file_bytes + copied, &instruction);
+        if ((instruction.flags & F_ERROR) || length == 0 || copied + length > available ||
+            copied + length > block_size - 14) {
+            std::snprintf(message, size, "Present's prologue could not be decoded at byte %zu",
+                          copied);
+            VirtualFree(block, 0, MEM_RELEASE);
+            return nullptr;
+        }
+        const unsigned char opcode = instruction.opcode;
+        if (opcode == 0xE8 || opcode == 0xE9 || opcode == 0xEB || (opcode >= 0x70 && opcode <= 0x7F) ||
+            (instruction.opcode2 >= 0x80 && instruction.opcode2 <= 0x8F && opcode == 0x0F) ||
+            opcode == 0xC3 || opcode == 0xC2) {
+            std::snprintf(message, size,
+                          "Present's prologue has a relative jump or return at byte %zu, which "
+                          "this does not relocate",
+                          copied);
+            VirtualFree(block, 0, MEM_RELEASE);
+            return nullptr;
+        }
+        std::memcpy(block + copied, file_bytes + copied, length);
+        if ((instruction.flags & F_MODRM) && (instruction.modrm & 0xC7) == 0x05) {
+            // The displacement sits before any immediate, whose size the flags carry.
+            const size_t immediate = (instruction.flags & 0x3C) >> 2;
+            const size_t at = copied + length - immediate - 4;
+            int32_t displacement = 0;
+            std::memcpy(&displacement, block + at, sizeof(displacement));
+            const intptr_t target =
+                reinterpret_cast<intptr_t>(entry + copied + length) + displacement;
+            const intptr_t moved = target - reinterpret_cast<intptr_t>(block + copied + length);
+            if (moved > INT32_MAX || moved < INT32_MIN) {
+                std::snprintf(message, size, "Present's prologue addresses memory too far from "
+                                             "the trampoline");
+                VirtualFree(block, 0, MEM_RELEASE);
+                return nullptr;
+            }
+            displacement = static_cast<int32_t>(moved);
+            std::memcpy(block + at, &displacement, sizeof(displacement));
+        }
+        copied += length;
+    }
+    // jmp [rip+0]; dq entry + copied
+    const unsigned char jump[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+    std::memcpy(block + copied, jump, sizeof(jump));
+    const unsigned char* resume = entry + copied;
+    std::memcpy(block + copied + sizeof(jump), &resume, sizeof(resume));
+    FlushInstructionCache(GetCurrentProcess(), block, block_size);
+    return block;
+}
+
+// The module a code address lives in, or null, with its file name for the log.
+HMODULE module_of(const void* address, wchar_t* name, size_t count)
+{
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            static_cast<LPCWSTR>(address), &module)) {
+        return nullptr;
+    }
+    wchar_t path[MAX_PATH] = L"?";
+    GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t* base = std::wcsrchr(path, L'\\');
+    std::wcsncpy(name, base ? base + 1 : path, count - 1);
+    name[count - 1] = L'\0';
+    return module;
+}
+
+// Hook Present by detour, in a way that coexists with whatever else has hooked it.
+//
+// Measured on 26 September 2026, on a machine that turned out to have three hooks on dxgi's
+// Present in a game: Steam's overlay, RivaTuner Statistics Server, and this. Each of the two others
+// patches the function's entry with a jump and, on its first present, checks the entry and writes
+// its own bytes back if something displaced them. Steam takes whatever it displaced as its
+// original, which with a table patch of ours made the two forward to each other until the stack
+// ran out; RivaTuner restores what it saved at its own install, which drops anything patched over
+// it out of the chain entirely. Nothing patched at that entry can be trusted to stay.
+//
+// So this never owns the entry. It follows the jump chain from the entry to the first function
+// that lives inside a module, which is the outermost hook's own function, or dxgi's Present itself
+// when nothing is patched, and detours that. A hook re-asserts its target's entry; none re-asserts
+// its own function's prologue. Steam and RivaTuner then run first, exactly as they would without
+// this, and reach this hook through their own chains, which end in the genuine body.
+//
+// Two more pieces cover the rest: the chain is never entered twice by one present, because a
+// re-entered call goes to a trampoline of this module's own over the bytes the file has for the
+// entry, which reaches the body without passing any hook; and everything is put back on uninstall.
+//
+// Returns false with a reason when no target could be established; the caller then falls back to
+// the table patch, with the re-entry guard as the only protection.
+bool install_present_detour(Observer& self, void* genuine, char* message, size_t size)
+{
+    ModuleImage image;
+    if (!read_module_image(genuine, image, message, size)) {
+        return false;
+    }
+    constexpr size_t window = 32;
+    const unsigned char* stored = disk_bytes(image, genuine, window);
+    if (!stored) {
+        std::snprintf(message, size, "no section of %ls covers Present", image.path);
+        return false;
+    }
+    auto* entry = static_cast<unsigned char*>(genuine);
+    const bool patched = std::memcmp(entry, stored, window) != 0;
+
+    // The loop breaker, over the file's bytes. Fourteen bytes past the entry is beyond the longest
+    // jump anyone writes there.
+    void* block = build_genuine_trampoline(entry, stored, window, 14, message, size);
+    if (!block) {
+        return false;
+    }
+
+    // Follow the chain to the first function inside a module. Relays, the near pages hooking
+    // libraries allocate to reach a far target with a short jump, are outside every module and are
+    // followed through. This module's own hook is refused as a target, because meeting it would
+    // mean something already chains to it.
+    void* target = genuine;
+    wchar_t owner[MAX_PATH] = L"dxgi.dll";
+    size_t hops = 0;
+    if (patched) {
+        const unsigned char* at = entry;
+        target = nullptr;
+        for (hops = 0; hops < 8; ++hops) {
+            size_t length = 0;
+            void* next = decode_jump(at, at, length);
+            if (!next) {
+                break;
+            }
+            wchar_t name[MAX_PATH];
+            HMODULE module = module_of(next, name, MAX_PATH);
+            if (module) {
+                if (next == reinterpret_cast<void*>(&hooked_present)) {
+                    break;
+                }
+                target = next;
+                std::wcsncpy(owner, name, MAX_PATH - 1);
+                ++hops;
+                break;
+            }
+            at = static_cast<const unsigned char*>(next);
+        }
+        if (!target) {
+            VirtualFree(block, 0, MEM_RELEASE);
+            std::snprintf(message, size,
+                          "Present's entry is patched (%02x %02x %02x %02x %02x) and the chain "
+                          "leads to no function inside a module",
+                          entry[0], entry[1], entry[2], entry[3], entry[4]);
+            return false;
+        }
+    }
+
+    const MH_STATUS initialised = MH_Initialize();
+    if (initialised != MH_OK && initialised != MH_ERROR_ALREADY_INITIALIZED) {
+        VirtualFree(block, 0, MEM_RELEASE);
+        std::snprintf(message, size, "MinHook did not initialise, status %d", int(initialised));
+        return false;
+    }
+    void* chain = nullptr;
+    MH_STATUS status = MH_CreateHook(target, reinterpret_cast<void*>(&hooked_present), &chain);
+    if (status != MH_OK) {
+        VirtualFree(block, 0, MEM_RELEASE);
+        std::snprintf(message, size, "the detour on %ls could not be created, status %d", owner,
+                      int(status));
+        return false;
+    }
+    status = MH_EnableHook(target);
+    if (status != MH_OK) {
+        MH_RemoveHook(target);
+        VirtualFree(block, 0, MEM_RELEASE);
+        std::snprintf(message, size, "the detour on %ls could not be enabled, status %d", owner,
+                      int(status));
+        return false;
+    }
+    self.present_entry = target;
+    self.present_chain = reinterpret_cast<present_fn>(chain);
+    self.present_genuine = reinterpret_cast<present_fn>(block);
+    self.present_genuine_block = block;
+    self.present_displaced = patched ? target : nullptr;
+    self.present_detoured = true;
+
+    if (self.options.log) {
+        char note[512];
+        if (patched) {
+            std::snprintf(note, sizeof(note),
+                          "observer: Present's entry at %p is hooked by others; detoured the "
+                          "outermost hook's function at %p in %ls, %zu hop%s down the chain, so it "
+                          "runs first and this runs after it. Genuine body at hand through a "
+                          "trampoline at %p",
+                          genuine, target, owner, hops, hops == 1 ? "" : "s", block);
+        } else {
+            std::snprintf(note, sizeof(note),
+                          "observer: Present detoured at %p in dxgi, entry unpatched", genuine);
+        }
+        self.options.log(self.options.log_user, note);
+    }
+    return true;
 }
 
 // A dummy device and swap chain exist only to reach the vtables, which are shared by every
@@ -673,12 +1127,32 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
                    reinterpret_cast<void*>(self.original_create), nullptr);
         return RSF_OBSERVER_ERROR_PATCH_FAILED;
     }
-    if (!patch_slot(self.swapchain_vtable, slot_present,
-                    reinterpret_cast<void*>(&hooked_present),
-                    reinterpret_cast<void**>(&self.original_present))) {
-        patch_slot(self.device_vtable, slot_create_texture2d,
-                   reinterpret_cast<void*>(self.original_create), nullptr);
-        return RSF_OBSERVER_ERROR_PATCH_FAILED;
+    // Present by detour on the genuine function, which the table names directly or, when another
+    // hook has rewritten the table, the module on disk still does. The table patch is the fallback
+    // and has only the re-entry guard between it and the recursion the first Windows run died of.
+    {
+        char why[512] = {};
+        void* current = self.swapchain_vtable[slot_present];
+        void* genuine = genuine_slot(self.swapchain_vtable, slot_present, current, why,
+                                     sizeof(why));
+        if (!genuine || !install_present_detour(self, genuine, why, sizeof(why))) {
+            if (self.options.log) {
+                char message[768];
+                std::snprintf(message, sizeof(message),
+                              "observer: Present is hooked in the swap chain's table, because %s. "
+                              "If another hook chains back into this one, the inner call is "
+                              "refused rather than recursed",
+                              why);
+                self.options.log(self.options.log_user, message);
+            }
+            if (!patch_slot(self.swapchain_vtable, slot_present,
+                            reinterpret_cast<void*>(&hooked_present),
+                            reinterpret_cast<void**>(&self.original_present))) {
+                patch_slot(self.device_vtable, slot_create_texture2d,
+                           reinterpret_cast<void*>(self.original_create), nullptr);
+                return RSF_OBSERVER_ERROR_PATCH_FAILED;
+            }
+        }
     }
 
     // Only patched when something asked to be told. These run on the game's creation path for every
@@ -732,8 +1206,21 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
                    reinterpret_cast<void*>(self.original_create_pixel_shader), nullptr);
         self.original_create_pixel_shader = nullptr;
     }
-    patch_slot(self.swapchain_vtable, slot_present, reinterpret_cast<void*>(self.original_present),
-               nullptr);
+    if (self.present_detoured) {
+        MH_DisableHook(self.present_entry);
+        MH_RemoveHook(self.present_entry);
+        self.present_detoured = false;
+        self.present_entry = nullptr;
+        self.present_chain = nullptr;
+        self.present_genuine = nullptr;
+        self.present_displaced = nullptr;
+        // Not freed. A Present already inside the trampoline when the hook came off would return
+        // into released memory, and sixty-four bytes for the life of the process are nothing.
+        self.present_genuine_block = nullptr;
+    } else if (self.original_present) {
+        patch_slot(self.swapchain_vtable, slot_present,
+                   reinterpret_cast<void*>(self.original_present), nullptr);
+    }
     for (ID3D11Texture2D* texture : self.matches) {
         texture->Release();
     }

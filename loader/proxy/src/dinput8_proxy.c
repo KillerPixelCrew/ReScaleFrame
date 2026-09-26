@@ -20,6 +20,8 @@
 
 #include <windows.h>
 
+#include <dbghelp.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -642,6 +644,15 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
 
     MultiByteToWideChar(CP_ACP, 0, directory, -1, log_path, MAX_PATH);
     wcscat(log_path, L"\\rsf-dump.log");
+
+    /* Said up front, because the first Windows run died of it: Steam's overlay hooks Present by
+       inline-patching dxgi and by rewriting the swap chain's table, and takes whatever it displaces
+       as its original, so a vtable hook on Present and the overlay chase each other. Until the
+       observer hooks by detour, the overlay has to be off for this game. */
+    if (GetModuleHandleW(L"gameoverlayrenderer64.dll")) {
+        note("steam overlay: gameoverlayrenderer64.dll is loaded; the observer detours Present "
+             "over its hook and keeps it in the chain, so both run");
+    }
 
     strncpy(observe_directory, directory, MAX_PATH - 1);
     observe_directory[MAX_PATH - 1] = '\0';
@@ -1361,11 +1372,223 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     return 0;
 }
 
+/* Crash reporting, because a machine with Windows Error Reporting switched off leaves nothing to
+   read when the game dies, and the first Windows run of this proxy did exactly that.
+
+   A vectored handler rather than the top-level filter, so a game that installs its own filter
+   cannot silence it, and first in line so nothing consumes the exception before it is described.
+   Only the fatal codes are looked at; C++ exceptions and guard page probes pass through untouched.
+   It logs the code, the faulting address as module plus offset, the access kind for an access
+   violation, and a walk of the faulting thread's stack with whatever symbols dbghelp finds beside
+   the modules, then writes a minidump beside the log. Once, because a second fatal exception in a
+   dying process is noise. It always returns EXCEPTION_CONTINUE_SEARCH, so whatever the game would
+   have done still happens. dbghelp is loaded here rather than linked, since nothing else needs it
+   and a process that never crashes never pays for it. */
+static volatile LONG crash_reported;
+
+static void describe_address(const void* address, char* out, size_t size)
+{
+    HMODULE module = NULL;
+    wchar_t path[MAX_PATH];
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)address, &module) &&
+        GetModuleFileNameW(module, path, MAX_PATH)) {
+        const wchar_t* name = wcsrchr(path, L'\\');
+        name = name ? name + 1 : path;
+        snprintf(out, size, "%p, %ls+0x%llx", address, name,
+                 (unsigned long long)((const char*)address - (const char*)module));
+    } else {
+        snprintf(out, size, "%p, no module", address);
+    }
+}
+
+typedef BOOL(WINAPI* minidump_write_fn)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
+                                        PMINIDUMP_EXCEPTION_INFORMATION,
+                                        PMINIDUMP_USER_STREAM_INFORMATION,
+                                        PMINIDUMP_CALLBACK_INFORMATION);
+typedef BOOL(WINAPI* sym_initialize_fn)(HANDLE, PCSTR, BOOL);
+typedef BOOL(WINAPI* sym_from_addr_fn)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+typedef BOOL(WINAPI* stack_walk_fn)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64, PVOID,
+                                    PREAD_PROCESS_MEMORY_ROUTINE64,
+                                    PFUNCTION_TABLE_ACCESS_ROUTINE64, PGET_MODULE_BASE_ROUTINE64,
+                                    PTRANSLATE_ADDRESS_ROUTINE64);
+typedef PVOID(WINAPI* function_table_access_fn)(HANDLE, DWORD64);
+typedef DWORD64(WINAPI* module_base_fn)(HANDLE, DWORD64);
+
+/* The description and the dump, on a thread of their own.
+
+   The faulting thread is the wrong place for this work: a stack overflow leaves it one page to
+   run on, which the first run of this reporter used up between the first line and the walk, and
+   the walk itself has to read that thread's registers from the exception record anyway. So the
+   handler hands the exception pointers to a fresh thread and waits for it. The pointers stay valid
+   because the faulting thread is blocked in the wait, one frame above the fault. */
+struct crash_report {
+    EXCEPTION_POINTERS* info;
+    DWORD thread;
+};
+
+static DWORD WINAPI crash_report_worker(LPVOID parameter)
+{
+    const struct crash_report* report = (const struct crash_report*)parameter;
+    EXCEPTION_POINTERS* info = report->info;
+    const EXCEPTION_RECORD* record = info->ExceptionRecord;
+    const DWORD code = record->ExceptionCode;
+    char where[MAX_PATH + 64];
+    HMODULE dbghelp;
+    HANDLE process = GetCurrentProcess();
+    HANDLE faulting = OpenThread(THREAD_ALL_ACCESS, FALSE, report->thread);
+
+    describe_address(record->ExceptionAddress, where, sizeof(where));
+    if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
+        note("crash: access violation %s address %p, code at %s, thread %lu",
+             record->ExceptionInformation[0] == 0   ? "reading"
+             : record->ExceptionInformation[0] == 1 ? "writing"
+                                                    : "executing",
+             (void*)record->ExceptionInformation[1], where, report->thread);
+    } else {
+        note("crash: exception 0x%08lx%s, code at %s, thread %lu", code,
+             code == EXCEPTION_STACK_OVERFLOW ? " (stack overflow)" : "", where, report->thread);
+    }
+
+    dbghelp = LoadLibraryW(L"dbghelp.dll");
+    if (!dbghelp) {
+        note("crash: dbghelp.dll did not load, so there is no stack and no dump");
+        return 0;
+    }
+    {
+        sym_initialize_fn sym_initialize =
+            (sym_initialize_fn)GetProcAddress(dbghelp, "SymInitialize");
+        sym_from_addr_fn sym_from_addr = (sym_from_addr_fn)GetProcAddress(dbghelp, "SymFromAddr");
+        stack_walk_fn stack_walk = (stack_walk_fn)GetProcAddress(dbghelp, "StackWalk64");
+        function_table_access_fn table_access =
+            (function_table_access_fn)GetProcAddress(dbghelp, "SymFunctionTableAccess64");
+        module_base_fn module_base = (module_base_fn)GetProcAddress(dbghelp, "SymGetModuleBase64");
+        if (sym_initialize && sym_from_addr && stack_walk && table_access && module_base &&
+            sym_initialize(process, NULL, TRUE)) {
+            CONTEXT context = *info->ContextRecord;
+            STACKFRAME64 frame;
+            int depth;
+            memset(&frame, 0, sizeof(frame));
+            frame.AddrPC.Offset = context.Rip;
+            frame.AddrPC.Mode = AddrModeFlat;
+            frame.AddrFrame.Offset = context.Rbp;
+            frame.AddrFrame.Mode = AddrModeFlat;
+            frame.AddrStack.Offset = context.Rsp;
+            frame.AddrStack.Mode = AddrModeFlat;
+            /* Sixty-four frames, because a stack overflow is a recursion and the interesting
+               part of one is the cycle, which the top few frames only show once. */
+            for (depth = 0; depth < 64; ++depth) {
+                union {
+                    SYMBOL_INFO info;
+                    char bytes[sizeof(SYMBOL_INFO) + 256];
+                } symbol;
+                DWORD64 displacement = 0;
+                if (!stack_walk(IMAGE_FILE_MACHINE_AMD64, process,
+                                faulting ? faulting : GetCurrentThread(), &frame, &context, NULL,
+                                table_access, module_base, NULL) ||
+                    frame.AddrPC.Offset == 0) {
+                    break;
+                }
+                memset(&symbol, 0, sizeof(symbol));
+                symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+                symbol.info.MaxNameLen = 255;
+                describe_address((const void*)(uintptr_t)frame.AddrPC.Offset, where,
+                                 sizeof(where));
+                if (sym_from_addr(process, frame.AddrPC.Offset, &displacement, &symbol.info)) {
+                    note("crash:   %2d %s  %s+0x%llx", depth, where, symbol.info.Name,
+                         (unsigned long long)displacement);
+                } else {
+                    note("crash:   %2d %s", depth, where);
+                }
+            }
+        } else {
+            note("crash: symbol support unavailable, so there is no stack walk");
+        }
+    }
+    {
+        minidump_write_fn write_dump =
+            (minidump_write_fn)GetProcAddress(dbghelp, "MiniDumpWriteDump");
+        if (write_dump && log_path[0]) {
+            wchar_t dump_path[MAX_PATH * 2];
+            wchar_t* slash;
+            HANDLE file;
+            wcscpy(dump_path, log_path);
+            slash = wcsrchr(dump_path, L'\\');
+            if (slash) {
+                slash[1] = L'\0';
+            }
+            wcscat(dump_path, L"Ace7Game-crash.dmp");
+            file = CreateFileW(dump_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+            if (file != INVALID_HANDLE_VALUE) {
+                MINIDUMP_EXCEPTION_INFORMATION exception;
+                BOOL written;
+                exception.ThreadId = report->thread;
+                exception.ExceptionPointers = info;
+                exception.ClientPointers = FALSE;
+                written = write_dump(process, GetCurrentProcessId(), file,
+                                     (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory |
+                                                     MiniDumpWithDataSegs |
+                                                     MiniDumpWithThreadInfo |
+                                                     MiniDumpWithUnloadedModules),
+                                     &exception, NULL, NULL);
+                CloseHandle(file);
+                if (written) {
+                    note("crash: minidump written to %ls", dump_path);
+                } else {
+                    note("crash: minidump failed, error %lu, path %ls", GetLastError(),
+                         dump_path);
+                }
+            }
+        }
+    }
+    if (faulting) {
+        CloseHandle(faulting);
+    }
+    return 0;
+}
+
+static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
+{
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    struct crash_report report;
+    HANDLE worker;
+
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_IN_PAGE_ERROR &&
+        code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (InterlockedIncrement(&crash_reported) != 1) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    report.info = info;
+    report.thread = GetCurrentThreadId();
+    worker = CreateThread(NULL, 0, crash_report_worker, &report, 0, NULL);
+    if (worker) {
+        WaitForSingleObject(worker, 30000);
+        CloseHandle(worker);
+    } else {
+        /* No thread can be made while the process is shutting down, which is where two of the
+           first day's reports landed. Described on the faulting thread instead, which is fine for
+           anything but a stack overflow. */
+        note("crash: exception 0x%08lx on thread %lu, no thread could be made, describing inline",
+             code, report.thread);
+        if (code != EXCEPTION_STACK_OVERFLOW) {
+            crash_report_worker(&report);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
+        /* First, before anything that could fault. */
+        AddVectoredExceptionHandler(1, on_fatal_exception);
 #if RSF_HAVE_FRAME_CAPTURE
         /* Loading a library is allowed here and the timing requirement leaves no alternative:
            RenderDoc must be in before the game creates its device. */

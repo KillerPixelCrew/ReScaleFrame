@@ -141,10 +141,14 @@ int main()
     stage("creating a frame's tail");
     // Half the output in each direction, which is the render scale the loader sets. Two interface
     // layers because AC7 alternates between two allocations from frame to frame.
-    ID3D11Texture2D* composite = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_UNORM);
-    ID3D11Texture2D* layer_a = make_target(device, 256, 144, DXGI_FORMAT_R8G8B8A8_UNORM);
+    // Typeless, as Unreal allocates them, because that is what the game hands over and what the
+    // first Windows run failed on: a view on a typeless texture has to be told its format. The
+    // composite is given the format the game binds with; the layers and the chain leave it to be
+    // derived.
+    ID3D11Texture2D* composite = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_TYPELESS);
+    ID3D11Texture2D* layer_a = make_target(device, 256, 144, DXGI_FORMAT_R8G8B8A8_TYPELESS);
     ID3D11Texture2D* layer_b = make_target(device, 256, 144, DXGI_FORMAT_R8G8B8A8_UNORM);
-    ID3D11Texture2D* chain = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_UNORM);
+    ID3D11Texture2D* chain = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_TYPELESS);
     ID3D11Texture2D* scene_color = make_target(device, 256, 144, DXGI_FORMAT_R16G16B16A16_FLOAT);
     ID3D11Texture2D* reconstruction = make_target(device, 512, 288, DXGI_FORMAT_R16G16B16A16_FLOAT);
     check(composite && layer_a && layer_b && chain && scene_color && reconstruction,
@@ -165,6 +169,7 @@ int main()
     tail.reconstruction = reconstruction;
     tail.render_width = 256;
     tail.render_height = 144;
+    tail.composite_view_format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
 
     stage("refusing a frame with nothing to upscale");
     rsf_promote_frame_tail unscaled = tail;

@@ -137,7 +137,7 @@
     "detail": "Recorded 7 September mission: 7917 evaluations, no refusals, 1024x576 input, 2048x1152 output. The reported image included the complete scene without obvious smearing. Controlled motion, quality, and performance validation remain open.",
     "not_yet": [
       "Reinserted into game post-processing with the interface intact. F6 promotes the composite and runs game-tested; the interface stays soft because it is scene geometry on the screens that matter, which the representation plan extracts instead of promoting. F7 is a rough-tonemapped debug display over the back buffer and hides the HUD.",
-      "A Windows game run. Every recorded session used MinGW-w64 and Wine/Proton, and on 26 September the reason no Windows run could have worked was measured: the stock D3D11 runtime rewrites its vtable on every flush and silently removed the frame tap's draw hooks (docs/research/d3d11-runtime-vtable-rewrite.md). The tap now survives that and the suite passes under MSVC, but nothing has run in the game on Windows."
+      "The judgement of the promoted picture. The first Windows game run happened on 26 September after four measured obstacles (docs/research/windows-present-hook-coexistence.md, docs/research/d3d11-runtime-vtable-rewrite.md): Streamline 2.14.1 loads, DLSS evaluates every frame at 800x450 to 1600x900, and F6 promotion ran for over 13,000 frames with the composite, one chain target and two interface layers. Whether the front end is sharp and the shimmer gone has not been written down."
     ]
   }
 }

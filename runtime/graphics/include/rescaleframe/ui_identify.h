@@ -26,7 +26,9 @@
 extern "C" {
 #endif
 
-#define RSF_UI_IDENTIFY_ABI_VERSION 1u
+/* 2: `rsf_ui_registry_note_recent` and the eviction counter, for the widget-target set, which the
+   first Windows run filled with the menus' targets and then refused the briefing's 777,752 times. */
+#define RSF_UI_IDENTIFY_ABI_VERSION 2u
 
 /* Which set an object belongs to. An object is in at most one: they are answers to the same
    question, and a thing that is both Slate's declaration and the canvas's is a bug in the rule that
@@ -48,10 +50,12 @@ typedef int32_t rsf_ui_result;
    distinction. */
 #define RSF_UI_ERROR_FULL ((rsf_ui_result)-3)
 
-/* Upper bounds. A frame has a handful of interface declarations, a couple of dozen converter
-   targets, and however many shaders a settings file names. */
+/* Upper bounds. A frame has a handful of interface declarations, a few dozen converter targets,
+   and however many shaders a settings file names. The widget targets are 64 to match what the
+   frame tap's candidate set holds, and they are a working set rather than a history: see
+   `rsf_ui_registry_note_recent`. */
 #define RSF_UI_MAX_LAYOUTS 16u
-#define RSF_UI_MAX_WIDGET_TARGETS 32u
+#define RSF_UI_MAX_WIDGET_TARGETS 64u
 #define RSF_UI_MAX_NAMED_SHADERS 32u
 
 typedef struct rsf_ui_registry rsf_ui_registry;
@@ -66,6 +70,20 @@ void rsf_ui_registry_destroy(rsf_ui_registry* registry);
    knows something this cannot, namely that an address is being handed out afresh. Adding an object
    already in the same set succeeds and changes nothing. */
 rsf_ui_result rsf_ui_registry_add(rsf_ui_registry* registry, rsf_ui_set set, void* object);
+
+/* Record that `object` was just seen in `set`, keeping the set as a working set of the most recent.
+
+   For a set whose membership is re-observed continuously rather than fixed at creation, which is
+   the widget targets: a converter target is confirmed every frame a Slate draw fills it. Entries
+   are kept in the order they were last seen; seeing one again moves it to the back, and adding one
+   to a full set evicts the one seen longest ago, counted in `evicted`. Measured why on 26 September
+   2026: the menus used 32 converter targets, the set held 32, and every one the briefing needed was
+   refused, so its widget quads never classified and its interface stayed magnified. An evicted
+   target that is still in use comes back the next frame its converter draws into it.
+
+   Returns 1 when the membership changed, a new entry with or without an eviction, and 0 when the
+   object was already there, so a caller republishing the set does it only when it has to. */
+int rsf_ui_registry_note_recent(rsf_ui_registry* registry, rsf_ui_set set, void* object);
 
 /* Drop `object` from every set. Call this for every object the game creates, before deciding what
    the new one is, whether or not the address was ever recorded. Cheap when it was not. */
@@ -89,6 +107,8 @@ typedef struct rsf_ui_registry_counters {
     uint32_t refused_full[RSF_UI_SET_COUNT];
     uint32_t forgotten_on_reuse;
     uint32_t recorded[RSF_UI_SET_COUNT];
+    /* Appended in ABI 2. Entries `rsf_ui_registry_note_recent` pushed out of a full set. */
+    uint32_t evicted[RSF_UI_SET_COUNT];
 } rsf_ui_registry_counters;
 
 rsf_ui_result rsf_ui_registry_get_counters(const rsf_ui_registry* registry,

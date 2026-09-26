@@ -9,6 +9,7 @@ Research began on 5 September 2026. The source comparisons are pinned to the rev
 | [AC7 UI composition](ac7-ui-composition.md) | How the interface reaches the frame, the 1920x1080 converter, the briefing tail order, and the retracted promotion attempts |
 | [AC7 UI extraction](ac7-ui-extraction.md) | Producers, classification, divert, alpha, composite; the measurements that showed extraction skips AC7's own interface processing, and the promotion route that replaced it |
 | [D3D11 runtime vtable rewrite](d3d11-runtime-vtable-rewrite.md) | Why no Windows run ever observed a draw: the stock runtime rewrites the work-submission entries of its heap vtable on every flush, and how the frame tap survives it |
+| [Present hook coexistence](windows-present-hook-coexistence.md) | The first Windows game run: Steam's overlay and RivaTuner both re-assert Present's entry, the chain-following detour that sits beside them, the user32 detours that make the panel's mouse work, and the DPI-sized swap chain |
 | [Frame generation contracts](vendor-fg-contracts.md) | What DLSS-G, FidelityFX and XeSS-FG require of a UI layer, HUD-less colour, the swap chain and frame identity, with citations |
 | [Presentation bridge](presentation-bridge.md) | The DX11 to DX12 facade, sharing and synchronisation design, and what the fixtures can prove |
 | [UE4.18 hook map](ue418-hook-map.md) | Engine source leads and the researched executable fingerprint |

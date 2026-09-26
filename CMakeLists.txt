@@ -39,6 +39,18 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_link_options(rsf_build_options INTERFACE -static -static-libgcc -static-libstdc++)
 endif()
 
+# MinHook, for hooking by detour where a vtable entry is contested. Steam's overlay hooks
+# IDXGISwapChain::Present both in the table and at the function's entry and re-asserts either when
+# displaced, so a table patch and the overlay chase each other; a detour with a trampoline built
+# from the genuine bytes sits in the same chain without ever routing through the entry again.
+# BSD-2-Clause, pinned to v1.3.4.
+include(FetchContent)
+FetchContent_Declare(minhook
+    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+    GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
+    GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(minhook)
+
 include(CTest)
 add_subdirectory(sdk/game)
 add_subdirectory(loader)

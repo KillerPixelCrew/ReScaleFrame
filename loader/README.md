@@ -40,6 +40,12 @@ composites them. The log names each layer and chain target as it is found, and s
 interface is being magnified because no layer has been seen yet. F3 stays as the measurement it is;
 do not hold both on at once, since a diverted quad never reaches the promoted layer.
 
+The proxy runs beside the Steam overlay and RivaTuner, both of which hook Present in the same
+process; the log says which hook it detoured behind at startup. The panel takes the mouse the way
+SpecialK does, by detouring the cursor functions while it is open, and the log counts the warps and
+hides it swallowed when it closes. A crash writes `Ace7Game-crash.dmp` and a symbolised stack into
+the dump directory, since Windows Error Reporting is off on the development machine.
+
 F4 answered a question and is kept for the next one like it. The front end shimmers at a reduced
 render scale and holds still at 100%, and toggling the gate on the main menu stops and starts it, so
 the cause is the jitter this project forces on rather than a reconstruction failing on elements with
