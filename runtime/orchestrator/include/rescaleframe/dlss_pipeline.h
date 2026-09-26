@@ -215,6 +215,17 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_request_dump(const ch
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
     rsf_dlss_pipeline_status* status);
 
+/* Change the quality level while running, without tearing Streamline down.
+
+   Asks DLSS for the render size this level wants at the current output, and on success the next
+   evaluate carries the new mode and accepts frames in the new range; Streamline recreates its
+   feature on the mode change itself. The render size is returned so the caller can move the game's
+   screen percentage to it, since a frame outside the new range is refused. Call it from the thread
+   that evaluates. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,
+                                                                       uint32_t* render_width,
+                                                                       uint32_t* render_height);
+
 /* Release everything in the reverse of the order it was acquired, and before the caller's device
    goes. Safe to call when nothing is running. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_stop(void);

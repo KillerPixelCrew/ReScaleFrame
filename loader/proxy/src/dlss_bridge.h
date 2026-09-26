@@ -171,4 +171,8 @@ void rsf_bridge_set_actions(const rsf_bridge_actions* actions);
 
 int rsf_bridge_running(void);
 
+/* The main view's render size as the last evaluated pass carried it, zero before the first. This is
+   the view the reconstruction resolves, and the only one that may be jittered. */
+void rsf_bridge_view_size(unsigned long* width, unsigned long* height);
+
 #endif /* RSF_DLSS_BRIDGE_H */

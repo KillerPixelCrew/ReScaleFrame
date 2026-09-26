@@ -185,6 +185,10 @@ static struct {
     rsf_camera_frame held_camera;
     unsigned long held_width;
     unsigned long held_height;
+    /* The main view's render size from the last qualifying pass, kept past the frame, for the
+       jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
+    volatile LONG view_width;
+    volatile LONG view_height;
     int have_held;
 
     /* Learning where the reconstruction goes back in.
@@ -262,6 +266,10 @@ static struct {
        corrupted frame or a dead process rather than a diagnostic nobody reads. */
     rsf_promote* promote;
     int reinsert_on;
+    /* The DLSS quality level in effect, for the panel, and whether the panel chose one before the
+       backend started. */
+    unsigned long quality;
+    int quality_chosen;
     unsigned long reinsert_frames;
     unsigned long gate_evaluates;
 
@@ -667,6 +675,8 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     rsf_resource_retain(bridge.held_exposure);
     bridge.held_camera = camera;
     bridge.held_width = pass->render_width;
+    InterlockedExchange(&bridge.view_width, (LONG)pass->render_width);
+    InterlockedExchange(&bridge.view_height, (LONG)pass->render_height);
     bridge.held_height = pass->render_height;
     bridge.have_held = 1;
     if (rsf_ac7_scene_color_source(&bridge.color_selection, pass->scene_color, pass->context,
@@ -1881,6 +1891,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
             }
         }
     }
+    stats->quality = (rsf_overlay_quality)bridge.quality;
     stats->render_scale_percent =
         bridge.actions.render_scale_percent ? (uint32_t)bridge.actions.render_scale_percent() : 0u;
     stats->captures_written =
@@ -1969,11 +1980,36 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.quality_changed) {
-        /* Quality selects a render size, so changing it means rebuilding the backend rather than
-           setting a value. Not done here yet, and said rather than silently ignored. */
-        say("overlay: quality %u was asked for. It needs the backend rebuilt, which is not wired "
-            "up yet",
-            (unsigned)intent.quality);
+        /* Quality selects a render size. The pipeline asks DLSS for it and switches mode on the
+           next evaluate without tearing Streamline down, and the game's screen percentage follows,
+           because a frame outside the new range would be refused. On this thread, which is the one
+           that evaluates. */
+        uint32_t width = 0;
+        uint32_t height = 0;
+        if (!bridge.started) {
+            say("overlay: quality %u noted; it applies when the backend starts",
+                (unsigned)intent.quality);
+            bridge.quality = (unsigned long)intent.quality;
+            bridge.quality_chosen = 1;
+        } else if (rsf_dlss_pipeline_set_quality((rsf_dlss_quality)intent.quality, &width,
+                                                 &height) == RSF_DLSS_PIPELINE_OK) {
+            rsf_dlss_pipeline_status pipeline;
+            memset(&pipeline, 0, sizeof(pipeline));
+            pipeline.struct_size = sizeof(pipeline);
+            bridge.quality = (unsigned long)intent.quality;
+            if (rsf_dlss_pipeline_get_status(&pipeline) == RSF_DLSS_PIPELINE_OK &&
+                pipeline.output_width != 0 && bridge.actions.set_render_scale) {
+                /* Rounded up, so the game's size lands inside DLSS's range, never just below. */
+                const unsigned long percent =
+                    (unsigned long)((width * 100u + pipeline.output_width - 1u) /
+                                    pipeline.output_width);
+                bridge.actions.set_render_scale(percent);
+                say("overlay: quality %u, render scale %lu%% for %ux%u",
+                    (unsigned)intent.quality, percent, width, height);
+            }
+        } else {
+            say("overlay: quality %u was refused by the pipeline", (unsigned)intent.quality);
+        }
     }
 }
 
@@ -2471,6 +2507,11 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     setup.streamline_directory_utf8 = streamline_directory;
     setup.output_width = (uint32_t)output_width;
     setup.output_height = (uint32_t)output_height;
+    /* A level chosen in the panel before the backend started wins over the settings file. */
+    if (bridge.quality_chosen) {
+        quality = bridge.quality;
+    }
+    bridge.quality = quality;
     setup.quality = (rsf_dlss_quality)quality;
     setup.motion.struct_size = sizeof(setup.motion);
     setup.motion.scale_x = RSF_UNREAL_MOTION_SCALE;
@@ -2744,6 +2785,12 @@ void rsf_bridge_request_dump(const char* prefix)
     if (bridge.started) {
         rsf_dlss_pipeline_request_dump(prefix);
     }
+}
+
+void rsf_bridge_view_size(unsigned long* width, unsigned long* height)
+{
+    *width = (unsigned long)InterlockedCompareExchange(&bridge.view_width, 0, 0);
+    *height = (unsigned long)InterlockedCompareExchange(&bridge.view_height, 0, 0);
 }
 
 int rsf_bridge_running(void)

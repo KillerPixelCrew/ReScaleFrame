@@ -734,6 +734,55 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(rsf_dlss_pipeli
     return RSF_DLSS_PIPELINE_OK;
 }
 
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,
+                                                                  uint32_t* render_width,
+                                                                  uint32_t* render_height)
+{
+    Pipeline& self = pipeline();
+    uint32_t output_width = 0;
+    uint32_t output_height = 0;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        if (!self.running) {
+            return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
+        }
+        output_width = self.output_width;
+        output_height = self.output_height;
+    }
+    rsf_dlss_plan plan{};
+    plan.struct_size = uint32_t(sizeof(plan));
+    plan.output_width = output_width;
+    plan.output_height = output_height;
+    plan.quality = quality;
+    const rsf_dlss_result planned = rsf_dlss_plan_render_size(&plan);
+    if (planned != RSF_DLSS_OK || plan.render_width == 0 || plan.render_height == 0) {
+        say(self, "quality %u refused: DLSS gave no render size (result %d)", unsigned(quality),
+            int(planned));
+        return RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
+    }
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        self.quality = quality;
+        self.planned_render_width = plan.render_width;
+        self.planned_render_height = plan.render_height;
+        self.render_width_min = plan.render_width_min ? plan.render_width_min : plan.render_width;
+        self.render_height_min =
+            plan.render_height_min ? plan.render_height_min : plan.render_height;
+        self.render_width_max = plan.render_width_max ? plan.render_width_max : plan.render_width;
+        self.render_height_max =
+            plan.render_height_max ? plan.render_height_max : plan.render_height;
+    }
+    say(self, "quality %u: DLSS renders %ux%u for %ux%u", unsigned(quality), plan.render_width,
+        plan.render_height, output_width, output_height);
+    if (render_width) {
+        *render_width = plan.render_width;
+    }
+    if (render_height) {
+        *render_height = plan.render_height;
+    }
+    return RSF_DLSS_PIPELINE_OK;
+}
+
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_stop(void)
 {
     Pipeline& self = pipeline();

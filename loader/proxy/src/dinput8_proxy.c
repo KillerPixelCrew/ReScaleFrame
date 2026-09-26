@@ -434,7 +434,128 @@ static struct {
     int enabled;
     int site_verified;
     DWORD rva;
+    /* The main-view stub, when the gate opens through it rather than for every view. */
+    unsigned char* stub;
+    volatile LONG* stub_width;
+    volatile LONG* stub_height;
 } jitter_patch;
+
+/* Open the gate for the main view only.
+
+   Measured 26 September 2026: with the gate open for every view, the briefing's holographic
+   terrain and its aircraft symbols, and the main menu, shimmered at a reduced render scale while
+   the scene around them held still. They are scene-in-scene: views the game renders into a texture
+   and shows inside the main one. They take the same jitter, and nothing resolves it, because the
+   reconstruction only sees the main view; the upscale then magnifies the wobble.
+
+   The jitter code reads the view's rectangle right before the gate (`ViewRect` at view+0x70..0x7C,
+   the view in rsi) to scale the sample. So instead of stepping over the anti-aliasing check, the
+   gate jumps to this stub, which keeps the game's own answer for a view that really runs temporal
+   AA, and otherwise lets the jitter through only for a view whose rectangle is the main view's
+   render size, as the reconstruction's last pass carried it. Anything rendered at another size is
+   left unjittered. Before the first pass the size is zero and every view passes, which is the
+   previous behaviour. rax is saved around the test; both exits start by overwriting the flags.
+
+     je   continue             ; flags from cmp [rsi+0x13c0], 2: temporal AA, the game's own path
+     push rax
+     mov  eax, [width]
+     test eax, eax
+     je   allow                ; no size yet: every view, as before
+     mov  eax, [rsi+0x78]
+     sub  eax, [rsi+0x70]
+     cmp  eax, [width]
+     jne  deny
+     mov  eax, [rsi+0x7c]
+     sub  eax, [rsi+0x74]
+     cmp  eax, [height]
+     jne  deny
+   allow: pop rax
+     jmp  continue             ; the jitter code, gate + 6
+   deny:  pop rax
+     jmp  skip                 ; where the stock jne went
+*/
+static int build_jitter_stub(DWORD rva)
+{
+    unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
+    unsigned char* gate;
+    unsigned char* continue_at;
+    unsigned char* skip_at;
+    unsigned char* stub = NULL;
+    uintptr_t candidate;
+    int32_t displacement;
+    static const unsigned char body[57] = {
+        0x0F, 0x84, 0, 0, 0, 0,             /* 0  je continue        */
+        0x50,                               /* 6  push rax           */
+        0x8B, 0x05, 51, 0, 0, 0,            /* 7  mov eax, [width]   */
+        0x85, 0xC0,                         /* 13 test eax, eax      */
+        0x74, 28,                           /* 15 je allow           */
+        0x8B, 0x46, 0x78,                   /* 17 mov eax, [rsi+78]  */
+        0x2B, 0x46, 0x70,                   /* 20 sub eax, [rsi+70]  */
+        0x3B, 0x05, 35, 0, 0, 0,            /* 23 cmp eax, [width]   */
+        0x75, 20,                           /* 29 jne deny           */
+        0x8B, 0x46, 0x7C,                   /* 31 mov eax, [rsi+7c]  */
+        0x2B, 0x46, 0x74,                   /* 34 sub eax, [rsi+74]  */
+        0x3B, 0x05, 25, 0, 0, 0,            /* 37 cmp eax, [height]  */
+        0x75, 6,                            /* 43 jne deny           */
+        0x58,                               /* 45 allow: pop rax     */
+        0xE9, 0, 0, 0, 0,                   /* 46 jmp continue       */
+        0x58,                               /* 51 deny: pop rax      */
+        0xE9, 0, 0, 0, 0,                   /* 52 jmp skip           */
+    };
+
+    if (!base) {
+        return 0;
+    }
+    gate = base + rva;
+    continue_at = gate + 6;
+    /* The stock jne's own target, 0x3DD past the instruction for the verified site. */
+    skip_at = continue_at + 0x3DD;
+    for (candidate = ((uintptr_t)base & ~(uintptr_t)0xFFFF) - 0x10000;
+         candidate > (uintptr_t)base - 0x70000000u; candidate -= 0x10000) {
+        stub = (unsigned char*)VirtualAlloc((void*)candidate, 0x1000, MEM_RESERVE | MEM_COMMIT,
+                                            PAGE_EXECUTE_READWRITE);
+        if (stub) {
+            break;
+        }
+    }
+    if (!stub) {
+        return 0;
+    }
+    memset(stub, 0xCC, 0x1000);
+    memcpy(stub, body, sizeof(body));
+    displacement = (int32_t)(continue_at - (stub + 6));
+    memcpy(stub + 2, &displacement, 4);
+    displacement = (int32_t)(continue_at - (stub + 51));
+    memcpy(stub + 47, &displacement, 4);
+    displacement = (int32_t)(skip_at - (stub + 57));
+    memcpy(stub + 53, &displacement, 4);
+    jitter_patch.stub = stub;
+    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + 64);
+    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + 68);
+    *jitter_patch.stub_width = 0;
+    *jitter_patch.stub_height = 0;
+    FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
+    return 1;
+}
+
+/* Keep the stub's main-view size in step with the reconstruction. From the hotkey loop. */
+static void update_jitter_main_view(void)
+{
+    unsigned long width = 0;
+    unsigned long height = 0;
+    if (!jitter_patch.stub) {
+        return;
+    }
+    rsf_bridge_view_size(&width, &height);
+    if ((LONG)width != *jitter_patch.stub_width || (LONG)height != *jitter_patch.stub_height) {
+        InterlockedExchange(jitter_patch.stub_width, (LONG)width);
+        InterlockedExchange(jitter_patch.stub_height, (LONG)height);
+        if (width != 0) {
+            note("jitter: main view is %lux%lu; views of any other size stay unjittered", width,
+                 height);
+        }
+    }
+}
 
 /* Write the gate open or closed. Idempotent, and announced on every transition: a jitter that
    silently stopped and a jitter that was never on look identical in the image. */
@@ -448,8 +569,17 @@ static void set_jitter_enabled(int enabled)
     }
     /* jne rel32, the stock gate. */
     static const uint8_t gate[6] = {0x0F, 0x85, 0xDD, 0x03, 0x00, 0x00};
-    /* The six byte canonical nop, so the fall-through path is reached. */
-    static const uint8_t open[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    /* The six byte canonical nop, so the fall-through path is reached for every view. */
+    static const uint8_t open_all[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+    /* Or a jump to the main-view stub, and a nop. */
+    uint8_t open_main[6] = {0xE9, 0, 0, 0, 0, 0x90};
+    const uint8_t* open = open_all;
+    if (jitter_patch.stub) {
+        unsigned char* gate_address = (unsigned char*)GetModuleHandleW(NULL) + jitter_patch.rva;
+        const int32_t displacement = (int32_t)(jitter_patch.stub - (gate_address + 5));
+        memcpy(open_main + 1, &displacement, 4);
+        open = open_main;
+    }
     const uint8_t* write = enabled ? open : gate;
     const uint8_t* expect = enabled ? gate : open;
     uint8_t previous[6] = {0};
@@ -499,6 +629,15 @@ static void apply_jitter_patch(void)
     jitter_patch.rva = read_number("RSF_JITTER_RVA", 0x112b1f3);
     jitter_patch.site_verified = 1;
     jitter_patch.enabled = 0;
+    /* The stub knows this site's registers and its jump target, so it is used there only. */
+    if (jitter_patch.rva == 0x112b1f3 && read_number("RSF_JITTER_ALL_VIEWS", 0) == 0) {
+        if (build_jitter_stub(jitter_patch.rva)) {
+            note("jitter: main view only, through a stub at %p", (void*)jitter_patch.stub);
+        } else {
+            note("jitter: no memory near the game for the main-view stub, so every view is "
+                 "jittered as before");
+        }
+    }
 
     set_jitter_enabled(1);
     if (!jitter_patch.enabled) {
@@ -855,10 +994,16 @@ static void start_dlss(void)
    it was told to expect, so asking it to replace 100 with our scale does exactly nothing while the
    scale is already ours, and restores it the moment the game puts 100 back. Silent in the ordinary
    case, and it says so on the rare occasion it acts. */
+static unsigned long requested_scale_percent;
+
 static void keep_render_scale(void)
 {
     uint32_t offset = 0;
-    const float value = (float)read_number("RSF_SCREEN_PERCENTAGE", 50);
+    /* What was last asked for, from the panel or a DLSS preset, over the settings file, so a
+       mission load puts back the scale that was chosen rather than the one the run started with. */
+    const float value = requested_scale_percent
+                            ? (float)requested_scale_percent
+                            : (float)read_number("RSF_SCREEN_PERCENTAGE", 50);
     if (value >= 100.0f) {
         return;
     }
@@ -880,7 +1025,6 @@ static void keep_render_scale(void)
    The scale one remembers what was asked so the panel can show what is in effect. Without it the
    only answer available is the environment default, which stops being true the moment anything
    changes it. */
-static unsigned long requested_scale_percent = 0;
 
 static void action_start_backend(void)
 {
@@ -1309,6 +1453,7 @@ static DWORD WINAPI observe_worker(LPVOID parameter)
     while (running) {
         uint32_t key_sources = 0;
         const uint32_t message_keys = rsf_overlay_input_take_function_keys(&key_sources);
+        update_jitter_main_view();
         /* F8, F7, F6 and F3 touch the device and the game's immediate context, so they run at the
            next present on the render thread, where the panel's own buttons run. Starting DLSS from
            this thread while the game was inside Present crashed the driver. */
