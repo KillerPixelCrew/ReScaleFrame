@@ -638,6 +638,12 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         ++bridge.not_main_view;
         return;
     }
+    /* The main view's size for the jitter stub, taken here, before the jitter check. Taken only
+       from evaluated passes it deadlocked: the first pass after F8 came before the render scale
+       applied, the stub learned 1600x900, refused the real 800x452 main view its jitter, and no
+       pass was ever evaluated again to correct it. */
+    InterlockedExchange(&bridge.view_width, (LONG)pass->render_width);
+    InterlockedExchange(&bridge.view_height, (LONG)pass->render_height);
     if (!view.has_jitter) {
         /* Expected until the anti-aliasing gate is patched, and worth counting separately: a run
            that reaches here and stops has found everything except the one thing RSF_ENABLE_JITTER
@@ -675,8 +681,6 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     rsf_resource_retain(bridge.held_exposure);
     bridge.held_camera = camera;
     bridge.held_width = pass->render_width;
-    InterlockedExchange(&bridge.view_width, (LONG)pass->render_width);
-    InterlockedExchange(&bridge.view_height, (LONG)pass->render_height);
     bridge.held_height = pass->render_height;
     bridge.have_held = 1;
     if (rsf_ac7_scene_color_source(&bridge.color_selection, pass->scene_color, pass->context,
