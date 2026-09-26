@@ -175,6 +175,9 @@ static struct {
     unsigned long translucent_draws_last;
     unsigned long depth_handover_traced;
     unsigned long depth_replay_width[2];
+    /* The present each replay target last took a draw in, so a size the layer no longer uses is
+       the one rebuilt when a new size appears. */
+    unsigned long depth_replay_used[2];
     unsigned long depth_replay_height[2];
     unsigned long depth_replayed;
     rsf_ac7_scene_color color_selection;
@@ -747,6 +750,9 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
     for (i = 0; i < 2; ++i) {
         const uint32_t replayed = rsf_depth_replay_draw(bridge.depth_replay[i], draw);
         bridge.depth_replayed += replayed;
+        if (replayed) {
+            bridge.depth_replay_used[i] = bridge.presents;
+        }
         rejects[i] = replayed ? 0u : rsf_depth_replay_last_reject(bridge.depth_replay[i]);
     }
 
@@ -2083,6 +2089,48 @@ static void overlay_tick(void* swapchain)
     }
 }
 
+/* Build the translucent depth replay at the size the layer actually has.
+
+   The replay targets were sized from the output at startup, full and half. Measured 26 September
+   2026 at 1600x900: the pool rounds the 450-row render height to 452, so the separate translucency
+   layer, at twice the scene on heavy frames, is 1600x904, and the replay refused all 2.2 million
+   briefing relief draws for their size. DLSS then saw the floor's depth under the hologram, could
+   not follow the relief from frame to frame, and showed its jitter unresolved. It worked on
+   7 September only because 2048x1152 halves without rounding.
+
+   Here, between frames, where no draw is in flight: when the layer's last size matches neither
+   target, the one used longest ago is rebuilt at that size. The layer alternates between full size
+   on heavy frames and render size on light ones, so the two targets settle on those two. */
+static void resize_depth_replay(void)
+{
+    const unsigned long width = bridge.depth_candidate_width;
+    const unsigned long height = bridge.depth_candidate_height;
+    unsigned int slot;
+    rsf_depth_replay* rebuilt;
+    if (!bridge.started || !bridge.device || width == 0 || height == 0 ||
+        bridge.depth_candidate_samples != 1) {
+        return;
+    }
+    if ((bridge.depth_replay_width[0] == width && bridge.depth_replay_height[0] == height) ||
+        (bridge.depth_replay_width[1] == width && bridge.depth_replay_height[1] == height)) {
+        return;
+    }
+    slot = bridge.depth_replay_used[0] <= bridge.depth_replay_used[1] ? 0u : 1u;
+    rebuilt = rsf_depth_replay_create(bridge.device, (uint32_t)width, (uint32_t)height);
+    if (!rebuilt) {
+        say("translucent depth: no replay target could be made at %lux%lu", width, height);
+        bridge.depth_candidate_width = 0;
+        return;
+    }
+    say("translucent depth: the layer is %lux%lu, replay %u rebuilt at that size (was %lux%lu)",
+        width, height, slot, bridge.depth_replay_width[slot], bridge.depth_replay_height[slot]);
+    rsf_depth_replay_destroy(bridge.depth_replay[slot]);
+    bridge.depth_replay[slot] = rebuilt;
+    bridge.depth_replay_width[slot] = width;
+    bridge.depth_replay_height[slot] = height;
+    bridge.depth_replay_used[slot] = bridge.presents;
+}
+
 /* Called before the game's own Present, from the observer. */
 /* Requests from the hotkey worker, run on this thread at the next present. */
 static volatile LONG pending_requests;
@@ -2212,6 +2260,7 @@ static void on_present(void* user, void* swapchain)
     rsf_ac7_scene_color_end_frame(&bridge.color_selection);
     rsf_depth_replay_end_frame(bridge.depth_replay[0]);
     rsf_depth_replay_end_frame(bridge.depth_replay[1]);
+    resize_depth_replay();
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
