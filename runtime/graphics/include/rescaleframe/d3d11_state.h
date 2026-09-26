@@ -59,6 +59,14 @@ void rsf_d3d11_state_restore(void* context, rsf_d3d11_state* state);
 uint32_t rsf_d3d11_depth_state_save(void* context, rsf_d3d11_state* state);
 void rsf_d3d11_depth_state_restore(void* context, rsf_d3d11_state* state);
 
+/* Two small device calls for a C caller. `rsf_d3d11_copy_resource` is CopyResource on `context`
+   (`ID3D11DeviceContext*`) from `source` to `destination`, both `ID3D11Resource*` of one size and
+   format. `rsf_d3d11_create_shader_view` makes a default shader resource view on `texture`
+   (`ID3D11Texture2D*`) with `device` (`ID3D11Device*`), returned as `ID3D11ShaderResourceView*`
+   with one reference the caller releases, or null. */
+void rsf_d3d11_copy_resource(void* context, void* destination, void* source);
+void* rsf_d3d11_create_shader_view(void* device, void* texture);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

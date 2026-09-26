@@ -282,3 +282,23 @@ extern "C" void rsf_d3d11_depth_state_restore(void* pointer, rsf_d3d11_state* st
     }
     std::memset(storage, 0, sizeof(*storage));
 }
+
+extern "C" void rsf_d3d11_copy_resource(void* context, void* destination, void* source)
+{
+    if (!context || !destination || !source) {
+        return;
+    }
+    static_cast<ID3D11DeviceContext*>(context)->CopyResource(
+        static_cast<ID3D11Resource*>(destination), static_cast<ID3D11Resource*>(source));
+}
+
+extern "C" void* rsf_d3d11_create_shader_view(void* device, void* texture)
+{
+    ID3D11ShaderResourceView* view = nullptr;
+    if (!device || !texture ||
+        FAILED(static_cast<ID3D11Device*>(device)->CreateShaderResourceView(
+            static_cast<ID3D11Resource*>(texture), nullptr, &view))) {
+        return nullptr;
+    }
+    return view;
+}

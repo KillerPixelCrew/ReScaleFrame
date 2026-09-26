@@ -15,7 +15,7 @@
 // The plan has to hold every promoted surface at once: the composite, the scene colour, and both
 // sets. A plan that describes the frame correctly and is refused for being one entry too long is
 // the worst kind of failure, because it reports itself on, and it has happened once.
-static_assert(4u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
+static_assert(5u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
                   RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
               "the frame tap's plan cannot hold everything promotion may name");
 
@@ -74,6 +74,9 @@ struct rsf_promote {
     // Where the game's own writes into scene colour go after the recombine: temporal AA's output,
     // which the reconstruction replaces. Never read.
     Replacement scratch;
+    // The layer and what stands in for its reads, both the caller's.
+    ID3D11Texture2D* layer = nullptr;
+    ID3D11ShaderResourceView* layer_view = nullptr;
     rsf_fullscreen_pass* seed_pass = nullptr;
     Replacement ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
     uint32_t ui_target_count = 0;
@@ -321,6 +324,13 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
         release_everything(promote);
         return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
     }
+    promote->layer = nullptr;
+    promote->layer_view = nullptr;
+    if (tail->composed && tail->struct_size >= sizeof(rsf_promote_frame_tail) && tail->layer &&
+        tail->layer_view) {
+        promote->layer = static_cast<ID3D11Texture2D*>(tail->layer);
+        promote->layer_view = static_cast<ID3D11ShaderResourceView*>(tail->layer_view);
+    }
     if (tail->composed) {
         if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composed),
                                promote->composed, "recombined colour", 0) ||
@@ -442,6 +452,14 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
         finish.texture = promote->scratch.texture;
         finish.shader_view = promote->scratch.shader_view;
         finish.after_target = promote->composite.original;
+        // The layer's reads, from the recombine onward, go to its integrated twin. Reads only:
+        // the game keeps drawing into the layer itself.
+        if (promote->layer && promote->layer_view) {
+            rsf_frame_tap_substitution& layer = plan->items[plan->count++];
+            layer.texture = promote->layer;
+            layer.shader_view = promote->layer_view;
+            layer.after_target = promote->composed.original;
+        }
         return RSF_PROMOTE_OK;
     }
     rsf_frame_tap_substitution& scene = plan->items[plan->count++];

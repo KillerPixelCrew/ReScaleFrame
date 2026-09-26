@@ -39,7 +39,8 @@
 extern "C" {
 #endif
 
-#define RSF_DLSS_PIPELINE_ABI_VERSION 1u
+/* 2: a second feature for a layer at one to one, and its counts in the status. */
+#define RSF_DLSS_PIPELINE_ABI_VERSION 2u
 
 typedef int32_t rsf_dlss_pipeline_result;
 #define RSF_DLSS_PIPELINE_OK ((rsf_dlss_pipeline_result)0)
@@ -169,7 +170,48 @@ typedef struct rsf_dlss_pipeline_status {
     uint64_t frames_evaluated;
     uint64_t frames_refused;
     rsf_dlss_pipeline_result last_result;
+    /* Appended in ABI 2: the layer feature's frames, and the size it is built for. */
+    uint64_t layer_frames_evaluated;
+    uint64_t layer_frames_refused;
+    uint32_t layer_width;
+    uint32_t layer_height;
+    rsf_dlss_pipeline_result layer_last_result;
 } rsf_dlss_pipeline_status;
+
+/* A layer to integrate at one to one: the separate translucency layer, rendered at the size the
+   game asked for and never scaled, handed to a second DLSS feature in its anti-aliasing mode so
+   its stochastic materials are averaged over frames the way the game's own temporal pass would
+   have. The colour is `R16G16B16A16_FLOAT` premultiplied, and the alpha is carried through. */
+typedef struct rsf_dlss_pipeline_layer {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    /* The layer, at `width` x `height` or larger. */
+    void* color;
+    /* A depth for it at the same size: the scene's depth with the layer's own geometry drawn
+       over it. */
+    void* depth;
+    uint32_t width;
+    uint32_t height;
+    /* The view the layer was drawn with: the scene's camera at the layer's size, jitter in the
+       layer's pixels. */
+    const rsf_camera_frame* camera;
+} rsf_dlss_pipeline_layer;
+
+/* Build the layer feature's output and its zero motion at this size, or rebuild them when the
+   size moves. Returns the output texture, `ID3D11Texture2D*` at `width` x `height`, owned by the
+   pipeline and valid until the next size change or stop. Call it from the thread that drives the
+   frames, before the first `rsf_dlss_pipeline_on_layer` and whenever the layer's size changes. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_t width,
+                                                                          uint32_t height,
+                                                                          void** output);
+
+/* Integrate the layer for this frame into the prepared output. Zero motion is submitted for the
+   whole layer and the camera's motion is left to Streamline to derive from the depth, which is
+   what the scene does for its static geometry as well. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(
+    void* d3d11_context, const rsf_dlss_pipeline_layer* layer);
+
+RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 
 /* Load Streamline, hand over the game's device, and find out whether DLSS can run on it.
 

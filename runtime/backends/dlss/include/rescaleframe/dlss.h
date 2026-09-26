@@ -24,7 +24,9 @@
 extern "C" {
 #endif
 
-#define RSF_DLSS_ABI_VERSION 2u
+/* 3: a frame names its viewport, may ask for alpha to be carried, and may pin its frame index so
+   two viewports evaluated in one frame share it. */
+#define RSF_DLSS_ABI_VERSION 3u
 
 /* Which engine the host is. Streamline wants an identity before it will start NGX, and NGX is what
    DLSS runs on, so this is not optional decoration: with none of it supplied the DLSS plugin loads
@@ -203,6 +205,17 @@ typedef struct rsf_dlss_frame {
     uint32_t camera_motion_included;
     /* No usable history: a cut, a teleport, or the first frame after a resolution change. */
     uint32_t reset;
+
+    /* Appended in ABI 3. Which of the two viewports this frame is for: 0 is the scene, 1 is a
+       second feature with its own history, such as a translucency layer integrated at one to one.
+       Each viewport keeps its own options, constants and resources. */
+    uint32_t viewport;
+    /* Carry the alpha channel through the reconstruction as well as the colour. For a layer
+       composited by its alpha afterwards. */
+    uint32_t alpha;
+    /* The frame this evaluate belongs to, so two viewports evaluated in one frame share a frame
+       token. Zero lets Streamline count frames itself. */
+    uint32_t frame_index;
 } rsf_dlss_frame;
 
 /* Run DLSS for this frame. `d3d11_context` is the `ID3D11DeviceContext*` the game renders with,
@@ -215,6 +228,9 @@ rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* fra
 /* Release DLSS resources for the viewport while leaving Streamline loaded. Worth doing when the
    render size changes, since the feature is built for a specific pair of sizes. */
 rsf_dlss_result rsf_dlss_release_resources(void);
+
+/* The same for one viewport by number. */
+rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport);
 
 /* Shut Streamline down and unload the interposer. Must happen before the game's device goes. */
 rsf_dlss_result rsf_dlss_shutdown(void);

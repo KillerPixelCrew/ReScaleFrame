@@ -13,6 +13,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -91,7 +92,34 @@ struct Pipeline {
     rsf_dlss_pipeline_result last_result = RSF_DLSS_PIPELINE_OK;
     bool dump_pending = false;
     std::string dump_prefix;
+
+    // The layer feature: viewport 1, one to one, with its own history.
+    ID3D11Texture2D* layer_output = nullptr;
+    ID3D11Texture2D* layer_motion = nullptr;
+    uint32_t layer_width = 0;
+    uint32_t layer_height = 0;
+    bool layer_rebuilt = false;
+    uint32_t layer_consecutive_failures = 0;
+    bool layer_given_up = false;
+    rsf_dlss_pipeline_result layer_reported = RSF_DLSS_PIPELINE_OK;
+    uint64_t layer_frames_evaluated = 0;
+    uint64_t layer_frames_refused = 0;
+    rsf_dlss_pipeline_result layer_last_result = RSF_DLSS_PIPELINE_OK;
 };
+
+void release_layer(Pipeline& self)
+{
+    if (self.layer_output) {
+        self.layer_output->Release();
+        self.layer_output = nullptr;
+    }
+    if (self.layer_motion) {
+        self.layer_motion->Release();
+        self.layer_motion = nullptr;
+    }
+    self.layer_width = 0;
+    self.layer_height = 0;
+}
 
 Pipeline& pipeline()
 {
@@ -165,11 +193,13 @@ void tear_down(Pipeline& self)
         self.output->Release();
         self.output = nullptr;
     }
+    release_layer(self);
     if (self.streamline_loaded) {
         say(self, "shutting streamline down");
         // Frees the DLSS feature's own resources first. Streamline's shutdown does this too, but
         // the order matters when the caller's device is about to go and this makes it explicit.
         rsf_dlss_release_resources();
+        rsf_dlss_release_viewport(1u);
         rsf_dlss_shutdown();
         self.streamline_loaded = false;
     }
@@ -188,10 +218,38 @@ void tear_down(Pipeline& self)
     self.reported_width = 0;
     self.reported_height = 0;
 
+    self.layer_consecutive_failures = 0;
+    self.layer_given_up = false;
+    self.layer_reported = RSF_DLSS_PIPELINE_OK;
     std::lock_guard<std::mutex> lock(self.guard);
     self.running = false;
     self.supported = false;
     self.dump_pending = false;
+    self.layer_frames_evaluated = 0;
+    self.layer_frames_refused = 0;
+    self.layer_last_result = RSF_DLSS_PIPELINE_OK;
+}
+
+rsf_dlss_pipeline_result finish_layer(Pipeline& self, rsf_dlss_pipeline_result result)
+{
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (result == RSF_DLSS_PIPELINE_OK) {
+        ++self.layer_frames_evaluated;
+    } else {
+        ++self.layer_frames_refused;
+    }
+    self.layer_last_result = result;
+    return result;
+}
+
+// Said once per run of the same failure, like the scene's, and for the same reason.
+bool layer_worth_saying(Pipeline& self, rsf_dlss_pipeline_result result)
+{
+    if (self.layer_reported == result) {
+        return false;
+    }
+    self.layer_reported = result;
+    return true;
 }
 
 // Record the outcome of a frame and hand it back. Every frame that did not reach a successful
@@ -731,7 +789,186 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(rsf_dlss_pipeli
     status->frames_evaluated = self.frames_evaluated;
     status->frames_refused = self.frames_refused;
     status->last_result = self.last_result;
+    status->layer_frames_evaluated = self.layer_frames_evaluated;
+    status->layer_frames_refused = self.layer_frames_refused;
+    status->layer_width = self.layer_width;
+    status->layer_height = self.layer_height;
+    status->layer_last_result = self.layer_last_result;
     return RSF_DLSS_PIPELINE_OK;
+}
+
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_t width,
+                                                                    uint32_t height,
+                                                                    void** output)
+{
+    Pipeline& self = pipeline();
+    if (!output || width == 0 || height == 0) {
+        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    }
+    *output = nullptr;
+    if (!self.device || !self.streamline_loaded) {
+        return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
+    }
+    if (self.layer_output && self.layer_width == width && self.layer_height == height) {
+        *output = self.layer_output;
+        return RSF_DLSS_PIPELINE_OK;
+    }
+    if (self.layer_output) {
+        say(self, "layer size moved from %ux%u to %ux%u, rebuilding the layer feature",
+            self.layer_width, self.layer_height, width, height);
+        rsf_dlss_release_viewport(1u);
+    }
+    release_layer(self);
+
+    say(self, "creating the %ux%u layer output and its zero motion", width, height);
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = width;
+    description.Height = height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    description.SampleDesc.Count = 1;
+    description.Usage = D3D11_USAGE_DEFAULT;
+    description.BindFlags =
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+    if (FAILED(self.device->CreateTexture2D(&description, nullptr, &self.layer_output)) ||
+        !self.layer_output) {
+        say(self, "the layer output could not be created");
+        release_layer(self);
+        return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+    }
+    // Zero motion for the whole layer. Its materials carry no velocity of their own, and the
+    // camera's share is derived from the depth by Streamline as for the scene's static geometry.
+    D3D11_TEXTURE2D_DESC motion = description;
+    motion.Format = DXGI_FORMAT_R16G16_FLOAT;
+    motion.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    std::vector<uint32_t> zeros(size_t(width) * size_t(height), 0u);
+    D3D11_SUBRESOURCE_DATA initial{};
+    initial.pSysMem = zeros.data();
+    initial.SysMemPitch = width * 4u;
+    if (FAILED(self.device->CreateTexture2D(&motion, &initial, &self.layer_motion)) ||
+        !self.layer_motion) {
+        say(self, "the layer's zero motion could not be created");
+        release_layer(self);
+        return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+    }
+    {
+        ID3D11DeviceContext* context = nullptr;
+        ID3D11RenderTargetView* target = nullptr;
+        self.device->GetImmediateContext(&context);
+        if (context &&
+            SUCCEEDED(self.device->CreateRenderTargetView(self.layer_output, nullptr, &target)) &&
+            target) {
+            const FLOAT clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            context->ClearRenderTargetView(target, clear);
+            target->Release();
+        }
+        if (context) {
+            context->Release();
+        }
+    }
+    self.layer_width = width;
+    self.layer_height = height;
+    self.layer_rebuilt = true;
+    self.layer_consecutive_failures = 0;
+    self.layer_given_up = false;
+    *output = self.layer_output;
+    return RSF_DLSS_PIPELINE_OK;
+}
+
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_pointer,
+                                                               const rsf_dlss_pipeline_layer* layer)
+{
+    if (!context_pointer || !layer || layer->struct_size < sizeof(rsf_dlss_pipeline_layer)) {
+        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    }
+    if (layer->abi_version != RSF_DLSS_PIPELINE_ABI_VERSION) {
+        return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
+    }
+    Pipeline& self = pipeline();
+    if (!self.device || !self.streamline_loaded || !self.layer_output || !self.layer_motion) {
+        return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
+    }
+    if (self.layer_given_up) {
+        return finish_layer(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
+    }
+    if (!layer->color || !layer->depth || !layer->camera || layer->width != self.layer_width ||
+        layer->height != self.layer_height ||
+        layer->camera->struct_size < sizeof(rsf_camera_frame)) {
+        return finish_layer(self, RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT);
+    }
+    if (layer->camera->abi_version != RSF_FRAME_ASSEMBLY_ABI_VERSION) {
+        return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
+    }
+
+    rsf_camera_frame camera = *layer->camera;
+    camera.struct_size = uint32_t(sizeof(rsf_camera_frame));
+    // Zeros are already the decoded convention: no sentinel, nothing to scale.
+    camera.motion_decoded = 1u;
+    camera.has_motion_sentinel = 0u;
+    camera.motion_scale[0] = 1.0f;
+    camera.motion_scale[1] = 1.0f;
+    if (self.layer_rebuilt) {
+        camera.reset = 1u;
+        self.layer_rebuilt = false;
+    }
+
+    rsf_frame_resources resources{};
+    resources.struct_size = uint32_t(sizeof(resources));
+    resources.color_in = layer->color;
+    resources.color_out = self.layer_output;
+    resources.depth = layer->depth;
+    resources.motion = self.layer_motion;
+    resources.exposure = nullptr;
+    resources.render_width = layer->width;
+    resources.render_height = layer->height;
+    resources.output_width = layer->width;
+    resources.output_height = layer->height;
+    resources.quality = RSF_DLSS_QUALITY_NATIVE;
+
+    rsf_dlss_frame dlss_frame{};
+    dlss_frame.struct_size = uint32_t(sizeof(dlss_frame));
+    const rsf_frame_assembly_result assembled =
+        rsf_assemble_dlss_frame(&camera, &resources, &dlss_frame);
+    if (assembled != RSF_FRAME_ASSEMBLY_OK) {
+        if (layer_worth_saying(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED)) {
+            say(self, "the layer frame was refused before DLSS saw it (result %d)",
+                int(assembled));
+        }
+        return finish_layer(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
+    }
+    dlss_frame.viewport = 1u;
+    dlss_frame.alpha = 1u;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        dlss_frame.frame_index = uint32_t(self.frames_evaluated + self.frames_refused);
+    }
+
+    const rsf_dlss_result evaluated = rsf_dlss_evaluate(context_pointer, &dlss_frame);
+    if (evaluated != RSF_DLSS_OK) {
+        ++self.layer_consecutive_failures;
+        if (self.layer_consecutive_failures >= kEvaluateFailureLimit) {
+            self.layer_given_up = true;
+            say(self, "DLSS failed to integrate the layer %u frames in a row (last result %d), "
+                      "so it will not be asked again until the layer is prepared anew",
+                self.layer_consecutive_failures, int(evaluated));
+        } else if (layer_worth_saying(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED)) {
+            say(self, "DLSS did not integrate the layer this frame (result %d)", int(evaluated));
+        }
+        return finish_layer(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
+    }
+    if (self.layer_frames_evaluated == 0) {
+        say(self, "DLSS integrated the layer at %ux%u, one to one, alpha carried", layer->width,
+            layer->height);
+    }
+    self.layer_consecutive_failures = 0;
+    self.layer_reported = RSF_DLSS_PIPELINE_OK;
+    return finish_layer(self, RSF_DLSS_PIPELINE_OK);
+}
+
+extern "C" void* rsf_dlss_pipeline_layer_output(void)
+{
+    return pipeline().layer_output;
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,

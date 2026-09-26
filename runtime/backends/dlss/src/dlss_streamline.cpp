@@ -163,12 +163,17 @@ sl::DLSSMode mode_for(rsf_dlss_quality quality)
     }
 }
 
-// The one viewport this integration drives. A second one would need its own tags, constants and
-// options, so it gets a name rather than a bare zero to make that assumption visible.
+// The viewports this integration drives: the scene, and a second feature with its own history for
+// a layer integrated at one to one. Each has its own tags, constants and options.
+const sl::ViewportHandle& viewport_handle(uint32_t index)
+{
+    static sl::ViewportHandle handles[2] = {sl::ViewportHandle{0u}, sl::ViewportHandle{1u}};
+    return handles[index < 2u ? index : 0u];
+}
+
 const sl::ViewportHandle& sole_viewport()
 {
-    static sl::ViewportHandle handle{0u};
-    return handle;
+    return viewport_handle(0u);
 }
 
 } // namespace
@@ -450,9 +455,13 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     auto* command_buffer = static_cast<sl::CommandBuffer*>(d3d11_context);
 
     sl::FrameToken* token = nullptr;
-    if (self.sl.get_new_frame_token(token, nullptr) != sl::Result::eOk || !token) {
+    uint32_t frame_index = frame->frame_index;
+    if (self.sl.get_new_frame_token(token, frame_index ? &frame_index : nullptr) !=
+            sl::Result::eOk ||
+        !token) {
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
+    const sl::ViewportHandle& viewport = viewport_handle(frame->viewport);
 
     sl::Constants constants{};
     constants.cameraViewToClip = to_matrix(frame->camera_view_to_clip);
@@ -484,7 +493,7 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     // a raw zero for exactly that, which is why AC7 needs no composition pass for DLSS.
     constants.motionVectorsInvalidValue = frame->motion_invalid_value;
 
-    if (self.sl.set_constants(constants, *token, sole_viewport()) != sl::Result::eOk) {
+    if (self.sl.set_constants(constants, *token, viewport) != sl::Result::eOk) {
         say("slSetConstants failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -497,7 +506,8 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     // Auto exposure only when the game does not hand us its own. AC7 keeps one in a 1x1 target and
     // it is bound at the same pass as everything else here, so normally it does.
     options.useAutoExposure = frame->exposure ? sl::Boolean::eFalse : sl::Boolean::eTrue;
-    if (self.set_options(sole_viewport(), options) != sl::Result::eOk) {
+    options.alphaUpscalingEnabled = flag(frame->alpha);
+    if (self.set_options(viewport, options) != sl::Result::eOk) {
         say("slDLSSSetOptions failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -529,13 +539,13 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     };
     const uint32_t tag_count = frame->exposure ? 5u : 4u;
 
-    if (self.sl.set_tag_for_frame(*token, sole_viewport(), tags, tag_count, command_buffer) !=
+    if (self.sl.set_tag_for_frame(*token, viewport, tags, tag_count, command_buffer) !=
         sl::Result::eOk) {
         say("slSetTagForFrame failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
 
-    const sl::BaseStructure* inputs[] = {&sole_viewport()};
+    const sl::BaseStructure* inputs[] = {&viewport};
     const sl::Result result =
         self.sl.evaluate_feature(sl::kFeatureDLSS, *token, inputs, 1, command_buffer);
     if (result != sl::Result::eOk) {
@@ -545,16 +555,21 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     return RSF_DLSS_OK;
 }
 
-extern "C" rsf_dlss_result rsf_dlss_release_resources(void)
+extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
 {
     State& self = state();
     if (!self.initialised) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
-    if (self.sl.free_resources(sl::kFeatureDLSS, sole_viewport()) != sl::Result::eOk) {
+    if (self.sl.free_resources(sl::kFeatureDLSS, viewport_handle(index)) != sl::Result::eOk) {
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
     return RSF_DLSS_OK;
+}
+
+extern "C" rsf_dlss_result rsf_dlss_release_resources(void)
+{
+    return rsf_dlss_release_viewport(0u);
 }
 
 extern "C" rsf_dlss_result rsf_dlss_shutdown(void)

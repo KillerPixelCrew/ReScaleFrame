@@ -189,3 +189,21 @@ in sl.common, caught by the crash reporter, then result -9). So a RenderDoc capt
 this route running. The route dump, taken with F10, writes the pictures at the gates for two
 consecutive frames instead: the game's scene colour, the seeded stand-in, the translucency layer
 at the recombine, and the recombined stand-in at the tonemap, with the camera jitter logged.
+
+### The layer's materials are stochastic, so the layer is integrated at one to one
+
+26 September 2026, from the route dumps of two consecutive briefing frames: the reconstruction
+and the recombined output move by under a tenth of a pixel, the layer does not move either, and
+the layer's content is re-rolled every frame. The hologram materials draw their contour lines and
+symbols as temporal dither and rely on the engine's temporal pass to average them; composited
+after the reconstruction, nothing averages them, and everything that is not interface shimmers.
+
+The layer therefore goes through DLSS after all, but at the size the game asked for and never
+scaled: a second Streamline viewport in the anti-aliasing mode, one to one, alpha carried, fed the
+layer as the game drew it with its jitter, a depth for it from the depth-only replay of its draws
+sized from the layer, zero motion with the camera's share derived by Streamline from that depth,
+and the layer view's own camera. The recombine reads the integrated output in the layer's place
+from the recombine onward. A refused frame copies the raw layer into the output instead.
+
+Not yet game-tested. What decides it: whether the feature creates for a second viewport, whether
+the replay accepts the layer's draws at 1600x904, and whether DLSS keeps the point cloud's detail.

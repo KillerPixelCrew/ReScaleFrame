@@ -96,7 +96,9 @@ extern "C" {
    game writes into scene colour after the recombine goes to a scratch target, and when the
    composite is bound for the tonemap the recombined stand-in is copied into scene colour's stand-in
    by `rsf_promote_finish`. */
-#define RSF_PROMOTE_ABI_VERSION 6u
+/* 7: the tail may name the separate translucency layer and what to read in its place: the layer
+   integrated at one to one, which the recombine then composites instead of the raw one. */
+#define RSF_PROMOTE_ABI_VERSION 7u
 /* How many interface layers may be promoted. AC7 alternates between two allocations from frame to
    frame on the briefing, and a screen with more of them should lose none rather than lose the ones
    found last. */
@@ -170,6 +172,11 @@ typedef struct rsf_promote_frame_tail {
        with the separate translucency layer composited over it. Null keeps the older route, where
        the reconstruction includes translucency and replaces scene colour at the tonemap. */
     void* composed;
+    /* Appended in ABI 7. The separate translucency layer the recombine reads, and the shader
+       resource view (`ID3D11ShaderResourceView*`, the caller's, kept alive by the caller) to read
+       in its place from the recombine onward. Either null leaves the layer as it is. */
+    void* layer;
+    void* layer_view;
 } rsf_promote_frame_tail;
 
 typedef struct rsf_promote_status {
