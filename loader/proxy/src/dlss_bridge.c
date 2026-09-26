@@ -226,6 +226,14 @@ static struct {
     int recombine_off;
     unsigned long finishes;
     unsigned long layer_draws_twinned;
+    /* The last tail that made a working plan, so a rebuild that fails puts it back rather than
+       leaving the frame unpromoted, and the present a failed rebuild is next tried at. Measured
+       26 September 2026: a rebuild failing on every present for a run of frames showed as the
+       interface and the hologram blinking out. */
+    rsf_promote_frame_tail last_tail;
+    int last_tail_valid;
+    unsigned long plan_retry_after;
+    unsigned long plan_restores;
     /* A route dump: the pictures at the gates for a couple of consecutive frames, written from the
        render thread as the frame passes them, with DLSS running. RenderDoc cannot do this here:
        Streamline crashes inside RenderDoc's device wrapper the moment it is handed the device. */
@@ -2519,6 +2527,7 @@ static void follow_layer_size(void)
     if (bridge.layer_output_view) {
         rsf_resource_release(bridge.layer_output_view);
         bridge.layer_output_view = NULL;
+        bridge.last_tail_valid = 0;
     }
     bridge.layer_output = NULL;
     if (rsf_dlss_pipeline_prepare_layer((uint32_t)width, (uint32_t)height, &output) ==
@@ -2641,8 +2650,11 @@ static void on_present(void* user, void* swapchain)
             watch_for_stalled_plan();
             /* A layer or a chain target came or went since the plan was built. Rebuilt here, on
                the thread that drives the frames, rather than inside the draw hook that noticed. */
-            if (bridge.plan_stale && !bridge.tail_restaking) {
-                install_reinsert_plan();
+            if (bridge.plan_stale && !bridge.tail_restaking &&
+                bridge.presents >= bridge.plan_retry_after) {
+                if (!install_reinsert_plan()) {
+                    bridge.plan_retry_after = bridge.presents + 60;
+                }
             }
             release_held();
             rsf_frame_tap_end_frame();
@@ -2837,6 +2849,7 @@ static void stop_reinsert(void)
 {
     rsf_frame_tap_set_plan(NULL);
     bridge.size_patch_target = NULL;
+    bridge.last_tail_valid = 0;
     rsf_frame_tap_end_frame();
     bridge.reinsert_on = 0;
     say("reinsert: off, the game draws its own frame again");
@@ -2915,11 +2928,54 @@ void rsf_bridge_toggle_reinsert(void)
    Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
    whether reinsertion should be on; it only makes the plan describe the frame that is actually
    being drawn now. */
+/* Prepare the replacements for `tail` and hand the tap its plan. On any failure the tap is left
+   with no plan, which is what the caller then repairs. */
+static int apply_tail(const rsf_promote_frame_tail* tail)
+{
+    rsf_frame_tap_plan plan;
+    rsf_promote_result prepared;
+
+    /* Preparing releases the previous replacements, and the tap must not be left holding views
+       onto textures that are gone. Cleared first; the new plan follows within this call. */
+    rsf_frame_tap_set_plan(NULL);
+    bridge.size_patch_target = NULL;
+    prepared = rsf_promote_prepare(bridge.promote, tail);
+    if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
+        say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
+        return 0;
+    }
+    if (prepared != RSF_PROMOTE_OK) {
+        say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
+        return 0;
+    }
+
+    memset(&plan, 0, sizeof(plan));
+    plan.struct_size = sizeof(plan);
+    if (rsf_promote_fill_plan(bridge.promote, &plan) != RSF_PROMOTE_OK) {
+        say("reinsert: the plan could not be built");
+        return 0;
+    }
+    plan.on_gate = on_gate;
+    /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
+       whatever the game draws with depth into the composite is lost unless something gives. The
+       three answers are all wrong in different ways and the setting exists so all three can be
+       compared in one run rather than one per build. See `depth_policy`. */
+    plan.depth_policy = bridge.actions.reinsert_depth_policy
+                            ? (uint32_t)bridge.actions.reinsert_depth_policy()
+                            : RSF_FRAME_TAP_DEPTH_DROP;
+
+    if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
+        say("reinsert: the frame tap refused the plan");
+        return 0;
+    }
+    /* The recombine's size constants follow the plan: promoted while its target is bound. */
+    bridge.size_patch_target = tail->composed;
+    return 1;
+}
+
 static int install_reinsert_plan(void)
 {
     rsf_promote_frame_tail tail;
-    rsf_frame_tap_plan plan;
-    rsf_promote_result prepared;
     uint32_t index;
     void* reconstruction = rsf_dlss_pipeline_output_texture();
 
@@ -2958,41 +3014,17 @@ static int install_reinsert_plan(void)
     }
     tail.ui_target_view_format = bridge.ui_target_view_format;
     tail.chain_view_format = bridge.chain_view_format;
-    /* Preparing releases the previous replacements, and the tap must not be left holding views
-       onto textures that are gone. Cleared first; the new plan follows within this call. */
-    rsf_frame_tap_set_plan(NULL);
-    bridge.size_patch_target = NULL;
-    prepared = rsf_promote_prepare(bridge.promote, &tail);
-    if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
-        say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
+    if (!apply_tail(&tail)) {
+        /* The frame must not go unpromoted for a tail that failed to build. The last tail that
+           worked goes back, and the new one is tried again later rather than on every present. */
+        if (bridge.last_tail_valid && apply_tail(&bridge.last_tail)) {
+            ++bridge.plan_restores;
+            say("reinsert: the previous plan is back until the new tail can be built");
+        }
         return 0;
     }
-    if (prepared != RSF_PROMOTE_OK) {
-        say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
-        return 0;
-    }
-
-    memset(&plan, 0, sizeof(plan));
-    plan.struct_size = sizeof(plan);
-    if (rsf_promote_fill_plan(bridge.promote, &plan) != RSF_PROMOTE_OK) {
-        say("reinsert: the plan could not be built");
-        return 0;
-    }
-    plan.on_gate = on_gate;
-    /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
-       whatever the game draws with depth into the composite is lost unless something gives. The
-       three answers are all wrong in different ways and the setting exists so all three can be
-       compared in one run rather than one per build. See `depth_policy`. */
-    plan.depth_policy = bridge.actions.reinsert_depth_policy
-                            ? (uint32_t)bridge.actions.reinsert_depth_policy()
-                            : RSF_FRAME_TAP_DEPTH_DROP;
-
-    if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
-        say("reinsert: the frame tap refused the plan");
-        return 0;
-    }
-    /* The recombine's size constants follow the plan: promoted while its target is bound. */
-    bridge.size_patch_target = tail.composed;
+    bridge.last_tail = tail;
+    bridge.last_tail_valid = 1;
     /* A fresh plan describes its first frames' passes and gate decisions, so a log of a screen
        says what that screen renders. */
     bridge.frames_described = 0;
@@ -3271,11 +3303,12 @@ void rsf_bridge_report(void)
         say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
             "redirected between stand-ins, %lu copies with one side promoted, %lu uploads for the "
             "recombine had %lu size constants promoted, %lu constant uploads watched, %lu "
-            "recombine gates declined as another render's camera",
+            "recombine gates declined as another render's camera, %lu plans restored after a "
+            "failed rebuild",
             bridge.finishes, (unsigned long)tap.copies_redirected,
             (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
             bridge.sizes_patched, (unsigned long)tap.updates_watched,
-            bridge.gates_declined_camera);
+            bridge.gates_declined_camera, bridge.plan_restores);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks

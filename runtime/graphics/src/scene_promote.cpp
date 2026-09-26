@@ -115,9 +115,48 @@ void say(const rsf_promote* promote, const char* format, ...)
 // The format a view on a texture takes: the one the game binds with, where the tail says, and
 // otherwise the texture's own format with a typeless family resolved to its plain UNORM member,
 // because a view on a typeless texture has to name one.
+// The typeless family a format belongs to, or the format itself when it has none.
+DXGI_FORMAT typeless_family(DXGI_FORMAT format)
+{
+    switch (format) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+    case DXGI_FORMAT_R8G8B8A8_UINT:
+    case DXGI_FORMAT_R8G8B8A8_SNORM:
+    case DXGI_FORMAT_R8G8B8A8_SINT:
+        return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+    case DXGI_FORMAT_B8G8R8X8_UNORM:
+    case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R10G10B10A2_UINT:
+        return DXGI_FORMAT_R10G10B10A2_TYPELESS;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+    case DXGI_FORMAT_R16G16B16A16_UNORM:
+    case DXGI_FORMAT_R16G16B16A16_UINT:
+    case DXGI_FORMAT_R16G16B16A16_SNORM:
+    case DXGI_FORMAT_R16G16B16A16_SINT:
+        return DXGI_FORMAT_R16G16B16A16_TYPELESS;
+    default:
+        return format;
+    }
+}
+
 DXGI_FORMAT typed_view_format(DXGI_FORMAT texture_format, uint32_t hint)
 {
-    if (hint != 0) {
+    // A hint from another surface's family is no hint: the chain's hint was measured on one
+    // candidate and applied to a later one of a different family, and the view failed to create
+    // on every rebuild. The family is the texture's; the hint only settles sRGB or not within it.
+    if (hint != 0 &&
+        typeless_family(static_cast<DXGI_FORMAT>(hint)) == typeless_family(texture_format)) {
         return static_cast<DXGI_FORMAT>(hint);
     }
     switch (texture_format) {
