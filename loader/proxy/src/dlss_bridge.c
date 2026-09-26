@@ -213,6 +213,8 @@ static struct {
     unsigned long recombine_missing;
     int recombine_off;
     unsigned long finishes;
+    unsigned long layer_draws_twinned;
+    unsigned long layer_draws_untwinned;
     /* The recombine route's one correction to the game's own shading. The recombine (Unreal 4.18
        PostProcessDOF.usf, MainRecombinePS) addresses scene colour and the separate translucency
        layer from the pixel position times the inverse size it was given for its first input, so run
@@ -1890,30 +1892,42 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
     }
 }
 
-static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* draw, uint32_t* slot,
-                                void** buffer)
+static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* draw, uint32_t* slots,
+                                void** buffers)
 {
     uint32_t index;
+    int count = 0;
+    int layer_draw;
     (void)user;
     if (!draw || !view_twins) {
         return 0;
     }
     /* The separate translucency layer is composited after the reconstruction, so nothing resolves
        its jitter either: its draws take the unjittered view as the interface's do. */
-    if (!(draw->render_target && draw->render_target == bridge.translucency_layer) &&
-        classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+    layer_draw = draw->render_target && draw->render_target == bridge.translucency_layer;
+    if (!layer_draw && classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
         return 0;
     }
+    /* Every slot with a twin, not the first. D3D11 keeps earlier draws' buffers bound in the slots
+       a shader does not use, so the first twinned buffer found may be a stale one while the view
+       this shader reads sits in a later slot, jitter and all. */
     for (index = 0; index < 14; ++index) {
         void* twin = rsf_constant_twins_find(view_twins, draw->vertex_constants[index]);
         if (twin) {
-            *slot = index;
-            *buffer = twin;
-            ++twins_bound;
-            return 1;
+            slots[count] = index;
+            buffers[count] = twin;
+            ++count;
         }
     }
-    return 0;
+    if (count) {
+        ++twins_bound;
+        if (layer_draw) {
+            ++bridge.layer_draws_twinned;
+        }
+    } else if (layer_draw) {
+        ++bridge.layer_draws_untwinned;
+    }
+    return count;
 }
 
 static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_draw* draw)
@@ -2994,8 +3008,10 @@ void rsf_bridge_report(void)
        texture the frame never binds, and that is invisible in the picture: the game simply draws
        what it always drew. */
     if (bridge.reinsert_on) {
-        say("ui: %lu unjittered view twins written, %lu interface draws given one",
-            twins_written, twins_bound);
+        say("ui: %lu unjittered view twins written, %lu interface draws given one; translucency "
+            "layer draws: %lu given one, %lu with no twinned view bound",
+            twins_written, twins_bound, bridge.layer_draws_twinned,
+            bridge.layer_draws_untwinned);
         say("reinsert: on, %lu frames, %lu evaluates at the gate, %lu bindings substituted, "
             "%lu targets redirected, %lu gates opened, %lu draws with a twin view",
             bridge.reinsert_frames, bridge.gate_evaluates, (unsigned long)tap.inputs_substituted,

@@ -60,7 +60,11 @@ extern "C" {
 /* 9: the constant watch covers every constant buffer when asked with zero bytes, hands over the
    upload as writable memory, and the target the game has bound can be asked for. Together these
    let a caller correct the size constants of a draw the plan runs into a promoted target. */
-#define RSF_FRAME_TAP_ABI_VERSION 9u
+/* 10: the constant override replaces every slot the caller names, not one. D3D11 leaves a
+   buffer bound in its slot until something replaces it, so a draw arrives with the view buffers of
+   earlier draws still in other slots, and replacing the first one found could leave the one the
+   shader reads untouched. */
+#define RSF_FRAME_TAP_ABI_VERSION 10u
 
 /* Render targets watched at once. The first two answer the tail's question: the swap chain's back
    buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
@@ -319,15 +323,17 @@ typedef struct rsf_frame_tap_divert_setup {
    same code with this switched off. */
 rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* setup);
 
-/* Asked before a candidate draw is forwarded: whether to bind a different vertex-shader constant
-   buffer for that draw only. Return non-zero with `slot` and `buffer` (`ID3D11Buffer*`) filled.
+/* Asked before a candidate draw is forwarded: which vertex-shader constant buffers to replace for
+   that draw only. Fill `slots` and `buffers` (`ID3D11Buffer*`), up to 14 pairs, and return how
+   many; zero leaves the draw alone.
 
    For drawing the interface with an unjittered copy of its view's uniform buffer. The tap binds
-   the buffer through the original entry, forwards the draw, and puts the game's own buffer back,
+   each buffer through the original entry, forwards the draw, and puts the game's own buffers back,
    so its shadow and the game's state stay as the game set them. Counted in `draws_overridden`.
-   Independent of diverting; a diverted draw is not asked. Appended in ABI 8. */
+   Independent of diverting; a diverted draw is not asked. Appended in ABI 8; several slots since
+   ABI 10. */
 typedef int (*rsf_frame_tap_constant_override_fn)(void* user, const rsf_frame_tap_target_draw* draw,
-                                                  uint32_t* slot, void** buffer);
+                                                  uint32_t* slots, void** buffers);
 rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_override_fn fn,
                                                          void* user);
 

@@ -203,8 +203,9 @@ struct Tap {
     std::atomic<void*> override_targets[max_override_targets]{};
     struct OverrideState {
         bool active = false;
-        UINT slot = 0;
-        ID3D11Buffer* original = nullptr;
+        uint32_t count = 0;
+        UINT slots[14] = {};
+        ID3D11Buffer* originals[14] = {};
     } override_state;
     // The constant watch: buffers of one width mapped for writing, held until their Unmap.
     std::atomic<rsf_frame_tap_constants_fn> constant_watch{nullptr};
@@ -958,17 +959,29 @@ void begin_constant_override(Tap& self, ID3D11DeviceContext* context, bool index
     rsf_frame_tap_target_draw facts;
     rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
     fill_divert_facts(self, indexed, element_count, facts, inputs);
-    uint32_t slot = 0;
-    void* buffer = nullptr;
-    if (!fn(self.constant_override_user.load(std::memory_order_relaxed), &facts, &slot, &buffer) ||
-        !buffer || slot >= 14) {
+    uint32_t slots[14] = {};
+    void* buffers[14] = {};
+    const int asked =
+        fn(self.constant_override_user.load(std::memory_order_relaxed), &facts, slots, buffers);
+    if (asked <= 0) {
         return;
     }
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*);
-    ID3D11Buffer* replacement = static_cast<ID3D11Buffer*>(buffer);
-    reinterpret_cast<Fn>(self.extra_originals[5])(context, slot, 1, &replacement);
-    state.slot = slot;
-    state.original = static_cast<ID3D11Buffer*>(self.geometry.vertex_constants[slot]);
+    state.count = 0;
+    for (int index = 0; index < asked && index < 14; ++index) {
+        if (!buffers[index] || slots[index] >= 14) {
+            continue;
+        }
+        ID3D11Buffer* replacement = static_cast<ID3D11Buffer*>(buffers[index]);
+        reinterpret_cast<Fn>(self.extra_originals[5])(context, slots[index], 1, &replacement);
+        state.slots[state.count] = slots[index];
+        state.originals[state.count] =
+            static_cast<ID3D11Buffer*>(self.geometry.vertex_constants[slots[index]]);
+        ++state.count;
+    }
+    if (state.count == 0) {
+        return;
+    }
     state.active = true;
     self.draws_overridden.fetch_add(1, std::memory_order_relaxed);
 }
@@ -980,7 +993,11 @@ void end_constant_override(Tap& self, ID3D11DeviceContext* context)
         return;
     }
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*);
-    reinterpret_cast<Fn>(self.extra_originals[5])(context, state.slot, 1, &state.original);
+    for (uint32_t index = 0; index < state.count; ++index) {
+        reinterpret_cast<Fn>(self.extra_originals[5])(context, state.slots[index], 1,
+                                                      &state.originals[index]);
+    }
+    state.count = 0;
     state.active = false;
 }
 
