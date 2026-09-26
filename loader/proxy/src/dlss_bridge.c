@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
@@ -212,6 +213,16 @@ static struct {
     unsigned long recombine_missing;
     int recombine_off;
     unsigned long finishes;
+    /* The recombine route's one correction to the game's own shading. The recombine (Unreal 4.18
+       PostProcessDOF.usf, MainRecombinePS) addresses scene colour and the separate translucency
+       layer from the pixel position times the inverse size it was given for its first input, so run
+       into a promoted target with a scaled viewport it draws the whole image into the top-left
+       quarter and clamps the rest into streaks. Seen on 26 September as smeared relief, vertical
+       stripes and a dark right half. While the recombined target is bound, every size constant that
+       names the render size is rewritten to the output size as the game uploads it. */
+    void* size_patch_target;
+    unsigned long size_uploads_patched;
+    unsigned long sizes_patched;
     /* The main view's render size from the last qualifying pass, kept past the frame, for the
        jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
     volatile LONG view_width;
@@ -1496,6 +1507,7 @@ static void watch_for_stalled_plan(void)
     /* Let go of what the plan named before looking, so a stale composite cannot be re-found by
        being the thing already held. The tail walk re-identifies both from the frame itself. */
     rsf_frame_tap_set_plan(NULL);
+    bridge.size_patch_target = NULL;
     rsf_resource_release(bridge.composite);
     bridge.composite = NULL;
     bridge.composite_view_format = 0;
@@ -1780,6 +1792,53 @@ static void* back_buffer_view(void* swapchain)
 static rsf_constant_twins* view_twins;
 static unsigned long twins_written, twins_bound;
 static unsigned char twin_scratch[RSF_AC7_VIEW_BUFFER_BYTES];
+
+/* Rewrite (W, H, 1/W, 1/H) at the render size into the same at the output size, in an upload for a
+   draw the plan runs at output size. Unreal packs every post process input's size that way
+   (RenderingCompositionGraph.cpp:973), and the pixel-to-UV factor a shader derives from it is what
+   has to follow the viewport. */
+static void patch_input_sizes(void* contents, uint32_t bytes)
+{
+    float* values = (float*)contents;
+    const float width = (float)bridge.held_width;
+    const float height = (float)bridge.held_height;
+    const float output_width = (float)bridge.output_width;
+    const float output_height = (float)bridge.output_height;
+    uint32_t index;
+    unsigned long patched = 0;
+    if (width <= 0.0f || height <= 0.0f || output_width <= 0.0f || output_height <= 0.0f) {
+        return;
+    }
+    for (index = 0; index + 4 <= bytes / 4; index += 4) {
+        if (values[index] == width && values[index + 1] == height &&
+            fabsf(values[index + 2] * width - 1.0f) < 1e-3f &&
+            fabsf(values[index + 3] * height - 1.0f) < 1e-3f) {
+            values[index] = output_width;
+            values[index + 1] = output_height;
+            values[index + 2] = 1.0f / output_width;
+            values[index + 3] = 1.0f / output_height;
+            ++patched;
+        }
+    }
+    if (patched) {
+        ++bridge.size_uploads_patched;
+        bridge.sizes_patched += patched;
+    }
+}
+
+static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes);
+
+/* Every constant buffer the game fills. The view's buffer is read for the camera and twinned
+   without its jitter; an upload for a draw into the recombined target has its sizes promoted. */
+static void on_constants(void* user, void* buffer, void* contents, uint32_t bytes)
+{
+    if (bridge.size_patch_target && rsf_frame_tap_bound_target() == bridge.size_patch_target) {
+        patch_input_sizes(contents, bytes);
+    }
+    if (bytes == RSF_AC7_VIEW_BUFFER_BYTES) {
+        on_view_constants(user, buffer, contents, bytes);
+    }
+}
 
 static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
 {
@@ -2514,6 +2573,7 @@ void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
 static void stop_reinsert(void)
 {
     rsf_frame_tap_set_plan(NULL);
+    bridge.size_patch_target = NULL;
     rsf_frame_tap_end_frame();
     bridge.reinsert_on = 0;
     say("reinsert: off, the game draws its own frame again");
@@ -2633,6 +2693,7 @@ static int install_reinsert_plan(void)
     /* Preparing releases the previous replacements, and the tap must not be left holding views
        onto textures that are gone. Cleared first; the new plan follows within this call. */
     rsf_frame_tap_set_plan(NULL);
+    bridge.size_patch_target = NULL;
     prepared = rsf_promote_prepare(bridge.promote, &tail);
     if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
         say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
@@ -2662,6 +2723,8 @@ static int install_reinsert_plan(void)
         say("reinsert: the frame tap refused the plan");
         return 0;
     }
+    /* The recombine's size constants follow the plan: promoted while its target is bound. */
+    bridge.size_patch_target = tail.composed;
     /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
        just because the previous plan's redirects are still the last thing counted. */
     bridge.redirect_stall = 0;
@@ -2939,9 +3002,11 @@ void rsf_bridge_report(void)
             (unsigned long)tap.targets_redirected, (unsigned long)tap.gates_opened,
             (unsigned long)tap.draws_overridden);
         say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
-            "redirected between stand-ins, %lu copies with one side promoted",
+            "redirected between stand-ins, %lu copies with one side promoted, %lu uploads for the "
+            "recombine had %lu size constants promoted",
             bridge.finishes, (unsigned long)tap.copies_redirected,
-            (unsigned long)tap.copies_mismatched);
+            (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
+            bridge.sizes_patched);
         /* The number that says whether geometry is being dropped. A promoted target bound with the
            game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
            carry no depth and are untouched. That is exactly the shape of an interface that looks
@@ -3002,7 +3067,7 @@ void rsf_bridge_set_unjitter(int on)
     }
     rsf_frame_tap_set_constant_override(on && view_twins ? ui_constant_override : NULL, NULL);
     /* Always: the recombine route takes this frame's camera from the upload. */
-    rsf_frame_tap_set_constant_watch(RSF_AC7_VIEW_BUFFER_BYTES, on_view_constants, NULL);
+    rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
     say("ui: interface drawn with %s", on ? "an unjittered twin of its view" : "its view as the game uploaded it");
 }
 

@@ -57,7 +57,10 @@
 extern "C" {
 #endif
 
-#define RSF_FRAME_TAP_ABI_VERSION 8u
+/* 9: the constant watch covers every constant buffer when asked with zero bytes, hands over the
+   upload as writable memory, and the target the game has bound can be asked for. Together these
+   let a caller correct the size constants of a draw the plan runs into a promoted target. */
+#define RSF_FRAME_TAP_ABI_VERSION 9u
 
 /* Render targets watched at once. The first two answer the tail's question: the swap chain's back
    buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
@@ -334,14 +337,24 @@ rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_
 rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* texture);
 
 /* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
-   the Unmap is forwarded, for buffers exactly `bytes` wide. Unreal 4.18's D3D11 RHI writes every
-   pooled uniform buffer that way (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform
-   buffer as the frame fills it, read on the CPU with no GPU readback. Borrowed for the call only;
-   render thread; must not call into the context. Null disarms. */
-typedef void (*rsf_frame_tap_constants_fn)(void* user, void* buffer, const void* contents,
+   the Unmap is forwarded. Unreal 4.18's D3D11 RHI writes every pooled uniform buffer that way
+   (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform buffer as the frame fills it, and
+   it writes each shader's own constants the same way, into a sub-buffer sized to the upload
+   (`WindowsD3D11ConstantBuffer.cpp:52`), right before the draw that uses them. `contents` is the
+   mapped memory itself and `bytes` the buffer's width: the callback may write into it, and what it
+   writes is what the game's draw reads. Render thread; must not call into the context.
+
+   `bytes` names the buffers to watch: a width, or zero for every constant buffer of up to 4096
+   bytes. Null disarms. */
+typedef void (*rsf_frame_tap_constants_fn)(void* user, void* buffer, void* contents,
                                            uint32_t bytes);
 rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes, rsf_frame_tap_constants_fn fn,
                                                       void* user);
+
+/* The `ID3D11Texture2D*` behind the render target the game has at output slot 0, as the game bound
+   it, or null. Borrowed, not retained; render thread only. This is how a constant watch tells which
+   draw an upload belongs to: the engine binds the target, then fills the constants, then draws. */
+void* rsf_frame_tap_bound_target(void);
 
 /* One texture the plan replaces.
 

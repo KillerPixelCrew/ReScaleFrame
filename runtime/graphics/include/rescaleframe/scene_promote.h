@@ -59,8 +59,9 @@
    resolution. The quads read the scene and its blur chain at render resolution alongside the widget
    texture, so the glow around the interface is low resolution too. Post process shaders that do
    texel addressed work rather than normalised sampling will address the wrong texels, because their
-   constants still describe the buffer the engine believes it has. All of it is visible only in a
-   rendered result.
+   constants still describe the buffer the engine believes it has; the recombine is one, and the
+   loader rewrites its size constants as they are uploaded (see the frame tap's constant watch). All
+   of it is visible only in a rendered result.
 
    Nothing here is game specific. It is given textures and sizes; which textures those are is the
    caller's question. In this repository the loader answers it by watching the frame's tail for the

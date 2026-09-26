@@ -154,3 +154,29 @@ effect now would be to overwrite the scene's motion behind the layer.
 
 Unverified in game at the time of writing: the briefing relief and symbols without jitter, the
 hangar, flight, and the route switch on leaving the briefing.
+
+### The recombine addresses by pixel, so its size constants are promoted with its target
+
+Three briefing runs on the recombine route showed the same picture: the relief and the world map
+in the top-left, vertical stripes below the middle, a dark right half. The first run's DLSS
+refusals and the second run's temporal AA writes were real faults, but not this one; the third
+run evaluated every frame, seeded and finished every frame, and looked identical.
+
+The 4.18 recombine shader says why (PostProcessDOF.usf, MainRecombinePS):
+
+    float2 PixelPosCenter = SvPosition.xy;
+    float2 FullResUV = PixelPosCenter * PostprocessInput0Size.zw;
+
+Scene colour and the separate translucency layer are sampled at that UV; only the depth of field
+layers use the interpolated one. With the viewport scaled to 1600x900 and the input size still the
+800x452 the engine believes, the UV runs to 2 and the sampler clamps: the whole image lands in the
+top-left quarter and the last row and column smear across the rest. The tonemap and the interface
+composite sample by interpolated UV, which is why the promotion of the composite worked without
+this.
+
+The engine uploads every post process input's size as (W, H, 1/W, 1/H) into the shader's own
+constants (RenderingCompositionGraph.cpp:973), through Map(WRITE_DISCARD) on a sub-buffer sized to
+the upload, right after binding the target and right before the draw. The tap's constant watch now
+covers every constant buffer and hands the upload over writable, and the bridge rewrites each
+render-size quad to the output size while the recombined target is bound. The count is in the
+status line. Not yet seen in the game.

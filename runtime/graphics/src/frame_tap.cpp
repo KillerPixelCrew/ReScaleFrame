@@ -213,6 +213,7 @@ struct Tap {
     struct PendingMap {
         ID3D11Resource* resource = nullptr;
         void* data = nullptr;
+        uint32_t bytes = 0;
     };
     PendingMap pending_maps[16]{};
     ID3D11RenderTargetView* layer_target = nullptr;
@@ -2049,22 +2050,24 @@ HRESULT STDMETHODCALLTYPE hooked_map(ID3D11DeviceContext* c, ID3D11Resource* res
     const HRESULT result =
         reinterpret_cast<Fn>(s.pass_originals[0])(c, resource, subresource, kind, flags, mapped);
     refresh_hooks(s);
-    // A uniform buffer being filled: remember where, so its contents can be read at Unmap.
+    // A constant buffer being filled: remember where, so its contents can be read at Unmap.
     const uint32_t watched = s.constant_watch_bytes.load(std::memory_order_relaxed);
-    if (watched != 0 && SUCCEEDED(result) && mapped && mapped->pData && resource &&
-        kind == D3D11_MAP_WRITE_DISCARD && subresource == 0 && !inside_hook &&
-        c == s.observed_context) {
+    if (s.constant_watch.load(std::memory_order_acquire) && SUCCEEDED(result) && mapped &&
+        mapped->pData && resource && kind == D3D11_MAP_WRITE_DISCARD && subresource == 0 &&
+        !inside_hook && c == s.observed_context) {
         D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
         resource->GetType(&dimension);
         if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
             D3D11_BUFFER_DESC description{};
             static_cast<ID3D11Buffer*>(resource)->GetDesc(&description);
-            if (description.ByteWidth == watched &&
-                (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0) {
+            const bool wanted = watched == 0 ? description.ByteWidth <= 4096u
+                                             : description.ByteWidth == watched;
+            if (wanted && (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0) {
                 for (Tap::PendingMap& pending : s.pending_maps) {
                     if (!pending.resource || pending.resource == resource) {
                         pending.resource = resource;
                         pending.data = mapped->pData;
+                        pending.bytes = description.ByteWidth;
                         break;
                     }
                 }
@@ -2089,7 +2092,7 @@ void STDMETHODCALLTYPE hooked_unmap(ID3D11DeviceContext* c, ID3D11Resource* reso
             if (watch && !inside_hook) {
                 const ReentryGuard guard;
                 watch(s.constant_watch_user.load(std::memory_order_relaxed), resource,
-                      pending.data, s.constant_watch_bytes.load(std::memory_order_relaxed));
+                      pending.data, pending.bytes);
             }
             pending = Tap::PendingMap{};
             break;
@@ -2714,11 +2717,16 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes,
                                                                   void* user)
 {
     Tap& self = tap();
-    self.constant_watch_bytes.store(0, std::memory_order_relaxed);
+    self.constant_watch.store(nullptr, std::memory_order_release);
     self.constant_watch_user.store(user, std::memory_order_relaxed);
+    self.constant_watch_bytes.store(bytes, std::memory_order_relaxed);
     self.constant_watch.store(fn, std::memory_order_release);
-    self.constant_watch_bytes.store(fn ? bytes : 0u, std::memory_order_release);
     return RSF_FRAME_TAP_OK;
+}
+
+extern "C" void* rsf_frame_tap_bound_target(void)
+{
+    return tap().target_texture;
 }
 
 extern "C" rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* texture)
