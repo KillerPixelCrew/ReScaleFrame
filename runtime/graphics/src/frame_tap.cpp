@@ -194,6 +194,15 @@ struct Tap {
     std::atomic<rsf_frame_tap_nudge_fn> nudge{nullptr};
     std::atomic<void*> nudge_user{nullptr};
     std::atomic<uint32_t> draws_nudged{0};
+    // The constant watch: buffers of one width mapped for writing, held until their Unmap.
+    std::atomic<rsf_frame_tap_constants_fn> constant_watch{nullptr};
+    std::atomic<void*> constant_watch_user{nullptr};
+    std::atomic<uint32_t> constant_watch_bytes{0};
+    struct PendingMap {
+        ID3D11Resource* resource = nullptr;
+        void* data = nullptr;
+    };
+    PendingMap pending_maps[16]{};
     struct NudgeState {
         bool active = false;
         UINT viewport_count = 0;
@@ -664,6 +673,9 @@ void fill_divert_facts(const Tap& self, bool indexed, UINT element_count,
     facts.target_height = self.target_description.Height;
     facts.target_format = static_cast<uint32_t>(self.target_description.Format);
     facts.target_view_format = self.target_view_format;
+    for (int slot = 0; slot < 14; ++slot) {
+        facts.vertex_constants[slot] = self.geometry.vertex_constants[slot];
+    }
     facts.target_count = self.target_count;
     facts.target_samples = self.target_description.SampleDesc.Count;
     facts.depth_bound = self.depth_bound ? 1u : 0u;
@@ -2016,6 +2028,28 @@ HRESULT STDMETHODCALLTYPE hooked_map(ID3D11DeviceContext* c, ID3D11Resource* res
     const HRESULT result =
         reinterpret_cast<Fn>(s.pass_originals[0])(c, resource, subresource, kind, flags, mapped);
     refresh_hooks(s);
+    // A uniform buffer being filled: remember where, so its contents can be read at Unmap.
+    const uint32_t watched = s.constant_watch_bytes.load(std::memory_order_relaxed);
+    if (watched != 0 && SUCCEEDED(result) && mapped && mapped->pData && resource &&
+        kind == D3D11_MAP_WRITE_DISCARD && subresource == 0 && !inside_hook &&
+        c == s.observed_context) {
+        D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+        resource->GetType(&dimension);
+        if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+            D3D11_BUFFER_DESC description{};
+            static_cast<ID3D11Buffer*>(resource)->GetDesc(&description);
+            if (description.ByteWidth == watched &&
+                (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0) {
+                for (Tap::PendingMap& pending : s.pending_maps) {
+                    if (!pending.resource || pending.resource == resource) {
+                        pending.resource = resource;
+                        pending.data = mapped->pData;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     return result;
 }
 void STDMETHODCALLTYPE hooked_unmap(ID3D11DeviceContext* c, ID3D11Resource* resource,
@@ -2023,6 +2057,23 @@ void STDMETHODCALLTYPE hooked_unmap(ID3D11DeviceContext* c, ID3D11Resource* reso
 {
     Tap& s = enter_hook();
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
+    // Before forwarding, while the mapped memory is still the game's to read.
+    if (resource && c == s.observed_context) {
+        for (Tap::PendingMap& pending : s.pending_maps) {
+            if (pending.resource != resource) {
+                continue;
+            }
+            const rsf_frame_tap_constants_fn watch =
+                s.constant_watch.load(std::memory_order_acquire);
+            if (watch && !inside_hook) {
+                const ReentryGuard guard;
+                watch(s.constant_watch_user.load(std::memory_order_relaxed), resource,
+                      pending.data, s.constant_watch_bytes.load(std::memory_order_relaxed));
+            }
+            pending = Tap::PendingMap{};
+            break;
+        }
+    }
     reinterpret_cast<Fn>(s.pass_originals[1])(c, resource, subresource);
     refresh_hooks(s);
 }
@@ -2460,6 +2511,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         self.plan_active.store(false, std::memory_order_relaxed);
         self.divert_armed.store(0, std::memory_order_relaxed);
         self.nudge.store(nullptr, std::memory_order_relaxed);
+        self.constant_watch_bytes.store(0, std::memory_order_relaxed);
+        self.constant_watch.store(nullptr, std::memory_order_relaxed);
         // Off before the table goes back, so a hook still in flight cannot re-apply what this is
         // removing. Then everything the table names, the pass-throughs included, back to whatever
         // the runtime last had there. On a runtime that rewrites its table that is the variant for
@@ -2607,6 +2660,18 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture)
     }
     self.input_watch = texture;
     self.input_watch_dirty = true;
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes,
+                                                                  rsf_frame_tap_constants_fn fn,
+                                                                  void* user)
+{
+    Tap& self = tap();
+    self.constant_watch_bytes.store(0, std::memory_order_relaxed);
+    self.constant_watch_user.store(user, std::memory_order_relaxed);
+    self.constant_watch.store(fn, std::memory_order_release);
+    self.constant_watch_bytes.store(fn ? bytes : 0u, std::memory_order_release);
     return RSF_FRAME_TAP_OK;
 }
 

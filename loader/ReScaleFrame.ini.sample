@@ -44,6 +44,16 @@ RSF_UI_CLASSIFY=1
 # dark parts of the interface slightly washed out, try 2.
 RSF_UI_ENCODE=1
 
+# Move each interface panel back by the jitter of the view it is drawn with, read from that view's
+# own uniform buffer, so panels drawn with a jittered projection into a layer the reconstruction
+# never sees hold still, and panels of unjittered views are left alone. 0 turns it off.
+RSF_UI_UNJITTER=1
+
+# Jitter every view rather than only the main one. 1 restores the plain gate patch. The main-view
+# stub exists because scene-in-scene views, the briefing hologram and the menu backgrounds, took
+# the jitter too and nothing resolved it.
+# RSF_JITTER_ALL_VIEWS=0
+
 # Name shaders the rules got wrong, by hash, in either direction. Forced wins over every rule and
 # skipped loses to none, so this corrects a run without waiting for a build.
 #

@@ -181,4 +181,8 @@ int rsf_bridge_running(void);
    the view the reconstruction resolves, and the only one that may be jittered. */
 void rsf_bridge_view_size(unsigned long* width, unsigned long* height);
 
+/* Whether the interface draws of the main view are moved back by the frame's jitter. Off by
+   default while under test. Takes effect once the backend has started. */
+void rsf_bridge_set_unjitter(int on);
+
 #endif /* RSF_DLSS_BRIDGE_H */

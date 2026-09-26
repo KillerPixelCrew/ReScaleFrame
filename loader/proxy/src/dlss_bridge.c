@@ -1654,36 +1654,91 @@ static void* back_buffer_view(void* swapchain)
  * right. A converter rasterizing its widget must stay where it is or the quads read an empty
  * texture. Modulate is counted and never moved, because it writes colour only and a transparent
  * layer keeps nothing of it. */
-/* Take the main view's jitter back out of a widget quad.
+/* Take a view's jitter back out of the interface panels drawn with it.
 
-   Measured 26 September 2026 from a recording of the main menu with promotion on: the menu text
-   moved by about two output pixels between consecutive frames while the background held still.
-   AC7's interface panels are geometry drawn with the main camera's projection, which carries the
-   jitter, into a layer the reconstruction never sees, so nothing resolves it. The jitter is a
-   constant screen-space shift by the sample the engine stored on the view, so moving the draw's
-   viewport by minus that sample puts the panel back where an unjittered projection would. */
+   AC7's interface panels are geometry drawn with a view's projection into a layer the
+   reconstruction never sees, so a panel in a jittered view wobbles by that view's jitter and
+   nothing resolves it. Measured 26 September 2026: the main menu's panels wobble, and the title
+   screen's, the hangar's, the briefing's and the in-flight HUD's do not, because they are drawn
+   with views that carry no jitter. Moving every panel by the main view's jitter fixed the menu and
+   put the wobble on everything else; guessing a panel's view from its viewport size did the same.
+
+   So the panel's own projection decides. Each view's uniform buffer carries the jitter baked into
+   its projection (TemporalAAJitter, 0x720), and 4.18 fills it on the CPU with Map(WRITE_DISCARD)
+   (D3D11UniformBuffer.cpp:168). The frame tap hands every 4096-byte upload to `on_view_constants`,
+   which records each view buffer's jitter in pixels. A panel is moved by minus the jitter of the
+   view buffer its vertex shader has bound, which is zero for every view the game draws unjittered,
+   so those are left exactly where the game puts them. */
+#define RSF_VIEW_JITTER_SLOTS 32u
+static struct {
+    void* buffer;
+    float x;
+    float y;
+} view_jitter[RSF_VIEW_JITTER_SLOTS];
+static uint32_t view_jitter_next;
+
+static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
+{
+    rsf_ac7_view view;
+    uint32_t index;
+    float x = 0.0f;
+    float y = 0.0f;
+    (void)user;
+    memset(&view, 0, sizeof(view));
+    if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &view) != RSF_AC7_VIEW_OK) {
+        /* Not a view buffer, or one this reader refuses. Forget any record of the address, since
+           the pool hands it out for whatever it likes. */
+        for (index = 0; index < RSF_VIEW_JITTER_SLOTS; ++index) {
+            if (view_jitter[index].buffer == buffer) {
+                view_jitter[index].buffer = NULL;
+            }
+        }
+        return;
+    }
+    if (view.has_jitter) {
+        x = view.jitter_pixels[0];
+        y = view.jitter_pixels[1];
+    }
+    for (index = 0; index < RSF_VIEW_JITTER_SLOTS; ++index) {
+        if (view_jitter[index].buffer == buffer) {
+            view_jitter[index].x = x;
+            view_jitter[index].y = y;
+            return;
+        }
+    }
+    index = view_jitter_next++ % RSF_VIEW_JITTER_SLOTS;
+    view_jitter[index].buffer = buffer;
+    view_jitter[index].x = x;
+    view_jitter[index].y = y;
+}
+
 static int ui_nudge(void* user, const rsf_frame_tap_target_draw* draw, float* offset_x,
                     float* offset_y)
 {
-    float x = 0.0f;
-    float y = 0.0f;
-    const long view_width = InterlockedCompareExchange(&bridge.view_width, 0, 0);
-    const long view_height = InterlockedCompareExchange(&bridge.view_height, 0, 0);
+    uint32_t slot;
+    uint32_t index;
     (void)user;
-    /* Only a draw in the main view carries the jitter: the stub jitters no view of another size.
-       Nudging every quad moved the main menu's background panels, which belong to another view,
-       by a jitter they never had; the same size test on both sides keeps the two in agreement. */
-    if (!draw || view_width == 0 || labs((long)draw->viewport_width - view_width) > 1 ||
-        labs((long)draw->viewport_height - view_height) > 1) {
+    if (!draw || classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
         return 0;
     }
-    if (!bridge.actions.jitter_pixels || !bridge.actions.jitter_pixels(&x, &y) ||
-        classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
-        return 0;
+    for (slot = 0; slot < 14; ++slot) {
+        void* bound = draw->vertex_constants[slot];
+        if (!bound) {
+            continue;
+        }
+        for (index = 0; index < RSF_VIEW_JITTER_SLOTS; ++index) {
+            if (view_jitter[index].buffer != bound) {
+                continue;
+            }
+            if (view_jitter[index].x == 0.0f && view_jitter[index].y == 0.0f) {
+                return 0;
+            }
+            *offset_x = -view_jitter[index].x;
+            *offset_y = -view_jitter[index].y;
+            return 1;
+        }
     }
-    *offset_x = -x;
-    *offset_y = -y;
-    return 1;
+    return 0;
 }
 
 static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_draw* draw)
@@ -2605,9 +2660,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     }
 
     tapped = rsf_frame_tap_install(bridge.context, &tap);
-    if (tapped == RSF_FRAME_TAP_OK) {
-        rsf_frame_tap_set_nudge(ui_nudge, NULL);
-    }
+
     if (tapped != RSF_FRAME_TAP_OK) {
         rsf_depth_replay_destroy(bridge.depth_replay[0]);
         rsf_depth_replay_destroy(bridge.depth_replay[1]);
@@ -2825,6 +2878,17 @@ void rsf_bridge_request_dump(const char* prefix)
     if (bridge.started) {
         rsf_dlss_pipeline_request_dump(prefix);
     }
+}
+
+void rsf_bridge_set_unjitter(int on)
+{
+    if (!bridge.started) {
+        return;
+    }
+    rsf_frame_tap_set_constant_watch(on ? RSF_AC7_VIEW_BUFFER_BYTES : 0u,
+                                     on ? on_view_constants : NULL, NULL);
+    rsf_frame_tap_set_nudge(on ? ui_nudge : NULL, NULL);
+    say("ui: interface draws are %s", on ? "moved back by their own view's jitter" : "left where the game draws them");
 }
 
 void rsf_bridge_view_size(unsigned long* width, unsigned long* height)

@@ -213,6 +213,10 @@ typedef struct rsf_frame_tap_target_draw {
        says whether a draw's colour is being encoded on the way in. A layer that does not encode
        where the original did holds linear values that later read as too dark. */
     uint32_t target_view_format;
+    /* Appended in ABI 8. The vertex stage's constant buffers as bound for this draw, by slot,
+       `ID3D11Buffer*` compared by address only. Filled for divert and nudge callbacks, where the
+       question is which view's projection the draw was made with. */
+    void* vertex_constants[14];
 } rsf_frame_tap_target_draw;
 
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
@@ -324,6 +328,16 @@ rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* 
 typedef int (*rsf_frame_tap_nudge_fn)(void* user, const rsf_frame_tap_target_draw* draw,
                                       float* offset_x, float* offset_y);
 rsf_frame_tap_result rsf_frame_tap_set_nudge(rsf_frame_tap_nudge_fn nudge, void* user);
+
+/* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
+   the Unmap is forwarded, for buffers exactly `bytes` wide. Unreal 4.18's D3D11 RHI writes every
+   pooled uniform buffer that way (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform
+   buffer as the frame fills it, read on the CPU with no GPU readback. Borrowed for the call only;
+   render thread; must not call into the context. Null disarms. */
+typedef void (*rsf_frame_tap_constants_fn)(void* user, void* buffer, const void* contents,
+                                           uint32_t bytes);
+rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes, rsf_frame_tap_constants_fn fn,
+                                                      void* user);
 
 /* One texture the plan replaces.
 

@@ -438,8 +438,12 @@ static struct {
     unsigned char* stub;
     volatile LONG* stub_width;
     volatile LONG* stub_height;
-    /* The main view the stub last let through, this frame, or null. */
+    /* The main view the stub last let through, this frame, or null; how many views it let through
+       and turned away; and the width or height that last failed the test, for the report. */
     void* volatile* stub_view;
+    volatile LONG* stub_allowed;
+    volatile LONG* stub_denied;
+    volatile LONG* stub_last_denied;
 } jitter_patch;
 
 /* Open the gate for the main view only.
@@ -486,25 +490,28 @@ static int build_jitter_stub(DWORD rva)
     unsigned char* stub = NULL;
     uintptr_t candidate;
     int32_t displacement;
-    static const unsigned char body[64] = {
-        0x0F, 0x84, 0, 0, 0, 0,             /* 0  je continue          */
-        0x50,                               /* 6  push rax             */
-        0x8B, 0x05, 51, 0, 0, 0,            /* 7  mov eax, [width]     */
-        0x85, 0xC0,                         /* 13 test eax, eax        */
-        0x74, 28,                           /* 15 je allow             */
-        0x8B, 0x46, 0x78,                   /* 17 mov eax, [rsi+78]    */
-        0x2B, 0x46, 0x70,                   /* 20 sub eax, [rsi+70]    */
-        0x3B, 0x05, 35, 0, 0, 0,            /* 23 cmp eax, [width]     */
-        0x75, 27,                           /* 29 jne deny             */
-        0x8B, 0x46, 0x7C,                   /* 31 mov eax, [rsi+7c]    */
-        0x2B, 0x46, 0x74,                   /* 34 sub eax, [rsi+74]    */
-        0x3B, 0x05, 25, 0, 0, 0,            /* 37 cmp eax, [height]    */
-        0x75, 13,                           /* 43 jne deny             */
-        0x48, 0x89, 0x35, 20, 0, 0, 0,      /* 45 allow: mov [view], rsi */
-        0x58,                               /* 52 pop rax              */
-        0xE9, 0, 0, 0, 0,                   /* 53 jmp continue         */
-        0x58,                               /* 58 deny: pop rax        */
-        0xE9, 0, 0, 0, 0,                   /* 59 jmp skip             */
+    static const unsigned char body[82] = {
+        0x0F, 0x84, 0, 0, 0, 0,             /* 0  je continue            */
+        0x50,                               /* 6  push rax               */
+        0x8B, 0x05, 75, 0, 0, 0,            /* 7  mov eax, [width]       */
+        0x85, 0xC0,                         /* 13 test eax, eax          */
+        0x74, 28,                           /* 15 je allow               */
+        0x8B, 0x46, 0x78,                   /* 17 mov eax, [rsi+78]      */
+        0x2B, 0x46, 0x70,                   /* 20 sub eax, [rsi+70]      */
+        0x3B, 0x05, 59, 0, 0, 0,            /* 23 cmp eax, [width]       */
+        0x75, 33,                           /* 29 jne deny               */
+        0x8B, 0x46, 0x7C,                   /* 31 mov eax, [rsi+7c]      */
+        0x2B, 0x46, 0x74,                   /* 34 sub eax, [rsi+74]      */
+        0x3B, 0x05, 49, 0, 0, 0,            /* 37 cmp eax, [height]      */
+        0x75, 19,                           /* 43 jne deny               */
+        0x48, 0x89, 0x35, 44, 0, 0, 0,      /* 45 allow: mov [view], rsi */
+        0xFF, 0x05, 46, 0, 0, 0,            /* 52 inc dword [allowed]    */
+        0x58,                               /* 58 pop rax                */
+        0xE9, 0, 0, 0, 0,                   /* 59 jmp continue           */
+        0x89, 0x05, 42, 0, 0, 0,            /* 64 deny: mov [last], eax  */
+        0xFF, 0x05, 32, 0, 0, 0,            /* 70 inc dword [denied]     */
+        0x58,                               /* 76 pop rax                */
+        0xE9, 0, 0, 0, 0,                   /* 77 jmp skip               */
     };
 
     if (!base) {
@@ -529,17 +536,23 @@ static int build_jitter_stub(DWORD rva)
     memcpy(stub, body, sizeof(body));
     displacement = (int32_t)(continue_at - (stub + 6));
     memcpy(stub + 2, &displacement, 4);
-    displacement = (int32_t)(continue_at - (stub + 58));
-    memcpy(stub + 54, &displacement, 4);
-    displacement = (int32_t)(skip_at - (stub + 64));
+    displacement = (int32_t)(continue_at - (stub + 64));
     memcpy(stub + 60, &displacement, 4);
+    displacement = (int32_t)(skip_at - (stub + 82));
+    memcpy(stub + 78, &displacement, 4);
     jitter_patch.stub = stub;
-    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + 64);
-    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + 68);
-    jitter_patch.stub_view = (void* volatile*)(void*)(stub + 72);
+    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + 88);
+    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + 92);
+    jitter_patch.stub_view = (void* volatile*)(void*)(stub + 96);
+    jitter_patch.stub_allowed = (volatile LONG*)(void*)(stub + 104);
+    jitter_patch.stub_denied = (volatile LONG*)(void*)(stub + 108);
+    jitter_patch.stub_last_denied = (volatile LONG*)(void*)(stub + 112);
     *jitter_patch.stub_width = 0;
     *jitter_patch.stub_height = 0;
     *jitter_patch.stub_view = NULL;
+    *jitter_patch.stub_allowed = 0;
+    *jitter_patch.stub_denied = 0;
+    *jitter_patch.stub_last_denied = 0;
     FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
     return 1;
 }
@@ -599,6 +612,26 @@ static void update_jitter_main_view(void)
         return;
     }
     rsf_bridge_view_size(&width, &height);
+    /* Every second, what the stub decided since the last time, so a run can say which views were
+       jittered and which were not, and at what size the ones turned away came. */
+    {
+        static int ticks = 0;
+        static LONG last_allowed = 0;
+        static LONG last_denied = 0;
+        if (++ticks >= 20) {
+            const LONG allowed = *jitter_patch.stub_allowed;
+            const LONG denied = *jitter_patch.stub_denied;
+            ticks = 0;
+            if (allowed != last_allowed || denied != last_denied) {
+                note("jitter stub: %ld views jittered, %ld turned away, last turned away at %ld "
+                     "wide or high",
+                     allowed - last_allowed, denied - last_denied,
+                     (long)*jitter_patch.stub_last_denied);
+                last_allowed = allowed;
+                last_denied = denied;
+            }
+        }
+    }
     if ((LONG)width != *jitter_patch.stub_width || (LONG)height != *jitter_patch.stub_height) {
         InterlockedExchange(jitter_patch.stub_width, (LONG)width);
         InterlockedExchange(jitter_patch.stub_height, (LONG)height);
@@ -1031,6 +1064,8 @@ static void start_dlss(void)
          (unsigned long)height, (unsigned long)read_number("RSF_DLSS_QUALITY", 3));
     rsf_bridge_start(directory, width, height, read_number("RSF_DLSS_QUALITY", 3), observer_note,
                      NULL);
+    /* Interface panels drawn with a jittered view are moved back by that view's own jitter. */
+    rsf_bridge_set_unjitter((int)read_number("RSF_UI_UNJITTER", 1));
     rsf_bridge_report();
 }
 
