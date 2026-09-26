@@ -33,6 +33,7 @@
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
 #include <rescaleframe/scene_promote.h>
+#include <rescaleframe/texture_dump.h>
 #include <rescaleframe/ui_identify.h>
 #include <rescaleframe/ui_layer.h>
 
@@ -214,6 +215,12 @@ static struct {
     int recombine_off;
     unsigned long finishes;
     unsigned long layer_draws_twinned;
+    /* A route dump: the pictures at the gates for a couple of consecutive frames, written from the
+       render thread as the frame passes them, with DLSS running. RenderDoc cannot do this here:
+       Streamline crashes inside RenderDoc's device wrapper the moment it is handed the device. */
+    char route_dump_prefix[520];
+    unsigned long route_dump_frames;
+    unsigned long route_dump_frame;
     /* Which recombine is the main view's. The briefing renders the scene more than once a frame
        (three qualifying passes a frame against one on the menus), and every render binds a
        recombined target; the pool hands them the same allocation, so the gate opens at the first.
@@ -1711,6 +1718,33 @@ static void log_gate_decision(const char* verdict)
         bridge.main_camera_ref.vertical_fov);
 }
 
+/* Write one texture of the route for the frame being dumped. Through a staging copy, so the
+   frame's state is left alone; a stall, which a capture can afford. */
+static void route_dump(void* context, void* texture, const char* name)
+{
+    rsf_texture_dump_options options;
+    rsf_texture_dump_report report;
+    char path[600];
+    if (!texture || !bridge.route_dump_frames) {
+        return;
+    }
+    snprintf(path, sizeof(path), "%s_f%lu_%s", bridge.route_dump_prefix, bridge.route_dump_frame,
+             name);
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+    options.output_prefix_utf8 = path;
+    options.view = RSF_DUMP_VIEW_RAW;
+    options.scale = 4.0f;
+    memset(&report, 0, sizeof(report));
+    report.struct_size = sizeof(report);
+    if (rsf_dump_texture(bridge.device, context, texture, &options, &report) == RSF_TEXTURE_OK) {
+        say("route dump: %s, %ux%u format %u", path, report.width, report.height, report.format);
+    } else {
+        say("route dump: %s could not be written", path);
+    }
+}
+
 static int on_gate(void* user, void* context, void* texture)
 {
     rsf_d3d11_state state;
@@ -1733,6 +1767,14 @@ static int on_gate(void* user, void* context, void* texture)
                 return 1;
             }
             rsf_promote_finish(bridge.promote, context);
+            if (bridge.route_dump_frames) {
+                void* scene_stand_in = NULL;
+                void* composed_stand_in = NULL;
+                rsf_promote_get_stand_ins(bridge.promote, &scene_stand_in, &composed_stand_in);
+                route_dump(context, composed_stand_in, "recombined");
+                say("route dump: frame %lu camera jitter %.3f %.3f px", bridge.route_dump_frame,
+                    bridge.upload_camera.jitter_pixels[0], bridge.upload_camera.jitter_pixels[1]);
+            }
             rsf_d3d11_state_restore(context, &state);
             ++bridge.finishes;
             if (bridge.have_held) {
@@ -1758,6 +1800,14 @@ static int on_gate(void* user, void* context, void* texture)
         /* Seeded every time: with the reconstruction, or with the game's own scene colour when
            the evaluation was refused, so the stand-in never shows a stale frame. */
         rsf_promote_seed(bridge.promote, context, evaluate_at_recombine(context) ? 1u : 0u);
+        if (bridge.route_dump_frames) {
+            void* scene_stand_in = NULL;
+            void* composed_stand_in = NULL;
+            rsf_promote_get_stand_ins(bridge.promote, &scene_stand_in, &composed_stand_in);
+            route_dump(context, bridge.scene_color, "scene");
+            route_dump(context, scene_stand_in, "seed");
+            route_dump(context, bridge.translucency_layer, "layer");
+        }
         rsf_d3d11_state_restore(context, &state);
         ++bridge.gate_evaluates;
         return 1;
@@ -2445,6 +2495,10 @@ static void on_present(void* user, void* swapchain)
     }
 
     bridge.upload_camera_valid = 0;
+    if (bridge.route_dump_frames) {
+        --bridge.route_dump_frames;
+        ++bridge.route_dump_frame;
+    }
     if (bridge.started) {
         ++bridge.presents;
         /* The runtime flushes at Present and rewrites its vtable when it does, which takes the
@@ -3143,6 +3197,11 @@ void rsf_bridge_request_dump(const char* prefix)
 {
     if (bridge.started) {
         rsf_dlss_pipeline_request_dump(prefix);
+        /* And the route's own pictures, for two consecutive frames: whether the layer or the
+           reconstruction moves between them is what a shimmer complaint needs answered. */
+        snprintf(bridge.route_dump_prefix, sizeof(bridge.route_dump_prefix), "%s_route", prefix);
+        bridge.route_dump_frame = 0;
+        bridge.route_dump_frames = 2;
     }
 }
 

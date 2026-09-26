@@ -226,6 +226,11 @@ rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context, uint32_
    on the older route. */
 rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* context);
 
+/* The output size stand-ins of the recombine route, `ID3D11Texture2D*`, borrowed: scene colour's,
+   which the tonemap reads, and the recombined target's, which the game's recombine writes. Null
+   on the older route. For writing them to disk when a frame has to be looked at. */
+rsf_promote_result rsf_promote_get_stand_ins(rsf_promote* promote, void** scene, void** composed);
+
 void rsf_promote_destroy(rsf_promote* promote);
 
 #ifdef __cplusplus

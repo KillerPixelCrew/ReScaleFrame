@@ -180,3 +180,12 @@ the upload, right after binding the target and right before the draw. The tap's 
 covers every constant buffer and hands the upload over writable, and the bridge rewrites each
 render-size quad to the output size while the recombined target is bound. The count is in the
 status line. Not yet seen in the game.
+
+### RenderDoc and Streamline do not share a process
+
+26 September 2026. With RSF_RENDERDOC=1, the backend cannot start: Streamline crashes inside
+renderdoc.dll the moment `slSetD3DDevice` is handed RenderDoc's wrapped device (access violation
+in sl.common, caught by the crash reporter, then result -9). So a RenderDoc capture can never show
+this route running. The route dump, taken with F10, writes the pictures at the gates for two
+consecutive frames instead: the game's scene colour, the seeded stand-in, the translucency layer
+at the recombine, and the recombined stand-in at the tonemap, with the camera jitter logged.

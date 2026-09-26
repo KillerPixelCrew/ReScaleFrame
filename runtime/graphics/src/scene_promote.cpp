@@ -500,6 +500,17 @@ extern "C" rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* con
                : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
 }
 
+extern "C" rsf_promote_result rsf_promote_get_stand_ins(rsf_promote* promote, void** scene,
+                                                       void** composed)
+{
+    if (!promote || !scene || !composed) {
+        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
+    }
+    *scene = promote->ready ? promote->scene.texture : nullptr;
+    *composed = promote->ready ? promote->composed.texture : nullptr;
+    return RSF_PROMOTE_OK;
+}
+
 extern "C" rsf_promote_result rsf_promote_get_status(rsf_promote* promote,
                                                      rsf_promote_status* status)
 {
