@@ -34,7 +34,8 @@ void rsf_constant_twins_destroy(rsf_constant_twins* twins);
 void* rsf_constant_twins_write(rsf_constant_twins* twins, void* context, void* original,
                                const void* contents);
 
-/* The twin of `original`, or null. Pointer comparison only. */
+/* The twin of `original`, or null. Checks the bound buffer's descriptor to reject an address
+   recycled for a differently sized resource. `original` must be a live ID3D11Buffer. */
 void* rsf_constant_twins_find(const rsf_constant_twins* twins, const void* original);
 
 /* Forget `original`, which the game has refilled with something that needs no twin. */

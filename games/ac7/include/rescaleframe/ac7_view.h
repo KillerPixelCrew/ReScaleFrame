@@ -134,7 +134,7 @@ rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t bytes, uint32
        column 1 -= jy * column 3;
      out of clip (ClipToView, ClipToTranslatedWorld): row 3 += jx * row 0 + jy * row 1;
      screen to world (ScreenToWorld, ScreenToTranslatedWorld): row 2 += jx * row 0 + jy * row 1;
-     SVPositionToTranslatedWorld: row 2 += the same, from ScreenToTranslatedWorld's rows;
+     SVPositionToTranslatedWorld: row 3 += jx * ClipToTranslatedWorld row 0 + jy * row 1;
      TemporalAAJitter.xy = 0.
    The previous frame's matrices are left: they carry the previous jitter, which is what the
    engine's own velocity uses. */

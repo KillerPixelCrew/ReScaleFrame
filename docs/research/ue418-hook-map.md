@@ -263,3 +263,43 @@ yet consumes them: this is source-verified identification, not a measured hook.
 ## Implementation follow-up
 
 The later [capture work](ac7-frame-capture.md) established live resources, view data, jitter, and render-scale control. The research proxy now evaluates DLSS. The [representation plan](../representation-plan.md) carries the rest: UI extraction, the presentation bridge, and the vendor contracts. The source inspection itself remains distinct from those later runtime results.
+
+## 29 September: existing translucency scale site, revised policy
+
+No new hook address or expected bytes. The existing 15-byte window at RVA `0x10be329`
+(`73 0D 40 84 FF 74 08 F3 0F 10 0D 58 61 4B 01`) still becomes the documented aligned
+immediate stub. Its scale now defaults to `100 / applied_scene_percent`, keeping full-output
+briefing dimensions across scene quality changes. The four depth sites remain as
+recorded. [Decision, inherited evidence and validation limits](ac7-consumer-session.md).
+
+## Enlarged separate translucency: shader view and depth consumers
+
+29 September 2026. Actual layer draws at 1600x904 bound 800x452 VS/PS views. Matching
+`4.18.3-release` source identifies `FTranslucencyDrawingPolicyFactory::DrawMesh` at
+`TranslucentRendering.cpp:581` and `FSceneTextureShaderParameters::Set` at
+`PostProcess/SceneRenderTargets.cpp:2619-2627` as additional Scale < 1 consumers.
+Capstone inspection of the recorded decrypted AC7 image confirms each COMISS compares the
+scene-context scale at +0x220 against float 1.0 at RVA 0x2574494. Only the JBE opcode changes to
+JE, preserving the separate-pass and depth-availability checks. The nine-byte compare/branch
+window is required at runtime, not just the two branch bytes.
+
+| Compare RVA | Branch RVA | Expected nine bytes | Replacement branch |
+| --- | --- | --- | --- |
+| 0x11583a6 | 0x11583ad | `0F 2F 80 20 02 00 00 76 0E` | `74 0E` |
+| 0x1025b12 | 0x1025b19 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+| 0x10294d2 | 0x10294d9 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+| 0x102ada2 | 0x102ada9 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+| 0x102c672 | 0x102c679 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+| 0x102e792 | 0x102e799 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+| 0x1031902 | 0x1031909 | `0F 2F 86 20 02 00 00 76 04` | `74 04` |
+
+The first site forms the DrawMesh scaled-view boolean in the code fragment covered by unwind
+range 0x11582c9..0x115840d. The remaining sites are six instantiations of the sampled-depth
+selection. Individual shader-stage names are not assigned to those instances without additional
+call evidence. All eleven allocation/view/depth windows now preflight before any behaviour changes;
+a write failure attempts guarded rollback and prevents a scale above one. The full-output follow-up
+capture verifies 1600x904 bound view buffers. It did not settle the visible shimmer because the
+terrain's domain stage was not yet covered by the unjitter override.
+
+Ghidra bridge unavailable in this session; source identities are recorded here for later annotation,
+not claimed as names applied to a Ghidra program. [Capture and subsequent stage evidence](ac7-consumer-session.md#captured-enlarged-view-mismatch-and-tessellation-gap).

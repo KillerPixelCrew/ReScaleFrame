@@ -346,13 +346,11 @@ extern "C" uint32_t rsf_ac7_view_remove_jitter(const void* in, void* out, uint32
     float* clip_to_translated_world = matrix_at(data, offset_clip_to_translated_world);
     add_rows(clip_to_translated_world, 3, clip_to_translated_world, jx, jy);
 
-    // The screen matrices' rows 0 and 1 are the same before and after, so the correction for
-    // SVPositionToTranslatedWorld reads ScreenToTranslatedWorld's rows before that is corrected.
-    const float* screen_to_translated_world_before =
-        matrix_at(static_cast<unsigned char*>(const_cast<void*>(in)),
-                  offset_screen_to_translated_world);
-    add_rows(matrix_at(data, offset_sv_position_to_translated_world), 2,
-             screen_to_translated_world_before, jx, jy);
+    // SVPosition contains device depth. UE4.18 builds this as pixel-to-clip * ClipToTranslatedWorld,
+    // so removing jitter changes row 3. ScreenToWorld instead takes linear depth and changes row 2.
+    // ClipToTranslatedWorld's rows 0/1 are unchanged by the inverse correction above.
+    add_rows(matrix_at(data, offset_sv_position_to_translated_world), 3,
+             clip_to_translated_world, jx, jy);
     float* screen_to_world = matrix_at(data, offset_screen_to_world);
     add_rows(screen_to_world, 2, screen_to_world, jx, jy);
     float* screen_to_translated_world = matrix_at(data, offset_screen_to_translated_world);

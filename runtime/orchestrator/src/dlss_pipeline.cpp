@@ -69,6 +69,7 @@ struct Pipeline {
        because an evaluate that fails while resources are being rebuilt is ordinary. */
     uint32_t consecutive_evaluate_failures = 0;
     bool evaluate_given_up = false;
+    bool reset_pending = false;
     rsf_dlss_pipeline_log_fn log = nullptr;
     void* log_user = nullptr;
 
@@ -626,7 +627,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     }
     // Or'd in, never cleared: the caller's own reasons for a reset are its own, and this adds the
     // one only this code knows about.
-    if (rebuilt) {
+    if (rebuilt || self.reset_pending) {
         camera.reset = 1u;
     }
 
@@ -747,6 +748,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     }
 
     // One good frame means the run of failures was a rebuild rather than a wall.
+    self.reset_pending = false;
     self.consecutive_evaluate_failures = 0;
     return finish(self, RSF_DLSS_PIPELINE_OK);
 }
@@ -1000,6 +1002,9 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quali
     {
         std::lock_guard<std::mutex> lock(self.guard);
         self.quality = quality;
+        self.reset_pending = true;
+        self.evaluate_given_up = false;
+        self.consecutive_evaluate_failures = 0;
         self.planned_render_width = plan.render_width;
         self.planned_render_height = plan.render_height;
         self.render_width_min = plan.render_width_min ? plan.render_width_min : plan.render_width;

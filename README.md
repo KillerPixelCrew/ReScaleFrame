@@ -1,77 +1,142 @@
 # ReScaleFrame
 
-ReScaleFrame adds upscaling and frame generation to games through engine-aware hooks. It is a KillerPixelCrew project, starting with Ace Combat 7's modified UE4.18 renderer.
+**DLSS upscaling for Ace Combat 7.**
 
-**DLSS runs in AC7 through the research proxy.** The recorded mission test evaluated 7,917 frames at 1024×576 into a 2048×1152 output. F7 displays that output over the game. Reinsertion into the game's post-processing is still pending, so this debug view lacks the game's grading and HUD.
+ReScaleFrame adds DLSS to AC7 while keeping the game's lighting, post-processing and interface.
+It starts when the game launches, saves your settings, and keeps the briefing terrain and aircraft
+icons at full output resolution independently of your upscaling preset.
 
-**The interface reaches the screen at native resolution.** AC7 rasterizes its front end at a fixed 1920×1080 and draws it into the scene as world-space quads at render resolution, which no amount of promoting a target could sharpen. Diverting those draws into a mod-owned layer and compositing at present does sharpen them, and was measured doing so on 7 September 2026. It also produces the wrong picture: the quads read the scene and its glow chain, so compositing at present skips AC7's own interface composite, its glow and its grade. The route is being changed to promote the game's own interface target instead, which keeps all three and yields the same premultiplied layer frame generation will need. See [the extraction note](docs/research/ac7-ui-extraction.md).
+A [KillerPixelCrew](https://github.com/KillerPixelCrew) project.
 
-**The presentation bridge is possible where the game runs.** Every frame generation SDK this targets is D3D12 and AC7 is D3D11, so the frame has to cross devices. Under a Wine prefix built from Proton's DXVK and vkd3d-proton, a D3D11 texture opens on a D3D12 device and a shared fence signals across, measured rather than assumed. Nothing above that has been built.
+**[Download the latest release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/latest)**
+· [Report an issue](https://github.com/KillerPixelCrew/ReScaleFrame/issues)
+· [Release notes](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
 
-The longer-term target is XeSS-SR, XeSS MFG, and XeLL on the MSI Claw 8, with DLSS and FSR using the same runtime. XeSS/MFG, the standalone launcher, WSGM integration, and in-game egui wiring are unfinished.
+## What you get
 
-## Get started
+- DLSS Super Resolution, plus Native/DLAA.
+- Automatic startup and in-game composition with the original post-processing and UI.
+- A small overlay with an enable switch and preset selection.
+- Full-resolution briefing terrain and aircraft icons with projection jitter removed, including
+  the terrain's tessellation stages.
+- Settings that carry over to your next session.
 
-- [Research proxy setup and hotkeys](loader/README.md)
-- [Current work and todo](docs/implementation.md)
-- [AC7 captures and verified engine data](docs/research/ac7-frame-capture.md)
-- [Design](docs/design.md) and [source references](docs/research/source-map.md)
-- [Repository review, 7 September 2026](docs/review.md)
+The current release is for **Ace Combat 7, Steam, Windows x64**. The tested game is Steam build
+**9855922**. Frame generation, Reflex, XeSS and FSR are planned separately. Other game builds and
+Proton have not been validated with this release.
 
-## Build
+## Requirements
 
-The Windows build uses Visual Studio 2022 C++ tools, a Windows SDK, CMake 3.25+, and Rust 1.94.1, pinned in `rust-toolchain.toml`.
+- Windows 10 or 11, 64-bit.
+- An NVIDIA RTX GPU with DLSS support and a current NVIDIA driver.
+- The [Microsoft Visual C++ v14 Redistributable, x64](https://aka.ms/vc14/vc_redist.x64.exe).
 
-```powershell
-./eng/verify.ps1
-cargo test --workspace --locked
+The release ZIP includes the required Streamline and DLSS runtime files.
+
+## Install
+
+1. Download **ReScaleFrame-0.1.0-AC7-Windows-x64.zip** from the
+   [release page](https://github.com/KillerPixelCrew/ReScaleFrame/releases/latest).
+2. Close AC7. In Steam, right-click it and choose **Manage > Browse local files**.
+3. Find the folder containing `Ace7Game.exe` and extract the ZIP there.
+4. Launch the game normally. DLSS starts automatically once the renderer is ready.
+
+The folder should contain:
+
+```text
+ACE COMBAT 7/
+├── Ace7Game.exe
+├── dinput8.dll
+├── rescaleframe_overlay.dll
+├── ReScaleFrame.ini
+└── ReScaleFrame/
+    ├── README.md
+    ├── manifest.json
+    ├── licenses/
+    └── streamline/
 ```
 
-The verification script builds native targets, runs CTest, checks Rust formatting, and runs Clippy. Rust tests need the separate command above. Neither command launches a game. Native Debug output is in `build/windows-x64/bin/Debug`.
+Keep the original `Ace7Game.exe`. No game executable replacement or Windows Steam launch options
+are needed. If another mod already provides `dinput8.dll`, do not overwrite it: this release does
+not chain a second DirectInput proxy.
 
-Streamline and RenderDoc are optional local dependencies. Without their headers, the corresponding features build as unavailable. See [dependencies](docs/dependencies.md) for paths and licensing references.
+## Controls and presets
 
-## Repository
+Press **Insert** to open or close the overlay.
 
-| Directory | Contents |
+**Enable DLSS** switches the feature on or off. Turning it off restores native scene rendering.
+Choose a preset in the same panel:
+
+| Preset | Behaviour |
 | --- | --- |
-| `loader` | Research proxy, module capture, and bootstrap scaffold |
-| `runtime/orchestrator` | Frame assembly and DLSS pipeline |
-| `runtime/contract` | What a reconstruction or frame generator has to be, for all three vendors, and the negotiation that chooses between them |
-| `runtime/backends` | Streamline DLSS adapter, FSR and XeSS providers that answer without their SDKs present, and the Rust input model |
-| `runtime/presentation` | Surfaces and a fence two devices can share, for the D3D11 to D3D12 bridge |
-| `runtime/graphics` | D3D11 observation, resource handling, decode, interface extraction, and UI rendering |
-| `games/ac7` | Build recognition and view-uniform reader |
-| `sdk/game` | C ABI for game plugins |
-| `ui/overlay` | egui settings and status DLL; runtime wiring pending |
-| `apps/launcher`, `integrations/wsgm` | Frontend scaffolding and integration plans |
-| `tests`, `tools`, `docs` | Tests, analysis utilities, and research |
+| Native | DLAA at your output resolution |
+| Quality | DLSS upscaling with the highest input resolution of the upscale presets |
+| Balanced | A lower input resolution than Quality |
+| Performance | A lower input resolution than Balanced; the first-launch default |
+| Ultra Performance | The lowest input resolution |
 
-All first-party components share one repository and release version. Game-specific hooks belong in plugins; vendor SDKs and presentation belong in the runtime. The research proxy still carries AC7-specific glue that needs to move into that structure.
+The runtime queries DLSS for each preset's render size. The briefing layer stays at **100% output
+resolution** whichever preset you choose.
 
-## Agent instructions
+Your choices are saved in `%LOCALAPPDATA%\ReScaleFrame\AC7.ini`. The `ReScaleFrame.ini` beside
+the game contains initial defaults and advanced settings; ordinary use does not require editing it.
 
-Read [AGENTS.md](AGENTS.md) before working here. The repository's [game-render-analysis skill](.agents/skills/game-render-analysis/SKILL.md) uses the open Agent Skills format in `.agents/skills/`. Use it with the [analysis method](docs/research/methodology.md) for rendering research.
+## Troubleshooting
 
-**Knowledge should be reusable.** Document every reverse-engineering result end to end: the question, why the approach was chosen, how the result was found, the evidence, and where and when the runtime uses it. Include build fingerprints, source revisions, units, resource lifetimes, failed approaches, and remaining uncertainty where relevant.
+**The overlay does not open:** check that both mod DLLs are beside `Ace7Game.exe`, then press Insert.
+Check for another mod using `dinput8.dll`.
 
-Every commit and PR must include its research or link to the relevant evidence in `docs/research/`. For changes that need no new experiment, state the rationale and checks performed. Update `games/<id>/engine.json` and [the todo](docs/implementation.md) when findings or implementation status change. Never invent a measurement to fill a template.
+**Windows reports a missing MSVCP140 or VCRUNTIME140 DLL:** install or repair the x64 Visual C++
+runtime linked above.
 
-Check the user's environment and recommend the tools needed for the task:
+**Something looks wrong:** note your preset and resolution, then
+[open an issue](https://github.com/KillerPixelCrew/ReScaleFrame/issues) with your GPU, driver version
+and a relevant excerpt from `%LOCALAPPDATA%\ReScaleFrame\AC7\rsf-dump.log`.
 
-| Work | Tools |
-| --- | --- |
-| Build on Windows | Git, Visual Studio 2022 C++ tools and Windows SDK, CMake 3.25+, PowerShell, Rust via rustup |
-| Binary and buffer analysis | Python 3, Ghidra with PyGhidra, and the JDK required by that Ghidra release |
-| Agent access and function signatures | [Ghidra MCP](https://github.com/bethington/ghidra-mcp), [Ghidra Function ID signature library](https://github.com/threatrack/ghidra-fidb-repo) |
-| D3D11 frame capture and replay | RenderDoc; a compatible Windows replay environment for the recorded AC7 workflow |
-| Linux cross-build | MinGW-w64, Wine, CMake, and the relevant Proton/DXVK setup for game tests |
-| Vendor integration | The backend's matching SDK headers and runtime; currently Streamline 2.12.0 for DLSS |
+## Update or uninstall
 
-See [tool setup](docs/tooling.md) for download links and requirements. Recommend authorized [Unreal Engine source access](https://www.unrealengine.com/en-US/ue-on-github) when studying an Unreal game; stock source is a reference to validate against the shipped build.
+Close the game before replacing the mod's files. Saved preferences survive an update.
 
-Keep licensed source, binaries, raw captures, machine paths, and credentials out of commits. Publish the findings, reproducible methods, and permitted metadata. Write plainly, preserve uncertainty, and distinguish built, synthetic-tested, capture-validated, game-tested, and target-device-tested results.
+To uninstall, remove `dinput8.dll`, `rescaleframe_overlay.dll`, `ReScaleFrame.ini` and the
+`ReScaleFrame` folder installed from the ZIP. Restore any files you backed up. You can also remove
+`%LOCALAPPDATA%\ReScaleFrame\AC7.ini` to reset the saved settings.
 
-## License
+## Building and contributing
 
-First-party code and documentation use [GPL-3.0-only](LICENSE), except the [MIT Game SDK](sdk/game/LICENSE). Third-party dependencies retain their own licenses. Game binaries, Epic source, and vendor runtime DLLs are not included.
+The repository contains the loader, runtime, game support, SDK and overlay. The AC7 release uses
+the proxy entry point; the standalone launcher, public plugin lifecycle and WSGM integration are
+still being built.
+
+The reference build uses Windows, Visual Studio C++ tools, CMake and the Rust toolchain pinned in
+`rust-toolchain.toml`. With Visual Studio 2026:
+
+```powershell
+./eng/verify.ps1 -VS2026 -Configuration Release
+cargo test --workspace --locked
+cargo build --release --locked -p rescaleframe-overlay
+```
+
+Omit `-VS2026` for Visual Studio 2022. The verification gate builds and tests the native code,
+checks Rust formatting and runs Clippy. It does not launch or modify the game.
+
+- [Build tools and local dependencies](docs/tooling.md)
+- [Vendor SDKs and release packaging](docs/dependencies.md)
+- [Implementation tracker](docs/implementation.md)
+- [Architecture](docs/design.md)
+- [AC7 upscaling research and accepted result](docs/research/ac7-consumer-session.md)
+- [Proxy settings and diagnostics](loader/README.md)
+- [Agent instructions](AGENTS.md)
+
+Research records distinguish source inspection, synthetic tests and actual game results. Game
+binaries, licensed engine source and raw captures stay outside Git.
+
+## License and credits
+
+First-party code and documentation are [GPL-3.0-only](LICENSE), except the
+[MIT-licensed Game SDK](sdk/game/LICENSE).
+
+NVIDIA supplies DLSS through Streamline. The release includes unmodified NVIDIA runtime files
+under their own accompanying terms, alongside notices for egui, MinHook and other dependencies.
+Those third-party components are not relicensed under the project's GPL license.
+
+ReScaleFrame is an independent mod, not an NVIDIA or Bandai Namco product.

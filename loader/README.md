@@ -14,80 +14,30 @@ Example Steam launch options, on one line, with both paths replaced by Windows p
 PROTON_ENABLE_NVAPI=1 RSF_OBSERVE=1 RSF_ENABLE_JITTER=1 RSF_DUMP_DIR="Z:\path\to\captures" RSF_STREAMLINE_BIN="Z:\path\to\ReScaleFrame\streamline" WINEDLLOVERRIDES="dinput8=n,b" %command%
 ```
 
-The proxy starts a hotkey worker on attach. Omitting `RSF_DUMP_DIR` disables the module-dump worker; it does **not** make the whole proxy inert. Remove the proxy and its launch override to stop loading it. Memory patches do not edit the executable on disk.
+## Playing
 
-## Hotkeys
+DLSS and reinsertion start automatically after the executable is ready and the presenting device
+exists. The first few rendered frames identify the scene and its composition path. Startup does
+not require a capture directory or a developer hotkey. Missing backend support leaves DLSS inactive
+and reports the reason.
 
-| Key | Action |
-| --- | --- |
-| F3 | Extract the interface: divert it into a layer at output resolution and composite it back. A measurement, not the route; see the note below |
-| F4 | Open or close the engine's temporal jitter gate, live |
-| F5 | Open or close the egui overlay |
-| F6 | Reinsert the reconstruction into the game's own frame by promoting its tail, the interface layers included, or stop |
-| F8 | Start DLSS after the game has a device; later presses report counters |
-| F7 | Toggle the reconstructed debug image over the back buffer |
-| F9 | Apply render scale and the corresponding jitter sequence length |
-| F10 | Dump retained velocity/view data and, while DLSS runs, matched colour/output |
-| F11 | Trigger RenderDoc when capture support is available |
+**Insert** opens or closes the overlay. Its only controls are **Enable DLSS** and the five presets.
+The old function-key actions are removed. Disable restores 100% scene resolution, stops reinsertion
+and closes the forced jitter gate. Native selects DLAA with reinsertion at output resolution.
 
-F3 does what it says and the result is not usable as a picture. The interface arrives at native
-resolution, which is the point of it, and the frame arrives flat and discoloured, because AC7's
-interface draws read the scene and its glow chain and are composited by the game afterwards.
-Compositing at present skips that. F6 is the route instead: it promotes the layers the classifier
-sees the widget quads drawn into, along with the composite and the chain between the tonemap and
-the game's own interface composite, so the quads rasterize at output resolution and the game
-composites them. The log names each layer and chain target as it is found, and says when the
-interface is being magnified because no layer has been seen yet. F3 stays as the measurement it is;
-do not hold both on at once, since a diverted quad never reaches the promoted layer.
+The selected preset determines screen percentage through DLSS's render-size query, both at startup
+and when changed. The setter accepts the last successfully applied value or the game's reset to
+100%; it no longer assumes every preset change starts at 100%. A refused game write rolls the
+backend mode back. Changes reset temporal history and wait for a fresh evaluated frame before
+rebuilding reinsertion. The backend remains loaded while disabled so another preset can be selected.
 
-The proxy runs beside the Steam overlay and RivaTuner, both of which hook Present in the same
-process; the log says which hook it detoured behind at startup. The panel takes the mouse the way
-SpecialK does, by detouring the cursor functions while it is open, and the log counts the warps and
-hides it swallowed when it closes. A crash writes `Ace7Game-crash.dmp` and a symbolised stack into
-the dump directory, since Windows Error Reporting is off on the development machine.
+Choices persist in `%LOCALAPPDATA%\ReScaleFrame\AC7.ini`, independently of the installation's
+advanced settings. Without saved choices, DLSS starts enabled with Performance selected.
 
-F4 answered a question and is kept for the next one like it. The front end shimmers at a reduced
-render scale and holds still at 100%, and toggling the gate on the main menu stops and starts it, so
-the cause is the jitter this project forces on rather than a reconstruction failing on elements with
-no motion vectors. AC7 runs no temporal anti-aliasing, so the projection only moves because we make
-it, and the front end is drawn at render resolution and spatially upscaled, which magnifies a
-sub-pixel offset instead of resolving it. `RSF_ENABLE_JITTER=1` keeps the gate shut except while a
-reconstruction is running, which is a mitigation; drawing the interface at output resolution removes
-the cause.
-
-Start with F8, wait a few frames, then press F8 again to inspect evaluation/refusal counts. F7 shows motion; F10 provides still comparisons. F7 uses a rough tonemap and replaces the visible game frame, so it hides the HUD and does not preserve game grading. It is not output reinsertion.
-
-F5 opens the egui overlay, and the panel now drives the session rather than reporting on it: start
-the backend, set the render scale, toggle the debug view and reinsertion, dump a frame, take a
-capture. It draws its own mouse cursor, because AC7 is played with a pad and hides the system one, so
-a panel that answers a mouse would otherwise be unusable. Requests are applied on the render thread
-at the point in the frame the panel was drawn from, which is the boundary the
-[review](../docs/review.md) asks for and something a hotkey worker cannot offer.
-
-It comes up as soon as the game has a device, before and independently of the backend, because the
-state it is most useful in is the one where nothing is running and the panel can say why. It draws
-over the finished frame after everything else and is never one of the reconstruction's inputs. The
-panel DLL is found through `RSF_OVERLAY_DLL`, or beside the proxy.
-
-The function keys below still work and are the fallback while the panel is unproven in game. They
-come out once it is confirmed working there; removing the only control path before its replacement
-has ever run would leave nothing to fall back to.
-
-F6 is that reinsertion, and it is off until asked for because a wrong substitution corrupts the frame. It needs the frame's tail identified first, which the loader learns from the draw into the back buffer over the first few frames after F8, so an immediate press reports what is still missing. It refuses when the game renders at the presented size, which is also what a mission load looks like from inside the frame. With F6 on, the reconstruction runs before the game's tonemap rather than at Present, the game grades it and draws its own interface over it at output resolution, and the last draw into the back buffer becomes a copy. The result has not been looked at yet.
-
-`RSF_TRANSLUCENT_VELOCITY=1` removes the blend-mode rejection in the velocity pass, so translucent
-geometry can write motion vectors. Stock 4.18 excludes it, which is why AC7's mission map relief and
-the vehicle symbols in replay have none, and why that layer also writes no depth to fall back on.
-Only the rejection is removed; the material-domain check, the movable test and `SupportsVelocity`
-still apply, so a material with no usable velocity permutation refuses rather than drawing wrongly.
-It patches after decryption and checks the expected bytes first, refusing on an unrecognised build.
-
-Whether anything is gained is a question for the velocity target, not the log line. Compare an F10
-dump with the patch off and on in the same scene: `captureNN_0` is the raw velocity target and its
-JSON records the unwritten fraction. The briefing screen cannot answer it, because nothing there
-writes velocity at all. Mission replay is the case this exists for.
-
-F10 writes `captureNN_*` TGA, JSON, and buffer files. The index restarts with the process and can overwrite earlier captures; use a new directory per run. Velocity previews show unwritten pixels in blue and zero motion in grey. The decoded dump should match the reference decode's range and unwritten fraction.
+The briefing layer targets 100% of output resolution at every scene quality, using the
+existing expected-byte-checked allocation-scale patch. It uses an unjittered view in both VS and PS
+and is recombined after scene SR, before tonemapping. This replaces the default secondary DLSS
+integration. See [the implementation and validation limits](../docs/research/ac7-consumer-session.md).
 
 ## Settings
 
@@ -108,8 +58,10 @@ beside the proxy, so neither path normally needs setting at all.
 
 | Variable | Default / purpose |
 | --- | --- |
-| `RSF_DUMP_DIR` | Module/capture output directory; created if missing |
-| `RSF_OBSERVE` | `0`; set `1` to install the D3D11 observer |
+| `RSF_DUMP_DIR` | Logs/captures; defaults to `%LOCALAPPDATA%\ReScaleFrame\AC7` |
+| `RSF_DUMP_MODULE` | `0`; opt in to executable dumps and module sampling |
+| `RSF_DLSS_ENABLE` | `1`; initial enable choice before saved preferences |
+| `RSF_OBSERVE` | `1`; install the D3D11 observer |
 | `RSF_OBSERVE_FORMAT` | `35`, `R16G16_UNORM` |
 | `RSF_OBSERVE_MIN_WIDTH` | `512` |
 | `RSF_OBSERVE_CAPACITY` | `8` retained textures |
@@ -119,11 +71,11 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_UI_CLASSIFY` | `1`; name pipeline objects as the game creates them and classify the draws made from them. Reports through the `ui:` lines and changes nothing |
 | `RSF_UI_SHADER_FORCE`, `RSF_UI_SHADER_SKIP` | hex hash lists naming shaders the rules got wrong, in either direction. The hashes are printed by the `ui draw:` trace lines |
 | `RSF_UI_ENCODE` | `1`; which transfer function the composite applies to the extracted interface. `0` none, `1` sRGB, `2` gamma 2.2 |
-| `RSF_ENABLE_JITTER` | `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
+| `RSF_ENABLE_JITTER` | Default `1`; `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
 | `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
-| `RSF_SCREEN_PERCENTAGE` | `50`; applied by F8/F9 and maintained during the run |
+| `RSF_SCREEN_PERCENTAGE` | Legacy diagnostic setting; consumer startup uses the selected DLSS preset |
 | `RSF_CONSOLE_SINGLETON_RVA` | Default address `0x3a8b290` |
 | `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
 | `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |
@@ -134,10 +86,10 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_RENDERDOC` | `0`; set `1` to load RenderDoc at attach for a capture session |
 | `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
 | `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
-| `RSF_TRANSLUCENCY_TARGET`, `RSF_TRANSLUCENCY_TARGET_HEAVY` | `0` (match the scene), `100` (native): the layer's resolution as a percentage of the presented size, derived against the render scale in effect |
-| `RSF_TRANSLUCENCY_HEAVY_INDICES` | `100000`; a frame whose layer draws more indices than this is heavy (the briefing) |
-| `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding both targets |
-| `RSF_REINSERT_DEPTH` | `0`; what F6 does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
+| `RSF_TRANSLUCENCY_TARGET` | `100`; percent of output, independent of the scene preset. `0` explicitly matches the scene |
+| `RSF_TRANSLUCENCY_UNJITTER` | `1`; unjitter VS/PS and bypass layer DLSS. `0` retains the experimental 1:1 temporal route |
+| `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding the target |
+| `RSF_REINSERT_DEPTH` | `0`; what reinsertion does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
 
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 
@@ -145,10 +97,11 @@ Quality selection does not choose `RSF_SCREEN_PERCENTAGE` automatically; the [re
 
 ## Startup and diagnostics
 
-RenderDoc loads during attach to precede device creation. The observer installs early enough to see allocations. A worker waits for code entropy to fall before dumping the decrypted module and applying requested patches. Console writes wait until the engine has created its manager.
+The worker waits for decrypted code before applying expected-byte-checked patches. The Present
+callback starts the backend once the device and dimensions are known; it does not repeatedly load
+a failing vendor runtime. Use Enable DLSS to retry after a failure. Renderer maintenance runs on
+the render thread. Module dumps are opt-in; vendor informational spam is not forwarded to the log.
+Warnings, errors and state changes remain available in `rsf-dump.log`.
 
-The jitter patch checks expected bytes at the default address. A custom RVA currently bypasses that check. These addresses are specific to the researched executable; the proxy does not yet use the plugin's build-recognition gate.
-
-GPU readbacks and evaluation run from Present. `rsf-dump.log` records each readback step before it runs, making the last entry useful when diagnosing a crash. These synchronous captures can stall rendering.
-
-Plain Wine needs more graphics overrides than an existing Proton setup; see [backend notes](../runtime/backends/README.md). Hook rollback, state preservation, and lifecycle problems are recorded in [the review](../docs/review.md).
+The proxy and overlay are still the research carrier, not the completed plugin lifecycle or product
+installer. Synthetic Windows checks do not establish briefing image quality or flight regression.

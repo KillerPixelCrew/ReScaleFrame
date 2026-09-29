@@ -334,12 +334,10 @@ extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
         tail->render_width == 0 || tail->render_height == 0) {
         return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
     }
-    // Substituting a texture for one of its own size changes nothing except how many textures the
-    // frame has. Saying so is the difference between a run that shows no improvement and a run that
-    // was never upscaling: the game puts its own screen percentage back when a mission loads, and
-    // that is exactly what this looks like from inside the frame.
-    if (tail->render_width >= promote->output_width ||
-        tail->render_height >= promote->output_height) {
+    // Native/DLAA still replaces the scene with a temporal resolve. Allow equal extents and the
+    // engine's four-pixel pool padding, but do not silently turn this into a downsampling route.
+    if (tail->render_width > ((promote->output_width + 3u) & ~3u) ||
+        tail->render_height > ((promote->output_height + 3u) & ~3u)) {
         say(promote,
             "promote: the game is rendering at %ux%u against an output of %ux%u, so there is "
             "nothing to promote",

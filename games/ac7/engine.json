@@ -90,7 +90,13 @@
       "state": "implemented_game_tested_briefing",
       "how": "source_read_disassembly_and_game_run_with_capture",
       "detail": "The layer's scale is a four byte immediate inside a patched instruction at RVA 0x10be330, four byte aligned so it can be rewritten while the game runs. Settings name a percentage of the presented resolution and the multiplier is derived from the render scale in effect, so it follows a quality level rather than being fixed. A frame is heavy when its layer receives more indices than a threshold, which is the briefing. Above 1.0 needs the engine to size the layer's depth to match, which four one byte patches enable by narrowing `Scale < 1.f` to `Scale == 1.f` at RVAs 0x1168f6f, 0x1097a0c, 0x109d03a and 0x109d061. Those four are no-ops for every scale the engine produces on its own. Game-tested 7 September: the briefing relief drew at 2048x1152 inside a 1024x576 scene with a matching depth. Flight, other heavy screens and the mission replay are unverified.",
-      "research": "docs/research/ac7-frame-capture.md"
+      "research": "docs/research/ac7-frame-capture.md",
+      "current_policy": {
+        "date": "2026-09-29",
+        "state": "full_output_capture_validated_user_accepted",
+        "detail": "Default target is 100% of output independently of applied scene percentage; existing allocation/depth patches are reused. Engine pool alignment still requires runtime verification. Default unjittered VS/PS layer is recombined after scene SR without the second DLSS feature. The earlier 1:1 integration remains an explicit comparison mode. The user accepted the unjittered half-output briefing and requested the full-output target for sharper detail. The 100% trial brought terrain jitter back. Source comparison and a failing corrected fixture identified a pixel-to-world unjitter row error; the correction passes Windows synthetic tests, with visual retest pending. Two-frame captures proved native layer draws still used scene-sized views. Seven extra scale-consumer gates correct view/depth selection, verified by a second capture; the user still saw shimmer. Terrain is a 12-control-point patch, so the unjitter override now also covers HS/DS/GS. All-stage pixel/state tests pass; game visual validation is pending. Final capture verifies zero-jitter twins in terrain HS b2 and DS b0 as well as VS/PS. The user confirmed the full-output briefing result and declared the AC7 upscaler finished. Temporary capture disabled.",
+        "research": "docs/research/ac7-consumer-session.md"
+      }
     }
   },
   "overlay": {
@@ -139,5 +145,10 @@
       "Reinserted into game post-processing with the interface intact. F6 promotes the composite and runs game-tested; the interface stays soft because it is scene geometry on the screens that matter, which the representation plan extracts instead of promoting. F7 is a rough-tonemapped debug display over the back buffer and hides the HUD.",
       "The judgement of the promoted picture. The first Windows game run happened on 26 September after four measured obstacles (docs/research/windows-present-hook-coexistence.md, docs/research/d3d11-runtime-vtable-rewrite.md): Streamline 2.14.1 loads, DLSS evaluates every frame at 800x450 to 1600x900, and F6 promotion ran for over 13,000 frames with the composite, one chain target and two interface layers. Whether the front end is sharp and the shimmer gone has not been written down."
     ]
+  },
+  "consumer_session": {
+    "state": "implemented_startup_log_verified_user_accepted",
+    "detail": "Automatic DLSS start after patch/device readiness; reinsertion after fresh evaluation. Insert is the only hotkey. Overlay exposes Enable DLSS and presets, persisted per user. Preset changes update scene scale from its last applied value, reset history and rebuild reinsertion. Disable restores 100% scene scale and closes jitter. The user accepted the completed AC7 upscaling path on 29 September; full-output briefing stage data was captured. This does not change public plugin lifecycle or FG validation status.",
+    "research": "docs/research/ac7-consumer-session.md"
   }
 }

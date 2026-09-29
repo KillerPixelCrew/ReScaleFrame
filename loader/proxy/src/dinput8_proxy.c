@@ -11,9 +11,11 @@
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/texture_dump.h>
+#include <rescaleframe/ac7_scene_color.h>
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
+#include "preferences.h"
 
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -31,6 +33,10 @@ extern IMAGE_DOS_HEADER __ImageBase;
 
 static HMODULE real_dinput8;
 static wchar_t log_path[MAX_PATH * 2];
+static volatile LONG startup_ready;
+static wchar_t preference_path[MAX_PATH * 2];
+static uint32_t preferred_enabled = 1;
+static uint32_t preferred_quality = 3;
 
 static void note(const char* format, ...)
 {
@@ -285,25 +291,6 @@ static void start_capture_support(void)
     note("capture support: %s, result %d", library, (int)result);
 }
 
-/* Watch for the capture key without touching the game's input. A polled key state cannot disturb
-   the message loop or the input ordering the project cares about. */
-static DWORD WINAPI capture_worker(LPVOID parameter)
-{
-    (void)parameter;
-    int was_down = 0;
-    int running = 1;
-    while (running) {
-        const int down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-        if (down && !was_down) {
-            const rsf_capture_result result = rsf_capture_trigger(1);
-            note("capture triggered, result %d, captures so far %u", (int)result,
-                 rsf_capture_count());
-        }
-        was_down = down;
-        Sleep(50);
-    }
-    return 0;
-}
 #endif
 
 static char observe_directory[MAX_PATH];
@@ -333,7 +320,7 @@ static int translucency_depth_conformed;
 
 static void start_observer(void)
 {
-    if (read_number("RSF_OBSERVE", 0) == 0) {
+    if (read_number("RSF_OBSERVE", 1) == 0) {
         note("observer disabled, set RSF_OBSERVE=1 to enable");
         return;
     }
@@ -369,6 +356,12 @@ static void start_observer(void)
        starts as soon as the game has a device, and the bridge would otherwise have nowhere to
        speak until the backend was started. */
     rsf_bridge_set_log(observer_note, NULL);
+    {
+        char prefix[MAX_PATH * 2];
+        if (read_text("RSF_BRIEFING_CAPTURE_PREFIX", prefix, sizeof(prefix))) {
+            rsf_bridge_set_briefing_capture(prefix);
+        }
+    }
     register_overlay_actions();
 
     /* Naming the game's pipeline objects, so a run can say which draws are the interface. On by
@@ -557,7 +550,7 @@ static int build_jitter_stub(DWORD rva)
     return 1;
 }
 
-/* Keep the stub's main-view size in step with the reconstruction. From the hotkey loop. */
+/* Keep the stub's main-view size in step with the reconstruction, on the render thread. */
 static void update_jitter_main_view(void)
 {
     unsigned long width = 0;
@@ -661,7 +654,7 @@ static unsigned long action_jitter_available(void)
    rather than at the first transition, when whoever is looking is looking at something else. */
 static void apply_jitter_patch(void)
 {
-    jitter_patch.mode = (int)read_number("RSF_ENABLE_JITTER", 0);
+    jitter_patch.mode = (int)read_number("RSF_ENABLE_JITTER", 1);
     if (jitter_patch.mode == 0) {
         return;
     }
@@ -814,8 +807,13 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
 
     char directory[MAX_PATH];
     if (!read_text("RSF_DUMP_DIR", directory, sizeof(directory))) {
-        note("RSF_DUMP_DIR is not set, nothing to do");
-        return 0;
+        const DWORD length = GetEnvironmentVariableA("LOCALAPPDATA", directory, MAX_PATH);
+        if (length == 0 || length + 32 >= MAX_PATH) {
+            return 0;
+        }
+        strcat(directory, "\\ReScaleFrame");
+        CreateDirectoryA(directory, NULL);
+        strcat(directory, "\\AC7");
     }
     /* Create it rather than failing silently when it is missing. A run of the game is expensive
        enough that losing one to a typo in a path is not acceptable. */
@@ -853,7 +851,31 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     memset(&report, 0, sizeof(report));
     report.struct_size = sizeof(report);
 
-    const rsf_dump_result result = rsf_dump_when_decrypted(&options, 250, 180000, 2, &report);
+    rsf_dump_result result;
+    const int dump_module = read_number("RSF_DUMP_MODULE", 0) != 0;
+    if (dump_module) {
+        result = rsf_dump_when_decrypted(&options, 250, 180000, 2, &report);
+    } else {
+        /* The same decryption readiness check without writing the licensed executable to disk. */
+        const ULONGLONG deadline = GetTickCount64() + 180000;
+        unsigned stable = 0;
+        do {
+            result = rsf_measure_module_code(NULL, &entropy);
+            if (result != RSF_DUMP_OK) {
+                break;
+            }
+            stable = entropy < 7.0 ? stable + 1 : 0;
+            if (stable >= 2) {
+                break;
+            }
+            result = RSF_DUMP_ERROR_STILL_ENCRYPTED;
+            Sleep(250);
+        } while (GetTickCount64() < deadline);
+    }
+    if (result != RSF_DUMP_OK) {
+        note("startup: executable did not become ready, result %d; DLSS remains inactive", (int)result);
+        return 0;
+    }
     /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
        write into bytes about to be overwritten. */
     apply_jitter_patch();
@@ -861,6 +883,11 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     /* Before the scale patch, because the scale it settles on depends on whether these applied. */
     translucency_depth_conformed = apply_translucency_depth_patches();
     apply_separate_translucency_patch();
+    InterlockedExchange(&startup_ready, 1);
+    if (!dump_module) {
+        note("startup: renderer patches prepared; waiting for a presented frame to start DLSS");
+        return 0;
+    }
 
     note("result %d, entropy %d.%03d, sections %u, imports %u, iat references %u, bytes %llu",
          (int)result, (int)report.code_entropy,
@@ -903,6 +930,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
    object, and replacing every match would corrupt it. */
 static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
 {
+    static int32_t previous_samples = 8;
     if (percentage <= 0.0f) {
         return;
     }
@@ -912,11 +940,17 @@ static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
         samples = 8;
     }
 
-    const rsf_dump_result result =
-        rsf_console_set_int("r.TemporalAASamples", 8, samples, value_offset,
+    rsf_dump_result result =
+        rsf_console_set_int("r.TemporalAASamples", previous_samples, samples, value_offset,
                             read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
                             read_number("RSF_CONSOLE_FIND_SLOT", 0x90));
+    if (result != RSF_DUMP_OK && previous_samples != 8) {
+        result = rsf_console_set_int("r.TemporalAASamples", 8, samples, value_offset,
+                                    read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                                    read_number("RSF_CONSOLE_FIND_SLOT", 0x90));
+    }
     if (result == RSF_DUMP_OK) {
+        previous_samples = samples;
         note("jitter sequence length set to %d at object offset 0x%lx", (int)samples,
              (unsigned long)value_offset);
     } else {
@@ -934,19 +968,28 @@ static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
    ViewRect so the offset rescales to render resolution by itself. Resizing render targets behind
    the engine's back would instead leave BufferSizeAndInvSize and ScreenPositionScaleBias
    describing a buffer that no longer exists, and every shader does its UV maths with those. */
-static void set_screen_percentage(float value)
+static unsigned long requested_scale_percent;
+
+static int set_screen_percentage(float value)
 {
     uint32_t offset = 0;
-    const rsf_dump_result result =
-        rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
+    const float previous = requested_scale_percent ? (float)requested_scale_percent : 100.0f;
+    rsf_dump_result result =
+        rsf_console_set_float("r.ScreenPercentage", previous, value,
                               read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
                               read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset);
+    if (result != RSF_DUMP_OK && previous != 100.0f) {
+        result = rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
+                                      read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
+                                      read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset);
+    }
     if (result == RSF_DUMP_OK) {
+        requested_scale_percent = (unsigned long)value;
         note("screen percentage set to %d, value found at object offset 0x%lx", (int)value,
              (unsigned long)offset);
         set_jitter_sequence_length(value, offset);
         set_separate_translucency_scale();
-        return;
+        return 1;
     }
 
     /* Say what actually went wrong rather than leaving one code to mean several things, and show
@@ -967,26 +1010,14 @@ static void set_screen_percentage(float value)
                  floats[row * 4 + 1], floats[row * 4 + 2], floats[row * 4 + 3]);
         }
     }
+    return 0;
 }
 
-/* Bring DLSS up, on demand rather than at startup.
-
-   The device has to exist first, and at startup it does not. Rather than guessing how long the game
-   takes to create one, this is a key press: by the time somebody presses it they are looking at the
-   game, so the device is certainly there. It also means a run can reach the menu without loading a
-   vendor runtime into the process at all. */
+/* Start on the render thread after decryption and the first presenting device are ready. */
 static void start_dlss(void)
 {
     char directory[MAX_PATH * 2];
     DWORD width, height;
-
-    /* The render scale first, and on every press rather than only the first.
-       Loading a mission re-applies the game's own graphics settings, which puts the screen
-       percentage back to 100 and leaves the backend running at the presented size. That is
-       antialiasing rather than upscaling, and it is not obvious from the picture: a mission was
-       watched that way and read as a successful upscale. Re-applying costs nothing when it is
-       already set. */
-    set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
 
     if (rsf_bridge_running()) {
         rsf_bridge_report();
@@ -1015,11 +1046,12 @@ static void start_dlss(void)
     }
 
     note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
-         (unsigned long)height, (unsigned long)read_number("RSF_DLSS_QUALITY", 3));
-    rsf_bridge_start(directory, width, height, read_number("RSF_DLSS_QUALITY", 3), observer_note,
+         (unsigned long)height, (unsigned long)preferred_quality);
+    rsf_bridge_start(directory, width, height, preferred_quality, observer_note,
                      NULL);
     /* Interface panels drawn with a jittered view are moved back by that view's own jitter. */
     rsf_bridge_set_unjitter((int)read_number("RSF_UI_UNJITTER", 1));
+    rsf_bridge_set_translucency_unjitter((int)read_number("RSF_TRANSLUCENCY_UNJITTER", 1));
     rsf_bridge_report();
 }
 
@@ -1035,11 +1067,12 @@ static void start_dlss(void)
    it was told to expect, so asking it to replace 100 with our scale does exactly nothing while the
    scale is already ours, and restores it the moment the game puts 100 back. Silent in the ordinary
    case, and it says so on the rare occasion it acts. */
-static unsigned long requested_scale_percent;
-
 static void keep_render_scale(void)
 {
     uint32_t offset = 0;
+    if (!requested_scale_percent) {
+        return;
+    }
     /* What was last asked for, from the panel or a DLSS preset, over the settings file, so a
        mission load puts back the scale that was chosen rather than the one the run started with. */
     const float value = requested_scale_percent
@@ -1094,11 +1127,11 @@ static float translucency_scale_now;
      RSF_TRANSLUCENCY_TARGET        percent of native, default 100; 0 means "match the scene"
      RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding it when nonzero
 
-   The target is native, always. Separate translucency does not go through the reconstruction: the
-   bridge evaluates DLSS at the game's recombine, before translucency is composited, and the
-   recombine then lays the layer over the reconstruction at output size, drawn with the unjittered
-   view. A layer at native needs no upscaler and has no jitter for one to resolve, which is what the
-   briefing relief needed and what every earlier attempt to push it through DLSS could not give. */
+   Render the briefing at full output resolution across quality changes. Applying the
+   vanilla 0.5 multiplier to an already reduced scene would halve its detail again. This changes
+   the engine's allocation, viewport and depth setup together, before the layer is rasterized.
+   The unjittered route composites it after scene SR; changing its scale cannot itself remove jitter.
+   Pooled allocation padding still follows the engine's alignment rules. */
 static void set_separate_translucency_scale(void)
 {
     union {
@@ -1116,8 +1149,8 @@ static void set_separate_translucency_scale(void)
         return;
     }
 
-    render_percent = requested_scale_percent ? requested_scale_percent
-                                             : read_number("RSF_SCREEN_PERCENTAGE", 50);
+    /* Before a preset has actually changed the game, its scene is still native. */
+    render_percent = requested_scale_percent ? requested_scale_percent : 100;
     if (render_percent == 0) {
         render_percent = 100;
     }
@@ -1125,10 +1158,8 @@ static void set_separate_translucency_scale(void)
 
     if (override_percent != 0) {
         scale.value = (float)override_percent / 100.0f;
-    } else if (target == 0) {
-        scale.value = 1.0f;
     } else {
-        scale.value = (float)target / (float)render_percent;
+        scale.value = rsf_ac7_translucency_scale(render_percent, target);
     }
     /* The engine clamps its own console value to 100 and this patch is downstream of that clamp,
        so the bound has to be here. */
@@ -1275,7 +1306,8 @@ static void apply_separate_translucency_patch(void)
     set_separate_translucency_scale();
 }
 
-/* Let the engine build a depth for a separate translucency layer larger than the scene.
+/* Let the engine allocate, bind and sample depth and the matching view for a separate
+   translucency layer larger than the scene.
 
    4.18 decides four times whether the layer has its own depth or borrows the scene's, and every one
    of them asks `Scale < 1.f`. Below 1.0 that is the downsampling case and the engine allocates a
@@ -1304,30 +1336,69 @@ static void apply_separate_translucency_patch(void)
    patch can reach. So this changes nothing about stock rendering, and it is what the scale above
    1.0 is allowed to depend on.
 
-   All four or none. A partial application would leave the engine allocating a depth it does not
-   bind, so a failure here keeps the scale clamped to the scene's resolution. */
+   The 29 September capture exposed the remaining consumers: DrawMesh still chose the main view
+   at Scale > 1, and six FSceneTextureShaderParameters::Set specializations still sampled scene
+   depth. The layer drew at 1600x904 with 800x452 VS/PS view constants. Those seven gates must use
+   Scale != 1 as well. See docs/research/ac7-consumer-session.md for source and byte evidence.
+
+   Preflight every expected window before changing any gate. If a write fails, roll back the gates
+   already changed; any failure keeps the scale at or below the scene's resolution. */
 static int apply_translucency_depth_patches(void)
 {
     static const struct {
         DWORD rva;
         uint8_t count;
-        uint8_t expected[4];
-        uint8_t replacement[4];
+        uint8_t expected[9];
+        uint8_t replacement[9];
         const char* what;
     } sites[] = {
         {0x1168f6f, 2, {0x76, 0x0E}, {0x74, 0x0E}, "the depth allocation and fill"},
         {0x1097a0c, 2, {0x76, 0x17}, {0x74, 0x17}, "the depth bind"},
         {0x109d03a, 4, {0x44, 0x0F, 0x47, 0xF9}, {0x44, 0x0F, 0x45, 0xF9}, "the snapshot resolve"},
         {0x109d061, 2, {0x76, 0x17}, {0x74, 0x17}, "the resolve"},
+        {0x11583a6, 9, {0x0F, 0x2F, 0x80, 0x20, 0x02, 0x00, 0x00, 0x76, 0x0E},
+                        {0x0F, 0x2F, 0x80, 0x20, 0x02, 0x00, 0x00, 0x74, 0x0E}, "the layer view selection"},
+        {0x1025b12, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 1"},
+        {0x10294d2, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 2"},
+        {0x102ada2, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 3"},
+        {0x102c672, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 4"},
+        {0x102e792, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 5"},
+        {0x1031902, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
+                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 6"},
     };
-    uint8_t previous[4] = {0};
+    uint8_t previous[9] = {0};
     unsigned int i;
 
+    /* Writing the identical bytes performs the patch helper's validated range/expected-byte
+       check without changing behaviour. No gate is changed until every site passes. */
+    for (i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
+        const rsf_dump_result result = rsf_patch_code(sites[i].rva, sites[i].expected, sites[i].count,
+                                                     sites[i].expected, sites[i].count, previous);
+        if (result != RSF_DUMP_OK) {
+            note("translucency preflight: %s at rva 0x%lx refused, result %d; no gates changed",
+                 sites[i].what, (unsigned long)sites[i].rva, (int)result);
+            return 0;
+        }
+    }
     for (i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
         const rsf_dump_result result =
             rsf_patch_code(sites[i].rva, sites[i].replacement, sites[i].count, sites[i].expected,
                            sites[i].count, previous);
         if (result != RSF_DUMP_OK) {
+            unsigned int undo = i;
+            while (undo > 0) {
+                --undo;
+                const rsf_dump_result restored = rsf_patch_code(sites[undo].rva, sites[undo].expected,
+                    sites[undo].count, sites[undo].replacement, sites[undo].count, previous);
+                if (restored != RSF_DUMP_OK) {
+                    note("translucency rollback: %s failed, result %d", sites[undo].what, (int)restored);
+                }
+            }
             note("translucency depth: %s at rva 0x%lx did NOT match, result %d. The layer stays at "
                  "the scene's resolution",
                  sites[i].what, (unsigned long)sites[i].rva, (int)result);
@@ -1339,17 +1410,12 @@ static int apply_translucency_depth_patches(void)
     return 1;
 }
 
-static void action_set_render_scale(unsigned long percent)
+static int action_set_render_scale(unsigned long percent)
 {
     if (percent == 0 || percent > 100) {
-        return;
+        return 0;
     }
-    requested_scale_percent = percent;
-    set_screen_percentage((float)percent);
-    /* Again here rather than only inside set_screen_percentage, which reaches it only when the
-       console write actually happened. A scale that is already ours writes nothing, and the
-       translucency multiplier still has to be recomputed against it. */
-    set_separate_translucency_scale();
+    return set_screen_percentage((float)percent);
 }
 
 static unsigned long action_render_scale_percent(void)
@@ -1393,6 +1459,43 @@ static unsigned long action_reinsert_depth_policy(void)
     return read_number("RSF_REINSERT_DEPTH", 0);
 }
 
+static unsigned long action_startup_ready(void)
+{
+    return (unsigned long)InterlockedCompareExchange(&startup_ready, 0, 0);
+}
+
+static void save_preferences(void)
+{
+    if (!rsf_preferences_write(preference_path, preferred_enabled, preferred_quality)) {
+        note("settings: could not save preferences; the current session still uses them");
+    }
+}
+
+static void action_save_quality(unsigned long quality)
+{
+    if (quality <= 4) {
+        preferred_quality = (uint32_t)quality;
+        save_preferences();
+    }
+}
+
+static void action_save_enabled(unsigned long enabled)
+{
+    preferred_enabled = enabled != 0;
+    save_preferences();
+}
+
+static void action_maintain_renderer(void)
+{
+    static ULONGLONG last_check;
+    update_jitter_main_view();
+    const ULONGLONG now = GetTickCount64();
+    if (now - last_check >= 500) {
+        last_check = now;
+        keep_render_scale();
+    }
+}
+
 static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
@@ -1407,138 +1510,30 @@ static void register_overlay_actions(void)
     actions.set_jitter = action_set_jitter;
     actions.jitter_open = action_jitter_open;
     actions.jitter_available = action_jitter_available;
+    actions.startup_ready = action_startup_ready;
+    actions.save_quality = action_save_quality;
+    actions.save_enabled = action_save_enabled;
+    actions.maintain_renderer = action_maintain_renderer;
     rsf_bridge_set_actions(&actions);
-}
-
-/* Whether a function key was pressed since the last look, from either route.
-
-   Polling GetAsyncKeyState was the only route until the first Windows run, where the user reported
-   the hotkeys doing nothing while the panel's own keys worked. So a press counts when the async
-   state shows a new press or when the game's window saw one, as a key message or as raw keyboard
-   input, and a second trigger of the same key within a quarter of a second is the same press seen
-   twice. The first few presses of each key say which route delivered them, so the log answers
-   which one this machine needs. */
-static int hotkey(int vk, int* down, uint32_t message_keys, uint32_t sources)
-{
-    static ULONGLONG last_fired[12];
-    static int said[12];
-    const int index = vk - VK_F1;
-    const int now_down = (GetAsyncKeyState(vk) & 0x8000) != 0;
-    const int async_edge = now_down && !*down;
-    const int message_edge = (int)((message_keys >> index) & 1u);
-    ULONGLONG now;
-    *down = now_down;
-    if (index < 0 || index >= 12 || (!async_edge && !message_edge)) {
-        return 0;
+    preferred_enabled = read_number("RSF_DLSS_ENABLE", 1) != 0;
+    preferred_quality = read_number("RSF_DLSS_QUALITY", 3);
+    if (preferred_quality > 4) {
+        preferred_quality = 3;
     }
-    now = GetTickCount64();
-    if (last_fired[index] != 0 && now - last_fired[index] < 250) {
-        return 0;
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", preference_path, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        wcscat(preference_path, L"\\ReScaleFrame");
+        if (CreateDirectoryW(preference_path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
+            wcscat(preference_path, L"\\AC7.ini");
+            rsf_preferences_read(preference_path, &preferred_enabled, &preferred_quality);
+        } else {
+            preference_path[0] = L'\0';
+        }
+    } else {
+        preference_path[0] = L'\0';
     }
-    last_fired[index] = now;
-    if (said[index] < 3) {
-        ++said[index];
-        note("hotkey: F%d, seen by%s%s%s", index + 1, async_edge ? " the async key state" : "",
-             (message_edge && (sources & (1u << 16))) ? " the window's key messages" : "",
-             (message_edge && (sources & (1u << 17))) ? " raw keyboard input" : "");
-    }
-    return 1;
-}
-
-static DWORD WINAPI observe_worker(LPVOID parameter)
-{
-    (void)parameter;
-    int was_down = 0;
-    int scale_down = 0;
-    int dlss_down = 0;
-    int show_down = 0;
-    int panel_down = 0;
-    int reinsert_down = 0;
-    int jitter_down = 0;
-    int extract_down = 0;
-    int ticks = 0;
-    int running = 1;
-    while (running) {
-        uint32_t key_sources = 0;
-        const uint32_t message_keys = rsf_overlay_input_take_function_keys(&key_sources);
-        update_jitter_main_view();
-        /* F8, F7, F6 and F3 touch the device and the game's immediate context, so they run at the
-           next present on the render thread, where the panel's own buttons run. Starting DLSS from
-           this thread while the game was inside Present crashed the driver. */
-        if (hotkey(VK_F8, &dlss_down, message_keys, key_sources)) {
-            rsf_bridge_request(RSF_BRIDGE_REQUEST_START);
-        }
-
-        {
-            /* The overlay's own toggle is the window procedure's, which is the right place for it:
-               it can swallow the key so the game does not also act on it. It is not always
-               reached, though. A run turned up where the panel never opened and no toggle ever
-               arrived, so the key never became a message for the window the swap chain named.
-
-               Polling here as well costs nothing and does not depend on which window has focus.
-               Both paths end in the same set_visible, and the input module ignores a transition to
-               the state it is already in, so pressing F5 once cannot toggle twice. */
-            if (hotkey(VK_F5, &panel_down, message_keys, key_sources)) {
-                rsf_overlay_host_toggle();
-            }
-        }
-
-        if (hotkey(VK_F7, &show_down, message_keys, key_sources)) {
-            rsf_bridge_request(RSF_BRIDGE_REQUEST_DISPLAY);
-        }
-
-        {
-            /* The real path, as against F7's debug view: the reconstruction goes into the game's
-               own frame before the tonemap, so the grade and the interface are the game's. It needs
-               the frame's tail identified first, which takes a few frames after F8. */
-            if (hotkey(VK_F6, &reinsert_down, message_keys, key_sources)) {
-                rsf_bridge_request(RSF_BRIDGE_REQUEST_REINSERT);
-            }
-        }
-
-        /* Report on a timer as well as on the key, because the report a key press produces is
-           taken the instant the tap is installed and therefore says nothing. Reading it as a result
-           cost a whole run. The report stays quiet while the numbers do not move, so a session that
-           reaches a steady state stops writing. */
-        if (++ticks >= 20 && rsf_bridge_running()) {
-            ticks = 0;
-            /* Every second, because a mission load puts the game's own screen percentage back and
-               a backend then reconstructs from the presented size without anything looking wrong.
-               This does nothing at all while the scale is already ours. */
-            keep_render_scale();
-            rsf_bridge_report();
-        }
-
-        if (hotkey(VK_F10, &was_down, message_keys, key_sources) && observe_directory[0]) {
-            report_and_dump();
-        }
-
-        if (hotkey(VK_F9, &scale_down, message_keys, key_sources)) {
-            set_screen_percentage((float)read_number("RSF_SCREEN_PERCENTAGE", 50));
-        }
-
-        {
-            /* Extraction, on a key rather than only in the settings, because the thing it changes
-               is the picture and the comparison that matters is before against after on the same
-               screen. It needs the presented size, which is only known once the game has a swap
-               chain, so it cannot simply be applied at attach. */
-            if (hotkey(VK_F3, &extract_down, message_keys, key_sources)) {
-                rsf_bridge_request(RSF_BRIDGE_REQUEST_EXTRACT);
-            }
-        }
-
-        {
-            /* Flip the jitter while looking at the screen that shows it. A shimmering front end
-               has two possible causes and they need different fixes: an offset nothing resolves,
-               or a resolve that fails on elements with no motion vectors. Holding still on the
-               main menu and pressing this separates them in one press, which no counter can. */
-            if (hotkey(VK_F4, &jitter_down, message_keys, key_sources)) {
-                set_jitter_enabled(!jitter_patch.enabled);
-            }
-        }
-        Sleep(50);
-    }
-    return 0;
+    rsf_bridge_select_quality(preferred_quality);
+    rsf_bridge_set_enabled((int)preferred_enabled);
 }
 
 /* Crash reporting, because a machine with Windows Error Reporting switched off leaves nothing to
@@ -1768,16 +1763,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         if (thread) {
             CloseHandle(thread);
         }
-#if RSF_HAVE_FRAME_CAPTURE
-        thread = CreateThread(NULL, 0, capture_worker, NULL, 0, NULL);
-        if (thread) {
-            CloseHandle(thread);
-        }
-#endif
-        thread = CreateThread(NULL, 0, observe_worker, NULL, 0, NULL);
-        if (thread) {
-            CloseHandle(thread);
-        }
+
     }
     return TRUE;
 }

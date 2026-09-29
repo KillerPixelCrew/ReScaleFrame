@@ -92,6 +92,11 @@ void say(const char* format, ...)
 // Streamline's own log messages, forwarded to the same sink rather than to a console nobody sees.
 void streamline_message(sl::LogType type, const char* message)
 {
+    // NGX's per-resource info messages grew the research log by hundreds of MB per session.
+    // Keep actionable vendor diagnostics; our own state transitions already describe startup.
+    if (type != sl::LogType::eError && type != sl::LogType::eWarn) {
+        return;
+    }
     const char* label = type == sl::LogType::eError     ? "error"
                         : type == sl::LogType::eWarn    ? "warning"
                                                         : "info";

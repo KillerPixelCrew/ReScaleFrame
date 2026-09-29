@@ -399,6 +399,24 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     context->DrawIndexed(3, 0, 0);
     check(rsf_ac7_scene_color_selected(&selection, base) == composed,
           "The captured recombine-shaped draw must select the composed target.");
+    // A full-output layer is approximately three times the scene at Ultra Performance.
+    // The old two-times ceiling lost recombine discovery at that preset.
+    ID3D11Texture2D* native_layer = make_target(device, 768, 432, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ID3D11ShaderResourceView* native_layer_srv = nullptr;
+    check(native_layer && SUCCEEDED(device->CreateShaderResourceView(native_layer, nullptr, &native_layer_srv)),
+          "The full-output layer fixture must be created.");
+    if (native_layer_srv) {
+        rsf_ac7_scene_color_end_frame(&selection);
+        context->PSSetShaderResources(31, 1, &native_layer_srv);
+        context->DrawIndexed(3, 0, 0);
+        check(rsf_ac7_scene_color_selected(&selection, base) == composed,
+              "A native layer at three times scene size must retain recombine discovery.");
+        context->PSSetShaderResources(31, 1, &layer_srv);
+        native_layer_srv->Release();
+    }
+    if (native_layer) {
+        native_layer->Release();
+    }
     check(rsf_ac7_scene_color_source(&selection, base, context, 256, 144) == 0 &&
               rsf_ac7_scene_color_selected(&selection, base) == composed,
           "A later qualifying pass carrying the same base must preserve this frame's composition.");

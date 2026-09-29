@@ -46,7 +46,7 @@ struct State {
     std::atomic<unsigned long long> last_visibility_change{0};
     std::atomic<HWND> window{nullptr};
     std::atomic<WNDPROC> original{nullptr};
-    std::atomic<uint32_t> toggle_key{VK_F7};
+    std::atomic<uint32_t> toggle_key{VK_INSERT};
 
     // Serialises install against uninstall. The window procedure never takes this one, so the
     // SetWindowLongPtrW calls made under it cannot end up waiting on a message thread that is
@@ -926,7 +926,7 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
     self.log = options->log;
     self.log_user = options->log_user;
 
-    const uint32_t toggle = options->toggle_virtual_key ? options->toggle_virtual_key : VK_F7;
+    const uint32_t toggle = options->toggle_virtual_key ? options->toggle_virtual_key : VK_INSERT;
     self.toggle_key.store(toggle, std::memory_order_relaxed);
     self.window.store(target, std::memory_order_relaxed);
     self.visible.store(0, std::memory_order_relaxed);

@@ -237,9 +237,12 @@ void store(std::vector<unsigned char>& buffer, uint32_t offset, const Mat& a)
     for (int i = 0; i < 16; ++i) values[i] = float(a.m[i / 4][i % 4]);
     std::memcpy(buffer.data() + offset, values, sizeof(values));
 }
-// A view buffer from a camera and projection, filled the way SceneView.cpp:2259 fills it.
+// A view buffer from a camera and projection. UE4.18 SceneView.cpp:2146 constructs SVPosition
+// from inverse clip-to-world directly; ScreenToWorld at line 2259 has a separate depth mapping.
 std::vector<unsigned char> view_buffer(const Mat& translated_world_to_view, const Mat& projection,
-                                       const double pre_view_translation[3], float jx, float jy)
+                                       const double pre_view_translation[3], float jx, float jy,
+                                       double width = 1024, double height = 576,
+                                       double origin_x = 0, double origin_y = 0)
 {
     std::vector<unsigned char> buffer(RSF_AC7_VIEW_BUFFER_BYTES, 0);
     Mat translate{};
@@ -251,8 +254,9 @@ std::vector<unsigned char> view_buffer(const Mat& translated_world_to_view, cons
     screen.m[0][0] = 1.0; screen.m[1][1] = 1.0;
     screen.m[2][2] = projection.m[2][2]; screen.m[2][3] = 1.0; screen.m[3][2] = projection.m[3][2];
     Mat sv{};
-    sv.m[0][0] = 2.0 / 1024.0; sv.m[1][1] = -2.0 / 576.0; sv.m[2][2] = 1.0;
-    sv.m[3][0] = -1.0; sv.m[3][1] = 1.0; sv.m[3][3] = 1.0;
+    sv.m[0][0] = 2.0 / width; sv.m[1][1] = -2.0 / height; sv.m[2][2] = 1.0;
+    sv.m[3][0] = -1.0 - 2.0 * origin_x / width;
+    sv.m[3][1] = 1.0 + 2.0 * origin_y / height; sv.m[3][3] = 1.0;
     const Mat screen_to_translated_world = mul(screen, inverse(to_clip));
     store(buffer, 0x000, to_clip);
     store(buffer, 0x040, world_to_clip);
@@ -260,7 +264,7 @@ std::vector<unsigned char> view_buffer(const Mat& translated_world_to_view, cons
     store(buffer, 0x180, projection);
     store(buffer, 0x1C0, inverse(projection));
     store(buffer, 0x200, inverse(to_clip));
-    store(buffer, 0x240, mul(sv, screen_to_translated_world));
+    store(buffer, 0x240, mul(sv, inverse(to_clip)));
     store(buffer, 0x280, mul(screen, inverse(world_to_clip)));
     store(buffer, 0x2C0, screen_to_translated_world);
     const float jitter[4] = {jx, jy, 0.0f, 0.0f};
@@ -445,6 +449,37 @@ int main(int argc, char* argv[])
         std::memcpy(jitter_after, removed.data() + 0x720, sizeof(jitter_after));
         check(jitter_after[0] == 0.0f && jitter_after[1] == 0.0f,
               "The jitter field itself must read zero after removal.");
+        // The dedicated translucency view rebuilds its pixel-to-world matrix at the layer's size.
+        // Compare unprojected pixel positions at several depths, including a nonzero view origin.
+        const double rectangles[][4] = {{800, 450, 0, 0}, {1600, 900, 0, 0}, {1600, 904, 32, 16}};
+        for (const auto& rect : rectangles) {
+            const auto scaled = view_buffer(camera, jittered_projection, translation, jx, jy,
+                                             rect[0], rect[1], rect[2], rect[3]);
+            const auto stable = view_buffer(camera, projection, translation, 0, 0,
+                                             rect[0], rect[1], rect[2], rect[3]);
+            check(rsf_ac7_view_remove_jitter(scaled.data(), removed.data(),
+                                             RSF_AC7_VIEW_BUFFER_BYTES) == 1,
+                  "The layer view must be unjittered at each resolution.");
+            float actual_sv[16], expected_sv[16];
+            std::memcpy(actual_sv, removed.data() + 0x240, sizeof(actual_sv));
+            std::memcpy(expected_sv, stable.data() + 0x240, sizeof(expected_sv));
+            for (const double depth : {0.01, 0.2, 0.8}) {
+                const double pixel[4] = {rect[2] + rect[0] * 0.37, rect[3] + rect[1] * 0.61, depth, 1};
+                double actual[4]{}, expected_point[4]{};
+                for (int column = 0; column < 4; ++column) {
+                    for (int row = 0; row < 4; ++row) {
+                        actual[column] += pixel[row] * actual_sv[row * 4 + column];
+                        expected_point[column] += pixel[row] * expected_sv[row * 4 + column];
+                    }
+                }
+                for (int axis = 0; axis < 3; ++axis) {
+                    const double wanted = expected_point[axis] / expected_point[3];
+                    check(std::fabs(actual[axis] / actual[3] - wanted) <=
+                              1e-5 * std::max(1.0, std::fabs(wanted)),
+                          "Unjittered pixel-to-world positions must agree at every depth and layer size.");
+                }
+            }
+        }
         std::vector<unsigned char> untouched(RSF_AC7_VIEW_BUFFER_BYTES, 0);
         check(rsf_ac7_view_remove_jitter(expected.data(), untouched.data(),
                                          RSF_AC7_VIEW_BUFFER_BYTES) == 0 &&

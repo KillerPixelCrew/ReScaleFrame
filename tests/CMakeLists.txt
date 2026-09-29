@@ -36,6 +36,15 @@ add_executable(rsf_ac7_view_test ac7_view.cpp)
 target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
 add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
 
+add_executable(rsf_ac7_session ac7_session.cpp ../loader/proxy/src/preferences.c)
+target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
+add_test(NAME ac7_session COMMAND rsf_ac7_session)
+
+add_executable(rsf_constant_override constant_override.cpp)
+target_link_libraries(rsf_constant_override PRIVATE ReScaleFrame::Graphics rsf_build_options d3dcompiler)
+add_test(NAME constant_override COMMAND rsf_constant_override)
+set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 # No device: the classifier is a pure function over shadowed facts, which is the point of it.
 add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.cpp)
 target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)

@@ -7,14 +7,10 @@
 //! The project cannot measure any of the three yet, and a status panel that implies otherwise is
 //! worse than no panel.
 
-use egui::{Color32, Context, Grid, Rect, RichText, Ui, Window};
+use egui::{Color32, Context, Rect, RichText, Ui, Window};
 
 use crate::model::{Intent, Quality, Stats};
 
-/// An input that was found this frame.
-const FOUND: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x70);
-/// An input that was not found, or a backend that refused.
-const MISSING: Color32 = Color32::from_rgb(0xff, 0x6e, 0x5c);
 /// Present but not in the state it needs to be in, and anything the user should read before
 /// believing the rest of the panel.
 const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3a);
@@ -92,8 +88,6 @@ pub struct Controls {
     pub quality: [Option<Rect>; 5],
     /// The enable toggle.
     pub enabled: Option<Rect>,
-    /// The dump button.
-    pub dump: Option<Rect>,
 }
 
 /// Lay out one frame of the panel, recording what the user did into `intent`.
@@ -126,139 +120,12 @@ fn body(
     intent: &mut Intent,
     controls: &mut Controls,
 ) {
-    session_section(ui, stats, intent);
-    ui.separator();
     controls_section(ui, selection, stats, intent, controls);
-    ui.separator();
-    resolution_section(ui, stats);
-    ui.separator();
-    inputs_section(ui, stats);
-    ui.separator();
-    counters_section(ui, stats);
-    ui.separator();
-
-    let dump = ui.button("Dump this frame's inputs");
-    controls.dump = Some(dump.rect);
-    if dump.clicked() {
-        intent.dump_requested = true;
+    if let Some(reason) = stats.refusal_reason {
+        ui.label(RichText::new(reason).color(WARN));
     }
-
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Capture a frame").clicked() {
-            intent.capture_requested = true;
-        }
-        if stats.captures_written > 0 {
-            ui.label(
-                RichText::new(format!("{} written", stats.captures_written))
-                    .small()
-                    .color(MUTED),
-            );
-        }
-    });
-
-    ui.label(
-        RichText::new("Counters only. This build measures no frame time and no latency.")
-            .small()
-            .color(MUTED),
-    );
-}
-
-/// Everything that used to be a function key.
-///
-/// The order is the order these have to happen in, and the state each button is in says why it
-/// cannot happen yet, rather than the press being silently ignored. Starting is separate from
-/// enabling because bringing a backend up can fail where choosing to reconstruct cannot.
-fn session_section(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent) {
-    ui.horizontal_wrapped(|ui| {
-        ui.scope(|ui| {
-            if stats.backend_loaded {
-                ui.disable();
-            }
-            if ui.button("Start backend").clicked() {
-                intent.start_requested = true;
-            }
-        });
-        if stats.backend_loaded {
-            ui.label(RichText::new("running").small().color(MUTED));
-        }
-    });
-
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Render scale");
-        for percent in [50u32, 67, 100] {
-            let current = stats.render_scale_percent == percent;
-            if ui
-                .selectable_label(current, format!("{percent}%"))
-                .clicked()
-                && !current
-            {
-                intent.scale_requested = true;
-                intent.scale_percent = percent;
-            }
-        }
-    });
-
-    let mut debug_view = stats.debug_view_on;
-    if ui
-        .checkbox(&mut debug_view, "Show the reconstruction over the frame")
-        .changed()
-    {
-        intent.debug_view = debug_view;
-        intent.debug_view_changed = true;
-    }
-
-    // Reinsertion needs the frame's tail identified first, which takes a few frames after the
-    // backend starts. Saying so beats a button that looks live and does nothing.
-    ui.scope(|ui| {
-        if !stats.reinsert_available {
-            ui.disable();
-        }
-        let mut reinsert = stats.reinsert_on;
-        if ui
-            .checkbox(&mut reinsert, "Put it into the game's own frame")
-            .changed()
-        {
-            intent.reinsert = reinsert;
-            intent.reinsert_changed = true;
-        }
-    });
-    if !stats.reinsert_available {
-        ui.label(
-            RichText::new("Reinsertion waits for the frame's tail to be identified.")
-                .small()
-                .color(MUTED),
-        );
-    }
-
-    // The engine runs no temporal anti-aliasing, so the jitter a reconstruction needs is ours: a
-    // patched gate makes the projection move. On a screen where nothing resolves it that shows as
-    // a shimmer, and the front end is where it shows, because it holds still. This is here rather
-    // than only on F4 so it can be flipped while looking at the screen in question.
-    ui.scope(|ui| {
-        if !stats.jitter_gate_available {
-            ui.disable();
-        }
-        let mut jitter = stats.jitter_gate_on;
-        if ui
-            .checkbox(&mut jitter, "Jitter the projection")
-            .on_hover_text(
-                "Off holds the image still and gives a reconstruction nothing to work from. \
-                 Turn it off on the main menu to tell a shimmer caused by the jitter from one \
-                 caused by the resolve.",
-            )
-            .changed()
-        {
-            intent.jitter = jitter;
-            intent.jitter_changed = true;
-        }
-    });
-    if !stats.jitter_gate_available {
-        ui.label(
-            RichText::new("The jitter gate was not found in this build of the game.")
-                .small()
-                .color(MUTED),
-        );
-    }
+    ui.separator();
+    ui.label(RichText::new("Insert to close").small().color(MUTED));
 }
 
 fn controls_section(
@@ -269,22 +136,16 @@ fn controls_section(
     controls: &mut Controls,
 ) {
     let mut enabled = selection.enabled;
-    let toggle = ui.checkbox(&mut enabled, "Enabled");
+    let toggle = ui.checkbox(&mut enabled, "Enable DLSS");
     controls.enabled = Some(toggle.rect);
     if toggle.changed() {
         intent.enabled = enabled;
         intent.enabled_changed = true;
     }
 
-    backend_line(ui, stats);
-
-    // Picking a level with no backend behind it does nothing at all, which looks like a bug in the
-    // level rather than an absent backend. Grey it out and say which it is.
+    // Presets can be saved while disabled; startup applies the selected level.
     ui.horizontal_wrapped(|ui| {
         ui.scope(|ui| {
-            if !stats.backend_loaded {
-                ui.disable();
-            }
             let mut choice = selection.quality;
             for (index, level) in Quality::ALL.iter().enumerate() {
                 let response = ui.radio_value(&mut choice, *level, level.label());
@@ -295,10 +156,6 @@ fn controls_section(
                 intent.quality_changed = true;
             }
         });
-
-        if !stats.backend_loaded {
-            ui.label(RichText::new("no backend loaded").color(WARN));
-        }
     });
 
     match (selection.requested_quality, stats.quality) {
@@ -346,173 +203,6 @@ fn controls_section(
 
 fn on_off(value: bool) -> &'static str {
     if value { "on" } else { "off" }
-}
-
-fn backend_line(ui: &mut Ui, stats: &Stats<'_>) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Backend");
-        if stats.backend_loaded {
-            let name = stats.backend_name.unwrap_or("unnamed");
-            if stats.backend_supported {
-                ui.label(RichText::new(name).strong().color(FOUND));
-            } else {
-                ui.label(RichText::new(name).strong().color(MISSING));
-                ui.label(RichText::new("not supported").color(MISSING));
-            }
-        } else {
-            ui.label(RichText::new("none loaded").color(MISSING));
-        }
-    });
-
-    // A refusal reason is worth reading whether or not a backend was loaded: "none loaded" and why
-    // it could not be are two different pieces of the same answer.
-    if let Some(reason) = stats.refusal_reason
-        && !stats.backend_supported
-    {
-        ui.label(RichText::new(reason).color(MISSING));
-    }
-}
-
-fn resolution_section(ui: &mut Ui, stats: &Stats<'_>) {
-    Grid::new("rsf_resolution")
-        .num_columns(2)
-        .spacing([12.0, 3.0])
-        .show(ui, |ui| {
-            ui.label("Render");
-            ui.label(RichText::new(size_text(stats.render)).monospace());
-            ui.end_row();
-
-            ui.label("Output");
-            ui.label(RichText::new(size_text(stats.output)).monospace());
-            ui.end_row();
-
-            // The ratio is what a quality level actually means, so it comes from the two sizes
-            // rather than from the selected level. If they disagree, the sizes are the truth.
-            ui.label("Ratio");
-            match stats.render_scale() {
-                Some([x, y]) => {
-                    ui.label(RichText::new(format!("{x:.3} x {y:.3} render/output")).monospace());
-                }
-                None => {
-                    ui.label(RichText::new("unknown").color(MUTED));
-                }
-            }
-            ui.end_row();
-        });
-}
-
-fn inputs_section(ui: &mut Ui, stats: &Stats<'_>) {
-    Grid::new("rsf_inputs")
-        .num_columns(2)
-        .spacing([12.0, 3.0])
-        .show(ui, |ui| {
-            found_row(ui, "Scene colour", stats.have_scene_color, None);
-            found_row(ui, "Depth", stats.have_depth, None);
-
-            // Motion being present and motion being usable are different questions, and this
-            // project has already answered the second one wrongly by assuming it from the first.
-            let motion_note = if stats.motion_decoded {
-                Some(("decoded", FOUND))
-            } else {
-                Some(("not decoded", WARN))
-            };
-            found_row(ui, "Motion", stats.have_motion, motion_note);
-
-            found_row(ui, "Exposure", stats.have_exposure, None);
-
-            // Same again for jitter: it was assumed active here long before it was checked.
-            ui.label("Jitter");
-            if stats.jitter_active {
-                ui.label(
-                    RichText::new(format!(
-                        "ACTIVE  {:+.3}, {:+.3} px",
-                        stats.jitter_pixels[0], stats.jitter_pixels[1]
-                    ))
-                    .monospace()
-                    .color(FOUND),
-                );
-            } else {
-                ui.label(RichText::new("NONE").monospace().strong().color(MISSING));
-            }
-            ui.end_row();
-        });
-}
-
-/// One input row. Colour and word both carry the state, because a colour alone is hard to read at
-/// a glance and this is meant to be readable while flying.
-fn found_row(ui: &mut Ui, label: &str, found: bool, note: Option<(&str, Color32)>) {
-    ui.label(label);
-    ui.horizontal(|ui| {
-        if found {
-            ui.label(RichText::new("FOUND").monospace().strong().color(FOUND));
-        } else {
-            ui.label(RichText::new("MISSING").monospace().strong().color(MISSING));
-        }
-        if let Some((text, color)) = note
-            && found
-        {
-            ui.label(RichText::new(text).color(color));
-        }
-    });
-    ui.end_row();
-}
-
-fn counters_section(ui: &mut Ui, stats: &Stats<'_>) {
-    Grid::new("rsf_counters")
-        .num_columns(2)
-        .spacing([12.0, 3.0])
-        .show(ui, |ui| {
-            ui.label("Presented");
-            ui.label(RichText::new(stats.frames_presented.to_string()).monospace());
-            ui.end_row();
-
-            ui.label("Evaluated");
-            let evaluated = match stats.evaluated_fraction() {
-                Some(fraction) => format!(
-                    "{} ({:.1}% of presented)",
-                    stats.frames_evaluated,
-                    fraction * 100.0
-                ),
-                None => stats.frames_evaluated.to_string(),
-            };
-            ui.label(RichText::new(evaluated).monospace());
-            ui.end_row();
-
-            ui.label("Refused");
-            if stats.frames_refused == 0 {
-                ui.label(RichText::new("0").monospace());
-            } else {
-                ui.label(
-                    RichText::new(stats.frames_refused.to_string())
-                        .monospace()
-                        .color(MISSING),
-                );
-            }
-            ui.end_row();
-
-            // The backend's own code, shown only once something has been refused, and in hex as
-            // well because that is how vendor SDKs write them down.
-            if stats.frames_refused > 0 {
-                ui.label("Last result");
-                ui.label(
-                    RichText::new(format!(
-                        "{} (0x{:08X})",
-                        stats.last_result, stats.last_result as u32
-                    ))
-                    .monospace()
-                    .color(MISSING),
-                );
-                ui.end_row();
-            }
-        });
-}
-
-fn size_text(size: [u32; 2]) -> String {
-    if size[0] == 0 || size[1] == 0 {
-        "unknown".to_owned()
-    } else {
-        format!("{} x {}", size[0], size[1])
-    }
 }
 
 #[cfg(test)]

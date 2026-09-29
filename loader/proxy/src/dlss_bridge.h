@@ -135,7 +135,7 @@ rsf_observer_texture_fn rsf_bridge_texture_hook(void);
    Registered at attach, next to the log sink and for the same reason. */
 typedef struct rsf_bridge_actions {
     void (*start_backend)(void);
-    void (*set_render_scale)(unsigned long percent);
+    int (*set_render_scale)(unsigned long percent);
     void (*trigger_dump)(void);
     void (*trigger_capture)(void);
     unsigned long (*capture_count)(void);
@@ -165,9 +165,18 @@ typedef struct rsf_bridge_actions {
     void (*set_jitter)(unsigned long open);
     unsigned long (*jitter_open)(void);
     unsigned long (*jitter_available)(void);
+    unsigned long (*startup_ready)(void);
+    void (*save_quality)(unsigned long quality);
+    void (*save_enabled)(unsigned long enabled);
+    void (*maintain_renderer)(void);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);
+/* Requested session state. Startup waits for patches/device/tail discovery on the render thread. */
+void rsf_bridge_set_enabled(int enabled);
+int rsf_bridge_select_quality(unsigned long quality);
+/* Optional bounded research capture, armed before shader creation. Empty disables it. */
+void rsf_bridge_set_briefing_capture(const char* prefix);
 
 int rsf_bridge_running(void);
 
@@ -178,5 +187,8 @@ void rsf_bridge_view_size(unsigned long* width, unsigned long* height);
 /* Whether the interface draws of the main view are moved back by the frame's jitter. Off by
    default while under test. Takes effect once the backend has started. */
 void rsf_bridge_set_unjitter(int on);
+/* Unjitter separate translucency and bypass its temporal integration. Zero selects the existing
+   jittered 1:1 integration for comparison. Resolution is controlled independently by the carrier. */
+void rsf_bridge_set_translucency_unjitter(int on);
 
 #endif /* RSF_DLSS_BRIDGE_H */

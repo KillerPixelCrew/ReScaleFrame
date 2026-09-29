@@ -69,9 +69,8 @@ typedef void (*rsf_overlay_input_log_fn)(void* user, const char* message);
 typedef struct rsf_overlay_input_options {
     uint32_t struct_size;
     uint32_t abi_version;
-    /* Virtual key that opens and closes the overlay. Zero means `VK_F7` (0x76), chosen because the
-       research carrier already claims F9 through F11 and AC7 binds none of them. It is a parameter
-       because a key that is free in one game is bound in the next. */
+    /* Virtual key that opens and closes the overlay. Zero means `VK_INSERT` (0x2D).
+       A caller may choose another key for a different game. */
     uint32_t toggle_virtual_key;
     rsf_overlay_input_log_fn log;
     void* log_user;

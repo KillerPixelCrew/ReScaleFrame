@@ -27,7 +27,7 @@ namespace {
 
 /* The key that opens the panel. F6 through F11 are already claimed by the bridge, and the input
    module's own default is F7, which is the debug display. */
-constexpr unsigned int kToggleKey = VK_F5;
+constexpr unsigned int kToggleKey = VK_INSERT;
 
 /* Atlas changes are drained in batches rather than one at a time. egui sends the font atlas whole
    once and then a patch per glyph first used, so a frame that introduces a word can produce
@@ -398,7 +398,7 @@ extern "C" int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn l
     self.last_frame.QuadPart = 0;
     self.started = true;
 
-    say("overlay: ready. F5 opens it, and it draws over the finished frame without taking part in "
+    say("overlay: ready. Insert opens it, and it draws over the finished frame without taking part in "
         "the reconstruction");
     return 1;
 }

@@ -2,6 +2,14 @@
 
 ReScaleFrame is a monorepo. All first-party components share this history and release version. Separate runtime/plugin DLLs do not imply separate repositories.
 
+## AC7 release
+
+- [x] Prepare the 0.1.0 Windows x64 package with the accepted proxy/overlay, retail DLSS runtime,
+      dependency notices, source-commit manifest and archive checksums. Installation, usage,
+      supported scope and removal are documented in the release notes and packaged README.
+      Packaging does not change rendering code. [Packaging procedure](dependencies.md#packaging-the-ac7-release).
+- [ ] Publish the v0.1.0 GitHub release and verify its downloadable assets.
+
 ## Repository foundation
 
 - [x] Native CMake targets for bootstrap, orchestrator, AC7 plugin, and launcher.
@@ -25,6 +33,13 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       [Evidence](research/d3d11-runtime-vtable-rewrite.md).
 
 ## First working target
+
+- [x] AC7 upscaling accepted by the user on 29 September 2026, including stable full-output
+      briefing terrain/icons, automatic startup/reinsertion and the simplified Insert overlay.
+      The final capture verifies zero-jitter view twins in the terrain's hull/domain stages as
+      well as VS/PS. Temporary automatic capture disabled after acceptance.
+      [Final result and scope](research/ac7-consumer-session.md#accepted-result).
+
 
 - [x] Decrypted module capture and import map. Cross-built, Wine-tested, and run in AC7 on 6 September; that run was not MSVC-verified. [Evidence](research/ghidra-tooling.md).
 - [x] AC7 frame/resource analysis and live view-buffer mapping. Captures identify sparse velocity and a separate half-size mask, plus a temporal-filter candidate. [Evidence](research/ac7-frame-capture.md).
@@ -63,11 +78,33 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
       with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
       other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
-- [ ] Separate translucency outside the reconstruction. DLSS is evaluated at the game's recombine,
-      the reconstruction seeds a promoted scene colour, and the layer renders at native size with
-      the unjittered view before the recombine composites it. Replaces the composed-colour input,
-      the heavy-frame scale switch and the translucent depth replay. Built and unit-tested on
-      26 September; not yet game-tested. [Decision](research/ac7-composed-scene-color.md).
+- [x] Consumer session controls: automatic DLSS startup and deferred reinsertion; Insert opens an
+      overlay containing only Enable DLSS and presets. Choices persist per user. Repeated preset
+      changes use the last applied screen percentage, reset history and rebuild reinsertion;
+      disable restores native rendering. Built and synthetic-tested on Windows; game validation
+      pending. [Evidence and checks](research/ac7-consumer-session.md).
+- [x] Default separate-translucency path renders at nominal full output resolution across
+      scene presets and uses unjittered VS/PS view twins before direct recombine. The previous 1:1
+      DLSS layer resolve is opt-in. Built and synthetic-tested; engine padding, pass classification,
+      the user reported the half-output briefing looks good; the requested full-output sharpness
+      change and flight regression still require a new game run.
+      [Decision and limits](research/ac7-consumer-session.md).
+- [x] Correct pixel-to-world unjitter math after the full-output terrain jitter report. The old
+      helper and fixture both applied the linear-depth screen-matrix correction to device-depth
+      SVPosition. Corrected fixture fails before the fix; scaled-view/depth regressions and the
+      Windows Release gate pass. Full-output visual retest pending.
+      [Evidence](research/ac7-consumer-session.md#full-output-jitter-pixel-to-world-unjitter-correction).
+- [x] Captured and corrected enlarged-layer view/depth selection: 1600x904 terrain draws had
+      800x452 views despite unjittered twins. Seven further engine gates now select the sized view
+      and sampled depth above scale one; a follow-up game capture verifies 1600x904 bound views.
+      This alone did not resolve the user's shimmer report.
+- [x] Extend unjitter to tessellation and geometry stages (tap ABI 13). The captured terrain uses
+      12-control-point patches and a VS that hands positions to DS. Synthetic tessellation/GS
+      pixel readback passes; the final all-stage capture and user visual acceptance confirm the briefing fix. Prevent
+      stale view twins from replacing smaller material allocations after address reuse.
+      [Evidence](research/ac7-consumer-session.md#captured-enlarged-view-mismatch-and-tessellation-gap).
+- [ ] Game-validate automatic startup, all five presets, disable/re-enable, saved choices, and the
+      briefing layer's fixed visible dimensions and temporal stability.
 - [ ] Reinsert the result. A debug view exists behind F7 and is game-tested: a full screen draw over
       the back buffer from inside the Present hook, with a rough tonemap so linear scene colour is
       viewable. It is what showed the reconstruction moving, which is the only way ghosting and a

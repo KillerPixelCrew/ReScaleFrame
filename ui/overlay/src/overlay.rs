@@ -633,28 +633,21 @@ mod tests {
     }
 
     #[test]
-    fn a_quality_level_cannot_be_picked_without_a_backend() {
+    fn a_preset_can_be_selected_before_enabling_dlss() {
         let mut overlay = Overlay::new();
-        let stats = Stats {
-            refusal_reason: Some("no backend was loaded for this device"),
-            ..Stats::default()
-        };
+        let stats = Stats::default();
         settle(&mut overlay, &stats);
-
         let target = quality_rect(&overlay, Quality::UltraPerformance);
         let [press, release] = click(&mut overlay, &stats, target);
-        assert!(press.is_idle() && release.is_idle());
-        assert_eq!(release.quality, Quality::Native);
-
-        // And the panel is not simply ignoring every click: the controls that are supposed to work
-        // in this state still do, which is what makes the assertion above about the greyed out
-        // selector rather than about a click that landed on nothing.
-        let dump = overlay
-            .controls()
-            .dump
-            .expect("the panel laid out its dump button");
-        let [_, release] = click(&mut overlay, &stats, dump);
-        assert!(release.dump_requested);
+        assert_eq!(
+            [press, release]
+                .iter()
+                .filter(|i| i.quality_changed)
+                .count(),
+            1
+        );
+        assert_eq!(release.quality, Quality::UltraPerformance);
+        assert!(!release.enabled_changed);
     }
 
     #[test]
@@ -805,24 +798,15 @@ mod tests {
     }
 
     #[test]
-    fn the_dump_button_asks_once() {
+    fn the_consumer_panel_has_only_enable_and_presets() {
         let mut overlay = Overlay::new();
         let stats = stats_with_backend();
         settle(&mut overlay, &stats);
-
-        let target = overlay
-            .controls()
-            .dump
-            .expect("the panel laid out its dump button");
-        let [press, release] = click(&mut overlay, &stats, target);
-        assert_eq!(
-            [press, release]
-                .iter()
-                .filter(|intent| intent.dump_requested)
-                .count(),
-            1
-        );
-        assert!(!idle_frame(&mut overlay, &stats).dump_requested);
+        assert!(overlay.controls().enabled.is_some());
+        assert!(overlay.controls().quality.iter().all(Option::is_some));
+        let intent = idle_frame(&mut overlay, &stats);
+        assert!(!intent.dump_requested && !intent.capture_requested);
+        assert!(!intent.reinsert_changed && !intent.jitter_changed && !intent.debug_view_changed);
     }
 
     #[test]

@@ -86,6 +86,8 @@ extern "C" void* rsf_constant_twins_write(rsf_constant_twins* twins, void* conte
     }
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(slot->twin, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) || !mapped.pData) {
+        slot->original = nullptr;
+        slot->written = 0;
         return nullptr;
     }
     std::memcpy(mapped.pData, contents, twins->bytes);
@@ -101,7 +103,12 @@ extern "C" void* rsf_constant_twins_find(const rsf_constant_twins* twins, const 
     }
     for (const auto& entry : twins->entries) {
         if (entry.original == original) {
-            return entry.twin;
+            // The engine recycles COM addresses. A former view address may now identify a small
+            // material buffer; never replace that binding with an old view just because it matches.
+            D3D11_BUFFER_DESC description{};
+            static_cast<ID3D11Buffer*>(const_cast<void*>(original))->GetDesc(&description);
+            return description.ByteWidth == twins->bytes &&
+                   (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 ? entry.twin : nullptr;
         }
     }
     return nullptr;

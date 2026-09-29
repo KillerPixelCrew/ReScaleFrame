@@ -68,7 +68,8 @@ extern "C" {
    so the next binding of the same target in the frame asks again. A frame that renders the same
    scene several times, the briefing's among them, binds the recombined target once per render,
    and only the main view's is the one to reconstruct at. */
-#define RSF_FRAME_TAP_ABI_VERSION 11u
+#define RSF_FRAME_TAP_ABI_VERSION 13u
+#define RSF_FRAME_TAP_CONSTANT_SLOTS 70u
 
 /* Render targets watched at once. The first two answer the tail's question: the swap chain's back
    buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
@@ -229,6 +230,12 @@ typedef struct rsf_frame_tap_target_draw {
        `ID3D11Buffer*` compared by address only. Filled for divert and nudge callbacks, where the
        question is which view's projection the draw was made with. */
     void* vertex_constants[14];
+    /* ABI 12: pixel-stage view buffers for per-draw overrides, in the same slot order. */
+    void* pixel_constants[14];
+    /* ABI 13: the later graphics stages, filled for constant overrides. */
+    void* geometry_constants[14];
+    void* hull_constants[14];
+    void* domain_constants[14];
 } rsf_frame_tap_target_draw;
 
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
@@ -327,19 +334,24 @@ typedef struct rsf_frame_tap_divert_setup {
    same code with this switched off. */
 rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* setup);
 
-/* Asked before a candidate draw is forwarded: which vertex-shader constant buffers to replace for
-   that draw only. Fill `slots` and `buffers` (`ID3D11Buffer*`), up to 14 pairs, and return how
-   many; zero leaves the draw alone.
+/* Asked before a candidate draw is forwarded: which constant buffers to replace for that draw
+   only. Fill `slots` and `buffers` (`ID3D11Buffer*`), up to RSF_FRAME_TAP_CONSTANT_SLOTS pairs.
+   Consecutive groups of 14 name VS, PS, GS, HS and DS b0..b13. Zero leaves the draw alone.
 
    For drawing the interface with an unjittered copy of its view's uniform buffer. The tap binds
    each buffer through the original entry, forwards the draw, and puts the game's own buffers back,
    so its shadow and the game's state stay as the game set them. Counted in `draws_overridden`.
    Independent of diverting; a diverted draw is not asked. Appended in ABI 8; several slots since
-   ABI 10. */
+   ABI 10; pixel-stage slots since ABI 12; GS/HS/DS since ABI 13. */
 typedef int (*rsf_frame_tap_constant_override_fn)(void* user, const rsf_frame_tap_target_draw* draw,
                                                   uint32_t* slots, void** buffers);
 rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_override_fn fn,
                                                          void* user);
+
+/* Also offer draws writing this DXGI_FORMAT to the callback. Zero disables this prefilter.
+   Allows the first draw after allocation/reuse to be classified before rasterization. The
+   callback must validate the remaining draw facts; a format alone does not identify a pass. */
+void rsf_frame_tap_set_constant_override_format(uint32_t format);
 
 /* Offer the constant override for every draw into `texture`, an `ID3D11Texture2D*`, as well as for
    the candidates. Four slots; a null texture clears one. For scene geometry whose projection must

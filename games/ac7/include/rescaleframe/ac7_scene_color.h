@@ -43,6 +43,11 @@ void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, void* sourc
 void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state);
 /* Captured separate-layer draw shape. Depth/raster suitability is checked by graphics replay. */
 int rsf_ac7_scene_depth_candidate(const rsf_frame_tap_geometry* draw);
+/* The same capture-derived separate-translucency shape, available before its first draw. */
+int rsf_ac7_separate_translucency_draw(const rsf_frame_tap_target_draw* draw);
+/* Target and render percentages are relative to output, not percentages of each other.
+   Zero target retains the diagnostic match-scene mode. Zero render means native. */
+float rsf_ac7_translucency_scale(uint32_t render_percent, uint32_t target_percent);
 void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state);
 
 #ifdef __cplusplus

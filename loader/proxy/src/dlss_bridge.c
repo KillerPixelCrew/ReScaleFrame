@@ -18,6 +18,7 @@
    successfully is not the same as producing a correct image, and nothing here has produced one. */
 
 #include <windows.h>
+#include <dxgiformat.h>
 
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/constant_twin.h>
@@ -170,6 +171,13 @@ static struct {
        jitter in the layer's pixels. Valid for the frame it was uploaded in. */
     rsf_camera_frame layer_camera;
     int layer_camera_valid;
+    int layer_unjitter;
+    int ui_unjitter;
+    int enabled_requested;
+    int startup_attempted;
+    unsigned long enable_retry_after;
+    unsigned long enable_after_evaluations;
+    const char* setting_error;
     /* The integrated layer: the pipeline's output for it, and the view the recombine reads it
        through. The view belongs to the bridge; the texture to the pipeline. */
     void* layer_output;
@@ -234,12 +242,22 @@ static struct {
     int last_tail_valid;
     unsigned long plan_retry_after;
     unsigned long plan_restores;
+    /* An ordered trace of gate events and presents for a few frames after a plan is installed and
+       after a dump is requested: which target opened which gate, in what order, per present. The
+       counters say the recombine gate is taken twice per counted present and the tonemap gate
+       every other one, which is not one render per frame, and only the order can say what is. */
+    unsigned long gate_trace_left;
     /* A route dump: the pictures at the gates for a couple of consecutive frames, written from the
        render thread as the frame passes them, with DLSS running. RenderDoc cannot do this here:
        Streamline crashes inside RenderDoc's device wrapper the moment it is handed the device. */
     char route_dump_prefix[520];
     unsigned long route_dump_frames;
     unsigned long route_dump_frame;
+    unsigned long route_dump_serial;
+    char briefing_capture_prefix[520];
+    unsigned long briefing_capture_wait;
+    unsigned long briefing_capture_draws;
+    unsigned long briefing_shader_bytes;
     /* Which recombine is the main view's. The briefing renders the scene more than once a frame
        (three qualifying passes a frame against one on the menus), and every render binds a
        recombined target; the pool hands them the same allocation, so the gate opens at the first.
@@ -565,6 +583,21 @@ static void on_shader_created(void* user, void* shader, uint32_t stage, const vo
     rsf_ui_registry_forget(bridge.ui, shader);
     ui_forget_hash(shader);
     hash = (unsigned long)rsf_ui_shader_hash(bytecode, bytes);
+    if (bridge.briefing_capture_prefix[0] && bytes <= 1024u * 1024u &&
+        bridge.briefing_shader_bytes + bytes <= 64ul * 1024ul * 1024ul) {
+        char path[600];
+        FILE* file;
+        snprintf(path, sizeof(path), "%s_shader_%u_%08lx.dxbc", bridge.briefing_capture_prefix,
+                 (unsigned)stage, hash);
+        file = fopen(path, "rb");
+        if (file) {
+            fclose(file);
+        } else if ((file = fopen(path, "wb")) != NULL) {
+            fwrite(bytecode, 1, bytes, file);
+            fclose(file);
+            bridge.briefing_shader_bytes += bytes;
+        }
+    }
     ui_remember_hash(shader, hash);
     ++ui_hashes_seen;
     for (index = 0; index < ui_forced_count; ++index) {
@@ -832,8 +865,9 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
         bridge.translucency_layer = draw->target;
         /* A new layer means a new tail: the recombine's reads of it are what the plan names. */
         bridge.plan_stale = 1;
-        say("translucency layer %p %lux%lu: integrated at one to one before the recombine",
-            draw->target, (unsigned long)draw->width, (unsigned long)draw->height);
+        say("translucency layer %p %lux%lu: %s before the recombine",
+            draw->target, (unsigned long)draw->width, (unsigned long)draw->height,
+            bridge.layer_unjitter ? "unjittered, no temporal integration" : "integrated at one to one");
     }
     bridge.depth_candidate_width = draw->width;
     bridge.depth_candidate_height = draw->height;
@@ -847,7 +881,7 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 
     rejects[0] = 0;
     rejects[1] = 0;
-    if (bridge.layer_replay) {
+    if (bridge.layer_replay && !bridge.layer_unjitter) {
         const uint32_t replayed = rsf_depth_replay_draw(bridge.layer_replay, draw);
         bridge.depth_replayed += replayed;
         rejects[0] = replayed ? 0u : rsf_depth_replay_last_reject(bridge.layer_replay);
@@ -1462,6 +1496,7 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 /* Defined below, next to the toggle it shares its work with. Declared here because a stalled plan
    is noticed in the present hook, which runs long before that. */
 static int install_reinsert_plan(void);
+static void stop_reinsert(void);
 
 /* Notice that reinsertion has stopped doing anything, and go and find the tail again.
 
@@ -1724,6 +1759,14 @@ static int camera_continues(const rsf_camera_frame* candidate, const rsf_camera_
            dot > 0.9962f /* cos 5 degrees */ && distance < 2000.0f * 2000.0f;
 }
 
+static void gate_trace(const char* what, void* texture)
+{
+    if (bridge.gate_trace_left == 0) {
+        return;
+    }
+    say("gate trace: %s %p, present %lu", what, texture, bridge.presents);
+}
+
 static void log_gate_decision(const char* verdict)
 {
     if (bridge.gate_decisions_logged >= 12) {
@@ -1760,8 +1803,8 @@ static void route_dump(void* context, void* texture, const char* name)
     if (!texture || !bridge.route_dump_frames) {
         return;
     }
-    snprintf(path, sizeof(path), "%s_f%lu_%s", bridge.route_dump_prefix, bridge.route_dump_frame,
-             name);
+    snprintf(path, sizeof(path), "%s_f%lu_s%lu_%s", bridge.route_dump_prefix, bridge.route_dump_frame,
+             bridge.route_dump_serial++, name);
     memset(&options, 0, sizeof(options));
     options.struct_size = sizeof(options);
     options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
@@ -1786,7 +1829,7 @@ static void integrate_layer(void* context)
     rsf_depth_replay_detail detail;
     void* depth = NULL;
     int ok = 0;
-    if (!bridge.layer_output || !bridge.translucency_layer) {
+    if (bridge.layer_unjitter || !bridge.layer_output || !bridge.translucency_layer) {
         return;
     }
     if (bridge.layer_replay) {
@@ -1833,6 +1876,8 @@ static int on_gate(void* user, void* context, void* texture)
     status.struct_size = sizeof(status);
     if (bridge.promote && rsf_promote_get_status(bridge.promote, &status) == RSF_PROMOTE_OK &&
         status.at_recombine) {
+        gate_trace(texture && texture == bridge.composite ? "composite bound" : "recombined bound",
+                   texture);
         if (texture && texture == bridge.composite) {
             /* The tonemap's gate: temporal AA wrote the scratch target, and scene colour gets the
                recombined result instead. The pass just before this is the main view's temporal
@@ -1864,9 +1909,11 @@ static int on_gate(void* user, void* context, void* texture)
             !camera_continues(&bridge.upload_camera, &bridge.main_camera_ref)) {
             ++bridge.gates_declined_camera;
             log_gate_decision("declined");
+            gate_trace("recombine declined", texture);
             return 0;
         }
         log_gate_decision("taken");
+        gate_trace("recombine taken", texture);
         if (!rsf_d3d11_state_save(context, &state)) {
             return 1;
         }
@@ -2034,6 +2081,8 @@ static void on_constants(void* user, void* buffer, void* contents, uint32_t byte
     }
     if (bytes == RSF_AC7_VIEW_BUFFER_BYTES) {
         on_view_constants(user, buffer, contents, bytes);
+    } else if (view_twins) {
+        rsf_constant_twins_forget(view_twins, buffer);
     }
 }
 
@@ -2098,6 +2147,56 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
     }
 }
 
+/* Read the buffers the actual draw binds, not an unrelated upload of the same size. Bounded to
+   two captured frames and 128 draws, explicitly opted in through the diagnostic prefix. */
+static void capture_layer_constants(const rsf_frame_tap_target_draw* draw)
+{
+    unsigned char data[RSF_AC7_VIEW_BUFFER_BYTES];
+    uint32_t stage, slot;
+    const unsigned long ordinal = bridge.briefing_capture_draws++;
+    say("briefing capture: frame %lu draw %lu target %p %ux%u elements %u topology %u VS %08lx PS %08lx",
+        bridge.route_dump_frame, ordinal, draw->render_target, draw->target_width, draw->target_height,
+        draw->element_count, draw->topology, ui_hash_of(draw->vertex_shader), ui_hash_of(draw->pixel_shader));
+    const char* names[] = {"vs", "ps", "gs", "hs", "ds"};
+    void* const* bound[] = {draw->vertex_constants, draw->pixel_constants,
+                           draw->geometry_constants, draw->hull_constants, draw->domain_constants};
+    for (stage = 0; stage < 5; ++stage) {
+        for (slot = 0; slot < 14; ++slot) {
+            void* original = bound[stage][slot];
+            void* twin = rsf_constant_twins_find(view_twins, original);
+            unsigned variant;
+            if (!original) {
+                continue;
+            }
+            for (variant = 0; variant < 2; ++variant) {
+                void* buffer = variant ? twin : original;
+                if (buffer && rsf_read_constant_buffer(bridge.device, bridge.context, buffer,
+                                                       data, sizeof(data)) == RSF_CONSTANT_BUFFER_OK) {
+                    char path[640];
+                    FILE* file;
+                    rsf_ac7_view view;
+                    rsf_ac7_view_result result;
+                    memset(&view, 0, sizeof(view));
+                    view.struct_size = sizeof(view);
+                    result = rsf_ac7_view_read(data, sizeof(data), RSF_AC7_VIEW_ABI_VERSION, &view);
+                    snprintf(path, sizeof(path), "%s_f%lu_d%lu_%s_b%u_%s.bin",
+                             bridge.briefing_capture_prefix, bridge.route_dump_frame, ordinal,
+                             names[stage], (unsigned)slot, variant ? "twin" : "original");
+                    file = fopen(path, "wb");
+                    if (file) {
+                        fwrite(data, 1, sizeof(data), file);
+                        fclose(file);
+                    }
+                    say("briefing buffer: draw %lu %s b%u %s %p parse %d view %ux%u jitter %.6f %.6f",
+                        ordinal, names[stage], (unsigned)slot, variant ? "twin" : "original",
+                        buffer, (int)result, view.view_width, view.view_height,
+                        view.jitter_pixels[0], view.jitter_pixels[1]);
+                }
+            }
+        }
+    }
+}
+
 static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* draw, uint32_t* slots,
                                 void** buffers)
 {
@@ -2108,13 +2207,15 @@ static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* dra
     if (!draw || !view_twins) {
         return 0;
     }
-    /* The separate translucency layer is composited after the reconstruction, so nothing resolves
-       its jitter either: its draws take the unjittered view as the interface's do. */
-    /* The layer is not here any more: it keeps the jitter it is drawn with, because its
-       integration wants the sub-pixel samples, and it is read integrated. */
-    layer_draw = 0;
-    if (classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
+    layer_draw = bridge.layer_unjitter && bridge.reinsert_on && !bridge.recombine_off &&
+        bridge.color_selection.composed && rsf_ac7_separate_translucency_draw(draw);
+    if (!layer_draw && (!bridge.ui_unjitter ||
+                       classify_candidate(draw) != RSF_AC7_DRAW_UI_WIDGET_QUAD)) {
         return 0;
+    }
+    if (layer_draw && bridge.briefing_capture_prefix[0] && bridge.route_dump_frames &&
+        bridge.briefing_capture_draws < 128) {
+        capture_layer_constants(draw);
     }
     /* Every slot with a twin, not the first. D3D11 keeps earlier draws' buffers bound in the slots
        a shader does not use, so the first twinned buffer found may be a stale one while the view
@@ -2125,6 +2226,23 @@ static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* dra
             slots[count] = index;
             buffers[count] = twin;
             ++count;
+        }
+    }
+    /* Terrain is a 12-control-point patch: its domain shader performs the final projection.
+       Every graphics stage must receive the same unjittered view. UI retains its VS-only path. */
+    if (layer_draw) {
+        void* const* bound[] = {draw->pixel_constants, draw->geometry_constants,
+                               draw->hull_constants, draw->domain_constants};
+        uint32_t stage;
+        for (stage = 0; stage < 4; ++stage) {
+            for (index = 0; index < 14; ++index) {
+                void* twin = rsf_constant_twins_find(view_twins, bound[stage][index]);
+                if (twin) {
+                    slots[count] = 14 * (stage + 1) + index;
+                    buffers[count] = twin;
+                    ++count;
+                }
+            }
         }
     }
     if (count) {
@@ -2319,13 +2437,13 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
        and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
        the entire reason this field exists. */
     if (!bridge.started) {
-        stats->refusal_reason = "not started, press F8";
+        stats->refusal_reason = bridge.startup_attempted ? "DLSS could not start; see the log" : "Waiting for the renderer";
     } else if (!stats->backend_supported) {
         stats->refusal_reason = "the driver did not accept DLSS";
     } else if (bridge.passes == 0) {
         stats->refusal_reason = "no pass has bound the reconstruction inputs yet";
     } else if (bridge.no_jitter > 0 && bridge.evaluated == 0) {
-        stats->refusal_reason = "the projection carries no jitter, press F9";
+        stats->refusal_reason = "Waiting for valid temporal inputs";
     } else if (bridge.not_main_view > 0 && bridge.evaluated == 0) {
         stats->refusal_reason = "the view read was not the main view";
     }
@@ -2347,7 +2465,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->jitter_pixels[0] = bridge.held_camera.jitter_pixels[0];
     stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
     stats->frames_presented = bridge.frames_shown;
-    stats->enabled = (uint32_t)(bridge.reinsert_on || bridge.show);
+    stats->enabled = (uint32_t)bridge.reinsert_on;
     stats->debug_view_on = (uint32_t)bridge.show;
     stats->reinsert_on = (uint32_t)bridge.reinsert_on;
     /* What rsf_bridge_toggle_reinsert would refuse on, asked before the click rather than after.
@@ -2383,6 +2501,13 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->jitter_on = bridge.actions.jitter_open ? (uint32_t)bridge.actions.jitter_open() : 0u;
     stats->jitter_available =
         bridge.actions.jitter_available ? (uint32_t)bridge.actions.jitter_available() : 0u;
+    if (bridge.setting_error) {
+        stats->refusal_reason = bridge.setting_error;
+    } else if (!bridge.enabled_requested) {
+        stats->refusal_reason = NULL;
+    } else if (bridge.started && !bridge.reinsert_on && !stats->refusal_reason) {
+        stats->refusal_reason = "Waiting for the scene's upscale path";
+    }
 }
 
 /* Lay the panel out and draw it, and report what was clicked without acting on it.
@@ -2392,6 +2517,79 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
    from the message thread to the render thread at a defined point, which is the open review finding
    about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
    and leaves the hotkeys as the way to ask. */
+int rsf_bridge_select_quality(unsigned long quality)
+{
+    uint32_t width = 0, height = 0;
+    if (quality > RSF_DLSS_QUALITY_ULTRA_PERFORMANCE) {
+        return 0;
+    }
+    if (bridge.started) {
+        const unsigned long previous = bridge.quality;
+        if (rsf_dlss_pipeline_set_quality((rsf_dlss_quality)quality, &width, &height) !=
+            RSF_DLSS_PIPELINE_OK) {
+            bridge.setting_error = "DLSS did not accept this preset";
+            return 0;
+        }
+        const unsigned long x = (width * 100ul + bridge.output_width - 1) / bridge.output_width;
+        const unsigned long y = (height * 100ul + bridge.output_height - 1) / bridge.output_height;
+        const unsigned long percent = x > y ? x : y;
+        if (bridge.enabled_requested && (!bridge.actions.set_render_scale ||
+                                        !bridge.actions.set_render_scale(percent))) {
+            rsf_dlss_pipeline_set_quality((rsf_dlss_quality)previous, NULL, NULL);
+            bridge.setting_error = "The game did not accept the preset's render resolution";
+            say("preset %lu refused: screen percentage did not change; keeping %lu", quality, previous);
+            return 0;
+        }
+        if (bridge.reinsert_on) {
+            stop_reinsert();
+        }
+        bridge.enable_after_evaluations = bridge.evaluated;
+        bridge.enable_retry_after = bridge.presents + 2;
+        say("preset %lu applied: requested %ux%u, output %lux%lu, screen percentage %lu",
+            quality, width, height, bridge.output_width, bridge.output_height, percent);
+    }
+    bridge.quality = quality;
+    bridge.quality_chosen = 1;
+    bridge.setting_error = NULL;
+    if (bridge.actions.save_quality) {
+        bridge.actions.save_quality(quality);
+    }
+    return 1;
+}
+
+void rsf_bridge_set_enabled(int enabled)
+{
+    if (!enabled) {
+        /* Restore the game's resolution before disarming. A refused write leaves the working
+           session intact and reports why the request could not be applied. */
+        if (bridge.started && bridge.actions.set_render_scale &&
+            !bridge.actions.set_render_scale(100)) {
+            bridge.setting_error = "Native resolution could not be restored";
+            return;
+        }
+        stop_reinsert();
+        bridge.show = 0;
+        bridge.enabled_requested = 0;
+        if (bridge.actions.set_jitter) {
+            bridge.actions.set_jitter(0);
+        }
+    } else {
+        bridge.enabled_requested = 1;
+        bridge.startup_attempted = 0;
+        if (bridge.started && !rsf_bridge_select_quality(bridge.quality)) {
+            bridge.enabled_requested = 0;
+            return;
+        }
+        if (bridge.started && bridge.actions.set_jitter) {
+            bridge.actions.set_jitter(1);
+        }
+    }
+    bridge.setting_error = NULL;
+    if (bridge.actions.save_enabled) {
+        bridge.actions.save_enabled(enabled != 0);
+    }
+}
+
 static void overlay_tick(void* swapchain)
 {
     rsf_overlay_stats stats;
@@ -2444,10 +2642,7 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.enabled_changed) {
-        /* The master enable is the pair of switches above it in the panel, and there is no third
-           thing for it to mean. Said rather than quietly doing nothing. */
-        say("overlay: the enable toggle does not act on its own. Use the debug view and the "
-            "reinsertion switches");
+        rsf_bridge_set_enabled(intent.enabled != 0);
     }
     if (intent.jitter_changed) {
         if (bridge.actions.set_jitter) {
@@ -2464,36 +2659,7 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.quality_changed) {
-        /* Quality selects a render size. The pipeline asks DLSS for it and switches mode on the
-           next evaluate without tearing Streamline down, and the game's screen percentage follows,
-           because a frame outside the new range would be refused. On this thread, which is the one
-           that evaluates. */
-        uint32_t width = 0;
-        uint32_t height = 0;
-        if (!bridge.started) {
-            say("overlay: quality %u noted; it applies when the backend starts",
-                (unsigned)intent.quality);
-            bridge.quality = (unsigned long)intent.quality;
-            bridge.quality_chosen = 1;
-        } else if (rsf_dlss_pipeline_set_quality((rsf_dlss_quality)intent.quality, &width,
-                                                 &height) == RSF_DLSS_PIPELINE_OK) {
-            rsf_dlss_pipeline_status pipeline;
-            memset(&pipeline, 0, sizeof(pipeline));
-            pipeline.struct_size = sizeof(pipeline);
-            bridge.quality = (unsigned long)intent.quality;
-            if (rsf_dlss_pipeline_get_status(&pipeline) == RSF_DLSS_PIPELINE_OK &&
-                pipeline.output_width != 0 && bridge.actions.set_render_scale) {
-                /* Rounded up, so the game's size lands inside DLSS's range, never just below. */
-                const unsigned long percent =
-                    (unsigned long)((width * 100u + pipeline.output_width - 1u) /
-                                    pipeline.output_width);
-                bridge.actions.set_render_scale(percent);
-                say("overlay: quality %u, render scale %lu%% for %ux%u",
-                    (unsigned)intent.quality, percent, width, height);
-            }
-        } else {
-            say("overlay: quality %u was refused by the pipeline", (unsigned)intent.quality);
-        }
+        rsf_bridge_select_quality((unsigned long)intent.quality);
     }
 }
 
@@ -2507,7 +2673,7 @@ static void follow_layer_size(void)
     const unsigned long height = bridge.depth_candidate_height;
     rsf_depth_replay* rebuilt;
     void* output = NULL;
-    if (!bridge.started || !bridge.device || width == 0 || height == 0 ||
+    if (bridge.layer_unjitter || !bridge.started || !bridge.device || width == 0 || height == 0 ||
         bridge.depth_candidate_samples != 1) {
         return;
     }
@@ -2600,6 +2766,18 @@ static void on_present(void* user, void* swapchain)
 
     /* First, so a key pressed since the last frame acts on this one, on this thread. */
     run_pending_requests(swapchain);
+    if (bridge.enabled_requested && !bridge.started && !bridge.startup_attempted &&
+        bridge.actions.startup_ready && bridge.actions.startup_ready() &&
+        bridge.actions.start_backend) {
+        unsigned long width = 0, height = 0;
+        if (swapchain_extent(swapchain, &width, &height)) {
+            bridge.startup_attempted = 1;
+            bridge.actions.start_backend();
+        }
+    }
+    if (bridge.started && bridge.actions.maintain_renderer) {
+        bridge.actions.maintain_renderer();
+    }
 
     /* Before anything reads it. The classifier compares against this on every candidate draw of the
        next frame, and a run where it is null classifies every Slate draw into the frame's own
@@ -2630,8 +2808,19 @@ static void on_present(void* user, void* swapchain)
 
     bridge.upload_camera_valid = 0;
     if (bridge.route_dump_frames) {
+        /* The frame as presented, last of the set: what the player sees. */
+        void* buffer = rsf_swapchain_back_buffer(swapchain);
+        if (buffer) {
+            route_dump(bridge.context, buffer, "final");
+            rsf_resource_release(buffer);
+        }
         --bridge.route_dump_frames;
         ++bridge.route_dump_frame;
+    }
+    if (bridge.gate_trace_left) {
+        say("gate trace: present %lu ends, %lu passes this frame", bridge.presents,
+            bridge.pass_in_frame);
+        --bridge.gate_trace_left;
     }
     if (bridge.started) {
         ++bridge.presents;
@@ -2658,10 +2847,17 @@ static void on_present(void* user, void* swapchain)
             }
             release_held();
             rsf_frame_tap_end_frame();
-        } else {
-            /* The frame is finished here, which is the whole reason the evaluate waits for it when
-               the result is only being drawn over the top. */
+        } else if (bridge.enabled_requested) {
             evaluate_held(bridge.context);
+        } else {
+            release_held();
+        }
+        if (bridge.enabled_requested && !bridge.reinsert_on && bridge.composite_found &&
+            bridge.scene_color && bridge.evaluated > bridge.enable_after_evaluations &&
+            bridge.held_width && bridge.held_height &&
+            bridge.presents >= bridge.enable_retry_after) {
+            rsf_bridge_toggle_reinsert();
+            bridge.enable_retry_after = bridge.presents + 60;
         }
     }
 
@@ -2671,6 +2867,13 @@ static void on_present(void* user, void* swapchain)
        deliberate choice: nothing observes draws before the tap exists. */
     bridge.translucent_indices_last = bridge.translucent_indices;
     bridge.translucent_draws_last = bridge.translucent_draws;
+    if (bridge.briefing_capture_prefix[0] && bridge.reinsert_on && !bridge.recombine_off &&
+        bridge.translucent_indices > 100000 && bridge.briefing_capture_wait < 120 &&
+        ++bridge.briefing_capture_wait == 120) {
+        rsf_bridge_request_dump(bridge.briefing_capture_prefix);
+        rsf_bridge_report();
+        say("briefing capture: collecting two frames automatically");
+    }
     if (bridge.actions.translucent_geometry) {
         bridge.actions.translucent_geometry(bridge.translucent_indices);
     }
@@ -2920,7 +3123,7 @@ void rsf_bridge_toggle_reinsert(void)
     /* Deliberately not "reinsertion works". The substitutions are in place and the game will draw
        its own tail over the reconstruction; whether the result is right is a thing to look at. */
     say("reinsert: on. The scene is reconstructed before the game's tonemap, and the grade and the "
-        "interface are the game's own. Press F6 again to stop");
+        "interface are the game's own");
 }
 
 /* Build the substitutions for the tail as it currently stands and hand them to the tap.
@@ -3008,7 +3211,7 @@ static int install_reinsert_plan(void)
        the game composites its full-size translucency over it. */
     tail.composed = bridge.recombine_off ? NULL : bridge.color_selection.composed;
     /* The layer, read integrated from the recombine onward, once its output exists. */
-    if (tail.composed && bridge.translucency_layer && bridge.layer_output_view) {
+    if (!bridge.layer_unjitter && tail.composed && bridge.translucency_layer && bridge.layer_output_view) {
         tail.layer = bridge.translucency_layer;
         tail.layer_view = bridge.layer_output_view;
     }
@@ -3030,6 +3233,7 @@ static int install_reinsert_plan(void)
     bridge.frames_described = 0;
     bridge.gate_decisions_logged = 0;
     bridge.main_camera_ref_valid = 0;
+    bridge.gate_trace_left = 6;
     /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
        just because the previous plan's redirects are still the last thing counted. */
     bridge.redirect_stall = 0;
@@ -3139,6 +3343,12 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     }
 
     bridge.started = 1;
+    if (!rsf_bridge_select_quality(bridge.quality)) {
+        rsf_frame_tap_uninstall();
+        rsf_dlss_pipeline_stop();
+        bridge.started = 0;
+        return 0;
+    }
     /* After the tap is installed, not before: the jitter is only worth having once there is
        something reading the frames it belongs to. */
     if (bridge.actions.set_jitter) {
@@ -3162,6 +3372,9 @@ void rsf_bridge_report(void)
         bridge.layer_integrations_refused, bridge.layer_depth_missing);
     say("translucent depth: %lu geometry draws reached the hook, %lu of them candidates",
         bridge.geometry_draws, bridge.depth_candidates);
+    say("layer route: %s, %lu draws with an unjittered view, %lu without an available twin",
+        bridge.layer_unjitter ? "unjittered direct recombine" : "jittered 1:1 integration",
+        bridge.layer_draws_twinned, bridge.layer_draws_untwinned);
     if (bridge.ui) {
         rsf_ui_registry_counters counters;
         uint32_t slate = 0, canvas = 0, widget = 0;
@@ -3361,12 +3574,21 @@ void rsf_bridge_request_dump(const char* prefix)
            reconstruction moves between them is what a shimmer complaint needs answered. */
         snprintf(bridge.route_dump_prefix, sizeof(bridge.route_dump_prefix), "%s_route", prefix);
         bridge.route_dump_frame = 0;
+        bridge.route_dump_serial = 0;
         bridge.route_dump_frames = 2;
+        bridge.gate_trace_left = 4;
     }
 }
 
-void rsf_bridge_set_unjitter(int on)
+void rsf_bridge_set_briefing_capture(const char* prefix)
 {
+    snprintf(bridge.briefing_capture_prefix, sizeof(bridge.briefing_capture_prefix), "%s",
+             prefix ? prefix : "");
+}
+
+static void configure_view_overrides(void)
+{
+    const int on = bridge.ui_unjitter || bridge.layer_unjitter;
     if (!bridge.started) {
         return;
     }
@@ -3377,9 +3599,32 @@ void rsf_bridge_set_unjitter(int on)
         }
     }
     rsf_frame_tap_set_constant_override(on && view_twins ? ui_constant_override : NULL, NULL);
+    rsf_frame_tap_set_constant_override_format(bridge.layer_unjitter && view_twins ?
+                                               DXGI_FORMAT_R16G16B16A16_FLOAT : 0);
     /* Always: the recombine route takes this frame's camera from the upload. */
     rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
+}
+
+void rsf_bridge_set_unjitter(int on)
+{
+    bridge.ui_unjitter = on != 0;
+    configure_view_overrides();
     say("ui: interface drawn with %s", on ? "an unjittered twin of its view" : "its view as the game uploaded it");
+}
+
+void rsf_bridge_set_translucency_unjitter(int on)
+{
+    bridge.layer_unjitter = on != 0;
+    configure_view_overrides();
+    bridge.plan_stale = 1;
+    /* A failed twin allocation must not silently select a raw jittered layer. */
+    if (bridge.layer_unjitter && !view_twins) {
+        bridge.layer_unjitter = 0;
+        say("layer: no view twins available; retaining jittered 1:1 integration");
+    }
+    say("layer: %s", bridge.layer_unjitter ?
+        "unjittered graphics-stage views, composited after scene SR without layer DLSS" :
+        "jittered view, integrated at one to one before recombine");
 }
 
 void rsf_bridge_view_size(unsigned long* width, unsigned long* height)

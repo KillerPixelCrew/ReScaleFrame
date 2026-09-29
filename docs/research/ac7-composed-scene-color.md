@@ -207,3 +207,15 @@ from the recombine onward. A refused frame copies the raw layer into the output 
 
 Not yet game-tested. What decides it: whether the feature creates for a second viewport, whether
 the replay accepts the layer's draws at 1600x904, and whether DLSS keeps the point cloud's detail.
+
+## Follow-up: fixed vanilla resolution and unjittered direct composition
+
+29 September 2026. The first trial preserved the briefing's vanilla half-output resolution, independent
+of the selected scene scale, with view twins in both VS and PS. The second DLSS layer feature is
+an explicit comparison mode. The previous stochastic-material explanation remains a hypothesis,
+not a proved shader mechanism. See [consumer session work](ac7-consumer-session.md) for evidence,
+startup/preset changes, synthetic checks and the remaining game validation.
+
+After the user accepted the briefing trial, the target was raised to 100% output resolution for
+sharpness. It stays unjittered and independent of the selected scene quality. Full-output visual
+validation is pending relaunch.

@@ -78,6 +78,7 @@ struct Tap {
 
     // Borrowed shadow of live IA/VS bindings, never retained as a deferred draw record.
     rsf_frame_tap_geometry geometry{};
+    ID3D11Buffer* pixel_constants[14]{};
     bool geometry_valid = false;
     ID3D11DepthStencilView* geometry_depth = nullptr;
     void* extra_originals[16]{};
@@ -194,6 +195,7 @@ struct Tap {
     // that draw only.
     std::atomic<rsf_frame_tap_constant_override_fn> constant_override{nullptr};
     std::atomic<void*> constant_override_user{nullptr};
+    std::atomic<uint32_t> constant_override_format{0};
     std::atomic<uint32_t> draws_overridden{0};
     std::atomic<uint32_t> copies_redirected{0};
     std::atomic<uint32_t> copies_mismatched{0};
@@ -204,8 +206,8 @@ struct Tap {
     struct OverrideState {
         bool active = false;
         uint32_t count = 0;
-        UINT slots[14] = {};
-        ID3D11Buffer* originals[14] = {};
+        UINT slots[RSF_FRAME_TAP_CONSTANT_SLOTS] = {};
+        ID3D11Buffer* originals[RSF_FRAME_TAP_CONSTANT_SLOTS] = {};
     } override_state;
     // The constant watch: buffers of one width mapped for writing, held until their Unmap.
     std::atomic<rsf_frame_tap_constants_fn> constant_watch{nullptr};
@@ -707,6 +709,7 @@ void fill_divert_facts(const Tap& self, bool indexed, UINT element_count,
     facts.target_view_format = self.target_view_format;
     for (int slot = 0; slot < 14; ++slot) {
         facts.vertex_constants[slot] = self.geometry.vertex_constants[slot];
+        facts.pixel_constants[slot] = self.pixel_constants[slot];
     }
     facts.target_count = self.target_count;
     facts.target_samples = self.target_description.SampleDesc.Count;
@@ -940,6 +943,37 @@ bool begin_divert(Tap& self, ID3D11DeviceContext* context,
  * flag rather than a depth could not survive, and it is now reachable. */
 // Bind a stand-in vertex constant buffer for a candidate draw, if the override callback asks.
 // See `rsf_frame_tap_set_constant_override`. Called after try_divert declined, with the guard held.
+void seed_geometry(Tap& self, ID3D11DeviceContext* context);
+
+// Query the less common stages only on an offered draw. The context owns these bindings;
+// release the getter references immediately and restore every overridden slot after drawing.
+void extra_stage_constants(ID3D11DeviceContext* context, rsf_frame_tap_target_draw& facts)
+{
+    ID3D11Buffer* buffers[14]{};
+    auto copy = [&](void** target) {
+        for (UINT i = 0; i < 14; ++i) {
+            target[i] = buffers[i];
+            if (buffers[i]) { buffers[i]->Release(); }
+        }
+    };
+    context->GSGetConstantBuffers(0, 14, buffers); copy(facts.geometry_constants);
+    context->HSGetConstantBuffers(0, 14, buffers); copy(facts.hull_constants);
+    context->DSGetConstantBuffers(0, 14, buffers); copy(facts.domain_constants);
+}
+
+void bind_override(Tap& self, ID3D11DeviceContext* context, UINT encoded_slot, ID3D11Buffer* buffer)
+{
+    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*);
+    const UINT slot = encoded_slot % 14;
+    switch (encoded_slot / 14) {
+    case 0: reinterpret_cast<Fn>(self.extra_originals[5])(context, slot, 1, &buffer); break;
+    case 1: self.original_set_constants(context, slot, 1, &buffer); break;
+    case 2: context->GSSetConstantBuffers(slot, 1, &buffer); break;
+    case 3: context->HSSetConstantBuffers(slot, 1, &buffer); break;
+    case 4: context->DSSetConstantBuffers(slot, 1, &buffer); break;
+    }
+}
+
 void begin_constant_override(Tap& self, ID3D11DeviceContext* context, bool indexed, UINT element_count)
 {
     Tap::OverrideState& state = self.override_state;
@@ -949,7 +983,13 @@ void begin_constant_override(Tap& self, ID3D11DeviceContext* context, bool index
     if (!fn || !self.extra_originals[5]) {
         return;
     }
-    bool offered = false;
+    if (!self.geometry_valid) {
+        seed_geometry(self, context);
+    }
+    bool offered = self.target_texture &&
+        self.constant_override_format.load(std::memory_order_relaxed) != 0 &&
+        self.constant_override_format.load(std::memory_order_relaxed) ==
+            static_cast<uint32_t>(self.target_description.Format);
     if (self.target_texture) {
         for (const auto& target : self.override_targets) {
             if (target.load(std::memory_order_relaxed) == self.target_texture) {
@@ -964,24 +1004,28 @@ void begin_constant_override(Tap& self, ID3D11DeviceContext* context, bool index
     rsf_frame_tap_target_draw facts;
     rsf_frame_tap_input inputs[RSF_FRAME_TAP_MAX_INPUTS];
     fill_divert_facts(self, indexed, element_count, facts, inputs);
-    uint32_t slots[14] = {};
-    void* buffers[14] = {};
+    extra_stage_constants(context, facts);
+    void* const* bound[] = {facts.vertex_constants, facts.pixel_constants, facts.geometry_constants,
+                           facts.hull_constants, facts.domain_constants};
+    uint32_t slots[RSF_FRAME_TAP_CONSTANT_SLOTS] = {};
+    void* buffers[RSF_FRAME_TAP_CONSTANT_SLOTS] = {};
     const int asked =
         fn(self.constant_override_user.load(std::memory_order_relaxed), &facts, slots, buffers);
     if (asked <= 0) {
         return;
     }
-    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*);
     state.count = 0;
-    for (int index = 0; index < asked && index < 14; ++index) {
-        if (!buffers[index] || slots[index] >= 14) {
+    bool used[RSF_FRAME_TAP_CONSTANT_SLOTS] = {};
+    for (int index = 0; index < asked && index < int(RSF_FRAME_TAP_CONSTANT_SLOTS); ++index) {
+        if (!buffers[index] || slots[index] >= RSF_FRAME_TAP_CONSTANT_SLOTS || used[slots[index]]) {
             continue;
         }
-        ID3D11Buffer* replacement = static_cast<ID3D11Buffer*>(buffers[index]);
-        reinterpret_cast<Fn>(self.extra_originals[5])(context, slots[index], 1, &replacement);
+        used[slots[index]] = true;
+        auto* replacement = static_cast<ID3D11Buffer*>(buffers[index]);
+        bind_override(self, context, slots[index], replacement);
         state.slots[state.count] = slots[index];
         state.originals[state.count] =
-            static_cast<ID3D11Buffer*>(self.geometry.vertex_constants[slots[index]]);
+            static_cast<ID3D11Buffer*>(bound[slots[index] / 14][slots[index] % 14]);
         ++state.count;
     }
     if (state.count == 0) {
@@ -997,10 +1041,8 @@ void end_constant_override(Tap& self, ID3D11DeviceContext* context)
     if (!state.active) {
         return;
     }
-    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*);
     for (uint32_t index = 0; index < state.count; ++index) {
-        reinterpret_cast<Fn>(self.extra_originals[5])(context, state.slots[index], 1,
-                                                      &state.originals[index]);
+        bind_override(self, context, state.slots[index], state.originals[index]);
     }
     state.count = 0;
     state.active = false;
@@ -1784,6 +1826,11 @@ void seed_geometry(Tap& self, ID3D11DeviceContext* context)
         g.vertex_constants[i] = buffers[i];
         drop(buffers[i]);
     }
+    context->PSGetConstantBuffers(0, 14, buffers);
+    for (UINT i = 0; i < 14; ++i) {
+        self.pixel_constants[i] = buffers[i];
+        drop(buffers[i]);
+    }
     self.geometry_valid = true;
 }
 
@@ -1979,6 +2026,10 @@ void STDMETHODCALLTYPE hooked_instanced(ID3D11DeviceContext* c, UINT n, UINT ins
 void invalidate_geometry(Tap& s)
 {
     s.geometry_valid = false;
+    s.geometry = rsf_frame_tap_geometry{};
+    for (auto& buffer : s.pixel_constants) {
+        buffer = nullptr;
+    }
     s.geometry_depth = nullptr;
     s.depth_bound = false;
     s.target_count = 0;
@@ -2429,7 +2480,13 @@ void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* conte
     }
     forward(context, start_slot, count, buffers);
 
-    if (inside_hook || context != self.observed_context || !buffers || count == 0) {
+    if (inside_hook || context != self.observed_context || count == 0) {
+        return;
+    }
+    for (UINT index = 0; index < count && start_slot + index < 14; ++index) {
+        self.pixel_constants[start_slot + index] = buffers ? buffers[index] : nullptr;
+    }
+    if (!buffers) {
         return;
     }
     const uint32_t wanted = self.options.view_constant_bytes;
@@ -2625,6 +2682,7 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
         self.plan_active.store(false, std::memory_order_relaxed);
         self.divert_armed.store(0, std::memory_order_relaxed);
         self.constant_override.store(nullptr, std::memory_order_relaxed);
+        self.constant_override_format.store(0, std::memory_order_relaxed);
         self.constant_watch_bytes.store(0, std::memory_order_relaxed);
         self.constant_watch.store(nullptr, std::memory_order_relaxed);
         // Off before the table goes back, so a hook still in flight cannot re-apply what this is
@@ -2811,6 +2869,11 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_override(
     self.constant_override_user.store(user, std::memory_order_relaxed);
     self.constant_override.store(fn, std::memory_order_release);
     return RSF_FRAME_TAP_OK;
+}
+
+extern "C" void rsf_frame_tap_set_constant_override_format(uint32_t format)
+{
+    tap().constant_override_format.store(format, std::memory_order_release);
 }
 
 extern "C" rsf_frame_tap_result rsf_frame_tap_set_divert(

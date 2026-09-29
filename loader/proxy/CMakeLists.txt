@@ -2,6 +2,7 @@
 add_library(rsf_proxy_dinput8 SHARED
     src/dinput8_proxy.c
     src/dlss_bridge.c
+    src/preferences.c
     # C++ because it is the one part of the bridge that talks to COM directly.
     src/overlay_host.cpp)
 target_link_libraries(rsf_proxy_dinput8 PRIVATE

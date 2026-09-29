@@ -6,7 +6,8 @@
 
 // The layers the recombine reads. The depth of field layers are half size; separate translucency is
 // whatever size it is told to render at, which is the presented size when it stays out of the
-// reconstruction, so anything from half to double the scene's size with the scene's aspect counts.
+// reconstruction, so anything from half to four times the scene's size with its aspect counts.
+// Native translucency exceeds twice the scene at Ultra Performance; the scale patch caps at four.
 // The pool rounds rows up to a multiple of four, hence the tolerance on the aspect.
 static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_width,
                             uint32_t scene_height)
@@ -14,8 +15,8 @@ static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_widt
     if (width == 0 || height == 0 || scene_width == 0 || scene_height == 0) {
         return false;
     }
-    if (width < (scene_width + 1) / 2 || width > scene_width * 2 ||
-        height < (scene_height + 1) / 2 || height > scene_height * 2 + 4) {
+    if (width < (scene_width + 1) / 2 || uint64_t(width) > uint64_t(scene_width) * 4 ||
+        height < (scene_height + 1) / 2 || uint64_t(height) > uint64_t(scene_height) * 4 + 4) {
         return false;
     }
     const uint64_t cross_a = uint64_t(width) * scene_height;
@@ -141,4 +142,18 @@ extern "C" int rsf_ac7_scene_depth_candidate(const rsf_frame_tap_geometry* draw)
     // depth. Identity is confirmed later by the recombine reading this exact target.
     return draw && draw->target && draw->depth_view && draw->samples == 1 &&
            draw->format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
+extern "C" int rsf_ac7_separate_translucency_draw(const rsf_frame_tap_target_draw* draw)
+{
+    // Apply before rasterization, including the first draw into a newly allocated layer.
+    // This remains the captured pass shape, not a material/shader identity claim.
+    return draw && draw->render_target && draw->depth_bound && draw->target_count == 1 &&
+           draw->target_samples == 1 && draw->target_format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
+extern "C" float rsf_ac7_translucency_scale(uint32_t render_percent, uint32_t target_percent)
+{
+    return target_percent == 0 ? 1.0f :
+        float(target_percent) / float(render_percent == 0 ? 100 : render_percent);
 }

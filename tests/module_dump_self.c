@@ -45,6 +45,10 @@ static char* read_file(const char* path, size_t* size)
 
 int main(int argc, char* argv[])
 {
+    /* Release linking can discard the diagnostic library's unused GetProcAddress caller. Make
+       the import asserted below an explicit dependency of this fixture in every configuration. */
+    check(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetCurrentProcessId") != NULL,
+          "The fixture's known import must be callable.");
     if (argc != 2) {
         fprintf(stderr, "usage: module_dump_self <output directory>\n");
         return 2;

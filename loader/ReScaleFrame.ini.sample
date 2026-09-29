@@ -1,136 +1,27 @@
-# ReScaleFrame settings.
-#
-# Copy this beside the proxy, as ReScaleFrame.ini next to Ace7Game.exe, and edit it there. It is
-# read once when the proxy attaches. One NAME=value per line; # or ; starts a comment.
-#
-# These are the same names that used to be Steam launch options, and an environment variable still
-# wins over the file, so an existing launch line keeps working and a one-off override does not mean
-# editing this.
-#
-# Numbers accept hexadecimal with an 0x prefix, and zero means zero rather than "unset".
-
-# Watch the game's D3D11 use. Nothing else works without it.
-RSF_OBSERVE=1
-
-# Run the engine's own temporal jitter, which every super resolution backend needs. This steps over
-# the anti-aliasing gate rather than turning temporal AA on, because AC7 runs none.
-#
-# 1 opens the gate only while a reconstruction is resolving frames, which is what keeps the front
-# end still: an offset that nothing accumulates is visible as a shimmer, and the menu holds still
-# so it has nowhere to hide. 2 opens it from decryption to exit, which is what every measurement
-# before this was taken under. 0 never patches.
-#
-# F4 and the overlay's "Jitter the projection" switch flip it live in either mode. Doing that while
-# looking at the main menu is how a shimmer caused by the jitter is told apart from one caused by
-# the resolve failing on elements that carry no motion vectors.
-RSF_ENABLE_JITTER=1
-
-# Name the game's pipeline objects and classify the draws made from them. Changes no pixel: it
-# answers which draws on a screen are the interface and, more usefully, how many looked like it and
-# matched no rule. Look for the "ui:" lines in the report.
-#
-# The creation hooks are only patched when this is on, so turning it off costs the game nothing.
-RSF_UI_CLASSIFY=1
-
-# Which transfer function the composite applies to the extracted interface. 0 none, 1 sRGB, 2 gamma
-# 2.2.
-#
-# AC7 stores its interface as linear values in a plain UNORM target, measured: the "ui draw:" trace
-# shows the widget quads writing into view format 28. The back buffer they are composited onto holds
-# colour the game has already transformed for display, so the composite has to transform too, and
-# without it the interface arrives dark.
-#
-# Which curve is right is not something the API records. 1 and 2 differ in the shadows: if 1 leaves
-# dark parts of the interface slightly washed out, try 2.
-RSF_UI_ENCODE=1
-
-# Move each interface panel back by the jitter of the view it is drawn with, read from that view's
-# own uniform buffer, so panels drawn with a jittered projection into a layer the reconstruction
-# never sees hold still, and panels of unjittered views are left alone. 0 turns it off.
-RSF_UI_UNJITTER=1
-
-# Jitter every view rather than only the main one. 1 restores the plain gate patch. The main-view
-# stub exists because scene-in-scene views, the briefing hologram and the menu backgrounds, took
-# the jitter too and nothing resolved it.
-# RSF_JITTER_ALL_VIEWS=0
-
-# Name shaders the rules got wrong, by hash, in either direction. Forced wins over every rule and
-# skipped loses to none, so this corrects a run without waiting for a build.
-#
-# The hashes come from the "ui draw:" trace lines, which print the vertex and pixel shader hash of
-# the first two dozen interface-shaped draws for exactly this purpose. Hex, separated by anything.
-#
-# RSF_UI_SHADER_FORCE=0x1a2b3c4d, 0x5e6f7a8b
-# RSF_UI_SHADER_SKIP=0x9c0d1e2f
-
-# Render scale, as a percentage. The panel can change this at runtime.
-RSF_SCREEN_PERCENTAGE=50
-
-# 0 Native, 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
+# ReScaleFrame for AC7. Copy beside Ace7Game.exe as ReScaleFrame.ini.
+# Insert opens the overlay. It offers Enable DLSS and the quality presets.
+# DLSS and reinsertion start automatically after the renderer is ready.
+# Overlay choices are saved in %LOCALAPPDATA%\ReScaleFrame\AC7.ini and take
+# precedence over these initial defaults on later launches.
+RSF_DLSS_ENABLE=1
+# 0 Native (DLAA), 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
 RSF_DLSS_QUALITY=3
 
-# Where dumps, logs and captures are written. A Windows path as Proton sees it.
-RSF_DUMP_DIR=Z:\home\n1ght\Projekte\ReScaleFrame\.local\observe
+# Briefing resolution is relative to output, never the reduced scene.
+# 100 renders the briefing at full output resolution, independently of the DLSS preset.
+RSF_TRANSLUCENCY_TARGET=100
+# Draw with an unjittered VS/PS view, then composite after scene SR.
+# 0 selects the experimental jittered 1:1 layer resolve for comparison.
+RSF_TRANSLUCENCY_UNJITTER=1
 
-# Left unset on purpose: the vendor runtime is found at ReScaleFrame\streamline beside the proxy.
-# RSF_STREAMLINE_BIN=
-
-# Frame capture, off unless asked for, and not a default worth having. RenderDoc wraps the device,
-# NGX then refuses to create the DLSS feature, and the retry costs the game a little more every
-# frame until it stops. Turn it on for a capture session, off for anything else. When on,
-# renderdoc.dll is found beside the proxy; the path is only for a copy kept elsewhere.
-# RSF_RENDERDOC=1
-# RSF_RENDERDOC_DLL=
-# Where captures are written, as RenderDoc's file path template: the frame number and .rdc are
-# appended. Unset, RenderDoc picks its own temporary folder.
-# RSF_CAPTURE_PREFIX=D:/captures/ac7
-
-# Let translucent geometry write motion vectors. Stock 4.18 excludes it by blend mode, which is why
-# the mission map's relief and the vehicle symbols in replay have none. The material domain check,
-# the movable test and SupportsVelocity are all left in place, so a material with no usable velocity
-# permutation still refuses rather than drawing wrongly.
-#
-# Off by default: separate translucency no longer goes through DLSS, so its motion would only
-# overwrite the motion of the scene behind it.
-#
-# Check the log for: translucent velocity gate patched at rva 0x11823de
-RSF_TRANSLUCENT_VELOCITY=0
-
-# What reinsertion (F6) does when a promoted target meets the game's own depth.
-#
-# Reinsertion promotes the composite to output resolution. The game keeps binding a depth at render
-# resolution, and D3D11 rejects that pair, so every draw in such a pass is dropped. Flat interface
-# draws bind no depth and are untouched, which is how the interface can look right over a scene that
-# is missing. All three answers are wrong in different ways, so pick by looking:
-#
-#   0  drop the depth and keep the substitution. The pass draws, without its depth test or writes.
-#   1  forward both. The pair is invalid and the pass draws nothing. This is what it did before.
-#   2  leave the target alone. The pass draws correctly into a texture nothing downstream reads.
-#
-# The count and the last mismatching pair are in the F7 report. Zero mismatches means depth is not
-# involved and the missing geometry has another cause.
-# RSF_REINSERT_DEPTH=0
-
-# Separate translucency resolution.
-#
-# 4.18 renders that layer at half the scene and doubles it back on composite, so at a 50% render
-# scale the mission map's relief is a quarter resolution image by the time anything sees it. The
-# proxy patches the halving out; these decide what it renders at instead.
-#
-# The target is a percentage of the presented resolution, not of the scene, and it defaults to 100:
-# the layer renders at native whatever the render scale. It does not go through DLSS. The bridge
-# evaluates the reconstruction at the game's recombine, before translucency is composited, and the
-# recombine lays the native layer over the reconstruction, drawn with the unjittered view. 0 means
-# "match the scene" and puts the layer back at render resolution, jitter and all.
-# RSF_TRANSLUCENCY_TARGET=100
-
-# A direct multiplier in percent of the scene, overriding the target when it is not zero.
-# RSF_TRANSLUCENCY_SCALE=0
-
-# Going above the scene's resolution needs the engine to build a depth to match, which stock 4.18
-# does only below 1.0: at or above it the layer borrows the scene's depth, and a large colour target
-# with a small depth is a pair D3D11 rejects. Game-tested, that made the briefing relief vanish
-# entirely. The proxy narrows that borrow to exactly 1.0 with four one-byte patches, after which the
-# engine allocates, fills, view-transforms and resolves the layer's own depth at any size. There is
-# no setting for it: if those patches do not match, the scale holds at the scene's resolution by
-# itself and says so in the log.
+# Advanced diagnostics. Ordinary use requires none of these overrides.
+# RSF_OBSERVE=1
+# RSF_ENABLE_JITTER=1
+# RSF_UI_CLASSIFY=1
+# RSF_UI_UNJITTER=1
+# RSF_STREAMLINE_BIN=              # defaults to ReScaleFrame\streamline beside the proxy
+# RSF_DUMP_DIR=                    # defaults to %LOCALAPPDATA%\ReScaleFrame\AC7
+# RSF_DUMP_MODULE=0               # executable dumps are opt-in
+# RSF_TRANSLUCENCY_SCALE=0        # overrides the output-relative target when nonzero
+# RSF_REINSERT_DEPTH=0            # existing overlay-depth policy
+# RSF_RENDERDOC=0                 # cannot be used alongside DLSS in the observed setup

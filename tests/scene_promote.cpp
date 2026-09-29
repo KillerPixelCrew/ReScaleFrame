@@ -171,12 +171,16 @@ int main()
     tail.render_height = 144;
     tail.composite_view_format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
 
-    stage("refusing a frame with nothing to upscale");
+    stage("native temporal reconstruction and oversize refusal");
     rsf_promote_frame_tail unscaled = tail;
     unscaled.render_width = 512;
     unscaled.render_height = 288;
+    check(rsf_promote_prepare(promote, &unscaled) == RSF_PROMOTE_OK,
+          "Native/DLAA must still reinsert its temporal reconstruction at equal resolution.");
+    unscaled.render_width = 1024;
+    unscaled.render_height = 576;
     check(rsf_promote_prepare(promote, &unscaled) == RSF_PROMOTE_ERROR_NOT_SCALED,
-          "A frame already at output resolution must be refused rather than substituted into.");
+          "An input larger than output must not silently select downsampling.");
     check(logged("nothing to promote"),
           "Refusing must say why, since it is the same thing a mission load causes.");
 
