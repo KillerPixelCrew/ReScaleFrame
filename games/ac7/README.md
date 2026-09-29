@@ -1,24 +1,84 @@
 # Ace Combat 7
 
-AC7 uses a modified UE4.18 renderer. The researched target is Windows x64/D3D11, Steam app `502500`, build `9855922`. The plugin recognizes its executable name, PE machine, and SHA-256. [engine.json](engine.json) records the evidence.
+**DLSS Super Resolution and Native/DLAA for AC7.**
 
-The plugin API still reports `rendering_ready = 0`: the live DLSS hooks are driven by the research proxy, outside this lifecycle. The AC7 view reader is implemented and used by that path.
+The integration starts with the game and keeps the original lighting, post-processing and UI.
+Briefing terrain and aircraft icons render at full output resolution, independently of the selected
+DLSS preset, with projection jitter removed through the terrain's tessellation stages.
 
-## View data
+[Download the AC7 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/latest)
+· [Installation details](../../docs/releases/ac7-install.md)
+· [Report an issue](https://github.com/KillerPixelCrew/ReScaleFrame/issues)
 
-`rsf_ac7_view` reads the 4096-byte view constant buffer: projection, camera basis/position, `ClipToPrevClip`, jitter, and view/buffer extents. It checks matrix and size relationships before accepting the data and identifies secondary views.
+## Supported setup
 
-UE4.18 has no `ViewToClipNoAA` field. Read the engine's camera transform, remove projection jitter where required, and validate backend conventions separately. The [capture report](../../docs/research/ac7-frame-capture.md) contains the offsets and checks.
+- Ace Combat 7 on Steam, Windows x64. Tested executable: build **9855922**, app **502500**.
+- Windows 10 or 11 and an NVIDIA RTX GPU with DLSS support.
+- A current NVIDIA driver and the
+  [Microsoft Visual C++ v14 Redistributable, x64](https://aka.ms/vc14/vc_redist.x64.exe).
 
-## Current evidence
+The release includes the required Streamline and DLSS runtime files. Other game builds and Proton
+have not been validated with this release. Frame generation, Reflex, XeSS and FSR are separate work.
 
-- The shipped code section is encrypted; analysis uses a decrypted runtime dump.
-- Captures show a temporal-filter candidate with colour, history, depth, velocity, and exposure. Jitter was zero before patching the AA gate.
-- The gate patch at RVA `0x112b1f3` enables sub-pixel jitter. `r.ScreenPercentage` reduces actual scene-buffer sizes.
-- Sparse `R16G16_UNORM` velocity needs bias removal. Camera movement is absent from unwritten pixels and can be resolved using depth and the engine transform.
-- At 50% scale, the scene and HUD composite run at render resolution before final scaling. The interface itself is rasterized at a fixed 1920x1080 through `Nimbus.WidgetToTextureConverter` and, on the briefing and hangar, drawn as world-space widget quads into AC7's own render-resolution `R8G8B8A8` layer with the scene's depth bound. Extraction into a layer of our own was measured to discolour the frame, because the quads read the scene and its glow chain and the game keeps processing them afterwards; the layers they draw into are promoted to output resolution instead, named by the draw classifier in `ui_rules.cpp`, so the game composites a sharp interface itself. See [AC7 UI composition](../../docs/research/ac7-ui-composition.md) and [extraction](../../docs/research/ac7-ui-extraction.md).
-- The separate translucency layer renders at native on heavy frames (the briefing relief) through a rewritable immediate and four depth-gate patches; game-tested 7 September.
-- The game keeps its own per-context screen percentage table (`FGraphicsSettingsManager`), which is why it overwrites `r.ScreenPercentage` on transitions; the plan applies the render scale there.
-- Live DLSS evaluation and the F7 debug display have recorded mission runs. Full integration and controlled motion validation remain open.
+## Install
 
-Move AC7 addresses and preparation out of `loader/proxy` as the plugin lifecycle is built; the [representation plan](../../docs/representation-plan.md) gives this directory the draw classifier, the frame tail, the screen policy, the graphics settings and the patch table, behind game SDK ABI 2. Revalidate pass/view identity across missions, weather, menus, and camera changes. See [the hook map](../../docs/research/ue418-hook-map.md) and [todo](../../docs/implementation.md).
+1. Close the game and download `ReScaleFrame-0.1.0-AC7-Windows-x64.zip`.
+2. In Steam, choose **Manage > Browse local files** and find `Ace7Game.exe`.
+3. Extract the archive into that folder. Both mod DLLs and `ReScaleFrame.ini` go beside the
+   executable, along with the included `ReScaleFrame` folder.
+4. Launch normally. DLSS and reinsertion start automatically when the renderer is ready.
+
+Keep the original game executable. No Steam launch options are needed on Windows. If another mod
+already uses `dinput8.dll`, do not overwrite it: this release does not chain another DirectInput proxy.
+
+## Use
+
+Press **Insert** to open or close the overlay. Its two controls are **Enable DLSS** and the presets.
+
+| Preset | Behaviour |
+| --- | --- |
+| Native | DLAA at output resolution |
+| Quality | Highest input resolution of the upscaling presets |
+| Balanced | Lower input resolution than Quality |
+| Performance | Lower input resolution than Balanced; the first-launch default |
+| Ultra Performance | Lowest input resolution |
+
+DLSS supplies the render sizes. The briefing layer stays at **100% output resolution** across
+preset changes. Turning DLSS off restores native scene rendering. Your choices are saved in
+`%LOCALAPPDATA%\ReScaleFrame\AC7.ini` and restored on the next launch.
+
+The INI beside the game contains initial defaults and advanced options. Logs are written to
+`%LOCALAPPDATA%\ReScaleFrame\AC7\rsf-dump.log`.
+
+## Update, troubleshoot or remove
+
+Close AC7 before updating the mod. If Windows reports a missing MSVCP140 or VCRUNTIME140 DLL,
+install or repair the x64 Visual C++ runtime linked above. If Insert does nothing, check the DLL
+locations and any other mod using `dinput8.dll`.
+
+When reporting an issue, include your GPU, driver, preset, output resolution and a relevant log
+excerpt. The [full installation guide](../../docs/releases/ac7-install.md) has the remaining details.
+
+To uninstall, remove the two mod DLLs, `ReScaleFrame.ini` and the installed `ReScaleFrame` folder.
+Restore any files you backed up. Delete `%LOCALAPPDATA%\ReScaleFrame\AC7.ini` if you also want
+to reset your saved preferences.
+
+## Integration notes
+
+AC7 uses a modified UE4.18 renderer on D3D11. The working release runs through the proxy entry
+point. The separate public plugin lifecycle still reports `rendering_ready = 0`; migrating the
+working hooks into that lifecycle remains framework work.
+
+The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
+removal, and the engine's camera transform supplies camera motion. The integration promotes the
+game's own UI/composition targets, preserving its grading and glow. Enlarged separate translucency
+uses matching view/depth selections and unjittered constants across VS, PS, HS, DS and GS.
+
+- [Accepted result and debugging history](../../docs/research/ac7-consumer-session.md)
+- [Executable and renderer evidence](engine.json)
+- [Hook sites and expected bytes](../../docs/research/ue418-hook-map.md)
+- [Capture research](../../docs/research/ac7-frame-capture.md)
+- [Framework implementation tracker](../../docs/implementation.md)
+
+ReScaleFrame is GPL-3.0-only except for its MIT Game SDK. NVIDIA supplies DLSS through Streamline;
+its bundled runtime files retain their separate included terms and notices.
