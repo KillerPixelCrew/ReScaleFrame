@@ -8,7 +8,11 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       dependency notices, source-commit manifest and archive checksums. Installation, usage,
       supported scope and removal are documented in the release notes and packaged README.
       Packaging does not change rendering code. [Packaging procedure](dependencies.md#packaging-the-ac7-release).
-- [ ] Publish the v0.1.0 GitHub release and verify its downloadable assets.
+- [x] Published [v0.1.0 for AC7](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0)
+      from `4386a9079d68df3f9f26e55f69d1a01f42bcb306`. Windows package, corresponding-source ZIP
+      and SHA256SUMS uploaded; GitHub asset digests match the local files and the downloaded
+      checksum file matches. Packaged retail runtime initialized and reported DLSS support in the
+      hardware load/query test. Framework and AC7 READMEs are separated.
 
 ## Repository foundation
 
