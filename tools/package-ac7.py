@@ -52,9 +52,10 @@ def dependency_notices(stage: Path) -> None:
             # Fetch it at the exact source revision recorded by Cargo, never a moving branch.
             vcs = json.loads((root / ".cargo_vcs_info.json").read_text(encoding="utf-8"))
             sha = vcs["git"]["sha1"]
-            repository = (package.get("repository") or "").removesuffix(".git").rstrip("/")
-            if not re.fullmatch(r"https://github.com/[\w.-]+/[\w.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            match = re.match(r"(https://github.com/[\w.-]+/[\w.-]+)(?:/|$)", package.get("repository") or "")
+            if not match or not re.fullmatch(r"[0-9a-f]{40}", sha):
                 raise RuntimeError(f"No verifiable license source for {name}")
+            repository = match[1].removesuffix(".git")
             base = repository.replace("https://github.com/", "https://raw.githubusercontent.com/") + f"/{sha}/"
             for filename in ("LICENSE-MIT", "LICENSE-MIT.txt", "LICENSE", "LICENSE.txt", "LICENSE.md"):
                 try:
