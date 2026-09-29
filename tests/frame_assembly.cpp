@@ -30,9 +30,9 @@ void* const depth = reinterpret_cast<void*>(0x3000);
 void* const motion = reinterpret_cast<void*>(0x4000);
 void* const exposure = reinterpret_cast<void*>(0x5000);
 
-rsf_camera_frame make_camera()
+rsf_pipeline_camera_frame make_camera()
 {
-    rsf_camera_frame camera{};
+    rsf_pipeline_camera_frame camera{};
     camera.struct_size = sizeof(camera);
     camera.abi_version = RSF_FRAME_ASSEMBLY_ABI_VERSION;
 
@@ -95,7 +95,7 @@ rsf_frame_resources make_resources()
 
 int main()
 {
-    const rsf_camera_frame camera = make_camera();
+    const rsf_pipeline_camera_frame camera = make_camera();
     const rsf_frame_resources resources = make_resources();
 
     rsf_dlss_frame frame{};
@@ -139,7 +139,7 @@ int main()
 
     // Refusals. Each of these is a frame that would assemble into something that renders and is
     // wrong, which is worse than one that refuses.
-    rsf_camera_frame broken = camera;
+    rsf_pipeline_camera_frame broken = camera;
     broken.has_jitter = 0;
     check(rsf_assemble_dlss_frame(&broken, &resources, &frame) ==
               RSF_FRAME_ASSEMBLY_ERROR_NOT_USABLE,

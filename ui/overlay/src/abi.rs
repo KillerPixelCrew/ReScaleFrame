@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 3;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 4;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -106,6 +106,12 @@ pub struct RsfOverlayStats {
     /// Non-zero when the jitter patch verified its site, so there is a gate to open. Zero after a
     /// game update moved the code, and the panel shows that rather than offering a dead switch.
     pub jitter_available: u32,
+    /// Effective SR backend, in the C header order.
+    pub backend: u32,
+    /// Most recently requested SR backend.
+    pub requested_backend: u32,
+    /// Result of the last switch.
+    pub last_switch_result: i32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -144,6 +150,10 @@ pub struct RsfOverlayIntent {
     pub jitter_changed: u32,
     /// The jitter state the panel now shows.
     pub jitter: u32,
+    /// A backend selection made in this frame.
+    pub backend_changed: u32,
+    /// Requested SR backend.
+    pub backend: u32,
 }
 
 impl Default for RsfOverlayIntent {
@@ -165,6 +175,8 @@ impl Default for RsfOverlayIntent {
             capture_requested: 0,
             jitter_changed: 0,
             jitter: 0,
+            backend_changed: 0,
+            backend: 1,
         }
     }
 }
@@ -299,7 +311,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 136);
+        assert_eq!(size_of::<RsfOverlayStats>(), 144);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -316,13 +328,18 @@ mod tests {
         // Appended in ABI 3, into the padding ABI 2 left behind.
         assert_eq!(offset_of!(RsfOverlayStats, jitter_on), 124);
         assert_eq!(offset_of!(RsfOverlayStats, jitter_available), 128);
+        assert_eq!(offset_of!(RsfOverlayStats, backend), 132);
+        assert_eq!(offset_of!(RsfOverlayStats, requested_backend), 136);
+        assert_eq!(offset_of!(RsfOverlayStats, last_switch_result), 140);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 64);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 72);
         assert_eq!(offset_of!(RsfOverlayIntent, start_requested), 24);
         assert_eq!(offset_of!(RsfOverlayIntent, jitter_changed), 56);
+        assert_eq!(offset_of!(RsfOverlayIntent, backend_changed), 64);
+        assert_eq!(offset_of!(RsfOverlayIntent, backend), 68);
         assert_eq!(size_of::<RsfOverlayInput>(), 36);
         assert_eq!(size_of::<RsfOverlayVertex>(), 20);
         assert_eq!(offset_of!(RsfOverlayVertex, color), 16);

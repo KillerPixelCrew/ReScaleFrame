@@ -105,3 +105,19 @@ Warnings, errors and state changes remain available in `rsf-dump.log`.
 
 The proxy and overlay are still the research carrier, not the completed plugin lifecycle or product
 installer. Synthetic Windows checks do not establish briefing image quality or flight regression.
+
+## Development SR backend switching
+
+The current development overlay offers DLSS, FSR2, FSR3, FSR4 and XeSS after startup. Selection is
+applied on the render thread; a refused backend keeps the active one. Existing startup is DLSS-first.
+The published 0.1.0 package contains DLSS only and is not automatically updated by these changes.
+New FSR/XeSS paths are built and synthetic device-tested, not yet game-tested in AC7.
+
+`RSF_FFX_BIN` selects the absolute directory containing `amd_fidelityfx_upscaler_dx12.dll`.
+It defaults to `ReScaleFrame\fidelityfx` beside the proxy. SDK 2.3.0 can supply all three FSR
+families. `RSF_FSR2_BIN`, `RSF_FSR3_BIN` and `RSF_FSR4_BIN` optionally select separate SDK runtime
+directories. `RSF_XESS_BIN` selects the directory containing `libxess.dll`, defaulting to
+`ReScaleFrame\xess`. Settings use the existing INI/environment precedence. No new vendor binaries
+are installed by building or testing; preserve their distribution terms when preparing a package.
+
+[Architecture, SDK revisions, device checks and remaining validation](../docs/research/orchestrator-sr-switching.md).

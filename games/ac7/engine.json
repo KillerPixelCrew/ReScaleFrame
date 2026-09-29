@@ -150,5 +150,11 @@
     "state": "implemented_startup_log_verified_user_accepted",
     "detail": "Automatic DLSS start after patch/device readiness; reinsertion after fresh evaluation. Insert is the only hotkey. Overlay exposes Enable DLSS and presets, persisted per user. Preset changes update scene scale from its last applied value, reset history and rebuild reinsertion. Disable restores 100% scene scale and closes jitter. The user accepted the completed AC7 upscaling path on 29 September; full-output briefing stage data was captured. This does not change public plugin lifecycle or FG validation status.",
     "research": "docs/research/ac7-consumer-session.md"
+  },
+  "sr_backend_switching": {
+    "state": "built_synthetic_device_tested_not_game_tested",
+    "date": "2026-09-29",
+    "detail": "Compatibility selector built for DLSS, FSR2, FSR3, FSR4 and XeSS. Runtime session/interop is reusable and has no AC7 hooks. FSR2/FSR3/XeSS synthetic device evaluations passed on Intel UHD and RTX 4070 Laptop; FSR4 refusal was tested. AC7 startup remains DLSS-first and new backend image quality/motion/transition validation is pending. Accepted AC7 DLSS evidence is unchanged.",
+    "research": "docs/research/orchestrator-sr-switching.md"
   }
 }

@@ -58,7 +58,7 @@ add_test(NAME ui_identify COMMAND rsf_ui_identify)
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
 # whose runtime is missing. Runs in both configurations and CI builds it both ways.
 add_executable(rsf_fsr_backend fsr_backend.cpp)
-target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR rsf_build_options)
+target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR ReScaleFrame::XeSS rsf_build_options)
 add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
 
 # Choosing between three vendors on a machine that has none of them, which is the point of
@@ -138,3 +138,25 @@ set_tests_properties(dlss_backend PROPERTIES TIMEOUT 120)
 
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")
+
+add_executable(rsf_sr_bridge_test sr_bridge.cpp)
+target_link_libraries(rsf_sr_bridge_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME sr_bridge COMMAND rsf_sr_bridge_test)
+set_tests_properties(sr_bridge PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+# Link controller against deterministic providers, with no vendor DLLs or graphics device.
+add_executable(rsf_sr_session_test sr_session.cpp ../runtime/orchestrator/src/sr_session.cpp)
+target_compile_definitions(rsf_sr_session_test PRIVATE RSF_RUNTIME_BUILD)
+target_include_directories(rsf_sr_session_test PRIVATE ../runtime/orchestrator/include)
+target_link_libraries(rsf_sr_session_test PRIVATE ReScaleFrame::Contract rsf_build_options)
+add_test(NAME sr_session COMMAND rsf_sr_session_test)
+
+add_executable(rsf_motion_resolve_test motion_resolve.cpp)
+target_link_libraries(rsf_motion_resolve_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME motion_resolve COMMAND rsf_motion_resolve_test)
+set_tests_properties(motion_resolve PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+add_executable(rsf_sr_pipeline_test sr_pipeline.cpp)
+target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
+set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)

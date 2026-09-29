@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+#ifndef RSF_SR_BRIDGE_H
+#define RSF_SR_BRIDGE_H
+#include <rescaleframe/sr_session.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef struct rsf_sr_bridge rsf_sr_bridge;
+/* setup.open.device is the game's D3D11 device. Creates D3D12 on that same adapter.
+   This is a synchronous SR transfer, with no presentation or swap-chain ownership. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_create(const rsf_sr_session_setup* setup,
+                                                        rsf_sr_bridge** out);
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_select(rsf_sr_bridge* bridge,
+    rsf_sr_backend backend, rsf_quality quality, uint64_t version_id);
+/* Frame resources are D3D11 textures. Prepared depth must be R32_FLOAT and motion must contain
+   dense, previous-minus-current displacement. No sparse sentinel is accepted. Transfers only
+   the declared origin-zero render rectangle. Output is a caller-owned UAV-capable color texture.
+   Run on the D3D11 immediate-context owner thread, with game bindings saved by the caller. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
+    void* d3d11_context, const rsf_sr_frame* frame);
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,
+    rsf_sr_session_status* status);
+RSF_RUNTIME_API void rsf_sr_bridge_destroy(rsf_sr_bridge* bridge);
+#ifdef __cplusplus
+}
+#endif
+#endif

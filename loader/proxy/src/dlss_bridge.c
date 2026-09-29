@@ -169,7 +169,7 @@ static struct {
     unsigned long layer_replay_height;
     /* The view the layer was drawn with, from its upload: the scene's camera at the layer's size,
        jitter in the layer's pixels. Valid for the frame it was uploaded in. */
-    rsf_camera_frame layer_camera;
+    rsf_pipeline_camera_frame layer_camera;
     int layer_camera_valid;
     int layer_unjitter;
     int ui_unjitter;
@@ -212,7 +212,7 @@ static struct {
     void* held_depth;
     void* held_motion;
     void* held_exposure;
-    rsf_camera_frame held_camera;
+    rsf_pipeline_camera_frame held_camera;
     unsigned long held_width;
     unsigned long held_height;
     /* The recombine route evaluates before this frame's qualifying pass has happened, so it works
@@ -221,7 +221,7 @@ static struct {
     void* last_depth;
     void* last_motion;
     void* last_exposure;
-    rsf_camera_frame upload_camera;
+    rsf_pipeline_camera_frame upload_camera;
     unsigned long upload_width;
     unsigned long upload_height;
     int upload_camera_valid;
@@ -264,7 +264,7 @@ static struct {
        The main view is the one whose tonemap writes the composite, and the pass right before that
        is its temporal pass, so its camera is the reference: the recombine whose camera continues
        it is the one to reconstruct at, and the others are declined and asked again. */
-    rsf_camera_frame main_camera_ref;
+    rsf_pipeline_camera_frame main_camera_ref;
     int main_camera_ref_valid;
     unsigned long gates_declined_camera;
     unsigned long gate_decisions_logged;
@@ -672,7 +672,15 @@ static void say(const char* format, ...)
    established: the pipeline fills the motion ones because it is the code that decodes them, and
    inventing the rest here would be exactly the kind of plausible wrong value this project keeps
    catching. */
-static void fill_camera(const rsf_ac7_view* view, rsf_camera_frame* camera)
+static char sdk_directories[4][1024];
+void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess)
+{
+    const char* paths[4] = {fsr2, fsr3, fsr4, xess};
+    unsigned int i;
+    for (i = 0; i < 4; ++i) snprintf(sdk_directories[i], sizeof(sdk_directories[i]), "%s", paths[i] ? paths[i] : "");
+}
+
+static void fill_camera(const rsf_ac7_view* view, rsf_pipeline_camera_frame* camera)
 {
     memset(camera, 0, sizeof(*camera));
     camera->struct_size = sizeof(*camera);
@@ -716,7 +724,7 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
 {
     unsigned char view_bytes[RSF_AC7_VIEW_BUFFER_BYTES];
     rsf_ac7_view view;
-    rsf_camera_frame camera;
+    rsf_pipeline_camera_frame camera;
     rsf_dlss_pipeline_frame frame;
     rsf_dlss_pipeline_result result;
 
@@ -1745,7 +1753,7 @@ static int evaluate_at_recombine(void* context)
 /* Whether `candidate` is the main view's camera a frame on from `reference`: the same lens, looking
    the same way to within a few degrees, from nearby. A camera turns a degree or two a frame at the
    fastest and moves metres, not the tens of metres between a scene and a capture of it. */
-static int camera_continues(const rsf_camera_frame* candidate, const rsf_camera_frame* reference)
+static int camera_continues(const rsf_pipeline_camera_frame* candidate, const rsf_pipeline_camera_frame* reference)
 {
     float dot = 0.0f;
     float distance = 0.0f;
@@ -2431,7 +2439,11 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->frames_refused = (uint32_t)pipeline.frames_refused;
         stats->last_result = (int32_t)pipeline.last_result;
     }
-    stats->backend_name = "DLSS";
+    stats->backend = pipeline.backend;
+    stats->requested_backend = pipeline.requested_backend;
+    stats->last_switch_result = pipeline.last_switch_result;
+    stats->backend_name = pipeline.backend == 2 ? "FSR2" : pipeline.backend == 3 ? "FSR3" :
+        pipeline.backend == 4 ? "FSR4" : pipeline.backend == 5 ? "XeSS" : "DLSS";
 
     /* Why nothing is happening, in the order the pipeline actually fails. A backend that is running
        and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
@@ -2656,6 +2668,17 @@ static void overlay_tick(void* swapchain)
             bridge.actions.trigger_capture();
         } else {
             say("overlay: no capture support was registered, so there is nothing to capture with");
+        }
+    }
+    if (intent.backend_changed && bridge.started) {
+        rsf_dlss_pipeline_status previous;
+        memset(&previous, 0, sizeof(previous)); previous.struct_size = sizeof(previous);
+        rsf_dlss_pipeline_get_status(&previous);
+        if (rsf_dlss_pipeline_select_backend(intent.backend, NULL, NULL) != RSF_DLSS_PIPELINE_OK) {
+            bridge.setting_error = "Requested backend is unavailable; keeping the active backend";
+        } else if (!rsf_bridge_select_quality(bridge.quality)) {
+            rsf_dlss_pipeline_select_backend(previous.backend, NULL, NULL);
+            bridge.setting_error = "Game render resolution refused; previous backend restored";
         }
     }
     if (intent.quality_changed) {
@@ -3307,6 +3330,14 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     setup.motion.zero_means_unwritten = 1u;
     setup.log = log;
     setup.log_user = log_user;
+    setup.engine = RSF_DLSS_ENGINE_UNREAL;
+    setup.engine_version_utf8 = "4.18";
+    setup.project_id_utf8 = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
+    setup.fsr2_directory_utf8 = sdk_directories[0];
+    setup.fsr3_directory_utf8 = sdk_directories[1];
+    setup.fsr4_directory_utf8 = sdk_directories[2];
+    setup.xess_directory_utf8 = sdk_directories[3];
+    setup.view_space_to_meters = 0.01f;
 
     started = rsf_dlss_pipeline_start(bridge.device, &setup);
     if (started != RSF_DLSS_PIPELINE_OK) {

@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define RSF_BACKEND_ABI_VERSION 1u
+#define RSF_BACKEND_ABI_VERSION 2u
 
 /* Ordered as the Rust capability model orders them, so the two can be compared field by field
    rather than through a mapping nobody maintains. */
@@ -224,6 +224,13 @@ typedef struct rsf_sr_open_desc {
     uint32_t auto_exposure;
     rsf_backend_log_fn log;
     void* log_user;
+    /* Absolute SDK runtime directory. Borrowed during open. */
+    const char* runtime_directory_utf8;
+    /* AMD family: 2, 3, or 4. Never silently substitutes another family. */
+    uint32_t fsr_major;
+    /* Zero selects the newest installed version of that family; otherwise require this ID. */
+    uint64_t version_id;
+    uint32_t depth_infinite;
 } rsf_sr_open_desc;
 
 /* What a reconstruction is given for one frame. Always ONLY_NOW: it consumes them during the call,
@@ -243,6 +250,9 @@ typedef struct rsf_sr_frame {
     float motion_scale_x;
     float motion_scale_y;
     uint32_t reset;
+    /* Positive color pre-exposure and world-unit conversion supplied by the plugin. */
+    float pre_exposure;
+    float view_space_to_meters;
 } rsf_sr_frame;
 
 typedef struct rsf_sr_provider {
@@ -257,6 +267,8 @@ typedef struct rsf_sr_provider {
     /* Drop what can be dropped without closing, for a game that has gone to a menu. */
     rsf_backend_result (*release_resources)(void* session);
     void (*close)(void* session);
+    /* Optional. Name is immutable, session-owned, and valid until close; caller never frees it. */
+    rsf_backend_result (*get_version)(void* session, uint64_t* id, const char** name);
 } rsf_sr_provider;
 
 /* Creating the presentation chain, which is the part no two vendors do alike.

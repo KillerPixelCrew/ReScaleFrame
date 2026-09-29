@@ -554,6 +554,25 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_click_requests_once_and_keeps_the_effective_selection() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().backend[2].expect("FSR3 control was laid out");
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.backend_changed);
+        assert!(release.backend_changed);
+        assert_eq!(release.backend, 3);
+        assert!(!idle_frame(&mut overlay, &stats).backend_changed);
+        stats.requested_backend = 3;
+        stats.last_switch_result = -7;
+        assert!(!idle_frame(&mut overlay, &stats).backend_changed);
+        stats.backend = 3;
+        stats.last_switch_result = 0;
+        assert!(!idle_frame(&mut overlay, &stats).backend_changed);
+    }
+
+    #[test]
     fn a_click_on_a_quality_level_changes_the_intent_exactly_once() {
         let mut overlay = Overlay::new();
         let stats = stats_with_backend();

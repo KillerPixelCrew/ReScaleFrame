@@ -88,6 +88,8 @@ pub struct Controls {
     pub quality: [Option<Rect>; 5],
     /// The enable toggle.
     pub enabled: Option<Rect>,
+    /// One control per SR backend.
+    pub backend: [Option<Rect>; 5],
 }
 
 /// Lay out one frame of the panel, recording what the user did into `intent`.
@@ -136,11 +138,39 @@ fn controls_section(
     controls: &mut Controls,
 ) {
     let mut enabled = selection.enabled;
-    let toggle = ui.checkbox(&mut enabled, "Enable DLSS");
+    let toggle = ui.checkbox(&mut enabled, "Enable upscaling");
     controls.enabled = Some(toggle.rect);
     if toggle.changed() {
         intent.enabled = enabled;
         intent.enabled_changed = true;
+    }
+
+    ui.add_enabled_ui(stats.backend_loaded, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let mut backend = stats.backend;
+            for (index, (id, name)) in [
+                (1, "DLSS"),
+                (2, "FSR2"),
+                (3, "FSR3"),
+                (4, "FSR4"),
+                (5, "XeSS"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let response = ui.radio_value(&mut backend, *id, *name);
+                controls.backend[index] = Some(response.rect);
+            }
+            if backend != stats.backend {
+                intent.backend_changed = true;
+                intent.backend = backend;
+            }
+        });
+    });
+    if stats.last_switch_result != 0 {
+        ui.label(
+            RichText::new("Backend change refused; previous backend remains active").color(WARN),
+        );
     }
 
     // Presets can be saved while disabled; startup applies the selected level.

@@ -1017,6 +1017,9 @@ static int set_screen_percentage(float value)
 static void start_dlss(void)
 {
     char directory[MAX_PATH * 2];
+    char fsr_directories[3][MAX_PATH * 2] = {{0}};
+    char xess_directory[MAX_PATH * 2] = {0};
+    char sdk_override[MAX_PATH * 2] = {0};
     DWORD width, height;
 
     if (rsf_bridge_running()) {
@@ -1047,6 +1050,16 @@ static void start_dlss(void)
 
     note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
          (unsigned long)height, (unsigned long)preferred_quality);
+    if (!read_text("RSF_FFX_BIN", fsr_directories[0], sizeof(fsr_directories[0])))
+        beside_this_module("ReScaleFrame\\fidelityfx", fsr_directories[0], sizeof(fsr_directories[0]));
+    memcpy(fsr_directories[1], fsr_directories[0], sizeof(fsr_directories[0]));
+    memcpy(fsr_directories[2], fsr_directories[0], sizeof(fsr_directories[0]));
+    if (read_text("RSF_FSR2_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[0], sdk_override);
+    if (read_text("RSF_FSR3_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[1], sdk_override);
+    if (read_text("RSF_FSR4_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[2], sdk_override);
+    if (!read_text("RSF_XESS_BIN", xess_directory, sizeof(xess_directory)))
+        beside_this_module("ReScaleFrame\\xess", xess_directory, sizeof(xess_directory));
+    rsf_bridge_set_sdk_directories(fsr_directories[0], fsr_directories[1], fsr_directories[2], xess_directory);
     rsf_bridge_start(directory, width, height, preferred_quality, observer_note,
                      NULL);
     /* Interface panels drawn with a jittered view are moved back by that view's own jitter. */

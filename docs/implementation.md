@@ -58,7 +58,7 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
 - [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
-- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024×576 input and 2048×1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
+- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024Ã—576 input and 2048Ã—1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
 - [x] Conditional composed-colour selection for the DLSS bridge. Persistent input watch and AC7
       recombine rule are cross-built and synthetic-tested under Wine. Each frame falls back to the
       identified colour unless a matching composition is observed; no new per-frame allocations.
@@ -79,7 +79,7 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       quality level instead of being fixed. Going above the scene's resolution needs the engine to
       size the layer's depth to match, which four one-byte patches enable by narrowing `Scale < 1.f`
       to `Scale == 1.f`; they are no-ops for every scale the engine produces on its own.
-      Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
+      Game-tested on 7 September: the briefing relief draws at 2048Ã—1152 inside a 1024Ã—576 scene
       with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
       other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
 - [x] Consumer session controls: automatic DLSS startup and deferred reinsertion; Insert opens an
@@ -120,7 +120,7 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       there and each failed differently, which is worth keeping because the failures were all the
       same mistake about bindings.
 
-      First run: nothing happened at all. The tail walk had taken a 2048×32 strip as the composite,
+      First run: nothing happened at all. The tail walk had taken a 2048Ã—32 strip as the composite,
       a UI bar the final draw also reads, and promoted that. Zero gates opened, so F6 did precisely
       nothing. Fixed by rejecting any input less than half the height of the target it is drawn into.
 
@@ -434,6 +434,21 @@ are investigations and proposed improvements, not confirmed defects or game-test
       missiles, clouds/contrails, and camera cuts at native and reduced render resolution.
       Check colour/depth/motion/camera frame alignment and GPU cost. Record synthetic-tested,
       capture-validated, and game-tested results separately before marking tasks complete.
+
+## Reusable SR orchestrator
+
+- [x] Game-independent SR session and D3D11/D3D12 transfer API. Transactional backend selection,
+      requested/effective status, SDK version reporting and history reset/refusal handling.
+- [x] FSR2, FSR3 and FSR4 family selection with version overrides and separate SDK runtime paths;
+      XeSS D3D12 adapter. FSR2/FSR3/XeSS device-tested on Intel UHD and RTX 4070 Laptop. FSR4
+      refusal tested on those adapters; FSR4 evaluation still requires compatible hardware.
+- [x] Generic sparse-motion/depth preparation, WARP numeric fixture and controller rollback tests.
+- [x] Compatibility path and Insert overlay selector for DLSS/FSR2/FSR3/FSR4/XeSS. Built;
+      synthetic hardware sequence DLSS → FSR2 → FSR3 → XeSS → DLSS passed. Engine identity and
+      world units are supplied by the integration. Existing AC7 startup still begins with DLSS.
+- [ ] Game-test AC7 switching, motion, exposure, transitions and overhead. New FSR/XeSS game
+      support is not claimed. Public plugin lifecycle migration, native XeSS D3D11, FG and latency
+      remain separate work. [Research, revisions and limits](research/orchestrator-sr-switching.md).
 
 ## Engine integration improvements
 

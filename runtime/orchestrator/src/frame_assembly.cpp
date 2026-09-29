@@ -14,11 +14,11 @@ constexpr float default_far_plane = 1.0e7f;
 
 } // namespace
 
-extern "C" rsf_frame_assembly_result rsf_assemble_dlss_frame(const rsf_camera_frame* camera,
+extern "C" rsf_frame_assembly_result rsf_assemble_dlss_frame(const rsf_pipeline_camera_frame* camera,
                                                              const rsf_frame_resources* resources,
                                                              rsf_dlss_frame* out)
 {
-    if (!camera || !resources || !out || camera->struct_size < sizeof(rsf_camera_frame) ||
+    if (!camera || !resources || !out || camera->struct_size < sizeof(rsf_pipeline_camera_frame) ||
         resources->struct_size < sizeof(rsf_frame_resources)) {
         return RSF_FRAME_ASSEMBLY_ERROR_INVALID_ARGUMENT;
     }

@@ -3,7 +3,7 @@
 
    This is the orchestrator's job by the ownership split: a plugin knows where its engine keeps
    camera data and how its velocity is stored, a backend knows what a vendor SDK wants, and neither
-   should know the other. So a plugin fills `rsf_camera_frame`, which names nothing vendor specific,
+   should know the other. So a plugin fills `rsf_pipeline_camera_frame`, which names nothing vendor specific,
    and this turns it into a backend's own structure.
 
    The conversion is small and every part of it is a decision that has been got wrong at least once
@@ -11,7 +11,7 @@
    depth is reversed, which value marks a pixel nothing wrote. Putting them in one place with the
    reasoning attached is the point of this file.
 
-   `rsf_camera_frame` will move into the game SDK once frame callbacks land there. It lives here
+   `rsf_pipeline_camera_frame` will move into the game SDK once frame callbacks land there. It lives here
    while the shape is still settling, so that changing it costs nothing outside this repository. */
 
 #ifndef RSF_FRAME_ASSEMBLY_H
@@ -40,7 +40,7 @@ typedef int32_t rsf_frame_assembly_result;
 #define RSF_FRAME_ASSEMBLY_ERROR_MOTION_NOT_DECODED ((rsf_frame_assembly_result)-4)
 
 /* One frame, as the plugin sees it. Engine terms, no vendor terms. */
-typedef struct rsf_camera_frame {
+typedef struct rsf_pipeline_camera_frame {
     uint32_t struct_size;
     uint32_t abi_version;
 
@@ -88,7 +88,7 @@ typedef struct rsf_camera_frame {
 
     /* No usable history: a cut, a teleport, or the first frame at a new resolution. */
     uint32_t reset;
-} rsf_camera_frame;
+} rsf_pipeline_camera_frame;
 
 /* The textures for one frame, and the sizes they are. All `ID3D11Texture2D*`. */
 typedef struct rsf_frame_resources {
@@ -110,7 +110,7 @@ typedef struct rsf_frame_resources {
 /* Fill a DLSS frame from a camera frame and its resources.
    Refuses a pairing that cannot work rather than assembling something that will look wrong. */
 RSF_RUNTIME_API rsf_frame_assembly_result rsf_assemble_dlss_frame(
-    const rsf_camera_frame* camera, const rsf_frame_resources* resources, rsf_dlss_frame* out);
+    const rsf_pipeline_camera_frame* camera, const rsf_frame_resources* resources, rsf_dlss_frame* out);
 
 #ifdef __cplusplus
 } /* extern "C" */

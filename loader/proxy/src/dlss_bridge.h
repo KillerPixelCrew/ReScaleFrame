@@ -178,6 +178,7 @@ int rsf_bridge_select_quality(unsigned long quality);
 /* Optional bounded research capture, armed before shader creation. Empty disables it. */
 void rsf_bridge_set_briefing_capture(const char* prefix);
 
+void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess);
 int rsf_bridge_running(void);
 
 /* The main view's render size as the last evaluated pass carried it, zero before the first. This is

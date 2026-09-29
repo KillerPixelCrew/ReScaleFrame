@@ -26,7 +26,7 @@ extern "C" {
 /* 2: the panel drives the session rather than reporting on it, so intent gained start, debug view,
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
-#define RSF_OVERLAY_ABI_VERSION 3u
+#define RSF_OVERLAY_ABI_VERSION 4u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
@@ -103,6 +103,10 @@ typedef struct rsf_overlay_stats {
        offering a switch that does nothing. */
     uint32_t jitter_on;
     uint32_t jitter_available;
+    /* 1 DLSS, 2 FSR2, 3 FSR3, 4 FSR4, 5 XeSS. */
+    uint32_t backend;
+    uint32_t requested_backend;
+    int32_t last_switch_result;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -134,6 +138,8 @@ typedef struct rsf_overlay_intent {
     /* Appended in ABI 3. */
     uint32_t jitter_changed;
     uint32_t jitter;
+    uint32_t backend_changed;
+    uint32_t backend;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

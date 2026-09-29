@@ -4,15 +4,14 @@
 | --- | --- | --- |
 | `rsf-upscaler` | Rust quality, motion, and input-validation model | Unit-tested; no GPU calls |
 | `dlss` | C++ Streamline adapter behind `rescaleframe/dlss.h` | Evaluates live AC7 frames |
-| `fsr` | FidelityFX behind `rsf_sr_provider` and `rsf_fg_provider` | Provider and capabilities only; every entry point returns `NOT_COMPILED` without the SDK headers and `NOT_READY` with them. Both branches compile |
-| `xess` | XeSS behind the same two | The same, plus the D3D11 reconstruction path it alone offers, which is Intel hardware only and currently reported as unavailable until the hardware check exists |
+| `fsr` | FFX DX12 SR provider with explicit FSR2/FSR3/FSR4 version selection | FSR2/FSR3 synthetic device-tested; FSR4 support queried and refusal tested; FG unavailable |
+| `xess` | XeSS-SR DX12 provider | Synthetic device-tested; native D3D11, FG and latency unavailable |
 
-The two new backends implement the contract and do no work. That is deliberate rather than a
-placeholder: negotiation has to know what each vendor *is* before anything is created, and that
-question is answerable without the runtime being present. `probe` therefore fills capabilities from
-what the SDK is and loads nothing, and the distinction between "not compiled in" and "compiled in,
-runtime missing" is preserved end to end, because one is a fact about the build and the other about
-the machine.
+Without SDK headers, providers return `NOT_COMPILED`. With headers, `open` loads the runtime
+from an absolute configured directory, resolves entry points, creates the vendor context and checks
+support. Probe reports build capability without loading. Missing DLLs, unsupported versions and
+failed evaluations remain different outcomes. Current AMD SDK 2.3.0 supplies actual FSR 2.3.4,
+3.1.5 and hardware-dependent FSR4 providers; the family is never silently substituted.
 
 The orchestrator owns shared resources and frame sequencing. Each backend owns its vendor context, capability queries, input requirements, and evaluation. Streamline stays in C++ so its versioned vendor types come from the official headers. No frame generation SDK runs on D3D11; the plan's presentation bridge is where every FG backend and the D3D12-only SR backends execute ([vendor contracts](../../docs/research/vendor-fg-contracts.md)).
 
@@ -30,15 +29,15 @@ cargo test -p rsf-upscaler --locked
 
 ## Streamline DLSS
 
-The adapter loads `sl.interposer.dll` from the configured directory, uses manual hooking, accepts the existing D3D11 device, and queries support and render sizes. It supplies resource tags and per-frame constants before evaluation. NGX initialization uses the Unreal 4.18 engine identity.
+The adapter loads `sl.interposer.dll` from the configured directory, uses manual hooking, accepts the existing D3D11 device, and queries support and render sizes. It supplies resource tags and per-frame constants before evaluation. NGX initialization uses the caller-supplied engine/project identity.
 
-The recorded 7 September mission run evaluated 7,917 frames without refusal, rendering at 1024×576 and producing 2048×1152. Flight footage was reported free of obvious smearing. This exercises the path but does not establish motion conventions for every camera, object, or effect. See [capture evidence](../../docs/research/ac7-frame-capture.md).
+The recorded 7 September mission run evaluated 7,917 frames without refusal, rendering at 1024Ã—576 and producing 2048Ã—1152. Flight footage was reported free of obvious smearing. This exercises the path but does not establish motion conventions for every camera, object, or effect. See [capture evidence](../../docs/research/ac7-frame-capture.md).
 
-Evaluation currently happens at Present so later sky draws have reached the selected colour target. F7 shows a rough-tonemapped result over the back buffer. Proper reinsertion, grading, and HUD preservation remain pending. [The review](../../docs/review.md) records known code issues.
+The accepted AC7 integration evaluates at the reconstruction gate and reinserts into the game pipeline; the Present path remains diagnostic. That DLSS acceptance does not validate FSR or XeSS in AC7. See [the backend switching evidence](../../docs/research/orchestrator-sr-switching.md). [The review](../../docs/review.md) records known code issues.
 
 ## Wine development notes
 
-The recorded support test used an RTX 4070 Laptop, driver 610.57, and the game's Proton prefix. It reported DLSS support and a 1024×576 Performance input for 2048×1152 output; the reported minimum driver was 512.15.
+The recorded support test used an RTX 4070 Laptop, driver 610.57, and the game's Proton prefix. It reported DLSS support and a 1024Ã—576 Performance input for 2048Ã—1152 output; the reported minimum driver was 512.15.
 
 That setup needed DXVK, DXVK-NVAPI, vkd3d-proton, and the driver's NGX path. Even this D3D11 integration initialized a Streamline DX11-on-12 compute path. Missing D3D12 overrides caused a misleading unsupported result.
 

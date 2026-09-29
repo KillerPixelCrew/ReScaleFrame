@@ -138,6 +138,12 @@ pub struct Stats<'a> {
     pub jitter_gate_on: bool,
     /// Whether the gate was found in this build, so the panel can refuse before offering a switch.
     pub jitter_gate_available: bool,
+    /// Effective SR backend.
+    pub backend: u32,
+    /// Most recent backend request.
+    pub requested_backend: u32,
+    /// Runtime switch result.
+    pub last_switch_result: i32,
 }
 
 impl Default for Stats<'_> {
@@ -172,6 +178,9 @@ impl Default for Stats<'_> {
             captures_written: 0,
             jitter_gate_on: false,
             jitter_gate_available: false,
+            backend: 1,
+            requested_backend: 1,
+            last_switch_result: 0,
         }
     }
 }
@@ -249,6 +258,10 @@ pub struct Intent {
     pub jitter: bool,
     /// Whether the jitter gate was toggled in this frame.
     pub jitter_changed: bool,
+    /// Whether the user chose an SR backend.
+    pub backend_changed: bool,
+    /// Backend requested by the user.
+    pub backend: u32,
 }
 
 impl Intent {
@@ -264,6 +277,7 @@ impl Intent {
             && !self.scale_requested
             && !self.capture_requested
             && !self.jitter_changed
+            && !self.backend_changed
     }
 }
 

@@ -1,5 +1,5 @@
 # ReScaleFrame for AC7. Copy beside Ace7Game.exe as ReScaleFrame.ini.
-# Insert opens the overlay. It offers Enable DLSS and the quality presets.
+# Insert opens the overlay. It offers Enable upscaling, backend selection and the quality presets.
 # DLSS and reinsertion start automatically after the renderer is ready.
 # Overlay choices are saved in %LOCALAPPDATA%\ReScaleFrame\AC7.ini and take
 # precedence over these initial defaults on later launches.
@@ -20,6 +20,11 @@ RSF_TRANSLUCENCY_UNJITTER=1
 # RSF_UI_CLASSIFY=1
 # RSF_UI_UNJITTER=1
 # RSF_STREAMLINE_BIN=              # defaults to ReScaleFrame\streamline beside the proxy
+# RSF_FFX_BIN=                    # defaults to ReScaleFrame\fidelityfx; SDK 2.3 provides FSR2/3/4
+# RSF_FSR2_BIN=                   # optional separate SDK directory for FSR2
+# RSF_FSR3_BIN=                   # optional separate SDK directory for FSR3
+# RSF_FSR4_BIN=                   # optional separate SDK directory for FSR4
+# RSF_XESS_BIN=                   # defaults to ReScaleFrame\xess, holding libxess.dll
 # RSF_DUMP_DIR=                    # defaults to %LOCALAPPDATA%\ReScaleFrame\AC7
 # RSF_DUMP_MODULE=0               # executable dumps are opt-in
 # RSF_TRANSLUCENCY_SCALE=0        # overrides the output-relative target when nonzero

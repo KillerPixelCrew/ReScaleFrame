@@ -32,6 +32,7 @@
 #include <rescaleframe/frame_assembly.h>
 #include <rescaleframe/motion_decode.h>
 #include <rescaleframe/runtime.h>
+#include <rescaleframe/sr_session.h>
 
 #include <stdint.h>
 
@@ -40,7 +41,7 @@ extern "C" {
 #endif
 
 /* 2: a second feature for a layer at one to one, and its counts in the status. */
-#define RSF_DLSS_PIPELINE_ABI_VERSION 2u
+#define RSF_DLSS_PIPELINE_ABI_VERSION 3u
 
 typedef int32_t rsf_dlss_pipeline_result;
 #define RSF_DLSS_PIPELINE_OK ((rsf_dlss_pipeline_result)0)
@@ -120,6 +121,15 @@ typedef struct rsf_dlss_pipeline_setup {
 
     rsf_dlss_pipeline_log_fn log;
     void* log_user;
+    /* Supplied by the game integration, never inferred by the runtime. */
+    rsf_dlss_engine engine;
+    const char* engine_version_utf8;
+    const char* project_id_utf8;
+    const char* fsr2_directory_utf8;
+    const char* fsr3_directory_utf8;
+    const char* fsr4_directory_utf8;
+    const char* xess_directory_utf8;
+    float view_space_to_meters;
 } rsf_dlss_pipeline_setup;
 
 /* One frame's inputs, all borrowed for the duration of the call and none of them retained.
@@ -149,7 +159,7 @@ typedef struct rsf_dlss_pipeline_frame {
     /* The camera, as whatever read the game's view buffer saw it. Everything in it is used as
        given except the motion fields this pipeline is the one to know: see
        `rsf_dlss_pipeline_on_frame`. */
-    const rsf_camera_frame* camera;
+    const rsf_pipeline_camera_frame* camera;
 } rsf_dlss_pipeline_frame;
 
 typedef struct rsf_dlss_pipeline_status {
@@ -176,6 +186,9 @@ typedef struct rsf_dlss_pipeline_status {
     uint32_t layer_width;
     uint32_t layer_height;
     rsf_dlss_pipeline_result layer_last_result;
+    uint32_t backend;
+    uint32_t requested_backend;
+    int32_t last_switch_result;
 } rsf_dlss_pipeline_status;
 
 /* A layer to integrate at one to one: the separate translucency layer, rendered at the size the
@@ -194,7 +207,7 @@ typedef struct rsf_dlss_pipeline_layer {
     uint32_t height;
     /* The view the layer was drawn with: the scene's camera at the layer's size, jitter in the
        layer's pixels. */
-    const rsf_camera_frame* camera;
+    const rsf_pipeline_camera_frame* camera;
 } rsf_dlss_pipeline_layer;
 
 /* Build the layer feature's output and its zero motion at this size, or rebuild them when the
@@ -267,6 +280,12 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,
                                                                        uint32_t* render_width,
                                                                        uint32_t* render_height);
+
+/* Compatibility selector for the existing frame pipeline. Run at the render-thread command
+   boundary. 1 DLSS, 2 FSR2, 3 FSR3, 4 FSR4, 5 XeSS. Refusals preserve the active backend.
+   New integrations can use sr_session.h/sr_bridge.h directly with SDK frame records. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t backend,
+    uint32_t* render_width, uint32_t* render_height);
 
 /* Release everything in the reverse of the order it was acquired, and before the caller's device
    goes. Safe to call when nothing is running. */

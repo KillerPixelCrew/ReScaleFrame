@@ -4,13 +4,16 @@
 # would both be worse.
 add_library(rsf_orchestrator_core OBJECT
     src/runtime.cpp
+    src/sr_session.cpp
+    src/sr_bridge.cpp
+    src/sr_legacy_adapter.cpp
     src/frame_assembly.cpp
     src/dlss_pipeline.cpp)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
-target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics)
+target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation)
 target_link_libraries(rsf_orchestrator_core PRIVATE rsf_build_options)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 

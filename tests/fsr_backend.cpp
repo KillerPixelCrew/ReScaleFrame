@@ -95,20 +95,20 @@ int main()
     } else {
         stage("built with the headers");
         check(caps.available == 1, "It must say so.");
-        check((caps.sr_apis & RSF_API_D3D12) != 0 && (caps.fg_apis & RSF_API_D3D12) != 0,
-              "FidelityFX is D3D12 on both sides, which is why choosing it for reconstruction "
+        check((caps.sr_apis & RSF_API_D3D12) != 0 && caps.fg_apis == 0,
+              "The implemented reconstruction is D3D12, which is why choosing it "
               "means the presentation bridge exists even with generation off.");
         check((caps.sr_apis & RSF_API_D3D11) == 0,
               "And offers no D3D11 path, which is the fact that decides the route.");
-        check(caps.max_generated_frames == 1,
-              "One generated frame between each pair, so a multiplier above two is capped.");
+        check(caps.max_generated_frames == 0,
+              "Generation is not implemented and cannot be selected.");
         check(caps.sr_fg_share_session == 0,
               "No shared session, so choosing it for generation leaves reconstruction free to be "
               "another vendor. This is what makes it the first generator worth wiring up.");
         check(caps.fg_requires_latency_markers == 0,
               "And it needs no latency markers, so a frame whose identifier is ambiguous can still "
               "be interpolated around.");
-        check(caps.fg_owns_swapchain == 1, "It replaces the presentation chain, as all three do.");
+        check(caps.fg_owns_swapchain == 0, "SR never claims swap-chain ownership.");
     }
 
     stage("arguments are checked");
@@ -125,6 +125,25 @@ int main()
               "A short caps structure.");
     }
 
+    stage("XeSS has the same missing-build versus missing-runtime distinction");
+    const auto* xess = rsf_xess_sr_provider();
+    caps.struct_size = sizeof(caps);
+    const auto xess_result = xess->probe(&desc, &caps);
+    check(caps.vendor == RSF_VENDOR_INTEL && caps.fg_apis == 0,
+          "XeSS is named and never advertises unimplemented frame generation.");
+    rsf_sr_open_desc missing{};
+    missing.struct_size = sizeof(missing); missing.abi_version = RSF_BACKEND_ABI_VERSION;
+    missing.api = RSF_API_D3D12; missing.device = &missing;
+    missing.output_width = missing.output_height = 128;
+    missing.fsr_major = 2;
+    missing.runtime_directory_utf8 = "C:\\__rsf_missing_runtime_fixture__";
+    void* session = nullptr;
+    check(xess->open(&missing, &session) == (xess_result == RSF_BACKEND_ERROR_NOT_COMPILED ?
+          RSF_BACKEND_ERROR_NOT_COMPILED : RSF_BACKEND_ERROR_LOAD_FAILED) && !session,
+          "A header-enabled XeSS build with no DLL must report LOAD_FAILED, not NOT_READY.");
+    check(sr->open(&missing, &session) == (result == RSF_BACKEND_ERROR_NOT_COMPILED ?
+          RSF_BACKEND_ERROR_NOT_COMPILED : RSF_BACKEND_ERROR_LOAD_FAILED) && !session,
+          "A header-enabled FSR build with no DLL must report LOAD_FAILED, not NOT_READY.");
     std::fprintf(stderr, "%s\n", passed ? "fsr_backend: all checks passed" : "fsr_backend: FAILED");
     return passed ? 0 : 1;
 }
