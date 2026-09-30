@@ -18,7 +18,7 @@ Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outsid
 
 Without the headers, the checkout still builds; the relevant API reports that the feature is unavailable. `RSF_RENDERDOC_DLL`, `RSF_STREAMLINE_BIN`, `RSF_FFX_BIN`, per-family `RSF_FSR2_BIN` / `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, and `RSF_XESS_BIN` select runtime locations. See [loader setup](../loader/README.md). The new SR adapters use the SDK checkout layouts above. A single current AMD package can provide all three FSR algorithms; separate runtime directories and explicit version overrides also permit side-by-side SDK releases. See [the switching evidence](research/orchestrator-sr-switching.md). Vendor checkouts remain untracked.
 
-RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. FidelityFX headers and the signed DX12 DLLs are MIT with a notice file to ship beside them. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. Frame generation, Reflex and other vendor feature runtimes are not part of this package. Vendor binaries stay untracked in Git.
+RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. The FidelityFX signed DX12 DLLs carry the SDK release's bundled binary redistribution terms; ship `Kits/FidelityFX/docs/license.md` and `3rdpartynotice.md` beside them. The earlier statement grouping these signed binaries under MIT was incorrect for the inspected SDK 2.3 package. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. Frame generation, Reflex and other vendor feature runtimes are not part of this package. Vendor binaries stay untracked in Git.
 
 The Skyrim and Fallout 4 Community Shaders presentation bridges, fo4test, OptiScaler and SpecialK were studied for the plan and not copied: they are GPL or carry their own exceptions, and `AGENTS.md` forbids copying reference code because it was useful to study.
 
@@ -26,6 +26,12 @@ First-party code and documentation use GPL-3.0-only; `sdk/game/` uses MIT. Refer
 
 
 ## Packaging the AC7 release
+
+For an existing local AC7 installation, deploy the SR dependencies explicitly with
+`eng/deploy-ac7-sr-runtimes.ps1 -GameDirectory <directory-containing-Ace7Game.exe>`. The helper
+uses the vendor paths above, copies the SR DLLs with their notices and verifies destination
+hashes. Missing FidelityFX/XeSS runtime directories cause LOAD_FAILED refusals even when the
+proxy was built with their headers. [Diagnosis and deployment evidence](research/sr-runtime-deployment.md).
 
 Build and verify the Release configuration, build the Rust overlay with `cargo build --release
 --locked -p rescaleframe-overlay`, and commit the release source. Use the official

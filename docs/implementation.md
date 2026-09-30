@@ -452,6 +452,12 @@ are investigations and proposed improvements, not confirmed defects or game-test
 
 ## Engine integration improvements
 
+The observed AC7 FSR/XeSS switch refusals were missing vendor DLLs (Windows error 126).
+Signed SR runtimes and notices are now deployed with hash verification. The hardware fixture
+passes DLSS -> FSR2 -> FSR3 -> XeSS -> DLSS using the installed paths. This is a deployment fix
+and synthetic device evidence; fresh AC7 switching/visual validation remains pending.
+[Evidence](research/sr-runtime-deployment.md).
+
 The reusable FG contract, CPU frame ledger, ownership/fallback controller, FSR3/4 and XeSS FG
 providers, and early D3D12 Streamline/DLSS-G host are implemented. Synthetic controller tests pass.
 DLSS-G, FSR3 and XeFG passed disabled-presentation lifecycle probes on the RTX 4070 Laptop GPU;
