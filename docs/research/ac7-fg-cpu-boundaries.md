@@ -15,7 +15,8 @@ executable SHA-256 `c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e55
 and authorized UE `4.18.3-release` source `0a14a8d537a31ecc77488ced41dbaa0166612ef8`.
 The reference checkout's revision was confirmed. The configured Ghidra bridge at port 8089 was
 offline, so local Capstone disassembly and PE exception ranges supplied the initial inspection.
-No Ghidra function was renamed and no patch was applied. Runtime validation remains mandatory.
+At that initial inspection no Ghidra function was renamed and no patch was applied. The later
+Ghidra check and replayable names are recorded below. Runtime validation remains mandatory.
 
 `tools/find-string-refs.py` located references to `t.IdleWhenNotForeground`,
 `r.OneFrameThreadLag` and `Frame%d`. A raw displacement match was treated as a lead, then verified
@@ -76,3 +77,43 @@ observer as a result of this research.
 
 Local disassembly and helper: `.local/fg-cpu-research/`. The input dump and licensed source remain
 ignored. Related runtime implementation: [FG implementation](orchestrator-fg-implementation.md).
+
+## Ghidra recovery and repeatable names
+
+The old Linux project was lost with its SSD. The retained decrypted dump is usable; its SHA-256
+is `fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db`. A fresh dump was not
+needed for this static question. This restores an analysis input, not the lost database's entire
+annotation history.
+
+Built GhidraMCP 7.0.0 from the existing local checkout against the installed Ghidra. The directory
+is named `ghidra_12.0.4_PUBLIC`, but its application and live server report **12.1.3**. Installed
+the user extension and Python stdio bridge. HTTP health, explicit program selection and MCP
+stdio initialization/listing succeeded. The live GUI uses JDK 25.0.4.1; the extension build used
+the existing JDK 21.0.12.1. The Debugger is active with no debuggee trace, so none of this is a
+game debugging run.
+
+A recovery project copy was prepared outside the motion agent's project. The first GUI launch
+failed because Ghidra rejects project paths containing `.local`; a copy under
+`references/ghidra-ac7-fg/` avoids that constraint. The user subsequently opened the active
+`AC7` project at `C:/Users/N1GHT/AC7.gpr`. MCP's explicit program metadata identifies the retained
+dump, x86-64 Windows language, base `0x7ff741350000`, and 71,407,384 imported bytes.
+
+Ghidra entry points agree with the six candidates above. Decompilation independently exposes
+the Tick input/media/engine ordering, USER32 message loop, idle branch, platform device poll,
+FinishedInputThisFrame's preprocessing/widget loops and the render BeginFrame counter/event.
+Applied the six `AC7_` names after checking all recorded byte ranges. Saving initially failed
+with an active auto-analysis transaction; the replay script now waits before writing and saving.
+An in-memory rename is not evidence that the database has been saved.
+
+The tracked [name manifest](evidence/ac7-fg-cpu-names-20260930.json) records RVAs, checked-span
+lengths/hashes, source revision, rationale and static validation limits. The
+[replay script](../../tools/ghidra/replay-research-names.py) preflights every record, preserves
+unrelated names and explicitly saves. A read-only rerun passed after renaming. These files allow
+the names to be recreated from a matching import without committing a proprietary database.
+Raw decompiler output stays in `.local/fg-cpu-research/ghidra/`.
+
+The render command's FrameNumber is still separate from the outer loop identity. A source check
+confirms `PostRenderAllViewports` increments `GFrameNumber`, while BeginRenderingViewFamily uses
+the scene counter for scene-backed families. Neither is interchangeable with the 64-bit
+orchestrator source-frame ID. No plugin CPU hooks, resource leases or presentation handoff were
+installed during this recovery.

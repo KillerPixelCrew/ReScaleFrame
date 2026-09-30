@@ -2,6 +2,28 @@
 
 DirectX type generation and COM-call analysis for Ghidra. Keep generated archives, reports, and projects in an untracked directory such as `.local/`.
 
+## Recovering researched names
+
+Commit research manifests and replay scripts so a lost Ghidra database does not lose the names
+and their evidence. Keep game binaries and databases untracked. Ghidra's GUI project locator
+rejects path components starting with a dot, so use `references/` for GUI projects instead of
+`.local/`.
+
+`replay-research-names.py` uses the running Ghidra MCP HTTP server. It requires the selected
+program explicitly, checks every recorded byte range and function entry before writing, and
+preserves unrelated names. Recorded ranges are fingerprints, not a claim of whole function size.
+It waits for auto-analysis before saving. The manifest records the original executable and dump
+hashes for provenance; replay checks the imported code ranges and language, not the file on disk.
+
+```powershell
+python tools/ghidra/replay-research-names.py docs/research/evidence/ac7-fg-cpu-names-20260930.json --program Ace7Game.exe.dump
+python tools/ghidra/replay-research-names.py docs/research/evidence/ac7-fg-cpu-names-20260930.json --program Ace7Game.exe.dump --apply
+```
+
+Replay is idempotent. The default command checks evidence without changing names. `--apply`
+renames matching functions and saves the program; a save failure is reported and must be retried.
+These names document static research and do not enable runtime hooks.
+
 ## Prerequisites
 
 - Ghidra 12 or newer. Set `GHIDRA_INSTALL_DIR`, or pass `--ghidra-home`.

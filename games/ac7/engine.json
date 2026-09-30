@@ -9,7 +9,8 @@
     "examined": "2026-09-06"
   },
   "frame_generation_cpu_research": {
-    "status": "static source/binary leads; hooks not installed or runtime validated",
+    "status": "static source/binary and Ghidra checked; hooks not installed or runtime validated",
+    "ghidra_name_manifest": "../../docs/research/evidence/ac7-fg-cpu-names-20260930.json",
     "runtime_active": false,
     "outer_loop_candidate_rva": "0x3a3f70",
     "message_pump_call_rva": "0x3a42c4",

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-30",
+  "language": "x86:LE:64:default",
+  "original_executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "dump_sha256": "fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db",
+  "source_revision": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+  "evidence_note": "docs/research/ac7-fg-cpu-boundaries.md",
+  "validation": "Static source, disassembly and Ghidra decompilation. No installed hook or CPU/render handoff validation. Evidence spans describe checked bytes, not universal whole-function sizes.",
+  "functions": [
+    {
+      "rva": "0x3a3f70",
+      "name": "AC7_FEngineLoop_Tick",
+      "evidence_length": 2291,
+      "evidence_sha256": "321f29242301dde4e9b46444b5f970c63387231b39b9c421ab59655bb9b4897b",
+      "source": "Engine/Source/Runtime/Launch/Private/LaunchEngineLoop.cpp",
+      "evidence": "Outer loop order, input/media work, engine vtable slot 0x268, frame counters and render begin/end commands"
+    },
+    {
+      "rva": "0xa88dc0",
+      "name": "AC7_FWindowsPlatformApplicationMisc_PumpMessages",
+      "evidence_length": 243,
+      "evidence_sha256": "442a7ae17f0c4ad5f5b5298598f6356a840b9a42fc5f583c42b847c7d10615a6",
+      "source": "Engine/Source/Runtime/ApplicationCore/Private/Windows/WindowsPlatformApplicationMisc.cpp",
+      "evidence": "PeekMessageW, TranslateMessage and DispatchMessageW input loop"
+    },
+    {
+      "rva": "0x3af850",
+      "name": "AC7_FEngineLoop_ShouldUseIdleMode",
+      "evidence_length": 297,
+      "evidence_sha256": "6425694678b466cbe50072c0aa03400ad1b6303b845887ca3f39227ff3d6fd72",
+      "source": "Engine/Source/Runtime/Launch/Private/LaunchEngineLoop.cpp",
+      "evidence": "Idle cvar lookup, foreground gating and caller sleep branch"
+    },
+    {
+      "rva": "0xcea130",
+      "name": "AC7_FSlateApplication_PollGameDeviceState",
+      "evidence_length": 47,
+      "evidence_sha256": "acab5d7c5e2217a59afce98937008d814abd17845c285da945bec56eadd002da",
+      "source": "Engine/Source/Runtime/Slate/Private/Framework/Application/SlateApplication.cpp",
+      "evidence": "Modal/input gate, delta at offsets 0x548/0x550, platform application virtual poll"
+    },
+    {
+      "rva": "0xcd56f0",
+      "name": "AC7_FSlateApplication_FinishedInputThisFrame",
+      "evidence_length": 1178,
+      "evidence_sha256": "b8416a23b74f8f2fe1d4b97f3c6f8e17a28f15b026e283dbbe65f04b99032030",
+      "source": "Engine/Source/Runtime/Slate/Private/Framework/Application/SlateApplication.cpp",
+      "evidence": "Delta, input preprocessor tick, captor/widget processing and user completion loops"
+    },
+    {
+      "rva": "0x3a8610",
+      "name": "AC7_FEngineLoop_ExecuteBeginFrameCommand",
+      "evidence_length": 401,
+      "evidence_sha256": "e06d184315783717c9f10f441cd5833cfb5daa2bd0d2bdf4c40095ec825ec846",
+      "source": "Engine/Source/Runtime/Launch/Private/LaunchEngineLoop.cpp",
+      "evidence": "Render-thread frame counter increment, Frame%d event, RHI command allocation"
+    }
+  ]
+}

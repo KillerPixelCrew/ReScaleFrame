@@ -463,6 +463,11 @@ status without requiring FG. PCL-only API/render/Present checks pass on NVIDIA a
 sleep calls; Reflex Off/On/Boost checks pass on NVIDIA with one sleep per source frame. This is SDK
 API evidence, not ETW validation or physical latency measurement. [Evidence](research/orchestrator-latency-services.md).
 
+The Ghidra MCP extension and stdio bridge are installed and connected to the retained AC7 dump.
+Six CPU boundary names pass byte-span checks and are recorded in a tracked replay manifest.
+The active database save is pending while auto-analysis runs. This is static research, not a
+game-tested CPU/render handoff. [Recovery evidence](research/ac7-fg-cpu-boundaries.md#ghidra-recovery-and-repeatable-names).
+
 The current [frame-generation orchestrator plan](frame-generation-plan.md) defines FG0-FG9 for
 DLSS-FG/MFG, XeSS-FG/MFG, FSR3/FSR4 FG, Reflex/XeLL and independent PCL telemetry. Planning/source
 inspection is recorded on 30 September 2026; subsequent implementation evidence is linked above.
