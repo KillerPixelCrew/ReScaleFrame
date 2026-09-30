@@ -1,7 +1,7 @@
 set(RSF_XESS_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/xess/inc" CACHE PATH
     "Directory holding XeSS's xess/xess.h")
 
-add_library(rsf_xess STATIC src/xess_backend.cpp)
+add_library(rsf_xess STATIC src/xess_backend.cpp src/xess_generation.cpp)
 target_include_directories(rsf_xess PUBLIC include)
 target_link_libraries(rsf_xess PRIVATE rsf_build_options)
 target_link_libraries(rsf_xess PUBLIC ReScaleFrame::Contract d3d11 d3d12 dxgi)
@@ -25,3 +25,8 @@ else()
 endif()
 
 add_library(ReScaleFrame::XeSS ALIAS rsf_xess)
+
+if(EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND
+   EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h")
+    target_compile_definitions(rsf_xess PRIVATE RSF_HAVE_XESS_FG=1)
+endif()

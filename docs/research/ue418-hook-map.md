@@ -30,6 +30,10 @@ The read-only [fingerprint](evidence/ac7-executable.json) records sections, impo
 
 ## Engine boundaries to investigate
 
+The [FG CPU boundary investigation](ac7-fg-cpu-boundaries.md) now identifies static candidates for
+the outer loop, Windows message pump, Slate device polling and engine virtual tick in the retained
+decrypted image. These hooks are not installed or runtime validated. The render handoff remains open.
+
 Paths below are relative to the reference engine's `Engine/` directory. Exact revision links are included in [source-map.md](source-map.md).
 
 | Required information | Stock source entry | Why it matters |

@@ -452,6 +452,19 @@ are investigations and proposed improvements, not confirmed defects or game-test
 
 ## Engine integration improvements
 
+The reusable FG contract, CPU frame ledger, ownership/fallback controller, FSR3/4 and XeSS FG
+providers, and early D3D12 Streamline/DLSS-G host are implemented. Synthetic controller tests pass.
+DLSS-G, FSR3 and XeFG passed disabled-presentation lifecycle probes on the RTX 4070 Laptop GPU;
+FSR4 was refused. Enabled FG, game export/facade integration, independent PCL/pacing transitions,
+shared D3D12 DLSS SR and latency/visual validation remain open. [Evidence and limits](research/orchestrator-fg-implementation.md).
+
+The current [frame-generation orchestrator plan](frame-generation-plan.md) defines FG0-FG9 for
+DLSS-FG/MFG, XeSS-FG/MFG, FSR3/FSR4 FG, Reflex/XeLL and independent PCL telemetry. Planning/source
+inspection is recorded on 30 September 2026; subsequent implementation evidence is linked above.
+Reuse the completed root UI work and finish its paired FG export. Shader replacement and
+motion-quality improvements belong to the separate motion workstream; FG owns the input contract,
+presentation integration and compatibility/acceptance checks.
+
 Use the existing plugin/runtime ownership split. These tasks extend the first working target and
 the motion investigations above; none is a claim of completed implementation.
 

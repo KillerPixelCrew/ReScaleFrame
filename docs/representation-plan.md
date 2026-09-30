@@ -2,6 +2,11 @@
 
 ## Context
 
+30 September 2026: use [the frame-generation orchestrator plan](frame-generation-plan.md) for
+current FG, MFG and latency design/milestones. It reuses the accepted root UI work, separates
+pacing from PCL telemetry and updates SDK ownership/lifetime rules. The historical decisions and
+superseded UI assumptions below remain as their research trail.
+
 The AC7 super-resolution input chain is done and game-tested (7 Sep 2026): jitter, translucent
 velocity, composed scene colour, translucent depth, and the separate translucency layer at native all
 reach the backend. What remains is presentation, and today's work on it established, from source and

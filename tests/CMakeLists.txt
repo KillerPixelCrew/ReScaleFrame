@@ -160,3 +160,30 @@ add_executable(rsf_sr_pipeline_test sr_pipeline.cpp)
 target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
 set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+add_executable(rsf_fg_session_test fg_session.cpp ../runtime/orchestrator/src/fg_session.cpp
+    ../runtime/orchestrator/src/frame_sequencer.cpp)
+target_compile_definitions(rsf_fg_session_test PRIVATE RSF_RUNTIME_BUILD)
+target_include_directories(rsf_fg_session_test PRIVATE ../runtime/orchestrator/include)
+target_link_libraries(rsf_fg_session_test PRIVATE ReScaleFrame::Contract rsf_build_options d3d12)
+add_test(NAME fg_session COMMAND rsf_fg_session_test)
+set_tests_properties(fg_session PROPERTIES TIMEOUT 120)
+
+add_executable(rsf_fg_provider_test fg_provider.cpp)
+target_link_libraries(rsf_fg_provider_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME fg_provider COMMAND rsf_fg_provider_test)
+set_tests_properties(fg_provider PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+add_executable(rsf_fg_leases_test fg_leases.cpp)
+target_link_libraries(rsf_fg_leases_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME fg_leases COMMAND rsf_fg_leases_test)
+set_tests_properties(fg_leases PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+add_library(rsf_fg_c_header OBJECT fg_c_header.c)
+target_include_directories(rsf_fg_c_header PRIVATE ../runtime/orchestrator/include)
+target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_options)
+
+add_executable(rsf_fg_switching_test fg_switching.cpp)
+target_link_libraries(rsf_fg_switching_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME fg_switching COMMAND rsf_fg_switching_test)
+set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

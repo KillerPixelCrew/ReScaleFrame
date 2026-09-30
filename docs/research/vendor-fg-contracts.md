@@ -6,6 +6,13 @@ Streamline 2.12.0 (`vendor/streamline`, `references/Streamline`), FidelityFX SDK
 (`8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0`). This is the evidence behind the vendor-neutral
 contract in the [representation plan](../representation-plan.md).
 
+30 September 2026: this is a historical source record. The
+[current FG/latency plan](../frame-generation-plan.md) uses Streamline 2.14.1, separates FSR3
+analytical FG from FSR4 ML FG, and preserves the root UI layer work. In particular, aggregate SDK
+present counts are not generated-only counts, resource reuse needs vendor/GPU retirement, PCL
+is telemetry rather than pacing, and the old two-slot/universal-UI shorthand is not an acceptance
+proof. Read the current plan before implementing the contracts below.
+
 ## None of them runs on D3D11
 
 | SDK | Frame generation API | Evidence |

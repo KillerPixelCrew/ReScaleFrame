@@ -28,6 +28,17 @@
 #include <cstring>
 #include <string>
 
+// sl_security.h defines globals, so it belongs in exactly one translation unit.
+bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
+{
+#if RSF_HAVE_SIGNATURE_CHECK
+    return sl::security::verifyEmbeddedSignature(path);
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 namespace {
 
 // Everything Streamline exports that this integration uses. Resolved by name from the interposer
@@ -200,6 +211,10 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     State& self = state();
     if (self.initialised) {
         return RSF_DLSS_OK;
+    }
+    if (GetModuleHandleW(L"sl.interposer.dll")) {
+        say("D3D11 DLSS cannot initialize over an existing Streamline owner; use the shared D3D12 host");
+        return RSF_DLSS_ERROR_INIT_FAILED;
     }
     self.log = setup->log;
     self.log_user = setup->log_user;
@@ -604,6 +619,12 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
 
 // Built without the SDK. The contract still exists so callers compile and can say honestly that
 // this build has no DLSS in it, rather than reporting a runtime failure that never happened.
+
+extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport)
+{
+    (void)viewport;
+    return RSF_DLSS_ERROR_NOT_COMPILED;
+}
 
 extern "C" uint32_t rsf_dlss_available(void)
 {

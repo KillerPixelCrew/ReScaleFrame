@@ -88,9 +88,16 @@ scene colour, and adds the chain targets between the tonemap and the back-buffer
 
 ## Status
 
-Design only; nothing here has run. M1 classifies without changing anything and fills the per-screen
-table below. M2 diverts and composites with frame generation off. Each run's summary lines are
-appended here.
+Current status, 30 September 2026: root UI target identification/promotion and engine recomposition
+are implemented and form part of the accepted AC7 upscaling path. They were intended to provide
+the separate UI input for FG. Exporting the matching final/HUD-less/UI packet and its frame identity,
+processing convention and resource lifetimes to an FG provider is not yet wired. Reuse this work
+in [the FG plan](../frame-generation-plan.md), rather than repeating the failed draw-diversion route.
+
+The original 7 September design called for M1 classification and M2 diversion/composition.
+Measurements and corrections from those experiments follow below; the earlier blanket statement
+that nothing here had run was stale. The [accepted result](ac7-consumer-session.md#accepted-result)
+records the later game validation.
 
 ### Per-screen classification
 
