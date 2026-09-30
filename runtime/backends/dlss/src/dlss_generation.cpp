@@ -19,6 +19,7 @@ struct rsf_streamline_host {
     HMODULE module = nullptr;
     bool initialized = false;
     uint32_t engine_type = 0;
+    uint32_t profile = RSF_SL_PROFILE_DLSS_FG;
     bool signature_verified = false, development_runtime = false;
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
@@ -28,6 +29,7 @@ struct rsf_streamline_host {
     ComPtr<IDXGIFactory2> factory;
     wchar_t directory[1024]{};
     const wchar_t* paths[1]{};
+    sl::Feature features[4]{};
     char engine_version[128]{}, project_id[256]{};
     PFun_slInit* init{};
     PFun_slShutdown* shutdown{};
@@ -47,9 +49,13 @@ struct rsf_streamline_host {
     PFun_slReflexSleep* sleep{};
     PFun_slPCLSetMarker* pcl_marker{};
     PFun_slPCLSetOptions* pcl_options{};
+    PFun_slPCLGetState* pcl_state{};
     struct Token { uint64_t id = 0; sl::FrameToken* token = nullptr; } tokens[sl::MAX_FRAMES_IN_FLIGHT];
     uint32_t cursor = 0, native_index = 0;
     uint64_t last_begin = 0;
+    uint64_t sleep_calls = 0, marker_calls = 0;
+    rsf_reflex_mode reflex_mode = RSF_REFLEX_OFF;
+    uint32_t frame_limit_us = 0;
     rsf_fg_status cached_capability{};
     std::mutex marker_guard;
 };
@@ -61,7 +67,6 @@ void message(sl::LogType, const char* text)
     const auto* host = logging_host.load();
     if (host && host->log) host->log(host->log_user, text);
 }
-const sl::Feature host_features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
 template<class T> bool feature(rsf_streamline_host& host, sl::Feature id, const char* name, T*& out)
 {
     void* pointer = nullptr;
@@ -213,12 +218,9 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     if (options->mode == RSF_FG_DYNAMIC && !self.state.dynamic_supported) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (options->mode == RSF_FG_FIXED && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (options->mode != RSF_FG_OFF && !self.state.low_latency_available) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    sl::ReflexOptions reflex{};
     const uint32_t mode = options->mode != RSF_FG_OFF && options->reflex_mode == RSF_REFLEX_OFF ? RSF_REFLEX_ON : options->reflex_mode;
-    reflex.mode = mode == RSF_REFLEX_BOOST ? sl::ReflexMode::eLowLatencyWithBoost :
-        mode == RSF_REFLEX_ON ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
-    reflex.frameLimitUs = options->frame_limit_us;
-    if (self.host->reflex_options(reflex) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    const auto latency = rsf_streamline_host_reflex(self.host, mode, options->frame_limit_us);
+    if (latency != 0) return latency;
     sl::DLSSGOptions fg{}; fg.mode = static_cast<sl::DLSSGMode>(options->mode);
     fg.numFramesToGenerate = options->generated_frames < self.state.max_generated_frames ? options->generated_frames : self.state.max_generated_frames;
     fg.dynamicTargetFrameRate = options->dynamic_target_fps;
@@ -234,29 +236,94 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 rsf_backend_result begin(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& host = *static_cast<DlssSession*>(pointer)->host;
+    return rsf_streamline_host_begin(static_cast<DlssSession*>(pointer)->host, id);
+}
+rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t controller)
+{
+    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return rsf_streamline_host_marker(static_cast<DlssSession*>(pointer)->host, id, marker, controller);
+}
+}
+extern "C" rsf_backend_result rsf_streamline_host_begin(rsf_streamline_host* pointer, uint64_t id)
+{
+    if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    auto& host = *pointer;
     std::lock_guard<std::mutex> lock(host.marker_guard);
     if (id <= host.last_begin || host.tokens[host.cursor].id) return RSF_BACKEND_ERROR_NOT_READY;
     if (host.native_index == UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto& slot = host.tokens[host.cursor]; const uint32_t index = ++host.native_index;
     if (host.new_token(slot.token, &index) != sl::Result::eOk || !slot.token) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     host.cursor = (host.cursor + 1) % sl::MAX_FRAMES_IN_FLIGHT; host.last_begin = id;
-    if (host.sleep(*slot.token) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (host.profile != RSF_SL_PROFILE_PCL) {
+        if (!host.sleep || host.sleep(*slot.token) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        ++host.sleep_calls;
+    }
     slot.id = id; return RSF_BACKEND_OK;
 }
-rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t controller)
+extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host* pointer, uint64_t id, rsf_latency_marker marker, uint32_t controller)
 {
     if (!pointer || !id || marker > RSF_LATENCY_INPUT_SAMPLE || controller > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& host = *static_cast<DlssSession*>(pointer)->host;
+    auto& host = *pointer;
+    if (!host.pcl_marker) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     std::lock_guard<std::mutex> lock(host.marker_guard);
     auto* token = find_token(host, id); if (!token) return RSF_BACKEND_ERROR_NOT_READY;
     // PCL removed ordinary input sample marker 6. Marker 13 is for controllers only.
     if (marker == RSF_LATENCY_INPUT_SAMPLE && !controller) return RSF_BACKEND_OK;
     const auto mapped = marker == RSF_LATENCY_INPUT_SAMPLE ? sl::PCLMarker::eControllerInputSample : static_cast<sl::PCLMarker>(marker);
     const auto result = host.pcl_marker(mapped, *token);
+    if (result == sl::Result::eOk) ++host.marker_calls;
     if (marker == RSF_LATENCY_PRESENT_END) for (auto& slot : host.tokens) if (slot.id == id) slot.id = 0;
     return result == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host* host, uint64_t id)
+{
+    if (!host || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(host->marker_guard);
+    for (auto& slot : host->tokens) if (slot.id == id) slot.id = 0;
+    return RSF_BACKEND_OK;
+}
+extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host* host, rsf_reflex_mode mode, uint32_t limit)
+{
+    if (!host || mode > RSF_REFLEX_BOOST) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!host->reflex_options || host->profile == RSF_SL_PROFILE_PCL) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    sl::ReflexState state{};
+    if (!host->reflex_state || host->reflex_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if ((mode != RSF_REFLEX_OFF || limit) && !state.lowLatencyAvailable) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    sl::ReflexOptions options{}; options.frameLimitUs = limit;
+    options.mode = mode == RSF_REFLEX_BOOST ? sl::ReflexMode::eLowLatencyWithBoost :
+        mode == RSF_REFLEX_ON ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
+    if (host->reflex_options(options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    host->reflex_mode = mode; host->frame_limit_us = limit; return RSF_BACKEND_OK;
+}
+extern "C" rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_host* host, rsf_streamline_latency_status* out)
+{
+    if (!host || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(host->marker_guard);
+    *out = {}; out->struct_size = sizeof(*out); out->profile = host->profile;
+    out->pacing_owner = host->profile == RSF_SL_PROFILE_PCL ? RSF_PACING_NONE : RSF_PACING_REFLEX;
+    out->reflex_mode = host->reflex_mode; out->frame_limit_us = host->frame_limit_us;
+    out->sleep_calls = host->sleep_calls; out->marker_calls = host->marker_calls; out->last_begin_id = host->last_begin;
+    if (host->reflex_state) {
+        sl::ReflexState state{};
+        if (host->reflex_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        out->low_latency_available = state.lowLatencyAvailable; out->latency_report_available = state.latencyReportAvailable;
+    }
+    if (host->pcl_state) {
+        sl::PCLState state{};
+        if (host->pcl_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        out->pcl_message_id = state.statsWindowMessage;
+    }
+    return RSF_BACKEND_OK;
+}
+extern "C" rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_host* host, void** chain)
+{
+    if (!host || !chain || !*chain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    void* native = nullptr;
+    if (host->native(*chain, &native) != sl::Result::eOk || !native) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    const bool upgraded = native != *chain; static_cast<IUnknown*>(native)->Release();
+    return upgraded || host->upgrade(chain) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+}
+namespace {
 rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* frame)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -349,8 +416,7 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<DlssSession*>(pointer);
-    std::lock_guard<std::mutex> lock(self.host->marker_guard);
-    for (auto& slot : self.host->tokens) if (slot.id == id) slot.id = 0;
+    const auto result = rsf_streamline_host_abort(self.host, id); if (result != 0) return result;
     self.history_valid = false; self.prepared_enabled = false; self.state.active = 0;
     return RSF_BACKEND_OK;
 }
@@ -360,14 +426,16 @@ extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_ho
 {
     if (!setup || !out || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
-    if (setup->abi_version != RSF_FG_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (!setup->dxgi_adapter || !setup->runtime_directory_utf8 || setup->engine_type >= uint32_t(sl::EngineType::eCount))
+    if (setup->abi_version != RSF_STREAMLINE_HOST_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (!setup->dxgi_adapter || !setup->runtime_directory_utf8 || setup->engine_type >= uint32_t(sl::EngineType::eCount) ||
+        setup->profile > RSF_SL_PROFILE_PCL)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(host_guard);
     if (GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto* host = new (std::nothrow) rsf_streamline_host; if (!host) return RSF_BACKEND_ERROR_INIT_FAILED;
     host->log = setup->log; host->log_user = setup->log_user;
     host->engine_type = setup->engine_type; host->development_runtime = setup->development_runtime != 0;
+    host->profile = setup->profile;
     if (!copy_text(host->engine_version, sizeof(host->engine_version), setup->engine_version_utf8) ||
         !copy_text(host->project_id, sizeof(host->project_id), setup->project_id_utf8) ||
         !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, host->directory, 1024) ||
@@ -393,7 +461,12 @@ extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_ho
         sl::PreferenceFlags::eDisableDebugText;
     preferences.renderAPI = sl::RenderAPI::eD3D12; preferences.showConsole = false;
     logging_host = host; preferences.logMessageCallback = message;
-    preferences.featuresToLoad = host_features; preferences.numFeaturesToLoad = 4;
+    uint32_t feature_count = 0;
+    if (host->profile != RSF_SL_PROFILE_PCL || setup->load_dlss_sr) host->features[feature_count++] = sl::kFeatureDLSS;
+    host->features[feature_count++] = sl::kFeaturePCL;
+    if (host->profile != RSF_SL_PROFILE_PCL) host->features[feature_count++] = sl::kFeatureReflex;
+    if (host->profile == RSF_SL_PROFILE_DLSS_FG) host->features[feature_count++] = sl::kFeatureDLSS_G;
+    preferences.featuresToLoad = host->features; preferences.numFeaturesToLoad = feature_count;
     host->paths[0] = host->directory; preferences.pathsToPlugins = host->paths; preferences.numPathsToPlugins = 1;
     preferences.engine = static_cast<sl::EngineType>(setup->engine_type);
     preferences.engineVersion = host->engine_version; preferences.projectId = host->project_id;
@@ -420,12 +493,17 @@ extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_ho
     native = nullptr;
     if (host->native(host->queue.Get(), &native) != sl::Result::eOk || !native) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
     host->native_queue.Attach(static_cast<ID3D12CommandQueue*>(native));
-    feature(*host, sl::kFeatureDLSS_G, "slDLSSGGetState", host->get_state);
-    feature(*host, sl::kFeatureDLSS_G, "slDLSSGSetOptions", host->set_options);
-    feature(*host, sl::kFeatureReflex, "slReflexSetOptions", host->reflex_options);
-    feature(*host, sl::kFeatureReflex, "slReflexGetState", host->reflex_state);
-    feature(*host, sl::kFeatureReflex, "slReflexSleep", host->sleep);
+    if (host->profile == RSF_SL_PROFILE_DLSS_FG) {
+        feature(*host, sl::kFeatureDLSS_G, "slDLSSGGetState", host->get_state);
+        feature(*host, sl::kFeatureDLSS_G, "slDLSSGSetOptions", host->set_options);
+    }
+    if (host->profile != RSF_SL_PROFILE_PCL) {
+        feature(*host, sl::kFeatureReflex, "slReflexSetOptions", host->reflex_options);
+        feature(*host, sl::kFeatureReflex, "slReflexGetState", host->reflex_state);
+        feature(*host, sl::kFeatureReflex, "slReflexSleep", host->sleep);
+    }
     feature(*host, sl::kFeaturePCL, "slPCLSetMarker", host->pcl_marker);
+    feature(*host, sl::kFeaturePCL, "slPCLGetState", host->pcl_state);
     if (feature(*host, sl::kFeaturePCL, "slPCLSetOptions", host->pcl_options)) {
         sl::PCLOptions pcl{}; host->pcl_options(pcl);
     }
@@ -468,4 +546,10 @@ extern "C" const rsf_generation_provider* rsf_generation_dlss() { return &provid
 extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_host_setup*, rsf_streamline_host**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host*, rsf_streamline_graphics*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_destroy(rsf_streamline_host*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_begin(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, uint64_t, rsf_latency_marker, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host*, rsf_reflex_mode, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_host*, rsf_streamline_latency_status*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_host*, void**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 #endif

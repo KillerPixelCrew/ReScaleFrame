@@ -187,3 +187,8 @@ add_executable(rsf_fg_switching_test fg_switching.cpp)
 target_link_libraries(rsf_fg_switching_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg_switching COMMAND rsf_fg_switching_test)
 set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+add_executable(rsf_latency_host_test latency_host.cpp)
+target_link_libraries(rsf_latency_host_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME latency_host COMMAND rsf_latency_host_test)
+set_tests_properties(latency_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

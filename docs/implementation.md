@@ -458,6 +458,11 @@ DLSS-G, FSR3 and XeFG passed disabled-presentation lifecycle probes on the RTX 4
 FSR4 was refused. Enabled FG, game export/facade integration, independent PCL/pacing transitions,
 shared D3D12 DLSS SR and latency/visual validation remain open. [Evidence and limits](research/orchestrator-fg-implementation.md).
 
+Independent PCL and Reflex services now expose cold profiles, shared token ownership and bounded
+status without requiring FG. PCL-only API/render/Present checks pass on NVIDIA and Intel with zero
+sleep calls; Reflex Off/On/Boost checks pass on NVIDIA with one sleep per source frame. This is SDK
+API evidence, not ETW validation or physical latency measurement. [Evidence](research/orchestrator-latency-services.md).
+
 The current [frame-generation orchestrator plan](frame-generation-plan.md) defines FG0-FG9 for
 DLSS-FG/MFG, XeSS-FG/MFG, FSR3/FSR4 FG, Reflex/XeLL and independent PCL telemetry. Planning/source
 inspection is recorded on 30 September 2026; subsequent implementation evidence is linked above.

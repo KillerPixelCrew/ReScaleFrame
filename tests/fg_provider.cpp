@@ -39,8 +39,8 @@ int main(int argc, char** argv)
     rsf_streamline_host* host = nullptr;
     rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
     if (backend == RSF_FG_BACKEND_DLSS) {
-        rsf_streamline_host_setup setup{sizeof(setup), RSF_FG_ABI_VERSION, argv[2], adapter.Get(), 0,
-            "ReScaleFrame fixture", "a3ed1f08-3542-4698-b85c-e1a9908e861a", 1, 0, log_message, nullptr};
+        rsf_streamline_host_setup setup{sizeof(setup), RSF_STREAMLINE_HOST_ABI_VERSION, argv[2], adapter.Get(), 0,
+            "ReScaleFrame fixture", "a3ed1f08-3542-4698-b85c-e1a9908e861a", 1, 0, log_message, nullptr, RSF_SL_PROFILE_DLSS_FG, 1};
         auto result = rsf_streamline_host_create(&setup, &host);
         std::printf("Streamline early host result=%d\n", result);
         if (result != 0) return result == RSF_BACKEND_ERROR_NOT_COMPILED || result == RSF_BACKEND_ERROR_NOT_SUPPORTED ? 77 : 1;

@@ -75,6 +75,8 @@ whose SDK default callback does not supply first-party callback counts.
 Cached input-processing fences govern retirement, including non-presenting producer queues.
 Current shared D3D12 DLSS SR, PCL independent of FG and hot Reflex-to-XeLL ownership transitions
 remain to be connected; loading the host is not proof these transitions are ready.
+Subsequent [independent latency services](orchestrator-latency-services.md) add cold PCL/Reflex
+profiles and standalone device API checks; they do not establish hot pacing transitions or game hooks.
 FSR and XeFG currently refuse a loaded Streamline interposer with NEEDS_RESTART, preserving the
 previous owner during preflight. Their standalone lifecycle probes do not establish safe
 DLSS-to-FFX/XeFG hot transitions or independent PCL presentation instrumentation.
