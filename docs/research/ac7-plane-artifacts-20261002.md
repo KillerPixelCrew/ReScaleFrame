@@ -1,5 +1,12 @@
 # AC7 aircraft composition artifacts, 2 October 2026
 
+Final status: after the 21:24 deployment the user reports "Works. And is clean!" Native logs
+verify Texture2D/RG32F depth bindings, divisor 1 and replacement dispatch. The wing/cloud
+correction is accepted with volumetrics present. The latest depth/format findings are in
+"Wing masking and cloud floor" below; earlier pending statements and the clean-plane/missing-cloud
+run describe superseded experiments. The later SR bridge/FSR4 deployment was also accepted.
+No new numeric FPS result or complete independent-object motion coverage was established.
+
 The updated goal is to fix gameplay aircraft artifacts, then improve motion vectors using the
 existing research. The user reports apparent missing vertices/triangles on steering surfaces,
 including while stationary and across upscalers. They separately identify DLSS-only dark colour

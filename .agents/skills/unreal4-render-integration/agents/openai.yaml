@@ -1,0 +1,4 @@
+interface:
+  display_name: "Unreal 4 Render Integration"
+  short_description: "Trace UE4 views, graph roles, UI and RHI ownership"
+  default_prompt: "Use $unreal4-render-integration to investigate this Unreal 4 renderer through its native producers and resource lifetimes."

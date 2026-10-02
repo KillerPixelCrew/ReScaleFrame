@@ -1,5 +1,11 @@
 # Implementation tracker
 
+2 October documentation: repository skills now separate general renderer analysis, shared
+Unreal 4 concepts, UE4.18/AC7 evidence and TrueSky production. The parent transcript, accepted
+implementation and failed experiments were reviewed; metadata/local-reference/whitespace
+checks pass. This is documentation validation, not a new game/device test.
+[Scope and checks](research/skills-session-update-20261002.md).
+
 ReScaleFrame is a monorepo. All first-party components share this history and release version. Separate runtime/plugin DLLs do not imply separate repositories.
 
 ## Active AC7 scope correction, 1 October 2026

@@ -2,8 +2,19 @@
 
 Research began on 5 September 2026. The source comparisons are pinned to the revisions in [source-map.md](source-map.md) and `evidence/repositories.json`. Later AC7 captures and DLSS runs are recorded separately.
 
+Current status, 2 October: the user accepted the native SR/UI path, corrected TrueSky wing/cloud
+production and optimized SR bridge/FSR4 compatibility deployment. Earlier dated pending notes
+preserve the investigation trail. Missing-object motion coverage, FG and latency integration
+remain separate work. [Maintained skills and session corrections](skills-session-update-20261002.md)
+route general Unreal 4, version-specific UE4.18 and TrueSky research.
+
 | Document | Read it for |
 | --- | --- |
+| [Native AC7 renderer](ac7-native-renderer-refactor-20261001.md) | Native view/graph/UI ownership, copied RHI identity, shared-uniform crash correction and retirement |
+| [Reconstruction stability](ac7-stability-20261001.md) | Exact input rectangles, bloom/exposure order, TrueSky jitter and valid-zero motion |
+| [Aircraft and cloud corrections](ac7-plane-artifacts-20261002.md) | TrueSky x1 activation, actual Texture2D views, RG32F depth bounds, FP16 production and user acceptance |
+| [SR interop and FSR4](sr-interop-performance-20261002.md) | GPU fence handoff, three command slots, FSR4 INT8 capability/provider proof and measurement limits |
+| [Repository skills update](skills-session-update-20261002.md) | Transcript-derived workflow, skill routing, historical corrections and focused checks |
 | [AC7 frame capture](ac7-frame-capture.md) | Resource contents, motion encoding, camera offsets, jitter, reduced-scale HUD behaviour |
 | [AC7 motion vectors](ac7-motion-vectors.md) | Native shader semantics, DLSS conversion discrepancy, captured unjittered reprojection, and RenoDX/Luma replacement routes |
 | [AC7 renderer ownership audit](ac7-renderer-roots-20260930.md) | Captured GBuffer/post-process allocation reuse, lighting/reflection regression, native view/widget roots and engine-owned integration |
@@ -24,17 +35,28 @@ Research began on 5 September 2026. The source comparisons are pinned to the rev
 | [Presentation backends](presentation-backends.md) | Native DX11/DX12 and Vulkan options |
 | [Validation plan](validation-plan.md) | Experiments and completion criteria |
 
-The super resolution input chain is game-tested in AC7 as of 7 September 2026: jitter, translucent velocity, composed scene colour, translucent depth and the separate translucency layer at native all reach the backend. What remains is presentation, and the [representation plan](../representation-plan.md) covers it: UI extraction, the DX11 to DX12 bridge, and SR plus frame generation for DLSS, FSR and XeSS as one framework. The Claw target (XeSS-SR, XeLL, MFG, standalone/WSGM operation) is its last milestone; source inspection does not prove that combination works.
+The early SR input chain was game-tested on 7 September. The 2 October implementation uses
+engine-owned view sizing, a native SR/fallback graph node and coordinated UI/cloud producers;
+the runtime supplies DLSS, FSR and XeSS plus ordered D3D11/D3D12 transfers. That accepted SR
+path does not complete the presentation/FG/latency milestones in
+[the representation plan](../representation-plan.md). The Claw target and standalone/WSGM
+operation remain unproven as a complete combination.
 
-The interface question that used to come first is answered in [AC7 UI composition](ac7-ui-composition.md) and [AC7 UI extraction](ac7-ui-extraction.md): the interface is rasterized at 1920x1080 and drawn into the scene as widget quads on the screens that look soft. Extraction into a layer of our own was built and measured, and it discolours the frame because the quads are composites the engine keeps processing; so the layers the quads draw into are promoted instead, with the classifier naming them and the game compositing them. The [tracker](../implementation.md) carries the milestones and the planned egui inspection/capture workflow. The [repository review](../review.md) lists concrete code defects.
+The interface investigation in [UI composition](ac7-ui-composition.md) and
+[UI extraction](ac7-ui-extraction.md) explained why extracting widget composites discarded
+later native processing. Texture promotion was an intermediate approach. The accepted native
+implementation fixes physical target/raster density through actual converter/game-instance
+owners while preserving logical layout and native composition. The [tracker](../implementation.md)
+separates that accepted scope from remaining framework work.
 
 Reference checkouts, vendor binaries, Epic source, raw captures, and game dumps stay outside Git. Publish methods, permitted metadata, observations, and uncertainty here.
 
 The 30 September on/off capture qualifies the earlier accepted SR input evidence: an allocation
 used for the tonemap output is a GBuffer earlier in the frame, and premature substitution corrupts
 lighting/reflection inputs. The [ownership audit](ac7-renderer-roots-20260930.md) records the
-capture-proven defect, phase correction and native graph/UI migration route. The user confirms
-lighting/reflections restored. New jitter/shimmer and the native migration remain pending;
-earlier backend evaluation counts do not establish complete image quality.
+capture-proven defect, phase correction and native graph/UI migration route. The user confirmed
+lighting/reflections restored. Later jitter/shimmer and native migration work is covered by
+the accepted 2 October corrections above; early evaluation counts alone did not prove image quality.
 
-- [Native AC7 renderer refactor](ac7-native-renderer-refactor-20261001.md): engine-owned view sizing, pre-tonemap graph node, queued identity and native resource retirement; MSVC/WARP checked, game validation pending.
+- [Native AC7 renderer refactor](ac7-native-renderer-refactor-20261001.md): development history,
+  MSVC/WARP contracts and later user acceptance, with remaining FG/latency coverage kept distinct.

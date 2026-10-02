@@ -1,0 +1,4 @@
+interface:
+  display_name: "Game Render Analysis"
+  short_description: "Trace renderer defects to verified engine producers"
+  default_prompt: "Use $game-render-analysis to investigate this renderer issue using existing evidence and native resource ownership."

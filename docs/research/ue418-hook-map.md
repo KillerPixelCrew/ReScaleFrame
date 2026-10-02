@@ -1,5 +1,11 @@
 # UE4.18 source map for the AC7 plugin
 
+Current status, 2 October: the user accepted the corrected native SR/UI and TrueSky wing/cloud
+path. Historical build-only notes below retain the discovery trail; latest activation and
+validation are in [engine evidence](../../games/ac7/engine.json) and
+[the session update](skills-session-update-20261002.md). Site/byte checks remain specific to the
+fingerprinted game/module. FG and full missing-object velocity coverage remain separate work.
+
 ## TrueSky depth storage and actual view type, 2 October follow-up
 
 Captures `motion-20261002-201334-66924-1` and `motion-20261002-201349-66924-2` retain

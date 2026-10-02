@@ -1,0 +1,4 @@
+interface:
+  display_name: "TrueSky Render Integration"
+  short_description: "Repair cloud depth, resolution and native composition"
+  default_prompt: "Use $truesky-render-integration to trace this cloud or aircraft-masking issue through native depth, allocation and effect owners."

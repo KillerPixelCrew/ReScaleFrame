@@ -2,6 +2,11 @@
 
 Start with a question and record the evidence needed to answer it. AC7's history includes useful failures; the procedure below keeps those lessons without treating one game's behaviour as a universal rule.
 
+Before a new experiment, check the latest implementation status and relevant transcript corrections.
+The accepted AC7 native path now owns view/target allocation, SR graph insertion and queued
+lifetimes. Earlier texture matching and Present-time evaluation describe discovery/compatibility
+paths. See [the session update](skills-session-update-20261002.md) for the maintained skills.
+
 ## 1. Establish the build and readable data
 
 Fingerprint the executable before using offsets:
@@ -18,7 +23,7 @@ For a runtime dump, record the actual load base and map file offsets to RVAs. Ve
 
 ## 2. Turn source leads into verified locations
 
-Search GitHub and other source hosting sites early for engine branches, middleware/plugin
+Search existing local references first, then source hosting for engine branches, middleware/plugin
 integrations, public game projects and existing decompilations. Useful source often lives in a
 larger project's checkout. Record its origin, revision and engine version, and compare it with
 the installed binary before trusting layouts or behaviour. Keep reference material untracked.
@@ -34,7 +39,12 @@ Compare several distinctive call sequences against an authorized engine checkout
 
 ## 3. Capture allocations, bindings, and contents
 
-Use RenderDoc to inspect the frame. The recorded Proton workflow loads the Windows capture DLL and converts its structured stream with Windows `renderdoccmd` under Wine. Pixel replay used Windows. See [capture setup](../../loader/README.md).
+Use RenderDoc where it can capture the active path. The recorded Proton workflow loads the
+Windows capture DLL and converts its stream with Windows `renderdoccmd` under Wine; pixel replay
+used Windows. The later Windows DLSS run could not use that capture route. Bounded F9 native
+captures provide raw colour/depth/motion, shader/binding and view/graph evidence without requiring
+a frame debugger. Check the existing images/metadata before asking the user to identify scenes.
+See [capture setup](../../loader/README.md).
 
 Formats and sizes narrow resource candidates. At each relevant draw, inspect complete bindings, shader identity, valid rectangles, and pixel contents. The current XML parser does not fully model inherited SRVs, compute work, or deferred contexts, so its pass/read lists require confirmation.
 
@@ -64,15 +74,41 @@ Read the producer and consumer shaders. Record storage bias/scale, direction, un
 
 Prefer enabling an existing engine path when it supplies the missing data. AC7's AA-gate patch lets the engine generate jitter before deriving matrices. Require a recognized build and expected patch bytes, and verify reset behaviour afterward.
 
+Follow the expected-byte code-patch approach when the game's native policy must change. Console
+or configuration values that the game resets are not stable producer ownership. Preserve a
+logged refusal and native fallback when a fingerprint/site differs; never weaken the guard.
+
+Check raw velocity validity before decoding. A valid decoded zero is not an unwritten vector.
+Shader substitution cannot create geometry excluded from the pass or supply missing previous bones.
+
 Use engine camera transforms directly. Depth turns that transform into per-pixel displacement; it cannot recover independent object movement. Determine whether written velocity replaces or adds to camera motion before combining them. Check what the loaded backend already resolves before adding another pass.
 
 ## 6. Choose when to consume each resource
 
 Identify producers, later writes, and last use. An AddRef keeps a texture allocated but does not preserve its pixels. Copy before reuse when evaluation cannot consume immediately.
 
-AC7's first qualifying binding precedes later sky draws. Evaluating there omitted the sky; Present-time evaluation fixed the diagnostic image. Proper SR reinsertion still needs an earlier, verified scene boundary and compatible downstream allocations.
+AC7's early qualifying binding preceded later sky draws. Present-time evaluation repaired the
+diagnostic image, but the accepted integration inserts an owned SR/fallback graph node before
+native tonemapping, with matched bloom/exposure and reviewed downstream dimensions. Do not
+repeat Present rediscovery as the production architecture. See [the native refactor](ac7-native-renderer-refactor-20261001.md).
+
+Join native CPU recorders before shared view changes. Saving a uniform by moving it cleared a
+shared slot and caused the hangar worker crash. Copy/AddRef and publish from a local source;
+retain generated buffers/pool leases through queued RHI use and retire on the native owner.
 
 Capture both full and reduced render scale. Equal dimensions concealed that AC7 also reduced its HUD composite. Check grading, transparency, refraction, spatial scaling, and UI separately.
+
+Fix resolution and precision at their producer. UI keeps logical geometry while physical raster
+targets follow output size. TrueSky cloud/depth/history dimensions and effect permutations must
+agree; x1 allocation arithmetic alone did not provide an x1 depth shader. UNORM depth bounds
+lost aircraft precision before masking, and an array-UAV guard wrongly rejected the actual 2D
+view. Verify real bindings/dispatch, not shader compilation. A clean plane with absent clouds fails.
+
+SDR display output still consumes linear floating-point radiance before tone mapping. A higher
+precision copy cannot restore quantized scene values. Keep vendor colour/exposure observations
+separate from a claim about proprietary internals. For FSR/XeSS transfers, GPU fence ordering
+avoids current-frame CPU stalls; fixtures and FPS differences are different evidence. Default
+FSR4 refusal was superseded by guarded, device-scoped INT8 execution, proven separately from FSR3.
 
 ## 7. Validate and publish
 

@@ -24,7 +24,16 @@ Use [Ghidra](https://github.com/NationalSecurityAgency/ghidra) with PyGhidra and
 
 Use [RenderDoc](https://github.com/baldurk/renderdoc) for capture and replay. The recorded AC7 workflow used 1.45: the Windows DLL captured through DXVK under Proton, Windows `renderdoccmd` converted XML under Wine, and Windows replay supplied pixels. Keep this evidence separate from assumptions about other versions/platforms.
 
-For DLSS development, obtain the matching [Streamline release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0) and follow [local dependency paths](dependencies.md). SDK headers and runtime DLLs are separate from Ghidra tooling.
+The accepted AC7 build uses [Streamline 2.14.1](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+and the runtimes recorded in [dependencies](dependencies.md). Check existing local SDK/reference
+folders before recommending downloads. SDK headers, deployed DLLs and Ghidra tooling are distinct.
+
+The Windows DLSS integration and the observed RenderDoc route did not coexist. AC7's bounded
+F9 instrumentation supplies raw colour/depth/motion, constants, shader/binding facts and native
+execution packets. Use that working path for producer questions rather than requiring a new
+debugger. Steam launch/attachment and capture modules can affect external debugger tests;
+record the actual setup instead of claiming an attachment succeeded. F9 usage is in
+[the loader guide](../loader/README.md).
 
 ## Ghidra MCP and signatures
 
@@ -65,7 +74,15 @@ The checkout at `references/UnrealEngine` is a full clone whose default branch i
 checked out at `4.18.3-release` (`0a14a8d537a3`), and every read for this project must be at that
 tag. The engine's structures are not stable across that gap: `FSimpleElementVertex` alone gained a
 `FDFVector4` position, which moves every offset after it, so a signature taken from the default
-branch matches nothing in the game and fails silently. If the checkout has been moved, put it back
-before reading, or read through `git show 4.18.3-release:<path>`.
+branch matches nothing in the game and fails silently. If the shared checkout has moved, read
+through `git show 4.18.3-release:<path>` rather than silently changing another task's checkout.
+
+For shared renderer concepts, use [the Unreal 4 skill](../.agents/skills/unreal4-render-integration/SKILL.md).
+For version-specific source/private layouts, use [the UE4.18 skill](../.agents/skills/ue418-render-integration/SKILL.md).
+For cloud projection, mixed-resolution effects and depth-bound precision, use
+[the TrueSky skill](../.agents/skills/truesky-render-integration/SKILL.md). These share one source
+under `.agents/skills`; the [analysis skill](../.agents/skills/game-render-analysis/SKILL.md)
+routes research and validation. TrueSky reference folders may be source snapshots rather than
+Git repositories; record their actual provenance/file hashes instead of inventing revisions.
 
 Keep licensed source and captures outside Git. Commit the method, evidence references, conclusions, uncertainty, and implementation use as required by [the agent instructions](../AGENTS.md).

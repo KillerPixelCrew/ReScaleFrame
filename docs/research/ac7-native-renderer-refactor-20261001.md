@@ -1,5 +1,14 @@
 # AC7 native renderer refactor, 1 October 2026
 
+Current status, 2 October: the user accepted the corrected native SR/UI path, hangar crash and
+wing/cloud result, followed by the GPU-fence bridge/FSR4 compatibility deployment. The build-only
+and pending notes below are the dated development trail. Later corrections preserve exact active
+backend rectangles inside padded allocations, route matched SceneColorHalfRes bloom/exposure
+through SR, and use the verified native TrueSky depth producer. See [stability](ac7-stability-20261001.md),
+[aircraft/cloud corrections](ac7-plane-artifacts-20261002.md) and
+[final SR acceptance](sr-interop-performance-20261002.md#user-acceptance-and-release-replacement).
+This acceptance does not complete missing-object motion coverage, FG surfaces or latency markers.
+
 The question is how to stop the UI from briefly using a stale size or low-resolution image after
 pause/menu transitions, and how to make SR integration follow engine ownership. Repeated texture
 promotion, draw classification and Present-based rediscovery were selecting allocations rather
@@ -134,7 +143,7 @@ frame 41 after CPU frame 900, graph retirement before RHI execution, native pool
 fallback pixels after the stopped backend refuses. The scope test checks nested scopes, capacity,
 quiescence and refusal to unload during callbacks. These are synthetic tests, not AC7 runs.
 
-## Remaining validation and limits
+## Initial validation request and limits, 1 October
 
 This build is not game-validated. Recheck briefing, hangar, flight, pause/resume, quality changes,
 lighting/reflections, UI sharpness/size and live shimmer. F9 once per scene collects execution

@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE4.18 Render Integration"
+  short_description: "Use matched UE4.18 source and AC7 native hook evidence"
+  default_prompt: "Use $ue418-render-integration to compare this render issue with the matched 4.18.3 source and AC7 hook evidence."
