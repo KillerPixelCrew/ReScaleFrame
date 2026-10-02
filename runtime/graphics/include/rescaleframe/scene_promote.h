@@ -27,13 +27,15 @@
 
    The intervention is four substitutions and a scale:
 
-     - the composite becomes an output resolution texture of the same format, so everything drawn
-       into it lands at output resolution;
+     - the composite becomes an output resolution texture of the same format after its single
+       target post-process binding. Its allocation can be a GBuffer earlier in the frame, so reads
+       and writes before that gate retain the game's original surface;
      - every ui target does too. The quads are drawn with the game's own render resolution viewport,
        which the frame tap scales while a promoted target is bound, so they rasterize at output
        resolution from their 1920x1080 sources rather than being squashed to render resolution and
        stretched back out by the last draw. This is what makes the interface sharp;
-     - every chain target does too. An intermediate between the tonemap and the interface composite
+     - every chain target does too, after the same composite gate. An intermediate between the
+       tonemap and the interface composite
        that stays at render resolution downsamples the promoted composite back to render resolution
        and the sharpness of the scene is lost on the way to the back buffer. Promoting the composite
        alone was game-tested on 7 September and made the picture cleaner without making it sharper,

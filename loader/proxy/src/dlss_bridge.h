@@ -9,8 +9,15 @@
 #define RSF_DLSS_BRIDGE_H
 
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/game_renderer.h>
 
 typedef void (*rsf_bridge_log_fn)(void* user, const char* message);
+
+/* Native game-controller lifecycle. Preparation belongs before graphics activation. */
+int rsf_bridge_native_owned(void);
+int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
+                            rsf_bridge_log_fn log, void* log_user);
+
 
 /* Acquire the game's device, start the backend, and begin watching frames.
 
@@ -48,6 +55,7 @@ void rsf_bridge_toggle_reinsert(void);
 
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
+rsf_observer_present_event_fn rsf_bridge_present_event_hook(void);
 
 /* Ask for an action to run on the render thread at the next present, rather than on the caller's.
 
@@ -180,6 +188,9 @@ void rsf_bridge_set_briefing_capture(const char* prefix);
 
 void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess);
 int rsf_bridge_running(void);
+/* Request from a frontend thread. The graphics owner quiesces native producers and keeps the
+   backend/device alive until queued plugin work has drained; no work runs under DllMain. */
+void rsf_bridge_request_shutdown(void);
 
 /* The main view's render size as the last evaluated pass carried it, zero before the first. This is
    the view the reconstruction resolves, and the only one that may be jittered. */

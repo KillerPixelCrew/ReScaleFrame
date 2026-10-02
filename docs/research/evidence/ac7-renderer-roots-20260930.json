@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-30",
+  "program": "Ace7Game.exe.dump",
+  "image_base": "0x7ff741350000",
+  "executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "decrypted_image_sha256": "fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db",
+  "source_revision": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+  "functions": [
+    {
+      "name": "AC7_FPostProcessing_Process",
+      "rva": "0xffb900",
+      "evidence_length": 128,
+      "evidence_sha256": "18df999a9b8a797729292c8bcba3bb4cd7cc33361c0cca9b595c609bc7697faa",
+      "prologue": "4c8bdc55498dabe8fcffff4881ec10040000488b05e7c68b",
+      "evidence": "Both PostProcessing event-string references; four arguments; constructs final post-process colour; called once per view with GPostProcessing, RHICmdList, FViewInfo and velocity reference.",
+      "status": "source/native matched and named; read-only capture detour game-captured in process 220716",
+      "capture_guard_length": 18,
+      "capture_guard_bytes": "4c8bdc55498dabe8fcffff4881ec10040000"
+    },
+    {
+      "name": "AC7_FDeferredShadingSceneRenderer_Render",
+      "rva": "0xef5cc0",
+      "evidence_length": 128,
+      "evidence_sha256": "805f9a2e97ce0cb39a8dffaecfad39bcc94b6a87896177ad0a7e300c7ff1c2be",
+      "prologue": "405553565741564157488dac2458fdffff4881eca8030000",
+      "evidence": "Per-view loop calls the identified postprocess function with view stride 0x27c0 and global postprocess object, matching the stock deferred-renderer tail.",
+      "status": "source/native matched and named; no runtime hook installed"
+    },
+    {
+      "name": "AC7_UWidgetToTextureConverter_PrepareSlateWindow",
+      "rva": "0x4d69a0",
+      "evidence_length": 128,
+      "evidence_sha256": "711e7dde0f9f452b8a09b29ea1de5bc424c002df229ecdb90cba091a37cf1e7e",
+      "prologue": "4c8bdc554881ec10030000488b054e163e034833c4488984",
+      "evidence": "WidgetToTextureConverter.cpp reference, Widget +0x30, DrawSize +0x28, cached Slate widget/window creation and resize.",
+      "status": "source/native matched and named; read-only capture detour game-captured in process 220716",
+      "capture_guard_length": 11,
+      "capture_guard_bytes": "4c8bdc554881ec10030000"
+    },
+    {
+      "name": "AC7_UWidgetToTextureConverter_QueueWidgetDraw",
+      "rva": "0x4d6340",
+      "evidence_length": 128,
+      "evidence_sha256": "17c0f2b6f9f9cace8f927e051370c23a544a5b1eb659f01caf8df4da7551fe34",
+      "prologue": "405557488d6c24a84881ec580100000f29b4244001000048",
+      "evidence": "Calls converter preparation, rate-limits update, reads RenderTarget +0x48 and queues a draw using cached widget/window and DrawSize. Tick-like scheduling; exact original method name unknown.",
+      "status": "source/native matched and named; read-only capture detour game-captured in process 220716",
+      "capture_guard_length": 15,
+      "capture_guard_bytes": "405557488d6c24a84881ec58010000"
+    },
+    {
+      "name": "AC7_AddTemporalAA",
+      "rva": "0xff6ad0",
+      "evidence_length": 128,
+      "evidence_sha256": "713e860486d46aa65b178ce34923f40c40f95d38502440f967d3d04e2dea46fd",
+      "prologue": "48895c241048897c2418554154415541564157488bec4883",
+      "evidence": "Creates the 0xe0-byte main temporal pass, connects FinalOutput to input 0, one history node to inputs 1/2, velocity to input 3, and updates FinalOutput. Matches PostProcessing.cpp AddTemporalAA.",
+      "status": "source/native matched and named; read-only capture detour built and deployed; latest runtime validation pending",
+      "capture_guard_length": 19,
+      "capture_guard_bytes": "48895c241048897c2418554154415541564157"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessTemporalAA_Process",
+      "rva": "0x10aeca0",
+      "evidence_length": 128,
+      "evidence_sha256": "fa8ac3626f5dea00cc8e647207f349b1dab60c44b4bcdc17bd16b610acce68ef",
+      "prologue": "405553564154415541564157488dac24f0fdffff4881ec10",
+      "evidence": "AsyncTemporalAAEndFence string, render/compute branches, graph input/output descriptor reads and TemporalAAHistoryRT update. Shares the constructed main pass vtable with ComputeOutputDesc.",
+      "status": "source/native matched and named; read-only capture detour built and deployed; latest runtime validation pending",
+      "capture_guard_length": 20,
+      "capture_guard_bytes": "405553564154415541564157488dac24f0fdffff"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessTemporalAA_ComputeOutputDesc",
+      "rva": "0x1098f40",
+      "evidence_length": 128,
+      "evidence_sha256": "d8d195ff99e730559451e5fb7f761dadfc9f323fa6b8f6b49abff9604c7ef446",
+      "prologue": "48895c2408574883ec20488b01488bda33d2488bf9ff5008",
+      "evidence": "Copies input-0 descriptor, resets target flags, forces format 10, TemporalAA debug name, compute-UAV versus render-target flags. Matches the exact source operation sequence.",
+      "status": "source/native matched and named; no runtime hook installed"
+    },
+    {
+      "name": "AC7_FRenderingCompositePassContext_Process",
+      "rva": "0x10b3970",
+      "evidence_length": 128,
+      "evidence_sha256": "fdf6dff9a8b76350dbe902dff9a538fde768fd17232c7e111a38538d2fd91fd3",
+      "prologue": "40565741574883ec3065488b042558000000488bf1448b05",
+      "evidence": "Hidden-area mask, dependency gathering and recursive execution of required graph nodes. Matches RenderingCompositionGraph.cpp Process; two relevant native arguments.",
+      "status": "source/native matched and named; no runtime detour installed"
+    },
+    {
+      "name": "AC7_FRenderingCompositionGraph_RecursivelyGatherDependencies",
+      "rva": "0x10b3cc0",
+      "evidence_length": 128,
+      "evidence_sha256": "d69ba2e3648ad2bd6b9fa7e79bc5e325b2bbf566ae1a255e29700964a5c0d27b",
+      "prologue": "4c8bdc574881ec90000000488b052e4380024833c4488984",
+      "evidence": "Dependency recursion, reference counts, ComputeOutputDesc virtual slot +0x70 and descriptor copy into output. Owns graph output extent/format propagation before allocations.",
+      "status": "source/native matched and named; no runtime detour installed"
+    },
+    {
+      "name": "AC7_FRenderingCompositionGraph_RecursivelyProcess",
+      "rva": "0x10b3f10",
+      "evidence_length": 128,
+      "evidence_sha256": "12791f7403207d7d4114f7ee1eaea4db0df3db9e5b4a9b1b77089a9bdda0355f",
+      "prologue": "4c8944241848894c2408534883ec30488b1a4885db740c48",
+      "evidence": "Dependency recursion, processed flag +9, Context.Pass +0x10, invalid viewport +0x30/+0x38, Process virtual slot +0x28, and dependency pooled-target reference release. Three relevant native arguments.",
+      "status": "source/native matched and named; read-only capture detour built and deployed; latest runtime validation pending",
+      "capture_guard_length": 15,
+      "capture_guard_bytes": "4c8944241848894c2408534883ec30"
+    },
+    {
+      "name": "AC7_FRHICommandListExecutor_ExecuteInner",
+      "rva": "0x120dea0",
+      "evidence_length": 128,
+      "evidence_sha256": "6116c7647871ba26a1c9d72882a6028f14bec71aee5298935aaa1e842466f93b",
+      "prologue": "405553574156488d6c24c14881ecd8000000488b0547a16a",
+      "evidence": "Source assertions name ExecuteInner, task dispatch/waits, inlined DoExecute loop with command Root +0, Next +0, execute thunk +8, GCurrentCommand write and Reset.",
+      "status": "source/native matched and named; no runtime detour installed"
+    },
+    {
+      "name": "AC7_FSceneRenderer_PreVisibilityFrameSetup",
+      "rva": "0x112afa0",
+      "evidence_length": 128,
+      "evidence_sha256": "1ea502b3acfa6bd2d3ac8963a070e7ef8b7872b618837c95acb5d202e7780cf9",
+      "prologue": "40555341544157488dac2468ffffff4881ec98010000488b",
+      "evidence": "Renderer view loop, matching jitter AA-method gate at +0x153 (RVA 0x112b1f3), native projection-jitter and previous-view/history setup. Matches SceneVisibility.cpp; prototype not yet suitable for a detour.",
+      "status": "source/native matched and named; no runtime detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessTonemap_Process",
+      "rva": "0x10b0220",
+      "evidence_length": 128,
+      "evidence_sha256": "9efbcc79b96155480995b7abea1e7b9ba4319157bc99ef1280c7c0bc0d8d7a10",
+      "prologue": "405553565741554157488d6c24b84881ec48010000488b01",
+      "evidence": "Runtime graph output Tonemap, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessTonemap_ComputeOutputDesc",
+      "rva": "0x1098ff0",
+      "evidence_length": 128,
+      "evidence_sha256": "77c999e146b72cc8568ad5c47a242e521053e18c643be1160a6bb3aad79b1c70",
+      "prologue": "48895c2408574883ec40488b01488bda33d2488bf9ff5008",
+      "evidence": "Runtime graph output Tonemap, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessAA_Process",
+      "rva": "0xfbfe90",
+      "evidence_length": 128,
+      "evidence_sha256": "f5323f3076930f1e4d7020237f4395ad4e8c5474c3916584aef82bad18c40555",
+      "prologue": "4055564156488d6c24b94881ec00010000488bf24c8bf133",
+      "evidence": "Runtime graph output PostProcessAA, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessAA_ComputeOutputDesc",
+      "rva": "0xfb6f20",
+      "evidence_length": 128,
+      "evidence_sha256": "44d5bf22a964a85805c7ca59e00f2477c978aeb337edd14593a08509774ef912",
+      "prologue": "40534883ec20488b01488bda33d2ff5008488bc8e8577a0e",
+      "evidence": "Runtime graph output PostProcessAA, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessMaterial_Process",
+      "rva": "0x1004960",
+      "evidence_length": 128,
+      "evidence_sha256": "bb6fea339d0230594093a8383fc1c7e0b45ca155f3cf4f18b96bbf47c7221612",
+      "prologue": "4055535657415441554156488dac24e0feffff4881ec2002",
+      "evidence": "Runtime graph output PostProcessMaterial, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_FRCPassPostProcessMaterial_ComputeOutputDesc",
+      "rva": "0xff7b50",
+      "evidence_length": 128,
+      "evidence_sha256": "3ea1d92446532e21dcfe2658fc4cd7c5473db4eb8f25e8b150787a382223a4fc",
+      "prologue": "48895c2408574883ec40488b01488bfa33d2488bd9ff5008",
+      "evidence": "Runtime graph output PostProcessMaterial, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Stock-source class role.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_NimbusHUDCombine_Process",
+      "rva": "0xfcbc90",
+      "evidence_length": 128,
+      "evidence_sha256": "fd64be6a719fd4b7853d15133da48728f046fea4a59dc3f112bc65a29371bdd6",
+      "prologue": "40555356415541564157488dac24e8feffff4881ec180200",
+      "evidence": "Runtime graph output NimbusHUDCombine, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_NimbusHUDCombine_ComputeOutputDesc",
+      "rva": "0xfb7bc0",
+      "evidence_length": 128,
+      "evidence_sha256": "2c9f0f96b89094b2f3275b70f950855401944d7e3faaf0593bf2df8fc807ba77",
+      "prologue": "40534883ec20488b01488bda33d2ff5008488bc8e8b76d0e",
+      "evidence": "Runtime graph output NimbusHUDCombine, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_NimbusComposite_Process",
+      "rva": "0xfc86c0",
+      "evidence_length": 128,
+      "evidence_sha256": "87f1785b357e85fd766b55c879a9755c560047ad06726dea9815e946cfcde75d",
+      "prologue": "48895c24185556574154415541564157488dac24e0feffff",
+      "evidence": "Runtime graph output Nimbus, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_NimbusComposite_ComputeOutputDesc",
+      "rva": "0xfb7b50",
+      "evidence_length": 128,
+      "evidence_sha256": "a3e4bbe344f92683cbe23bd9f78d5930bbd9e53832bb1c3e336b39b1c75ab56f",
+      "prologue": "40534883ec20488b01488bda33d2ff5008488bc8e8276e0e",
+      "evidence": "Runtime graph output Nimbus, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_UnmodifiedTranslucency_Process",
+      "rva": "0x10037d0",
+      "evidence_length": 128,
+      "evidence_sha256": "e1f2bd2c41bf1a17b1e489b979869f96185c8099baf3089c14d9fbe46a198c45",
+      "prologue": "40534883ec20488b91a8000000488b5970488951704885d2",
+      "evidence": "Runtime graph output UnmodifiedTranslucency, virtual Process address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    },
+    {
+      "name": "AC7_UnmodifiedTranslucency_ComputeOutputDesc",
+      "rva": "0xff7a00",
+      "evidence_length": 128,
+      "evidence_sha256": "19b2360c4f02d83abbcb3cd3251fdeb98c25eff5403b505c06d34fd50e0ce11e",
+      "prologue": "40534883ec20488b89a8000000488bda488b01ff50100f10",
+      "evidence": "Runtime graph output UnmodifiedTranslucency, virtual ComputeOutputDesc address and descriptor linked to captured draw by RHI command in process 215904. Custom function name describes captured behavior; original method name unknown.",
+      "status": "runtime pass/vtable/draw association captured; renamed; no behavior detour installed"
+    }
+  ],
+  "research": "../ac7-renderer-roots-20260930.md",
+  "static_renderer_layout": {
+    "views_offset": "0xb8",
+    "count_offset": "0xc0",
+    "view_stride": "0x27c0",
+    "postprocess_call_rva": "0xef7d5f",
+    "g_postprocessing_rva": "0x3c31f00",
+    "status": "build-specific static control-flow match; view/RHI identity validation pending",
+    "correction": "Earlier 0x2e0/0x300 offsets misread wchar_t pointer arithmetic in decompilation. Native loop and constructor inspection establish byte offsets 0xb8/0xc0."
+  },
+  "pooled_resource_lifetime": {
+    "session": "motion-20260930-182527-205956-1",
+    "interval": 0,
+    "trace_sha256": "d412c0f774bc1642978873246abc2dffd8e14aa91a0ed84b6e63fa4743667f34",
+    "original_resource": "0x230893f4ee0",
+    "replacement_resource": "0x230899a2ca0",
+    "events": [
+      {
+        "draw_line": 7,
+        "qpc": 9385356192744,
+        "role": "base-pass MRT GBuffer write",
+        "slot": 2,
+        "actual": {
+          "resource": 2407484313312,
+          "dimension": 3,
+          "width": 800,
+          "height": 452,
+          "format": 90
+        }
+      },
+      {
+        "draw_line": 98,
+        "qpc": 9385356256257,
+        "role": "lighting read",
+        "ps_crc32c": "652391ba",
+        "slot": 0,
+        "requested": {
+          "slot": 0,
+          "resource": 2407484313312,
+          "width": 800,
+          "height": 452,
+          "format": 90
+        },
+        "actual": {
+          "resource": 2407490268320,
+          "dimension": 3,
+          "width": 1600,
+          "height": 900,
+          "format": 90
+        }
+      },
+      {
+        "draw_line": 110,
+        "qpc": 9385356269451,
+        "role": "reflection/environment read",
+        "ps_crc32c": "1ff7837d",
+        "slot": 1,
+        "requested": {
+          "slot": 1,
+          "resource": 2407484313312,
+          "width": 800,
+          "height": 452,
+          "format": 90
+        },
+        "actual": {
+          "resource": 2407490268320,
+          "dimension": 3,
+          "width": 1600,
+          "height": 900,
+          "format": 90
+        }
+      },
+      {
+        "draw_line": 148,
+        "qpc": 9385356928336,
+        "role": "later tonemap output write",
+        "ps_crc32c": "6bcbd787",
+        "slot": 0,
+        "actual": {
+          "resource": 2407490268320,
+          "dimension": 3,
+          "width": 1600,
+          "height": 900,
+          "format": 90
+        }
+      }
+    ],
+    "correction": "Composite and chain replacements wait for a single-target composite gate; MRT writes and earlier reads remain native. Gate callback runs once per binding.",
+    "validation": "Windows MSVC Release synthetic regression passed; user confirms lighting/reflections restored with the 19:09 deployment. New jitter/shimmer reported; complete image-quality validation remains open."
+  },
+  "main_temporal_graph": {
+    "vtable_rva": "0x2ac6a90",
+    "allocation_size": "0xe0",
+    "final_output_context_offset": "0x28",
+    "graph_build_rva": "0xff6ad0",
+    "process_rva": "0x10aeca0",
+    "output_desc_rva": "0x1098f40",
+    "status": "static graph/vtable/source match; node and resource lifetime runtime validation pending"
+  },
+  "language": "x86:LE:64:default",
+  "rhi_commands": {
+    "executor_rva": "0x120dea0",
+    "current_command_rva": "0x3c78358",
+    "current_command_write_rva": "0x120e67c",
+    "current_command_write_bytes": "488905d59ca602",
+    "command_list_root_offset": "0x0",
+    "command_list_tail_link_offset": "0x8",
+    "command_list_uid_offset": "0x18",
+    "command_next_offset": "0x0",
+    "command_execute_offset": "0x8",
+    "association": "1119 sampled draw/dispatch associations validated in nine completed process-215904 sessions. Preserves captured pass/view/family/native frame and matches actual shader roles. Production coverage for all queues, resets, sublists and Present remains unvalidated.",
+    "status": "sampled game-capture validated; not installed as production SR/frame identity"
+  },
+  "latest_capture_evidence": "ac7-temporal-instability-20260930.json"
+}

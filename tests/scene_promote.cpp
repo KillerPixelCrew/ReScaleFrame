@@ -87,8 +87,8 @@ const rsf_frame_tap_substitution* entry_for(const rsf_frame_tap_plan& plan, void
 }
 
 // A promoted surface is both written and read at output resolution, so its entry carries both
-// views and is not gated.
-void check_promoted(const rsf_frame_tap_plan& plan, void* texture, const char* what)
+// views. Post-process allocations may alias earlier GBuffers and must be phase gated.
+void check_promoted(const rsf_frame_tap_plan& plan, void* texture, const char* what, void* gate = nullptr)
 {
     const rsf_frame_tap_substitution* item = entry_for(plan, texture);
     std::string missing = std::string("The plan must name the ") + what + ".";
@@ -98,9 +98,9 @@ void check_promoted(const rsf_frame_tap_plan& plan, void* texture, const char* w
     }
     std::string views = std::string("The ") + what + " is written and read, so it needs both views.";
     check(item->render_view != nullptr && item->shader_view != nullptr, views.c_str());
-    std::string gate = std::string("The ") + what +
-                       " must be substituted from the start of the frame, not gated.";
-    check(item->after_target == nullptr, gate.c_str());
+    std::string gate_message = std::string("The ") + what +
+                       " must use its requested lifetime gate.";
+    check(item->after_target == gate, gate_message.c_str());
 }
 
 } // namespace
@@ -209,10 +209,10 @@ int main()
     check(plan.items[plan.count - 1].texture == scene_color,
           "Scene colour comes last, after everything it is gated behind.");
 
-    check_promoted(plan, composite, "composite");
+    check_promoted(plan, composite, "composite", composite);
     check_promoted(plan, layer_a, "first interface layer");
     check_promoted(plan, layer_b, "second interface layer");
-    check_promoted(plan, chain, "chain target");
+    check_promoted(plan, chain, "chain target", composite);
 
     const rsf_frame_tap_substitution* scene_item = entry_for(plan, scene_color);
     check(scene_item != nullptr, "The plan must name scene colour.");

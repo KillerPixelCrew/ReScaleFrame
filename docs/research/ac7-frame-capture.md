@@ -54,11 +54,11 @@ Raw zero means unwritten, while encoded zero motion is near 0.5. Test the sentin
 | Clear-sky flight | 4.7–8.3% | Mainly aircraft |
 | `ac7_frame36073`, `ac7_frame36392` | 52%, 58% | Ground visible |
 
-The remaining 83.6% of the menu-pan texture is exactly zero despite camera movement. The field therefore does not provide dense camera motion. Stock UE4's temporal consumer computes camera displacement from depth and `ClipToPrevClip`, then replaces it at written velocity pixels. Whether AC7's written vectors already contain camera movement must be checked before adding any camera contribution to them.
+The remaining 83.6% of the menu-pan texture is exactly zero despite camera movement. The field therefore does not provide dense camera motion. Stock UE4's temporal consumer computes camera displacement from depth and `ClipToPrevClip`, then replaces it at written velocity pixels. That capture alone left the meaning of written vectors unresolved. The later native shader inspection establishes total camera/object motion for the ordinary path, so those vectors must replace camera displacement rather than have it added again.
 
 The current compute pass decodes into float motion and uses a separate invalid sentinel so valid zero motion remains distinguishable. The DLSS adapter submits `cameraMotionIncluded = false`, the decoded sentinel, depth, and the engine transform for Streamline's resolve. Another dense-motion pass is optional work for diagnostics or backends that need it, not a prerequisite for this DLSS path.
 
-Remaining checks: clip versus UV/pixel units, temporal direction, vertical sign, jitter inclusion, dilation, sky depth, and independently moving geometry. The Rust conversion uses half the viewport extent and a vertical flip; the live path defaults scales to one. See [the motion todo](../implementation.md#ac7-motion-and-velocity-improvements).
+The [30 September shader investigation](ac7-motion-vectors.md) establishes current-minus-previous NDC for the ordinary native velocity producer, including camera movement at written pixels. Its custom projection branch still needs identification. Captured matrices also confirm unjittered `ClipToPrevClip` in the sampled briefing views. The deployed Streamline resolve and live `(1, 1)` scales expose a conversion discrepancy; no new game comparison has tested a correction. Remaining checks include flight displacement, the custom jitter convention, dilation, sky depth and independently moving/deforming geometry. See [the motion todo](../implementation.md#ac7-motion-and-velocity-improvements).
 
 ## Jitter and render scale
 

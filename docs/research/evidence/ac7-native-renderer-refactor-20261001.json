@@ -1,0 +1,1055 @@
+{
+  "schema_version": 1,
+  "hangar_explicit_null_binding": {
+    "capture": "motion-20261001-213540-44968-1",
+    "shader_sha1": "8446d04c917833569c768094e8c051c1c0028a4e",
+    "slot": 1,
+    "expected_layout_hash": "0x0ab00bb1",
+    "producer_rvas": [
+      "0xe9b880",
+      "0xedb9d0",
+      "0x18d21c0",
+      "0xf4c620"
+    ],
+    "evidence": "Explicit null queued before non-null policy/material buffers and indexed draw",
+    "status": "CPU-origin probes built/installed; crash not fixed"
+  },
+  "direct_ps_binding_trace": {
+    "pixel_setter_rva": "0xe39520",
+    "pixel_setter_expected_hex": "48895c2410555657415641574883ec20",
+    "pixel_commit_rva": "0xe1f8d0",
+    "pixel_commit_expected_hex": "48895c242055415641574883ec300fb7",
+    "context_uniform_offset": "0x3f90",
+    "dirty_offset": "0x40e6",
+    "diagnostics": "128-entry bind ring; missing layout hash and preceding16 writes",
+    "status": "Built diagnostic correction, repeated crash unresolved"
+  },
+  "crash_blocker_followup": {
+    "crash_rva": "0xe204d6",
+    "confirmed_sr_input": [
+      533,
+      300
+    ],
+    "scaled_view_producer_rva": "0x116ea00",
+    "scaled_view_expected_hex": "4c8bdc55565741564881ec780d000048",
+    "pixel_view_probe_rva": "0xe97d80",
+    "pixel_view_probe_expected_hex": "48895c240848896c2410488974241857",
+    "uniform_lifetime_evidence": "UE FRHICommandSetShaderUniformBuffer and AC7 enqueue helper0xe9b880 store borrowed raw RHI uniform pointers",
+    "correction": "Ensure scaled buffers before material selection and retain generated buffers until queued RHI completion",
+    "validation": "MSVC Release built; crash retest pending"
+  },
+  "ultra_performance_retest": {
+    "ui_status": "User-confirmed all UI fixed",
+    "refused_active_view": [
+      536,
+      300
+    ],
+    "required_backend_extent": [
+      533,
+      300
+    ],
+    "output_extent": [
+      1600,
+      900
+    ],
+    "correction": "Exact active rectangles; separate padded engine allocation and region-local SR inputs",
+    "crash_rva": "0xe204d6",
+    "crash_evidence": "Null R8 PS uniform buffer, index1; exact upstream binder not established",
+    "ui_selector_correction": "Scoped normal and scaled-view uniform references supplied/restored together",
+    "validation": "Windows MSVC Release built; game retest pending"
+  },
+  "unmodified_ui_producer": {
+    "hooks": [
+      "0x1097d20",
+      "0x109d320",
+      "0x1168d40"
+    ],
+    "native_depth_helpers": [
+      "0x109e0d0",
+      "0xee93f0"
+    ],
+    "depth_pool_offset": "0x1b8",
+    "implementation": "Scoped output-size native rect/buffer, engine-resampled depth and unjittered uniform; original state restored after native resolve",
+    "validation": "Windows MSVC Release built; AC7 retest pending",
+    "cloud_status": "Unresolved; bounded consecutive-frame diagnostics added"
+  },
+  "ui_branch_allocation": {
+    "capture": "motion-20261001-200740-43352-11",
+    "scene_input": [
+      928,
+      524
+    ],
+    "sr_output": [
+      1600,
+      900
+    ],
+    "ui_branch_input_output": [
+      928,
+      524
+    ],
+    "producer_rva": "0x10be2b0",
+    "expected_entry_hex": "48895c2408574883ec2065488b042558",
+    "validation": "Capture confirms original resolution loss; native allocation correction MSVC built, game retest pending"
+  },
+  "launch_crash_correction": {
+    "plugin_rva": "0x2298",
+    "invalid_read_address": "0x2",
+    "cause": "VelocityRT is IPooledRenderTarget; calling its slot 0x30 as FRHITexture GetNativeResource returned a reference count",
+    "correction": "node_process resolves the shader-readable pooled texture before retaining the native D3D resource",
+    "validation": "Windows MSVC Release built; matching DLLs deployed and overlay preflight passed; AC7 relaunch pending"
+  },
+  "date": "2026-10-01",
+  "executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "dump_sha256": "fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db",
+  "source_revision": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+  "validation": "MSVC Release and Windows D3D11 WARP native graph/queue tests; AC7 validation pending",
+  "functions": [
+    {
+      "rva": "0x10b0220",
+      "name": "AC7_FRCPassPostProcessTonemap_Process",
+      "expected_entry_hex": "405553565741554157488d6c24b84881",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfbfe90",
+      "name": "AC7_FRCPassPostProcessAA_Process",
+      "expected_entry_hex": "4055564156488d6c24b94881ec000100",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x1004960",
+      "name": "AC7_FRCPassPostProcessMaterial_Process",
+      "expected_entry_hex": "4055535657415441554156488dac24e0",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfcbc90",
+      "name": "AC7_FRCPassPostProcessNimbusHUDCombine_Process",
+      "expected_entry_hex": "40555356415541564157488dac24e8fe",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfc86c0",
+      "name": "AC7_FRCPassPostProcessNimbus_Process",
+      "expected_entry_hex": "48895c24185556574154415541564157",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x10b1650",
+      "name": "AC7_FRCPassPostProcessUpscale_Process",
+      "expected_entry_hex": "40555657488d6c24f04881ec10010000",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x1098ff0",
+      "name": "AC7_FRCPassPostProcessTonemap_ComputeOutputDesc",
+      "expected_entry_hex": "48895c2408574883ec40488b01488bda",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfb6f20",
+      "name": "AC7_FRCPassPostProcessAA_ComputeOutputDesc",
+      "expected_entry_hex": "40534883ec20488b01488bda33d2ff50",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xff7b50",
+      "name": "AC7_FRCPassPostProcessMaterial_ComputeOutputDesc",
+      "expected_entry_hex": "48895c2408574883ec40488b01488bfa",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfb7bc0",
+      "name": "AC7_FRCPassPostProcessNimbusHUDCombine_ComputeOutputDesc",
+      "expected_entry_hex": "40534883ec20488b01488bda33d2ff50",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xfb7b50",
+      "name": "AC7_FRCPassPostProcessNimbus_ComputeOutputDesc",
+      "expected_entry_hex": "40534883ec20488b01488bda33d2ff50",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x10991e0",
+      "name": "AC7_FRCPassPostProcessUpscale_ComputeOutputDesc",
+      "expected_entry_hex": "48895c2408574883ec20488b01488bda",
+      "kind": "hook"
+    },
+    {
+      "rva": "0xffb900",
+      "name": "AC7_FPostProcessing_Process",
+      "expected_entry_hex": "4c8bdc55498dabe8fcffff4881ec1004",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x10b3970",
+      "name": "AC7_FRenderingCompositePassContext_Process",
+      "expected_entry_hex": "40565741574883ec3065488b04255800",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x112afa0",
+      "name": "AC7_FSceneRenderer_PreVisibilityFrameSetup",
+      "expected_entry_hex": "40555341544157488dac2468ffffff48",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x1113080",
+      "name": "AC7_FSceneRenderer_Construct",
+      "expected_entry_hex": "48895c24204c8944241848894c240855",
+      "kind": "hook"
+    },
+    {
+      "rva": "0x19b6fe0",
+      "name": "AC7_FSceneViewFamily_ComputeFamilySize",
+      "expected_entry_hex": "4883ec288b41084532c00f57d24c8bd9",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff742d06fe0 from 'FUN_7ff742d06fe0' to 'AC7_FSceneViewFamily_ComputeFamilySize'",
+        "warnings": [
+          "Function name 'AC7_FSceneViewFamily_ComputeFamilySize' — main part 'FSceneViewFamily_ComputeFamilySize' is not PascalCase. Expected: FsceneviewfamilyComputefamilysize",
+          "Function name 'AC7_FSceneViewFamily_ComputeFamilySize' — main part 'FSceneViewFamily_ComputeFamilySize' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0xe93670",
+      "name": "AC7_FRenderingCompositionGraph_RegisterPass",
+      "expected_entry_hex": "48895c24084889742410574883ec2048",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff7421e3670 from 'FUN_7ff7421e3670' to 'AC7_FRenderingCompositionGraph_RegisterPass'",
+        "warnings": [
+          "Function name 'AC7_FRenderingCompositionGraph_RegisterPass' — main part 'FRenderingCompositionGraph_RegisterPass' is not PascalCase. Expected: FrenderingcompositiongraphRegisterpass",
+          "Function name 'AC7_FRenderingCompositionGraph_RegisterPass' — main part 'FRenderingCompositionGraph_RegisterPass' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0x10b4870",
+      "name": "AC7_FRenderingCompositeOutput_RequestSurface",
+      "expected_entry_hex": "48895c241048896c2418488974242057",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff742404870 from 'FUN_7ff742404870' to 'AC7_FRenderingCompositeOutput_RequestSurface'",
+        "warnings": [
+          "Function name 'AC7_FRenderingCompositeOutput_RequestSurface' — main part 'FRenderingCompositeOutput_RequestSurface' is not PascalCase. Expected: FrenderingcompositeoutputRequestsurface",
+          "Function name 'AC7_FRenderingCompositeOutput_RequestSurface' — main part 'FRenderingCompositeOutput_RequestSurface' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0x109dc70",
+      "name": "AC7_FSceneRenderTargets_GetGlobal",
+      "expected_entry_hex": "488d0599cfb902c3cccccccccccccccc",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff7423edc70 from 'FUN_7ff7423edc70' to 'AC7_FSceneRenderTargets_GetGlobal'",
+        "warnings": [
+          "Function name 'AC7_FSceneRenderTargets_GetGlobal' — main part 'FSceneRenderTargets_GetGlobal' is not PascalCase. Expected: FscenerendertargetsGetglobal",
+          "Function name 'AC7_FSceneRenderTargets_GetGlobal' — main part 'FSceneRenderTargets_GetGlobal' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0x1127a20",
+      "name": "AC7_FViewInfo_InitRHIResources",
+      "expected_entry_hex": "48895c2420555657488d6c24b94881ec",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff742477a20 from 'FUN_7ff742477a20' to 'AC7_FViewInfo_InitRHIResources'",
+        "warnings": [
+          "Function name 'AC7_FViewInfo_InitRHIResources' — main part 'FViewInfo_InitRHIResources' is not PascalCase. Expected: FviewinfoInitrhiresources",
+          "Function name 'AC7_FViewInfo_InitRHIResources' — main part 'FViewInfo_InitRHIResources' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0xff9af0",
+      "name": "AC7_FViewMatrices_HackRemoveTemporalAAProjectionJitter",
+      "expected_entry_hex": "40534883ec60f30f104120488bd9f30f",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff742349af0 from 'FUN_7ff742349af0' to 'AC7_FViewMatrices_HackRemoveTemporalAAProjectionJitter'",
+        "warnings": [
+          "Function name 'AC7_FViewMatrices_HackRemoveTemporalAAProjectionJitter' — main part 'FViewMatrices_HackRemoveTemporalAAProjectionJitter' is not PascalCase. Expected: FviewmatricesHackremovetemporalaaprojectionjitter",
+          "Function name 'AC7_FViewMatrices_HackRemoveTemporalAAProjectionJitter' — main part 'FViewMatrices_HackRemoveTemporalAAProjectionJitter' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0x11346d0",
+      "name": "AC7_FViewInfo_SetupUniformBufferParameters",
+      "expected_entry_hex": "488bc455565741564157488d68b94881",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff7424846d0 from 'FUN_7ff7424846d0' to 'AC7_FViewInfo_SetupUniformBufferParameters'",
+        "warnings": [
+          "Function name 'AC7_FViewInfo_SetupUniformBufferParameters' — main part 'FViewInfo_SetupUniformBufferParameters' is not PascalCase. Expected: FviewinfoSetupuniformbufferparameters",
+          "Function name 'AC7_FViewInfo_SetupUniformBufferParameters' — main part 'FViewInfo_SetupUniformBufferParameters' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0xde5cf0",
+      "name": "AC7_RHIUniformBufferRef_MoveAssign",
+      "expected_entry_hex": "40534883ec20488bd9483bca0f84be00",
+      "kind": "guarded_helper",
+      "ghidra_rename_result": {
+        "status": "success",
+        "message": "Success: Renamed function at FUN_7ff742135cf0 from 'FUN_7ff742135cf0' to 'AC7_RHIUniformBufferRef_MoveAssign'",
+        "warnings": [
+          "Function name 'AC7_RHIUniformBufferRef_MoveAssign' — main part 'RHIUniformBufferRef_MoveAssign' is not PascalCase. Expected: RhiuniformbufferrefMoveassign",
+          "Function name 'AC7_RHIUniformBufferRef_MoveAssign' — main part 'RHIUniformBufferRef_MoveAssign' contains underscores. Use PascalCase after the module prefix."
+        ]
+      }
+    },
+    {
+      "rva": "0x4d6340",
+      "name": "AC7_UWidgetToTextureConverter_QueueRender",
+      "kind": "hook",
+      "expected_entry_hex": "405557488d6c24a84881ec580100000f",
+      "validation": "dump/source inspected, named and saved in live AC7 Ghidra project; MSVC built; game pending"
+    },
+    {
+      "rva": "0x4d6660",
+      "name": "AC7_UWidgetToTextureConverter_PrepareTargets",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2408574883ec5080797800488b",
+      "validation": "dump/source inspected, named and saved in live AC7 Ghidra project; MSVC built; game pending"
+    },
+    {
+      "rva": "0x1380d80",
+      "name": "AC7_FWidgetRenderer_DrawScaledWindow",
+      "kind": "hook",
+      "expected_entry_hex": "488bc44889580848897010488978184c",
+      "validation": "dump/source inspected, named and saved in live AC7 Ghidra project; MSVC built; game pending"
+    },
+    {
+      "rva": "0x1ab0200",
+      "name": "AC7_UTextureRenderTarget2D_InitCustomFormat",
+      "kind": "hook",
+      "expected_entry_hex": "0fb644242883e0018991d00000004489",
+      "validation": "dump/source inspected, named and saved in live AC7 Ghidra project; MSVC built; game pending",
+      "purpose": "scoped game-instance canvas initialization and private/widget target format creation"
+    },
+    {
+      "rva": "0x1ab7dc0",
+      "name": "AC7_UTextureRenderTarget2D_UpdateResourceImmediate",
+      "kind": "helper",
+      "expected_entry_hex": "48895c2410574883ec4048837970000f",
+      "validation": "dump/source inspected, named and saved in live AC7 Ghidra project; MSVC built; game pending"
+    },
+    {
+      "rva": "0xfcf880",
+      "name": "AC7_NimbusHUDCombine_SetShaderParameters",
+      "kind": "helper",
+      "expected_entry_hex": "488bc45553574155488d68a14881ec88",
+      "validation": "all eight HUD variants call this helper; view+13a0/resource+70/texture+30 binding mapped in live Ghidra; game pending"
+    },
+    {
+      "rva": "0x3a3f70",
+      "name": "AC7_FEngineLoop_Tick",
+      "kind": "hook",
+      "expected_entry_hex": "488bc448895810488970185557415441",
+      "validation": "previous CPU/handoff source mapping, live Ghidra rechecked; MSVC built; hook runtime pending"
+    },
+    {
+      "rva": "0x113a0c0",
+      "name": "AC7_FSceneRenderer_WaitForTasksClearSnapshotsAndDelete",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2408574883ec20488bfa488bd9",
+      "validation": "previous CPU/handoff source mapping, live Ghidra rechecked; MSVC built; hook runtime pending"
+    },
+    {
+      "rva": "0xcea130",
+      "name": "AC7_FSlateApplication_PollGameDeviceState",
+      "kind": "hook",
+      "expected_entry_hex": "83b9b001000000488bd17522f20f1082",
+      "validation": "previous CPU/handoff source mapping, live Ghidra rechecked; MSVC built; hook runtime pending"
+    },
+    {
+      "rva": "0x3cd130",
+      "name": "AC7_UNimbusGameInstance_Init",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2410488974241848897c242055",
+      "validation": "live Ghidra decompiled/named/saved; SDK fields and allocator hard-coded1920x1080 matched; MSVC built; game pending"
+    },
+    {
+      "rva": "0x923e60",
+      "name": "AC7_UNimbusGameInstance_GetPrivateStaticClass",
+      "kind": "helper",
+      "expected_entry_hex": "4c8bdc4883ec78488b050ae115034885",
+      "validation": "live Ghidra decompiled/named/saved; SDK fields and allocator hard-coded1920x1080 matched; MSVC built; game pending"
+    },
+    {
+      "rva": "0x3c7a30",
+      "name": "AC7_UNimbusGameEngine_Tick",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2408574883ec300f2974242041",
+      "validation": "live Ghidra named/saved, GameEngine.cpp/vtable source match; MSVC built only"
+    },
+    {
+      "rva": "0x1781e80",
+      "name": "AC7_UGameEngine_Tick",
+      "kind": "hook",
+      "expected_entry_hex": "488bc444884018488948085553565741",
+      "validation": "live Ghidra named/saved, GameEngine.cpp/vtable source match; MSVC built only"
+    },
+    {
+      "rva": "0x177cdd0",
+      "name": "AC7_UGameEngine_RedrawViewports",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2408574883ec20488bd90fb6fa",
+      "validation": "live Ghidra named/saved, GameEngine.cpp/vtable source match; MSVC built only"
+    },
+    {
+      "rva": "0x1ac3600",
+      "name": "AC7_FViewport_Draw",
+      "kind": "hook",
+      "expected_entry_hex": "4055565741544155488dac2470feffff",
+      "validation": "live Ghidra named/saved, UnrealClient.cpp matched, MSVC built only"
+    },
+    {
+      "rva": "0x1345310",
+      "name": "AC7_FSlateRHIRenderer_DrawWindowsPrivate",
+      "kind": "hook",
+      "expected_entry_hex": "488bc4488950105553488da888feffff",
+      "validation": "live Ghidra/source mapped and names saved; MSVC built; game pending"
+    },
+    {
+      "rva": "0x133c6c0",
+      "name": "AC7_SlateWindowDrawTask_Allocate",
+      "kind": "hook",
+      "expected_entry_hex": "4056574883ec4848895c2440488bf148",
+      "validation": "live Ghidra/source mapped and names saved; MSVC built; game pending"
+    },
+    {
+      "rva": "0x1346520",
+      "name": "AC7_SlateWindowDrawTask_Execute",
+      "kind": "hook",
+      "expected_entry_hex": "48895c241048896c2418488974242057",
+      "validation": "live Ghidra/source mapped and names saved; MSVC built; game pending"
+    },
+    {
+      "rva": "0x1343660",
+      "name": "AC7_FSlateRHIRenderer_DrawWindowRenderThread",
+      "kind": "hook",
+      "expected_entry_hex": "4c8bdc555357498dab08faffff4881ec",
+      "validation": "live Ghidra/source mapped and names saved; MSVC built; game pending"
+    },
+    {
+      "rva": "0x1351e10",
+      "name": "AC7_FSlateElementPS_BindTextureAndSampler",
+      "kind": "hook",
+      "expected_entry_hex": "48895c2418555657415541564883ec20",
+      "validation": "live Ghidra/source argument/command match, named/saved, MSVC built only"
+    }
+  ],
+  "native_layout": {
+    "renderer_views": "0xb8",
+    "renderer_view_count": "0xc0",
+    "view_stride": "0x27c0",
+    "view_family": "0x0",
+    "view_state": "0x8",
+    "view_render_rect": "0x70",
+    "view_output_rect": "0x80",
+    "view_aa_mode": "0x13c0",
+    "cached_shader_parameters": "0x1418, 0xcf0 bytes",
+    "scene_buffer_size": "0x208",
+    "scene_depth_pool": "0x60",
+    "command_list": "context+0x28",
+    "descriptor_size": "0x50",
+    "pooled_output": "0x50",
+    "dependencies": "0x58",
+    "native_view_frame": "family+0x68",
+    "native_uniform_handle": "view+0x10",
+    "uniform_create": "GRHI at RVA 0x3c783d0, virtual +0xf0",
+    "uniform_layout_rva": "0x3caa6c8",
+    "uniform_usage": "1, single-frame",
+    "cache_lifetime": "owned cache remains allocated; shader parameters restored after CPU graph; RHI uniform refs moved through native assignment",
+    "sr_native_node": "two input refs at +0x10/+0x20; pooled output +0x30; bilinear quality +0xb8; custom dependencies finish tonemap auxiliary branches before resizing"
+  },
+  "deployment": {
+    "date": "2026-10-01",
+    "matching_files_sha256": {
+      "dinput8.dll": "83001bd3f59fb28dca87ff252f9c388bbdb0d0916b724d73231eb88850923be1",
+      "ReScaleFrame.Game.AC7.dll": "d6f1e60916512d7708b1c6978642199b18913549fbd6bfbc7eb448fac22cb3f5",
+      "rescaleframe_overlay.dll": "cc96ca792743dd79d0b57b3ae1c9dd7f294c3b616becb6436af35e542b861a6f"
+    },
+    "backup": ".local/deploy-backups/ac7-pair-20261001-031408-000",
+    "overlay_preflight": "real ABI 4 panel Insert/draw/resize test passed during explicit deployment",
+    "game_validation": "not run"
+  },
+  "ui_producer_continuation": {
+    "ownership": "queue-local converter scope, allocator before rasterization, logical Slate geometry preserved",
+    "density_policy": "integer ceiling of whole output divided by measured 1920x1080 HUD design canvas; minimum 1, maximum 8, target extents capped at 16384",
+    "excluded": "borrowed/shared converters and widget draws outside the active converter queue",
+    "open": "live DPI, glow radius, borrowed target producer ownership and native UI isolation for FG",
+    "validation": "focused MSVC Release build only; no new tests; not deployed"
+  },
+  "current_game_abi_version": 10,
+  "native_ui_composition": {
+    "status": "source_implemented_msvc_release_built_game_pending",
+    "ui_source": "view+0x13a0 UTextureRenderTarget2D; resource+0x70, texture+0x30; D3D ref leased until native pass end",
+    "ownership": "demand-driven runtime-owned GPU copies before/after HUD pass, copied native identity; SDK ABI3 ui_input",
+    "capture": "F9 requests two scopes and writes native_pre_hud/native_ui_raster/native_composed through existing dump path",
+    "not_proven": "UI alpha/effect conventions, final presentation identity and simulation/input linkage for FG"
+  },
+  "renderer_source_identity": {
+    "assignment": "first PollGameDeviceState inside outer Tick; per-session monotonically increasing64bit source ID",
+    "binding": "renderer constructor on source thread to embedded family owner; bounded512entries, no eviction",
+    "consumption": "copy source_frame_id/submission_id into native SR/HUD packets before renderer retirement",
+    "retirement": "unbind at retirement-helper entry before delete/address reuse; entry guard retains DLL through waits",
+    "open": "actual polling/simulation marker validation, final presentation association, runtime sequencing with vendor latency/FG"
+  },
+  "shared_ui_producer": {
+    "ownership": "NimbusGameInstance Init allocates HUDWidgetRenderTexture1f0 and StereoUIRenderTexture1f8 at1920x1080, B8G8R8A8, linear gamma",
+    "allocation": "root InitCustomFormat interception only inside verified game-instance initializer; shared converter queue updates selected target before rasterization",
+    "logical_layout": "verified1920x1080 shared canvas restored before PrepareWindow; physical DrawWindow size andScale adjusted together",
+    "lifetime": "world OwningGameInstance140 plus native class hierarchy check; no retained UObject pointers; repaint target IDs scoped to outer Tick",
+    "refresh": "native dirty byte for contributors queued in the replacement input frame; normal RefreshFPS resumes thereafter",
+    "validation": "MSVC Release build only; dormant contributors, stereo/DPI/glow and output transitions still need game validation"
+  },
+  "ownership_audit": {
+    "pool_retirement": "native render owner drains before/after retirement helper, including final synchronously executed RHI lease releases",
+    "composition": "explicit primary flag, paired family/source/submission/native/scope/rect matching; attempts consume bounded demand",
+    "validation": "focused MSVC Release build, no new tests, not deployed/game-tested"
+  },
+  "simulation_boundary": {
+    "global_engine_rva": "0x3cbbc28",
+    "nimbus_tick_slot": "0x285ca88",
+    "nimbus_redraw_slot": "0x285cc38",
+    "behavior": "actual GEngine derived/base update scope, Redraw entry after world/viewport updates; constructor-bound AFTER_SIMULATION flag",
+    "validation": "MSVC build only; not vendor markers or final Present proof"
+  },
+  "cpu_event_handoff": {
+    "abi": 5,
+    "token": "reserved before original outer Tick; input association established at native Poll",
+    "stages": [
+      "outer_begin",
+      "input_sample",
+      "simulation_begin",
+      "simulation_end_before_redraw",
+      "outer_end_cpu_only"
+    ],
+    "clock": "QPC ticks with explicit frequency",
+    "ownership": "runtime bounded128 CPU records; no live eviction or GPU/presentation validity; optional real-time consumer outside lock",
+    "capture": "F9 native_identity JSON pairs renderer IDs with exact CPU record or declares it missing",
+    "validation": "MSVC build only, not deployed, no new tests/runtime validation; vendor sink not attached"
+  },
+  "viewport_provenance": {
+    "abi": 6,
+    "producer": "actual GEngine.GameViewport720 -> native viewporta0; source Tick scoped FViewportDraw",
+    "copy": "opaque viewport_key at renderer construction, queued packets/runtime snapshots/F9 identity JSON",
+    "limits": "not the final Slate window/DXGI swapchain; original bShouldPresent unchanged",
+    "next": "Slate draw-buffer/window queued ownership and native RHI viewport mapping",
+    "validation": "MSVC built only, no tests/deployment/game run"
+  },
+  "pass_completion_correction": {
+    "abi": 7,
+    "semantics": "separate completed-ticket callbacks from parent-restoration diagnostics; lease resolve at begin and end before release",
+    "rationale": "public before/after pass contract differs from private scope-state callback; end resource publication may be later than begin",
+    "validation": "MSVC built, legacy state observer behavior unchanged; no tests/runtime validation"
+  },
+  "slate_window_trace": {
+    "draw_window_rva": "0x1343660",
+    "draw_windows_private_rva": "0x1345310",
+    "window_task_execute_rva": "0x1346520",
+    "allocator_lead_rva": "0x133c6c0",
+    "end_drawing_rva": "0x120c340",
+    "rhi_execute_lead_rva": "0x120dc20",
+    "task_fields": "renderer10,viewportInfo18,elementList20,window28,vsync30,clear31",
+    "viewport_rhi": "viewportInfo+70",
+    "validation": "live source/decompile inspected, four names saved; not hooked or runtime-validated"
+  },
+  "queued_window_implementation": {
+    "abi": 8,
+    "source_binding": "main game weak windowdf8/refe00 plus mainviewport; task allocation before enqueue; consumed before task reuse",
+    "lifetime": "bounded512 CPU bindings, duplicate poison, no eviction; swapchain QI ref through native RHI window end",
+    "runtime": "thread-local window scope stack; canonical COM identity match at existing Present observer; mismatch clears state",
+    "unverified": [
+      "shipped virtual getter/layout at runtime",
+      "scene input agreement",
+      "Present flags/result/generated handling",
+      "Reflex/PCL consumer"
+    ],
+    "validation": "MSVC Release build only, no tests, not deployed"
+  },
+  "present_contract": {
+    "observer_abi": 7,
+    "game_abi": 8,
+    "events": "paired swapchain/interval/flags and returned HRESULT around original Present chain",
+    "tests": "DXGI_PRESENT_TEST bypasses legacy per-frame/graphics work; runtime ignores test events",
+    "counter": "S_OK non-test accepted calls only, not physical scanout/generated count",
+    "record": "copied numeric window/source identity plus result/QPC; no leased pointers retained after end",
+    "open": [
+      "scene-resource agreement",
+      "Present1/generated handling",
+      "vendor sleep/marker consumer"
+    ],
+    "validation": "MSVC Release build only, no new tests, not deployed"
+  },
+  "present1_implementation": {
+    "observer_abi": 8,
+    "game_abi": 8,
+    "method": "optional IDXGISwapChain1 slot22, same genuine/overlay-safe route, no new vtable fallback",
+    "forwarding": "original dirty/scroll parameters pointer, interval, flags and result preserved; shared recursion guard suppresses duplicate inner events",
+    "lifetime": "route published atomically before enable; in-flight Present count refuses uninstall; caller still quiesces graphics",
+    "validation": "MSVC build only, no tests/deployment/runtime coverage proof",
+    "open": [
+      "scene-resource agreement",
+      "vendor consumer",
+      "game Present1/overlay/generated behavior"
+    ]
+  },
+  "scene_window_declaration": {
+    "ownership": "bounded64 copied execution-thread primary composition identities; no GPU resources or capture demand",
+    "match": "exact session/source/viewport and unique completed post-update declaration; rechecked after Present",
+    "refusal": "second primary ambiguous; unmatched/incomplete/live modulo collision refuses",
+    "limits": "not exact sampled texture or full FG resource proof",
+    "validation": "MSVC build only, no tests/deployment/runtime validation"
+  },
+  "final_family_surface": {
+    "abi": 9,
+    "role": 10,
+    "producer": "native PostProcessing Process scope, primary family RenderTarget+20/getter8/RHI native getter30",
+    "lifetime": "D3D surface reference through queued begin/end; numeric identity afterward only",
+    "correction": "HUD intermediate replaced by full native postprocess completion for scene-window declaration",
+    "consumer_lead": "Slate DrawElements133ff40 named/saved, ordinary texture binding still to map",
+    "validation": "MSVC built only; source/shipped getter/sampling/late canvas still unvalidated; no tests/deployment"
+  },
+  "ordinary_slate_texture": {
+    "abi": 10,
+    "producer_filter": "exact numeric CPU final-surface declaration for source/viewport; no font/icon leases",
+    "consumer": "mapped ordinary PS binder texturearg3/samplerrefarg4/indexc0/countc2; original commands preserved",
+    "lifetime": "native D3D texture leased through queued binding end, runtime compares against completed final surface",
+    "present": "separate scene_texture_bound flag for exact window/source declaration",
+    "limits": "binding evidence only, other shader/material/custom paths and later draw validation incomplete",
+    "validation": "MSVC build, no tests/deployment/game run"
+  },
+  "hangar_recording_race": {
+    "question": "Why does fixed hangar camera pan enqueue null pixel View uniform?",
+    "approach": "Bounded CPU creator stack, Ghidra caller mapping against UE4.18.3, shared-view mutation review.",
+    "cpu_creator_rva": "0x18d21c0",
+    "caller_stack_rvas": [
+      "0x110dd39",
+      "0xec54d0",
+      "0xec8c31",
+      "0x1142863",
+      "0x1142d60",
+      "0x11584b8",
+      "0x1157e82",
+      "0x1167b62",
+      "0x1158858"
+    ],
+    "shader_sha1": "8446d04c917833569c768094e8c051c1c0028a4e",
+    "pixel_slot": 1,
+    "layout_hash": "0x0ab00bb1",
+    "source_omission": "Saving shared normal/scaled View refs by move clears +0x10/+0x18 before replacement; worker can record null. Exact interleaving not captured.",
+    "correction": "Save by copy/AddRef, publish with move from local source. Join outstanding CPU recording before shared view changes and restoration.",
+    "wait_helper_rva": "0x12183c0",
+    "wait_helper_bytes": "40 53 48 83 EC 20 8B 1D 94 0C A6 02 85 DB 0F 84",
+    "ownership": "Render owner outside locks joins CPU recording; generated RHI buffers still retained through queued execution completion.",
+    "prior_correction_limit": "Generated uniform lifetime retention and scaled-view preparation alone did not stop repeat crash.",
+    "validation": "MSVC Release build and existing actual-overlay Insert/render/resize preflight passed. Deployed 2026-10-01 22:34. No game launch; crash and shimmer retest pending.",
+    "backup": ".local/deploy-backups/ac7-pair-20261001-223402-360"
+  },
+  "stability_2252": {
+    "notes": "docs/research/ac7-stability-20261001.md",
+    "priority": [
+      "background and sky jitter",
+      "edge glistening",
+      "previously researched motion-vector coverage"
+    ],
+    "hangar_crash": "User retest reports no recurrence after 22:34 shared view recording correction.",
+    "capture_sessions": [
+      "motion-20261001-223710-51460-1",
+      "motion-20261001-223720-51460-2",
+      "motion-20261001-223744-51460-3",
+      "motion-20261001-223751-51460-4",
+      "motion-20261001-223805-51460-5",
+      "motion-20261001-223849-51460-6",
+      "motion-20261001-223900-51460-7"
+    ],
+    "alternate_backend": "DXGI26 packed float color was rejected by bridge expecting DXGI10 half RGBA. Runtime now performs explicit linear color conversion; actual vendor acceptance pending.",
+    "sky": {
+      "render_rva": "0x222afa0",
+      "adapter_rva": "0x2225470",
+      "render_entry": "40 55 41 54 41 55 41 57 48 8D AC 24 38 FC FF FF",
+      "adapter_entry": "48 83 EC 08 80 3D 15 02 69 01 00 0F 28 D9 F3 0F",
+      "omission": "Adapter flips M20 and M23 but leaves M21; perspective divide reverses vertical jitter. Correct M21 after native adapter in matched primary-view RenderFrame scope.",
+      "guard": "Uid at parameters+b0, primary view, cached jitterY match to input projection M21, perspective M23=1",
+      "fit_limits": "Approximate gradient displacement fits, not calibrated ground truth. Cloud backend y -2.48 to +2.37 pixels, aircraft y max0.21 in paused region."
+    },
+    "motion": "Existing explicit-sentinel resolve now supplies dense motion to DLSS, preserving valid zero aircraft vectors. No new class coverage or dilation implemented; further motion work follows recorded user priority.",
+    "validation": "MSVC Release and D3DCompile new region shaders pass. Existing overlay Insert/pixels/resize preflight pass. Deployed22:52; no game launch. Visual/backend retest pending.",
+    "backup": ".local/deploy-backups/ac7-pair-20261001-225225-566",
+    "unresolved": "General shimmer/edges, cloud effective depth/motion, alternate backend game acceptance, separate vendor shutdown fault."
+  },
+  "bloom_sampling_2319": {
+    "notes": "docs/research/ac7-stability-20261001.md",
+    "user_validation": "22:52 build background and clouds stable. Remaining bloom jitter, aircraft bands at Performance/Ultra, edge glistening and cloud-overlap flap smear.",
+    "captures": [
+      "motion-20261001-225701-37756-1",
+      "motion-20261001-225807-37756-2",
+      "motion-20261001-225959-37756-3"
+    ],
+    "capture_modes": [
+      "hangar DLSS533x300",
+      "hangar native comparison",
+      "flight DLSS928x522"
+    ],
+    "bloom": "Native SceneColorHalfRes descriptor fb7a00 plus constructor name c8 and exact scene-ref identity select root. Producer and tonemap now share SR; native bloom/histogram desc derive from output. Late route retained if common source unverified.",
+    "exposure": "Current exposure depends on SR in new route. Read preceding engine-owned current eye RT via effective state1126090, manager indexbd8, refsbe0/be8; lease through queued read. Native current update remains tonemap guide. F9 saves supplied scalar exposure. Banding not claimed fixed.",
+    "sampling": "Native getter10ecdd0 returnsc1c through vtable slot60 (pointer reference2ae1b70, table candidate2ae1b10). Previsibility matches actual state1410 and native family frame. Phase count round8*outputArea/renderArea,8..255; typical32/72. Preserve native Gaussian, matrices/history, separate FrameIndexMod8c20. Skip compatibility console tuning in native mode.",
+    "guarded_sites": {
+      "fb7a00": "48 89 5C 24 08 57 48 83 EC 40 48 8B 01 48 8B DA",
+      "1126090": "83 B9 B0 09 00 00 02 4C 8B 89 10 14 00 00 75 58",
+      "10ecdd0": "0F B6 81 1C 0C 00 00 C3 CC CC CC CC CC CC CC CC"
+    },
+    "validation": "MSVC Release and existing overlay Insert/pixels/resize preflight pass. Deployed23:19 backupac7-pair-20261001-231912-182. No game launch/new tests. Runtime ordering, sampling, bloom, exposure and edge retest pending.",
+    "remaining": [
+      "bloom jitter and glistening game validation",
+      "preset-independent dark band correction",
+      "cloud-overlap boundary smear",
+      "previously researched object/weapon/bone/vehicle vector coverage"
+    ]
+  },
+  "plane_artifacts_20261002": {
+    "notes": "docs/research/ac7-plane-artifacts-20261002.md",
+    "goal_order": [
+      "aircraft graphical artifacts",
+      "distant cloud blocks",
+      "DLSS Performance/Ultra colour defects",
+      "originally researched motion-vector coverage after blockers"
+    ],
+    "capture": "motion-20261001-233456-50356-1",
+    "observations": "Affected surfaces have depth and written vectors; engine input colour already shows the defect. User reports stationary/all-upscaler defect. Distant rectangular cloud steps amplified in this DLSS sample; cross-backend cloud cause not proved.",
+    "rejected_or_unproven": "Custom projection selector is a lead. Readable sampled flags0; other binding data unavailable due readback budget. Native jitter removal/derived update does not modify extra matrix, so partial matrix restoration hypothesis unsupported. Legacy D3D geometry/constant rewriting disabled in native route.",
+    "projection_producer": {
+      "rva": "0x19d4b50",
+      "current_source": "View+0x430",
+      "current_uniform": "0x740",
+      "previous_source": "PreviousMatrices+0x370",
+      "previous_uniform": "0x780",
+      "status": "source/shader/binary matched; no projection patch"
+    },
+    "correction": "Stop overwriting shared ordinary separate-translucency layer extent218/21c and scale220. Its native setter now owns sizing. Scoped Unmodified UI producer owns BufferSize208 and depth60, retained.",
+    "validation": "MSVC Release and actual-overlay Insert/pixels/resize preflight pass. Deployed2026-10-02 00:09; no game launch/new tests. Plane/UI retest pending; not a confirmed artifact fix.",
+    "capture_correction": "Skip constants on inactive shaders;128 GPU readbacks per sampled interval0/30/59 rather than128 for whole session.",
+    "backup": ".local/deploy-backups/ac7-pair-20261002-000941-391",
+    "remaining": [
+      "aircraft/cloud composition root validation",
+      "cloud block cause",
+      "missing object/weapon/vehicle/bone motion coverage"
+    ],
+    "separate_deferred": "Superseded: DLSS colour defect is now priority one. Native production and GPU correction implemented; game acceptance pending."
+  },
+  "artifact_retest_20261002": {
+    "capture": "motion-20261002-084543-34000-1",
+    "result": "User reports all three artifacts persist after ordinary translucency correction.",
+    "state_experiment": "Standalone NVIDIA D3D11 state preservation proves missing all-stage high bindings, CB ranges and append counter reset in old saver; replacement preserves bindings/ranges/counter. Game causation unproved.",
+    "cloud_ps_crc32c": "0x83524e47",
+    "cloud_vs_crc32c": "0xddc582f0",
+    "cloud_texture_extent": [
+      268,
+      152
+    ],
+    "scene_extent": [
+      536,
+      300
+    ],
+    "viewport": [
+      533,
+      300
+    ],
+    "cloud_indices": 3876,
+    "hdr_constant_blob": 154,
+    "next_evidence": "Installed native divisor1 and FP16 production, paired cloud composite and corrected/uncorrected DLSS; moving-frame acceptance.",
+    "notes": "docs/research/ac7-plane-artifacts-20261002.md",
+    "game_visual_status": "unresolved"
+  },
+  "render_blockers_20261002": {
+    "notes": "docs/research/ac7-plane-artifacts-20261002.md",
+    "priority_one": [
+      "aircraft graphical artifacts",
+      "distant cloud blocks",
+      "DLSS Performance/Ultra colour defects"
+    ],
+    "cloud_producer": {
+      "module": "TrueSkyPluginRender_MT.dll",
+      "sha256": "c6c58ea3a355ed345888b1528e84aa753c6fc69db9c8fb8789e729c7651004d0",
+      "size_bytes": 1711616,
+      "image_base": "0x180000000",
+      "render_interface_rva": "0x879c0",
+      "divisor_consumer_rva": "0xac1c0",
+      "resource_rebuild_rva": "0xbdfe0",
+      "vtable_rva": "0x121ae0",
+      "patch_rva": "0x87f6d",
+      "expected16": "8b871002000089442438488b45d00f29",
+      "original6": "8b8710020000",
+      "replacement6": "b80100000090",
+      "divisor": 1,
+      "units": "scene pixels; native even padding; internal amortization retained",
+      "lifetime": "Apply once under mutex before active native RenderFrame; expected bytes checked; restore after calls quiesce.",
+      "validation": "Allocation confirmed534x300; original divisor1 route lacked depth effect Apply. Superseded by guarded one-to-one depth correction."
+    },
+    "scene_precision": {
+      "hook_index": 47,
+      "entry_hooks_total": 48,
+      "getter_rva": "0x109f300",
+      "expected16": "83b9580200000241ba0a000000458bc2",
+      "allocation_rva": "0x1095010",
+      "allocation_call_rva": "0x10951b1",
+      "shader_parameter_rva": "0x1134770",
+      "pixel_format": 10,
+      "source": "UE4.18.3 SceneRenderTargets.cpp:2165; revision 0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+      "rationale": "Preserve FP16 at scene producer rather than widening already-quantized R11 values.",
+      "family_allocation_rva": "0x1095480",
+      "policy_patch_rva": "0x1095620",
+      "policy_expected16": "488b052933bc02488bcb8b40048945d7",
+      "policy_original13": "488b052933bc02488bcb8b4004",
+      "policy_replacement13": "b8040000009090488bcb909090",
+      "policy_lifetime": "Guard at native start; effective policy4 participates in engine cache/UpdateRHI, including existing targets; restore after calls quiesce.",
+      "validation": "Built and matched source/binary. Actual producer format and game image not yet measured."
+    },
+    "dlss_colour_correction": {
+      "owner": "orchestrator/graphics",
+      "stage": "after DLSS, before native bloom and tonemap",
+      "algorithm": "Three source-footprint RGB residual iterations, source/output bounds, depth-discontinuity rejection. No history or readback.",
+      "jitter_units": "render pixels, producer screen displacement, Y down",
+      "preset_override": false,
+      "native_tone_mapping": true,
+      "alpha_preserved": true,
+      "hangar_gpu_repro": "Frozen800x452 input to1600x900,60 evaluations,flat depth/identity/zero motion+jitter, Performance default; broad bands visibly removed.",
+      "hangar_rgb_range": [
+        0.00019204617,
+        482.75
+      ],
+      "hangar_source_projection_rmse_before": 3.0290482,
+      "hangar_source_projection_rmse_after": 1.1773373,
+      "metric_limit": "Source consistency, not native-image MSE or moving-game validation.",
+      "flight_gpu_repro": "motion-20261002-084543-34000-1 f000,533x300 actual colour/depth to1600x900,Ultra; camera/motion/jitter simplified.",
+      "flight_maximum_before_after": 1.73046875,
+      "single_gpu_ms": {
+        "flight": 0.6205,
+        "hangar": 1.4991
+      },
+      "rejected": [
+        "unconstrained additive ringing",
+        "RGB ratio highlight overshoot",
+        "colour-only boundary guard leaves bands"
+      ],
+      "failure": "Compilation cached until restart; wrong device/depth/format/allocation refuses replacement and retains native graph.",
+      "capture": "F9 output_uncorrected and output are same-frame pairs.",
+      "validation": "Device-tested frozen repro; game temporal/visual acceptance pending; proprietary internal exposure cause unproved."
+    },
+    "risks": [
+      "more native cloud work and FP16 scene bandwidth",
+      "GPU correction overhead",
+      "moving-frame visual acceptance pending"
+    ],
+    "game_visual_status": "19:10 clean aircraft coincided with missing clouds.20:13 cloud rendering returned through old-grid fallback and artifacts returned; wing/cloud correction needs live acceptance.",
+    "delivery": {
+      "backup": ".local/deploy-backups/ac7-pair-20261002-191007-200",
+      "date": "2026-10-02T19:10:07.2202918+02:00",
+      "hashes": {
+        "dinput8.dll": "cd63e4c1d1631a312e2631d006ee6fdb31d106e1b120fcb47737aae08a3cc5f1",
+        "ReScaleFrame.Game.AC7.dll": "fb32c08f2b02428a184c4008d7c2d8cf8b58f508875e10e4d262df8bbcf53fd1",
+        "rescaleframe_overlay.dll": "cc96ca792743dd79d0b57b3ae1c9dd7f294c3b616becb6436af35e542b861a6f"
+      },
+      "verification": "Windows MSVC Release full gate:33 executed tests pass,5 vendor/environment skips; Rust format/clippy pass.",
+      "overlay": "Actual Rust panel Insert/open/close, rendered pixels and960x720 resize pass.",
+      "game_launched": false,
+      "visual_acceptance": "Frozen GPU colour correction checked; new cloud/scene producer and moving-game appearance still require user-run acceptance."
+    }
+  },
+  "truesky_depth_regression_20261002": {
+    "notes": "docs/research/ac7-plane-artifacts-20261002.md",
+    "user_acceptance": {
+      "aircraft": "clean",
+      "hangar_exposure": "correct",
+      "flight_sky_lighting_volumetrics": "broken"
+    },
+    "captures": [
+      "motion-20261002-191851-15564-1",
+      "motion-20261002-191902-15564-2"
+    ],
+    "source_observation": "Black sky before SR; nearly constant/transparent near-far cloud inputs. Native cloud grid534x300, scene format10.",
+    "corrected_prior_conclusion": "Divisor1 allocation arithmetic was valid; this did not establish complete producer support. Missing depth-pass selection caused the new regression.",
+    "depth_producer_rva": "0xbfb30",
+    "ghidra_name": "TRUESKY_GenerateNormalizedSceneDepthBounds",
+    "effect": "screenspace_depth_downscale",
+    "stock_passes": [
+      "x2",
+      "x3",
+      "x4"
+    ],
+    "branch_guard_rva": "0xbff07",
+    "branch_expected16": "4183fc02751d488b4b084c8d4318488b",
+    "branch_patch_rva": "0xbff0b",
+    "branch_original": "75",
+    "branch_replacement": "77",
+    "dispatch_patch_rva": "0xc003f",
+    "dispatch_expected16": "41ff9248010000488b4b084c8d83b001",
+    "dispatch_original7": "41ff9248010000",
+    "dispatch_replacement": "ff15<rel32>90 to nearby pointer data; native Win64 context/xyz ABI",
+    "shader_effect_file": {
+      "name": "mixed_resolution.fxo",
+      "bytes": 45263,
+      "crc32": "78881ef3",
+      "sha256": "07eca6e47c1506d5b63236761a97dcf5cdb879480203a63588e978f1210a4d09"
+    },
+    "original_x2_shader_sha256": "410c6b8f7d63b80a909e117d1c604fee43db8955c6857c4f1d259db8f0021b12",
+    "shader_abi": {
+      "cb": 11,
+      "source": 1,
+      "point_clamp_sampler": 15,
+      "array_uav": 0,
+      "cb_bytes": 352,
+      "depth_parameters_offset": 208,
+      "source_size_offset": 224,
+      "target_size_offset": 240,
+      "source_offset": 248,
+      "tan_half_fov_offset": 328,
+      "actual_uav_correction": "Native Texture2D, not array view; prior array experiment did not match live allocation."
+    },
+    "units": "Normalized ray distance using native depth conversion/FOV. Single sample -> (d,d,0,0), native near/sky conventions.",
+    "runtime": "Install guarded depth route before divisor1. Prepare shader/verify native bindings on supported first pass, then activate full grid. Forward current Dispatch method; restore native shader before Unapply.",
+    "lifetime": "Native render quiescence; restore divisor/selector/call before freeing pointer relay, shader and device. Compilation or guard refusal retains supported native resolution.",
+    "counter_evidence": "Cleanup decrement after skipped Apply in matched binary. Actual internal counter not read in game.",
+    "gpu_experiment": {
+      "adapter": "NVIDIA hardware",
+      "native_x2_max_error": 9.31322575e-10,
+      "first_party_x1_max_error": 1.86264515e-09,
+      "cases": [
+        "near",
+        "sky",
+        "varying depth",
+        "one-pixel geometry"
+      ],
+      "limit": "Shader ABI/math, not patched call-site execution or live game clouds."
+    },
+    "game_status": "20:13 retest restored clouds through stock-grid fallback; wing/cloud artifacts remain. Array-UAV guard rejected actual Texture2D; see follow-up correction.",
+    "delivery": {
+      "date": "2026-10-02T20:05:38.6628576+02:00",
+      "backup": ".local/deploy-backups/ac7-pair-20261002-200538-588",
+      "hashes": {
+        "dinput8.dll": "1c4bf2e607a2e9b909bca82fa10b4e339706ab2416da2216cd76f165c43819e8",
+        "ReScaleFrame.Game.AC7.dll": "63fcc3e266088809fe6596d1d1f74da5156110b7f86c5c553d9bd7a61f50b7f7",
+        "rescaleframe_overlay.dll": "cc96ca792743dd79d0b57b3ae1c9dd7f294c3b616becb6436af35e542b861a6f"
+      },
+      "checks": "MSVC Release gate33 passed,5 vendor/environment skips; Rust format/clippy; NVIDIA x1/x2 depth GPU experiment; actual overlay Insert/pixels/resize.",
+      "game_launched": false,
+      "live_validation": "Pending restored sky/lighting/volumetrics with aircraft and hangar corrections retained."
+    }
+  },
+  "truesky_wing_cloud_correction_20261002": {
+    "notes": "docs/research/ac7-plane-artifacts-20261002.md",
+    "question": "Fix stationary aircraft wing masking and distant cloud blocks below Balanced without losing volumetrics.",
+    "transcript_review": "Parent conversation 2 October, prior failed sizing/state fixes,19:10 missing-depth-pass regression,20:05 guarded kernel and20:13 fallback captures reviewed before implementation.",
+    "captures": [
+      "motion-20261002-201334-66924-1",
+      "motion-20261002-201349-66924-2"
+    ],
+    "prior_result": "Cloud grid268x152 and native x2 remained; kernel compiled but array-UAV guard rejected actual Texture2D. Clean aircraft at19:10 coincided with missing clouds and is not visual acceptance.",
+    "view_owner": {
+      "rva": "0xeae10",
+      "ghidra_name": "TRUESKY_EnsureTexture2DResourceViews",
+      "uav_dimension": 4,
+      "ownership": "Native per-view+0x2d8 texture and matching SRV/UAV; format change recreates allocation."
+    },
+    "precision_patch": {
+      "module": "TrueSkyPluginRender_MT.dll",
+      "guard_rva": "0xbfc05",
+      "expected16": "c744242016000000ff50588b87940000",
+      "patch_rva": "0xbfc09",
+      "original4": "16000000",
+      "replacement4": "05000000",
+      "old_native_format": 22,
+      "new_native_format": 5,
+      "old_dxgi_format": 35,
+      "new_dxgi_format": 16,
+      "format_map_rva": "0xefb70",
+      "format_map_name": "TRUESKY_MapPixelFormatToDxgiFormat"
+    },
+    "shader": "First-party x1 RWTexture2D<float2> at u0; native b11/t1/s15; equal per-pixel maximum/minimum normalized radial distance. Original CS restored before native cleanup.",
+    "captured_precision": {
+      "conversion": [
+        0.1,
+        150000,
+        0,
+        0
+      ],
+      "unorm_step_native_distance_units": 2.288853284504463,
+      "relative_error_median_percent": 3.215,
+      "relative_error_max_percent": 7.683,
+      "aircraft_occupied_x2_blocks": 3185,
+      "mixed_aircraft_background_x2_blocks": 384,
+      "limit": "CPU calculation from captured depth. Contribution to each visible wing pixel unproven."
+    },
+    "cloud_floor": "Native divisor1 full scene grid: Ultra533x300 gives padded534x300, above stock Balanced roughly29 percent of output per axis. Opaque render scale unchanged; native cloud/history/tile allocation stays coordinated.",
+    "lifetime": "Guarded installation before native depth production; full grid waits for shader and actual Texture2D RG32F binding verification; bounded refusal logs; restore format/divisor/selector/call before freeing callback resources after quiescence.",
+    "validation": {
+      "build": "Windows MSVC Release",
+      "gate": "33 executed tests passed,5 vendor/environment skips; Rust format/clippy passed",
+      "gpu": {
+        "adapter": "NVIDIA GeForce RTX 4070 Laptop GPU",
+        "source_capture": "motion-20261002-201349-66924-2",
+        "source_dimensions": [
+          536,
+          300
+        ],
+        "cb_blob": 196,
+        "cb_bytes": 352,
+        "candidate_dimensions": [
+          534,
+          300
+        ],
+        "native_x2_dimensions": [
+          268,
+          152
+        ],
+        "x1_max_absolute_error": 1.78813934e-07,
+        "x1_aircraft_max_relative_error": 3.22693268e-07,
+        "native_x2_fp32_aircraft_max_relative_error": 3.12168595e-07,
+        "native_x2_unorm_aircraft_max_relative_error": 0.0856714323,
+        "extra_padding_dimensions": [
+          538,
+          302
+        ],
+        "view_check": "Texture2D and one-slice array outputs matched on this device; shipped factory and plugin both use Texture2D.",
+        "scope": "Standalone GPU execution with captured data. Native callsite activation and visual wing/cloud result need user run.",
+        "logs": [
+          ".local/cloud-depth-actual-534x300-20261002.log",
+          ".local/cloud-depth-actual-538x302-20261002.log"
+        ],
+        "probe": ".local/probe-cloud-depth-actual-20261002.cpp"
+      },
+      "game": "User confirms: Works and clean. Latest log verifies Texture2D RG32F bindings, divisor1 and one-to-one dispatch.",
+      "game_launched": false
+    },
+    "unexpected_binding_failure": "Rebuild shader on device recreation. If full-grid bindings still fail, disable full-grid activation, restore stock divisor for next native allocation and suppress unsafe x2 dispatch on current x1 targets; enclosing native cleanup remains balanced. A depth update is lost on the rejected frame.",
+    "delivery": {
+      "date": "2026-10-02T21:24:45.3866632+02:00",
+      "backup": ".local/deploy-backups/ac7-pair-20261002-212445-314",
+      "hashes": {
+        "dinput8.dll": "825de39ac2206ec6ebfa19f5a8f6ab82c1bba53ea31a7274cb3073162550186a",
+        "ReScaleFrame.Game.AC7.dll": "a02e4c88947e96f1be90ff79a41e34dcec3aa35ae83ac1381821e33eb14c7b1b",
+        "rescaleframe_overlay.dll": "cc96ca792743dd79d0b57b3ae1c9dd7f294c3b616becb6436af35e542b861a6f"
+      },
+      "overlay": "Actual Rust overlay Insert, pixels and resize preflight passed",
+      "game_launched": false,
+      "visual_acceptance": "Accepted by user2October after21:24 installation; wing artifacts and cloud blocks clean."
+    }
+  }
+}

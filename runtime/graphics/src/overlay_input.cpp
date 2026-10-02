@@ -1080,6 +1080,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
     // A negative or NaN delta reaches egui's animation clock, so it is clamped rather than passed
     // on. The comparison is written this way because NaN fails it and lands on zero.
     out->delta_seconds = delta_seconds > 0.0f ? delta_seconds : 0.0f;
+    out->startup_hint_alpha = 0.0f; // The presentation host owns the hint timer.
 
     State& self = state();
     if (!self.installed.load(std::memory_order_acquire)) {

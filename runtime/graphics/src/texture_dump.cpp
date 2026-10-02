@@ -83,6 +83,26 @@ float half_to_float(uint16_t value)
 bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
 {
     switch (format) {
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS: {
+        uint32_t raw = 0; std::memcpy(&raw, pixel, sizeof(raw));
+        out.x = float(raw & 1023u) / 1023.0f;
+        out.y = float((raw >> 10) & 1023u) / 1023.0f;
+        out.z = float((raw >> 20) & 1023u) / 1023.0f;
+        out.written = true;
+        return true;
+    }
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS: case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: {
+        const bool bgra = format == DXGI_FORMAT_B8G8R8A8_TYPELESS ||
+                          format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        out.x = pixel[bgra ? 2 : 0] / 255.0f;
+        out.y = pixel[1] / 255.0f;
+        out.z = pixel[bgra ? 0 : 2] / 255.0f;
+        out.written = true;
+        return true;
+    }
     case DXGI_FORMAT_R16G16_UNORM: {
         uint16_t raw[2];
         std::memcpy(raw, pixel, sizeof(raw));
@@ -166,6 +186,11 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
 uint32_t bytes_per_pixel(DXGI_FORMAT format)
 {
     switch (format) {
+    case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS: case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        return 4;
     case DXGI_FORMAT_R16G16_UNORM:
     case DXGI_FORMAT_R16G16_FLOAT:
         return 4;

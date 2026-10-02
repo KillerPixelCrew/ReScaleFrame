@@ -1,5 +1,19 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include <rescaleframe/ac7_ui_rules.h>
+#include <rescaleframe/ui_identify.h>
+#include <cstring>
+
+extern "C" int rsf_ac7_ui_is_hud_producer(const void* bytecode, uint32_t bytes)
+{
+    static constexpr unsigned char checksum[] = {
+        0x6c,0xac,0x06,0x44,0xb6,0xa4,0x9b,0xe3,0xef,0x92,0x58,0x58,0xa7,0xd3,0x8e,0x63
+    };
+    if (!bytecode || bytes != 1104) return 0;
+    const auto* data = static_cast<const unsigned char*>(bytecode);
+    return std::memcmp(data, "DXBC", 4) == 0 &&
+           std::memcmp(data + 4, checksum, sizeof(checksum)) == 0 &&
+           rsf_ui_shader_hash(bytecode, bytes) == 0xb2f7719du;
+}
 
 namespace {
 

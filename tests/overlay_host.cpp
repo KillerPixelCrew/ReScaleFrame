@@ -48,7 +48,25 @@ void present(void*, void* pointer)
         require(observed == device, "the observer must adopt the presenting device, not a helper");
         static_cast<ID3D11Device*>(observed)->Release();
         require(rsf_overlay_host_start(chain, log_line, nullptr) != 0, "host starts without DLSS");
-        rsf_overlay_host_toggle();
+        require(rsf_overlay_host_visible() == 0, "panel starts closed");
+    }
+    if (frames == 2) {
+        DXGI_SWAP_CHAIN_DESC chain_desc{};
+        require(SUCCEEDED(chain->GetDesc(&chain_desc)), "get input window");
+        require(rsf_overlay_host_visible() == 0, "panel starts closed");
+        SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 1);
+        require(rsf_overlay_host_visible() != 0, "Insert opens the actual panel");
+        SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 0x40000001);
+        require(rsf_overlay_host_visible() != 0, "holding Insert must not close it");
+        SendMessageW(chain_desc.OutputWindow, WM_KEYUP, VK_INSERT, 0xc0000001);
+        Sleep(260); // Separate physical presses beyond the dual-input debounce window.
+        SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 1);
+        require(rsf_overlay_host_visible() == 0, "second Insert closes the panel");
+        SendMessageW(chain_desc.OutputWindow, WM_KEYUP, VK_INSERT, 0xc0000001);
+        Sleep(260);
+        SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 1);
+        require(rsf_overlay_host_visible() != 0, "Insert reopens the panel for rendering");
+        SendMessageW(chain_desc.OutputWindow, WM_KEYUP, VK_INSERT, 0xc0000001);
     }
 
     ID3D11Texture2D* buffer = nullptr;
@@ -71,6 +89,11 @@ void present(void*, void* pointer)
     stats.refusal_reason = "No backend in this test";
     rsf_overlay_intent intent{};
     require(rsf_overlay_host_present(chain, &stats, &intent) != 0, "draw on presenting device");
+    if (frames < 2) {
+        require(rsf_overlay_host_visible() == 0, "startup hint must not open the panel");
+        require(intent.quality_changed == 0 && intent.enabled_changed == 0 &&
+                intent.backend_changed == 0, "startup hint must not request settings changes");
+    }
 
     ID3D11RenderTargetView* bound = nullptr;
     context->OMGetRenderTargets(1, &bound, nullptr);

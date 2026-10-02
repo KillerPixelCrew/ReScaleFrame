@@ -113,7 +113,9 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
     constants.sentinel = params->sentinel; constants.has_sentinel = params->has_sentinel;
     constants.size[0] = pass->width; constants.size[1] = pass->height;
     context->UpdateSubresource(pass->constants.Get(), 0, nullptr, &constants, 0, 0);
-    rsf_d3d11_state saved{}; rsf_d3d11_state_save(context, &saved);
+    rsf_d3d11_state saved{};
+    if (!rsf_d3d11_state_save(context, &saved)) return 0;
+    context->SetPredication(nullptr, FALSE);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     ID3D11ShaderResourceView* sources[] = {source_views[0].Get(), source_views[1].Get()};
     ID3D11UnorderedAccessView* targets[] = {pass->views[0].Get(), pass->views[1].Get()};

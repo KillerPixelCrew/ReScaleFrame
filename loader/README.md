@@ -6,6 +6,19 @@
 
 Place the proxy beside `Ace7Game.exe`. Under Proton, select it with `WINEDLLOVERRIDES="dinput8=n,b"`. It forwards AC7's imported `DirectInput8Create` to the system DLL.
 
+Deploy `dinput8.dll` and the Rust `rescaleframe_overlay.dll` together. Their overlay ABI must match;
+native verification uses a panel fixture and does not build the Rust release DLL. The 30 September
+capture build exposed this when the proxy expected ABI 4 and the installed overlay still used ABI 3,
+leaving Insert unavailable. After configuring/verifying the native build, use the explicit local
+deployment command with AC7 closed:
+
+```powershell
+./eng/deploy-ac7-proxy.ps1 -GameDirectory 'D:/SteamLibrary/steamapps/common/ACE COMBAT 7'
+```
+
+It builds both DLLs, checks the real overlay's ABI, Insert handling, rendering and resize, then
+backs up and deploys the matching pair. Routine `eng/verify.ps1` does not touch the game installation.
+
 Keep the separately obtained NVIDIA runtime in a directory visible to the game, for example `ReScaleFrame/streamline/` beside the executable. The tested set includes `sl.interposer.dll`, `sl.common.dll`, `sl.dlss.dll`, `sl.pcl.dll`, and `nvngx_dlss.dll`. See [dependencies](../docs/dependencies.md) for versions and terms.
 
 Example Steam launch options, on one line, with both paths replaced by Windows paths visible inside Proton:
@@ -121,3 +134,46 @@ directories. `RSF_XESS_BIN` selects the directory containing `libxess.dll`, defa
 are installed by building or testing; preserve their distribution terms when preparing a package.
 
 [Architecture, SDK revisions, device checks and remaining validation](../docs/research/orchestrator-sr-switching.md).
+# AC7 motion research capture
+
+Set `RSF_MOTION_CAPTURE=1` in the proxy INI before launching AC7. With the game focused,
+press F9 once during the scene of interest and let it run for at least five seconds.
+Repeat for carrier launch with attached weapons visible, aerial refuelling, moving ground
+vehicles, and clouds. For clouds, include a steady-camera sample and a camera-pan sample.
+Keep DLSS enabled so paired scene inputs are available. Capture readbacks can briefly hitch.
+
+Each request records 60 Present intervals under
+`%LOCALAPPDATA%\ReScaleFrame\AC7\motion-*` (or `RSF_DUMP_DIR`). The observer log reports
+capture armed/finished. Samples at intervals 0, 30 and 59 contain raw colour, depth and
+motion inputs with frame constants when the backend evaluates. Engine selection decisions,
+shader bytecode, draw/dispatch bindings and constant-buffer snapshots help distinguish
+eligibility rejection from a shader/history problem. Native decisions are preserved.
+
+`native.jsonl` also records guarded engine post-processing, main temporal graph and widget
+producer boundaries. Sampled graph records include output names, extents, formats, pass methods,
+pooled targets and native family frame numbers. Draw/dispatch records carry candidate graph-to-RHI
+command associations. These are read-only diagnostics: queued execution can occur after the CPU
+scope and must be validated before those associations are used as a production frame contract.
+
+Run `python tools/analyze-ac7-motion-capture.py <capture-directory>` to check completeness
+and summarize coverage. GPU records cover the installed immediate context; deferred command
+lists are not decomposed. Post-processing/converter scopes and sampled graph-to-RHI associations
+are AC7-captured; full queue/Present identity remains unvalidated.
+
+Nine completed sessions subsequently validated sampled graph-to-draw associations. A pause-menu
+capture exposed an unretained cached translucency pointer in route readback; the corrected build
+holds that resource and skips layer capture without a current-frame producer. Sampled native
+post-process returns also write `native.partial.jsonl` and numbered blobs before queued graphics
+execution. Those files preserve partial evidence and do not mark a session complete. Release
+builds emit `dinput8.map` beside the DLL for exact private-function crash addresses. Corrected
+pause capture validation is pending; the nine completed sessions do not need repeating.
+
+## Native renderer build
+
+The matching `ReScaleFrame.Game.AC7.dll` is deployed beside the proxy. The runtime prepares it after
+decryption and activates it after SR initialization. Expected-byte refusal uses the compatibility
+renderer. Native mode sizes renderer-owned views and inserts SR in the native graph; texture
+promotion, constant-buffer rewriting and timed rediscovery are disabled there. It still needs live
+AC7 validation. [Details and current limits](../docs/research/ac7-native-renderer-refactor-20261001.md).
+F9 records copied RHI scope/role/frame identity along with the existing paired images, GPU bindings,
+widget observations and screenshot. Native family IDs do not prove simulation/FG identity.

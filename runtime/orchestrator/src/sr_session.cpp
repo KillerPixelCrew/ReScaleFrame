@@ -49,8 +49,8 @@ extern "C" rsf_backend_result rsf_sr_session_create(const rsf_sr_session_setup* 
     return RSF_BACKEND_OK;
 }
 
-extern "C" rsf_backend_result rsf_sr_session_select(rsf_sr_session* session,
-    rsf_sr_backend backend, rsf_quality quality, uint64_t version_id)
+static rsf_backend_result select_session(rsf_sr_session* session,
+    rsf_sr_backend backend, rsf_quality quality, uint64_t version_id, bool force)
 {
     if (!session || (backend != RSF_SR_NONE && (backend < RSF_SR_FSR2 || backend > RSF_SR_XESS)) ||
         quality > RSF_QUALITY_ULTRA_QUALITY) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -77,7 +77,7 @@ extern "C" rsf_backend_result rsf_sr_session_select(rsf_sr_session* session,
         session->reset = true;
         return RSF_BACKEND_OK;
     }
-    if (session->backend && status.effective == backend && status.quality == quality &&
+    if (!force && session->backend && status.effective == backend && status.quality == quality &&
         (!version_id || status.version_id == version_id)) {
         status.last_switch_result = RSF_BACKEND_OK;
         return RSF_BACKEND_OK;
@@ -114,6 +114,21 @@ extern "C" rsf_backend_result rsf_sr_session_select(rsf_sr_session* session,
     session->reset = true;
     if (open.log) open.log(open.log_user, status.version_name);
     return RSF_BACKEND_OK;
+}
+
+extern "C" rsf_backend_result rsf_sr_session_select(rsf_sr_session* session,
+    rsf_sr_backend backend, rsf_quality quality, uint64_t version_id)
+{ return select_session(session, backend, quality, version_id, false); }
+extern "C" rsf_backend_result rsf_sr_session_set_auto_exposure(rsf_sr_session* session, uint32_t enabled)
+{
+    if (!session || enabled > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (session->open.auto_exposure == enabled) return RSF_BACKEND_OK;
+    const auto previous = session->open.auto_exposure;
+    session->open.auto_exposure = enabled;
+    const auto result = select_session(session, session->status.effective,
+        session->status.quality, session->status.version_id, true);
+    if (result != RSF_BACKEND_OK) session->open.auto_exposure = previous;
+    return result;
 }
 
 extern "C" rsf_backend_result rsf_sr_session_evaluate(rsf_sr_session* session,

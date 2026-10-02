@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Included inside the backend's private namespace, with SDK headers included at file scope.
 struct FsrSession {
+    std::shared_ptr<Fsr4Compatibility> compatibility;
     HMODULE module = nullptr;
     ffxContext context = nullptr;
     PfnFfxCreateContext create = nullptr;
@@ -19,6 +20,7 @@ void sr_close(void* pointer)
     auto* session = static_cast<FsrSession*>(pointer);
     if (!session) return;
     if (session->context) session->destroy(&session->context, nullptr);
+    session->compatibility.reset();
     if (session->module) FreeLibrary(session->module);
     delete session;
 }
@@ -32,6 +34,8 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
     session->open = *desc;
     session->module = rsf::load_runtime(*desc, L"amd_fidelityfx_upscaler_dx12.dll");
     if (!session->module) { sr_close(session); return RSF_BACKEND_ERROR_LOAD_FAILED; }
+    if (desc->fsr_major == 4)
+        session->compatibility = rsf_fsr4_enable_int8(session->module,static_cast<ID3D12Device*>(desc->device),desc->log,desc->log_user);
     session->create = rsf::entry<PfnFfxCreateContext>(session->module, "ffxCreateContext");
     session->destroy = rsf::entry<PfnFfxDestroyContext>(session->module, "ffxDestroyContext");
     session->query = rsf::entry<PfnFfxQuery>(session->module, "ffxQuery");
@@ -64,7 +68,19 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
             std::snprintf(session->name, sizeof(session->name), "%s", names[i]);
         }
     }
-    if (!session->version) { sr_close(session); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
+    if (!session->version) {
+        if (desc->log) {
+            char message[192]{};
+            std::snprintf(message,sizeof(message),"FSR%u unavailable: runtime exposes no matching provider on this device (%llu available)",
+                desc->fsr_major,static_cast<unsigned long long>(count));
+            desc->log(desc->log_user,message);
+            for (uint64_t i=0;i<count;++i) {
+                std::snprintf(message,sizeof(message),"FSR available provider: %s",names[i] ? names[i] : "unnamed");
+                desc->log(desc->log_user,message);
+            }
+        }
+        sr_close(session); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    }
     session->device.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
     session->device.device = static_cast<ID3D12Device*>(desc->device);
     session->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;

@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define RSF_OBSERVER_ABI_VERSION 5u
+#define RSF_OBSERVER_ABI_VERSION 8u
 
 /* One element of a vertex declaration, reduced to what identifies it.
 
@@ -53,6 +53,10 @@ typedef void (*rsf_observer_layout_fn)(void* user, void* layout,
 
 #define RSF_OBSERVER_STAGE_VERTEX 0u
 #define RSF_OBSERVER_STAGE_PIXEL 1u
+#define RSF_OBSERVER_STAGE_GEOMETRY 2u
+#define RSF_OBSERVER_STAGE_HULL 3u
+#define RSF_OBSERVER_STAGE_DOMAIN 4u
+#define RSF_OBSERVER_STAGE_COMPUTE 5u
 
 /* A shader was created. `bytecode` is the compiled blob the game passed, borrowed for the call.
 
@@ -70,6 +74,12 @@ typedef void (*rsf_observer_texture_fn)(void* user, void* texture, uint32_t widt
                                         uint32_t sample_count, uint32_t bind_flags,
                                         uint32_t misc_flags);
 
+/* ABI 6: buffer creation, including borrowed initial CPU contents when supplied. This also lets
+   capture clients invalidate an old buffer identity before a recycled pointer is used again.
+   Called under the observer lock; do not call D3D11 from it. */
+typedef void (*rsf_observer_buffer_fn)(void* user, void* buffer, const void* initial,
+                                      uint32_t bytes, uint32_t bind_flags);
+
 /* Bind flags, so a caller does not need d3d11.h to read the ones above. These are the D3D11 values. */
 #define RSF_OBSERVER_BIND_SHADER_RESOURCE 0x8u
 #define RSF_OBSERVER_BIND_RENDER_TARGET 0x20u
@@ -83,6 +93,19 @@ typedef void (*rsf_observer_texture_fn)(void* user, void* texture, uint32_t widt
    for the duration of the call. Anything this does to the device context it must put back: the game
    is between its own draws and did not ask for its state to change. */
 typedef void (*rsf_observer_present_fn)(void* user, void* swapchain);
+typedef struct rsf_observer_present_event {
+    uint32_t struct_size;
+    uint32_t completed;
+    void* swapchain;
+    uint32_t sync_interval;
+    uint32_t flags;
+    int32_t result; /* HRESULT, valid only when completed is nonzero. */
+    uint32_t method; /* 0: Present, 1: Present1. */
+} rsf_observer_present_event;
+/* Paired around the original Present chain, including test calls. No observer lock is held.
+   completed=0 precedes frame/overlay work; completed=1 follows the real call's return. */
+typedef void (*rsf_observer_present_event_fn)(void* user, const rsf_observer_present_event* event);
+
 
 typedef int32_t rsf_observer_result;
 #define RSF_OBSERVER_OK ((rsf_observer_result)0)
@@ -142,12 +165,17 @@ typedef struct rsf_observer_options {
     void* on_shader_user;
     rsf_observer_texture_fn on_texture;
     void* on_texture_user;
+    rsf_observer_buffer_fn on_buffer;
+    void* on_buffer_user;
+    rsf_observer_present_event_fn on_present_event;
+    void* on_present_event_user;
 } rsf_observer_options;
 
 typedef struct rsf_observer_status {
     uint32_t struct_size;
     uint32_t installed;
     uint32_t have_device;
+    /* Non-test Present calls returning S_OK, not physical scanout/generated-frame count. */
     uint32_t frames_presented;
     uint32_t textures_matched;
     uint32_t textures_created;
@@ -165,7 +193,8 @@ typedef struct rsf_observer_status {
    creates a device. */
 rsf_observer_result rsf_observer_install(const rsf_observer_options* options);
 
-/* Restore the original vtable entries and release everything retained. */
+/* Restore entries/release retained resources after graphics producers are quiescent.
+   Returns NOT_READY while a Present callback/forwarding call is still in flight. */
 rsf_observer_result rsf_observer_uninstall(void);
 
 /* Hand out the device the observer found, and its immediate context.

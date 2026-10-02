@@ -69,6 +69,7 @@ struct State {
     ID3D11Device* device = nullptr;
     bool initialised = false;
     bool supported = false;
+    rsf_dlss_preset preset = RSF_DLSS_PRESET_AUTO;
 
     // Kept alive for the process: Streamline is given pointers to these at init and the
     // documentation does not promise it copies them.
@@ -527,6 +528,11 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     // it is bound at the same pass as everything else here, so normally it does.
     options.useAutoExposure = frame->exposure ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     options.alphaUpscalingEnabled = flag(frame->alpha);
+    if (frame->viewport == 0) {
+        const auto preset = static_cast<sl::DLSSPreset>(self.preset);
+        options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
+        options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
+    }
     if (self.set_options(viewport, options) != sl::Result::eOk) {
         say("slDLSSSetOptions failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
@@ -575,6 +581,15 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     return RSF_DLSS_OK;
 }
 
+extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
+{
+    switch (preset) {
+    case RSF_DLSS_PRESET_AUTO: case RSF_DLSS_PRESET_E: case RSF_DLSS_PRESET_F:
+    case RSF_DLSS_PRESET_J: case RSF_DLSS_PRESET_K: case RSF_DLSS_PRESET_L: case RSF_DLSS_PRESET_M:
+        state().preset = preset; return RSF_DLSS_OK;
+    default: return RSF_DLSS_ERROR_INVALID_ARGUMENT;
+    }
+}
 extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
 {
     State& self = state();
@@ -616,6 +631,11 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
 }
 
 #else // RSF_HAVE_STREAMLINE
+
+extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
+{
+    (void)preset; return RSF_DLSS_ERROR_NOT_COMPILED;
+}
 
 // Built without the SDK. The contract still exists so callers compile and can say honestly that
 // this build has no DLSS in it, rather than reporting a runtime failure that never happened.

@@ -105,6 +105,13 @@ AC7 needed a decrypted runtime image. Its import references and decoded instruct
 
 ## Use source and signatures as leads
 
+Search GitHub and other source hosting sites early for engine branches, middleware/plugin
+integrations, public game projects and existing decompilations, including source inside larger
+projects. Record origin, revision and engine version, then match the installed binary. Keep these
+references untracked. Use ILSpy for managed assemblies, Ghidra for native code, and shader
+disassembly/decompilation where appropriate. Decompiled types and names remain hypotheses until
+calling conventions, layouts, instructions and runtime evidence agree.
+
 Compare distinctive source call sequences with the shipped build. `map-source-files.py` and `find-string-refs.py` narrow the search, but byte-scan hits and inlined assertions do not establish function boundaries.
 
 Ghidra MCP can inspect the selected program. Confirm its identity before calling analysis or mutation tools. Function ID databases match compiled functions; `.gdt` archives describe types. Record the database/compiler/architecture and inspect ambiguous matches. Neither kind of data validates an AC7 runtime hook by itself.

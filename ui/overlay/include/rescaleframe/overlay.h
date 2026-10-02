@@ -26,7 +26,8 @@ extern "C" {
 /* 2: the panel drives the session rather than reporting on it, so intent gained start, debug view,
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
-#define RSF_OVERLAY_ABI_VERSION 4u
+/* 5: input gains a host-timed, noninteractive startup hint opacity. */
+#define RSF_OVERLAY_ABI_VERSION 5u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
@@ -158,9 +159,10 @@ typedef struct rsf_overlay_input {
     uint32_t display_height;
     /* Seconds since the previous frame. egui uses it for animation, and a zero is survivable. */
     float delta_seconds;
-    /* When zero, the overlay lays out nothing and returns no draw calls. Hiding it is not the same
-       as destroying it: widget state survives, so reopening it does not reset what was chosen. */
+    /* When zero, only the optional startup hint is drawn. Widget state survives. */
     uint32_t visible;
+    /* Appended in ABI 5. Zero hides the hint; 0..1 controls its fade. No input is captured. */
+    float startup_hint_alpha;
 } rsf_overlay_input;
 
 /* One vertex, in the layout egui produces: position in physical pixels, texture coordinate, and a

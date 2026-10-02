@@ -3,11 +3,16 @@
 #include <rescaleframe/dlss_pipeline.h>
 
 #include <rescaleframe/texture_dump.h>
+#include <rescaleframe/native_sr.h>
+#include <rescaleframe/motion_resolve.h>
+#include <rescaleframe/colour_fidelity.h>
 #include "sr_legacy_adapter.h"
 
 #include <windows.h>
 
 #include <d3d11.h>
+#include <wrl/client.h>
+#include <memory>
 
 #include <cstdarg>
 #include <cstdio>
@@ -32,6 +37,10 @@ struct Pipeline {
     ID3D11Device* device = nullptr;
     ID3D11Texture2D* output = nullptr;
     rsf_motion_decode* decode = nullptr;
+    rsf_motion_resolve* dense_motion = nullptr;
+    rsf_colour_fidelity* colour_fidelity = nullptr;
+    bool colour_fidelity_create_failed = false;
+    uint32_t dense_width = 0, dense_height = 0;
     rsf_motion_decode_params motion{};
     uint32_t decode_width = 0;
     uint32_t decode_height = 0;
@@ -53,6 +62,8 @@ struct Pipeline {
     rsf_sr_legacy_adapter* alternate = nullptr;
     uint32_t backend = 1;
     uint32_t requested_backend = 1;
+    uint32_t last_evaluated_backend = 0;
+    uint32_t last_evaluated_width = 0, last_evaluated_height = 0;
     int32_t last_switch_result = 0;
     std::string sdk_directories[4];
     float units_to_meters = 1;
@@ -88,6 +99,7 @@ struct Pipeline {
     uint32_t render_width_max = 0;
     uint32_t render_height_max = 0;
     rsf_dlss_quality quality = RSF_DLSS_QUALITY_NATIVE;
+    rsf_dlss_preset dlss_preset = RSF_DLSS_PRESET_AUTO;
     uint64_t frames_evaluated = 0;
     uint64_t frames_refused = 0;
     rsf_dlss_pipeline_result last_result = RSF_DLSS_PIPELINE_OK;
@@ -182,6 +194,11 @@ bool worth_saying(Pipeline& self, rsf_dlss_pipeline_result result, uint32_t widt
 // point in a partially completed start, which is what the failure paths there rely on.
 void tear_down(Pipeline& self)
 {
+    rsf_native_sr_release_resources();
+    rsf_colour_fidelity_destroy(self.colour_fidelity); self.colour_fidelity = nullptr;
+    self.colour_fidelity_create_failed = false;
+    rsf_motion_resolve_destroy(self.dense_motion); self.dense_motion = nullptr;
+    self.dense_width = self.dense_height = 0;
     if (self.decode) {
         rsf_motion_decode_destroy(self.decode);
         self.decode = nullptr;
@@ -220,6 +237,7 @@ void tear_down(Pipeline& self)
     self.reported = RSF_DLSS_PIPELINE_OK;
     self.reported_width = 0;
     self.reported_height = 0;
+    self.last_evaluated_backend = self.last_evaluated_width = self.last_evaluated_height = 0;
 
     self.layer_consecutive_failures = 0;
     self.layer_given_up = false;
@@ -671,6 +689,41 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         return finish(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
     }
 
+    if (self.backend == 1 && !camera.camera_motion_included && camera.has_motion_sentinel) {
+        if (!self.dense_motion || self.dense_width != frame->render_width || self.dense_height != frame->render_height) {
+            rsf_motion_resolve* replacement = nullptr;
+            if (!rsf_motion_resolve_create(self.device, frame->render_width, frame->render_height, &replacement))
+                return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+            rsf_motion_resolve_destroy(self.dense_motion); self.dense_motion = replacement;
+            self.dense_width = frame->render_width; self.dense_height = frame->render_height;
+            say(self, "DLSS dense motion: explicit unwritten sentinel, preserving valid zero vectors at %ux%u",
+                frame->render_width, frame->render_height);
+        }
+        rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
+        std::memcpy(resolve.clip_to_previous, dlss_frame.clip_to_prev_clip, sizeof(resolve.clip_to_previous));
+        // Canonical sparse inputs are current-minus-previous UV. Resolve emits previous-minus-current pixels.
+        resolve.decoded_to_pixels[0] = -float(frame->render_width) * dlss_frame.motion_scale_x;
+        resolve.decoded_to_pixels[1] = -float(frame->render_height) * dlss_frame.motion_scale_y;
+        resolve.sentinel = camera.motion_sentinel; resolve.has_sentinel = 1;
+        if (!rsf_motion_resolve_run(self.dense_motion, context_pointer, dlss_frame.motion, dlss_frame.depth, &resolve))
+            return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        dlss_frame.motion = rsf_motion_resolve_motion(self.dense_motion);
+        dlss_frame.depth = rsf_motion_resolve_depth(self.dense_motion);
+        dlss_frame.camera_motion_included = 1;
+        dlss_frame.motion_scale_x = 1.0f / float(frame->render_width);
+        dlss_frame.motion_scale_y = 1.0f / float(frame->render_height);
+    }
+    if (self.backend == 1 && !self.colour_fidelity) {
+        if (!self.colour_fidelity_create_failed &&
+            !rsf_colour_fidelity_create(self.device, &self.colour_fidelity)) {
+            self.colour_fidelity_create_failed = true;
+            say(self, "DLSS colour correction could not create its GPU pass; retaining the native graph");
+        }
+        if (!self.colour_fidelity) return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        say(self, "DLSS colour correction: current linear scene colour, depth-guarded bounded RGB residual, before native tonemapping");
+    }
+    if (self.backend == 1 && rsf_dlss_set_preset(self.dlss_preset) != RSF_DLSS_OK)
+        return finish(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
     const rsf_dlss_result evaluated = self.backend == 1 ? rsf_dlss_evaluate(context_pointer, &dlss_frame) :
         rsf_sr_legacy_evaluate(self.alternate, context_pointer, &dlss_frame, self.motion.zero_means_unwritten);
     if (evaluated != RSF_DLSS_OK) {
@@ -709,6 +762,23 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             prefix = self.dump_prefix;
         }
     }
+    if (self.backend == 1) {
+        if (!prefix.empty()) {
+            const std::string raw_prefix = prefix + "_output_uncorrected";
+            rsf_texture_dump_options raw{}; raw.struct_size = sizeof(raw);
+            raw.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; raw.output_prefix_utf8 = raw_prefix.c_str();
+            raw.log = from_dump;
+            rsf_dump_texture_bytes(self.device, context_pointer, self.output, &raw);
+        }
+        if (!rsf_colour_fidelity_run(self.colour_fidelity, context_pointer, frame->scene_color,
+                self.output, dlss_frame.depth, dlss_frame.depth_inverted, camera.jitter_pixels)) {
+            self.reset_pending = true;
+            if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED, frame->render_width,
+                    frame->render_height))
+                say(self, "DLSS colour correction refused this frame; retaining the native graph");
+            return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        }
+    }
     if (!prefix.empty()) {
         // Both sides of the comparison, from the same frame. An upscaled image on its own says
         // nothing: the question is whether it is this scene, sharper, and that needs the input it
@@ -722,6 +792,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
            from this frame's own inputs, so what they show is what the backend saw. */
         const std::string motion_prefix = prefix + "_motion";
         const std::string decoded_prefix = prefix + "_motion_decoded";
+        const std::string depth_prefix = prefix + "_depth";
         const struct {
             const char* what;
             const std::string& path;
@@ -732,6 +803,9 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             {"the game velocity it was given", motion_prefix, frame->game_motion},
             {"the decoded motion it submitted", decoded_prefix,
              self.decode ? rsf_motion_decode_texture(self.decode) : nullptr},
+            {"the complete motion it submitted", prefix + "_motion_submitted", dlss_frame.motion},
+            {"the depth it submitted", depth_prefix, frame->depth},
+            {"the engine exposure guide", prefix + "_exposure", frame->exposure},
         };
 
         for (const auto& target : targets) {
@@ -748,16 +822,43 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             options.log = from_dump;
             rsf_texture_dump_report report{};
             report.struct_size = uint32_t(sizeof(report));
-            const rsf_dump_texture_result written =
+            const rsf_dump_texture_result raw =
+                rsf_dump_texture_bytes(self.device, context_pointer, target.texture, &options);
+            if (raw != RSF_TEXTURE_OK) say(self, "raw readback of %s failed (result %d)", target.what, int(raw));
+            const rsf_dump_texture_result written = target.texture == frame->depth ? raw :
                 rsf_dump_texture(self.device, context_pointer, target.texture, &options, &report);
             if (written != RSF_TEXTURE_OK) {
                 say(self, "writing %s failed (result %d)", target.what, int(written));
             }
         }
+        // Constants are the exact assembled values for these images, not a later view-buffer read.
+        const std::string camera_path = prefix + "_frame.json";
+        FILE* camera_file = std::fopen(camera_path.c_str(), "wb");
+        if (camera_file) {
+            std::fprintf(camera_file,
+                "{\"render\":[%u,%u],\"output\":[%u,%u],\"backend\":%u,"
+                "\"jitter\":[%.9g,%.9g],\"motion_scale\":[%.9g,%.9g],"
+                "\"camera_motion_included\":%u,\"reset\":%u,\"clip_to_previous\":[",
+                frame->render_width, frame->render_height, output_width, output_height, self.backend,
+                double(dlss_frame.jitter_x), double(dlss_frame.jitter_y),
+                double(dlss_frame.motion_scale_x), double(dlss_frame.motion_scale_y),
+                dlss_frame.camera_motion_included, dlss_frame.reset);
+            for (uint32_t i = 0; i < 16; ++i)
+                std::fprintf(camera_file, "%s%.9g", i ? "," : "", double(dlss_frame.clip_to_prev_clip[i]));
+            std::fprintf(camera_file, "]}\n");
+            std::fclose(camera_file);
+        }
         // A failed dump is diagnostic only and does not change the frame's outcome.
     }
 
     // One good frame means the run of failures was a rebuild rather than a wall.
+    if (self.last_evaluated_backend != self.backend || self.last_evaluated_width != frame->render_width ||
+        self.last_evaluated_height != frame->render_height) {
+        say(self,"SR submitted successfully: backend %u, input %ux%u, output %ux%u; reconstruction output ready in GPU command order",
+            self.backend,frame->render_width,frame->render_height,output_width,output_height);
+        self.last_evaluated_backend = self.backend;
+        self.last_evaluated_width = frame->render_width; self.last_evaluated_height = frame->render_height;
+    }
     self.reset_pending = false;
     self.consecutive_evaluate_failures = 0;
     return finish(self, RSF_DLSS_PIPELINE_OK);
@@ -1051,6 +1152,72 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quali
     }
     return RSF_DLSS_PIPELINE_OK;
 }
+
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_t width, uint32_t height,
+    uint32_t* render_width, uint32_t* render_height) try
+{
+    auto& self = pipeline();
+    if (!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    if (!self.device || !self.output) return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
+    if (width == self.output_width && height == self.output_height) {
+        if (render_width) *render_width = self.planned_render_width;
+        if (render_height) *render_height = self.planned_render_height;
+        return RSF_DLSS_PIPELINE_OK;
+    }
+    uint32_t planned_width = 0, planned_height = 0;
+    uint32_t min_width = 1, min_height = 1, max_width = width, max_height = height;
+    using AlternateOwner = std::unique_ptr<rsf_sr_legacy_adapter, decltype(&rsf_sr_legacy_destroy)>;
+    AlternateOwner next_alternate(nullptr, rsf_sr_legacy_destroy);
+    if (self.backend == 1) {
+        rsf_dlss_plan plan{}; plan.struct_size = sizeof(plan);
+        plan.output_width = width; plan.output_height = height; plan.quality = self.quality;
+        const auto result = rsf_dlss_plan_render_size(&plan);
+        if (result != RSF_DLSS_OK || !plan.render_width || !plan.render_height)
+            return RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
+        planned_width = plan.render_width; planned_height = plan.render_height;
+        min_width = plan.render_width_min ? plan.render_width_min : planned_width;
+        min_height = plan.render_height_min ? plan.render_height_min : planned_height;
+        max_width = plan.render_width_max ? plan.render_width_max : planned_width;
+        max_height = plan.render_height_max ? plan.render_height_max : planned_height;
+    } else {
+        rsf_sr_legacy_adapter* created = nullptr;
+        auto result = rsf_sr_legacy_create(self.device, width, height,
+            self.sdk_directories[0].c_str(), self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(),
+            self.sdk_directories[3].c_str(), self.units_to_meters, self.log, self.log_user, &created);
+        next_alternate.reset(created);
+        if (result == RSF_BACKEND_OK)
+            result = rsf_sr_legacy_select(created, self.backend, self.quality, &planned_width, &planned_height);
+        if (result != RSF_BACKEND_OK || !planned_width || !planned_height)
+            return RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED;
+    }
+    D3D11_TEXTURE2D_DESC descriptor{}; self.output->GetDesc(&descriptor);
+    descriptor.Width = width; descriptor.Height = height;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> replacement;
+    if (FAILED(self.device->CreateTexture2D(&descriptor, nullptr, &replacement)))
+        return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+    if (self.backend == 1 && rsf_dlss_release_resources() != RSF_DLSS_OK)
+        return RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
+    auto* previous_output = self.output;
+    auto* previous_alternate = self.alternate;
+    self.output = replacement.Detach(); self.alternate = next_alternate.release();
+    rsf_motion_decode_destroy(self.decode); self.decode = nullptr;
+    self.decode_width = self.decode_height = self.decode_failed_width = self.decode_failed_height = 0;
+    self.reset_pending = true; self.evaluate_given_up = false; self.consecutive_evaluate_failures = 0;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        self.output_width = width; self.output_height = height;
+        self.planned_render_width = planned_width; self.planned_render_height = planned_height;
+        self.render_width_min = min_width; self.render_height_min = min_height;
+        self.render_width_max = max_width; self.render_height_max = max_height;
+    }
+    previous_output->Release(); rsf_sr_legacy_destroy(previous_alternate);
+    if (render_width) *render_width = planned_width;
+    if (render_height) *render_height = planned_height;
+    say(self, "output resized to %ux%u; backend %u plans %ux%u", width, height, self.backend, planned_width, planned_height);
+    return RSF_DLSS_PIPELINE_OK;
+}
+catch (...) { return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t backend,
     uint32_t* render_width, uint32_t* render_height)

@@ -50,6 +50,10 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_session_create(const rsf_sr_session_se
 RSF_RUNTIME_API rsf_backend_result rsf_sr_session_select(rsf_sr_session* session,
                                                          rsf_sr_backend backend, rsf_quality quality,
                                                          uint64_t version_id);
+/* Exposure policy is a context creation flag. Prepare a replacement before committing;
+   refusal preserves the previous context. Caller completes submitted GPU work first. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_session_set_auto_exposure(rsf_sr_session* session,
+                                                                    uint32_t enabled);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_session_evaluate(rsf_sr_session* session,
                                                            void* command_context,
                                                            const rsf_sr_frame* frame);

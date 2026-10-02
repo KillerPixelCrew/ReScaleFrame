@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-30",
+  "language": "x86:LE:64:default",
+  "original_executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "dump_sha256": "fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db",
+  "source_revision": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+  "evidence_note": "docs/research/ac7-render-frame-handoff.md",
+  "validation": "Static source, decoded instructions and Ghidra decompilation. No runtime hook or Present lineage proven. Task name describes matched behavior, not recovered original debug symbols.",
+  "functions": [
+    {
+      "rva": "0x111ac10",
+      "name": "AC7_FRendererModule_BeginRenderingViewFamily",
+      "evidence_length": 128,
+      "evidence_sha256": "2052e757c7112802fb4da08eda47222a47108919ebd65d78e422a4b17cf9a0f2",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Scene/world synchronization, update commands, canvas flush, family counter and render queue submission"
+    },
+    {
+      "rva": "0x111ec90",
+      "name": "AC7_FSceneRenderer_CreateSceneRenderer",
+      "evidence_length": 125,
+      "evidence_sha256": "b9cf88fba5149b13808495990fbb895616ad58f060d8c28bffcf8e52ccd819d8",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Shading-path dispatch and 0x220/0x228 mobile/deferred allocations"
+    },
+    {
+      "rva": "0x1113080",
+      "name": "AC7_FSceneRenderer_Construct",
+      "evidence_length": 128,
+      "evidence_sha256": "6904af1dc649b532116842939ebeb8b5135b6098a9fb068ccfc3f854f1d44438",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Copied family at renderer +0x10, view-info array +0xb8, count +0xc0 and 0x27c0 view stride"
+    },
+    {
+      "rva": "0x1113350",
+      "name": "AC7_FSceneViewFamily_CopyConstruct",
+      "evidence_length": 128,
+      "evidence_sha256": "b60d5017bbec242c3afa385bf853cbfadce668fb0971f66c2e24e55a92e5dd6b",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Copies arrays, frame number +0x68 and family metadata into renderer-owned storage"
+    },
+    {
+      "rva": "0x112ff00",
+      "name": "AC7_RenderViewFamily_RenderThread",
+      "evidence_length": 128,
+      "evidence_sha256": "6979b2185b68edd4d32516266cf6efe842ec47a7a423382318ae3fe70faff2bd",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Deferred resources, renderer virtual slot +8, scene cache maintenance and renderer deletion"
+    },
+    {
+      "rva": "0x11241b0",
+      "name": "AC7_FDrawSceneCommand_ExecuteTask",
+      "evidence_length": 128,
+      "evidence_sha256": "db7d2a9fcd6b1aa52e75d736b9eff96e953993b3e97dde1f86d1767806c373c3",
+      "source": "Engine/Source/Runtime/RenderCore/Public/RenderingThread.h",
+      "evidence": "Reads captured renderer at task +0x10, invokes render helper, flushes and releases task storage"
+    },
+    {
+      "rva": "0x113a0c0",
+      "name": "AC7_FSceneRenderer_WaitForTasksClearSnapshotsAndDelete",
+      "evidence_length": 128,
+      "evidence_sha256": "2007f608cdc91cb16fc20631848d94ab41f1c78bee9282222dfd5b735fb2786c",
+      "source": "Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp",
+      "evidence": "Task/snapshot waits, r.RHICmdAsyncRHIThreadDispatch lookup and deleting destructor"
+    }
+  ]
+}

@@ -79,6 +79,8 @@ struct Host {
 
     LARGE_INTEGER frequency{};
     LARGE_INTEGER last_frame{};
+    ULONGLONG startup_hint_begin = 0;
+    bool startup_hint_dismissed = false;
 
     rsf_overlay_host_log_fn log = nullptr;
     void* log_user = nullptr;
@@ -343,8 +345,8 @@ extern "C" int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn l
 
     self.panel = self.create(RSF_OVERLAY_ABI_VERSION);
     if (!self.panel) {
-        say("overlay: the panel refused to be created, which is an ABI mismatch or an allocation "
-            "failure");
+        say("overlay: the panel refused ABI %u. Deploy rescaleframe_overlay.dll and dinput8.dll "
+            "from the same build; an allocation failure is also possible", RSF_OVERLAY_ABI_VERSION);
         self.stopped_after_failure = true;
         return 0;
     }
@@ -396,6 +398,8 @@ extern "C" int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn l
     self.device->AddRef();
     QueryPerformanceFrequency(&self.frequency);
     self.last_frame.QuadPart = 0;
+    self.startup_hint_begin = 0;
+    self.startup_hint_dismissed = false;
     self.started = true;
 
     say("overlay: ready. Insert opens it, and it draws over the finished frame without taking part in "
@@ -427,13 +431,6 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
     if (!self.started || self.stopped_after_failure || !swapchain || !stats) {
         return 0;
     }
-    if (!rsf_overlay_input_visible()) {
-        /* Closed. The clock is reset so that reopening it does not hand egui the whole time the
-           panel spent shut as one frame. */
-        self.last_frame.QuadPart = 0;
-        return 0;
-    }
-
     bool idle = false;
     if (!self.drawing.compare_exchange_strong(idle, true)) {
         say("overlay frame: thread %lu skipped, another is already drawing the panel",
@@ -445,6 +442,16 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
         Host& host;
         ~DrawingGuard() { host.drawing.store(false); }
     } drawing_guard{self};
+
+    const bool visible = rsf_overlay_input_visible() != 0;
+    const ULONGLONG now = GetTickCount64();
+    if (visible || (self.startup_hint_begin && now - self.startup_hint_begin >= 8000)) {
+        self.startup_hint_dismissed = true;
+    }
+    if (!visible && self.startup_hint_dismissed) {
+        self.last_frame.QuadPart = 0;
+        return 0;
+    }
 
     const bool trace = self.trace_frames > 0;
     if (trace) {
@@ -521,6 +528,11 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
     input.struct_size = sizeof(input);
     rsf_overlay_input_collect(&input, description.Width, description.Height,
                               seconds_since_last_frame());
+    if (!self.startup_hint_begin) self.startup_hint_begin = now;
+    if (!visible && !self.startup_hint_dismissed) {
+        const ULONGLONG elapsed = now - self.startup_hint_begin;
+        input.startup_hint_alpha = elapsed < 7000 ? 1.0f : float(8000 - elapsed) / 1000.0f;
+    }
 
     rsf_overlay_draw_data draw_data{};
     draw_data.struct_size = sizeof(draw_data);

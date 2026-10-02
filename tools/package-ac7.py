@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the Release proxy and overlay with the retail Streamline DLSS runtime."""
+"""Package the AC7 Release build, overlay and required DLSS, FSR and XeSS runtimes."""
 from __future__ import annotations
 
 import argparse
@@ -80,8 +80,12 @@ def dependency_notices(stage: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--streamline-root", required=True, type=Path)
+    parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
+    parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases")
     parser.add_argument("--expected-proxy-sha256", help="Require the game-tested proxy bytes")
+    parser.add_argument("--expected-plugin-sha256", help="Require the game-tested AC7 plugin bytes")
+    parser.add_argument("--expected-overlay-sha256", help="Require the tested overlay bytes")
     args = parser.parse_args()
     if git("status", "--porcelain"):
         raise RuntimeError("Commit the intended release source before packaging.")
@@ -92,11 +96,25 @@ def main() -> None:
     stage = output / f"stage-ac7-{uuid.uuid4().hex[:8]}"
     stage.mkdir()
     native = ROOT / "build/windows-x64/bin/Release/dinput8.dll"
+    plugin = ROOT / "build/windows-x64/bin/Release/ReScaleFrame.Game.AC7.dll"
     overlay = ROOT / "target/release/rescaleframe_overlay.dll"
-    if args.expected_proxy_sha256 and digest(native).lower() != args.expected_proxy_sha256.lower():
-        raise RuntimeError("The proxy differs from the validated build.")
+    for source, expected in ((native, args.expected_proxy_sha256),
+                             (plugin, args.expected_plugin_sha256),
+                             (overlay, args.expected_overlay_sha256)):
+        if expected and digest(source).lower() != expected.lower():
+            raise RuntimeError(f"{source.name} differs from the validated build.")
+    # The FSR4 compatibility hook recognizes this exact signed SDK binary.
+    fsr = args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
+    xess = args.xess_root / "bin/libxess.dll"
+    for source, expected in (
+        (fsr, "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"),
+        (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
+    ):
+        if digest(source) != expected:
+            raise RuntimeError(f"{source.name} differs from the validated SR runtime.")
     for source, relative in (
-        (native, "dinput8.dll"), (overlay, "rescaleframe_overlay.dll"),
+        (native, "dinput8.dll"), (plugin, "ReScaleFrame.Game.AC7.dll"),
+        (overlay, "rescaleframe_overlay.dll"),
         (ROOT / "loader/ReScaleFrame.ini.sample", "ReScaleFrame.ini"),
         (ROOT / "docs/releases/ac7-install.md", "ReScaleFrame/README.md"),
         (ROOT / "docs/releases/ac7-third-party.md", "ReScaleFrame/licenses/README.md"),
@@ -107,6 +125,12 @@ def main() -> None:
         (args.streamline_root / "3rd-party-licenses.md", "ReScaleFrame/licenses/Streamline-third-party.md"),
         (args.streamline_root / "bin/x64/nvngx_dlss.license.txt", "ReScaleFrame/streamline/nvngx_dlss.license.txt"),
         (args.streamline_root / "bin/x64/reflex.license.txt", "ReScaleFrame/licenses/NVIDIA-Reflex.txt"),
+        (fsr, "ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll"),
+        (args.fidelityfx_root / "Kits/FidelityFX/docs/license.md", "ReScaleFrame/fidelityfx/LICENSE.md"),
+        (args.fidelityfx_root / "3rdpartynotice.md", "ReScaleFrame/fidelityfx/3rdpartynotice.md"),
+        (xess, "ReScaleFrame/xess/libxess.dll"),
+        (args.xess_root / "LICENSE.txt", "ReScaleFrame/xess/LICENSE.txt"),
+        (args.xess_root / "third-party-programs.txt", "ReScaleFrame/xess/third-party-programs.txt"),
     ):
         copy(source, stage / relative)
     for name in RUNTIME:
@@ -120,6 +144,8 @@ def main() -> None:
     manifest = {
         "product": "ReScaleFrame for Ace Combat 7", "version": version, "source_commit": revision,
         "platform": "Windows x64", "streamline": "2.14.1", "dlss_runtime": "310.9.1.0",
+        "fidelityfx_sdk": "2.3.0", "fsr_providers": ["2.3.4", "3.1.5", "4.1.1"],
+        "xess_sdk": "3.0.2", "xess_sr_runtime": "2.0.2",
         "files": {p.relative_to(stage).as_posix(): digest(p) for p in sorted(stage.rglob("*")) if p.is_file()},
     }
     (stage / "ReScaleFrame/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

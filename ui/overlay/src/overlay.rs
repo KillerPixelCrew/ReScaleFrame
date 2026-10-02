@@ -127,6 +127,30 @@ impl Overlay {
             self.last_buttons = input.mouse_buttons;
             self.was_visible = false;
             self.controls = Controls::default();
+            let alpha = sanitise(input.startup_hint_alpha, 0.0).clamp(0.0, 1.0);
+            if !input.visible && alpha > 0.0 && display[0] > 0.0 && display[1] > 0.0 {
+                let scale = pixels_per_point(display[1]);
+                let mut raw = RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        egui::vec2(display[0] / scale, display[1] / scale),
+                    )),
+                    max_texture_side: Some(MAX_TEXTURE_SIDE),
+                    ..RawInput::default()
+                };
+                if let Some(viewport) = raw.viewports.get_mut(&ViewportId::ROOT) {
+                    viewport.native_pixels_per_point = Some(scale);
+                }
+                // No pointer events, widgets or cursor while the hint is shown.
+                let output = self
+                    .context
+                    .run_ui(raw, |ui| paint_startup_hint(ui.ctx(), alpha));
+                self.collect_textures(output.textures_delta);
+                let primitives = self
+                    .context
+                    .tessellate(output.shapes, output.pixels_per_point);
+                self.collect_primitives(&primitives, output.pixels_per_point, input.display);
+            }
             return intent;
         }
 
@@ -393,13 +417,31 @@ impl Overlay {
 /// Chosen rather than measured, and the one number here that is pure taste: a panel laid out at
 /// one point per pixel is unreadable on a 4K display, so it scales with the display height and
 /// stops at 3x. There is no way to ask the host for a preferred scale in ABI version 1.
-/// Draw a pointer, because the game does not.
-///
-/// Ace Combat 7 is played with a pad and hides the system cursor, so a panel that answers a mouse
-/// is unusable without one: the pointer is somewhere, and the only evidence of where is whatever
-/// happens to highlight. This draws on the foreground layer after the panel, so it is never behind
-/// a widget, and it is deliberately a plain arrow with an outline rather than a themed shape, so it
-/// stays visible against a bright sky and a dark hangar alike.
+fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("rsf_startup_hint"),
+    ));
+    let text = painter.layout_no_wrap(
+        "ReScaleFrame · Press Insert for settings".to_owned(),
+        egui::FontId::proportional(18.0),
+        egui::Color32::WHITE.gamma_multiply(alpha),
+    );
+    let position = Pos2::new(24.0, 24.0);
+    let rect = egui::Rect::from_min_size(position, text.size() + egui::vec2(24.0, 16.0));
+    painter.rect_filled(
+        rect,
+        6.0,
+        egui::Color32::from_black_alpha(200).gamma_multiply(alpha),
+    );
+    painter.galley(
+        position + egui::vec2(12.0, 8.0),
+        text,
+        egui::Color32::WHITE.gamma_multiply(alpha),
+    );
+}
+
+/// Draw a pointer because AC7 hides the system cursor.
 fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -551,6 +593,26 @@ mod tests {
             .position(|candidate| *candidate == level)
             .expect("every level is in ALL");
         overlay.controls().quality[index].expect("the panel laid out its quality selector")
+    }
+
+    #[test]
+    fn startup_hint_draws_without_opening_controls_or_accepting_clicks() {
+        let mut overlay = Overlay::new();
+        let stats = stats_with_backend();
+        let mut input = FrameInput {
+            visible: false,
+            startup_hint_alpha: 1.0,
+            mouse_buttons: RSF_OVERLAY_MOUSE_LEFT,
+            ..visible_input()
+        };
+        for _ in 0..3 {
+            assert!(overlay.frame(&input, &stats).is_idle());
+        }
+        assert!(!overlay.draw_calls().is_empty());
+        assert!(overlay.controls().enabled.is_none());
+        input.startup_hint_alpha = 0.0;
+        assert!(overlay.frame(&input, &stats).is_idle());
+        assert!(overlay.draw_calls().is_empty());
     }
 
     #[test]

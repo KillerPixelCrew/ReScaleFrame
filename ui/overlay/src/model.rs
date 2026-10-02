@@ -294,8 +294,10 @@ pub struct FrameInput {
     pub display: [u32; 2],
     /// Seconds since the previous frame.
     pub delta_seconds: f32,
-    /// When false, nothing is laid out and no draw calls are produced. Widget state survives.
+    /// When false, only the optional startup hint is drawn. Widget state survives.
     pub visible: bool,
+    /// Noninteractive startup hint opacity. Zero produces no hint.
+    pub startup_hint_alpha: f32,
 }
 
 impl Default for FrameInput {
@@ -307,6 +309,7 @@ impl Default for FrameInput {
             display: [1920, 1080],
             delta_seconds: 1.0 / 60.0,
             visible: true,
+            startup_hint_alpha: 0.0,
         }
     }
 }

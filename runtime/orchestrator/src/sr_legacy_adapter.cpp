@@ -61,6 +61,9 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     const rsf_dlss_frame* input, uint32_t has_sentinel)
 {
     if (!adapter || !input) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // FSR/XeSS choose exposure behavior at context creation, unlike DLSS's per-frame option.
+    const auto exposure_policy = rsf_sr_bridge_set_auto_exposure(adapter->bridge, input->exposure ? 0u : 1u);
+    if (exposure_policy != RSF_BACKEND_OK) return exposure_policy;
     if (adapter->width != input->render_width || adapter->height != input->render_height) {
         rsf_motion_resolve* replacement = nullptr;
         if (!rsf_motion_resolve_create(adapter->device, input->render_width, input->render_height, &replacement))
@@ -103,6 +106,12 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
         resources[i]->width = i == 3 ? input->output_width : input->render_width;
         resources[i]->height = i == 3 ? input->output_height : input->render_height;
         resources[i]->generation = adapter->generation;
+    }
+    if (input->exposure) {
+        frame.exposure.struct_size = sizeof(frame.exposure);
+        frame.exposure.resource = input->exposure;
+        frame.exposure.width = frame.exposure.height = 1;
+        frame.exposure.generation = adapter->generation;
     }
     return rsf_sr_bridge_evaluate(adapter->bridge, context, &frame);
 }

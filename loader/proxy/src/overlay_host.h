@@ -52,7 +52,7 @@ void rsf_overlay_host_toggle(void);
    panel wants changed, written when this returns non-zero; it is a description of what the user
    clicked and nothing here acts on it.
 
-   Returns zero when the overlay is closed, has not started, or could not draw. Drawing binds the
+   Returns zero when both panel and startup hint are hidden, has not started, or could not draw. Drawing binds the
    back buffer, because the renderer deliberately never rebinds a render target, and puts back the
    targets that were bound the way `present_blit` does at the same point in the frame. */
 int rsf_overlay_host_present(void* swapchain, const rsf_overlay_stats* stats,

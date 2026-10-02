@@ -4,38 +4,34 @@
 
 #include <windows.h>
 
-#include <d3d11.h>
+#include <d3d11_1.h>
 
 #include <cstring>
 #include <new>
 
 namespace {
 
-// How much of each stage is kept. D3D11 allows 128 shader resource slots and 16 samplers per
-// stage; Unreal's D3D11 backend and the vendor runtimes here stay inside the low ones, and saving
-// all 128 across three stages would be 384 reference counts for slots nothing ever binds.
-//
-// Sixteen is not a guess about Unreal. It is the count the D3D11 constants themselves name for
-// samplers, so a stage whose samplers all fit is a stage whose interesting textures do too. Where
-// that turns out to be wrong the symptom is a texture the game rebinds anyway, because a pass that
-// reaches past slot 16 sets its own bindings up.
-constexpr UINT saved_resources = 16;
+constexpr UINT saved_resources = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
 constexpr UINT saved_samplers = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT;
 constexpr UINT saved_constants = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
-constexpr UINT saved_vertex_buffers = 8;
-constexpr UINT saved_uavs = D3D11_PS_CS_UAV_REGISTER_COUNT;
+constexpr UINT saved_vertex_buffers = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT;
+constexpr UINT saved_uavs = D3D11_1_UAV_SLOT_COUNT;
 constexpr UINT saved_viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
-// One programmable stage's bindings. The three this fills are the ones anything here can disturb:
-// the vertex and pixel stages because a full screen pass uses them, and the compute stage because
-// that is what a vendor reconstruction actually runs.
 struct Stage {
     ID3D11ShaderResourceView* resources[saved_resources];
     ID3D11SamplerState* samplers[saved_samplers];
     ID3D11Buffer* constants[saved_constants];
+    UINT first_constants[saved_constants];
+    UINT constant_counts[saved_constants];
+    ID3D11ClassInstance* classes[D3D11_SHADER_MAX_INTERFACES];
+    UINT class_count;
 };
 
 struct State {
+    ID3D11DeviceContext1* context1;
+    bool constant_ranges;
+    UINT uav_count;
     // Input assembler.
     ID3D11InputLayout* layout;
     D3D11_PRIMITIVE_TOPOLOGY topology;
@@ -46,9 +42,7 @@ struct State {
     UINT vertex_strides[saved_vertex_buffers];
     UINT vertex_offsets[saved_vertex_buffers];
 
-    // Shaders. Class instances are deliberately not saved: asking for them means providing an
-    // array and a count for each stage, and nothing in this project or in Unreal's D3D11 backend
-    // uses shader linkage.
+    // Shaders and their stage-specific bindings.
     ID3D11VertexShader* vertex_shader;
     ID3D11HullShader* hull_shader;
     ID3D11DomainShader* domain_shader;
@@ -57,9 +51,16 @@ struct State {
     ID3D11ComputeShader* compute_shader;
 
     Stage vertex;
+    Stage hull;
+    Stage domain;
+    Stage geometry;
     Stage pixel;
     Stage compute;
     ID3D11UnorderedAccessView* compute_uavs[saved_uavs];
+    ID3D11UnorderedAccessView* pixel_uavs[saved_uavs];
+    ID3D11Buffer* stream_targets[D3D11_SO_BUFFER_SLOT_COUNT];
+    ID3D11Predicate* predicate;
+    BOOL predicate_value;
 
     // Rasteriser.
     ID3D11RasterizerState* raster;
@@ -78,13 +79,15 @@ struct State {
     UINT stencil_reference;
 };
 
-static_assert(sizeof(State) <= RSF_D3D11_STATE_BYTES,
-              "rsf_d3d11_state is too small for the state it has to hold");
-static_assert(alignof(State) <= alignof(uint64_t), "rsf_d3d11_state is not aligned for the state");
+struct Storage {
+    State* snapshot;
+};
+static_assert(sizeof(Storage) <= RSF_D3D11_STATE_BYTES);
+static_assert(alignof(Storage) <= alignof(uint64_t));
 
-State& state_of(rsf_d3d11_state* state)
+Storage& storage_of(rsf_d3d11_state* state)
 {
-    return *reinterpret_cast<State*>(state->opaque);
+    return *reinterpret_cast<Storage*>(state->opaque);
 }
 
 void release_array(IUnknown* const* items, size_t count)
@@ -101,7 +104,30 @@ void release_stage(const Stage& stage)
     release_array(reinterpret_cast<IUnknown* const*>(stage.resources), saved_resources);
     release_array(reinterpret_cast<IUnknown* const*>(stage.samplers), saved_samplers);
     release_array(reinterpret_cast<IUnknown* const*>(stage.constants), saved_constants);
+    release_array(reinterpret_cast<IUnknown* const*>(stage.classes), stage.class_count);
 }
+
+struct StageOperations {
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*get_resources)(UINT, UINT, ID3D11ShaderResourceView**);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*set_resources)(UINT, UINT, ID3D11ShaderResourceView* const*);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*get_samplers)(UINT, UINT, ID3D11SamplerState**);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*set_samplers)(UINT, UINT, ID3D11SamplerState* const*);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*get_constants)(UINT, UINT, ID3D11Buffer**);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext::*set_constants)(UINT, UINT, ID3D11Buffer* const*);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext1::*get_ranges)(UINT, UINT, ID3D11Buffer**, UINT*, UINT*);
+    void (STDMETHODCALLTYPE ID3D11DeviceContext1::*set_ranges)(UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*);
+};
+
+#define STAGE_OPERATIONS(name) { &ID3D11DeviceContext::name##GetShaderResources, \
+    &ID3D11DeviceContext::name##SetShaderResources, &ID3D11DeviceContext::name##GetSamplers, \
+    &ID3D11DeviceContext::name##SetSamplers, &ID3D11DeviceContext::name##GetConstantBuffers, \
+    &ID3D11DeviceContext::name##SetConstantBuffers, &ID3D11DeviceContext1::name##GetConstantBuffers1, \
+    &ID3D11DeviceContext1::name##SetConstantBuffers1 }
+constexpr StageOperations operations[]{
+    STAGE_OPERATIONS(VS), STAGE_OPERATIONS(HS), STAGE_OPERATIONS(DS),
+    STAGE_OPERATIONS(GS), STAGE_OPERATIONS(PS), STAGE_OPERATIONS(CS)
+};
+#undef STAGE_OPERATIONS
 
 } // namespace
 
@@ -111,10 +137,22 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
         return 0;
     }
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    // Zeroed first. Every Get below writes each slot it is asked about, but a partial failure or a
-    // future field added without a Get would otherwise leave a stack pointer to be released.
     std::memset(state_pointer, 0, sizeof(*state_pointer));
-    State& state = *new (state_pointer->opaque) State{};
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
+    auto* snapshot = new (std::nothrow) State{};
+    if (!snapshot) return 0;
+    new (state_pointer->opaque) Storage{snapshot};
+    State& state = *snapshot;
+    context->QueryInterface(IID_PPV_ARGS(&state.context1));
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    state.uav_count = device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 ?
+        saved_uavs : D3D11_PS_CS_UAV_REGISTER_COUNT;
+    D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
+    state.constant_ranges = state.context1 &&
+        SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) &&
+        options.ConstantBufferOffsetting;
+    device->Release();
 
     context->IAGetInputLayout(&state.layout);
     context->IAGetPrimitiveTopology(&state.topology);
@@ -122,23 +160,31 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
     context->IAGetVertexBuffers(0, saved_vertex_buffers, state.vertex_buffers,
                                 state.vertex_strides, state.vertex_offsets);
 
-    context->VSGetShader(&state.vertex_shader, nullptr, nullptr);
-    context->HSGetShader(&state.hull_shader, nullptr, nullptr);
-    context->DSGetShader(&state.domain_shader, nullptr, nullptr);
-    context->GSGetShader(&state.geometry_shader, nullptr, nullptr);
-    context->PSGetShader(&state.pixel_shader, nullptr, nullptr);
-    context->CSGetShader(&state.compute_shader, nullptr, nullptr);
+    state.vertex.class_count = state.hull.class_count = state.domain.class_count =
+        state.geometry.class_count = state.pixel.class_count = state.compute.class_count = D3D11_SHADER_MAX_INTERFACES;
+    context->VSGetShader(&state.vertex_shader, state.vertex.classes, &state.vertex.class_count);
+    context->HSGetShader(&state.hull_shader, state.hull.classes, &state.hull.class_count);
+    context->DSGetShader(&state.domain_shader, state.domain.classes, &state.domain.class_count);
+    context->GSGetShader(&state.geometry_shader, state.geometry.classes, &state.geometry.class_count);
+    context->PSGetShader(&state.pixel_shader, state.pixel.classes, &state.pixel.class_count);
+    context->CSGetShader(&state.compute_shader, state.compute.classes, &state.compute.class_count);
 
-    context->VSGetShaderResources(0, saved_resources, state.vertex.resources);
-    context->VSGetSamplers(0, saved_samplers, state.vertex.samplers);
-    context->VSGetConstantBuffers(0, saved_constants, state.vertex.constants);
-    context->PSGetShaderResources(0, saved_resources, state.pixel.resources);
-    context->PSGetSamplers(0, saved_samplers, state.pixel.samplers);
-    context->PSGetConstantBuffers(0, saved_constants, state.pixel.constants);
-    context->CSGetShaderResources(0, saved_resources, state.compute.resources);
-    context->CSGetSamplers(0, saved_samplers, state.compute.samplers);
-    context->CSGetConstantBuffers(0, saved_constants, state.compute.constants);
-    context->CSGetUnorderedAccessViews(0, saved_uavs, state.compute_uavs);
+    Stage* stages[]{&state.vertex, &state.hull, &state.domain, &state.geometry, &state.pixel, &state.compute};
+    for (size_t i = 0; i < 6; ++i) {
+        auto& stage = *stages[i];
+        const auto& op = operations[i];
+        (context->*op.get_resources)(0, saved_resources, stage.resources);
+        (context->*op.get_samplers)(0, saved_samplers, stage.samplers);
+        if (state.constant_ranges) {
+            (state.context1->*op.get_ranges)(0, saved_constants, stage.constants,
+                                           stage.first_constants, stage.constant_counts);
+        } else {
+            (context->*op.get_constants)(0, saved_constants, stage.constants);
+        }
+    }
+    context->CSGetUnorderedAccessViews(0, state.uav_count, state.compute_uavs);
+    context->SOGetTargets(D3D11_SO_BUFFER_SLOT_COUNT, state.stream_targets);
+    context->GetPredication(&state.predicate, &state.predicate_value);
 
     context->RSGetState(&state.raster);
     state.viewport_count = saved_viewports;
@@ -146,8 +192,8 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
     state.scissor_count = saved_viewports;
     context->RSGetScissorRects(&state.scissor_count, state.scissors);
 
-    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, state.targets,
-                                &state.depth_view);
+    context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
+        state.targets, &state.depth_view, 0, state.uav_count, state.pixel_uavs);
     context->OMGetBlendState(&state.blend, state.blend_factor, &state.blend_mask);
     context->OMGetDepthStencilState(&state.depth_state, &state.stencil_reference);
     return 1;
@@ -159,42 +205,59 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
         return;
     }
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    State& state = state_of(state_pointer);
+    auto* snapshot = storage_of(state_pointer).snapshot;
+    if (!snapshot) return;
+    State& state = *snapshot;
 
-    // Inputs first, outputs after. A texture that is still bound as a shader resource when it is
-    // bound as a render target is silently unbound by the runtime, and the binding that loses is
-    // the one that arrived first, so restoring the targets before the resources would quietly drop
-    // exactly the render target this is trying to hand back.
+    // Remove foreign bindings from every stage before restoring potentially conflicting resources.
     ID3D11ShaderResourceView* no_resources[saved_resources] = {};
     ID3D11UnorderedAccessView* no_uavs[saved_uavs] = {};
-    UINT no_counts[saved_uavs] = {};
-    context->VSSetShaderResources(0, saved_resources, no_resources);
-    context->PSSetShaderResources(0, saved_resources, no_resources);
-    context->CSSetShaderResources(0, saved_resources, no_resources);
-    context->CSSetUnorderedAccessViews(0, saved_uavs, no_uavs, no_counts);
+    UINT keep_counts[saved_uavs];
+    for (auto& count : keep_counts) count = UINT(-1);
+    for (const auto& op : operations) (context->*op.set_resources)(0, saved_resources, no_resources);
+    context->CSSetUnorderedAccessViews(0, state.uav_count, no_uavs, keep_counts);
+    context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr,
+        0, state.uav_count, no_uavs, keep_counts);
+    context->SOSetTargets(0, nullptr, nullptr);
+    ID3D11Buffer* no_vertices[saved_vertex_buffers]{};
+    UINT no_strides[saved_vertex_buffers]{};
+    context->IASetVertexBuffers(0, saved_vertex_buffers, no_vertices, no_strides, no_strides);
+    context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
 
-    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, state.targets,
-                                state.depth_view);
+    // OM render targets and UAVs share slot numbers. Start UAV restoration after the last RTV.
+    UINT target_count = 0;
+    for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+        if (state.targets[i]) target_count = i + 1;
+    context->OMSetRenderTargetsAndUnorderedAccessViews(target_count, state.targets, state.depth_view,
+        target_count, state.uav_count - target_count, state.pixel_uavs + target_count,
+        keep_counts + target_count);
     context->OMSetBlendState(state.blend, state.blend_factor, state.blend_mask);
     context->OMSetDepthStencilState(state.depth_state, state.stencil_reference);
 
-    context->VSSetShaderResources(0, saved_resources, state.vertex.resources);
-    context->VSSetSamplers(0, saved_samplers, state.vertex.samplers);
-    context->VSSetConstantBuffers(0, saved_constants, state.vertex.constants);
-    context->PSSetShaderResources(0, saved_resources, state.pixel.resources);
-    context->PSSetSamplers(0, saved_samplers, state.pixel.samplers);
-    context->PSSetConstantBuffers(0, saved_constants, state.pixel.constants);
-    context->CSSetShaderResources(0, saved_resources, state.compute.resources);
-    context->CSSetSamplers(0, saved_samplers, state.compute.samplers);
-    context->CSSetConstantBuffers(0, saved_constants, state.compute.constants);
-    context->CSSetUnorderedAccessViews(0, saved_uavs, state.compute_uavs, no_counts);
+    context->CSSetUnorderedAccessViews(0, state.uav_count, state.compute_uavs, keep_counts);
+    UINT stream_offsets[D3D11_SO_BUFFER_SLOT_COUNT];
+    for (auto& offset : stream_offsets) offset = UINT(-1);
+    context->SOSetTargets(D3D11_SO_BUFFER_SLOT_COUNT, state.stream_targets, stream_offsets);
 
-    context->VSSetShader(state.vertex_shader, nullptr, 0);
-    context->HSSetShader(state.hull_shader, nullptr, 0);
-    context->DSSetShader(state.domain_shader, nullptr, 0);
-    context->GSSetShader(state.geometry_shader, nullptr, 0);
-    context->PSSetShader(state.pixel_shader, nullptr, 0);
-    context->CSSetShader(state.compute_shader, nullptr, 0);
+    Stage* stages[]{&state.vertex, &state.hull, &state.domain, &state.geometry, &state.pixel, &state.compute};
+    for (size_t i = 0; i < 6; ++i) {
+        auto& stage = *stages[i];
+        const auto& op = operations[i];
+        (context->*op.set_resources)(0, saved_resources, stage.resources);
+        (context->*op.set_samplers)(0, saved_samplers, stage.samplers);
+        (context->*op.set_constants)(0, saved_constants, stage.constants);
+        if (state.constant_ranges) {
+            (state.context1->*op.set_ranges)(0, saved_constants, stage.constants,
+                                           stage.first_constants, stage.constant_counts);
+        }
+    }
+
+    context->VSSetShader(state.vertex_shader, state.vertex.classes, state.vertex.class_count);
+    context->HSSetShader(state.hull_shader, state.hull.classes, state.hull.class_count);
+    context->DSSetShader(state.domain_shader, state.domain.classes, state.domain.class_count);
+    context->GSSetShader(state.geometry_shader, state.geometry.classes, state.geometry.class_count);
+    context->PSSetShader(state.pixel_shader, state.pixel.classes, state.pixel.class_count);
+    context->CSSetShader(state.compute_shader, state.compute.classes, state.compute.class_count);
 
     context->IASetInputLayout(state.layout);
     context->IASetPrimitiveTopology(state.topology);
@@ -203,18 +266,15 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
                                 state.vertex_strides, state.vertex_offsets);
 
     context->RSSetState(state.raster);
-    if (state.viewport_count > 0) {
-        context->RSSetViewports(state.viewport_count, state.viewports);
-    }
-    if (state.scissor_count > 0) {
-        context->RSSetScissorRects(state.scissor_count, state.scissors);
-    }
+    context->RSSetViewports(state.viewport_count, state.viewports);
+    context->RSSetScissorRects(state.scissor_count, state.scissors);
+    context->SetPredication(state.predicate, state.predicate_value);
 
     release_array(reinterpret_cast<IUnknown* const*>(state.vertex_buffers), saved_vertex_buffers);
-    release_stage(state.vertex);
-    release_stage(state.pixel);
-    release_stage(state.compute);
-    release_array(reinterpret_cast<IUnknown* const*>(state.compute_uavs), saved_uavs);
+    for (const auto* stage : stages) release_stage(*stage);
+    release_array(reinterpret_cast<IUnknown* const*>(state.compute_uavs), state.uav_count);
+    release_array(reinterpret_cast<IUnknown* const*>(state.pixel_uavs), state.uav_count);
+    release_array(reinterpret_cast<IUnknown* const*>(state.stream_targets), D3D11_SO_BUFFER_SLOT_COUNT);
     release_array(reinterpret_cast<IUnknown* const*>(state.targets),
                   D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
 
@@ -222,12 +282,11 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
         state.layout,          state.index_buffer,    state.vertex_shader,  state.hull_shader,
         state.domain_shader,   state.geometry_shader, state.pixel_shader,   state.compute_shader,
         state.raster,          state.depth_view,      state.blend,          state.depth_state,
+        state.context1,        state.predicate,
     };
     release_array(singles, sizeof(singles) / sizeof(singles[0]));
 
-    // Zeroed so a second restore of the same state releases nothing. It is a caller mistake either
-    // way, and one that leaves the game short a reference on every resource it had bound is the
-    // kind that surfaces minutes later as a use after free somewhere else entirely.
+    delete snapshot;
     std::memset(state_pointer, 0, sizeof(*state_pointer));
 }
 

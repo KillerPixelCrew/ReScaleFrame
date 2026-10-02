@@ -3,6 +3,11 @@
 Inspected source snapshots for the AC7 research. Links pin the exact revision. Sparse checkouts contain selected source directories; SDK binaries and recursive submodules were not fetched. No upstream source was edited.
 Epic Unreal Engine links require authorized Epic GitHub access. The selected engine source is a local reference, not a resolved map of AC7 binary addresses.
 
+The 30 September [motion investigation](ac7-motion-vectors.md) inspected newer RenoDX and Luma
+snapshots alongside the original engine tag. Their revisions are recorded separately in
+[motion evidence](evidence/ac7-motion-shaders-20260930.json); the older links below remain the
+sources of the earlier research.
+
 | Reference | Source | What to inspect |
 | --- | --- | --- |
 | SpecialK | [README.md:34](https://github.com/SpecialKO/SpecialK/blob/5e0c979e5a2a3d6168114cb5b6a531faffedf338/README.md#L34) | Loading options and why Special K prefers early injection |

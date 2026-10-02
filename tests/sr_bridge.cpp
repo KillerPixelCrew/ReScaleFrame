@@ -71,10 +71,19 @@ int main(int argc, char** argv)
         resources[i]->struct_size = sizeof(*resources[i]); resources[i]->resource = textures[i].Get();
         resources[i]->width = resources[i]->height = 128; resources[i]->generation = 1;
     }
+    ComPtr<ID3D11Texture2D> exposure;
+    D3D11_TEXTURE2D_DESC exposure_desc{};
+    exposure_desc.Width = exposure_desc.Height = exposure_desc.MipLevels = exposure_desc.ArraySize = exposure_desc.SampleDesc.Count = 1;
+    exposure_desc.Format = DXGI_FORMAT_R32_FLOAT; exposure_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const float exposure_value = 1;
+    D3D11_SUBRESOURCE_DATA exposure_data{&exposure_value, sizeof(float), 0};
+    if (FAILED(device->CreateTexture2D(&exposure_desc, &exposure_data, &exposure))) return 1;
     bool passed = true;
-    const rsf_sr_backend sequence[] = {RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_XESS, RSF_SR_FSR2, RSF_SR_FSR4};
+    const rsf_sr_backend sequence[] = {RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_XESS, RSF_SR_FSR2,
+                                      RSF_SR_FSR4, RSF_SR_XESS, RSF_SR_FSR4};
     const rsf_quality qualities[] = {RSF_QUALITY_NATIVE, RSF_QUALITY_QUALITY, RSF_QUALITY_NATIVE,
-                                     RSF_QUALITY_PERFORMANCE, RSF_QUALITY_NATIVE};
+                                     RSF_QUALITY_PERFORMANCE, RSF_QUALITY_NATIVE,
+                                     RSF_QUALITY_ULTRA_PERFORMANCE, RSF_QUALITY_ULTRA_PERFORMANCE};
     uint32_t sequence_index = 0;
     for (auto backend : sequence) {
         result = rsf_sr_bridge_select(bridge, backend, qualities[sequence_index++], 0);
@@ -90,7 +99,19 @@ int main(int argc, char** argv)
             resources[i]->width = i == 3 ? 128 : record.render_width;
             resources[i]->height = i == 3 ? 128 : record.render_height;
         }
-        for (uint32_t i = 0; i < 3; ++i) {
+        // Reuse all command slots, then rebuild the SDK context while earlier work is queued.
+        for (uint32_t i = 0; i < 12; ++i) {
+            if (i == 6 || i == 9) {
+                result = rsf_sr_bridge_set_auto_exposure(bridge, i == 9 ? 1u : 0u);
+                passed &= result == RSF_BACKEND_OK;
+                frame.exposure = {};
+                if (i == 6) {
+                    frame.exposure.struct_size = sizeof(frame.exposure);
+                    frame.exposure.resource = exposure.Get();
+                    frame.exposure.width = frame.exposure.height = 1;
+                    frame.exposure.generation = record.resource_generation;
+                }
+            }
             ++record.frame_id;
             frame.jitter_x = i == 0 ? -0.25f : i == 1 ? 0.25f : 0;
             result = rsf_sr_bridge_evaluate(bridge, context.Get(), &frame);

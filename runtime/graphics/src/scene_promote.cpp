@@ -286,7 +286,7 @@ void release_everything(rsf_promote* promote)
     promote->ready = false;
 }
 
-void add_promoted(rsf_frame_tap_plan* plan, const Replacement* set, uint32_t count)
+void add_promoted(rsf_frame_tap_plan* plan, const Replacement* set, uint32_t count, void* gate = nullptr)
 {
     for (uint32_t index = 0; index < count && plan->count < RSF_FRAME_TAP_MAX_SUBSTITUTIONS;
          ++index) {
@@ -297,6 +297,7 @@ void add_promoted(rsf_frame_tap_plan* plan, const Replacement* set, uint32_t cou
         item.texture = set[index].original;
         item.shader_view = set[index].shader_view;
         item.render_view = set[index].target_view;
+        item.after_target = gate;
     }
 }
 
@@ -450,18 +451,17 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
     plan->viewport_scale_x = float(promote->output_width) / float(promote->render_width);
     plan->viewport_scale_y = float(promote->output_height) / float(promote->render_height);
 
-    // The composite first, and ungated: everything drawn into it has to land at output resolution,
-    // including the interface composite that runs after the tonemap.
+    // A pooled tonemap allocation can be GBuffer A earlier in this frame. Its reads must stay
+    // native until the single-target post-process binding starts its new lifetime.
     rsf_frame_tap_substitution& composite = plan->items[plan->count++];
     composite.texture = promote->composite.original;
     composite.shader_view = promote->composite.shader_view;
     composite.render_view = promote->composite.target_view;
+    composite.after_target = promote->composite.original;
 
-    // The interface layers and the chain, ungated for the same reason: the quads draw before the
-    // tonemap and the chain is filled after it, and both have to be at output resolution whenever
-    // they are touched.
+    // UI writes precede tonemapping. Chain allocations can alias other GBuffers before it.
     add_promoted(plan, promote->ui_targets, promote->ui_target_count);
-    add_promoted(plan, promote->chain_targets, promote->chain_target_count);
+    add_promoted(plan, promote->chain_targets, promote->chain_target_count, promote->composite.original);
 
     // Scene colour last and gated on the composite, because the scene passes read scene colour
     // while they are still writing it. An ungated substitution here hands a lighting pass a

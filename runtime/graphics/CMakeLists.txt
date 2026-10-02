@@ -1,7 +1,9 @@
 add_library(rsf_graphics STATIC
+    src/texture_dump_raw.cpp
     src/texture_dump.cpp
     src/motion_decode.cpp
     src/motion_resolve.cpp
+    src/colour_fidelity.cpp
     src/resource_roles.cpp
     src/constant_buffer_read.cpp
     src/resource_ref.cpp

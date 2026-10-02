@@ -225,6 +225,7 @@ unsafe fn frame_inner(
         display: [input.display_width, input.display_height],
         delta_seconds: input.delta_seconds,
         visible: input.visible != 0,
+        startup_hint_alpha: input.startup_hint_alpha,
     };
     let frame_stats = unsafe { borrow_stats(stats) };
     let produced = overlay.frame(&frame_input, &frame_stats);
@@ -381,6 +382,7 @@ mod tests {
             display_height: 720,
             delta_seconds: 1.0 / 60.0,
             visible: 1,
+            startup_hint_alpha: 0.0,
         }
     }
 
@@ -579,7 +581,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 4);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 5);
     }
 
     #[test]

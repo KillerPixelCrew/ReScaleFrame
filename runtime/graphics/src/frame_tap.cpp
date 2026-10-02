@@ -99,6 +99,10 @@ struct Tap {
     void* sentinel_replacement = nullptr;
     std::atomic<uint32_t> vtable_refreshes{0};
     rsf_frame_tap_options options{};
+    std::atomic<rsf_frame_tap_target_fn> research_draw{nullptr};
+    std::atomic<rsf_frame_tap_target_fn> research_before{nullptr};
+    std::atomic<rsf_frame_tap_compute_fn> research_compute{nullptr};
+    std::atomic<void*> research_user{nullptr};
     ID3D11DeviceContext* observed_context = nullptr;
     void* input_watch = nullptr;
     bool input_watch_dirty = true;
@@ -538,19 +542,22 @@ void open_gates_for(Tap& self, ID3D11DeviceContext* context, void* texture)
     if (!texture) {
         return;
     }
+    bool asked = false, accepted = true;
     for (uint32_t index = 0; index < self.plan.count; ++index) {
         if (self.plan.items[index].after_target != texture || self.gate_open[index]) {
             continue;
         }
-        if (self.plan.on_gate) {
+        if (self.plan.on_gate && !asked) {
             // Under the reentry guard the caller set up, so whatever this binds comes back through
             // these hooks as the tap's own work rather than as the game's. A callback that declines
             // leaves the gate shut for the next binding of this target.
-            if (!self.plan.on_gate(self.plan.on_gate_user, context, texture)) {
+            accepted = self.plan.on_gate(self.plan.on_gate_user, context, texture) != 0;
+            asked = true;
+            if (!accepted) {
                 self.gates_declined.fetch_add(1, std::memory_order_relaxed);
-                continue;
             }
         }
+        if (!accepted) continue;
         self.gate_open[index] = true;
         self.gates_opened.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1089,12 +1096,15 @@ void end_divert(Tap& self, ID3D11DeviceContext* context)
 }
 
 void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
-                          UINT element_count)
+                          UINT element_count, bool before = false)
 {
+    const auto research = before ? self.research_before.load(std::memory_order_acquire) :
+        self.research_draw.load(std::memory_order_acquire);
+    if (before && (!research || context != self.observed_context)) return;
     if (!self.target_texture) {
         return;
     }
-    const uint32_t ordinal = self.draws_into_target++;
+    const uint32_t ordinal = before ? self.draws_into_target : self.draws_into_target++;
 
     uint32_t watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
     for (uint32_t index = 0; index < RSF_FRAME_TAP_WATCH_SLOTS; ++index) {
@@ -1115,7 +1125,7 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
         }
         self.input_watch_dirty = false;
     }
-    const bool report_input = self.options.on_input_draw && self.input_watch_bound &&
+    const bool report_input = !before && self.options.on_input_draw && self.input_watch_bound &&
                               context == self.observed_context;
 
     // Is this one of the handful of draws in the frame worth describing? Pointer comparisons over
@@ -1123,14 +1133,14 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     // The sets are small by construction, so these loops are a few compares and no memory the draw
     // path did not already touch.
     bool report_candidate = false;
-    if (self.options.on_candidate_draw && context == self.observed_context &&
+    if (!before && self.options.on_candidate_draw && context == self.observed_context &&
         candidate_passes(self)) {
         report_candidate = true;
         self.candidate_draws.fetch_add(1, std::memory_order_relaxed);
     }
 
     bool report_target = false;
-    if (watch_index != RSF_FRAME_TAP_WATCH_SLOTS && self.options.on_target_draw) {
+    if (!before && watch_index != RSF_FRAME_TAP_WATCH_SLOTS && self.options.on_target_draw) {
         uint32_t budget = self.watch_budget[watch_index].load(std::memory_order_relaxed);
         while (budget != 0) {
             if (budget == unlimited_budget ||
@@ -1141,7 +1151,8 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
             }
         }
     }
-    if (!report_target && !report_input && !report_candidate) {
+    const bool report_research = research && context == self.observed_context;
+    if (!report_target && !report_input && !report_candidate && !report_research) {
         return;
     }
 
@@ -1219,6 +1230,18 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
         // of what it is made of. Saying so keeps a candidate from being read as a watch hit.
         report.watch_index = RSF_FRAME_TAP_WATCH_SLOTS;
         self.options.on_candidate_draw(self.options.on_candidate_draw_user, &report);
+    }
+    if (report_research) {
+        if (!self.geometry_valid) seed_geometry(self, context);
+        report.vertex_shader = self.geometry.vertex_shader;
+        report.input_layout = self.geometry.input_layout;
+        report.vertex_stride = self.geometry.strides[0];
+        report.topology = static_cast<uint32_t>(self.geometry.topology);
+        std::memcpy(report.vertex_constants, self.geometry.vertex_constants,
+                    sizeof(report.vertex_constants));
+        std::memcpy(report.pixel_constants, self.pixel_constants, sizeof(report.pixel_constants));
+        extra_stage_constants(context, report);
+        research(self.research_user.load(std::memory_order_relaxed), &report);
     }
 }
 
@@ -1358,7 +1381,7 @@ ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContex
                                                    ID3D11RenderTargetView** substituted,
                                                    ID3D11DepthStencilView** depth_out)
 {
-    if (inside_hook || context != self.observed_context || !views || count == 0 ||
+    if (inside_hook || context != self.observed_context || !views || count != 1 ||
         !self.plan_active.load(std::memory_order_relaxed)) {
         return views;
     }
@@ -1421,7 +1444,7 @@ ID3D11RenderTargetView* const* plan_render_targets(Tap& self, ID3D11DeviceContex
 void settle_target_substitution(Tap& self, ID3D11DeviceContext* context)
 {
     bool substituted = false;
-    if (self.plan_active.load(std::memory_order_relaxed) && self.target_texture) {
+    if (self.plan_active.load(std::memory_order_relaxed) && self.target_texture && self.target_count == 1) {
         uint32_t entry_index = 0;
         const rsf_frame_tap_substitution* entry = find_entry(self, self.target_texture, entry_index);
         substituted = entry && entry->render_view && entry_applies(self, entry_index);
@@ -1599,6 +1622,7 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
 // at the moment it is written rather than at the moment it is used.
 void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
 {
+    if (!self.options.on_pass) return; // Native owners use graph inputs; keep shadows for captures.
     if (!self.shadow_dirty) {
         return;
     }
@@ -2188,6 +2212,11 @@ void STDMETHODCALLTYPE hooked_dispatch(ID3D11DeviceContext* c, UINT x, UINT y, U
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
     reinterpret_cast<Fn>(s.pass_originals[3])(c, x, y, z);
     refresh_hooks(s);
+    const auto fn = s.research_compute.load(std::memory_order_acquire);
+    if (fn && !inside_hook && c == s.observed_context) {
+        const ReentryGuard guard;
+        fn(s.research_user.load(std::memory_order_relaxed), c, x, y, z, nullptr, 0);
+    }
 }
 void STDMETHODCALLTYPE hooked_dispatch_indirect(ID3D11DeviceContext* c, ID3D11Buffer* arguments,
                                                 UINT offset)
@@ -2196,6 +2225,11 @@ void STDMETHODCALLTYPE hooked_dispatch_indirect(ID3D11DeviceContext* c, ID3D11Bu
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
     reinterpret_cast<Fn>(s.pass_originals[4])(c, arguments, offset);
     refresh_hooks(s);
+    const auto fn = s.research_compute.load(std::memory_order_acquire);
+    if (fn && !inside_hook && c == s.observed_context) {
+        const ReentryGuard guard;
+        fn(s.research_user.load(std::memory_order_relaxed), c, 0, 0, 0, arguments, offset);
+    }
 }
 void STDMETHODCALLTYPE hooked_copy_subresource_region(ID3D11DeviceContext* c,
                                                       ID3D11Resource* destination,
@@ -2430,7 +2464,10 @@ void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT in
     if (!moved) {
         begin_constant_override(self, context, true, index_count);
     }
-    forward(context, index_count, start_index, base_vertex);
+    consider_target_draw(self, context, true, index_count, true);
+    // A before-capture Map can switch the runtime's submission vtable. Use its current entry.
+    refresh_hooks(self);
+    self.original_draw_indexed(context, index_count, start_index, base_vertex);
     refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
@@ -2459,7 +2496,9 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
     if (!moved) {
         begin_constant_override(self, context, false, vertex_count);
     }
-    forward(context, vertex_count, start_vertex);
+    consider_target_draw(self, context, false, vertex_count, true);
+    refresh_hooks(self);
+    self.original_draw(context, vertex_count, start_vertex);
     refresh_hooks(self);
     if (moved) {
         end_divert(self, context);
@@ -2671,6 +2710,9 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_refresh(void)
 extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
 {
     Tap& self = tap();
+    self.research_draw.store(nullptr, std::memory_order_release);
+    self.research_before.store(nullptr, std::memory_order_release);
+    self.research_compute.store(nullptr, std::memory_order_release);
     ID3D11Buffer* constants = nullptr;
     {
         std::lock_guard<std::mutex> lock(self.guard);
@@ -2844,6 +2886,28 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes,
     self.constant_watch_user.store(user, std::memory_order_relaxed);
     self.constant_watch_bytes.store(bytes, std::memory_order_relaxed);
     self.constant_watch.store(fn, std::memory_order_release);
+    return RSF_FRAME_TAP_OK;
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_research_callbacks(
+    rsf_frame_tap_target_fn draw, rsf_frame_tap_compute_fn compute, void* user)
+{
+    return rsf_frame_tap_set_research_phase_callbacks(nullptr, draw, compute, user);
+}
+
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_research_phase_callbacks(
+    rsf_frame_tap_target_fn before, rsf_frame_tap_target_fn after,
+    rsf_frame_tap_compute_fn compute, void* user)
+{
+    Tap& self = tap();
+    if (!self.installed) return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    self.research_draw.store(nullptr, std::memory_order_release);
+    self.research_before.store(nullptr, std::memory_order_release);
+    self.research_compute.store(nullptr, std::memory_order_release);
+    self.research_user.store(user, std::memory_order_relaxed);
+    self.research_draw.store(after, std::memory_order_release);
+    self.research_before.store(before, std::memory_order_release);
+    self.research_compute.store(compute, std::memory_order_release);
     return RSF_FRAME_TAP_OK;
 }
 

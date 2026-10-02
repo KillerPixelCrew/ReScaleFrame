@@ -1,0 +1,1053 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-30",
+  "process_id": 220716,
+  "executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "deployment": "ac7-pair-20260930-190900-292",
+  "sessions": [
+    {
+      "session": "motion-20260930-191208-220716-1",
+      "session_sha256": "0f31c87e9561945f59c359e5ba0028ab289b033a228db51cbec5159a8db7e97d",
+      "native_sha256": "bec2aa0c2fe13041d47963609442ad81f913282824237d8be0922eef87dabc1f",
+      "draws_sha256": "797eaff4dc1116c8ad4371e5dc2b399f3827cdb1662fb8f5c552e0a863279f84",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 474
+      },
+      "postprocess_qpc": [
+        9413365706160,
+        9413365707742
+      ],
+      "first_draw_qpc": 9413365689178,
+      "tonemap_qpc": 9413366610476,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413366610476
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413366680035
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191216-220716-2",
+      "session_sha256": "268995066a1ac0bab9d8ac9f74f1acf9868f2ce17164b592bd608549b76e6716",
+      "native_sha256": "d912fe40af537c3e11b1e89d5ce1b1950cd89f5abd11bbf5ba5afda5b67e1f87",
+      "draws_sha256": "87042c923d0477e24af3de34c3dbf953cadbe18d72333f458ee5cb6be514dbaf",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 459
+      },
+      "postprocess_qpc": [
+        9413449637095,
+        9413449638084
+      ],
+      "first_draw_qpc": 9413449630845,
+      "tonemap_qpc": 9413450490198,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413450490198
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413450557744
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191219-220716-3",
+      "session_sha256": "fb1f6c9d932cc608acc1d31d7aa4dd03f3f5436ece49755af025c217878ae7ca",
+      "native_sha256": "5e137c351e9cf986d2eab16af39314caf224b96bec69aea305b6647bc37e228a",
+      "draws_sha256": "f77850ba419361cf6c7c4d6ef6a93757b615e889b1d227f0dbe8b53c359b4ce8",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 463
+      },
+      "postprocess_qpc": [
+        9413470675694,
+        9413470676698
+      ],
+      "first_draw_qpc": 9413470669749,
+      "tonemap_qpc": 9413471526123,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413471526123
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413471590698
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191220-220716-4",
+      "session_sha256": "c9371a65958f8a141918b52826440ec8ee8295be4b3a0f6f2659da60e8675998",
+      "native_sha256": "2ba5adde4b31044bc1022957f065035bd39c4f8ccc75628744f25278c79331ee",
+      "draws_sha256": "f1cbb2b0095374f2bd256213d6c022023623e577c8b332ea43b0f7cb3985cc35",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 537
+      },
+      "postprocess_qpc": [
+        9413486237771,
+        9413486238786
+      ],
+      "first_draw_qpc": 9413486231679,
+      "tonemap_qpc": 9413487040690,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413487040690
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413487107629
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191222-220716-5",
+      "session_sha256": "f6733c9435f42e53e6bdecf85702d520bebbfebd89c9b3474fba4b1c3a13ba8f",
+      "native_sha256": "aa4c5aee08ae367edd49ef80032837c614680e869cb90f7eb77cc800f09709f1",
+      "draws_sha256": "286c0f12eb52a132b768782a62b3cb41088ae8f1b590e764a41c7b96a33138e1",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 535
+      },
+      "postprocess_qpc": [
+        9413504816965,
+        9413504818058
+      ],
+      "first_draw_qpc": 9413504810580,
+      "tonemap_qpc": 9413505654744,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413505654744
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413505725129
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191225-220716-6",
+      "session_sha256": "01cfc6c02d2a6ad394e30806fa74fbb5bd450b5b196edd91bd68031f61d6400a",
+      "native_sha256": "144437670929d7f7a466c7fd56eb4553b0fe2cc9e6b1fe0b18eae82be219a71d",
+      "draws_sha256": "7065477133c8aa2cba7d26cc1e9d3fcf6cf23870704ae94a38030d6a6f3cbe81",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 525
+      },
+      "postprocess_qpc": [
+        9413530312056,
+        9413530313194
+      ],
+      "first_draw_qpc": 9413530305041,
+      "tonemap_qpc": 9413531167385,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413531167385
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413531235835
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191227-220716-7",
+      "session_sha256": "2c5ee4f6aa79841e1f05ba22d5a59686efaca12013711b03ef9eccdd457b1404",
+      "native_sha256": "c28bebb0491981121f8f3edd52880bdcbe7707fe528e183b7b726d8098b2f52f",
+      "draws_sha256": "6d7cfce593b187c1a09912b69a6caceb6b1b87baf403a83001f6dc7a35e434f8",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 519
+      },
+      "postprocess_qpc": [
+        9413552529450,
+        9413552530538
+      ],
+      "first_draw_qpc": 9413552523157,
+      "tonemap_qpc": 9413553390911,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413553390911
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413553459165
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191236-220716-8",
+      "session_sha256": "8870d9ba52de7e6b425e7be8a597a2646461ce792e7f980a8d75a17e2495e824",
+      "native_sha256": "972c4ecb8f971b5a8d591e0b523a235f2fad8c15aed589dc3eaa184d0f8d6241",
+      "draws_sha256": "e671762b0d1dc35f084de785463372eab93bbfda3fa7ad03dd7224f144dce0fa",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 660
+      },
+      "postprocess_qpc": [
+        9413649612827,
+        9413649613798
+      ],
+      "first_draw_qpc": 9413649606130,
+      "tonemap_qpc": 9413650511346,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413650511346
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413650581468
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191242-220716-9",
+      "session_sha256": "09584e62eef4b95ae818ac349de2df658bee71cc3fd533a821d1677378530559",
+      "native_sha256": "b0ebc748b1da3195dd7ac2674326069c133a34fbdc87f5998c0522f301d8bbfa",
+      "draws_sha256": "06b238d2c705a0f629f6d0f4fba042e384ee53f6bf66e37c56aeb22df4177710",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 676
+      },
+      "postprocess_qpc": [
+        9413704189186,
+        9413704190157
+      ],
+      "first_draw_qpc": 9413704191353,
+      "tonemap_qpc": 9413705030101,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413705030101
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413705097140
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191245-220716-10",
+      "session_sha256": "3f1d5da91628e8b505a07116f67aa47118688c3220642ad93b584f896408d6ab",
+      "native_sha256": "c461e55a1a0531cfc0858708fd238b5cebee2c2d4ab66d7ec3733cb744868c81",
+      "draws_sha256": "8723675cf3b4f9972046c2451e7570f96af79ad59cd9dfc2d2d5fa352f2d7c7f",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 442
+      },
+      "postprocess_qpc": [
+        9413733152172,
+        9413733153116
+      ],
+      "first_draw_qpc": 9413733154305,
+      "tonemap_qpc": 9413733963852,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413733963852
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413734030690
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191250-220716-11",
+      "session_sha256": "18f8876d33f378aa175ac353dbeefaed574d2310fdecd51389a076cb84312bfa",
+      "native_sha256": "935eea21e935c19ccfb8bd0b04c8e3cbc955c0345f92f40ac01bb031ad49f9e9",
+      "draws_sha256": "dba22e985339e6a5e55336b6da0684456c0621b83f9a5a114c44775c0c519878",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 688
+      },
+      "postprocess_qpc": [
+        9413780795947,
+        9413780796982
+      ],
+      "first_draw_qpc": 9413780739790,
+      "tonemap_qpc": 9413781646444,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413781646444
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413781719751
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191252-220716-12",
+      "session_sha256": "3e6b2636bfbd92c940b1dcd3f1ca136d1168446d4691134054957b2fd942bb45",
+      "native_sha256": "52410759c0ac47715ec66486d29f0d9892cd2365b8c98bbc0c22ea81b0108ede",
+      "draws_sha256": "9dafd919bf19f48b57051d4ba709827e3772f29243c4a2fafae92e9b3239ccf5",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 925
+      },
+      "postprocess_qpc": [
+        9413805865993,
+        9413805867071
+      ],
+      "first_draw_qpc": 9413805773492,
+      "tonemap_qpc": 9413806746715,
+      "stages": [
+        {
+          "ps_crc32c": "6bcbd787",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413806746715
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413806820156
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191310-220716-13",
+      "session_sha256": "a55c294b29585744d32654a5ff859614b4a3ca2f1a17090373222ee36c72d853",
+      "native_sha256": "228af346dde863edb2d9b207b1599823bffee0604f75f0a59f7bef19110d5fb4",
+      "draws_sha256": "8c3c0999eeb995d10fcedb6e9c429fe280d4375aba3b8d52f23ae523a0169209",
+      "root_counts": {
+        "widget_queue_before": 60,
+        "widget_prepare_before": 60,
+        "widget_prepare_after": 60,
+        "widget_queue_after": 60,
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 1522
+      },
+      "postprocess_qpc": [
+        9413989458537,
+        9413989459653
+      ],
+      "first_draw_qpc": 9413989374412,
+      "tonemap_qpc": 9413989814358,
+      "stages": [
+        {
+          "ps_crc32c": "5fb31417",
+          "extent": [
+            928,
+            524
+          ],
+          "format": 90,
+          "qpc": 9413989814358
+        },
+        {
+          "ps_crc32c": "a5c9147b",
+          "extent": [
+            928,
+            524
+          ],
+          "format": 90,
+          "qpc": 9413989871882
+        },
+        {
+          "ps_crc32c": "a7441be5",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9413990654479
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-191315-220716-14",
+      "session_sha256": "f8a6bf5e0cec2450ba3c7d718ae1721016ab3592a1f48907df1aca8578359ad6",
+      "native_sha256": "05ae9d1e1be8c0e9e255fa6374904cdc09cc027f3cf723eedab84901f9008aec",
+      "draws_sha256": "574f374132ca912f98327f18c6325ca9e34904c191cec1f8a735f853a06757f9",
+      "root_counts": {
+        "postprocess_begin": 60,
+        "postprocess_end": 60
+      },
+      "root_dropped": 0,
+      "views": [
+        {
+          "interval": 0,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 30,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        },
+        {
+          "interval": 59,
+          "rect": [
+            0,
+            0,
+            928,
+            524
+          ],
+          "aa_method": 1
+        }
+      ],
+      "draw_scopes": {
+        "0": 1686
+      },
+      "postprocess_qpc": [
+        9414037798277,
+        9414037799577
+      ],
+      "first_draw_qpc": 9414037693538,
+      "tonemap_qpc": 9414039408621,
+      "stages": [
+        {
+          "ps_crc32c": "5fb31417",
+          "extent": [
+            928,
+            524
+          ],
+          "format": 90,
+          "qpc": 9414039408621
+        },
+        {
+          "ps_crc32c": "a5c9147b",
+          "extent": [
+            928,
+            524
+          ],
+          "format": 90,
+          "qpc": 9414039438447
+        },
+        {
+          "ps_crc32c": "2136e125",
+          "extent": [
+            1600,
+            900
+          ],
+          "format": 90,
+          "qpc": 9414039866216
+        }
+      ]
+    }
+  ],
+  "user_report": "Lighting and reflections restored; image instability, jitter and shimmer returned.",
+  "observations": "All 14 sessions complete, 42 paired samples. One 928x524 main FXAA view per native interval. Native postprocess scopes precede the corresponding D3D11 postprocess draws, whose thread-local native scope is zero. Hangar tonemap targets 1600x900; flight tonemap and scene-effect targets remain 928x524 before 1600x900 final composition.",
+  "limits": "Preserved API inputs and images validate resource ordering, not final temporal correctness. Added main-temporal/graph/RHI associations were not in this deployment. Root cause of shimmer remains unproven.",
+  "native_jitter_validation": {
+    "pairs_compared": 42,
+    "mismatches_over_1e_6_pixels": 0,
+    "native_offsets": [
+      "0xab4",
+      "0xab8"
+    ],
+    "sampled_camera_cut_count": 0,
+    "camera_cut_offset": "0xc34",
+    "limits": "Agreement of sampled native/backend jitter values is not complete colour/depth/motion frame alignment or a temporal stability pass."
+  }
+}

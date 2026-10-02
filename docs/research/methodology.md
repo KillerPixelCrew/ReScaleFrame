@@ -18,6 +18,16 @@ For a runtime dump, record the actual load base and map file offsets to RVAs. Ve
 
 ## 2. Turn source leads into verified locations
 
+Search GitHub and other source hosting sites early for engine branches, middleware/plugin
+integrations, public game projects and existing decompilations. Useful source often lives in a
+larger project's checkout. Record its origin, revision and engine version, and compare it with
+the installed binary before trusting layouts or behaviour. Keep reference material untracked.
+
+Use decompilers as ordinary research tools alongside source: ILSpy for managed assemblies,
+Ghidra for native code, and shader disassembly/decompilation for graphics programs. Decompiled
+types and names are hypotheses; verify calling conventions, fields and producer ownership against
+instructions and runtime evidence. Source availability is a lead, not a substitute for matching.
+
 Use embedded source paths and console-variable references to narrow the search. `map-source-files.py` and `find-string-refs.py` produce candidates; byte scans and inlined assertions do not prove function boundaries or source ownership.
 
 Compare several distinctive call sequences against an authorized engine checkout. Validate the actual shipped build before using any address. Source from a nearby engine version explains behaviour but does not establish game offsets.

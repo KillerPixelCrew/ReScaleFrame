@@ -182,7 +182,7 @@ int main(int argc, char* argv[])
 
     // An unsupported format must be refused rather than decoded as something it is not.
     D3D11_TEXTURE2D_DESC other = desc;
-    other.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    other.Format = DXGI_FORMAT_R32_FLOAT;
     std::vector<uint8_t> bytes(width * height * 4, 0);
     D3D11_SUBRESOURCE_DATA otherInitial{};
     otherInitial.pSysMem = bytes.data();

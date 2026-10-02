@@ -1,0 +1,792 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-30",
+  "process_id": 215904,
+  "executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "capture_build_dll_sha256": "995db001a80f627eedb46e2f182d00d87e368530d10c8729482e70f795b58db4",
+  "capture_build_text_sha256": "d25a31fb62db25d5084fa4ce788027dc432c965bb9317642e872bda6171edc1e",
+  "scene_mapping": "1-2 mission briefing; 3-7 hangar/selection; 8-9 flight; 10 pause menu captured before the crash.",
+  "sessions": [
+    {
+      "session": "motion-20260930-194500-215904-1",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 840,
+      "root_dropped": 0,
+      "command_associations": 582,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "a6ca4e015c85cbcf11e7173c02d8823da6fe778dbf34a169af69a30e48e06383",
+      "draws_sha256": "0dc43a349302956b224ab48be8df0d61a606d3f3334e5542f56ffc7a9b367535",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 93,
+          "native_frame": 10229,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "5fb31417",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 114,
+          "native_frame": 10229,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 119,
+          "native_frame": 10229,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194503-215904-2",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 840,
+      "root_dropped": 0,
+      "command_associations": 1746,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "68e93112c9b249964f1de11079a7109192ec8d6070ec01902d3885ed55db0e24",
+      "draws_sha256": "e07072055a1ecc60dbca845cba9e8714460cd7864c8b858107a76cf3465a353e",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 513,
+          "native_frame": 10762,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "5fb31417",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 534,
+          "native_frame": 10762,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 539,
+          "native_frame": 10762,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194516-215904-3",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 804,
+      "root_dropped": 0,
+      "command_associations": 1691,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "de9756572e878d932f05fd6cc05446ad996a45c3eb2e7b092fcdc64c055a8e53",
+      "draws_sha256": "b55ad58e4df218d13245408f170669246f3ed975659e9fb3dbc213dc7af6e2f1",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 925,
+          "native_frame": 14416,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "6bcbd787",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 930,
+          "native_frame": 14416,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 948,
+          "native_frame": 14416,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 953,
+          "native_frame": 14416,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194520-215904-4",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 804,
+      "root_dropped": 0,
+      "command_associations": 1130,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "90fab6fe749c22190b4ce2f418f28b79642a8eb2413fb7b1be1644779c6e8b3d",
+      "draws_sha256": "6f2c19933eb1a36a8bf595d2dcfa1e232220c5ab1d92a301645d7106d0580072",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 1327,
+          "native_frame": 15578,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "6bcbd787",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 1332,
+          "native_frame": 15578,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 1350,
+          "native_frame": 15578,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 1355,
+          "native_frame": 15578,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194526-215904-5",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 804,
+      "root_dropped": 0,
+      "command_associations": 1129,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "a8b6f19775935d36ac0d7c990b0b3cc53cb263d138d58974bc1bfcf4043ebabc",
+      "draws_sha256": "9691de0e15c887af3704f9774520257cc000767ded3942b195373d325d5a631c",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 1729,
+          "native_frame": 17361,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "6bcbd787",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 1734,
+          "native_frame": 17361,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 1752,
+          "native_frame": 17361,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 1757,
+          "native_frame": 17361,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194533-215904-6",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 804,
+      "root_dropped": 0,
+      "command_associations": 1461,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "bc8fd0bda933b75132f31655e3867fe55e86179c88be624efa51bba12af09177",
+      "draws_sha256": "cad15d2dbda1bc5e9b82c5c601f8b9d82395902e4f6d77a99711fa3bdec5de08",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 2131,
+          "native_frame": 19119,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "6bcbd787",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 2136,
+          "native_frame": 19119,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 2154,
+          "native_frame": 19119,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 2159,
+          "native_frame": 19119,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194536-215904-7",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 804,
+      "root_dropped": 0,
+      "command_associations": 1130,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 117,
+      "native_sha256": "7e70640208faf19fb4500a69f07d0ee2478a0f5ba862f1b549eeb98e2e137b32",
+      "draws_sha256": "3ee4506dc9958b16bcdbf65d9340a0afd0de2e191b547d124190873367f087c4",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 2533,
+          "native_frame": 20131,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "6bcbd787",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 2538,
+          "native_frame": 20131,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 2556,
+          "native_frame": 20131,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "2136e125",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 2561,
+          "native_frame": 20131,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194546-215904-8",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 1128,
+      "root_dropped": 0,
+      "command_associations": 2091,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 150,
+      "native_sha256": "8ff740344b336b3740cf79dfc3d337a8614ad8cdb54268debe5398dea4c86d50",
+      "draws_sha256": "413a3c52ef9b3f62542da3e49d815f2358f02595ce5c4e7b2ec1c42a0c6463ac",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 2948,
+          "native_frame": 629,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "5fb31417",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 2953,
+          "native_frame": 629,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "PostProcessMaterial",
+          "scope": 2955,
+          "native_frame": 629,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x1004960",
+          "desc_rva": "0xff7b50",
+          "ps_crc32c": "a5c9147b",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "NimbusHUDCombine",
+          "scope": 2958,
+          "native_frame": 629,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfcbc90",
+          "desc_rva": "0xfb7bc0",
+          "ps_crc32c": "b2f7719d",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 2974,
+          "native_frame": 629,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "a7441be5",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 2979,
+          "native_frame": 629,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194553-215904-9",
+      "complete": true,
+      "paired_samples": 3,
+      "root_records": 1128,
+      "root_dropped": 0,
+      "command_associations": 2097,
+      "command_associations_dropped": 0,
+      "matched_draw_dispatch_records": 150,
+      "native_sha256": "6135ec00689869e670ec2776da0f360511c6a1292d504866beeb2c2131f1fee7",
+      "draws_sha256": "0e4575a21581fccc2efaf8685b17058acbf1818bc765d6fbe611cd8a40fcffbe",
+      "post_process_pairs": [
+        {
+          "name": "Tonemap",
+          "scope": 3512,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x10b0220",
+          "desc_rva": "0x1098ff0",
+          "ps_crc32c": "5fb31417",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "PostProcessAA",
+          "scope": 3517,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfbfe90",
+          "desc_rva": "0xfb6f20",
+          "ps_crc32c": "4ceee9f1",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "PostProcessMaterial",
+          "scope": 3519,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0x1004960",
+          "desc_rva": "0xff7b50",
+          "ps_crc32c": "a5c9147b",
+          "live_extent": [
+            928,
+            524
+          ]
+        },
+        {
+          "name": "NimbusHUDCombine",
+          "scope": 3522,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfcbc90",
+          "desc_rva": "0xfb7bc0",
+          "ps_crc32c": "b2f7719d",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Nimbus",
+          "scope": 3538,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            928,
+            524
+          ],
+          "process_rva": "0xfc86c0",
+          "desc_rva": "0xfb7b50",
+          "ps_crc32c": "c0715ef2",
+          "live_extent": [
+            1600,
+            900
+          ]
+        },
+        {
+          "name": "Upscale",
+          "scope": 3543,
+          "native_frame": 1761,
+          "descriptor_extent": [
+            1600,
+            900
+          ],
+          "process_rva": "0x10b1650",
+          "desc_rva": "0x10991e0",
+          "ps_crc32c": "5a1196f8",
+          "live_extent": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "session": "motion-20260930-194557-215904-10",
+      "complete": false,
+      "paired_samples": 1
+    }
+  ],
+  "matched_draw_dispatch_records": 1119,
+  "crash": {
+    "session": "motion-20260930-194557-215904-10",
+    "kind": "user-visible gameplay/capture crash, distinct from earlier shutdown-only exception",
+    "exception": "access violation reading 0x34 in nvwgf2umx.dll",
+    "thread": 65196,
+    "resolved_proxy_frames": [
+      {
+        "rva": "0x1dc8e",
+        "name": "hooked_copy_subresource_region"
+      },
+      {
+        "rva": "0x263b4",
+        "name": "rsf_dump_texture_bytes"
+      },
+      {
+        "rva": "0xadad",
+        "name": "route_dump"
+      },
+      {
+        "rva": "0x89bc",
+        "name": "on_gate"
+      },
+      {
+        "rva": "0x228f9",
+        "name": "plan_render_targets"
+      },
+      {
+        "rva": "0x216d7",
+        "name": "hooked_om_set_render_targets"
+      }
+    ],
+    "method": "Relink identical Release objects with MAP; assert original and relinked .text SHA-256 identical before interpreting addresses. Compiler-reported bridge field offsets and minidump memory identify cached layer. Nearest exported names in the original crash log are inaccurate.",
+    "cached_layer": "0x1da35c1e7e0",
+    "driver_source_rsi": "0x1da35c1e970",
+    "driver_source_offset": "0x190",
+    "ownership_defect": "Geometry callback texture borrow stored without AddRef and later read by capture after screen changes.",
+    "correction": "Retain on observation/replacement; capture only if produced in current Present interval. Persist native checkpoints before graphics execution.",
+    "validation": "Windows MSVC Release verified: 31 passed, five vendor skips; matching pair deployed with real-overlay preflight; corrected crash scene not game-tested yet.",
+    "failed_recovery": "Capture vector headers/session survived in minidump, but native/draw/blob heap allocations were not included. Cannot reconstruct unwritten final JSONL from this minidump. First backend input/output/depth/motion and pre-capture pause screenshot remain available."
+  },
+  "limits": "Sampled RHI command associations establish these pass/draw identities. They do not establish a production frame contract for all queues or a UI/temporal image-quality fix."
+}

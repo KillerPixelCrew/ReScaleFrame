@@ -1,8 +1,8 @@
 # ReScaleFrame for AC7. Copy beside Ace7Game.exe as ReScaleFrame.ini.
 # Insert opens the overlay. It offers Enable upscaling, backend selection and the quality presets.
 # DLSS and reinsertion start automatically after the renderer is ready.
-# Overlay choices are saved in %LOCALAPPDATA%\ReScaleFrame\AC7.ini and take
-# precedence over these initial defaults on later launches.
+# Enable and quality choices are saved in %LOCALAPPDATA%\ReScaleFrame\AC7.ini and
+# take precedence over these defaults. Alternate backend selection is per session.
 RSF_DLSS_ENABLE=1
 # 0 Native (DLAA), 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
 RSF_DLSS_QUALITY=3
@@ -27,6 +27,7 @@ RSF_TRANSLUCENCY_UNJITTER=1
 # RSF_XESS_BIN=                   # defaults to ReScaleFrame\xess, holding libxess.dll
 # RSF_DUMP_DIR=                    # defaults to %LOCALAPPDATA%\ReScaleFrame\AC7
 # RSF_DUMP_MODULE=0               # executable dumps are opt-in
+# RSF_MOTION_CAPTURE=1            # F9: bounded AC7 motion research capture (60 present intervals)
 # RSF_TRANSLUCENCY_SCALE=0        # overrides the output-relative target when nonzero
 # RSF_REINSERT_DEPTH=0            # existing overlay-depth policy
 # RSF_RENDERDOC=0                 # cannot be used alongside DLSS in the observed setup

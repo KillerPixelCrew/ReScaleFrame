@@ -1,0 +1,542 @@
+{
+  "date": "2026-09-30",
+  "question": "Why do flight HUD and dark hangar HDR shading lose detail?",
+  "method": "Live F9 records, exact shader container identification, and 60 evaluations of one frozen FP16 input per separate GPU process. Render 800x452, output 1600x900, depth .5, motion/jitter zero, identity matrices, reset on first evaluation. This isolates colour precision; it is not ordered temporal replay or a native baseline.",
+  "gpu": "RTX 4070 Laptop GPU",
+  "driver": "616.92",
+  "streamline": "2.14.1",
+  "dlss_version": "310.9.1.0",
+  "dlss_sha256": "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983",
+  "captures": [
+    {
+      "capture": "motion-20260930-165850-170536-1",
+      "scene": "hangar departure",
+      "reasons": {
+        "mobility": 3725,
+        "unchanged_transform": 60,
+        "missing_history": 240,
+        "accepted": 420
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 4445,
+        "draw_records": 698,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.005890486725663717,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.005754977876106195,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.0056554203539823005,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "capture": "motion-20260930-165859-170536-2",
+      "scene": "hangar departure",
+      "reasons": {
+        "unchanged_transform": 60,
+        "missing_history": 139,
+        "mobility": 4594,
+        "accepted": 120
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 4913,
+        "draw_records": 506,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.48493639380530973,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.5261034292035398,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.5449612831858407,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "capture": "motion-20260930-165903-170536-3",
+      "scene": "hangar departure",
+      "reasons": {
+        "unchanged_transform": 180,
+        "missing_history": 300,
+        "mobility": 3840,
+        "accepted": 120
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 4440,
+        "draw_records": 471,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.3556720132743363,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.3208794247787611,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.2913772123893805,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "capture": "motion-20260930-165916-170536-4",
+      "scene": "flight/clouds",
+      "reasons": {
+        "accepted": 600,
+        "mobility": 3055,
+        "material_or_main_pass": 671
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 4326,
+        "draw_records": 983,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.0808075221238938,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.08331581858407079,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.0825304203539823,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "capture": "motion-20260930-165920-170536-5",
+      "scene": "flight/clouds",
+      "reasons": {
+        "mobility": 3284,
+        "size": 2640,
+        "accepted": 600,
+        "material_or_main_pass": 836
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 7360,
+        "draw_records": 1039,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.08086283185840708,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.07934734513274336,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.07833517699115045,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    },
+    {
+      "capture": "motion-20260930-165923-170536-6",
+      "scene": "flight/clouds",
+      "reasons": {
+        "mobility": 4350,
+        "accepted": 600,
+        "size": 8445,
+        "material_or_main_pass": 1745,
+        "missing_history": 273
+      },
+      "session": {
+        "schema": 1,
+        "qpc_frequency": 10000000,
+        "engine_hooks": 1,
+        "intervals": 60,
+        "engine_records": 15413,
+        "draw_records": 1430,
+        "engine_dropped": 0,
+        "draw_dropped": 0,
+        "blob_dropped": 0,
+        "shader_creation_dropped": 0,
+        "readbacks": 128,
+        "readback_failures": 0,
+        "capture_failures": 0,
+        "files_written": true,
+        "timing": "present intervals and QPC; CPU selection may precede GPU execution",
+        "draw_state": "shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored",
+        "gpu_context": "installed immediate context; deferred command lists not decomposed",
+        "selection_metric_order": [
+          "bounds_radius",
+          "distance_squared",
+          "lod_factor",
+          "minimum_size"
+        ]
+      },
+      "samples": [
+        {
+          "interval": 0,
+          "written_fraction": 0.08073561946902655,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 30,
+          "written_fraction": 0.08015763274336284,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        },
+        {
+          "interval": 59,
+          "written_fraction": 0.07874723451327434,
+          "render": [
+            800,
+            452
+          ],
+          "output": [
+            1600,
+            900
+          ]
+        }
+      ]
+    }
+  ],
+  "probe_output_sha256": {
+    "probe-auto": "1208529a32ebdcf3a310e7f29da28c0ca368997559ab7ee5f930ce29f50f2d26",
+    "probe-clamp1": "d46542c7a7c1006fcd7be1bb4522f7368e2dbd4ff806f1917a522e4e8ef13188",
+    "probe-exposure100": "1208529a32ebdcf3a310e7f29da28c0ca368997559ab7ee5f930ce29f50f2d26",
+    "probe-performance-k": "65bdffe9e457eb719437533d9eed4a04b5fabced244b82702366d8cad0b9e2aa",
+    "probe-quality": "65bdffe9e457eb719437533d9eed4a04b5fabced244b82702366d8cad0b9e2aa"
+  },
+  "conclusion": "Performance default and exposure100 output byte-identical and posterized. Performance K and Quality default output byte-identical and visually smooth. Clipping input to 1 also removes bands, but destroys highlights and is only a diagnostic control. M internal exposure/precision cause remains unproven.",
+  "hud_producer": {
+    "crc32c": "b2f7719d",
+    "bytes": 1104,
+    "dxbc_checksum": "6cac0644b6a49be3ef925858a7d38e63",
+    "sha256": "9faca5d9e57d6911f0077ad2959b2f172b6e5ec4fb263e8267eecf561d4274e3",
+    "captured_output": [
+      800,
+      452
+    ],
+    "widget_input": [
+      1920,
+      1080
+    ],
+    "output_promoted": false
+  },
+  "limits": "No corrected AC7 run yet; no native/bilinear image-quality baseline or GPU timing. Motion rejection reasons do not identify pixel owners or object classes. Final-screen dumps originally unsupported R10 format; fixed with raw and preview capture.",
+  "preset_policy": "Default/user/driver selection. Forced K workaround withdrawn, not a production fix.",
+  "actual_ngx_flags": {
+    "auto": "0x4b",
+    "manual100": "0x0b",
+    "hdr_preserved": true
+  },
+  "pre_exposure_experiments": {
+    "pre100_unchanged_input": "byte-identical to baseline",
+    "scaled100_pre100_normalized_output": "posterization persists"
+  },
+  "format_comparison": {
+    "method": "Same frozen scene values, 800x452 to1600x900, Performance default, HDR auto exposure, 60 evaluations in separate processes; actual input/output formats queried from NGX resources. R11 values converted exactly to FP16, then widened to FP32.",
+    "results": [
+      {
+        "condition": "probe-r11-fp16",
+        "ngx_input_format": 26,
+        "ngx_output_format": 10,
+        "rgb_identical_to_fp16_baseline": true,
+        "max_absolute_rgb_difference": 0.0,
+        "dark_max_absolute_difference": 0.0,
+        "nonfinite_rgb_values": 0,
+        "output_sha256": "1208529a32ebdcf3a310e7f29da28c0ca368997559ab7ee5f930ce29f50f2d26",
+        "visual_result": "same broad posterization"
+      },
+      {
+        "condition": "probe-auto",
+        "ngx_input_format": 10,
+        "ngx_output_format": 10,
+        "rgb_identical_to_fp16_baseline": true,
+        "max_absolute_rgb_difference": 0.0,
+        "dark_max_absolute_difference": 0.0,
+        "nonfinite_rgb_values": 0,
+        "output_sha256": "1208529a32ebdcf3a310e7f29da28c0ca368997559ab7ee5f930ce29f50f2d26",
+        "visual_result": "same broad posterization"
+      },
+      {
+        "condition": "probe-fp32-fp16",
+        "ngx_input_format": 2,
+        "ngx_output_format": 10,
+        "rgb_identical_to_fp16_baseline": true,
+        "max_absolute_rgb_difference": 0.0,
+        "dark_max_absolute_difference": 0.0,
+        "nonfinite_rgb_values": 0,
+        "output_sha256": "1208529a32ebdcf3a310e7f29da28c0ca368997559ab7ee5f930ce29f50f2d26",
+        "visual_result": "same broad posterization"
+      },
+      {
+        "condition": "probe-fp32-fp32",
+        "ngx_input_format": 2,
+        "ngx_output_format": 2,
+        "rgb_identical_to_fp16_baseline": false,
+        "max_absolute_rgb_difference": 0.248016357421875,
+        "dark_max_absolute_difference": 1.5214085578918457e-05,
+        "nonfinite_rgb_values": 0,
+        "output_sha256": "f266400a98dffc0370db74b779d5a8350a93d8f6107f5c1a17a7e81dfe3ad809",
+        "visual_result": "same broad posterization"
+      }
+    ],
+    "conclusion": "Input packing/precision alone is ruled out for this captured artifact. FP32 output does not eliminate the broad bands. It does not prove every resource view or integration path is correct."
+  },
+  "display_context": "SDR display; no native AC7 HDR presentation. HDR here describes pre-tonemap floating-point scene colour.",
+  "ldr_experiment": {
+    "curve": "pow(x / (x + 0.18), 1 / 2.2)",
+    "ngx_flags": "0x4a",
+    "result": "smooth dark shading in frozen GPU run",
+    "output_sha256": "c45cce91608f682f49ae3cecbbec6bba2668725b6bcd50842616d0691dcb5f48",
+    "limits": "Diagnostic curve, not actual AC7 grading. Not deployed. Requires real pre-HUD tonemapped capture and temporal/pipeline validation."
+  }
+}

@@ -2,6 +2,192 @@
 
 ReScaleFrame is a monorepo. All first-party components share this history and release version. Separate runtime/plugin DLLs do not imply separate repositories.
 
+## Active AC7 scope correction, 1 October 2026
+
+2 October release acceptance: the user confirms the latest 22:17 deployment works and requests
+replacement of the broken v0.1.0 GitHub package. The previously accepted wing/cloud plugin is
+unchanged; the optimized GPU-fence bridge and FSR4 INT8 compatibility are now accepted in game.
+This is user-reported visual acceptance, separate from the explicit RTX4070 device fixtures.
+The package now includes the proxy, AC7 plugin, overlay, DLSS, FSR 2/3/4 and XeSS SR runtimes,
+all accompanying notices, exact source and checksums. Frame generation and Reflex remain deferred.
+[Research and validation](research/sr-interop-performance-20261002.md).
+
+Release follow-up: startup hotkey hint added through overlay ABI5. It draws above the completed
+frame for eight seconds, fades over the final second and is dismissed on opening the panel.
+No mouse input, settings changes or reconstruction participation. Native Release gate passes
+33 executed tests/five skips; Rust workspace tests pass53. Actual Rust overlay host verifies hint
+pixels with panel closed, Insert toggling, settings panel rendering and resize. The game plugin
+hash remains unchanged; proxy/overlay hashes change for the hint. No agent AC7 launch.
+
+2 October FSR4 compatibility: implemented a fingerprint-guarded, device-leased INT8 capability
+hook in the installed SDK4.1.1.2740. This targets the native decision behind OptiScaler's scoped
+adapter/driver substitutions, leaving actual GPU identity and FP8 checks intact. RTX4070 output
+watermark confirms FSR4-I8 at3x;80 frozen-input Ultra frames and84 lifecycle fixture frames pass.
+The D3D12 bridge uses GPU ordering and three command slots. User acceptance is recorded above;
+no new measured in-game FPS comparison was supplied.
+[Mechanism and proof](research/sr-interop-performance-20261002.md#fsr4-int8-compatibility-implementation).
+
+2 October21:30 user acceptance: wing artifacts and cloud blockiness are clean. The latest log
+confirms native Texture2D/RG32F validation, divisor1 activation and one-to-one depth dispatch.
+Follow-up XeSS/FSR performance work replaces current-frame CPU transfer waits with GPU fence
+ordering and three guarded command slots.240 standalone Ultra evaluations produce byte-identical
+outputs before/after; lifecycle and full-pipeline hardware checks pass. The initial official FSR4
+refusal on RTX4070 was subsequently resolved by the fingerprint-guarded INT8 hook recorded above.
+[Evidence and limits](research/sr-interop-performance-20261002.md).
+
+2 October wing/cloud follow-up: reviewed the earlier transcript and20:13 captures before changing
+the implementation. The20:05 kernel never activated because its guard required an array UAV;
+TrueSky's texture owner creates a Texture2D UAV. Corrected the one-to-one kernel and guard to
+that native layout. A new expected-byte patch at TrueSky RVA0xbfc09 promotes only normalized
+scene-depth bounds from R16G16_UNORM to R32G32_FLOAT through the native allocation owner.
+Captured aircraft depth has up to8.57% relative error in UNORM GPU output; RG32F reduces it below
+0.000034% in the standalone replay. Full scene-grid clouds at Ultra exceed the user's observed
+stock Balanced cloud-resolution floor. Installed21:24, backup `ac7-pair-20261002-212445-314`.
+Release gate33 passed/five skips, Rust format/lint and real overlay Insert/render/resize passed.
+No AC7 launch; live wing/cloud acceptance remains pending. [Evidence](research/ac7-plane-artifacts-20261002.md).
+
+2 October flight regression: user confirms clean aircraft and corrected hangar exposure after19:10,
+but sky/lighting/volumetric clouds are broken. New captures locate the damage before DLSS.
+TrueSky divisor1 skipped its x2/x3/x4 depth-pass selection while still dispatching and cleaning up.
+Added a guarded native pass/call correction and first-party one-to-one normalized depth kernel;
+full resolution waits for actual shader/binding readiness. Original shader and native cleanup are
+preserved. Explicit NVIDIA GPU comparison passes for x1 and shipped x2. Flight visual acceptance
+is pending; accepted aircraft/colour/FP16 fixes retained. Installed20:05, backup
+`ac7-pair-20261002-200538-588`; Release gate33 passed with five skips, Rust format/lint and real
+overlay Insert/render/resize preflight passed. No AC7 launch. [Evidence](research/ac7-plane-artifacts-20261002.md).
+
+2 October rendering correction: all three current defects are priority-one blockers. Implemented
+native TrueSky scene-grid production with a guarded DLL instruction patch and native FP16 scene
+colour allocation. Added a depth-guarded GPU colour correction after DLSS and before native bloom/
+tonemap, without changing presets. Frozen Performance GPU replay removes broad bands; Ultra
+flight replay preserves silhouettes after guarding. Native cloud/precision changes are built,
+not yet game-accepted. Installed19:10 with backup `ac7-pair-20261002-191007-200`. MSVC Release
+gate passes33 executed tests, five vendor/environment skips; Rust format/clippy and actual overlay
+Insert/pixel/resize preflight pass. Installed hashes match the build. No autonomous game launch or new test target. Full evidence and failed
+variants are in [the artifact research](research/ac7-plane-artifacts-20261002.md).
+
+2 October retest: aircraft, distant cloud blocks and DLSS Performance/Ultra exposure defects
+persist. The00:09 ordinary-translucency correction is not the artifact fix. Complete mid-frame
+D3D11 state preservation is built and device-tested in a standalone binding/counter experiment.
+F9 now pairs the TrueSky composite's colour/loss outputs and records its cloud/depth inputs;
+CB readbacks select shader-declared slots. Release gate passes33 tests with five environment
+skips, format/lint pass. No new test target or game launch. Artifact and exposure fixes remain
+game-unverified. [Evidence](research/ac7-plane-artifacts-20261002.md).
+
+Installed10:22, backup `ac7-pair-20261002-102210-392`; real-overlay Insert/render/resize preflight
+passes. Game was not launched. Await paired F9 cloud/aircraft comparisons with SR off and Ultra.
+
+2 October 00:09: updated goal is gameplay aircraft artifacts, then motion-vector improvements.
+Latest flight sample has affected surfaces in depth/written motion and a pre-reconstruction colour
+defect. Removed obsolete global separate-translucency enlargement; native ordinary sizing restored,
+scoped UI preparation retained. F9 skips inactive stages and budgets readbacks per sample. Release
+and overlay preflight pass; plane/UI retest pending. [Evidence](research/ac7-plane-artifacts-20261002.md).
+User confirms background/cloud stability and blur improved. DLSS banding remains separate.
+
+23:19 build installed after user confirms stable background/clouds. Bloom common-source
+rewiring now generates native bloom/exposure from reconstructed scene; source identity
+must match or late path remains. Native view-state jitter cycles scale with output/render
+area (32/72 at Performance/Ultra), replacing ineffective console tuning under native ownership.
+F9 saves exposure guide. Release/overlay preflight pass. Bloom/edge/exposure retest pending;
+aircraft colour banding and cloud-overlap smear still open. See stability research note.
+
+22:52 stability corrections installed. User confirms hangar crash no longer reproduced.
+FSR/XeSS packed scene-colour rejection corrected with explicit linear RGBA16 conversion.
+TrueSky native projection adapter now preserves vertical jitter handedness for matched primary
+views. DLSS receives explicit-sentinel dense motion to preserve valid zero aircraft vectors.
+F9 includes submitted motion. MSVC and shader compilation plus overlay preflight pass;
+visual/backend retest pending. [Evidence and limits](research/ac7-stability-20261001.md).
+
+22:34 correction deployed: CPU trace maps null PS View slot to worker BasePass material
+recording. Saving shared View uniforms by move cleared their slots during replacement.
+Save now takes an owned reference, publishes from a local replacement, and joins native
+outstanding recording tasks before shared view changes/restoration. MSVC Release build and
+overlay Insert/render/resize preflight passed. Hangar crash and shimmer retest pending;
+no autonomous game launch. See the native renderer research note for evidence and limits.
+
+Hangar retest: fixed camera-pan position produces explicit PS slot1=null before indexed draw,
+not merely a missing binding at commit. Shader SHA1 and expected layout recorded in research.
+Mapped four exact CPU command creators; bounded null-slot CPU stack probes installed. Release
+build/overlay preflight pass. Crash still unresolved; user-driven reproduction required. No game launch.
+
+21:17 crash persists at the same PS uniform read. No null View-helper argument recorded;
+missing buffer type remains unproven. Direct RHI pixel setter/commit observers now record
+expected layout hash and preceding bindings. Diagnostic build only; crash remains a blocker.
+User explicitly prohibits autonomous AC7 launches. Preserve SR/UI corrections; cloud work deferred.
+
+Crash blocker only: successful533x300 SR confirmed, same null PS uniform crash recurred.
+Corrected scaled-uniform availability before all participating translucent views and explicit
+ownership of generated view uniforms through queued RHI completion. Raw queued uniform
+pointers were previously released at CPU view restoration. Bounded null-binder diagnostics
+added. Release builds and overlay deployment preflight pass; gameplay crash fix unvalidated.
+Cloud investigation deferred until the crash is resolved.
+
+User confirms all UI fixed by the native UnmodifiedTranslucency producer build. Ultra Performance
+was refused: active view536x300 exceeded exact DLSS533x300. Corrected active rect sizing versus
+allocation padding and completed UI normal/scaled uniform selector ownership. Release built;
+Ultra Performance and crash retest pending. Dump confirms null PS uniform slot1; its exact bind
+producer is unproven, so the source omission correction is not yet a game-confirmed crash fix.
+
+UnmodifiedTranslucency correction now implemented: native begin/resolve/render wrapper owns
+output-size allocation/viewport, engine-resampled matching depth and unjittered native uniform,
+with saved scene state restored after resolve. MSVC Release built; UI game retest pending.
+Eight-frame opt-in native route snapshots added for cloud jitter attribution. Cloud fix remains open.
+
+Retest correction: briefing is user-confirmed sharp, other UI remains low resolution/jittery.
+The ordinary separate-translucency allocation hook does not own AC7 UnmodifiedTranslucency.
+Mapped its actual allocation/begin/resolve and render-pass callers in Ghidra; full-resolution
+depth/view/resolve ownership remains to implement. Cloud video confirms vertical instability;
+cause unresolved. Do not report all UI fixed or broaden back into FG/latency.
+
+Eleven new captures isolate a scene-sized UI/translucency branch despite full-output SR.
+Native SetSeparateTranslucencyBufferSize ownership implemented at guarded RVA 0x10be2b0;
+actual scene/output dimensions drive allocation before rasterization. MSVC Release built;
+corrected UI capture validation pending. Renamed misleading pre-HUD capture label to UI branch input.
+
+After the launch-crash correction, AC7 logged successful native SR evaluations but the user
+reports blurry/pixelated output. Corrected stale compatibility-derived overlay status and added
+bounded F9 SR/backend/graph/downstream images. MSVC Release built; visual defect remains open.
+
+First ABI10 game run crashed in native SR resource retention. VelocityRT was incorrectly treated
+as an RHI texture instead of a pooled target. Corrected the pool-to-texture lookup, built Release
+and redeployed matching DLLs with overlay preflight passing. AC7 relaunch remains pending.
+The crash mechanism and evidence are recorded in the native renderer refactor notes.
+
+The immediate goal is correct super resolution and improved motion-vector coverage. The native
+refactor expanded into latency and frame-generation infrastructure before its SR path had been
+validated in AC7. That expansion is deferred: Reflex/PCL wiring, FG/MFG handoff and broader
+presentation tracing are not prerequisites for this goal. Preserve existing work without extending
+it unless a measured SR defect requires it.
+
+The earlier compatibility path has user-accepted upscaling and a user-confirmed lighting/reflection
+correction. The newer engine-owned SR/UI implementation builds with MSVC Release but has not been
+deployed or game-validated. Neither result proves that current UI blur, temporal instability or
+hangar banding is resolved. Motion research establishes native encoding, camera-transform leads
+and velocity eligibility sites; missing-object coverage is still unvalidated.
+
+Next, audit only the native SR enablement and input/output path against the existing captures and
+matching UE4 source. Establish one bounded candidate for game validation: intact scene colour and
+postprocessing, matching depth/motion/view identity, correct jitter and history, and output-size UI.
+Do not add another generic architecture layer. Prepare a matching DLL set and exact capture
+instructions once that path is reviewable. Compare native and reduced-resolution briefing,
+hangar, flight and pause/resume before declaring an improvement.
+
+Then resolve measured motion conventions and coverage, starting with carrier-launch/refuelling
+weapons and attached missiles, followed by moving vehicles. Match colour draws to velocity writes
+or a verified rejection reason before changing the producer. Audit TrueSky separately using its
+depth/history and stationary-camera evidence. No universal cloud or object-motion fix is claimed.
+
+This scope correction is documentation-only; it adds no runtime experiment or build result.
+
+Deployment on 1 October: explicitly installed the current Release proxy, ABI10 AC7 plugin and
+matching Rust overlay in the user-named AC7 installation. Installed SHA256 values match build
+outputs. The deployment preflight loaded the real overlay and passed Insert open/close, visible
+pixel rendering and swap-chain resize. Matching FSR/XeSS runtimes and notices were also installed
+by the deployment procedure. Previous files are backed up under
+`.local/deploy-backups/ac7-pair-20261001-195716-425` and
+`.local/deploy-backups/ac7-sr-20261001-195716-201`. Native SR and UI behavior in AC7 remain unvalidated;
+this overlay preflight is not a gameplay test.
+
 ## AC7 release
 
 - [x] Prepare the 0.1.0 Windows x64 package with the accepted proxy/overlay, retail DLSS runtime,
@@ -35,6 +221,35 @@ ReScaleFrame is a monorepo. All first-party components share this history and re
       observed a draw after the first read-back. Measured with a probe on 26 September, fixed by a
       sentinel check on every hook entry and pass-through hooks on the flush-class calls, tap ABI 8.
       [Evidence](research/d3d11-runtime-vtable-rewrite.md).
+
+## Native AC7 renderer refactor
+
+- [x] SDK ABI 2 and runtime-owned plugin prepare/start/quiesce/stop/status; native preparation
+      precedes graphics activation. Recognition still does not report rendering readiness.
+- [x] Renderer-owned view sizing before allocation, native temporal preparation, pre-tonemap
+      graph SR node with native spatial fallback and auxiliary dependencies, downstream
+      descriptor/rectangle/uniform ownership and FXAA bypass. Native mode bypasses the binding
+      matcher, GPU constant-buffer rewriting and UI/chain/reinsert ageing timers.
+- [x] Copied queued RHI identity, render-thread pool-reference retirement and F9 native execution
+      records. Windows MSVC Release gate: 33 passed, five explicit vendor/device experiments skipped.
+      Independent Windows WARP graph/queue/pixel tests passed; no new AC7 run yet.
+- [ ] Validate this native path in AC7: briefing, hangar, flight, pause/resume, preset transitions,
+      lighting/reflections, UI sharpness and temporal stability. `rendering_ready` remains zero.
+- [x] Continued source implementation: runtime-owned native configuration, transactional output
+      resizing and a leased engine eye-adaptation guide converted to scalar exposure. Focused
+      MSVC Release build succeeds; new image behavior and backend resize paths are not game-validated.
+- [x] Lifecycle source integration: failed-prepare module retention, calls outside lifecycle locks,
+      transition/status reader ownership, actual controller activity and deferred graphics-owner
+      shutdown before backend release. MSVC Release build passes; live teardown remains unverified.
+- [x] Cropped-view source path: region-local colour/depth/motion guides, rect-local backend
+      evaluation, native rect reinsertion, rectangle history resets and separate whole-surface
+      configuration. Primary constrained views are scaled from renderer-owned surface dimensions.
+      MSVC Release build passes; actual cropped image behavior remains unverified.
+- [ ] Complete native UI producer/isolation ownership, carrier cleanup and
+      lifecycle integration. The active refactor goal remains unfinished.
+- [ ] Validate exposure input ownership, output resizing, native UI isolation for
+      FG and simulation-frame handoff. Velocity coverage/cloud reprojection remains separate work.
+      [Implementation and evidence](research/ac7-native-renderer-refactor-20261001.md).
 
 ## First working target
 
@@ -372,10 +587,59 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 The engine's camera transform is already available through `ClipToPrevClip`; camera motion is
 not being estimated from images. The current DLSS path decodes the sparse object-velocity buffer
 and asks Streamline to resolve unwritten pixels using depth and that transform. The tasks below
-are investigations and proposed improvements, not confirmed defects or game-tested changes.
+include completed offline investigation and proposed changes. The
+[30 September research](research/ac7-motion-vectors.md) found a conversion discrepancy against
+native shaders and a valid-zero limitation in the deployed Streamline kernel. Corrections and
+producer extensions have not been game-tested.
 
-- [ ] Investigate the engine path first. Inspect the shaders that consume AC7's scene velocity
-      buffer, including temporal filtering and motion blur where present. Locate their per-pixel
+- [x] Disassemble the 207 recorded native VS/PS blobs and the deployed Streamline motion kernel.
+      The ordinary velocity producer stores total current-minus-previous NDC; the inspected
+      temporal consumer replaces depth-derived camera motion at written pixels and exports colour
+      only. The custom projection branch has different jitter selection and remains unidentified.
+- [x] Compare RenoDX and Luma shader replacement at pinned revisions. Author an independent
+      packed-output plus float-motion sidecar probe. It compiles as `ps_5_0` and creates on Windows
+      D3D11 WARP; draw readback, binding integration and game validation remain undone.
+- [x] Check captured `ClipToPrevClip` against both frames' unjittered translated projections.
+      Maximum absolute matrix error is `1.44e-6` across 472 repeated bindings over two briefing
+      frames. This is capture analysis, not a new stationary-camera or flight test.
+- [x] Locate AC7's small-object velocity selection gate in the decrypted image. The known dynamic
+      loop calls `ShouldRenderVelocity` at RVA `0x10fdc00`; size rejection is `76 38` at
+      `0x10fdd0c`, followed by history/transform checks in `HasVelocity` at `0x1183820`.
+      Native/source matched with Capstone and named/decompiled in the local Ghidra project.
+      Eligibility bypass and affected-scene validation remain pending.
+      [Evidence](research/evidence/ac7-velocity-coverage-20260930.json).
+- [x] Build opt-in F9 motion capture with guarded engine observations, shader/CB records and
+      lossless backend input samples. Windows WARP capture and readback tests pass; the Release
+      verification gate passes (30 tests passed, four vendor-environment tests skipped).
+      AC7 capture validation remains pending. See [capture procedure](../loader/README.md).
+- [x] Analyze six 30 September F9 captures and isolate hangar colour posterization with a
+      frozen-input RTX 4070 Laptop experiment. Performance preset K is smooth at unchanged
+      800x452 input and 1600x900 output. Forced K was withdrawn because driver overrides can
+      defeat it; actual NGX flags preserve HDR and the preset-independent fix remains open.
+      R11/FP16/FP32 GPU input comparisons and FP32 output also preserve the same bands;
+      widening formats does not solve this captured failure.
+      A diagnostic perceptual-SDR input is smooth, but the actual game route is unimplemented.
+      Bounded tonemap/scene-effect/HUD/composite snapshots now support that investigation.
+      Recognize the captured fullscreen flight HUD producer
+      and preserve its promoted output; add final-screen raw/preview captures. Windows Release
+      verification passes. Corrected AC7 run and pause/resume validation remain pending.
+      [Research](research/ac7-ui-hdr-20260930.md).
+- [ ] Prioritize the reported carrier-launch and refuelling weapon/attached-missile omissions,
+      then possibly missing moving ground vehicles. Match each visible colour draw to its
+      velocity draw or exact rejection reason, separating per-primitive bounds from material/LOD
+      sections. Confirm previous world transforms, attachments, bone motion and valid zero values.
+      Only then apply a guarded size-gate bypass or class-specific producer change and measure cost.
+- [ ] Audit TrueSky cloud motion with a stationary camera and with rotation/translation. The
+      installed renderer has wind and cloud-reprojection string leads, not proven output vectors.
+      Trace its own time/depth/history inputs; static density still needs camera motion and finite
+      cloud depth. Independent drift/evolution and multilayer blending need separate validation.
+- [ ] Capture flight particle producers. Stock CPU sprite streams expose `OldPosition` from
+      `Particle.OldLocation`, although their velocity helper returns current position. Confirm
+      AC7's input layout, history interval and previous billboard/deformation state before adding
+      a VS/PS motion output. Beam/trail fill paths sometimes duplicate current into old position.
+
+- [ ] Complete the engine path inventory in flight. The captured temporal and reflection consumers
+      are inspected; compute/motion-blur and flight-specific shaders remain. Locate their per-pixel
       camera-motion calculation and establish whether a complete, reusable motion texture exists
       or the result is only an intermediate shader value. Record the pass, inputs, encoding,
       extent, timing, and lifetime. Follow the later correction in
@@ -387,7 +651,7 @@ are investigations and proposed improvements, not confirmed defects or game-test
       resolve. Engine camera transforms still need depth to become per-pixel displacement.
       Do not assume an engine-produced result is more accurate without matching conventions.
 - [ ] Establish the exact meaning of written object vectors. Determine whether they already
-      include camera movement at those pixels or contain only an object-motion contribution.
+      use the verified ordinary total-motion path or AC7's unidentified custom projection path.
       Preserve valid zero motion separately from unwritten pixels, and never add camera movement
       twice. Verify the sentinel handling against the Streamline version actually loaded.
 - [ ] Reconcile the Rust and live C/C++ motion conversions. `MotionToPixels::unreal` in
@@ -395,10 +659,13 @@ are investigations and proposed improvements, not confirmed defects or game-test
       sign flip, while `loader/proxy/src/dlss_bridge.c` and
       `runtime/orchestrator/src/dlss_pipeline.cpp` currently default output/backend scales to
       one. Trace clip displacement, normalized UV displacement, pixel units, and temporal
-      direction end to end. Measure aircraft or missile displacement on both axes before changing
-      factors or signs; matching a numeric range alone does not establish matching units.
+      direction end to end. Measure aircraft or missile displacement on both axes before applying
+      the proposed ordinary-path Streamline scale `(0.5, -0.5)`. Rust's helper expresses the
+      opposite temporal direction from the FSR/XeSS resolve; distinguish direction from units.
+      Matching a numeric range alone does not establish matching units.
 - [ ] Verify jitter throughout reprojection. In `games/ac7/src/view_uniforms.cpp`, establish
-      whether the engine's `ClipToPrevClip` remains unjittered after enabling temporal jitter.
+      whether the captured unjittered `ClipToPrevClip` result holds in stationary and flight views,
+      and identify the custom producer's projection/jitter selection.
       Removing jitter from `ViewToClip` alone does not prove this. With a stationary camera and
       changing jitter, unjittered camera motion must remain zero. If necessary, remove both frames'
       jitter transforms and recompute the inverse. Explicitly match the backend's vector-jitter
@@ -424,9 +691,9 @@ are investigations and proposed improvements, not confirmed defects or game-test
       Coordinate this with output reinsertion so the scene is reconstructed before the game's
       grade and HUD composite. Recheck all relevant extents at reduced render scale; full-resolution
       captures alone did not establish an output-resolution HUD path.
-- [ ] Consider a shared dense-motion resolve only if needed for another backend or diagnostics.
-      Extend the existing decode pass with depth and verified camera data when useful for XeSS/FSR,
-      rather than making a second camera reconstruction mandatory for DLSS. If submitting a
+- [ ] Compare the existing explicit-sentinel dense resolve with Streamline's sparse resolve for
+      DLSS, since the deployed kernel treats valid zero as unwritten. Keep this independent of
+      producer/scale changes and measure GPU cost. If submitting a
       complete field, set backend metadata accordingly to prevent another camera-motion resolve.
       Validate depth-aware edge dilation and its metadata without applying it twice.
 - [ ] Validate in controlled captures and live motion: stationary camera with jitter, horizontal
@@ -471,8 +738,15 @@ API evidence, not ETW validation or physical latency measurement. [Evidence](res
 
 The Ghidra MCP extension and stdio bridge are installed and connected to the retained AC7 dump.
 Six CPU boundary names pass byte-span checks and are recorded in a tracked replay manifest.
-The active database save is pending while auto-analysis runs. This is static research, not a
+Auto-analysis finished and the database save succeeded. This is static research, not a
 game-tested CPU/render handoff. [Recovery evidence](research/ac7-fg-cpu-boundaries.md#ghidra-recovery-and-repeatable-names).
+
+The reusable render-link registry carries source IDs through engine-owned queued objects without
+using the latest CPU frame. Delayed rendering, multiple submissions, capacity refusal and stale
+pointer/ticket checks pass synthetic tests. Seven AC7 renderer/family/task functions are named,
+byte-checked and saved. Native Release verification passed (31 tests, five opt-in fixtures skipped).
+Game hooks, main-view selection, RHI handoff and final FG export remain unwired.
+[Ownership trace and limits](research/ac7-render-frame-handoff.md).
 
 The current [frame-generation orchestrator plan](frame-generation-plan.md) defines FG0-FG9 for
 DLSS-FG/MFG, XeSS-FG/MFG, FSR3/FSR4 FG, Reflex/XeLL and independent PCL telemetry. Planning/source
@@ -570,7 +844,46 @@ and capture of the next N frames; prove the capture format before building offli
       that opening, freezing, or closing diagnostics does not corrupt history or game input.
       Record built, synthetic-tested, capture-validated, and game-tested status separately.
 
+- [x] Repair the 30 September mixed proxy/overlay deployment: ABI 4 proxy paired with ABI 3
+      panel prevented Insert startup. The rebuilt real Rust panel passes Insert, draw and resize
+      checks; matched pair deployed with backups. Add explicit pair deployment/preflight tooling.
+      Corrected AC7 run pending. [Research](research/ac7-consumer-session.md).
+
 ## Repository review follow-up
+
+The [30 September renderer ownership audit](research/ac7-renderer-roots-20260930.md) changes
+the SR integration work: late resource identities can alias an earlier GBuffer. Successful
+backend evaluation is not evidence that the supplied scene includes intact lighting/reflections.
+
+- [x] Capture the pooled GBuffer/tonemap alias and premature lighting/reflection SRV replacement.
+      Gate composite/chain promotion by phase, refuse MRT promotion/gates and call shared gates
+      once per binding. Windows MSVC Release built and synthetic regression passed: 31 tests
+      passed, five vendor skips, Rust formatting/lint passed. User confirms lighting/reflections
+      restored in the 19:09 game build. Jitter/shimmer returned and remain unresolved.
+- [x] Map and name native post-processing, per-view renderer and widget converter roots in the
+      decrypted Ghidra project, plus main temporal construction/Process/ComputeOutputDesc,
+      composition descriptor gathering/execution, RHI commands and pre-visibility/jitter setup.
+      Post-processing/widget F9 scopes game-captured in 14 sessions (42 paired samples). All 42
+      backend jitter pairs match native view samples; sampled cuts are zero. CPU scopes end before
+      the post-process draws, so TLS alone is insufficient. Expanded graph/RHI capture built and
+      deployed with expected-byte guards; runtime validation pending.
+- [x] Validate sampled graph-to-RHI command associations: nine completed process-215904 sessions,
+      27 paired samples and 1119 matched draw/dispatch records with no native/command drops. Name
+      Tonemap/FXAA/material/Nimbus HUD/composite descriptor/processing methods from runtime vtables.
+      This sampled result does not establish all queue/Present identities.
+- [x] Diagnose the pause-menu F9 crash using an identical-code linker map and minidump: route copy
+      used an unretained borrowed translucency texture. Add owned retention/current-frame capture
+      checks and pre-execution native checkpoints; emit a Release linker map. Windows MSVC Release
+      verified, matching proxy/overlay deployed; corrected crash scene pending game validation.
+      [Evidence](research/ac7-graph-capture-crash-20260930.md).
+- [ ] Make the identified main temporal node and engine graph own SR inputs/output
+      descriptors and rectangles. Flight tonemap/scene-effect still write 928x524 before 1600x900
+      final composition; this is a measured extent problem, not the proven whole shimmer cause.
+- [ ] Move UI resolution to widget producers and dependent downsample/glow allocations; preserve
+      logical layout, refresh timing and real depth occlusion. Retire settling/discovery heuristics
+      only after equivalent transition captures pass.
+- [ ] Reassess remaining hangar banding using an intact input scene. Keep driver preset selection
+      unrestricted. Post-tonemap SR is a possible experiment, not the established correction.
 
 Open defects from the [7 September review](review.md). These are not fixed by the documentation rewrite.
 
@@ -589,3 +902,83 @@ Open defects from the [7 September review](review.md). These are not fixed by th
 - [ ] Derive discovery extents from verified render data/backend planning so inputs below 50% can be selected.
 
 The [validation plan](research/validation-plan.md) defines acceptance. Keep build, synthetic, game, and target-device results separate.
+
+Native widget producer continuation: QueueRender/PrepareTargets/DrawScaledWindow now own physical
+raster density while preserving logical layout; owned glow siblings resize and replacement painting
+bypasses refresh skipping. Native settings stop writing screen-percentage cvars. FSR/XeSS receive
+engine exposure with transactional context policy changes. MSVC Release built only; not deployed,
+no new tests. Borrowed UI targets, native UI isolation and FG identity remain open.
+[Evidence](research/ac7-native-renderer-refactor-20261001.md).
+
+Native UI composition: ABI3 appends leased ui_input from the verified view-owned HUD target.
+Runtime now owns demand-driven paired scene/UI/composed GPU snapshots with native scope identity;
+F9 writes these layers. MSVC Release built, not deployed/game-tested. Raw UI alpha/effects and
+simulation/Present identity remain unproven; these inputs do not authorize FG yet.
+
+Native renderer identity continuation: ABI4 copies input-loop source frame and per-renderer
+submission ID through native SR/HUD packets. Bounded constructor bindings retire before native
+delete; stop separately drains the outer Tick return path after disabling hooks. Existing
+post-SR native jitter removal/uniform rebuild confirmed. MSVC built only, no new tests/deployment.
+Final Present association, vendor markers and borrowed UI allocation ownership remain open.
+
+Shared UI producer migration now controls the verified game-instance mono/stereo canvas allocator,
+keeps its1920x1080 logical layout and resizes before borrowed widget rendering. Replacement-frame
+contributors repaint via native dirty state, with subsequent RefreshFPS preserved. MSVC Release
+built only, no tests/deployment/game validation. Dormant/stereo/DPI/glow transitions and final
+presentation/latency integration remain open. [Research](research/ac7-native-renderer-refactor-20261001.md).
+
+Native ownership audit correction: renderer retirement drains final RHI pool releases before/after
+its native wait/delete helper. Composition accepts only explicitly declared primary-view packets
+and requires complete paired identity/rectangle equality; bounded capture counts failures too.
+MSVC built only; no new tests/deployment. CPU semantic markers and final presentation remain open.
+
+Native update association: derived/base GameEngine Tick and RedrawViewports hooks bind the
+update-to-render phase into renderer identities and queued packets. Long-call guards cover
+synchronous Present and retirement waits. MSVC built only, no tests/deployment/game execution.
+Actual Reflex/PCL marker/sleep routing and final presentation association remain incomplete.
+
+Native CPU event handoff now uses ABI5 copied callbacks for outer/input/simulation boundaries.
+Runtime owns bounded CPU sequence state and a real-time optional consumer; F9 pairs source/QPC
+metadata with native composition identity. MSVC built only, no tests/deployment/game execution.
+Vendor sleep/marker consumer and final render/submission/Present association remain incomplete.
+
+Main viewport submission provenance now binds through native FViewport Draw and renderer
+construction (ABI6 viewport_key), queued packets/composition/F9 metadata. MSVC built only; no
+tests/deployment/game execution. Slate's actual window/RHI Present handoff remains separate and
+unfinished, along with vendor sleep/marker wiring and the final completion audit.
+
+Pass completion correction: ABI7 separates semantic before/after callbacks from scope-state
+restoration, resolves output resources again at end and removes an unused global pass copy.
+MSVC built only, no tests/deployment. Slate window/task/RHI end-drawing functions are now mapped
+and named; their queued source/swapchain handoff and vendor markers remain unfinished.
+
+Queued Slate window ownership is implemented: bounded task-to-source binding, main-window checks,
+leased native swapchain and execution-thread COM identity match at the existing Present observer.
+ABI8. MSVC built only; no tests/deployment/game run. Shipped getter/layout, scene-resource agreement,
+Present flags/result/generated handling and vendor Reflex/PCL consumer remain unfinished.
+
+Actual Present completion contract implemented (observer ABI7, game ABI8 unchanged): original
+interval/flags/HRESULT preserved, test calls bypass per-frame graphics work, runtime stores copied
+numeric source/window completion/QPC evidence, and counter records accepted non-test calls.
+MSVC built only; no tests/deployment/game run. Present1/generated handling, scene-resource agreement
+and real vendor sleep/marker consumption remain incomplete.
+
+Present1 coverage implemented through the shared overlay-aware installer/observer body (observer
+ABI8). Original parameters survive forwarding; recursive internal calls do not duplicate events.
+Route publication precedes activation and in-flight calls block uninstall. MSVC built only; no
+tests/deployment/game execution. Scene agreement, vendor consumer and live coverage remain open.
+
+Scene/window declaration agreement is implemented without capture copies: unique completed
+primary composition matches the exact Present source/session/viewport and is rechecked after
+return. MSVC built only, no tests/deployment. Actual sampled texture/final HUD-less resources,
+vendor sleep/marker setup and full completion validation remain unfinished.
+
+Final family surface producer implemented (ABI9): full native postprocess scope leases the real
+family render target through RHI completion, replacing HUD-intermediate identity. No ordinary
+GPU copies added. MSVC built only, no tests/deployment/game execution. Exact Slate sampling/late
+canvas contributions and vendor sleep/markers remain incomplete.
+
+Ordinary Slate texture binding path implemented (ABI10): candidate-only source-surface filtering,
+leased native texture across queued bind commands, exact source/window comparison and separate
+texture-bound Present evidence. MSVC built only, no tests/deployment/game run. Other consumers,
+late canvas/HUD-less resources and vendor sleep/markers remain unfinished.

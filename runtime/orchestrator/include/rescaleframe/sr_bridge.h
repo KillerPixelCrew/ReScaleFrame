@@ -7,7 +7,8 @@ extern "C" {
 #endif
 typedef struct rsf_sr_bridge rsf_sr_bridge;
 /* setup.open.device is the game's D3D11 device. Creates D3D12 on that same adapter.
-   This is a synchronous SR transfer, with no presentation or swap-chain ownership. */
+   GPU fences order SR transfers without presentation or swap-chain ownership. CPU waits are
+   limited to command allocator reuse and resource/backend retirement. */
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_create(const rsf_sr_session_setup* setup,
                                                         rsf_sr_bridge** out);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_select(rsf_sr_bridge* bridge,
@@ -15,7 +16,11 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_select(rsf_sr_bridge* bridge,
 /* Frame resources are D3D11 textures. Prepared depth must be R32_FLOAT and motion must contain
    dense, previous-minus-current displacement. No sparse sentinel is accepted. Transfers only
    the declared origin-zero render rectangle. Output is a caller-owned UAV-capable color texture.
-   Run on the D3D11 immediate-context owner thread, with game bindings saved by the caller. */
+   Run on the D3D11 immediate-context owner thread, with game bindings saved by the caller.
+   Success queues the completed output copy on that context; later draws/readbacks on the same
+   context are ordered after it. It does not imply CPU-observed GPU completion. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_set_auto_exposure(rsf_sr_bridge* bridge,
+                                                                  uint32_t enabled);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
     void* d3d11_context, const rsf_sr_frame* frame);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,

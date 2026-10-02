@@ -12,6 +12,7 @@
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/ac7_scene_color.h>
+#include <rescaleframe/ac7_motion_capture.h>
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
@@ -28,6 +29,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <bcrypt.h>
 
 extern IMAGE_DOS_HEADER __ImageBase;
 
@@ -37,6 +39,35 @@ static volatile LONG startup_ready;
 static wchar_t preference_path[MAX_PATH * 2];
 static uint32_t preferred_enabled = 1;
 static uint32_t preferred_quality = 3;
+
+static int executable_sha256(char output[65])
+{
+    wchar_t path[MAX_PATH];
+    BCRYPT_ALG_HANDLE algorithm = NULL;
+    BCRYPT_HASH_HANDLE hash = NULL;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    unsigned char digest[32], buffer[65536];
+    DWORD read = 0;
+    int ok = 0;
+    unsigned i;
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH)) return 0;
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE || BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0 ||
+        BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) < 0) goto done;
+    for (;;) {
+        if (!ReadFile(file, buffer, sizeof(buffer), &read, NULL)) goto done;
+        if (!read) break;
+        if (BCryptHashData(hash, buffer, read, 0) < 0) goto done;
+    }
+    if (read || BCryptFinishHash(hash, digest, sizeof(digest), 0) < 0) goto done;
+    for (i = 0; i < 32; ++i) snprintf(output + i * 2, 3, "%02x", digest[i]);
+    ok = 1;
+done:
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    return ok;
+}
 
 static void note(const char* format, ...)
 {
@@ -342,6 +373,10 @@ static void start_observer(void)
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
     options.log = observer_note;
+    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
+        rsf_ac7_motion_capture_configure(observe_directory, observer_note, NULL);
+        options.on_buffer = rsf_ac7_motion_capture_buffer;
+    }
     /* Unreal's encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written out as the
        decode a backend needs, which is the reciprocal of that scale and the same bias. The
        sentinel is far outside any real screen space motion and still representable in half. */
@@ -352,6 +387,7 @@ static void start_observer(void)
     /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
        observer's options are written once, and harmless until something turns the display on. */
     options.on_present = rsf_bridge_present_hook();
+    options.on_present_event = rsf_bridge_present_event_hook();
     /* Same reason, and it has to happen before the first present rather than at F8: the overlay
        starts as soon as the game has a device, and the bridge would otherwise have nowhere to
        speak until the backend was started. */
@@ -390,6 +426,9 @@ static void start_observer(void)
         }
     }
 
+    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
+        options.on_shader = rsf_bridge_shader_hook();
+    }
     const rsf_observer_result result = rsf_observer_install(&options);
     note("observer install result %d (format %lu, min width %lu, view cb %lu..%lu bytes)",
          (int)result, (unsigned long)options.format, (unsigned long)options.minimum_width,
@@ -883,6 +922,20 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     /* Before the scale patch, because the scale it settles on depends on whether these applied. */
     translucency_depth_conformed = apply_translucency_depth_patches();
     apply_separate_translucency_patch();
+    {
+        wchar_t path[MAX_PATH];
+        char sha256[65];
+        const DWORD length = GetModuleFileNameW((HMODULE)&__ImageBase, path, MAX_PATH);
+        wchar_t* separator = length && length < MAX_PATH ? wcsrchr(path, L'\\') : NULL;
+        if (separator && executable_sha256(sha256) &&
+            (size_t)(separator - path) + 1 + wcslen(L"ReScaleFrame.Game.AC7.dll") < MAX_PATH) {
+            wcscpy(separator + 1, L"ReScaleFrame.Game.AC7.dll");
+            note("native AC7 plugin preparation: %s", rsf_bridge_prepare_game(path, sha256, observer_note, NULL) ? "ready" : "refused");
+        }
+    }
+    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
+        rsf_ac7_motion_capture_install();
+    }
     InterlockedExchange(&startup_ready, 1);
     if (!dump_module) {
         note("startup: renderer patches prepared; waiting for a presented frame to start DLSS");
@@ -930,6 +983,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
    object, and replacing every match would corrupt it. */
 static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
 {
+    if (rsf_bridge_native_owned()) return;
     static int32_t previous_samples = 8;
     if (percentage <= 0.0f) {
         return;
@@ -1501,6 +1555,7 @@ static void action_save_enabled(unsigned long enabled)
 static void action_maintain_renderer(void)
 {
     static ULONGLONG last_check;
+    if (rsf_bridge_native_owned()) return;
     update_jitter_main_view();
     const ULONGLONG now = GetTickCount64();
     if (now - last_check >= 500) {

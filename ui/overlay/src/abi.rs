@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 4;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 5;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -201,8 +201,10 @@ pub struct RsfOverlayInput {
     pub display_height: u32,
     /// Seconds since the previous frame.
     pub delta_seconds: f32,
-    /// Zero lays out nothing and returns no draw calls, without discarding widget state.
+    /// Zero draws only the optional startup hint, without discarding widget state.
     pub visible: u32,
+    /// Host-timed startup hint opacity, clamped to 0..1. Appended in ABI 5.
+    pub startup_hint_alpha: f32,
 }
 
 /// One vertex, in the layout egui produces. Mirrors `rsf_overlay_vertex`.
@@ -340,7 +342,8 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayIntent, jitter_changed), 56);
         assert_eq!(offset_of!(RsfOverlayIntent, backend_changed), 64);
         assert_eq!(offset_of!(RsfOverlayIntent, backend), 68);
-        assert_eq!(size_of::<RsfOverlayInput>(), 36);
+        assert_eq!(size_of::<RsfOverlayInput>(), 40);
+        assert_eq!(offset_of!(RsfOverlayInput, startup_hint_alpha), 36);
         assert_eq!(size_of::<RsfOverlayVertex>(), 20);
         assert_eq!(offset_of!(RsfOverlayVertex, color), 16);
 

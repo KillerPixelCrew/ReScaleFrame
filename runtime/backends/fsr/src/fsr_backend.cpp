@@ -9,6 +9,7 @@
 #include <new>
 #include <cfloat>
 #include "../../common/sr_helpers.h"
+#include "fsr4_compat.h"
 #if defined(RSF_HAVE_FFX)
 #include <ffx_api.h>
 #include <ffx_upscale.h>

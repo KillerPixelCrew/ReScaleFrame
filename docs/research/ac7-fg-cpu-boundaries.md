@@ -104,6 +104,8 @@ FinishedInputThisFrame's preprocessing/widget loops and the render BeginFrame co
 Applied the six `AC7_` names after checking all recorded byte ranges. Saving initially failed
 with an active auto-analysis transaction; the replay script now waits before writing and saving.
 An in-memory rename is not evidence that the database has been saved.
+Auto-analysis subsequently completed; replay and explicit program save succeeded. The
+[render handoff investigation](ac7-render-frame-handoff.md) records the next ownership trace.
 
 The tracked [name manifest](evidence/ac7-fg-cpu-names-20260930.json) records RVAs, checked-span
 lengths/hashes, source revision, rationale and static validation limits. The

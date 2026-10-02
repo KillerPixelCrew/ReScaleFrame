@@ -241,6 +241,21 @@ typedef struct rsf_frame_tap_target_draw {
 /* Called on the render thread, immediately after the game's own draw has been forwarded. */
 typedef void (*rsf_frame_tap_target_fn)(void* user, const rsf_frame_tap_target_draw* draw);
 
+/* Temporary capture observers, independent of UI candidates and target watches. Set/clear on
+   the observed context's render thread between frames. Draw facts describe requested game state
+   after existing overrides are restored; compute work is reported after dispatch. */
+typedef void (*rsf_frame_tap_compute_fn)(void* user, void* context, uint32_t x, uint32_t y,
+                                       uint32_t z, void* indirect_arguments, uint32_t offset);
+rsf_frame_tap_result rsf_frame_tap_set_research_callbacks(rsf_frame_tap_target_fn draw,
+                                                        rsf_frame_tap_compute_fn compute,
+                                                        void* user);
+/* Optional paired observations around Draw/DrawIndexed. Before and after use the same target
+   draw ordinal. These callbacks observe the immediate context and must preserve its bindings. */
+rsf_frame_tap_result rsf_frame_tap_set_research_phase_callbacks(rsf_frame_tap_target_fn before,
+                                                              rsf_frame_tap_target_fn after,
+                                                              rsf_frame_tap_compute_fn compute,
+                                                              void* user);
+
 /* The pipeline objects worth a second look, so the tap can reject the rest of the frame inline.
 
    A frame is tens of thousands of draws and a handful of them are the interface. Asking a callback
@@ -405,8 +420,9 @@ typedef struct rsf_frame_tap_substitution {
     void* after_target;
 } rsf_frame_tap_substitution;
 
-/* Called the first time in a frame that a substitution's `after_target` is bound as a render
-   target, before that binding is forwarded.
+/* Called when a substitution's `after_target` is bound as a single render target, before that
+   binding is forwarded. One callback covers all closed gates waiting on that target. MRT binds
+   never open these gates: a pooled post-process target can still be a GBuffer earlier in the frame.
 
    It is the one moment where the scene is finished and nothing downstream has read it yet, which
    is where a reconstruction has to run. Whatever it does to the device context it must put back:

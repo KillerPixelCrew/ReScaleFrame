@@ -61,10 +61,11 @@ int main(int argc, char** argv)
     frame.scene_color = textures[0].Get(); frame.depth = textures[1].Get(); frame.game_motion = textures[2].Get();
     frame.render_width = frame.render_height = 512; frame.camera = &camera;
     bool passed = true;
-    const uint32_t sequence[] = {1u, 2u, 3u, 5u, 1u};
+    const uint32_t sequence[] = {1u, 2u, 3u, 5u, 4u, 1u};
     for (uint32_t backend : sequence) {
         result = rsf_dlss_pipeline_select_backend(backend, nullptr, nullptr);
         std::fprintf(stderr, "select %u: %d\n", backend, result);
+        if (backend == 4 && result == RSF_BACKEND_ERROR_NOT_SUPPORTED) continue;
         if (result != 0) { passed = false; continue; }
         for (uint32_t i = 0; i < 3; ++i) {
             camera.jitter_pixels[0] = i % 2 ? -0.25f : 0.25f;

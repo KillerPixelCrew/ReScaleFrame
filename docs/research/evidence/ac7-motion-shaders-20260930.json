@@ -1,0 +1,159 @@
+{
+  "date": "2026-09-30",
+  "source_revision": "0e2df170a9f276e24c76b75039065393b760ccd7",
+  "executable": {
+    "name": "Ace7Game.exe",
+    "build": "9855922",
+    "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f"
+  },
+  "references": {
+    "unreal": "0a14a8d537a31ecc77488ced41dbaa0166612ef8",
+    "renodx": "25a0e773147f0022eb2e56db381fa592eb9017c7",
+    "luma": "8ff992c450b8f8164fd5790759c8b22d2284d338",
+    "streamline_release": "2.14.1"
+  },
+  "renodx_active_ac7_ieee_crc32_matches": [
+    "1e252703",
+    "2179dad2",
+    "41fb3106",
+    "5e0455bc",
+    "645484c3",
+    "759f7dbb",
+    "79821615",
+    "7a572e8f",
+    "82bed845",
+    "c9564c2a"
+  ],
+  "capture": {
+    "session": "briefing-tessellation-fix-20260929-214407",
+    "date": "2026-09-29",
+    "shader_creation_blobs": 207,
+    "vertex_shaders": 55,
+    "pixel_shaders": 152,
+    "limitation": "Shader creation inventory; not a flight draw trace or full CS/HS/DS/GS inventory.",
+    "selected_shaders": [
+      {
+        "file": "briefing_shader_0_3060c987.dxbc",
+        "profile": "vs_5_0",
+        "bytes": 1984,
+        "sha256": "19b47df0a66961bec41c890319d71a01778d0a56ba84e2ea3c0d5fe66556d82b",
+        "crc32": "f88d607b"
+      },
+      {
+        "file": "briefing_shader_1_45946e43.dxbc",
+        "profile": "ps_5_0",
+        "bytes": 696,
+        "sha256": "b30616f416a82704386c5847a359e3d4819efe798dd0437f4ddf785c6f2ae622",
+        "crc32": "1ddf3049"
+      },
+      {
+        "file": "briefing_shader_1_a4d87960.dxbc",
+        "profile": "ps_5_0",
+        "bytes": 6040,
+        "sha256": "04d205b627decd8dbfe57f09e2d826f576d7a66e262a58831228c1862a2934fd",
+        "crc32": "aa9b26ca"
+      },
+      {
+        "file": "briefing_shader_1_c618a960.dxbc",
+        "profile": "ps_5_0",
+        "bytes": 4240,
+        "sha256": "85ec4635ea1fee2851d5979da08a1013609ead56312747cc4f54ba2e80620af0",
+        "crc32": "0fa916c5"
+      }
+    ]
+  },
+  "reprojection": {
+    "bindings": 472,
+    "capture_frame_labels": [
+      "f0",
+      "f1"
+    ],
+    "noaa_max_absolute_matrix_error": 1.4380863984087e-06,
+    "jittered_max_absolute_matrix_error": 0.04290824774216162,
+    "limitation": "Repeated bindings over two captured frames, not 472 independent frames or a stationary-camera test."
+  },
+  "streamline": {
+    "dll_sha256": "73bf52c0cfaa5900a8f3f4a91306e4625e7cca696dfb305aae44c9f97b582e1f",
+    "version": "2.14.1.0",
+    "embedded_shaders": [
+      {
+        "file": "sl_dlss_5d250.asm",
+        "offset": "0x5d250",
+        "bytes": 2248,
+        "sha256": "ec67e8f358a89501deced0bc782393f69fb46713a12c005e53bf2679c6976951",
+        "declarations": [
+          "dcl_globalFlags refactoringAllowed",
+          "dcl_constantbuffer CB0[6], immediateIndexed",
+          "dcl_resource_texture2d (float,float,float,float) t0",
+          "dcl_resource_texture2d (float,float,float,float) t1",
+          "dcl_uav_typed_texture2d (float,float,float,float) u0",
+          "dcl_input vThreadID.xy",
+          "dcl_temps 3",
+          "dcl_thread_group 16, 16, 1"
+        ],
+        "candidate": true
+      }
+    ]
+  },
+  "shader_probe": {
+    "profile": "ps_5_0",
+    "compiler": "System32/d3dcompiler_47.dll",
+    "device": "D3D11 WARP",
+    "feature_level": "0xb000",
+    "bytes": 1292,
+    "sha256": "73deaa9c3cd25a7707f5d655386374dcdb1051768fe0759897d1ff5950d15e1f",
+    "compile": "passed",
+    "create_pixel_shader": "passed",
+    "draw_readback": "not_run",
+    "game_test": "not_run"
+  },
+  "convention_examples": [
+    {
+      "case": "10px_right",
+      "ndc_current_minus_previous": [
+        0.01953125,
+        0
+      ],
+      "current_to_previous_pixels": [
+        -10.0,
+        0
+      ],
+      "current_sl_written_branch_pixels": [
+        -20.0,
+        0
+      ]
+    },
+    {
+      "case": "10px_down",
+      "ndc_current_minus_previous": [
+        0,
+        -0.034722222222222224
+      ],
+      "current_to_previous_pixels": [
+        0,
+        -10.0
+      ],
+      "current_sl_written_branch_pixels": [
+        0,
+        20.0
+      ]
+    }
+  ],
+  "valid_zero_example": {
+    "decoded_total_motion": [
+      0,
+      0
+    ],
+    "camera_fallback_pixels": [
+      -10,
+      0
+    ],
+    "expected_tracking_motion_pixels": [
+      0,
+      0
+    ],
+    "streamline_kernel_selects_camera_fallback": true,
+    "note": "CPU branch example, not a rendered or captured tracking object."
+  },
+  "validation": "Offline native shader disassembly, captured matrix comparison, CPU convention examples, and Windows WARP shader compilation/creation only. No new AC7 run."
+}

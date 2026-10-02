@@ -15,6 +15,14 @@ target_link_libraries(rsf_proxy_dinput8 PRIVATE
     ReScaleFrame::AC7SceneColor
     ReScaleFrame::AC7UIRules
     ReScaleFrame::AC7View
+    ReScaleFrame::AC7MotionCapture
+    bcrypt
     rsf_build_options)
 target_compile_definitions(rsf_proxy_dinput8 PRIVATE _CRT_SECURE_NO_WARNINGS)
 set_target_properties(rsf_proxy_dinput8 PROPERTIES OUTPUT_NAME "dinput8" PREFIX "")
+add_dependencies(rsf_proxy_dinput8 rsf_game_ac7)
+if(MSVC)
+    # Optimized builds need exact private-function addresses for capture crash analysis.
+    target_link_options(rsf_proxy_dinput8 PRIVATE
+        "/MAP:$<TARGET_FILE_DIR:rsf_proxy_dinput8>/dinput8.map")
+endif()

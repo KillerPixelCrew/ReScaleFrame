@@ -10,6 +10,8 @@
 #include <rescaleframe/ac7_ui_rules.h>
 
 #include <cstdio>
+#include <fstream>
+#include <vector>
 
 namespace {
 
@@ -100,8 +102,20 @@ rsf_ac7_draw_facts make_widget_quad(rsf_ac7_draw_input* inputs)
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    // Optional captured shader validates the guard without distributing game bytecode.
+    if (argc == 2) {
+        std::ifstream file(argv[1], std::ios::binary | std::ios::ate);
+        if (!file) return 1;
+        const auto size = file.tellg();
+        if (size != 1104) return 1;
+        std::vector<char> bytecode(static_cast<size_t>(size));
+        file.seekg(0); file.read(bytecode.data(), size);
+        check(rsf_ac7_ui_is_hud_producer(bytecode.data(), 1104) != 0, "Captured HUD producer must match.");
+        bytecode.back() ^= 1;
+        check(rsf_ac7_ui_is_hud_producer(bytecode.data(), 1104) == 0, "Changed instructions must refuse, even with the same container checksum.");
+    }
     rsf_ac7_draw_input inputs[4]{};
     const rsf_ac7_ui_registry registry = make_registry(&back_buffer_object);
 

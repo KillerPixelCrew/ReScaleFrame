@@ -89,6 +89,12 @@ rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* text
                                          const rsf_texture_dump_options* options,
                                          rsf_texture_dump_report* report);
 
+/* Lossless subresource-zero readback for colour, motion and depth diagnostics. Writes .bin and
+   _raw.json with the DXGI format and row pitch. Refuses MSAA, compressed/unknown formats, foreign
+   devices and deferred contexts. Rows are packed; source and file row pitches are recorded. */
+rsf_dump_texture_result rsf_dump_texture_bytes(void* device, void* context, void* texture,
+                                              const rsf_texture_dump_options* options);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

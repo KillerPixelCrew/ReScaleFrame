@@ -1381,10 +1381,11 @@ int main()
     plan.viewport_scale_y = 2.0f;
     plan.on_gate = note_gate;
     plan.count = 2;
-    // The composite: promoted to a larger target, and ungated.
+    // The allocation is a GBuffer earlier in the frame, then becomes the composite.
     plan.items[0].texture = composite;
     plan.items[0].render_view = promoted_target;
     plan.items[0].shader_view = promoted_resource;
+    plan.items[0].after_target = composite;
     // The scene colour: substituted only once the composite has been bound this frame, which is
     // what keeps a reconstruction out of the passes still drawing the scene.
     plan.items[1].texture = source;
@@ -1408,6 +1409,35 @@ int main()
     check(gates_seen == 0, "A target the plan does not name must not open a gate.");
     check(bound_resource(context, 2) == source_view,
           "A gated substitution must not apply before its gate opens.");
+
+    stage("a future composite used as a GBuffer remains native");
+    D3D11_TEXTURE2D_DESC gbuffer_desc{}; composite->GetDesc(&gbuffer_desc);
+    ID3D11Texture2D* second_gbuffer = nullptr;
+    ID3D11RenderTargetView* second_gbuffer_view = nullptr;
+    check(SUCCEEDED(device->CreateTexture2D(&gbuffer_desc, nullptr, &second_gbuffer)) &&
+          SUCCEEDED(device->CreateRenderTargetView(second_gbuffer, nullptr, &second_gbuffer_view)),
+          "The MRT regression needs equal-size GBuffer targets.");
+    ID3D11RenderTargetView* gbuffer_targets[] = {composite_view, second_gbuffer_view};
+    context->OMSetRenderTargets(2, gbuffer_targets, nullptr);
+    check(gates_seen == 0 && bound_target(context) == composite_view,
+          "An MRT GBuffer bind must neither open the post-process gate nor redirect its target.");
+    set_viewport(context, 128.0f, 72.0f);
+    D3D11_VIEWPORT native_viewport{}; UINT native_count = 1;
+    context->RSGetViewports(&native_count, &native_viewport);
+    check(native_count == 1 && native_viewport.Width == 128.0f,
+          "The GBuffer viewport must not inherit post-process scaling.");
+    context->OMSetRenderTargets(1, &other_view, nullptr);
+    if (second_gbuffer_view) second_gbuffer_view->Release();
+    if (second_gbuffer) second_gbuffer->Release();
+    ID3D11ShaderResourceView* composite_source_view = nullptr;
+    check(SUCCEEDED(device->CreateShaderResourceView(composite, nullptr, &composite_source_view)),
+          "The pooled GBuffer allocation must be readable.");
+    context->PSSetShaderResources(2, 1, &composite_source_view);
+    check(bound_resource(context, 2) == composite_source_view,
+          "Lighting must read the real GBuffer, not the future composite stand-in.");
+    ID3D11ShaderResourceView* clear_gbuffer = nullptr;
+    context->PSSetShaderResources(2, 1, &clear_gbuffer);
+    composite_source_view->Release();
 
     stage("substituting after the gate opens");
     context->OMSetRenderTargets(1, &composite_view, nullptr);

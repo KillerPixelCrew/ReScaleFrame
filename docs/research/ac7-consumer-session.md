@@ -216,6 +216,24 @@ This records completion of the user's AC7 upscaling task. It does not claim a ne
 frame-generation/latency validation, or completion of the separate public plugin lifecycle. The
 existing Streamline shutdown/manual-present bookkeeping observations remain separately recorded.
 
+## Insert regression from a mixed deployment, 30 September
+
+The capture proxy was rebuilt against overlay ABI 4 but deployed with the older ABI 3 Rust DLL.
+The game log records panel-creation refusal before the input hook is installed. Direct calls to
+the installed DLL confirmed that it accepts ABI 3 and rejects ABI 4. This explains why Insert
+could not open the panel; it was not a key-binding change.
+
+Rebuilding `rescaleframe-overlay` and deploying it with the proxy resolves the compatibility
+failure. The real Rust panel passed the Windows D3D11 host fixture: Insert open, repeat suppression,
+close and reopen, nonblack rendered pixels, restored state, and swap-chain resize. The initial
+new key test sent separate presses within the existing 250 ms debounce window; spacing those
+presses beyond that window tests the intended behaviour. Windows Release verification passed
+30 tests with five vendor-environment skips. No Rust behaviour changed.
+
+`eng/deploy-ac7-proxy.ps1` now builds and tests the actual pair before backing up and replacing
+both files in an explicitly supplied game directory. Native routine verification remains isolated
+from game installations. Deployment succeeded; a corrected AC7 run remains user-validated work.
+
 ## Shutdown-log clarification
 
 During release preparation, the user clarified that they experienced no crash. Earlier wording

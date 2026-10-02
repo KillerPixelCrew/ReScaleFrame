@@ -77,6 +77,22 @@ int wmain(int argc, wchar_t* argv[])
                     "The researched executable must be recognized.");
     passed &= check(api.info.rendering_ready == 0,
                     "Recognition must not advertise unimplemented rendering support.");
+    passed &= check(api.hooks.prepare && api.hooks.start && api.hooks.quiesce && api.hooks.stop && api.hooks.status,
+                    "The game must expose its renderer lifecycle.");
+    rsf_game_renderer_status status{};
+    passed &= check(api.hooks.status(&status) == RSF_ERROR_INVALID_ARGUMENT, "Short renderer status must refuse.");
+    status.struct_size = sizeof(status); status.abi_version = RSF_GAME_ABI_VERSION;
+    passed &= check(api.hooks.status(&status) == RSF_OK && !status.prepared && !status.active && !status.rendering_ready,
+                    "The renderer must start inactive and unvalidated.");
+    rsf_game_start_args start{sizeof(start), RSF_GAME_ABI_VERSION};
+    passed &= check(api.hooks.start(&start) == RSF_ERROR_NOT_READY, "Activation requires native preparation.");
+    rsf_game_host_services host{sizeof(host), RSF_GAME_ABI_VERSION, 9, nullptr, nullptr, nullptr};
+    rsf_game_prepare_args prepare{sizeof(prepare), RSF_GAME_ABI_VERSION, &host};
+    passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_NATIVE_REFUSED,
+                    "A recognized fingerprint alone must not install hooks in a different host executable.");
+    rsf_game_control_args control{sizeof(control), RSF_GAME_ABI_VERSION};
+    passed &= check(api.hooks.quiesce(&control) == RSF_OK && api.hooks.stop(&control) == RSF_OK,
+                    "Refused preparation must be safely stoppable.");
     probe.sha256_hex = "unknown";
     passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN,
                     "An unrecognized hash must not match by name alone.");

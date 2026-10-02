@@ -11,23 +11,23 @@ rendering rules in its own integration. A [KillerPixelCrew](https://github.com/K
 
 ## Current status
 
-**Ace Combat 7 is the first working integration.** Its DLSS upscaling path is complete and
-accepted in game, including full-resolution briefing rendering and the in-game settings overlay.
-It currently runs through the AC7 proxy while the shared plugin lifecycle is being built.
+**Ace Combat 7 is the first working integration.** Its engine-owned upscaling path and corrected
+wing/cloud rendering are accepted in game, with full-resolution UI and the in-game settings overlay.
+The AC7 proxy loads the game plugin and shared runtime services.
 
 | Area | Status |
 | --- | --- |
 | DLSS Super Resolution / DLAA | Working in AC7 |
-| Game detection and native SDK | Versioned C ABI and executable recognition implemented; full rendering lifecycle still in progress |
+| Game detection and native SDK | Versioned C ABI, guarded AC7 engine hooks and renderer/resource ownership implemented; other games remain unsupported |
 | Frame generation and latency | Planned; graphics interoperability research and shared-surface tests are in place |
-| FSR and XeSS | Backend scaffolding and integration plans; no released game support yet |
+| FSR and XeSS | FSR 2/3/4 and XeSS SR available in AC7; optimized D3D11/D3D12 transfer; FSR 4 INT8 compatibility device-tested on RTX 4070 |
 | Standalone launcher and WSGM | Scaffolding and planned integration |
 
 For downloads, supported builds, installation and controls, see the relevant game's README:
 
 | Game | Released features | Guide |
 | --- | --- | --- |
-| Ace Combat 7 | DLSS Super Resolution and Native/DLAA on Windows x64 | [AC7 README](games/ac7/README.md) |
+| Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
 
 [Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
 · [Implementation tracker](docs/implementation.md)

@@ -226,6 +226,10 @@ rsf_ac7_draw_class rsf_ac7_ui_classify(const rsf_ac7_ui_registry* registry,
    when it reads a registered widget target, or when a setting named its shader. */
 int rsf_ac7_ui_is_candidate(const rsf_ac7_ui_registry* registry, const rsf_ac7_draw_facts* draw);
 
+/* Captured flight HUD producer: exact DXBC container checksum, CRC32C and size.
+   This names a producer for resolution tracking, not a draw to divert into a transparent layer. */
+int rsf_ac7_ui_is_hud_producer(const void* bytecode, uint32_t bytes);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
