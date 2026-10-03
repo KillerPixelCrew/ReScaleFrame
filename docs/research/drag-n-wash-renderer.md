@@ -187,8 +187,13 @@ or global settings contents were inferred from failed parses.
 
 ## Runtime use and next experiments
 
-Current runtime use: none. There is no Drag'n Wash or Unity Mono renderer implementation,
-deployment route, Harmony dependency or successful game/device test from this work.
+Current runtime use: the shared Unity Mono native scaffold recognizes this exact Drag'n Wash
+fingerprint and exposes an inactive lifecycle. It retains no services and refuses preparation.
+There is no managed bootstrap, Unity renderer implementation, deployment route, Harmony
+dependency or successful game/device test.
+
+The scaffold builds on Windows/MSVC and its synthetic DLL contract passes. That test does not
+load the game, Mono, Harmony, URP or a graphics device.
 
 First load an inert helper into the actual Mono domain, establish the live API/pipeline/camera,
 and count the proposed Harmony hook executions. Then prove a native copy-through graph pass

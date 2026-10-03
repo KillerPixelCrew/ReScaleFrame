@@ -1,8 +1,9 @@
 # Shared Unity Mono plugin
 
 Direction agreed on 3 October 2026: use a shared Unity Mono plugin, reflection for discovery,
-and Harmony for managed method patches. Drag'n Wash is the first validation case. This is a
-source-grounded design, not an implemented, built or game-tested plugin.
+and Harmony for managed method patches. Drag'n Wash is the first validation case. The native
+game-plugin scaffold and contract fixture now exist; managed bootstrap, Harmony and rendering
+remain unimplemented and untested in a game.
 
 ## Question and evidence
 
@@ -18,11 +19,23 @@ and ages, but no native symbol import or hook experiment was performed.
 
 ## Ownership and loading
 
-The proposed plugin lives under `games/unity-mono/`. It implements the existing game-plugin C
-ABI, owns Unity discovery, managed bootstrap, Harmony patches, pipeline adapters, frame/view
-data and output reinsertion. It loads one first-party managed helper into the game's existing
-Mono scripting domain. It never initializes a second Mono/CLR runtime or another orchestrator.
+The plugin lives under `games/unity-mono/`. Its native scaffold implements the existing
+game-plugin C ABI. The completed plugin will own Unity discovery, managed bootstrap, Harmony
+patches, pipeline adapters, frame/view data and output reinsertion. It will load one first-party
+managed helper into the game's existing Mono scripting domain. It never initializes a second
+Mono/CLR runtime or another orchestrator.
 Vendor SDKs, graphics interoperability, settings and presentation remain in `runtime/`.
+
+`ReScaleFrame.Game.UnityMono.dll` currently recognizes only the exact researched Drag'n Wash
+x64 name and SHA256. It reports rendering readiness false, refuses `prepare` and `start` with
+`RSF_ERROR_NOT_READY`, retains no host services and allows repeated cleanup. This exact allowlist
+is deliberate: executable metadata alone cannot prove another Unity game's adapter compatibility.
+The synthetic contract fixture validates C ABI guards and lifecycle refusal. It does not load
+Mono, install Harmony patches or touch a graphics device.
+
+The Release scaffold was built with MSVC through the VS 2026 preset. The full repository gate
+passed with six expected environment/vendor skips, then Rust formatting and Clippy. The Unity
+contract fixture passed. These checks establish the DLL contract only.
 
 Native bootstrap must wait for the player, Mono and scripting domain to be ready, outside
 `DllMain`. Resolve exports from the already loaded runtime and attach only threads that need

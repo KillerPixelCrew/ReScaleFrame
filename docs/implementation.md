@@ -11,8 +11,17 @@
       adapters and the existing native orchestrator. Map camera policy, temporal production,
       pre-tonemap reconstruction and SDR overlay boundaries from the shipped managed code.
       [Design and validation sequence](research/unity-mono-plugin.md).
-- [ ] Implement the native/managed bootstrap in the player's existing Mono domain, generic
-      capability discovery and guarded Harmony patches. No Unity plugin is built or tested yet.
+- [x] Add `rsf_game_unity_mono`, producing `ReScaleFrame.Game.UnityMono.dll` through the existing
+      game-plugin ABI. The researched Drag'n Wash name/hash/architecture is the initial allowlist.
+      Preparation and activation refuse with `RSF_ERROR_NOT_READY`; no hooks or host-service
+      references are retained. Rendering readiness stays false.
+- [x] Build and synthetic-test the scaffold on Windows/MSVC with
+      `eng/verify.ps1 -Configuration Release -VS2026`: the repository gate passed with six
+      expected environment/vendor skips; Rust formatting and Clippy passed. The Unity fixture verifies
+      detection, ABI/size guards, inactive lifecycle and repeated cleanup. This is not a Mono,
+      Harmony, graphics-device or game test.
+- [ ] Implement the managed bootstrap in the player's existing Mono domain, generic capability
+      discovery and guarded Harmony patches. The native scaffold does not establish these paths.
 - [ ] Validate render-thread native copy-through, API state/fences, view/frame identity and graph
       resource lifetime, then temporal inputs and output-resolution SR reinsertion.
 - [ ] Game-test custom fluid/deformation coverage, scene/settings/resize transitions, HUD-less/UI

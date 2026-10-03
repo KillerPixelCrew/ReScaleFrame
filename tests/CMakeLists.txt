@@ -3,7 +3,7 @@ target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_o
 
 add_executable(rsf_plugin_contract plugin_contract.cpp)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_dependencies(rsf_plugin_contract rsf_game_ac7)
+add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_unity_mono)
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 if(NOT MSVC)
     # This test uses wmain, which mingw only selects as the entry point with -municode.
@@ -12,9 +12,13 @@ if(NOT MSVC)
 endif()
 # Load the plugin by name from its own directory. That is how it is loaded in practice, and it
 # keeps the test runnable under a cross-build emulator, which cannot take a host path.
-add_test(NAME game_plugin_contract COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:rsf_game_ac7>")
+add_test(NAME game_plugin_contract COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:rsf_game_ac7>" ac7)
 set_tests_properties(game_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_ac7>")
+add_test(NAME game_unity_mono_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_unity_mono>" unity-mono)
+set_tests_properties(game_unity_mono_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_unity_mono>")
 add_executable(rsf_module_dump_entropy module_dump_entropy.c)
 target_link_libraries(rsf_module_dump_entropy PRIVATE ReScaleFrame::LoaderDiagnostics rsf_build_options)
 add_test(NAME module_dump_entropy COMMAND rsf_module_dump_entropy)

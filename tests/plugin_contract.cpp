@@ -3,9 +3,26 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <cstring>
 #include <iostream>
 
 namespace {
+struct Fixture {
+    const wchar_t* argument;
+    const char* id;
+    const char* executable;
+    const char* sha256;
+    rsf_result prepare_result;
+};
+
+constexpr Fixture fixtures[] = {
+    {L"ac7", "ac7", "Ace7Game.exe",
+     "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+     RSF_ERROR_NATIVE_REFUSED},
+    {L"unity-mono", "unity-mono", "DragNWash.exe",
+     "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
+     RSF_ERROR_NOT_READY}};
+
 bool check(bool condition, const char* message)
 {
     if (!condition) {
@@ -35,7 +52,17 @@ bool resolve_beside_self(const wchar_t* leaf, wchar_t* buffer, DWORD capacity)
 
 int wmain(int argc, wchar_t* argv[])
 {
-    if (argc != 2) {
+    if (argc != 3) {
+        return 2;
+    }
+    const Fixture* fixture = nullptr;
+    for (const auto& candidate : fixtures) {
+        if (wcscmp(argv[2], candidate.argument) == 0) {
+            fixture = &candidate;
+            break;
+        }
+    }
+    if (!fixture) {
         return 2;
     }
     wchar_t path[MAX_PATH];
@@ -71,14 +98,20 @@ int wmain(int argc, wchar_t* argv[])
         return 1;
     }
 
-    rsf_game_probe probe{sizeof(rsf_game_probe), 0x8664, 0, "Ace7Game.exe",
-        "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f"};
+    passed &= check(api.info.id && std::strcmp(api.info.id, fixture->id) == 0,
+                    "The plugin must report the expected game identity.");
+    passed &= check(api.info.name && api.info.version && api.info.status,
+                    "The plugin must supply its immutable metadata strings.");
+    rsf_game_probe probe{sizeof(rsf_game_probe), 0x8664, 0, fixture->executable, fixture->sha256};
     passed &= check(api.detect(&probe) == RSF_GAME_RECOGNIZED,
                     "The researched executable must be recognized.");
     passed &= check(api.info.rendering_ready == 0,
                     "Recognition must not advertise unimplemented rendering support.");
-    passed &= check(api.hooks.prepare && api.hooks.start && api.hooks.quiesce && api.hooks.stop && api.hooks.status,
-                    "The game must expose its renderer lifecycle.");
+    if (!check(api.hooks.prepare && api.hooks.start && api.hooks.quiesce && api.hooks.stop && api.hooks.status,
+               "The game must expose its renderer lifecycle.")) {
+        FreeLibrary(module);
+        return 1;
+    }
     rsf_game_renderer_status status{};
     passed &= check(api.hooks.status(&status) == RSF_ERROR_INVALID_ARGUMENT, "Short renderer status must refuse.");
     status.struct_size = sizeof(status); status.abi_version = RSF_GAME_ABI_VERSION;
@@ -88,11 +121,72 @@ int wmain(int argc, wchar_t* argv[])
     passed &= check(api.hooks.start(&start) == RSF_ERROR_NOT_READY, "Activation requires native preparation.");
     rsf_game_host_services host{sizeof(host), RSF_GAME_ABI_VERSION, 9, nullptr, nullptr, nullptr};
     rsf_game_prepare_args prepare{sizeof(prepare), RSF_GAME_ABI_VERSION, &host};
-    passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_NATIVE_REFUSED,
-                    "A recognized fingerprint alone must not install hooks in a different host executable.");
+    passed &= check(api.hooks.prepare(&prepare) == fixture->prepare_result,
+                    "Preparation must refuse without implemented, validated native hooks.");
     rsf_game_control_args control{sizeof(control), RSF_GAME_ABI_VERSION};
     passed &= check(api.hooks.quiesce(&control) == RSF_OK && api.hooks.stop(&control) == RSF_OK,
                     "Refused preparation must be safely stoppable.");
+    passed &= check(api.hooks.status(&status) == RSF_OK && !status.prepared && !status.active && !status.rendering_ready,
+                    "Refused preparation and cleanup must leave no active renderer.");
+    probe.pe_machine = 0x14c;
+    passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A different architecture must not match.");
+    probe.pe_machine = 0x8664;
+    probe.struct_size = sizeof(probe) - 1;
+    passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A short probe must not match.");
+    probe.struct_size = sizeof(probe);
+    probe.executable_name_utf8 = "OtherGame.exe";
+    passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A fingerprint with a different name must not match.");
+    probe.executable_name_utf8 = nullptr;
+    passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A missing executable name must not match.");
+    probe.executable_name_utf8 = fixture->executable;
+
+    if (fixture->prepare_result == RSF_ERROR_NOT_READY) {
+        passed &= check(api.hooks.prepare(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.start(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.quiesce(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.stop(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.status(nullptr) == RSF_ERROR_INVALID_ARGUMENT,
+                        "Scaffold lifecycle callbacks must reject null structures.");
+        prepare.struct_size = sizeof(prepare) - 1;
+        start.struct_size = sizeof(start) - 1;
+        control.struct_size = sizeof(control) - 1;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.start(&start) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.quiesce(&control) == RSF_ERROR_INVALID_ARGUMENT &&
+                        api.hooks.stop(&control) == RSF_ERROR_INVALID_ARGUMENT,
+                        "Scaffold lifecycle callbacks must reject short structures.");
+        prepare.struct_size = sizeof(prepare);
+        start.struct_size = sizeof(start);
+        control.struct_size = sizeof(control);
+        prepare.abi_version = start.abi_version = control.abi_version = status.abi_version = RSF_GAME_ABI_VERSION + 1;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_ABI_MISMATCH &&
+                        api.hooks.start(&start) == RSF_ERROR_ABI_MISMATCH &&
+                        api.hooks.quiesce(&control) == RSF_ERROR_ABI_MISMATCH &&
+                        api.hooks.stop(&control) == RSF_ERROR_ABI_MISMATCH &&
+                        api.hooks.status(&status) == RSF_ERROR_ABI_MISMATCH,
+                        "Scaffold lifecycle callbacks must reject incompatible ABIs.");
+        prepare.abi_version = start.abi_version = control.abi_version = status.abi_version = RSF_GAME_ABI_VERSION;
+        prepare.host = nullptr;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_INVALID_ARGUMENT, "A missing host must refuse.");
+        prepare.host = &host;
+        host.struct_size = sizeof(host) - 1;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_INVALID_ARGUMENT, "A short host must refuse.");
+        host.struct_size = sizeof(host);
+        host.abi_version = RSF_GAME_ABI_VERSION + 1;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_ABI_MISMATCH, "An incompatible host must refuse.");
+        host.abi_version = RSF_GAME_ABI_VERSION;
+        host.session_id = 0;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_INVALID_ARGUMENT, "A missing session must refuse.");
+        host.session_id = 9;
+        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_NOT_READY &&
+                        api.hooks.start(&start) == RSF_ERROR_NOT_READY &&
+                        api.hooks.quiesce(&control) == RSF_OK && api.hooks.stop(&control) == RSF_OK,
+                        "The scaffold must remain inactive and allow repeated cleanup.");
+        status.prepared = status.active = status.rendering_ready = 1;
+        passed &= check(api.hooks.status(&status) == RSF_OK && !status.prepared && !status.active &&
+                        !status.rendering_ready && status.reason,
+                        "Status must overwrite stale flags and explain missing renderer support.");
+    }
     probe.sha256_hex = "unknown";
     passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN,
                     "An unrecognized hash must not match by name alone.");
