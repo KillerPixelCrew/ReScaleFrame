@@ -10,6 +10,8 @@ route general Unreal 4, version-specific UE4.18 and TrueSky research.
 
 | Document | Read it for |
 | --- | --- |
+| [Shared Unity Mono plugin](unity-mono-plugin.md) | Reflection/Harmony adapters, existing-domain bootstrap, RenderGraph execution and lifecycle design |
+| [Drag'n Wash renderer](drag-n-wash-renderer.md) | First Unity case: 6000.3.14f1 Mono/URP, complete selected assembly decompiles, temporal/UI boundaries and unmeasured runtime limits |
 | [Native AC7 renderer](ac7-native-renderer-refactor-20261001.md) | Native view/graph/UI ownership, copied RHI identity, shared-uniform crash correction and retirement |
 | [Reconstruction stability](ac7-stability-20261001.md) | Exact input rectangles, bloom/exposure order, TrueSky jitter and valid-zero motion |
 | [Aircraft and cloud corrections](ac7-plane-artifacts-20261002.md) | TrueSky x1 activation, actual Texture2D views, RG32F depth bounds, FP16 production and user acceptance |

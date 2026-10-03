@@ -2,6 +2,11 @@
 
 Each game directory holds its plugin and an `engine.json` evidence summary. Record the exact executable build and the source of each rendering claim.
 
+[Unity Mono](unity-mono/README.md) is the proposed shared engine plugin using reflection and
+Harmony, with separate rendering-pipeline adapters. [Drag'n Wash](drag-n-wash/README.md) is its
+first researched game; its directory records build evidence rather than a duplicated renderer
+DLL. Neither the shared plugin nor that game's rendering support is implemented yet.
+
 - `measured`: observed in the game or a capture.
 - `inferred`: follows from evidence, with the reasoning recorded.
 - `assumed`: an unconfirmed working hypothesis.

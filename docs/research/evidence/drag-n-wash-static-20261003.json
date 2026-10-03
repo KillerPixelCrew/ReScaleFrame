@@ -1,0 +1,459 @@
+{
+  "examined": "2026-10-03",
+  "method": "Read-only PE/PDB metadata, complete ILSpy projects for selected assemblies, strict serialized-object reads with generated managed schemas.",
+  "runtime_observed": false,
+  "steam": {
+    "appid": 4739660,
+    "buildid": "25286774"
+  },
+  "engine": {
+    "version": "6000.3.14f1",
+    "revision": "d68c3f99a318",
+    "serialized_version": "6000.3.14f1",
+    "urp_embedded_package_id": "3b809f23691d",
+    "core_embedded_package_id": "02dfbe8e43de",
+    "package_semantic_version": null
+  },
+  "native_modules": [
+    {
+      "file": "DragNWash.exe",
+      "bytes": 667648,
+      "sha256": "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
+      "codeview": [
+        {
+          "guid": "2964b514-c5f1-4838-b709-967f3017719c",
+          "age": 1,
+          "pdb": "WindowsPlayer_player_Master_mono_x64.pdb"
+        }
+      ],
+      "selected_exports": [],
+      "pdb": {
+        "file": "WindowsPlayer_player_Master_mono_x64.pdb",
+        "sha256": "888839936092a56237b72b139abd363daeea71f204dd02c12be04605bd7cacbc",
+        "bytes": 405504,
+        "guid": "2964b514-c5f1-4838-b709-967f3017719c",
+        "age": 1,
+        "pdb_version": 20000404,
+        "matches_module": true
+      }
+    },
+    {
+      "file": "UnityPlayer.dll",
+      "bytes": 36340136,
+      "sha256": "bbdf3e73522223ea45c3a54049b716f9da3e632994636734c5d53326aa2c36d0",
+      "codeview": [
+        {
+          "guid": "223bd7a7-393f-40cf-9b0c-20abedf13a2e",
+          "age": 1,
+          "pdb": "UnityPlayer_Win64_player_mono_x64.pdb"
+        }
+      ],
+      "selected_exports": [
+        "UnityMain"
+      ],
+      "pdb": {
+        "file": "UnityPlayer_Win64_player_mono_x64.pdb",
+        "sha256": "97e42724ae7e86084af1740c5e938860889efc58b6fe4751a22d5fe9c5aa3f82",
+        "bytes": 25735168,
+        "guid": "223bd7a7-393f-40cf-9b0c-20abedf13a2e",
+        "age": 1,
+        "pdb_version": 20000404,
+        "matches_module": true
+      }
+    },
+    {
+      "file": "mono-2.0-bdwgc.dll",
+      "bytes": 7828904,
+      "sha256": "69dd7ca153d9bd718ed6176c1e6ff065721a9408964384a421602f7d5527a294",
+      "codeview": [
+        {
+          "guid": "1ac99f6b-fd3a-4dc0-93e7-782ca1b4be7d",
+          "age": 1,
+          "pdb": "mono-2.0-bdwgc.pdb"
+        }
+      ],
+      "selected_exports": [
+        "mono_add_internal_call",
+        "mono_assembly_foreach",
+        "mono_assembly_get_image",
+        "mono_class_from_name",
+        "mono_class_get_fields",
+        "mono_class_get_method_from_name",
+        "mono_domain_assembly_open",
+        "mono_domain_get",
+        "mono_field_get_value",
+        "mono_get_root_domain",
+        "mono_image_get_name",
+        "mono_runtime_invoke",
+        "mono_thread_attach",
+        "mono_thread_detach"
+      ]
+    }
+  ],
+  "decompiled_assemblies": [
+    {
+      "file": "Assembly-CSharp.dll",
+      "bytes": 433664,
+      "sha256": "68502524f23843e674e9a98248ddcb4b42ebd68cf37aae76312f28514b85258b",
+      "decompiled_csharp_files": 317
+    },
+    {
+      "file": "com.naelstrof-raliv.fluid-rendering-for-games.dll",
+      "bytes": 30208,
+      "sha256": "13180f24daa27226d87a34b97b45a95604d053e40283d371dc61377932751c15",
+      "decompiled_csharp_files": 9
+    },
+    {
+      "file": "com.naelstrof.skinnedmeshdecals.dll",
+      "bytes": 40448,
+      "sha256": "fefa273174484c8f9cb49da83242019ad3aa94a08268e3d17aa7b1983370068c",
+      "decompiled_csharp_files": 16
+    },
+    {
+      "file": "GatorDragonGamesExtensions.dll",
+      "bytes": 18944,
+      "sha256": "7a5df7d79d3cca119afcf1d65e6ffc9b217d69a8a6e0348128b1cf4d5ba0704d",
+      "decompiled_csharp_files": 17
+    },
+    {
+      "file": "Naelstrof.UnityScriptableSettings.dll",
+      "bytes": 37376,
+      "sha256": "b6f215bc0eef09035d800a2fab01bed0a8ffeba8f85ba00cfb329ebf009c1f90",
+      "decompiled_csharp_files": 22
+    },
+    {
+      "file": "Unity.RenderPipelines.Core.Runtime.dll",
+      "bytes": 1201152,
+      "sha256": "0edf7f466004eb162fb649d749773715729e797bf40805b0cbad1e81f4987017",
+      "decompiled_csharp_files": 451
+    },
+    {
+      "file": "Unity.RenderPipelines.Core.Runtime.Shared.dll",
+      "bytes": 5632,
+      "sha256": "4d107d0c787c7e65fdd78bd821fa68e7a53093d9c89a1600168ea098e44fcced",
+      "decompiled_csharp_files": 3
+    },
+    {
+      "file": "Unity.RenderPipelines.Universal.2D.Runtime.dll",
+      "bytes": 232960,
+      "sha256": "d41de7d0a65fed456b44282799b54d26c906cae01c23d2ace4c96909e42b2aba",
+      "decompiled_csharp_files": 103
+    },
+    {
+      "file": "Unity.RenderPipelines.Universal.Config.Runtime.dll",
+      "bytes": 5632,
+      "sha256": "c5850cd6e028743a3c45eef80a996f1e11ff6fe1dadbab3c2f0218ed7db2e6fc",
+      "decompiled_csharp_files": 3
+    },
+    {
+      "file": "Unity.RenderPipelines.Universal.Runtime.dll",
+      "bytes": 765952,
+      "sha256": "be249a2af1956f2eb6113d4a3eb3413198b155e6ee6c01d078441a0b8addb3ab",
+      "decompiled_csharp_files": 287
+    },
+    {
+      "file": "UnityEngine.CoreModule.dll",
+      "bytes": 1983920,
+      "sha256": "d589629ecd4971438643c5d3ce5ee78cf7ee26ac0d98522f802923ca6b55bc79",
+      "decompiled_csharp_files": 1089
+    },
+    {
+      "file": "UnityEngine.UIModule.dll",
+      "bytes": 49576,
+      "sha256": "88f95e40c5d59a7f6625d328d46d33d1037544800aca65e53d81b5f9b3de8eae",
+      "decompiled_csharp_files": 10
+    }
+  ],
+  "serialized_files": [
+    {
+      "file": "globalgamemanagers",
+      "bytes": 223348,
+      "sha256": "e628071eff53d9075c00979c9311d6b544e3bf8d3246398a090ea7bb49909575"
+    },
+    {
+      "file": "globalgamemanagers.assets",
+      "bytes": 26851320,
+      "sha256": "0948b788c15132fccb447a120daa4ad991ebf7878db7365757381dbb7c0ab4f0"
+    },
+    {
+      "file": "resources.assets",
+      "bytes": 407752,
+      "sha256": "7ed2d905fb1543915da4ad0f23b886ce921c8ad152d6fde7388c0f85088b2f1d"
+    },
+    {
+      "file": "level0",
+      "bytes": 944924,
+      "sha256": "c5823d7a98e4eb908e06723f43e5b2b344fe106926b918b2500a827fd33acb56"
+    },
+    {
+      "file": "level1",
+      "bytes": 893924,
+      "sha256": "a3eea5df6225fb0857459ab516e1bc6b9ad71fe93f0609324352092b015b3d80"
+    },
+    {
+      "file": "level2",
+      "bytes": 139616,
+      "sha256": "cc96a28e3f3e7da6c756bd445a89d0bd2089c22e652539bfbef7d30d23a382d3"
+    },
+    {
+      "file": "level3",
+      "bytes": 559512,
+      "sha256": "adc4d95432a59881845194d335b9b762e9b8cdbc33f1c02435aade7c2a047ffe"
+    },
+    {
+      "file": "level4",
+      "bytes": 606644,
+      "sha256": "7663c848d186ead03e3c9a284cb183bbe00f14e7904d9ebe4dc26a9d3cadcfcf"
+    },
+    {
+      "file": "level5",
+      "bytes": 361004,
+      "sha256": "ea32466830ef34d32e444ea6e4630ef3ef8e70f34f2525c757a7fab910473d1c"
+    },
+    {
+      "file": "level6",
+      "bytes": 485444,
+      "sha256": "8096706f4647bc98df9e90f48aae2b30449990266710c1ddd91747c7f64a863e"
+    }
+  ],
+  "packaged_graphics_api_ids": [
+    18,
+    2
+  ],
+  "packaged_graphics_api_names": [
+    "Direct3D12",
+    "Direct3D11"
+  ],
+  "pipeline_assets": [
+    {
+      "file": "globalgamemanagers.assets",
+      "path_id": 2288,
+      "class": "UniversalRenderPipelineAsset",
+      "fields": {
+        "m_Name": "PC_RPAsset",
+        "k_AssetVersion": 13,
+        "m_DefaultRendererIndex": 0,
+        "m_RequireDepthTexture": 0,
+        "m_RequireOpaqueTexture": 1,
+        "m_SupportsHDR": 1,
+        "m_HDRColorBufferPrecision": 0,
+        "m_MSAA": 4,
+        "m_RenderScale": 0.9700000286102295,
+        "m_UpscalingFilter": 0,
+        "m_ColorGradingMode": 0,
+        "m_UseAdaptivePerformance": 1
+      }
+    },
+    {
+      "file": "globalgamemanagers.assets",
+      "path_id": 2289,
+      "class": "UniversalRendererData",
+      "fields": {
+        "m_Name": "PC_Renderer",
+        "m_RenderingMode": 2,
+        "m_DepthPrimingMode": 0,
+        "m_CopyDepthMode": 0,
+        "m_IntermediateTextureMode": 0
+      }
+    }
+  ],
+  "cameras": [
+    {
+      "file": "level0",
+      "path_id": 5217,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level1",
+      "path_id": 4347,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level2",
+      "path_id": 775,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 0,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level3",
+      "path_id": 1683,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level4",
+      "path_id": 2162,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level5",
+      "path_id": 1762,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    },
+    {
+      "file": "level6",
+      "path_id": 1686,
+      "fields": {
+        "m_CameraType": 0,
+        "m_RenderPostProcessing": 1,
+        "m_Antialiasing": 0,
+        "m_Cameras": [],
+        "m_RendererIndex": -1
+      }
+    }
+  ],
+  "canvases": [
+    {
+      "file": "level0",
+      "path_id": 4980,
+      "render_mode": 0
+    },
+    {
+      "file": "level1",
+      "path_id": 3622,
+      "render_mode": 0
+    },
+    {
+      "file": "level1",
+      "path_id": 3623,
+      "render_mode": 0
+    },
+    {
+      "file": "level1",
+      "path_id": 3624,
+      "render_mode": 0
+    },
+    {
+      "file": "level2",
+      "path_id": 464,
+      "render_mode": 0
+    },
+    {
+      "file": "level2",
+      "path_id": 465,
+      "render_mode": 0
+    },
+    {
+      "file": "level3",
+      "path_id": 1382,
+      "render_mode": 0
+    },
+    {
+      "file": "level3",
+      "path_id": 1383,
+      "render_mode": 0
+    },
+    {
+      "file": "level3",
+      "path_id": 1384,
+      "render_mode": 0
+    },
+    {
+      "file": "level4",
+      "path_id": 1844,
+      "render_mode": 0
+    },
+    {
+      "file": "level4",
+      "path_id": 1845,
+      "render_mode": 0
+    },
+    {
+      "file": "level4",
+      "path_id": 1846,
+      "render_mode": 0
+    },
+    {
+      "file": "level5",
+      "path_id": 1405,
+      "render_mode": 0
+    },
+    {
+      "file": "level5",
+      "path_id": 1406,
+      "render_mode": 0
+    },
+    {
+      "file": "level5",
+      "path_id": 1407,
+      "render_mode": 0
+    },
+    {
+      "file": "level6",
+      "path_id": 1379,
+      "render_mode": 0
+    },
+    {
+      "file": "level6",
+      "path_id": 1380,
+      "render_mode": 0
+    },
+    {
+      "file": "level6",
+      "path_id": 1381,
+      "render_mode": 0
+    },
+    {
+      "file": "resources.assets",
+      "path_id": 866,
+      "render_mode": 0
+    },
+    {
+      "file": "resources.assets",
+      "path_id": 867,
+      "render_mode": 0
+    },
+    {
+      "file": "sharedassets0.assets",
+      "path_id": 463,
+      "render_mode": 0
+    }
+  ],
+  "asset_parser": {
+    "UnityPy": "1.25.4",
+    "TypeTreeGeneratorAPI": "0.0.10",
+    "successful_selected_objects": 2967,
+    "failed_reads": 563,
+    "limits": "Failures retained locally. PlayerSettings and UniversalRenderPipelineGlobalSettings did not decode completely. Generated header script pointers are not used; class identity comes from independent MonoBehaviour-head parsing. No partial failed decode supports a field claim."
+  },
+  "limits": [
+    "Assembly presence and source review do not prove active API, pass execution or image quality.",
+    "Texture formats, motion units/coverage, GPU lifetime and HUD-less boundary require captured game data.",
+    "Harmony has not been installed or exercised in this game.",
+    "No game launch, injection, deployment, native plugin implementation or render test was performed."
+  ]
+}

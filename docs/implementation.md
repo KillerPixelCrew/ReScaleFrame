@@ -1,5 +1,24 @@
 # Implementation tracker
 
+## Unity Mono research and shared plugin direction, 3 October 2026
+
+- [x] Fingerprint Drag'n Wash Steam build `25286774`, Unity `6000.3.14f1`, Mono and packaged
+      URP Forward+/RenderGraph path. Verify player/executable PDB GUID/age pairing. Completely
+      decompile 12 selected game/renderer assemblies into ignored references. Parse selected
+      pipeline/camera/canvas settings with strict reads and retain parser failures.
+      [Research](research/drag-n-wash-renderer.md) and [game evidence](../games/drag-n-wash/engine.json).
+- [x] Record the shared Unity Mono plugin direction using reflection and Harmony, with pipeline
+      adapters and the existing native orchestrator. Map camera policy, temporal production,
+      pre-tonemap reconstruction and SDR overlay boundaries from the shipped managed code.
+      [Design and validation sequence](research/unity-mono-plugin.md).
+- [ ] Implement the native/managed bootstrap in the player's existing Mono domain, generic
+      capability discovery and guarded Harmony patches. No Unity plugin is built or tested yet.
+- [ ] Validate render-thread native copy-through, API state/fences, view/frame identity and graph
+      resource lifetime, then temporal inputs and output-resolution SR reinsertion.
+- [ ] Game-test custom fluid/deformation coverage, scene/settings/resize transitions, HUD-less/UI
+      boundaries, teardown, FG and latency. No game launch, injection or installation change
+      occurred during the static investigation. Built/synthetic/game/device readiness stays false.
+
 2 October documentation: repository skills now separate general renderer analysis, shared
 Unreal 4 concepts, UE4.18/AC7 evidence and TrueSky production. The parent transcript, accepted
 implementation and failed experiments were reviewed; metadata/local-reference/whitespace

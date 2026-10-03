@@ -1,0 +1,104 @@
+{
+  "game": {
+    "id": "drag-n-wash",
+    "title": "Drag'n Wash",
+    "steam_appid": 4739660,
+    "build": "25286774",
+    "executable": "DragNWash.exe",
+    "sha256": "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
+    "bytes": 667648,
+    "pe_machine": "0x8664",
+    "platform": "windows-x64",
+    "examined": "2026-10-03"
+  },
+  "plugin": {
+    "proposed_id": "unity-mono",
+    "status": "research only; shared Unity Mono adapter planned",
+    "rendering_ready": false,
+    "implemented": false,
+    "built": false,
+    "synthetic_tested": false,
+    "game_tested": false,
+    "device_tested": false
+  },
+  "engine": {
+    "family": "Unity",
+    "version": "6000.3.14f1",
+    "revision": "d68c3f99a318",
+    "scripting_backend": "Mono",
+    "render_pipeline": "Universal Render Pipeline",
+    "packaged_renderer": "Forward+",
+    "how": "Player version resource, BuildSettings, independently resolved MonoScript identities, parsed pipeline assets and shipped managed code",
+    "urp_semantic_version": null,
+    "urp_embedded_package_id": "3b809f23691d",
+    "core_embedded_package_id": "02dfbe8e43de",
+    "compatibility_mode_getter": false
+  },
+  "graphics": {
+    "packaged_api_order": [
+      "Direct3D12",
+      "Direct3D11"
+    ],
+    "active_api": null,
+    "native_player_pdb_matches": true,
+    "native_executable_pdb_matches": true
+  },
+  "packaged_defaults": {
+    "pipeline_asset": "PC_RPAsset",
+    "renderer_asset": "PC_Renderer",
+    "render_scale": 0.9700000286102295,
+    "source_derived_camera_scale_before_adaptive_performance": 1.0,
+    "msaa_samples": 4,
+    "hdr_scene_colour": true,
+    "hdr_display_boot_flag": false,
+    "upscaling_filter": "Automatic",
+    "depth_texture_requested_by_pipeline": false,
+    "opaque_texture_requested_by_pipeline": true,
+    "camera_aa_serialized": "None",
+    "game_camera_setting_choices": [
+      "None with MSAA disabled",
+      "SMAA with MSAA allowed"
+    ],
+    "post_processing_enabled_camera_count": 6,
+    "camera_count": 7,
+    "effective_settings_measured": false
+  },
+  "temporal": {
+    "taa_code_present": true,
+    "stp_code_present": true,
+    "motion_producer_code_present": true,
+    "motion_target_source_format": "R16G16_SFloat",
+    "active_taa": null,
+    "active_stp": null,
+    "active_motion": null,
+    "motion_direction_and_units": null,
+    "object_and_transparent_motion_coverage": null,
+    "taa_jitter_source_units": "render pixels; translated by 2/width and 2/height into projection space",
+    "source_taa_requirements": [
+      "TAA requested",
+      "post-processing enabled",
+      "history allocated",
+      "single-sample camera target",
+      "base camera without camera stack",
+      "hardware dynamic resolution disabled",
+      "renderer motion support"
+    ]
+  },
+  "hud": {
+    "serialized_canvas_count": 21,
+    "serialized_canvas_modes": [
+      "ScreenSpaceOverlay"
+    ],
+    "completed_hudless_surface_verified": false,
+    "source_sdr_overlay_order": "after post-processing and final blit on last base camera",
+    "other_runtime_ui_routes_verified": false
+  },
+  "custom_renderer_features": [
+    "ScreenSpaceAmbientOcclusion",
+    "DecalRendererFeature",
+    "FluidRenderingRendererFeature"
+  ],
+  "research": "../../docs/research/drag-n-wash-renderer.md",
+  "shared_plugin_plan": "../../docs/research/unity-mono-plugin.md",
+  "evidence": "../../docs/research/evidence/drag-n-wash-static-20261003.json"
+}
