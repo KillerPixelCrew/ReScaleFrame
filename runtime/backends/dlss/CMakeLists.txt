@@ -1,7 +1,7 @@
 set(RSF_STREAMLINE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/streamline/include" CACHE PATH
     "Directory holding Streamline's sl.h")
 
-add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp)
+add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp src/dlss_native12.cpp)
 target_compile_definitions(rsf_dlss PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_include_directories(rsf_dlss PUBLIC include)
 target_link_libraries(rsf_dlss PRIVATE rsf_build_options)

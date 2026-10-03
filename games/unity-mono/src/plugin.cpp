@@ -1,14 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/version.h>
+#include "bridge.h"
+#include "mono_runtime.h"
+#include <windows.h>
 
 #include <cstddef>
+#include <mutex>
+#include <string>
 
 namespace {
 constexpr char drag_n_wash_sha256[] =
     "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc";
-constexpr char renderer_status[] =
-    "Unity Mono scaffold only; managed bootstrap, Harmony adapter and renderer hooks are not implemented.";
+constexpr char renderer_status[] = "Unity Mono SR adapter built; game validation is pending.";
+std::mutex lifecycle;
+bool prepared = false, running = false;
+rsf_unity_native_api managed_api{};
+const char* reason = "Unity Mono adapter has not been prepared.";
+
+std::wstring managed_path()
+{
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<const wchar_t*>(managed_path), &module);
+    wchar_t path[32768]{};
+    const DWORD length = GetModuleFileNameW(module, path, 32768);
+    if (!length || length >= 32768) return {};
+    std::wstring result(path, length);
+    const auto slash = result.find_last_of(L"/\\");
+    if (slash == std::wstring::npos) return {};
+    result.resize(slash + 1); result += L"ReScaleFrame.Unity.Managed.dll";
+    return result;
+}
 
 template<class T> rsf_result validate(const T* value) noexcept
 {
@@ -31,24 +54,47 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
     if (!args->host->session_id) {
         return RSF_ERROR_INVALID_ARGUMENT;
     }
-    // The scaffold retains no host services and installs no native or managed hooks.
-    return RSF_ERROR_NOT_READY;
+    try {
+        std::lock_guard<std::mutex> lock(lifecycle);
+        if (prepared) return RSF_ERROR_BUSY;
+        if (!rsf_unity_bridge_prepare(*args->host, &managed_api)) return RSF_ERROR_NOT_READY;
+        const auto path = managed_path();
+        prepared = !path.empty() && rsf_unity_mono_start(path.c_str(), &managed_api, &reason);
+        if (!prepared && args->host->log) args->host->log(args->host->user, reason);
+        if (!prepared) rsf_unity_bridge_release();
+        return prepared ? RSF_OK : RSF_ERROR_NOT_READY;
+    } catch (...) { return RSF_ERROR_NOT_READY; }
 }
 
 rsf_result start(const rsf_game_start_args* args) noexcept
 {
     const auto valid = validate(args);
-    return valid == RSF_OK ? RSF_ERROR_NOT_READY : valid;
+    if (valid != RSF_OK) return valid;
+    std::lock_guard<std::mutex> lock(lifecycle);
+    if (!prepared) return RSF_ERROR_NOT_READY;
+    rsf_unity_bridge_activate(true); running = true;
+    reason = "Unity managed adapter active; native provider execution and image validation pending.";
+    return RSF_OK;
 }
 
 rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
-    return validate(args);
+    const auto valid = validate(args); if (valid != RSF_OK) return valid;
+    std::lock_guard<std::mutex> lock(lifecycle);
+    rsf_unity_bridge_activate(false); running = false;
+    reason = "Unity producers quiesced; queued commands may still need to drain.";
+    return RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept
 {
-    return validate(args);
+    const auto valid = validate(args); if (valid != RSF_OK) return valid;
+    std::lock_guard<std::mutex> lock(lifecycle);
+    if (running || !rsf_unity_bridge_drained()) return RSF_ERROR_BUSY;
+    if (!rsf_unity_mono_stop()) return RSF_ERROR_BUSY;
+    rsf_unity_bridge_release(); prepared = false;
+    reason = "Unity adapter stopped; managed assembly remains inert in the player domain.";
+    return RSF_OK;
 }
 
 rsf_result status(rsf_game_renderer_status* output) noexcept
@@ -57,10 +103,12 @@ rsf_result status(rsf_game_renderer_status* output) noexcept
     if (valid != RSF_OK) {
         return valid;
     }
-    output->prepared = 0;
-    output->active = 0;
+    std::lock_guard<std::mutex> lock(lifecycle);
+    output->prepared = prepared ? 1u : 0u;
+    const auto stage = rsf_unity_bridge_managed_state();
+    output->active = running && stage == 2 ? 1u : 0u;
     output->rendering_ready = 0;
-    output->reason = renderer_status;
+    output->reason = stage == 3 ? "Managed Unity adapter refused its pipeline contract; see diagnostics." : reason;
     return RSF_OK;
 }
 

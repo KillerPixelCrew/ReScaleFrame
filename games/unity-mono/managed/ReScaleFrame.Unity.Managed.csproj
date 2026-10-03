@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>ReScaleFrame.Unity.Managed</AssemblyName>
+    <RootNamespace>ReScaleFrame.Unity</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <UnityManagedDirectory Condition="'$(UnityManagedDirectory)' == ''">$(RSF_UNITY_MANAGED_DIRECTORY)</UnityManagedDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
+    <Reference Include="0Harmony"><HintPath>$(PkgLib_Harmony)/lib/net472/0Harmony.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.SharedInternalsModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.SharedInternalsModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime.Shared"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.Shared.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="CheckUnityReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(UnityManagedDirectory)/UnityEngine.CoreModule.dll')" Text="Set UnityManagedDirectory to the examined Mono player's Managed directory." />
+  </Target>
+</Project>

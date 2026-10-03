@@ -165,11 +165,15 @@ fn controls_section(
                 intent.backend_changed = true;
                 intent.backend = backend;
             }
+            if ui.radio(stats.backend == 6, "FSR1").clicked() {
+                intent.backend_changed = true;
+                intent.backend = 6;
+            }
         });
     });
     if stats.last_switch_result != 0 {
         ui.label(
-            RichText::new("Backend change refused; previous backend remains active").color(WARN),
+            RichText::new("Requested configuration refused; check runtime status").color(WARN),
         );
     }
 

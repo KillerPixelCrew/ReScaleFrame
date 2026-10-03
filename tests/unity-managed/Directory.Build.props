@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../build/managed/unity-tests/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../build/managed/unity-tests/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

@@ -2,6 +2,43 @@
 
 ## Unity Mono research and shared plugin direction, 3 October 2026
 
+4 October increment: shared drop-in shim, Mono/Harmony URP hooks, native DX12 SR and the
+shared overlay are built and deployed. All 277 original Drag'n Wash files remain unchanged.
+Live logs confirm overlay opening and vendor/quality requests reaching all temporal providers.
+Five-provider GPU readback and 55 Rust tests pass; moving-scene SR and image acceptance remain
+pending. AA-copy ordering and build-directory version-alias collisions were corrected.
+The next live run confirms DLSS result 0 with accepted frames increasing and no refusals,
+after fixing truncated render extents and Unity's D32_FLOAT_S8X24 depth view. Full VS2026
+Release verification passes: 37 native tests, six opt-in skips, Rust format and Clippy.
+[Implementation and evidence](research/unity-dx12-runtime-20261004.md).
+
+User-reported distant-object shimmer in FSR2/FSR3/XeSS: corrected the Unity DX12 adapter's
+Y-jitter mapping against AMD's Unity integration and Intel's API convention. Added bounded
+history-reset/jitter logs. Visual improvement awaits the next matched game comparison.
+
+The supplied static-skyline recording rejects that first sign correction. Replaced the
+pre-GPU sign assumption with measured post-conversion raster jitter and removed the extra
+FSR/XeSS flip. Bounded GPU motion readback reports zero motion in four sampled regions;
+settled XeSS logs show continuous history and successful evaluations. Built, verified and
+deployed; the shimmer is still an open visual defect pending the new comparison.
+
+Corrected the SR boundary after inspecting the shipped post stack: DoF preceded the original
+STP slot. Temporal SR now replaces the incoming HDR scene at post-processing entry and feeds
+output-size DoF/blur/bloom/tonemap; the later STP hook avoids duplicate evaluation. Managed
+build and shipped-Mono contract checks pass; deployed. Visual shimmer/edge acceptance pending.
+
+The user confirms the post-processing order is much better. Packaged the hash-verified deployed
+snapshot for MSI Claw testing, defaulting to XeSS Quality and including all vendor runtimes,
+licenses, relative configuration, per-file checksums and install/uninstall instructions.
+Claw/device acceptance and quantitative image comparisons remain pending.
+
+Added shared startup GPU policy: Auto resolves the adapter owning the native D3D12 device,
+then selects NVIDIA DLSS, Intel XeSS or AMD FSR3. Package/deployment defaults use Auto;
+manual overlay choices override it for the session. Preserved DirectInput ordinal 1 in the
+common shim and added a real Windows forwarding fixture. Clean staged-source verification
+is separate from the concurrent full workspace gate. AMD RDNA4 auto-classification is deferred;
+FSR4 remains a manual experimental choice. Claw hardware acceptance remains pending.
+
 - [x] Fingerprint Drag'n Wash Steam build `25286774`, Unity `6000.3.14f1`, Mono and packaged
       URP Forward+/RenderGraph path. Verify player/executable PDB GUID/age pairing. Completely
       decompile 12 selected game/renderer assemblies into ignored references. Parse selected

@@ -28,7 +28,7 @@ add_library(rsf_build_options INTERFACE)
 target_include_directories(rsf_build_options INTERFACE "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(rsf_build_options INTERFACE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(MSVC)
-    target_compile_options(rsf_build_options INTERFACE /W4 /WX /utf-8)
+    target_compile_options(rsf_build_options INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:/W4;/WX;/utf-8>)
     # fopen and friends are used on purpose in the diagnostics. The secure-CRT deprecation is not
     # a defect and must not fail the warnings-are-errors build; it is what failed every CI run.
     target_compile_definitions(rsf_build_options INTERFACE _CRT_SECURE_NO_WARNINGS)

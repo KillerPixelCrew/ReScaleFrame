@@ -1,5 +1,21 @@
 # Dependencies
 
+## Unity Mono DX12 adapter
+
+The managed helper uses Harmony 2.4.2 (MIT), pinned by its NuGet lockfile, with the executable
+net472 assembly for the shipped Mono runtime. Unity assemblies are build references supplied
+by the local game installation and are never included in the mod ZIP. The native adapter uses
+the public Unity rendering interfaces from NativeRenderingPlugin revision
+`522254181faf188efa8b50c3e3bf6fce720b26e4` under `vendor/unity-native/include`; those headers
+carry Unity's Companion License and stay untracked. Preserve that notice with distributed
+Unity-dependent artifacts. Build scripts require the headers and the researched player's
+Managed directory; they do not install tools or rewrite game assemblies.
+
+The test package includes Streamline/DLSS, FidelityFX and XeSS runtime notices, Harmony's
+license, the first-party GPL license and MinHook's license. Its payload comes from a verified
+deployment manifest, with an explicit allowlist that excludes game binaries, game assemblies,
+decompiles, logs, backups and machine-specific original-file baselines.
+
 The native build needs the Windows/C++ toolchain. Rust dependencies are pinned in `Cargo.toml` and `Cargo.lock`. MinGW-w64 and Wine support the optional Linux cross-build.
 
 Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outside version control. [The source map](research/source-map.md) records inspected revisions; Epic links require authorized access.

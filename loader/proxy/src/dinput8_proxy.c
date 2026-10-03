@@ -1814,7 +1814,7 @@ static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
+BOOL WINAPI rsf_ac7_proxy_process_event(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {

@@ -10,6 +10,11 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_cpu.cpp
     src/native_composition.cpp
     src/native_sr.cpp
+    src/native_sr_d3d12.cpp
+    src/gpu_policy.cpp
+    src/unity_sr_host.cpp
+    src/overlay_d3d12.cpp
+    ../../loader/proxy/src/overlay_host.cpp
     src/native_regions.cpp
     src/frame_sequencer.cpp
     src/render_links.cpp
@@ -27,6 +32,7 @@ target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 # pass's parameters.
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
+target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)

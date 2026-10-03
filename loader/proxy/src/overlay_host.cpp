@@ -415,6 +415,59 @@ extern "C" unsigned int rsf_overlay_host_visible(void)
     return rsf_overlay_input_visible();
 }
 
+extern "C" int rsf_overlay_host_start_device(void* native_device, void* hwnd,
+    rsf_overlay_host_log_fn logger, void* user)
+{
+    Host& self = host();
+    if (self.started) return 1;
+    if (!native_device || !hwnd || self.stopped_after_failure) return 0;
+    self.log = logger; self.log_user = user;
+    if (!load_panel()) return 0;
+    self.panel = self.create(RSF_OVERLAY_ABI_VERSION);
+    if (!self.panel) { say("overlay: panel ABI mismatch"); return 0; }
+    rsf_overlay_renderer_setup setup{sizeof(setup), RSF_OVERLAY_RENDERER_ABI_VERSION, log_from_module, nullptr};
+    if (rsf_overlay_renderer_create(native_device, &setup, &self.renderer) != RSF_OVERLAY_RENDERER_OK) {
+        self.destroy(self.panel); self.panel = nullptr; return 0;
+    }
+    rsf_overlay_input_options options{sizeof(options), RSF_OVERLAY_INPUT_ABI_VERSION, kToggleKey, log_from_module, nullptr};
+    if (rsf_overlay_input_install(hwnd, &options) != RSF_OVERLAY_INPUT_OK) {
+        rsf_overlay_renderer_destroy(self.renderer); self.renderer = nullptr;
+        self.destroy(self.panel); self.panel = nullptr; return 0;
+    }
+    self.device = static_cast<ID3D11Device*>(native_device); self.device->AddRef();
+    QueryPerformanceFrequency(&self.frequency); self.last_frame.QuadPart = 0;
+    self.startup_hint_begin = GetTickCount64(); self.startup_hint_dismissed = false;
+    self.started = true; say("overlay: shared panel ready on supplied device; Insert opens it"); return 1;
+}
+extern "C" int rsf_overlay_host_draw_target(void* native_context, void* native_target, uint32_t width,
+    uint32_t height, const rsf_overlay_stats* stats, rsf_overlay_intent* intent)
+{
+    Host& self = host();
+    if (!self.started || !native_context || !native_target || !stats || !width || !height) return 0;
+    const bool visible = rsf_overlay_input_visible() != 0;
+    const ULONGLONG elapsed = GetTickCount64() - self.startup_hint_begin;
+    bool performance_hud = false;
+#if RSF_OVERLAY_ABI_VERSION >= 7
+    performance_hud = stats->show_performance_hud != 0;
+#endif
+    if (!visible && elapsed >= 8000 && !performance_hud) return 0;
+    rsf_overlay_input input{}; input.struct_size = sizeof(input);
+    rsf_overlay_input_collect(&input, width, height, seconds_since_last_frame());
+    input.startup_hint_alpha = !visible && elapsed < 8000 ? (elapsed < 7000 ? 1.0f : float(8000-elapsed)/1000) : 0;
+    rsf_overlay_draw_data data{}; data.struct_size = sizeof(data);
+    rsf_overlay_intent decided{}; decided.struct_size = sizeof(decided);
+    if (self.frame(self.panel, &input, stats, &data, &decided) != RSF_OVERLAY_OK) return 0;
+    auto* context = static_cast<ID3D11DeviceContext*>(native_context);
+    auto* target = static_cast<ID3D11RenderTargetView*>(native_target);
+    carry_textures(context);
+    SavedTargets targets{}; save_targets(context, targets);
+    context->OMSetRenderTargets(1, &target, nullptr);
+    const auto result = rsf_overlay_renderer_draw(self.renderer, context, &data, width, height);
+    restore_targets(context, targets);
+    if (intent) *intent = decided;
+    return result == RSF_OVERLAY_RENDERER_OK ? 1 : 0;
+}
+
 extern "C" void rsf_overlay_host_toggle(void)
 {
     if (!host().started) {

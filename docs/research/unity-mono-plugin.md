@@ -151,6 +151,9 @@ Cuts, camera replacement, pipeline recreation, scale/API changes and resize rese
 
 ## Validation sequence
 
+The subsequent [DX12 runtime increment](unity-dx12-runtime-20261004.md) records implementation,
+synthetic GPU checks, live activation and shared overlay controls separately from this plan.
+
 1. Load an inert managed helper into the real player domain and report bounded discovery results.
 2. Install diagnostic Harmony hooks and prove the selected camera and recorder execute. Unpatch
    and drain repeatedly without changing the rendered image.

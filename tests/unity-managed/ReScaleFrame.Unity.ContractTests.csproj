@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType Condition="'$(TargetFramework)' == 'net10.0'">Exe</OutputType>
+    <OutputType Condition="'$(TargetFramework)' == 'netstandard2.1'">Library</OutputType>
+    <TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks>
+    <AssemblyName>ReScaleFrame.Unity.ContractTests</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
+    <Reference Include="0Harmony"><HintPath>$(PkgLib_Harmony)/lib/net472/0Harmony.dll</HintPath><Private>true</Private></Reference>
+    <ProjectReference Include="../../games/unity-mono/managed/ReScaleFrame.Unity.Managed.csproj" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.SharedInternalsModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.SharedInternalsModule.dll</HintPath></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.dll</HintPath></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime.Shared"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.Shared.dll</HintPath></Reference>
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Universal.Runtime.dll</HintPath></Reference>
+    <Reference Include="Unity.Mathematics"><HintPath>$(UnityManagedDirectory)/Unity.Mathematics.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

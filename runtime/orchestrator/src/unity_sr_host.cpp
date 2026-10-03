@@ -1,0 +1,314 @@
+// SPDX-License-Identifier: GPL-3.0-only
+#include <rescaleframe/unity_sr_host.h>
+#include <rescaleframe/native_sr_d3d12.h>
+#include <rescaleframe/plugin_session.h>
+#include <rescaleframe/overlay_d3d12.h>
+#include <rescaleframe/gpu_policy.h>
+#include <windows.h>
+#include <bcrypt.h>
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
+#include <array>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <cstdio>
+
+namespace {
+struct Host {
+    std::mutex state, logging;
+    HANDLE log_file = INVALID_HANDLE_VALUE;
+    rsf_plugin_session* plugin = nullptr;
+    rsf_sr12* sr = nullptr;
+    std::string streamline, fsr2, fsr3, fsr4, xess;
+    rsf_game_render_config plan{};
+    std::array<void*, 3> command_lists{};
+    uint32_t backend = 1, quality = 1;
+    uint32_t requested_backend = 1, requested_quality = 1;
+    int (*policy)(uint32_t, uint32_t) = nullptr;
+    bool dirty = false, enabled = true, show_performance = false;
+    bool automatic = true;
+    int32_t last_result = 0;
+    uint64_t overlay_frames = 0;
+    uint32_t width = 0, height = 0;
+    bool attempted = false;
+    uint64_t accepted = 0, refused = 0;
+    ~Host() { if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file); }
+};
+std::mutex lifecycle;
+std::unique_ptr<Host> host;
+std::wstring setting(const wchar_t* path, const wchar_t* name)
+{
+    wchar_t text[32768]{};
+    GetPrivateProfileStringW(L"UnitySR", name, L"", text, 32768, path);
+    std::wstring value(text);
+    if (value.empty() || (value.size() >= 2 && (value[1] == L':' || value[0] == L'\\'))) return value;
+    std::wstring containing(path);
+    const auto separator = containing.find_last_of(L"/\\");
+    if (separator == std::wstring::npos) return {};
+    containing.resize(separator + 1); containing += value;
+    wchar_t absolute[32768]{};
+    const DWORD count = GetFullPathNameW(containing.c_str(), 32768, absolute, nullptr);
+    return count && count < 32768 ? std::wstring(absolute, count) : std::wstring{};
+}
+std::string utf8(const std::wstring& value)
+{
+    if (value.empty()) return {};
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(bytes > 0 ? static_cast<size_t>(bytes) : 0, '\0');
+    if (bytes > 0) WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), bytes, nullptr, nullptr);
+    return result;
+}
+void log(void* owner, const char* message)
+{
+    auto& self = *static_cast<Host*>(owner);
+    std::lock_guard<std::mutex> lock(self.logging);
+    if (self.log_file == INVALID_HANDLE_VALUE || !message) return;
+    DWORD bytes = 0;
+    WriteFile(self.log_file, message, static_cast<DWORD>(std::strlen(message)), &bytes, nullptr);
+    WriteFile(self.log_file, "\r\n", 2, &bytes, nullptr);
+}
+int configuration(void* owner, rsf_game_render_config* output)
+{
+    auto& self = *static_cast<Host*>(owner);
+    if (!output || output->struct_size < sizeof(*output)) return 0;
+    std::lock_guard<std::mutex> lock(self.state);
+    *output = self.plan; output->struct_size = sizeof(*output); return 1;
+}
+bool fingerprint(const wchar_t* path, std::string& digest)
+{
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
+    ok = ok && BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
+    std::array<unsigned char, 65536> buffer{};
+    DWORD read = 0;
+    while (ok) {
+        ok = ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) != 0;
+        if (!ok || !read) break;
+        ok = BCryptHashData(hash, buffer.data(), read, 0) >= 0;
+    }
+    unsigned char bytes[32]{};
+    ok = ok && BCryptFinishHash(hash, bytes, 32, 0) >= 0;
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    CloseHandle(file);
+    if (!ok) return false;
+    constexpr char hex[] = "0123456789abcdef";
+    digest.clear(); digest.reserve(64);
+    for (auto value : bytes) { digest += hex[value >> 4]; digest += hex[value & 15]; }
+    return true;
+}
+void render(void* owner, void* command_list, const rsf_game_render_pass* pass, uint32_t begin)
+{
+    if (!begin || !command_list || !pass || pass->struct_size < sizeof(*pass)) return;
+    auto& self = *static_cast<Host*>(owner);
+    std::lock_guard<std::mutex> lock(self.state);
+    if (pass->role == RSF_GAME_RENDER_WINDOW) {
+        auto* queue = static_cast<ID3D12CommandQueue*>(command_list);
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device)))) return;
+        static const char* names[] = {"Off", "DLSS", "FSR2", "FSR3", "FSR4", "XeSS", "FSR1"};
+        rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats);
+        stats.backend_loaded = 1; stats.backend_supported = self.plan.enabled;
+        stats.backend_name = names[self.backend]; stats.backend = self.backend;
+        stats.requested_backend = self.requested_backend; stats.quality = self.quality;
+        stats.enabled = self.enabled; stats.last_result = self.last_result;
+        stats.last_switch_result = self.last_result;
+        stats.refusal_reason = self.dirty ? "Applying requested configuration after GPU completion" :
+            self.last_result ? "Provider refused; spatial fallback retained" :
+            !self.accepted && self.backend != 6 ? "Prepared; awaiting an eligible scene evaluation" : nullptr;
+        stats.render_width = self.plan.render_width; stats.render_height = self.plan.render_height;
+        stats.output_width = pass->camera.output_width; stats.output_height = pass->camera.output_height;
+        stats.frames_presented = static_cast<uint32_t>(++self.overlay_frames);
+        stats.frames_evaluated = static_cast<uint32_t>(self.accepted); stats.frames_refused = static_cast<uint32_t>(self.refused);
+        stats.reinsert_available = 1; stats.reinsert_on = self.plan.enabled;
+        stats.have_scene_color = stats.have_depth = stats.have_motion = self.accepted != 0;
+        stats.motion_decoded = self.accepted != 0; stats.jitter_available = 1;
+        stats.jitter_active = self.plan.enabled && self.backend != 6;
+        stats.render_scale_percent = self.width ? self.plan.render_width * 100 / self.width : 0;
+#if RSF_OVERLAY_ABI_VERSION >= 7
+        stats.show_performance_hud = self.show_performance;
+#endif
+        rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
+        if (rsf_overlay_d3d12_frame(device.Get(), queue, pass->swapchain, &stats, &intent, log, &self)) {
+#if RSF_OVERLAY_ABI_VERSION >= 7
+            if (intent.performance_hud_changed) self.show_performance = intent.performance_hud != 0;
+#endif
+            if (intent.backend_changed || intent.quality_changed || intent.enabled_changed || intent.start_requested) {
+                const auto requested_backend = intent.backend_changed ? intent.backend : self.requested_backend;
+                const auto requested_quality = intent.quality_changed ? intent.quality : self.requested_quality;
+                if (requested_backend <= 6 && requested_quality <= 4 && self.policy && self.policy(requested_backend, requested_quality)) {
+                    self.requested_backend = requested_backend; self.requested_quality = requested_quality;
+                    if (intent.backend_changed) self.automatic = false;
+                    if (intent.enabled_changed) self.enabled = intent.enabled != 0;
+                    self.dirty = true; self.plan.enabled = 0;
+                    log(&self, "Overlay requested vendor/quality change; draining previous GPU work.");
+                }
+            }
+        }
+        return;
+    }
+    if (pass->role != RSF_GAME_RENDER_SR) return;
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(command_list);
+    if ((self.dirty && (pass->flags & 0x80000000u)) || self.width != pass->camera.output_width || self.height != pass->camera.output_height) {
+        // The Unity submission adapter joins its previous frame-fence values before this resize.
+        rsf_sr12_destroy(self.sr); self.sr = nullptr;
+        self.width = pass->camera.output_width; self.height = pass->camera.output_height;
+        self.attempted = false; self.plan = {};
+        self.backend = self.requested_backend; self.quality = self.requested_quality;
+        self.dirty = false; self.accepted = self.refused = 0; self.last_result = 0;
+    }
+    if (!self.attempted) {
+        self.attempted = true;
+        self.plan = {sizeof(self.plan), 0, self.width, self.height, 0, 0};
+        if (self.automatic) {
+            Microsoft::WRL::ComPtr<ID3D12Device> device;
+            Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+            Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+            DXGI_ADAPTER_DESC1 description{};
+            if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))) || FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+                FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
+                FAILED(adapter->GetDesc1(&description))) {
+                self.last_result = RSF_BACKEND_ERROR_NOT_SUPPORTED;
+                log(&self, "Automatic SR refused: owning D3D12 adapter could not be identified.");
+                return;
+            }
+            self.backend = self.requested_backend = rsf_gpu_default_sr_backend(description.VendorId,
+                (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+            if (!self.policy || !self.policy(self.backend, self.quality)) return;
+            char detail[160];
+            std::snprintf(detail, sizeof(detail), "Auto SR selected backend %u from owning D3D12 adapter vendor=0x%x device=0x%x",
+                self.backend, description.VendorId, description.DeviceId);
+            log(&self, detail);
+        }
+        if (!self.backend || !self.enabled) return;
+        if (self.backend == 6) {
+            constexpr float ratios[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f, 1.3f};
+            self.plan.render_width = static_cast<uint32_t>(static_cast<float>(self.width) / ratios[self.quality]);
+            self.plan.render_height = static_cast<uint32_t>(static_cast<float>(self.height) / ratios[self.quality]);
+            self.plan.enabled = 1;
+            log(&self, "FSR1 selected through URP's original spatial upscaling path."); return;
+        }
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (FAILED(list->GetDevice(IID_PPV_ARGS(&device)))) return;
+        rsf_sr12_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = 1;
+        setup.device = device.Get(); setup.backend = self.backend; setup.quality = self.quality;
+        setup.output_width = self.width; setup.output_height = self.height; setup.inverted_depth = pass->camera.depth_inverted;
+        setup.fsr2_directory_utf8 = self.fsr2.c_str(); setup.fsr3_directory_utf8 = self.fsr3.c_str();
+        setup.fsr4_directory_utf8 = self.fsr4.c_str(); setup.xess_directory_utf8 = self.xess.c_str();
+        setup.log = log; setup.user = &self;
+        const std::string interposer = self.streamline + "\\sl.interposer.dll";
+        setup.dlss.struct_size = sizeof(setup.dlss); setup.dlss.abi_version = RSF_DLSS_ABI_VERSION;
+        setup.dlss.interposer_path_utf8 = interposer.c_str(); setup.dlss.plugin_directory_utf8 = self.streamline.c_str();
+        setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = "6000.3";
+        setup.dlss.project_id_utf8 = "57a42c7e-faf0-4bda-a9f9-892870948ac1";
+        setup.dlss.require_signature = 1; setup.dlss.log = log; setup.dlss.log_user = &self;
+        const auto created = rsf_sr12_create(&setup, &self.sr);
+        self.last_result = created;
+        if (created == RSF_BACKEND_OK) {
+            rsf_sr12_plan(self.sr, &self.plan.render_width, &self.plan.render_height);
+            self.plan.enabled = 1;
+        }
+        char text[192];
+        std::snprintf(text, sizeof(text), "Native D3D12 provider %u preparation result %d, %ux%u -> %ux%u",
+            self.backend, created, self.plan.render_width, self.plan.render_height, self.width, self.height);
+        log(&self, text);
+    }
+    if (!self.sr || !pass->camera_valid) return;
+    uint32_t slot = 3;
+    for (uint32_t i = 0; i < 3; ++i) if (self.command_lists[i] == command_list) { slot = i; break; }
+    if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!self.command_lists[i]) { self.command_lists[i] = command_list; slot = i; break; }
+    if (slot == 3) return;
+    const auto result = rsf_sr12_evaluate(self.sr, command_list, pass, slot);
+    if (result != RSF_BACKEND_OK && self.refused == 0) {
+        void* resources[] = {pass->color_input, pass->depth, pass->motion, pass->color_output};
+        for (uint32_t i = 0; i < 4; ++i) if (resources[i]) {
+            const auto desc = static_cast<ID3D12Resource*>(resources[i])->GetDesc();
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "SR input %u: %llux%u format=%u samples=%u; camera=%ux%u plan=%ux%u",
+                i, static_cast<unsigned long long>(desc.Width), desc.Height, static_cast<uint32_t>(desc.Format), desc.SampleDesc.Count,
+                pass->camera.render_width, pass->camera.render_height, self.plan.render_width, self.plan.render_height);
+            log(&self, detail);
+        }
+    }
+    self.last_result = result;
+    if (result == RSF_BACKEND_OK) ++self.accepted; else ++self.refused;
+    if (result == RSF_BACKEND_OK ? (self.accepted <= 3 || self.accepted % 600 == 0) : self.refused <= 3) {
+        char text[160];
+        std::snprintf(text, sizeof(text), "Unity SR view %llu frame %llu result %d, accepted=%llu refused=%llu reset=%u jitter=%.3f,%.3f",
+            static_cast<unsigned long long>(pass->view_key), static_cast<unsigned long long>(pass->native_frame), result,
+            static_cast<unsigned long long>(self.accepted), static_cast<unsigned long long>(self.refused),
+            pass->flags & RSF_GAME_RENDER_RESET, pass->camera.jitter_pixels[0], pass->camera.jitter_pixels[1]);
+        log(&self, text);
+    }
+}
+}
+extern "C" uint32_t __stdcall rsf_unity_sr_start(const wchar_t* path) try
+{
+    std::lock_guard<std::mutex> lock(lifecycle);
+    if (host || !path || path[1] != L':' || (path[2] != L'\\' && path[2] != L'/')) return 1;
+    std::unique_ptr<Host> next(new Host);
+    next->backend = GetPrivateProfileIntW(L"UnitySR", L"Backend", 7, path);
+    next->automatic = next->backend == 7;
+    if (next->automatic) next->backend = 0;
+    next->quality = GetPrivateProfileIntW(L"UnitySR", L"Quality", 1, path);
+    next->requested_backend = next->backend; next->requested_quality = next->quality;
+    if (next->backend > 6 || next->quality > 5 || (next->backend == 1 && next->quality > 4)) return 2;
+    const auto plugin_path = setting(path, L"Plugin");
+    const auto log_path = setting(path, L"Log");
+    if (plugin_path.empty() || log_path.empty()) return 3;
+    next->log_file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (next->log_file == INVALID_HANDLE_VALUE) return 4;
+    next->streamline = utf8(setting(path, L"Streamline")); next->fsr2 = utf8(setting(path, L"FSR2"));
+    next->fsr3 = utf8(setting(path, L"FSR3")); next->fsr4 = utf8(setting(path, L"FSR4")); next->xess = utf8(setting(path, L"XeSS"));
+    wchar_t executable[32768]{};
+    DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
+    if (!length || length >= 32768) return 5;
+    const auto executable_name = utf8(std::wstring(executable).substr(std::wstring(executable).find_last_of(L"/\\") + 1));
+    std::string hash;
+    if (!fingerprint(executable, hash)) return 6;
+    rsf_game_probe probe{sizeof(probe), 0x8664, 0, executable_name.c_str(), hash.c_str()};
+    HMODULE policy_module = LoadLibraryExW(plugin_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!policy_module) return 7;
+    using Policy = int (*)(uint32_t, uint32_t);
+    auto policy = reinterpret_cast<Policy>(reinterpret_cast<void*>(GetProcAddress(policy_module, "rsf_unity_set_policy")));
+    next->policy = policy;
+    if (!policy || !policy(next->backend, next->quality)) { FreeLibrary(policy_module); return 8; }
+    rsf_plugin_session_options options{}; options.struct_size = sizeof(options); options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION;
+    options.plugin_path = plugin_path.c_str(); options.probe = &probe;
+    options.services.struct_size = sizeof(options.services); options.services.abi_version = RSF_GAME_ABI_VERSION;
+    options.services.session_id = GetTickCount64() + 1; options.services.log = log; options.services.render_pass = render;
+    options.services.render_config = configuration; options.services.user = next.get();
+    auto result = rsf_plugin_session_prepare(&options, &next->plugin);
+    FreeLibrary(policy_module);
+    if (result == RSF_OK) result = rsf_plugin_session_start(next->plugin);
+    if (result != RSF_OK) {
+        log(next.get(), "Unity plugin preparation/activation refused.");
+        if (next->plugin) {
+            rsf_plugin_session_quiesce(next->plugin);
+            if (rsf_plugin_session_stop(next->plugin) != RSF_OK) { host = std::move(next); return 9; }
+        }
+        return 10;
+    }
+    log(next.get(), "Unity Mono lifecycle activated; awaiting actual D3D12 render callback.");
+    host = std::move(next); return 0;
+}
+catch (...) { return 11; }
+extern "C" uint32_t __stdcall rsf_unity_sr_stop(void*) try
+{
+    std::lock_guard<std::mutex> lock(lifecycle);
+    if (!host) return 0;
+    if (host->plugin && (rsf_plugin_session_quiesce(host->plugin) != RSF_OK || rsf_plugin_session_stop(host->plugin) != RSF_OK))
+        return 1;
+    host->plugin = nullptr;
+    rsf_overlay_d3d12_stop();
+    rsf_sr12_destroy(host->sr); host->sr = nullptr;
+    log(host.get(), "Unity SR stopped after managed/native/GPU retirement.");
+    host.reset(); return 0;
+}
+catch (...) { return 2; }

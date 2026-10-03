@@ -28,7 +28,7 @@ For downloads, supported builds, installation and controls, see the relevant gam
 | Game | Released features | Guide |
 | --- | --- | --- |
 | Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
-| Drag'n Wash | Shared Unity Mono scaffold and static URP research; rendering unsupported | [Drag'n Wash README](games/drag-n-wash/README.md) |
+| Drag'n Wash | Experimental Unity Mono DX12 SR and shared overlay; Claw test package | [Drag'n Wash README](games/drag-n-wash/README.md) |
 
 [Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
 · [Implementation tracker](docs/implementation.md)
