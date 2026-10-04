@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define RSF_BACKEND_ABI_VERSION 2u
+#define RSF_BACKEND_ABI_VERSION 3u
 
 /* Ordered as the Rust capability model orders them, so the two can be compared field by field
    rather than through a mapping nobody maintains. */
@@ -253,6 +253,12 @@ typedef struct rsf_sr_frame {
     /* Positive color pre-exposure and world-unit conversion supplied by the plugin. */
     float pre_exposure;
     float view_space_to_meters;
+    /* Appended in ABI 3. Optional single-channel masks over the render extent; a null resource
+       leaves the vendor default. Reactive is in [0,0.9] and lowers history weight where
+       translucency changed the image (FSR reactive, XeSS responsive pixel mask). Transparency
+       is translucent coverage in [0,1] (FSR transparency and composition). */
+    rsf_backend_resource reactive;
+    rsf_backend_resource transparency;
 } rsf_sr_frame;
 
 typedef struct rsf_sr_provider {

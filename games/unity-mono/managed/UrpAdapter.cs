@@ -31,10 +31,13 @@ namespace ReScaleFrame.Unity
         private static FieldInfo filter, scaling, rawProjection, antialiasing;
         private static MethodInfo updateResolution;
         private static PropertyInfo frameDataProperty;
+        private static PropertyInfo hdrOutputProperty;
         private static int overlayFrame = -1;
+        private static int hudlessFrame = -1;
         private static object stpFilter, fsrFilter, upscaling;
         private static uint failures;
         private static uint jitterReports;
+        [ThreadStatic] private static bool inputScope;
 
         internal static void Install()
         {
@@ -48,6 +51,9 @@ namespace ReScaleFrame.Unity
             Patch(methods[6], postfix: nameof(CameraCreated));
             Patch(methods[7], postfix: nameof(Overlay));
             Patch(methods[8], postfix: nameof(AdaptiveCamera));
+            Patch(methods[9], prefix: nameof(Hudless));
+            Patch(methods[10], prefix: nameof(InputScope), finalizer: nameof(RestoreInputScope));
+            Patch(methods[11], prefix: nameof(RequireMotion));
         }
 
         // Pure metadata preflight. Resolve the complete contract before installing any patch.
@@ -61,6 +67,7 @@ namespace ReScaleFrame.Unity
             rawProjection = RequireField(camera, "m_ProjectionMatrix");
             antialiasing = RequireField(camera, "antialiasing");
             frameDataProperty = AccessTools.Property(typeof(ScriptableRenderer), "frameData") ?? throw new MissingMemberException("ScriptableRenderer.frameData");
+            hdrOutputProperty = AccessTools.Property(camera, "isHDROutputActive") ?? throw new MissingMemberException("UniversalCameraData.isHDROutputActive");
             stpFilter = Enum.Parse(filter.FieldType, "STP");
             fsrFilter = Enum.Parse(filter.FieldType, "FSR");
             upscaling = Enum.Parse(scaling.FieldType, "Upscaling");
@@ -76,7 +83,12 @@ namespace ReScaleFrame.Unity
                     typeof(TextureHandle).MakeByRefType(), typeof(bool), typeof(bool), typeof(bool)),
                 RequireMethod(pipeline, "CreateCameraData", typeof(ContextContainer), typeof(Camera), typeof(UniversalAdditionalCameraData)),
                 RequireMethod(typeof(UniversalRenderer), "OnAfterRendering", typeof(RenderGraph), typeof(bool)),
-                RequireMethod(pipeline, "ApplyAdaptivePerformance", camera)
+                RequireMethod(pipeline, "ApplyAdaptivePerformance", camera),
+                RequireMethod(pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.DrawScreenSpaceUIPass", true),
+                    "RenderOverlay", typeof(RenderGraph), typeof(ContextContainer), typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType()),
+                RequireMethod(typeof(UniversalRenderer), "OnRecordRenderGraph", typeof(RenderGraph), typeof(ScriptableRenderContext)),
+                RequireMethod(typeof(UniversalRenderer), "GetRenderPassInputs", typeof(bool), typeof(bool), typeof(bool), typeof(bool),
+                    typeof(List<ScriptableRenderPass>), pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.MotionVectorRenderPass", true))
             };
         }
 
@@ -104,6 +116,22 @@ namespace ReScaleFrame.Unity
                 !camera.orthographic && !camera.stereoEnabled && !camera.allowDynamicResolution &&
                 camera.rect == new Rect(0, 0, 1, 1) && (additional == null ||
                     (additional.renderType == CameraRenderType.Base && additional.cameraStack.Count == 0 && additional.renderPostProcessing));
+        }
+        private static void InputScope(UniversalRenderer __instance, out bool __state)
+        {
+            __state = inputScope;
+            var frame = (ContextContainer)frameDataProperty.GetValue(__instance);
+            inputScope = Eligible(frame.Get<UniversalCameraData>().camera);
+        }
+        private static Exception RestoreInputScope(bool __state, Exception __exception)
+        {
+            inputScope = __state; return __exception;
+        }
+        private static void RequireMotion(ref bool isTemporalAAEnabled)
+        {
+            // This argument is only the input planner's request. Camera AA and jitter policy
+            // remain untouched; its existing true branch schedules depth and motion producers.
+            if (inputScope) isTemporalAAEnabled = true;
         }
         private static void StackedCamera(Camera baseCamera, UniversalAdditionalCameraData baseAdditionalCameraData, UniversalCameraData cameraData)
         {
@@ -215,11 +243,13 @@ namespace ReScaleFrame.Unity
             var camera = frameData.Get<UniversalCameraData>();
             if (!Eligible(camera.camera)) return;
             Configuration config = Native.Configuration(camera.camera);
-            if (config.Enabled == 0) {
-                Record(renderGraph, Snapshot(camera, true), activeCameraColorTexture, default, default, default);
+            if (config.Enabled == 0 || config.Backend == 6) {
+                var resources = frameData.Get<UniversalResourceData>();
+                if (!resources.cameraDepthTexture.IsValid() || !resources.motionVectorColor.IsValid()) return;
+                var packet = Snapshot(camera, false); packet.Flags |= 34;
+                Record(renderGraph, packet, activeCameraColorTexture, resources.cameraDepthTexture, resources.motionVectorColor, default);
                 return;
             }
-            if (config.Backend == 6) return;
             TextureHandle output = default;
             if (!Reconstruct(__instance, renderGraph, frameData.Get<UniversalResourceData>(), camera,
                 ref activeCameraColorTexture, ref output)) {
@@ -251,6 +281,22 @@ namespace ReScaleFrame.Unity
                             if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id() + 1, owned);
                         }
                     });
+                }
+            }
+        }
+        private static void Hudless(RenderGraph renderGraph, ContextContainer frameData, ref TextureHandle colorBuffer)
+        {
+            using (var producer = Bootstrap.EnterProducer()) {
+                if (!producer.Valid || hudlessFrame == Time.frameCount || !colorBuffer.IsValid()) return;
+                var camera = frameData.Get<UniversalCameraData>();
+                if (!Eligible(camera.camera) || !camera.resolveFinalTarget || (bool)hdrOutputProperty.GetValue(camera)) return;
+                hudlessFrame = Time.frameCount;
+                Packet packet = Snapshot(camera, true); packet.Flags = 10; // completed SDR colour, before the UI draw
+                using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame completed scene before UI", out var pass)) {
+                    pass.Packet = packet; pass.Color = colorBuffer;
+                    builder.UseTexture(colorBuffer, AccessFlags.Read);
+                    builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
+                    builder.SetRenderFunc<PassData>(Execute);
                 }
             }
         }
@@ -311,8 +357,20 @@ namespace ReScaleFrame.Unity
         private static void Execute(PassData pass, UnsafeGraphContext context)
         {
             using (var producer = Bootstrap.EnterProducer()) {
-            RTHandle color = pass.Color;
             Packet packet = pass.Packet;
+            if ((packet.Flags & 8) != 0) {
+                // Imported backbuffers have an RTHandle without a RenderTexture. Resolve
+                // the current engine buffer in the queued native callback, not through rt.
+                if (!producer.Valid) return;
+                IntPtr final = Native.Enqueue(ref packet);
+                if (final != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id(), final);
+                return;
+            }
+            RTHandle color = pass.Color;
+            if (color == null || color.rt == null) {
+                if (++failures <= 6) Native.Log("Temporal inputs refused: source has no owned RenderTexture.");
+                return;
+            }
             if ((packet.Flags & 2) == 0)
             {
                 RTHandle output = pass.Output;
@@ -326,6 +384,12 @@ namespace ReScaleFrame.Unity
                 if ((packet.Flags & 16) != 0) return;
                 packet.Output = output.rt.GetNativeTexturePtr();
                 RTHandle depth = pass.Depth, motion = pass.Motion;
+                if (depth == null || depth.rt == null || motion == null || motion.rt == null) return;
+                packet.Depth = depth.rt.GetNativeTexturePtr(); packet.Motion = motion.rt.GetNativeTexturePtr();
+            }
+            if ((packet.Flags & 32) != 0) {
+                RTHandle depth = pass.Depth, motion = pass.Motion;
+                if (depth == null || depth.rt == null || motion == null || motion.rt == null) return;
                 packet.Depth = depth.rt.GetNativeTexturePtr(); packet.Motion = motion.rt.GetNativeTexturePtr();
             }
             if (!producer.Valid) return;
@@ -334,6 +398,6 @@ namespace ReScaleFrame.Unity
             if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id(), owned);
             }
         }
-        internal static void Clear() { views.Clear(); failures = jitterReports = 0; overlayFrame = -1; }
+        internal static void Clear() { views.Clear(); failures = jitterReports = 0; overlayFrame = hudlessFrame = -1; }
     }
 }

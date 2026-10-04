@@ -15,6 +15,10 @@ typedef struct rsf_native_cpu_frame {
     uint64_t timestamps_qpc[5];
     uint32_t ended;
     uint32_t failed;
+    uint32_t input_mask;
+    uint32_t input_events[3];
+    uint64_t input_qpc[3];
+    uint64_t pacing_qpc;
 } rsf_native_cpu_frame;
 /* Copies CPU ownership/ordering only, with no GPU or presentation authorization. A bounded
    cache may reuse ended records; absent or overwritten IDs refuse lookup. Live records never

@@ -2,6 +2,9 @@ param(
     [Parameter(Mandatory)][string]$GameDirectory,
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
     [ValidateRange(0,5)][int]$Quality = 1,
+    [ValidateSet('Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Off',
+    [ValidateRange(1,15)][int]$GeneratedFrames = 1,
+    [switch]$GraphicsDebug,
     [ValidateSet('Debug','Release')][string]$Configuration = 'Release'
 )
 $ErrorActionPreference = 'Stop'
@@ -35,17 +38,19 @@ foreach ($taskLeaf in @('ReScaleFrame.Runtime.dll','ReScaleFrame.Game.UnityMono.
     Add-UnityCopy "$taskBin/$taskLeaf" "ReScaleFrame/$taskLeaf"
 }
 $taskSl = "$taskRoot/.local/streamline/sdk"
-foreach ($taskLeaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlss.license.txt')) {
+foreach ($taskLeaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) {
     Add-UnityCopy "$taskSl/bin/x64/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf"
 }
 foreach ($taskLeaf in @('license.txt','3rd-party-licenses.md')) { Add-UnityCopy "$taskSl/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf" }
 $taskFfx = "$taskRoot/vendor/fidelityfx/Kits/FidelityFX"
-foreach ($taskLeaf in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll')) {
+foreach ($taskLeaf in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')) {
     Add-UnityCopy "$taskFfx/signedbin/$taskLeaf" "ReScaleFrame/fidelityfx/$taskLeaf"
 }
 Add-UnityCopy "$taskFfx/docs/license.md" 'ReScaleFrame/fidelityfx/license.md'
 Add-UnityCopy "$taskRoot/vendor/fidelityfx/3rdpartynotice.md" 'ReScaleFrame/fidelityfx/3rdpartynotice.md'
 Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess.dll" 'ReScaleFrame/xess/libxess.dll'
+Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess_fg.dll" 'ReScaleFrame/xess/libxess_fg.dll'
+Add-UnityCopy "$taskRoot/vendor/xess/bin/libxell.dll" 'ReScaleFrame/xess/libxell.dll'
 foreach ($taskLeaf in @('LICENSE.txt','third-party-programs.txt')) { Add-UnityCopy "$taskRoot/vendor/xess/$taskLeaf" "ReScaleFrame/xess/$taskLeaf" }
 $taskCopies.Add(@{ source=$null; path='ReScaleFrame.ini' })
 foreach ($taskCopy in $taskCopies) {
@@ -70,7 +75,9 @@ foreach ($taskCopy in $taskCopies) {
     if ($taskCopy.source) { Copy-Item -LiteralPath $taskCopy.source -Destination $taskDestination }
     else {
         $taskId = @{ Off=0; DLSS=1; FSR2=2; FSR3=3; FSR4=4; XeSS=5; FSR1=6; Auto=7 }[$Backend]
+        $taskFg = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5 }[$FrameGeneration]
         [IO.File]::WriteAllLines($taskDestination, @('[UnitySR]',"Backend=$taskId","Quality=$Quality",
+            "FrameGeneration=$taskFg","GeneratedFrames=$GeneratedFrames","GraphicsDebug=$([int]$GraphicsDebug.IsPresent)",
             'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
             'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',
             'FSR4=ReScaleFrame/fidelityfx','XeSS=ReScaleFrame/xess'), [Text.Encoding]::Unicode)

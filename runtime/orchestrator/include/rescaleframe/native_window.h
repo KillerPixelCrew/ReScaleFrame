@@ -28,6 +28,7 @@ typedef struct rsf_native_present_record {
     uint32_t scene_matched;
     uint64_t scene_submission_id, scene_view_key, scene_native_frame;
     uint32_t scene_texture_bound;
+    uint32_t scene_direct_present;
 } rsf_native_present_record;
 RSF_RUNTIME_API int rsf_native_window_present(const rsf_observer_present_event* event);
 /* Copied numeric data only, no resource borrowed beyond window scope. Graphics owner thread. */

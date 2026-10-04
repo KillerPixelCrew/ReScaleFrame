@@ -237,6 +237,17 @@ unsafe fn frame_inner(
             quality: produced.quality.to_abi(),
             enabled_changed: u32::from(produced.enabled_changed),
             enabled: u32::from(produced.enabled),
+            fg_changed: u32::from(produced.fg_changed),
+            fg_mode: produced.fg_mode,
+            fg_generated: produced.fg_generated,
+            fg_backend_changed: u32::from(produced.fg_backend_changed),
+            fg_backend: produced.fg_backend,
+            reflex_changed: u32::from(produced.reflex_changed),
+            reflex_mode: produced.reflex_mode,
+            performance_hud_changed: u32::from(produced.performance_hud_changed),
+            performance_hud: u32::from(produced.performance_hud),
+            frame_limit_changed: u32::from(produced.frame_limit_changed),
+            frame_limit_us: produced.frame_limit_us,
             dump_requested: u32::from(produced.dump_requested),
             start_requested: u32::from(produced.start_requested),
             debug_view_changed: u32::from(produced.debug_view_changed),
@@ -326,6 +337,31 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         backend: stats.backend,
         requested_backend: stats.requested_backend,
         last_switch_result: stats.last_switch_result,
+        generation: crate::model::GenerationStats {
+            backend: stats.fg_backend,
+            requested_backend: stats.fg_requested_backend,
+            backend_choices: stats.fg_backend_choices,
+            selection_result: stats.fg_selection_result,
+            available: stats.fg_available != 0,
+            requested_mode: stats.fg_requested_mode,
+            requested_generated: stats.fg_requested_generated,
+            effective_mode: stats.fg_effective_mode,
+            effective_generated: stats.fg_effective_generated,
+            active: stats.fg_active != 0,
+            max_generated: stats.fg_max_generated,
+            reflex_available: stats.reflex_available != 0,
+            requested_reflex: stats.reflex_requested_mode,
+            effective_reflex: stats.reflex_effective_mode,
+            reason: stats.fg_reason,
+            last_result: stats.fg_last_result,
+            total_presented: stats.fg_total_presented,
+            frame_limit_us: stats.frame_limit_us,
+            display_refresh_mhz: stats.display_refresh_mhz,
+        },
+        application_presented_frames: stats.application_presented_frames,
+        counter_clock: [stats.sample_qpc, stats.qpc_frequency],
+        show_performance_hud: stats.show_performance_hud != 0,
+        fg_present_count_valid: stats.fg_present_count_valid != 0,
     }
 }
 
@@ -420,6 +456,30 @@ mod tests {
             backend: 1,
             requested_backend: 1,
             last_switch_result: 0,
+            fg_available: 0,
+            fg_requested_mode: 0,
+            fg_requested_generated: 1,
+            fg_effective_mode: 0,
+            fg_effective_generated: 0,
+            fg_active: 0,
+            fg_max_generated: 0,
+            reflex_available: 0,
+            reflex_requested_mode: 0,
+            reflex_effective_mode: 0,
+            fg_reason: 0,
+            fg_last_result: 0,
+            fg_total_presented: 0,
+            application_presented_frames: 0,
+            sample_qpc: 0,
+            qpc_frequency: 0,
+            show_performance_hud: 0,
+            fg_present_count_valid: 0,
+            frame_limit_us: 0,
+            display_refresh_mhz: 0,
+            fg_backend: 0,
+            fg_requested_backend: 0,
+            fg_backend_choices: 0,
+            fg_selection_result: 0,
         }
     }
 
@@ -581,7 +641,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 5);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 9);
     }
 
     #[test]

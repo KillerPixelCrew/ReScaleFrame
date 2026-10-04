@@ -25,12 +25,16 @@ $taskExpected = @(
     'ReScaleFrame/0Harmony.dll', 'ReScaleFrame/Harmony-LICENSE.txt',
     'ReScaleFrame/streamline/sl.interposer.dll', 'ReScaleFrame/streamline/sl.common.dll',
     'ReScaleFrame/streamline/sl.dlss.dll', 'ReScaleFrame/streamline/sl.pcl.dll',
+    'ReScaleFrame/streamline/sl.dlss_g.dll', 'ReScaleFrame/streamline/sl.reflex.dll',
+    'ReScaleFrame/streamline/nvngx_dlssg.dll',
     'ReScaleFrame/streamline/nvngx_dlss.dll', 'ReScaleFrame/streamline/nvngx_dlss.license.txt',
     'ReScaleFrame/streamline/license.txt', 'ReScaleFrame/streamline/3rd-party-licenses.md',
     'ReScaleFrame/fidelityfx/amd_fidelityfx_loader_dx12.dll',
     'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll',
+    'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll',
     'ReScaleFrame/fidelityfx/license.md', 'ReScaleFrame/fidelityfx/3rdpartynotice.md',
-    'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt'
+    'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/libxess_fg.dll', 'ReScaleFrame/xess/libxell.dll',
+    'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt'
 )
 $taskFiles = @($taskDeployment.files)
 if ($taskFiles.Count -ne $taskExpected.Count -or @($taskFiles.path | Select-Object -Unique).Count -ne $taskExpected.Count) {

@@ -13,10 +13,13 @@
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/ac7_motion_capture.h>
+#include <rescaleframe/native_fg.h>
+#include <rescaleframe/dlss_pipeline.h>
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
 #include "preferences.h"
+#include <rescaleframe/fg_choice.h>
 
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -840,6 +843,84 @@ static void report_and_dump(void)
     note("dump did not complete within five seconds");
 }
 
+static int prepare_native_game(void)
+{
+    wchar_t path[MAX_PATH]; char sha256[65];
+    const DWORD length = GetModuleFileNameW((HMODULE)&__ImageBase, path, MAX_PATH);
+    wchar_t* separator = length && length < MAX_PATH ? wcsrchr(path, L'\\') : NULL;
+    if (!separator || !executable_sha256(sha256) ||
+        (size_t)(separator - path) + 1 + wcslen(L"ReScaleFrame.Game.AC7.dll") >= MAX_PATH) return 0;
+    wcscpy(separator + 1, L"ReScaleFrame.Game.AC7.dll");
+    return rsf_bridge_prepare_game(path, sha256, observer_note, NULL);
+}
+static int accept_ac7_window(void* user, void* window)
+{
+    wchar_t name[64]; DWORD process = 0;
+    (void)user;
+    GetWindowThreadProcessId((HWND)window, &process);
+    if (process != GetCurrentProcessId() || !GetClassNameW((HWND)window, name, 64) || wcscmp(name, L"UnrealWindow") != 0) return 0;
+    // Native preparation checks decrypted hook bytes and the executable fingerprint before
+    // the cold presentation host creates any D3D12 objects. A refusal keeps the original chain.
+    return prepare_native_game();
+}
+static void fg_latency_event(void* user, const rsf_observer_present_event* event)
+{ (void)user; rsf_native_fg_present(event); }
+static void start_generation(void)
+{
+    char directory[MAX_PATH * 2];
+    const DWORD fallback = read_number("RSF_FG_ENABLE", 0) ? read_number("RSF_FG_BACKEND", RSF_FG_BACKEND_DLSS) : 0;
+    const DWORD backend = rsf_fg_choice_start(preference_path, fallback,
+        (1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS));
+    const char* variable = backend == RSF_FG_BACKEND_XESS ? "RSF_XESS_BIN" :
+        backend == RSF_FG_BACKEND_FSR3 ? "RSF_FSR3_BIN" : backend == RSF_FG_BACKEND_FSR4 ? "RSF_FSR4_BIN" : "RSF_STREAMLINE_BIN";
+    const char* relative = backend == RSF_FG_BACKEND_XESS ? "ReScaleFrame\\xess" :
+        backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4 ? "ReScaleFrame\\fidelityfx" : "ReScaleFrame\\streamline";
+    if (!read_text(variable, directory, sizeof(directory)) &&
+        !((backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4) && read_text("RSF_FFX_BIN", directory, sizeof(directory))) &&
+        !beside_this_module(relative, directory, sizeof(directory))) {
+        note("frame generation: runtime directory unavailable; retaining D3D11 presentation"); return;
+    }
+    rsf_native_fg_options options = {0}; options.struct_size = sizeof(options);
+    options.mode = read_number("RSF_FG_MODE", RSF_FG_FIXED);
+    options.generated_frames = read_number("RSF_FG_GENERATED", 1);
+    options.reflex_mode = backend == RSF_FG_BACKEND_DLSS ? read_number("RSF_REFLEX_MODE", RSF_REFLEX_ON) : RSF_REFLEX_OFF;
+    /* A limit on rendered frames, applied before generation. FPS wins over the interval form. */
+    {
+        const DWORD limit_fps = read_number("RSF_FRAME_LIMIT_FPS", 0);
+        options.frame_limit_us = limit_fps ? (1000000u + limit_fps / 2u) / limit_fps : read_number("RSF_REFLEX_LIMIT_US", 0);
+    }
+    options.debug = read_number("RSF_FG_DEBUG", 0);
+    rsf_native_fg_options_set(&options);
+    /* RSF_REFLEX_ASYNC=1 restores the sleep that overlaps the previous frame's Present, for comparison. */
+    rsf_native_fg_reflex_ordering_set(read_number("RSF_REFLEX_ASYNC", 0));
+    rsf_native_fg_set_log(observer_note, NULL);
+    rsf_d3d11_present_setup setup = {0}; setup.struct_size = sizeof(setup);
+    setup.runtime_directory_utf8 = directory; setup.development_runtime = read_number("RSF_FG_DEVELOPMENT", 0);
+    setup.log = observer_note; setup.accept_window = accept_ac7_window;
+    setup.before_present = rsf_bridge_present_hook(); setup.present_event = rsf_bridge_present_event_hook();
+    setup.latency_event = fg_latency_event; setup.prepare = rsf_native_fg_prepare; setup.retire = rsf_native_fg_retire;
+    setup.debug_timing = options.debug;
+    setup.backend = backend; setup.max_generated_frames = UINT32_MAX;
+    setup.runtime_switching = 1;
+    {
+        char streamline[MAX_PATH * 2] = {0}, fsr3[MAX_PATH * 2] = {0}, fsr4[MAX_PATH * 2] = {0}, xess[MAX_PATH * 2] = {0};
+        if (!read_text("RSF_STREAMLINE_BIN", streamline, sizeof(streamline))) beside_this_module("ReScaleFrame\\streamline", streamline, sizeof(streamline));
+        if (!read_text("RSF_FSR3_BIN", fsr3, sizeof(fsr3)) && !read_text("RSF_FFX_BIN", fsr3, sizeof(fsr3))) beside_this_module("ReScaleFrame\\fidelityfx", fsr3, sizeof(fsr3));
+        if (!read_text("RSF_FSR4_BIN", fsr4, sizeof(fsr4)) && !read_text("RSF_FFX_BIN", fsr4, sizeof(fsr4))) beside_this_module("ReScaleFrame\\fidelityfx", fsr4, sizeof(fsr4));
+        if (!read_text("RSF_XESS_BIN", xess, sizeof(xess))) beside_this_module("ReScaleFrame\\xess", xess, sizeof(xess));
+        setup.streamline_directory_utf8 = streamline; setup.fsr3_directory_utf8 = fsr3;
+        setup.fsr4_directory_utf8 = fsr4; setup.xess_directory_utf8 = xess;
+        if (!rsf_d3d11_present_install(&setup)) note("frame generation: interception refused; retaining D3D11 presentation");
+    }
+    note("frame generation: cold startup requested, backend=%lu mode=%lu generated=%lu Reflex=%lu directory=%s (%s)",
+        (unsigned long)backend, (unsigned long)options.mode, (unsigned long)options.generated_frames, (unsigned long)options.reflex_mode,
+        directory, setup.development_runtime ? "development" : "production");
+    note("frame limit before generation: %lu us between rendered frames (0 is unlimited)",
+        (unsigned long)options.frame_limit_us);
+    note(read_number("RSF_REFLEX_ASYNC", 0) ?
+        "Reflex ordering: sleep may precede the previous Present (RSF_REFLEX_ASYNC=1)" :
+        "Reflex ordering: previous Present, then one sleep, then input; submit end before PresentStart");
+}
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -873,6 +954,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     strncpy(observe_directory, directory, MAX_PATH - 1);
     observe_directory[MAX_PATH - 1] = '\0';
     start_observer();
+    start_generation();
 
     double entropy = 0.0;
     rsf_measure_module_code(NULL, &entropy);
@@ -922,17 +1004,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     /* Before the scale patch, because the scale it settles on depends on whether these applied. */
     translucency_depth_conformed = apply_translucency_depth_patches();
     apply_separate_translucency_patch();
-    {
-        wchar_t path[MAX_PATH];
-        char sha256[65];
-        const DWORD length = GetModuleFileNameW((HMODULE)&__ImageBase, path, MAX_PATH);
-        wchar_t* separator = length && length < MAX_PATH ? wcsrchr(path, L'\\') : NULL;
-        if (separator && executable_sha256(sha256) &&
-            (size_t)(separator - path) + 1 + wcslen(L"ReScaleFrame.Game.AC7.dll") < MAX_PATH) {
-            wcscpy(separator + 1, L"ReScaleFrame.Game.AC7.dll");
-            note("native AC7 plugin preparation: %s", rsf_bridge_prepare_game(path, sha256, observer_note, NULL) ? "ready" : "refused");
-        }
-    }
+    note("native AC7 plugin preparation: %s", prepare_native_game() ? "ready" : "refused");
     if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
         rsf_ac7_motion_capture_install();
     }
@@ -1584,6 +1656,8 @@ static void register_overlay_actions(void)
     actions.maintain_renderer = action_maintain_renderer;
     rsf_bridge_set_actions(&actions);
     preferred_enabled = read_number("RSF_DLSS_ENABLE", 1) != 0;
+    rsf_dlss_pipeline_set_colour_correction(read_number("RSF_DLSS_COLOUR_CORRECTION", 0) != 0);
+    rsf_dlss_pipeline_set_colour_transport(read_number("RSF_DLSS_TONEMAP", 1) != 0);
     preferred_quality = read_number("RSF_DLSS_QUALITY", 3);
     if (preferred_quality > 4) {
         preferred_quality = 3;

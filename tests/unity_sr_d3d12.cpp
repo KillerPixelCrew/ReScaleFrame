@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_d3d12.h>
+#include <rescaleframe/streamline_host.h>
+#if RSF_HAVE_STREAMLINE
+#include <sl.h>
+#endif
 #include <rescaleframe/unity_bridge.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -41,12 +45,12 @@ static bool buffer(ID3D12Device* device, uint64_t size, D3D12_HEAP_TYPE type, D3
 }
 int main(int argc, char** argv)
 {
-    static_assert(sizeof(rsf_camera_frame) == 384 && sizeof(rsf_unity_packet) == 520 && sizeof(rsf_unity_native_api) == 56);
+    static_assert(sizeof(rsf_camera_frame) == 384 && sizeof(rsf_unity_packet) == 520 && sizeof(rsf_unity_native_api) == 64);
     rsf_sr12* invalid = reinterpret_cast<rsf_sr12*>(1);
     if (rsf_sr12_create(nullptr, &invalid) != RSF_BACKEND_ERROR_INVALID_ARGUMENT || invalid ||
         rsf_sr12_evaluate(nullptr, nullptr, nullptr, 0) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return 1;
     if (argc == 1) { std::puts("PASS: native ABI and null/short setup refusal."); return 0; }
-    if (argc != 5 && argc != 6) { std::fprintf(stderr, "Usage: test backend streamline-directory fidelityfx-directory xess-directory [vendor-id]\n"); return 2; }
+    if (argc != 5 && argc != 6 && argc != 7) { std::fprintf(stderr, "Usage: test backend streamline-directory fidelityfx-directory xess-directory [vendor-id] [shared]\n"); return 2; }
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> selected;
     const bool debug_requested = std::getenv("RSF_UNITY_GPU_DEBUG") != nullptr;
     if (debug_requested) {
@@ -55,7 +59,7 @@ int main(int argc, char** argv)
         else { std::fprintf(stderr, "D3D12 debug interface unavailable.\n"); return 77; }
     }
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 77;
-    if (argc == 6) {
+    if (argc >= 6) {
         const auto wanted = static_cast<uint32_t>(std::strtoul(argv[5], nullptr, 0));
         for (UINT index = 0;; ++index) {
             ComPtr<IDXGIAdapter1> candidate;
@@ -90,6 +94,17 @@ int main(int argc, char** argv)
     setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = "6000.3";
     setup.dlss.project_id_utf8 = "57a42c7e-faf0-4bda-a9f9-892870948ac1"; setup.dlss.require_signature = 1;
     setup.log = setup.dlss.log = logger;
+    rsf_streamline_host* shared = nullptr;
+    if (argc == 7) {
+        rsf_streamline_host_setup registration{sizeof(registration), RSF_STREAMLINE_HOST_ABI_VERSION,
+            argv[2], adapter.Get(), 2, "6000.3", setup.dlss.project_id_utf8, 1, 0, logger, nullptr, RSF_SL_PROFILE_DLSS_FG, 1};
+        if (rsf_streamline_host_adopt(&registration, device.Get(), queue.Get(), &shared) != RSF_BACKEND_OK ||
+            rsf_streamline_host_acquire(shared, 1) != RSF_BACKEND_OK ||
+            rsf_streamline_host_sleep(shared, 1) != RSF_BACKEND_OK) return 1;
+        for (auto marker : {RSF_LATENCY_SIMULATION_START, RSF_LATENCY_SIMULATION_END, RSF_LATENCY_RENDER_SUBMIT_START})
+            if (rsf_streamline_host_marker(shared, 1, marker, 0) != RSF_BACKEND_OK) return 1;
+        setup.streamline_host = shared;
+    }
     rsf_sr12* sr = nullptr;
     const auto created = rsf_sr12_create(&setup, &sr);
     if (created != RSF_BACKEND_OK) { std::fprintf(stderr, "Provider %u preparation refused %d\n", setup.backend, created); return 77; }
@@ -133,8 +148,34 @@ int main(int argc, char** argv)
     std::memcpy(pass.camera.view_to_clip, &projection, 64); std::memcpy(pass.camera.clip_to_view, &inverse, 64);
     std::memcpy(pass.camera.view_to_world, &identity, 64); std::memcpy(pass.camera.world_to_view, &identity, 64);
     std::memcpy(pass.camera.clip_to_previous_clip, &identity, 64); std::memcpy(pass.previous_clip_to_clip, &identity, 64);
+    if (!setup.backend) {
+        barrier(list.Get(), images[0].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->CopyResource(images[3].Get(), images[0].Get());
+        barrier(list.Get(), images[0].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        pass.color_output = nullptr; pass.role = RSF_GAME_RENDER_FG_INPUTS;
+    }
     auto evaluated = rsf_sr12_evaluate(sr, list.Get(), &pass, 0);
     std::fprintf(stderr, "Provider %u: %ux%u -> 640x360, evaluate=%d\n", setup.backend, width, height, evaluated);
+#if RSF_HAVE_STREAMLINE
+    if (shared) {
+        // FG has separate completed-frame constants on viewport zero. Setting them
+        // after SR on the same token must succeed even when their values differ.
+        auto set_constants = reinterpret_cast<PFun_slSetConstants*>(reinterpret_cast<void*>(
+            GetProcAddress(static_cast<HMODULE>(rsf_streamline_host_module(shared)), "slSetConstants")));
+        auto* token = static_cast<sl::FrameToken*>(rsf_streamline_host_token(shared, 1));
+        sl::Constants constants{};
+        std::memcpy(&constants.cameraViewToClip, pass.camera.view_to_clip, 64);
+        std::memcpy(&constants.clipToCameraView, pass.camera.clip_to_view, 64);
+        std::memcpy(&constants.clipToPrevClip, pass.camera.clip_to_previous_clip, 64);
+        std::memcpy(&constants.prevClipToClip, pass.previous_clip_to_clip, 64);
+        constants.cameraNear = 0.2f; constants.cameraFar = 1000;
+        constants.cameraFOV = pass.camera.vertical_fov_radians; constants.cameraAspectRatio = 640.0f / 360.0f;
+        constants.depthInverted = sl::eTrue; constants.reset = sl::eTrue;
+        if (!set_constants || !token || set_constants(constants, *token, sl::ViewportHandle(0u)) != sl::Result::eOk)
+            return 1;
+        std::fprintf(stderr, "PASS: independent SR/FG constants accepted on the same source token.\n");
+    }
+#endif
     auto desc = images[3]->GetDesc(); D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{}; uint64_t bytes = 0;
     device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
     ComPtr<ID3D12Resource> readback; if (!buffer(device.Get(), bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, readback)) return 1;
@@ -154,6 +195,11 @@ int main(int argc, char** argv)
     const float b = DirectX::PackedVector::XMConvertHalfToFloat(center[2]);
     std::fprintf(stderr, "GPU output center RGB %.4f %.4f %.4f\n", r, g, b);
     readback->Unmap(0, nullptr); rsf_sr12_destroy(sr);
+    if (shared) {
+        for (auto marker : {RSF_LATENCY_RENDER_SUBMIT_END, RSF_LATENCY_PRESENT_START, RSF_LATENCY_PRESENT_END})
+            if (rsf_streamline_host_marker(shared, 1, marker, 0) != RSF_BACKEND_OK) return 1;
+        rsf_streamline_host_destroy(shared);
+    }
     bool validation_ok = true;
     if (debug_requested) {
         ComPtr<ID3D12InfoQueue> info;

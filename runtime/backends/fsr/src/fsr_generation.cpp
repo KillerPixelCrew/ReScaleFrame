@@ -27,8 +27,15 @@ struct FfxSession {
     rsf_fg_options options{};
     rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
     std::atomic<uint64_t> generated{0}, presented{0};
+    std::atomic<uint64_t> dispatched{0};
+    std::atomic<int32_t> dispatch_result{0};
+    std::atomic<uint32_t> dispatch_logs{0};
+    rsf_backend_log_fn log = nullptr;
+    void* log_user = nullptr;
     uint64_t sequence = 0;
     uint64_t last_prepare = 0, observed_generated = 0;
+    uint32_t counter_reports = 0;
+    UINT last_dxgi_present = 0;
     float view_space_to_meters = 1;
     bool history_valid = false, prepared_enabled = false;
 };
@@ -63,7 +70,16 @@ void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer);
-    return self->dispatch(&self->generation, &desc->header);
+    const auto result = self->dispatch(&self->generation, &desc->header);
+    self->dispatch_result = static_cast<int32_t>(result);
+    if (result == FFX_API_RETURN_OK) self->dispatched += desc->numGeneratedFrames;
+    const auto report = self->dispatch_logs.fetch_add(1);
+    if (self->log && (report < 3 || (result != FFX_API_RETURN_OK && report < 12))) {
+        char text[176]; std::snprintf(text, sizeof(text), "FSR FG dispatch frame=%llu requested_outputs=%u result=%d reset=%u",
+            static_cast<unsigned long long>(desc->frameID), desc->numGeneratedFrames, static_cast<int32_t>(result), desc->reset);
+        self->log(self->log_user, text);
+    }
+    return result;
 }
 ffxReturnCode_t present(ffxCallbackDescFrameGenerationPresent* desc, void* pointer)
 {
@@ -96,24 +112,33 @@ rsf_backend_result wait(FfxSession& self)
 void destroy(void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer); if (!self) return;
+    if (self->generation && self->chain) {
+        // Detach callbacks and HUD-less resources before releasing either context.
+        // Disabling composition drains the SDK's in-flight work.
+        ffxConfigureDescFrameGeneration off{};
+        off.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+        off.swapChain = self->chain.Get(); off.frameID = ++self->sequence;
+        if (self->configure(&self->generation, &off.header) != FFX_API_RETURN_OK) return;
+    }
     if (wait(*self) != 0) return; // Pending SDK callbacks still own this context.
+    if (self->generation && self->destroy(&self->generation, nullptr) != FFX_API_RETURN_OK) return;
     self->chain.Reset();
-    if (self->swapchain) self->destroy(&self->swapchain, nullptr);
-    if (self->generation) self->destroy(&self->generation, nullptr);
+    if (self->swapchain && self->destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return;
     if (self->module) FreeLibrary(self->module);
     delete self;
 }
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
-    // Cross-SDK transitions need common-present instrumentation and pacing feature unload.
-    // Until that shared-host transition exists, retain the previous owner rather than stack proxies.
-    if (GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NEEDS_RESTART;
+    // A Streamline SR-only registration can coexist on the native engine device. An
+    // actual DLSS-G presentation owner still forbids a second vendor proxy.
+    if (GetModuleHandleW(L"sl.dlss_g.dll") && !setup->streamline_host) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     if (setup->feature_major != 3 && setup->feature_major != 4) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (setup->chain.ui_mode != RSF_UI_MODE_NONE && setup->chain.ui_mode != RSF_UI_MODE_BACKBUFFER_HUDLESS)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     auto* self = new (std::nothrow) FfxSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device); self->ui_mode = setup->chain.ui_mode;
+    self->log = setup->chain.log; self->log_user = setup->chain.log_user;
     self->view_space_to_meters = setup->view_space_to_meters;
     self->module = rsf::fg_library(*setup, L"amd_fidelityfx_framegeneration_dx12.dll");
     if (!self->module) { destroy(self); return RSF_BACKEND_ERROR_LOAD_FAILED; }
@@ -191,6 +216,10 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     auto& self = *static_cast<FfxSession*>(pointer);
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
     if (options->mode != RSF_FG_OFF && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // Called at every application Present. Repeating the request must not disable generation
+    // or reset temporal history between two consecutive source frames.
+    if (self.options.struct_size && self.options.mode == options->mode &&
+        self.options.generated_frames == options->generated_frames) return RSF_BACKEND_OK;
     ffxConfigureDescFrameGeneration config{};
     config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     config.swapChain = self.chain.Get(); config.frameGenerationEnabled = false;
@@ -222,6 +251,22 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     const bool enabled = frame->interpolate && self.options.mode != RSF_FG_OFF;
     if (enabled) {
         result = rsf::fg_command(command, self.device.Get()); if (result != 0) return result;
+        DXGI_SWAP_CHAIN_DESC1 current{};
+        if (FAILED(self.chain->GetDesc1(&current))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        if (current.Width != self.description.displaySize.width || current.Height != self.description.displaySize.height ||
+            ffxApiGetSurfaceFormatDX12(current.Format) != self.description.backBufferFormat) {
+            // ResizeBuffers was drained by the presentation owner. The generation context's
+            // display extent is fixed at creation, independently of the proxy swapchain.
+            if (wait(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
+            if (self.destroy(&self.generation, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+            self.generation = nullptr;
+            self.description.displaySize = {current.Width, current.Height};
+            self.description.maxRenderSize = self.description.displaySize;
+            self.description.backBufferFormat = ffxApiGetSurfaceFormatDX12(current.Format);
+            if (self.create(&self.generation, &self.description.header, nullptr) != FFX_API_RETURN_OK)
+                return RSF_BACKEND_ERROR_INIT_FAILED;
+            self.history_valid = false;
+        }
         if (record.output_width != self.description.displaySize.width || record.output_height != self.description.displaySize.height ||
             record.render_width > self.description.maxRenderSize.width || record.render_height > self.description.maxRenderSize.height)
             return RSF_BACKEND_ERROR_STALE_RESOURCES;
@@ -273,11 +318,14 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     data.reset = !self.history_valid || record.frame_id != self.last_prepare + 1;
     data.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth.resource));
     data.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion.resource));
+    // Perspective W follows view Z. Unity's right-handed projection looks down
+    // negative Z; UE's positive-Z view basis remains positive.
+    const float forward_sign = record.camera.view_to_clip[11] < 0 ? -1.0f : 1.0f;
     for (uint32_t i = 0; i < 3; ++i) {
         data.cameraPosition[i] = record.camera.view_to_world[12 + i];
         data.cameraRight[i] = record.camera.view_to_world[i];
         data.cameraUp[i] = record.camera.view_to_world[4 + i];
-        data.cameraForward[i] = record.camera.view_to_world[8 + i];
+        data.cameraForward[i] = forward_sign * record.camera.view_to_world[8 + i];
     }
     if (self.dispatch(&self.generation, &data.header) != FFX_API_RETURN_OK) {
         self.history_valid = false; self.prepared_enabled = false; return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -288,11 +336,25 @@ rsf_backend_result after(void* pointer)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<FfxSession*>(pointer);
-    self.state.generated_callbacks = self.generated.load(); self.state.present_callbacks = self.presented.load();
-    self.state.valid_statistics = self.ui_mode == RSF_UI_MODE_NONE ?
-        RSF_FG_STAT_PRESENT_CALLBACKS | RSF_FG_STAT_ACTIVITY : 0;
-    self.state.active = self.prepared_enabled && self.state.generated_callbacks > self.observed_generated;
-    self.observed_generated = self.state.generated_callbacks;
+    self.state.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();
+    self.state.present_callbacks = self.presented.load(); self.state.vendor_status = self.dispatch_result.load();
+    self.state.valid_statistics = RSF_FG_STAT_ACTIVITY | (self.ui_mode == RSF_UI_MODE_NONE ? RSF_FG_STAT_PRESENT_CALLBACKS : 0u);
+    const auto observed = self.ui_mode == RSF_UI_MODE_NONE ? self.state.generated_callbacks : self.dispatched.load();
+    self.state.active = self.prepared_enabled && observed > self.observed_generated;
+    self.observed_generated = observed;
+    UINT count = 0;
+    const auto counter_result = self.chain->GetLastPresentCount(&count);
+    if (SUCCEEDED(counter_result)) {
+        const UINT delta = count >= self.last_dxgi_present || self.last_dxgi_present > 0xf0000000u ?
+            count - self.last_dxgi_present : count;
+        self.state.total_presented += delta; self.last_dxgi_present = count;
+        self.state.valid_statistics |= RSF_FG_STAT_TOTAL_PRESENTED;
+    }
+    if (self.log && self.counter_reports++ < 6) {
+        char text[176]; std::snprintf(text, sizeof(text), "FSR FG counters source=%llu generated=%llu DXGI_present_count=%u query=%08lx",
+            static_cast<unsigned long long>(self.last_prepare), static_cast<unsigned long long>(self.dispatched.load()),
+            count, static_cast<unsigned long>(counter_result)); self.log(self.log_user, text);
+    }
     return RSF_BACKEND_OK;
 }
 rsf_backend_result status(void* pointer, rsf_fg_status* out)
@@ -303,8 +365,10 @@ rsf_backend_result status(void* pointer, rsf_fg_status* out)
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto result = wait(*static_cast<FfxSession*>(pointer));
-    out->fence = nullptr; out->value = 0; return result;
+    // This integration does not enable async compute. Interpolation and HUD-less
+    // reads run on the game queue, whose completion fence the caller already owns.
+    // Waiting for every display Present here serializes subsequent rendering.
+    out->fence = nullptr; out->value = 0; return RSF_BACKEND_OK;
 }
 rsf_backend_result abort_frame(void* pointer, uint64_t id)
 {

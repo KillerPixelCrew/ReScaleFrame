@@ -31,6 +31,7 @@ pub struct Overlay {
     context: egui::Context,
     selection: Selection,
     controls: Controls,
+    performance: crate::performance::Meter,
 
     /// Monotonic seconds handed to egui for animation. Advanced by the host's delta, because the
     /// overlay has no business reading a clock on a render thread.
@@ -82,6 +83,7 @@ impl Overlay {
             context,
             selection: Selection::default(),
             controls: Controls::default(),
+            performance: crate::performance::Meter::default(),
             time: 0.0,
             last_mouse: None,
             last_buttons: 0,
@@ -112,6 +114,7 @@ impl Overlay {
         self.textures_to_free_taken = 0;
 
         self.selection.reconcile(stats);
+        let rates = self.performance.sample(stats);
 
         let mut intent = Intent {
             quality: self.selection.quality(),
@@ -128,7 +131,11 @@ impl Overlay {
             self.was_visible = false;
             self.controls = Controls::default();
             let alpha = sanitise(input.startup_hint_alpha, 0.0).clamp(0.0, 1.0);
-            if !input.visible && alpha > 0.0 && display[0] > 0.0 && display[1] > 0.0 {
+            if !input.visible
+                && (alpha > 0.0 || stats.show_performance_hud)
+                && display[0] > 0.0
+                && display[1] > 0.0
+            {
                 let scale = pixels_per_point(display[1]);
                 let mut raw = RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -142,9 +149,14 @@ impl Overlay {
                     viewport.native_pixels_per_point = Some(scale);
                 }
                 // No pointer events, widgets or cursor while the hint is shown.
-                let output = self
-                    .context
-                    .run_ui(raw, |ui| paint_startup_hint(ui.ctx(), alpha));
+                let output = self.context.run_ui(raw, |ui| {
+                    if alpha > 0.0 {
+                        paint_startup_hint(ui.ctx(), alpha);
+                    }
+                    if stats.show_performance_hud {
+                        panel::performance_hud(ui.ctx(), rates, stats);
+                    }
+                });
                 self.collect_textures(output.textures_delta);
                 let primitives = self
                     .context
@@ -166,6 +178,9 @@ impl Overlay {
         );
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), selection, stats, &mut intent, controls);
+            if stats.show_performance_hud {
+                panel::performance_hud(ui.ctx(), rates, stats);
+            }
             paint_cursor(ui.ctx(), pointer);
         });
 
@@ -509,6 +524,25 @@ fn sanitise(value: f32, fallback: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn performance_hud_draws_without_opening_the_interactive_panel() {
+        let mut overlay = Overlay::new();
+        let stats = Stats {
+            show_performance_hud: true,
+            ..Stats::default()
+        };
+        let input = FrameInput {
+            visible: false,
+            display: [1280, 720],
+            ..FrameInput::default()
+        };
+        for _ in 0..3 {
+            assert!(overlay.frame(&input, &stats).is_idle());
+        }
+        assert!(!overlay.vertices.is_empty());
+        assert_eq!(overlay.controls, Controls::default());
+        assert!(!overlay.was_visible);
+    }
     use crate::model::Quality;
 
     /// A display that maps points to pixels one to one, so a test can click a rectangle the panel
@@ -632,6 +666,72 @@ mod tests {
         stats.backend = 3;
         stats.last_switch_result = 0;
         assert!(!idle_frame(&mut overlay, &stats).backend_changed);
+    }
+
+    #[test]
+    fn generation_provider_selection_is_separate_and_persisted() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend = 1;
+        stats.generation.requested_backend = 1;
+        stats.generation.backend_choices = 0x3b;
+        stats.generation.available = true;
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().fg_backend[2].expect("FSR3 generation choice was laid out");
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.fg_backend_changed);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 3);
+        assert!(!release.backend_changed);
+        assert!(!release.fg_changed);
+        stats.generation.requested_backend = 3;
+        assert!(!idle_frame(&mut overlay, &stats).fg_backend_changed);
+        assert_eq!(stats.generation.backend, 1);
+        let off = overlay.controls().fg_backend[0].expect("Off generation choice was laid out");
+        let [_, release] = click(&mut overlay, &stats, off);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 0);
+    }
+
+    #[test]
+    fn an_unimplemented_generation_provider_cannot_be_selected() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend_choices = 0x39; // Unity has no native DLSS-G presentation yet.
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().fg_backend[1].expect("Disabled DLSS-G choice was laid out");
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.fg_backend_changed);
+        assert!(!release.fg_backend_changed);
+    }
+
+    #[test]
+    fn supported_mfg_multiplier_maps_to_generated_frames() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.available = true;
+        stats.generation.backend = 5;
+        stats.generation.requested_backend = 5;
+        stats.generation.requested_mode = 1;
+        stats.generation.requested_generated = 1;
+        stats.generation.max_generated = 3;
+        settle(&mut overlay, &stats);
+        let track = overlay
+            .controls()
+            .fg_multiplier
+            .expect("MFG track exists for supported hardware");
+        let right = egui::Rect::from_center_size(
+            egui::pos2(track.right() - 2.0, track.center().y),
+            egui::vec2(1.0, 1.0),
+        );
+        let [press, release] = click(&mut overlay, &stats, right);
+        let changed = if press.fg_changed { press } else { release };
+        assert!(changed.fg_changed);
+        assert_eq!(changed.fg_generated, 3);
+        assert_eq!(changed.fg_mode, 1);
+        stats.generation.max_generated = 1;
+        idle_frame(&mut overlay, &stats);
+        assert!(overlay.controls().fg_multiplier.is_some());
     }
 
     #[test]

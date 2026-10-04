@@ -43,7 +43,21 @@ The suggested signature library is [threatrack/ghidra-fidb-repo](https://github.
 
 Function signatures identify compiled library functions. They do not supply engine structure layouts or verify AC7 hook addresses. Ghidra `.gdt` files provide types; this repo generates DirectX archives from local headers and can export compiler-derived types. Keep both kinds of generated/downloaded data untracked. [Ghidra's Function ID documentation](https://github.com/NationalSecurityAgency/ghidra/blob/master/Ghidra/Features/FunctionID/src/main/doc/fid.xml) explains creating and sharing databases.
 
+The 3 October Project Wingman investigation built local x64 databases for UE4.27.2 Launcher
+modules (185,694 signatures), Windows DirectX libraries (34,795) and Vulkan loader 1.4.357
+(3,985). Editable `.fidb` containers and exported raw `.fidbf` files are distinct: Ghidra's
+FunctionID `data` directory discovers the raw files. Do not rename a packed container to create
+one. [Project Wingman research](research/project-wingman-renderer.md) records provenance,
+population corrections, matching limits and the ignored reference-workspace locations.
+
 ## A Wine prefix with DXVK, for the tests that need it
+
+The 3 October AC7 reference uses Launcher UE4.18.3 changelist 3832480. Fourteen verified
+x64 DLL/PDB pairs produced 123,308 signatures in `RSF_UnrealEngine_4.18.3_Launcher_Win64.fidbf`,
+installed alongside its editable `.fidb` in FunctionID's data directory. Reference projects and
+manifests remain ignored under `references/ghidra-ac7-ue4183-fid`. The user completed GUI
+analysis; targeted `GetViewTarget` matches confirm camera/controller offsets. Editor signatures
+still require shipping-game byte/source checks. [Evidence](research/ac7-dlss-fg-20261003.md).
 
 `eng/wine-test-prefix.sh` builds `.local/wine-test-prefix` from an installed Proton, copying its
 DXVK `d3d11`, `dxgi` and `d3d10core` and vkd3d-proton's `d3d12` and `d3d12core` over the prefix's

@@ -12,6 +12,9 @@ struct XessSession {
     rsf_sr_open_desc open{};
     uint64_t version = 0;
     char name[128]{};
+    // XeSS needs a mask on every frame once the responsive flag is set. Frames without one get
+    // this zeroed output-size texture, which leaves history weights unchanged.
+    ID3D12Resource* no_response = nullptr;
 };
 xess_quality_settings_t xess_quality(rsf_quality quality)
 {
@@ -29,6 +32,7 @@ void sr_close(void* pointer)
     auto* session = static_cast<XessSession*>(pointer);
     if (!session) return;
     if (session->context) session->destroy(session->context);
+    if (session->no_response) session->no_response->Release();
     if (session->module) FreeLibrary(session->module);
     delete session;
 }
@@ -73,7 +77,17 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
     init.initFlags = (desc->inverted_depth ? XESS_INIT_FLAG_INVERTED_DEPTH : 0u) |
         (!desc->hdr ? XESS_INIT_FLAG_LDR_INPUT_COLOR : 0u) |
         (desc->motion_jittered ? XESS_INIT_FLAG_JITTERED_MV : 0u) |
-        (desc->auto_exposure ? XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE : XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE);
+        (desc->auto_exposure ? XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE : XESS_INIT_FLAG_EXPOSURE_SCALE_TEXTURE) |
+        XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC zero{};
+    zero.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; zero.Width = desc->output_width; zero.Height = desc->output_height;
+    zero.DepthOrArraySize = zero.MipLevels = 1; zero.SampleDesc.Count = 1; zero.Format = DXGI_FORMAT_R8_UNORM;
+    // Committed resources are zero-filled unless created with CREATE_NOT_ZEROED.
+    if (FAILED(static_cast<ID3D12Device*>(desc->device)->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &zero,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&session->no_response)))) {
+        sr_close(session); return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
     if (session->init(session->context, &init) != XESS_RESULT_SUCCESS) {
         sr_close(session); return RSF_BACKEND_ERROR_INIT_FAILED;
     }
@@ -106,6 +120,8 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     params.pDepthTexture = static_cast<ID3D12Resource*>(frame->depth.resource);
     params.pVelocityTexture = static_cast<ID3D12Resource*>(frame->motion.resource);
     params.pExposureScaleTexture = static_cast<ID3D12Resource*>(frame->exposure.resource);
+    params.pResponsivePixelMaskTexture = frame->reactive.resource ?
+        static_cast<ID3D12Resource*>(frame->reactive.resource) : session->no_response;
     params.pOutputTexture = static_cast<ID3D12Resource*>(frame->output.resource);
     params.inputWidth = frame->record->render_width;
     params.inputHeight = frame->record->render_height;

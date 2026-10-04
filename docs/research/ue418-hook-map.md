@@ -6,6 +6,114 @@ validation are in [engine evidence](../../games/ac7/engine.json) and
 [the session update](skills-session-update-20261002.md). Site/byte checks remain specific to the
 fingerprinted game/module. FG and full missing-object velocity coverage remain separate work.
 
+## Velocity gates mapped, 4 October
+
+The question and its use are in the [motion and depth research](ac7-motion-depth-20261004.md).
+Each row was matched against the named 4.18.3 source and checked in both the live Ghidra image
+(base `0x7ff741350000`) and `.local/observe/Ace7Game.exe.dump`. 36 functions were named with the
+`AC7_` prefix in the live program; save it in Ghidra to keep them. No gate below is patched.
+
+| Function | RVA | Entry (16) | Gate RVA: bytes | Source |
+| --- | --- | --- | --- | --- |
+| `Render` | `0xef5cc0` | `40 55 53 56 57 41 56 41 57 48 8d ac 24 58 fd ff` | `0xef6ed0`: `74 49` skips velocities | `DeferredShadingRenderer.cpp:793,1050` |
+| `ShouldRenderVelocities` | `0x118a480` | `41 57 48 83 ec 40 80 3d d3 8e 51 02 00 4c 8b f9` | `0x118a4e3`: `75 0e` (AA not TAA), `0x118a4ec`: `75 05` (cut) | `VelocityRendering.cpp:858-873` |
+| `RenderVelocities` | `0x11869c0` | `40 53 56 57 48 81 ec d0 00 00 00 48 8b 05 2e 16` | `0x11869ed`: `0f 84 3c 02 00 00` | `VelocityRendering.cpp:887-918` |
+| `GetRenderTargetDesc` | `0x1183490` | `40 53 48 83 ec 70 48 8b d9 e8 d2 a7 f1 ff 0f 10` | `0x11834ab`: PF_G16R16 (`0e`) | `VelocityRendering.cpp:938` |
+| `RenderVelocitiesInner` | `0x1186cc0` | `48 8b c4 48 89 70 18 55 57 41 54 41 55 41 57 48` | `0x1186d5c`: `0f 85 13 02 00 00` (no visible primitive) | `VelocityRendering.cpp:836-852` |
+| `RenderDynamicVelocitiesMeshElementsInner` | `0x1184dc0` | `4c 8b dc 56 41 54 41 56 41 57 48 83 ec 78 48 63` | `0x1184e4c`: `74 67` (opaque or masked element) | `VelocityRendering.cpp:622` |
+| `FMeshElementCollector::AddMesh` | `0x19ae340` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57` | `0x19ae3cc`: flag = blend < 2 | `SceneManagement.cpp:187` |
+| `ShouldRenderVelocity` | `0x10fdc00` | `40 53 48 83 ec 20 4c 8b da 48 8b d9 45 84 c0 74` | `0x10fdc71` movable, `0x10fdc7c`/`0x10fdc81` relevance `01 40`, `0x10fdd0c`: `76 38` size, `0x10fdd1b`: `74 29` | `PrimitiveSceneInfo.cpp:550-580` |
+| `HasVelocity` | `0x1183820` | `40 53 48 83 ec 60 80 b9 34 0c 00 00 00 48 8b da` | `0x1183830` cut, `0x1183842` movable, `0x118384c`: `74 08` always-velocity, `0x1183870` history, `0x11838c4` moved | `VelocityRendering.cpp:396-424` |
+| `SetMeshRenderState` | `0x1187800` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57` | no history uses current LocalToWorld | `VelocityRendering.cpp:356-375` |
+| `DrawDynamicMesh` | `0x1182390` | `48 89 54 24 10 55 53 56 57 41 55 41 56 41 57 48` | `0x11823de` blend, `0x11823f0` MD_UI | `VelocityRendering.cpp:544,555` |
+| `AddStaticMesh` (velocity) | `0x117fc70` | `48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57` | `0x117fd1a` movable, `0x117fd22` GBuffer velocity, `0x117fd37` blend | `VelocityRendering.cpp:504-520` |
+| `FStaticMesh::AddToDrawLists` | `0x10d33f0` | `48 89 5c 24 10 55 56 57 48 83 ec 20 49 8b 00 48` | `0x10d34b9` translucent: do not cut, it feeds the depth prepass | `SceneCore.cpp:340-379` |
+| `UpdatePrimitiveMotionBlur` | `0x10ffd00` | `48 89 5c 24 08 48 89 74 24 20 57 48 81 ec d0 00` | `0x10ffd3f` movable only | `RendererScene.cpp:3132-3158` |
+| `FSkeletalMeshSceneProxy` ctor | `0x19e31d0` | `48 8b c4 48 89 50 10 48 89 48 08 55 56 41 56 48` | `0x19e3431`: `74 0f` per-bone motion blur | `SkeletalMesh.cpp:5059` |
+
+`bRenderInMainPass` is relevance bit 14 in AC7, one above stock. `MotionBlurPerObjectSize` is
+view+0x1174, `FinalPostProcessSettings` at view+0xC80 plus 0x4F4. The 0.02 constant at RVA
+`0x2671470` has 13 references and the 0.0001 constant at `0x2580188` has 444; patch branches,
+not those constants.
+
+### Translucency scope and scene targets, 4 October
+
+`Render` calls `RenderTranslucencyPass` (`0x1168d40`, already hooked) at `0xef7ac9`, `0xef7ada`
+and `0xef7af3` with pass 0, 1 and 4, or pass 2 alone when separate translucency is off. The
+hook now leases scene colour around passes 0, 1 and 2 of one primary view:
+- Scene colour is `SceneColor[]` at scene targets +0x30 (mobile), +0x38, or +0x40 when alpha is
+  propagated or the format is 10. This is the selection in `AC7_FSceneRenderTargets_AllocateSceneColor`,
+  RVA `0x1095010`.
+- The separate layer is the pooled target at +0x1b0, allocated on demand by
+  `AC7_FSceneRenderTargets_GetSeparateTranslucency`, RVA `0x109f4d0`, named on 4 October.
+
+The layer composites as `scene * a + rgb` (`PostProcessBokehDOF.usf:458`), cleared to black with
+alpha 1.
+
+### Base pass scope for the material mip bias, 4 October
+
+`AC7_FDeferredShadingSceneRenderer_RenderBasePass`, RVA `0xebf050`, entry
+`48 89 5c 24 10 55 56 57 41 54 41 57 48 83 ec 40`, signature (renderer, RHICmdList,
+BasePassDepthStencilAccess) returning bool. `Render` calls it at `0xef68bc`, after
+`AddPhaseEvent(L"BasePass")` (`0xef68a1`; FID mislabels `AddPhaseEvent` at RVA `0x12af050` as
+`StartProfileThreadUsage`). It sits between two `SetCurrentStat` calls at `0x1216e30`. The
+per-view loop over renderer+0xb8, stride 0x27c0, and the parallel branch match 4.18 source. The
+hook queues a MATERIALS scope around it for the single primary view; the runtime applies the
+4.27 material mip bias inside it and inside translucency scopes.
+
+### TrueSky composite draw relay, 4 October
+
+composite_tile reaches the render platform's `DrawIndirect` at DLL RVA `0xabc6b`.
+- Expected 16 bytes before it: `49 8b 8e 28 02 00 00 45 8b c4 49 8b d7 48 8b 01`.
+- Expected at the site: `ff 90 30 01 00 00 49 8b 9e 60 02 00 00 48 8d 0d`.
+- The six-byte call becomes `ff 15 <rel32>` to a nearby pointer page.
+- The handler forwards (platform, deviceContext&, count), then reads t1, t2 and b12 of the still
+  applied pass.
+- Teardown restores the original six bytes after render calls quiesce.
+- It requires the device recorded by the depth producer relay at `0xc003f`.
+
+## DLSS-G primary submission and scene classification, 3 October
+
+Additional initialized class-cache getters for the requested hangar/briefing FG paths:
+
+| RVA | Function | Class cache RVA | Expected entry |
+| --- | --- | --- | --- |
+| 0x925860 | AC7_GetNimbusHangarMeshManagerStaticClass | 0x3a82130 | `4c8bdc4883ec78488b05c2c815034885` |
+| 0x925d10 | AC7_GetNimbusHangarPawnStaticClass | 0x3a82140 | `4c8bdc4883ec78488b0522c415034885` |
+| 0x925e10 | GetPrivateStaticClass, NimbusHangarPlaneSelector (4 October, not renamed: FID owns the name) | 0x3a82158 | `4c8bdc4883ec78488b053ac315034885` |
+| 0x925710 | GetPrivateStaticClass, NimbusHangarGameMode (4 October, dump scan) | 0x3a82008 | `4c8bdc4883ec78488b05eac815034885` |
+| 0x8b3100 | GetPrivateStaticClass, AssetViewerManager (4 October, dump scan) | 0x3a74730 | `4c8bdc4883ec78488b0522161c034885` |
+| 0x1b495f0 | GetPrivateStaticClass, Engine CameraActor (4 October, dump scan) | 0x3cc0150 | `4c8bdc4883ec78488b05526b17024885` |
+
+`UWorld::AuthorityGameMode` is read at `+0xf0`, taken from the AC7 SDK reflection dump and
+guarded by the class check above.
+| 0x8c1bd0 | AC7_GetCampaignBriefingWidgetStaticClass | 0x3a76c90 | `4c8bdc4883ec78488b05b2501b034885` |
+
+UTF-16 registration strings led to these getters; retained-dump instructions and private
+Ghidra decompilation confirm sizes 0x7f0, 0x3f8 and 0x560 and the cached class returns. Names
+were saved in the private AC7 project. Startup checks these entries but never calls the getters.
+The producer tests the current camera target's ancestry for hangar and the focused briefing
+widget through controller HUD 0x3f8, HUD UI manager 0x288, layer manager 0xf00 and focus 0x820.
+The latter field chain remains a community-SDK layout lead pending live briefing validation.
+These classifications do not bypass full same-frame SR, scene, window and Present ownership.
+[Activation and pacing evidence](ac7-dlss-fg-20261003.md#flight-activation-pacing-correction-and-additional-scenes).
+
+The experimental profile adds a guarded hook around `AC7_RenderViewFamily_RenderThread`,
+RVA `0x112ff00`, expected entry `4c 8b dc 49 89 5b 08 49 89 6b 18 56 57 41 56 48`.
+It copies the single primary renderer's source/submission identity before native deletion and
+queues RHI begin/end for vendor submission markers. Secondary/capture views refuse.
+
+`AC7_GetPlayerPlaneStaticClass`, RVA `0x938fb0`, expected entry
+`4c 8b dc 48 83 ec 78 48 8b 05 a2 b6 14 03 48 85`, registers `/Script/Nimbus/PlayerPlane`
+and returns cache RVA `0x3a84660`. Ghidra was named and saved. The helper is preflighted;
+classification reads the existing class cache rather than constructing a class from a render
+callback. Source/SDK world/controller/pause reads remain conservative layout leads needing
+game proof. No new patch bypasses an expected-byte refusal.
+
+[Replay manifest](evidence/ac7-fg-native-sites-20261003.json) records byte-span hashes.
+[FG research](ac7-dlss-fg-20261003.md) explains discovery, ownership, units, lifetime,
+synthetic activation, FID provenance and the remaining AC7/latency/visual acceptance.
+
 ## TrueSky depth storage and actual view type, 2 October follow-up
 
 Captures `motion-20261002-201334-66924-1` and `motion-20261002-201349-66924-2` retain
@@ -740,3 +848,56 @@ Arguments shader/cmdlist/TextureRHI/samplerref; texture index+c0/count+c2, sampl
 Mapped from ordinary DrawElements branch, named/saved in Ghidra. ABI10 candidate-only resource lease
 and queued binding comparison against final family surface; MSVC built, game/material/custom
 coverage pending. Source SlateRHIRenderingPolicy769-878.
+
+### AC7 full-frame Reflex boundaries, 4 October 2026
+
+Matched in GUI AC7 Ghidra against the fingerprinted dump and stock 4.18.3 LaunchEngineLoop.
+The later 4.27.2 Reflex implementation motivates full-frame intervals; its private layouts
+are not used. All six hook guards below were compared byte-for-byte with the retained dump.
+
+| RVA | Native boundary | Expected first 16 bytes |
+| --- | --- | --- |
+| 0x3a5a20 | BeginFrame task constructor, vtable RVA 0x257bc78 | `40534883ec20c74108ff000000488d05` |
+| 0x3a8b60 | BeginFrame task execution and retirement | `48895c241048896c2418488974242057` |
+| 0x1207df0 | Immediate command-list BeginFrame enqueue | `48895c2408574883ec20488b5130488b` |
+| 0x120c540 | Immediate command-list EndFrame enqueue | `48895c2408574883ec20488b5130488b` |
+| 0x1ada010 | FFrameEndSync::Sync, main-loop instance RVA 0x3a4a6f8 | `48895c24084889742410574883ec2048` |
+| 0xa88dc0 | Windows platform main-loop message pump | `4883ec684533c94533c033d284c9488d` |
+
+BeginFrame/EndFrame enqueue command executors RVA 0x120dc00/0x120dc40. These load context
+from command-list+0x20 and tail-call virtual offsets 0xf8/0x100. The surrounding copied
+scope therefore executes on the actual RHI stream. Task metadata is copied before dispatch
+and removed before native task deletion; no current game-thread counter is read during RHI
+execution. PresentEnd does not retire the Streamline token until RenderEnd and SimulationEnd
+also exist. Mouse/keyboard records originate at removed Win32 messages; controller sampling
+uses Slate poll RVA 0xcea130 and its modal-count guard +0x1b0. Details, failed prior joins and
+acceptance limits are in [the FG research](ac7-dlss-fg-20261003.md#full-native-frame-and-input-marker-correction-4-october).
+
+The subsequent ABI13 pacing correction hooks UEngine::UpdateTimeAndHandleMaxTickRate at
+RVA `0x1adbcb0`, expected `40555357488d6c24b94881ecc0000000`. FEngineLoop dispatches
+BeginFrame before this call. The plugin reserves its token at outer Tick and sleeps only at
+this native time-update entry, before input. GEngine identity guards other callers. Simulation
+starts at the later pre-input boundary after native timing work. The relevant GUI Ghidra
+decompilation is retained in `.local/fg-cpu-research/reflex-native-pacing-ghidra-20261004.json`;
+the site/hash is in the existing FG native-site manifest. Game pacing validation remains pending.
+
+The 08:45 correction retains BeginFrame source ownership but emits the vendor RenderStart
+at actual primary RenderViewFamily RHI submission, because the D3D12 proxy device has no
+graphics work at the native D3D11 BeginFrame dispatch. Vendor RenderEnd remains at native
+EndFrame, including Slate/Present. No new engine hook site is needed for that change.
+
+### Directional contact-shadow shader creation, 4 October
+
+`AC7_CreateNativePixelShader`, RVA `0xe31e90`, expected first 16 bytes
+`48895c240848896c2410488974241857`, matches FD3D11DynamicRHI::RHICreatePixelShader in stock
+4.18.3 D3D11Shaders.cpp. Located through the exact CreatePixelShader failure string, then
+decompiled and named/saved in GUI Ghidra. Win64 arguments are RHI this, output RHI reference,
+and borrowed TArray bytecode (pointer+0, Num+8, capacity+12). The factory reads resource-table
+bits and five uint32 arrays, then passes DXBC to device vtable offset 0x78. Its final uint32
+stores optional trailer size; it retains shader/table metadata, not the borrowed byte array.
+
+The wrapper preserves the resource-table prefix and optional-data suffix, substitutes only
+the exact fingerprinted directional DXBC, and calls the original factory synchronously with
+owned temporary code. Shader recognition, inserted operands, checksum and acceptance evidence
+are in [the lighting research](ac7-lighting-shadow-20261004.md). The hook is applied during
+prepared shader creation so early global shaders are covered before renderer activation.

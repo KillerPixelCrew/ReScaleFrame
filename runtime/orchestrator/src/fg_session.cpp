@@ -163,7 +163,8 @@ extern "C" rsf_backend_result rsf_fg_session_prepare(rsf_fg_session* self, void*
     auto prepared_frame = *frame;
     const auto& record = *frame->record;
     if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) ||
-        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY && record.screen != RSF_SCREEN_HANGAR))
+        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY &&
+         record.screen != RSF_SCREEN_HANGAR && record.screen != RSF_SCREEN_BRIEFING))
         prepared_frame.interpolate = 0;
     if (prepared_frame.interpolate && record.input_qpc != sequence.timestamps[0])
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

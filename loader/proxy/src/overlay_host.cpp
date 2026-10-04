@@ -501,7 +501,7 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
     if (visible || (self.startup_hint_begin && now - self.startup_hint_begin >= 8000)) {
         self.startup_hint_dismissed = true;
     }
-    if (!visible && self.startup_hint_dismissed) {
+    if (!visible && self.startup_hint_dismissed && !stats->show_performance_hud) {
         self.last_frame.QuadPart = 0;
         return 0;
     }

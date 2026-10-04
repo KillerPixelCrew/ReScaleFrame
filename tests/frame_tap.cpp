@@ -1505,6 +1505,44 @@ int main()
     std::fprintf(stderr, "  [runtime rewrote its vtable %u time%s]\n", status.vtable_refreshes,
                  status.vtable_refreshes == 1 ? "" : "s");
 
+    stage("biasing material samplers");
+    {
+        D3D11_SAMPLER_DESC desc{};
+        desc.Filter = D3D11_FILTER_ANISOTROPIC; desc.MaxAnisotropy = 8;
+        desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        desc.MaxLOD = D3D11_FLOAT32_MAX;
+        ID3D11SamplerState* material = nullptr;
+        check(SUCCEEDED(device->CreateSamplerState(&desc, &material)), "Creating a material sampler must succeed.");
+        desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT; desc.MaxAnisotropy = 1;
+        ID3D11SamplerState* point = nullptr;
+        check(SUCCEEDED(device->CreateSamplerState(&desc, &point)), "Creating a point sampler must succeed.");
+        ID3D11SamplerState* set[] = {material, point};
+        context->PSSetSamplers(0, 2, set);
+        check(rsf_frame_tap_set_sampler_bias(-1.25f) == RSF_FRAME_TAP_OK, "Setting a bias must succeed.");
+        ID3D11SamplerState* bound[3]{};
+        context->PSGetSamplers(0, 2, bound);
+        D3D11_SAMPLER_DESC seen{};
+        if (bound[0]) bound[0]->GetDesc(&seen);
+        check(bound[0] && bound[0] != material && seen.MipLODBias == -1.25f && seen.Filter == D3D11_FILTER_ANISOTROPIC,
+              "An already bound mip-filtered sampler must be replaced by a biased clone.");
+        check(bound[1] == point, "A point-mip sampler must be left alone.");
+        // The engine rebinding its own sampler inside the scope also receives the clone.
+        context->PSSetSamplers(2, 1, &material);
+        context->PSGetSamplers(2, 1, &bound[2]);
+        check(bound[2] == bound[0], "A sampler set inside the scope must be biased too.");
+        for (auto*& sampler : bound) if (sampler) { sampler->Release(); sampler = nullptr; }
+        check(rsf_frame_tap_set_sampler_bias(0.0f) == RSF_FRAME_TAP_OK, "Clearing the bias must succeed.");
+        context->PSGetSamplers(0, 3, bound);
+        check(bound[0] == material && bound[1] == point && bound[2] == material,
+              "Clearing the bias must restore the game's own samplers in every slot.");
+        for (auto*& sampler : bound) if (sampler) sampler->Release();
+        check(rsf_frame_tap_set_sampler_bias(0.5f) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "A positive bias must be refused.");
+        ID3D11SamplerState* none[3]{};
+        context->PSSetSamplers(0, 3, none);
+        material->Release(); point->Release();
+    }
+
     stage("uninstalling");
     check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK, "Uninstalling must succeed.");
     check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_ERROR_NOT_INSTALLED,

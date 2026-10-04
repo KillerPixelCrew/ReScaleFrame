@@ -65,5 +65,30 @@ int main()
     rsf_ac7_render_scope current{}; current.struct_size = sizeof(current);
     ok &= expect(!rsf_ac7_render_scope_current(check.scopes, &current), "closed stream has no stale view");
     ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "quiescent destruction");
+
+    // Use the shapes emitted by the native Slate hooks. Neither operation owns a scene view.
+    check = {};
+    ok &= expect(rsf_ac7_render_scopes_create(7, 2, notify, &check, &check.scopes) != 0, "create Slate scopes");
+    rsf_ac7_render_scope window{}; window.struct_size = sizeof(window); window.session_id = 7;
+    window.role = RSF_GAME_RENDER_WINDOW; window.source_frame_id = 8;
+    window.viewport_key = 0x100; window.window_key = 0x200; window.rhi_viewport_key = 0x300; window.pass_key = 0x400;
+    auto invalid = window; invalid.window_key = 0;
+    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs window owner");
+    invalid = window; invalid.rhi_viewport_key = 0;
+    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs native viewport");
+    invalid = window; invalid.source_frame_id = 0;
+    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs source frame");
+    ok &= expect(rsf_ac7_render_scope_open(check.scopes, &list, &window, &outer) != 0, "queue viewless window");
+    auto binding = window; binding.role = RSF_GAME_RENDER_TEXTURE_BINDING; binding.rhi_viewport_key = 0;
+    invalid = binding; invalid.viewport_key = 0;
+    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "binding needs source viewport");
+    ok &= expect(rsf_ac7_render_scope_open(check.scopes, &list, &binding, &inner) != 0, "queue viewless texture binding");
+    ok &= expect(rsf_ac7_render_scope_close(inner, &list) && rsf_ac7_render_scope_close(outer, &list), "close Slate scopes");
+    run(list);
+    ok &= expect(check.observed.size() == 4, "Slate callbacks executed with no scene view");
+    invalid = window; invalid.role = RSF_GAME_RENDER_SUBMISSION;
+    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "scene submission still needs its view");
+    rsf_ac7_render_scopes_quiesce(check.scopes);
+    ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "Slate quiescent destruction");
     return ok ? 0 : 1;
 }

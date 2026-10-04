@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <rescaleframe/dlss.h>
+#include <rescaleframe/streamline_host.h>
+#include "streamline_frame.h"
 
 #if RSF_HAVE_STREAMLINE
 
 #include <windows.h>
 
 #include <d3d11.h>
+#include <d3d12.h>
 #include <dxgi.h>
 
 #include <sl.h>
@@ -67,6 +70,8 @@ struct State {
     PFun_slDLSSSetOptions* set_options = nullptr;
 
     ID3D11Device* device = nullptr;
+    rsf_streamline_host* shared_host = nullptr;
+    ID3D12Device* shared_device = nullptr;
     bool initialised = false;
     bool supported = false;
     rsf_dlss_preset preset = RSF_DLSS_PRESET_AUTO;
@@ -335,6 +340,7 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
 extern "C" rsf_dlss_result rsf_dlss_set_device(void* d3d11_device)
 {
     State& self = state();
+    if (self.shared_host) return RSF_DLSS_OK;
     if (!d3d11_device) {
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     }
@@ -371,13 +377,17 @@ extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     }
     State& self = state();
-    if (!self.initialised || !self.device) {
+    if (!self.initialised || (!self.device && !self.shared_device)) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
 
     // The adapter comes from the game's own device. Enumerating adapters instead would answer for
     // a GPU the game is not rendering on, which on a laptop is the usual case rather than a rare
     // one.
+    DXGI_ADAPTER_DESC description{};
+    if (self.shared_device) {
+        description.AdapterLuid = self.shared_device->GetAdapterLuid();
+    } else {
     IDXGIDevice* dxgi_device = nullptr;
     if (FAILED(self.device->QueryInterface(__uuidof(IDXGIDevice),
                                            reinterpret_cast<void**>(&dxgi_device))) ||
@@ -390,11 +400,11 @@ extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
     if (FAILED(got_adapter) || !adapter) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
-    DXGI_ADAPTER_DESC description{};
     const HRESULT described = adapter->GetDesc(&description);
     adapter->Release();
     if (FAILED(described)) {
         return RSF_DLSS_ERROR_NOT_READY;
+    }
     }
 
     sl::AdapterInfo info{};
@@ -457,7 +467,7 @@ extern "C" rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
     return RSF_DLSS_OK;
 }
 
-extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* frame)
+static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame, uint64_t source_id)
 {
     if (!d3d11_context || !frame || frame->struct_size < sizeof(rsf_dlss_frame)) {
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
@@ -469,7 +479,7 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     }
     State& self = state();
-    if (!self.initialised || !self.device || !self.set_options) {
+    if (!self.initialised || (!self.device && !self.shared_device) || !self.set_options) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
 
@@ -477,7 +487,10 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
 
     sl::FrameToken* token = nullptr;
     uint32_t frame_index = frame->frame_index;
-    if (self.sl.get_new_frame_token(token, frame_index ? &frame_index : nullptr) !=
+    if (self.shared_host) {
+        token = static_cast<sl::FrameToken*>(rsf_streamline_host_token(self.shared_host, source_id));
+        if (!token) return RSF_DLSS_ERROR_NOT_READY;
+    } else if (self.sl.get_new_frame_token(token, frame_index ? &frame_index : nullptr) !=
             sl::Result::eOk ||
         !token) {
         return RSF_DLSS_ERROR_FEATURE_FAILED;
@@ -514,7 +527,9 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     // a raw zero for exactly that, which is why AC7 needs no composition pass for DLSS.
     constants.motionVectorsInvalidValue = frame->motion_invalid_value;
 
-    if (self.sl.set_constants(constants, *token, viewport) != sl::Result::eOk) {
+    const bool common = self.shared_host ? rsf_streamline_common_set(self.shared_host, source_id, frame->viewport, constants) :
+        self.sl.set_constants(constants, *token, viewport) == sl::Result::eOk;
+    if (!common) {
         say("slSetConstants failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -523,10 +538,10 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     options.mode = mode_for(frame->quality);
     options.outputWidth = frame->output_width;
     options.outputHeight = frame->output_height;
-    options.colorBuffersHDR = sl::Boolean::eTrue;
+    options.colorBuffersHDR = frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     // Auto exposure only when the game does not hand us its own. AC7 keeps one in a 1x1 target and
     // it is bound at the same pass as everything else here, so normally it does.
-    options.useAutoExposure = frame->exposure ? sl::Boolean::eFalse : sl::Boolean::eTrue;
+    options.useAutoExposure = frame->exposure || frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     options.alphaUpscalingEnabled = flag(frame->alpha);
     if (frame->viewport == 0) {
         const auto preset = static_cast<sl::DLSSPreset>(self.preset);
@@ -547,11 +562,28 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
     sl::Resource depth{sl::ResourceType::eTex2d, frame->depth, nullptr, nullptr, 0};
     sl::Resource motion{sl::ResourceType::eTex2d, frame->motion, nullptr, nullptr, 0};
     sl::Resource exposure{sl::ResourceType::eTex2d, frame->exposure, nullptr, nullptr, 0};
+    // Optional translucency hints, in the order Streamline names them. DLSS SR reads the
+    // transparency and bias hints; the other two are Ray Reconstruction inputs.
+    struct { void* texture; sl::BufferType type; } const hint_inputs[] = {
+        {frame->transparency_hint, sl::kBufferTypeTransparencyHint},
+        {frame->bias_current_color, sl::kBufferTypeBiasCurrentColorHint},
+        {frame->color_before_transparency, sl::kBufferTypeColorBeforeTransparency},
+        {frame->transparency_layer, sl::kBufferTypeTransparencyLayer},
+    };
+    sl::Resource hints[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        hints[i] = sl::Resource{sl::ResourceType::eTex2d, hint_inputs[i].texture, nullptr, nullptr, 0};
+        if (self.shared_host) hints[i].state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
+    if (self.shared_host) {
+        color_in.state = depth.state = motion.state = exposure.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        color_out.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
 
     // Everything is tagged as valid only now. These are engine scene targets that the game reuses
     // later in the same frame, and claiming otherwise would hand DLSS a buffer holding something
     // else by the time it reads it.
-    sl::ResourceTag tags[] = {
+    sl::ResourceTag tags[9] = {
         sl::ResourceTag{&color_in, sl::kBufferTypeScalingInputColor,
                         sl::ResourceLifecycle::eOnlyValidNow, &render_extent},
         sl::ResourceTag{&color_out, sl::kBufferTypeScalingOutputColor,
@@ -560,10 +592,12 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
                         &render_extent},
         sl::ResourceTag{&motion, sl::kBufferTypeMotionVectors,
                         sl::ResourceLifecycle::eOnlyValidNow, &render_extent},
-        sl::ResourceTag{&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eOnlyValidNow,
-                        &exposure_extent},
     };
-    const uint32_t tag_count = frame->exposure ? 5u : 4u;
+    uint32_t tag_count = 4u;
+    if (frame->exposure) tags[tag_count++] = sl::ResourceTag{&exposure, sl::kBufferTypeExposure,
+        sl::ResourceLifecycle::eOnlyValidNow, &exposure_extent};
+    for (uint32_t i = 0; i < 4; ++i) if (hint_inputs[i].texture)
+        tags[tag_count++] = sl::ResourceTag{&hints[i], hint_inputs[i].type, sl::ResourceLifecycle::eOnlyValidNow, &render_extent};
 
     if (self.sl.set_tag_for_frame(*token, viewport, tags, tag_count, command_buffer) !=
         sl::Result::eOk) {
@@ -578,6 +612,46 @@ extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss
         say("slEvaluateFeature failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
+    return RSF_DLSS_OK;
+}
+
+extern "C" rsf_dlss_result rsf_dlss_evaluate(void* context, const rsf_dlss_frame* frame)
+{
+    if (state().shared_host) return RSF_DLSS_ERROR_NOT_READY;
+    return evaluate(context, frame, 0);
+}
+extern "C" rsf_dlss_result rsf_dlss_evaluate_shared(void* list, const rsf_dlss_frame* frame, uint64_t id)
+{
+    if (!state().shared_host || !id) return RSF_DLSS_ERROR_NOT_READY;
+    return evaluate(list, frame, id);
+}
+extern "C" rsf_dlss_result rsf_dlss_share_host(void* pointer, rsf_dlss_log_fn log, void* user)
+{
+    auto* host = static_cast<rsf_streamline_host*>(pointer);
+    auto& self = state();
+    if (!host || self.initialised) return RSF_DLSS_ERROR_NOT_READY;
+    rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
+    auto module = static_cast<HMODULE>(rsf_streamline_host_module(host));
+    if (!module || rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK)
+        return RSF_DLSS_ERROR_NOT_READY;
+    Entries entries{};
+    if (!resolve(module, "slIsFeatureSupported", entries.is_feature_supported) ||
+        !resolve(module, "slGetFeatureFunction", entries.get_feature_function) ||
+        !resolve(module, "slGetFeatureRequirements", entries.get_feature_requirements) ||
+        !resolve(module, "slSetConstants", entries.set_constants) ||
+        !resolve(module, "slSetTagForFrame", entries.set_tag_for_frame) ||
+        !resolve(module, "slEvaluateFeature", entries.evaluate_feature) ||
+        !resolve(module, "slFreeResources", entries.free_resources)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    void* optimal = nullptr; void* options = nullptr;
+    if (entries.get_feature_function(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", optimal) != sl::Result::eOk ||
+        entries.get_feature_function(sl::kFeatureDLSS, "slDLSSSetOptions", options) != sl::Result::eOk ||
+        !optimal || !options) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    self.sl = entries; self.shared_host = host;
+    self.shared_device = static_cast<ID3D12Device*>(graphics.native_device);
+    self.shared_device->AddRef(); self.initialised = true; self.log = log; self.log_user = user;
+    self.get_optimal_settings = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
+    self.set_options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
+    say("DLSS SR shares the D3D12 FG host and CPU frame token");
     return RSF_DLSS_OK;
 }
 
@@ -596,6 +670,8 @@ extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
     if (!self.initialised) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
+    if (self.shared_host && rsf_streamline_host_drain(self.shared_host) != RSF_BACKEND_OK)
+        return RSF_DLSS_ERROR_FEATURE_FAILED;
     if (self.sl.free_resources(sl::kFeatureDLSS, viewport_handle(index)) != sl::Result::eOk) {
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -613,7 +689,9 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
     if (!self.initialised) {
         return RSF_DLSS_ERROR_NOT_READY;
     }
-    self.sl.shutdown();
+    if (!self.shared_host) self.sl.shutdown();
+    if (self.shared_device) { self.shared_device->Release(); self.shared_device = nullptr; }
+    self.shared_host = nullptr;
     if (self.device) {
         self.device->Release();
         self.device = nullptr;
@@ -631,6 +709,10 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
 }
 
 #else // RSF_HAVE_STREAMLINE
+extern "C" rsf_dlss_result rsf_dlss_share_host(void*, rsf_dlss_log_fn, void*)
+{ return RSF_DLSS_ERROR_NOT_COMPILED; }
+extern "C" rsf_dlss_result rsf_dlss_evaluate_shared(void*, const rsf_dlss_frame*, uint64_t)
+{ return RSF_DLSS_ERROR_NOT_COMPILED; }
 
 extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
 {

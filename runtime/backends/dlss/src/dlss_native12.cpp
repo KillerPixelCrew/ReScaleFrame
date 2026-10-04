@@ -21,6 +21,8 @@ namespace sl::security { bool verifyEmbeddedSignature(const wchar_t* path); }
 struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
+    bool owned_module = false;
+    rsf_streamline_host* shared_host = nullptr;
     rsf_quality quality = RSF_QUALITY_QUALITY;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
 #if RSF_HAVE_STREAMLINE
@@ -59,7 +61,7 @@ sl::float4x4 matrix(const float* values)
 }
 }
 #endif
-rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* setup, rsf_dlss_native12** out) try
+static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared, rsf_dlss_native12** out) try
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
@@ -68,8 +70,8 @@ rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* 
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_DLSS_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if RSF_HAVE_STREAMLINE
-    // Share registration deliberately in future; never initialize a second interposer invisibly.
-    if (GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NOT_READY;
+    // Shared SR borrows the presentation host; standalone SR owns one registration.
+    if (!shared && GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NOT_READY;
     std::unique_ptr<rsf_dlss_native12, decltype(&rsf_dlss_native12_destroy)> context(new rsf_dlss_native12, rsf_dlss_native12_destroy);
     auto widen = [](const char* text) {
         int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
@@ -81,7 +83,16 @@ rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* 
     if (path.empty() || directory.empty()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->require_signature && !sl::security::verifyEmbeddedSignature(path.c_str()))
         return RSF_BACKEND_ERROR_LOAD_FAILED;
-    context->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    context->shared_host = shared;
+    if (shared) {
+        rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
+        if (rsf_streamline_host_graphics(shared, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
+            return RSF_BACKEND_ERROR_WRONG_API;
+        context->module = static_cast<HMODULE>(rsf_streamline_host_module(shared));
+    } else {
+        context->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        context->owned_module = context->module != nullptr;
+    }
     if (!context->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
     PFun_slInit* init = nullptr;
     PFun_slSetD3DDevice* set_device = nullptr;
@@ -102,9 +113,12 @@ rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* 
     preferences.pathsToPlugins = paths; preferences.numPathsToPlugins = 1;
     preferences.engine = setup->engine == RSF_DLSS_ENGINE_UNITY ? sl::EngineType::eUnity : sl::EngineType::eCustom;
     preferences.engineVersion = setup->engine_version_utf8; preferences.projectId = setup->project_id_utf8;
-    if (init(preferences, sl::kSDKVersion) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
-    context->initialized = true; context->device = static_cast<ID3D12Device*>(device);
-    if (set_device(device) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (!shared) {
+        if (init(preferences, sl::kSDKVersion) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
+        context->initialized = true;
+        if (set_device(device) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
+    context->device = static_cast<ID3D12Device*>(device);
     LUID luid = context->device->GetAdapterLuid();
     sl::AdapterInfo adapter{}; adapter.deviceLUID = reinterpret_cast<uint8_t*>(&luid); adapter.deviceLUIDSizeInBytes = sizeof(luid);
     const auto supported = support(sl::kFeatureDLSS, adapter);
@@ -125,6 +139,12 @@ rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* 
 #endif
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* setup, rsf_dlss_native12** out) {
+    return create_context(device, setup, nullptr, out);
+}
+rsf_backend_result rsf_dlss_native12_create_shared(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* host, rsf_dlss_native12** out) {
+    return create_context(device, setup, host, out);
+}
 rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t width, uint32_t height,
     rsf_quality quality, uint32_t* render_width, uint32_t* render_height)
 {
@@ -152,8 +172,12 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     const auto& camera = record.camera;
     uint32_t index = static_cast<uint32_t>(record.frame_id);
     sl::FrameToken* token = nullptr;
-    if (context->token(token, &index) != sl::Result::eOk || !token) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    sl::ViewportHandle viewport(0u);
+    if (context->shared_host) token = static_cast<sl::FrameToken*>(rsf_streamline_host_token(context->shared_host, record.frame_id));
+    else if (context->token(token, &index) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (!token) return RSF_BACKEND_ERROR_NOT_READY;
+    // SR consumes pre-tonemap inputs and has independent history/reset constants.
+    // The shared host reserves viewport zero for completed-frame generation.
+    sl::ViewportHandle viewport(context->shared_host ? 1u : 0u);
     sl::Constants constants{};
     constants.cameraViewToClip = matrix(camera.view_to_clip); constants.clipToCameraView = matrix(camera.clip_to_view);
     constants.clipToPrevClip = matrix(camera.clip_to_previous_clip);
@@ -209,6 +233,6 @@ void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 #if RSF_HAVE_STREAMLINE
     if (context->initialized && context->shutdown) context->shutdown();
 #endif
-    if (context->module) FreeLibrary(context->module);
+    if (context->module && context->owned_module) FreeLibrary(context->module);
     delete context;
 }

@@ -15,12 +15,35 @@ internal static class Program
         try
         {
             if (Marshal.SizeOf<CameraFrame>() != 384 || Marshal.SizeOf<Packet>() != 520 ||
-                Marshal.SizeOf<Api>() != 56 || Marshal.SizeOf<Configuration>() != 40 ||
+                Marshal.SizeOf<Api>() != 64 || Marshal.SizeOf<Configuration>() != 40 ||
                 Marshal.OffsetOf<Packet>(nameof(Packet.Camera)).ToInt32() != 72)
                 throw new InvalidOperationException("Managed/native packet layout differs.");
             var methods = UrpAdapter.Contracts();
-            if (methods.Length != 9) throw new InvalidOperationException("Incomplete URP contract.");
+            if (methods.Length != 12) throw new InvalidOperationException("Incomplete URP contract.");
             foreach (var method in methods) Console.WriteLine("Matched " + method.DeclaringType.FullName + "." + method.Name);
+            // An imported backbuffer has no RenderTexture. Its packet must reach native
+            // resolution without evaluating TextureHandle -> RTHandle or touching context.cmd.
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+            var bootstrapState = typeof(Bootstrap).GetField("state", flags);
+            int previousState = (int)bootstrapState.GetValue(null);
+            var previousEnqueue = Native.Enqueue;
+            int importedPackets = 0;
+            try {
+                bootstrapState.SetValue(null, 2);
+                Native.Enqueue = (ref Packet packet) => {
+                    if (packet.Flags != 10 || packet.Color != IntPtr.Zero) throw new InvalidOperationException("Imported-buffer packet changed.");
+                    ++importedPackets; return IntPtr.Zero;
+                };
+                var passType = typeof(UrpAdapter).GetNestedType("PassData", System.Reflection.BindingFlags.NonPublic);
+                var pass = Activator.CreateInstance(passType, true);
+                passType.GetField("Packet", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    .SetValue(pass, new Packet { Flags = 10 });
+                var execute = typeof(UrpAdapter).GetMethod("Execute", flags);
+                execute.Invoke(null, new[] { pass, Activator.CreateInstance(execute.GetParameters()[1].ParameterType) });
+                if (importedPackets != 1) throw new InvalidOperationException("Imported buffer was not forwarded to native resolution.");
+            }
+            finally { Native.Enqueue = previousEnqueue; bootstrapState.SetValue(null, previousState); }
+            Console.WriteLine("PASS: imported backbuffer avoids RenderTexture dereference.");
             if (Type.GetType("Mono.Runtime") == null)
             {
                 Console.WriteLine("PASS: layout and shipped URP metadata. Run the Mono fixture to exercise the deployed Harmony assembly.");

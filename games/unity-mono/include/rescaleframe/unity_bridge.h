@@ -3,6 +3,7 @@
 #include <rescaleframe/game_api.h>
 
 #define RSF_UNITY_BRIDGE_ABI_VERSION 1u
+#define RSF_UNITY_NATIVE_ABI_VERSION 2u
 #define RSF_UNITY_RENDER_EVENT 0x52534601
 
 // Copied at graph execution. All texture pointers are Unity D3D12 resources, borrowed until
@@ -32,4 +33,5 @@ typedef struct rsf_unity_native_api {
     void* (*enqueue)(const rsf_unity_packet* packet);
     void* render_event;
     void (*managed_state)(uint32_t stage);
+    void (*cpu_event)(uint32_t stage, uint64_t frame_id);
 } rsf_unity_native_api;

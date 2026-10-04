@@ -7,6 +7,14 @@ RSF_DLSS_ENABLE=1
 # 0 Native (DLAA), 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
 RSF_DLSS_QUALITY=3
 
+# DLSS-only colour correction after evaluation. It pulls the output toward the current
+# jittered frame and adds edge shimmer in the hangar. 0 off (default), 1 on for comparison.
+RSF_DLSS_COLOUR_CORRECTION=0
+# DLSS sees an invertible display-range encoding of the scene (HDR input off) and its output is
+# decoded back to linear. Removes the dark banding of the auto-exposing presets (L, M) on any
+# preset or driver override. 1 on (default), 0 sends linear HDR for comparison.
+RSF_DLSS_TONEMAP=1
+
 # Briefing resolution is relative to output, never the reduced scene.
 # 100 renders the briefing at full output resolution, independently of the DLSS preset.
 RSF_TRANSLUCENCY_TARGET=100

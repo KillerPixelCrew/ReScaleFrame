@@ -8,17 +8,22 @@
 #include <d3d11.h>
 #include <d3d11_1.h>
 
+#include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <mutex>
+#include <vector>
 
 namespace {
 
 // ID3D11DeviceContext vtable slots, counting the three IUnknown and four ID3D11DeviceChild entries
 // first. Same source as the observer's slots, tools/ghidra/build-directx-types.py.
 constexpr size_t slot_ps_set_shader_resources = 8;
+constexpr size_t slot_ps_set_samplers = 10;
 constexpr size_t slot_draw_indexed = 12;
 constexpr size_t slot_draw = 13;
 constexpr size_t slot_ps_set_constant_buffers = 16;
@@ -32,6 +37,8 @@ using ps_set_shader_resources_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*
                                                             ID3D11ShaderResourceView* const*);
 using ps_set_constant_buffers_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
                                                             ID3D11Buffer* const*);
+using ps_set_samplers_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
+                                                    ID3D11SamplerState* const*);
 using draw_indexed_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
 using draw_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 using om_set_render_targets_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT,
@@ -75,6 +82,20 @@ struct Tap {
     rs_set_viewports_fn original_set_viewports = nullptr;
     rs_set_scissor_rects_fn original_set_scissors = nullptr;
     clear_render_target_view_fn original_clear_target = nullptr;
+    ps_set_samplers_fn original_set_samplers = nullptr;
+
+    // Texture LOD bias for material sampling, see rsf_frame_tap_set_sampler_bias. `requested`
+    // shadows what the game asked for per slot, always the game's own objects, so the bias can be
+    // applied to and removed from bindings the engine's state cache will not set again.
+    struct BiasedSampler {
+        ID3D11SamplerState* original = nullptr;
+        ID3D11SamplerState* clone = nullptr;
+        float bias = 0;
+    };
+    std::mutex sampler_guard;
+    float sampler_bias = 0;
+    std::vector<BiasedSampler> biased_samplers;
+    ID3D11SamplerState* requested_samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT]{};
 
     // Borrowed shadow of live IA/VS bindings, never retained as a deferred draw record.
     rsf_frame_tap_geometry geometry{};
@@ -2082,6 +2103,8 @@ void STDMETHODCALLTYPE hooked_clear_state(ID3D11DeviceContext* c)
     reinterpret_cast<Fn>(s.extra_originals[8])(c);
     if (!inside_hook && c == s.observed_context) {
         invalidate_geometry(s);
+        std::lock_guard<std::mutex> lock(s.sampler_guard);
+        for (auto& sampler : s.requested_samplers) sampler = nullptr;
     }
 }
 void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* c, ID3D11CommandList* list, BOOL restore)
@@ -2091,6 +2114,8 @@ void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* c, ID3D11CommandList*
     reinterpret_cast<Fn>(s.extra_originals[9])(c, list, restore);
     if (!inside_hook && c == s.observed_context && !restore) {
         invalidate_geometry(s);
+        std::lock_guard<std::mutex> lock(s.sampler_guard);
+        for (auto& sampler : s.requested_samplers) sampler = nullptr;
     }
 }
 void STDMETHODCALLTYPE hooked_indexed_indirect(ID3D11DeviceContext* c, ID3D11Buffer* b, UINT offset)
@@ -2509,6 +2534,57 @@ void STDMETHODCALLTYPE hooked_draw(ID3D11DeviceContext* context, UINT vertex_cou
     consider_target_draw(self, context, false, vertex_count);
 }
 
+// The game's object behind a binding, which is the clone's original when the bias put it there.
+ID3D11SamplerState* sampler_original(Tap& self, ID3D11SamplerState* sampler)
+{
+    for (const auto& entry : self.biased_samplers)
+        if (entry.clone == sampler) return entry.original;
+    return sampler;
+}
+// What to bind for one of the game's samplers at the current bias. Only filters that blend between
+// mips with a mip range are biased, as 4.27 biases only the world texture group's samplers;
+// comparison, min/max and point-mip samplers pass through, as does anything at zero bias.
+ID3D11SamplerState* biased_sampler(Tap& self, ID3D11DeviceContext* context, ID3D11SamplerState* original)
+{
+    if (!original || self.sampler_bias == 0) return original;
+    for (auto& entry : self.biased_samplers) {
+        if (entry.original != original) continue;
+        if (entry.bias == self.sampler_bias) return entry.clone ? entry.clone : original;
+        if (entry.clone) entry.clone->Release();
+        entry.clone = nullptr; entry.bias = self.sampler_bias;
+        D3D11_SAMPLER_DESC desc{}; original->GetDesc(&desc);
+        if (!(desc.Filter & 0x1) || (desc.Filter & 0x180) || !(desc.MaxLOD > desc.MinLOD)) return original;
+        desc.MipLODBias = std::clamp(desc.MipLODBias + self.sampler_bias, -16.0f, 15.99f);
+        ID3D11Device* device = nullptr; context->GetDevice(&device);
+        if (device) { device->CreateSamplerState(&desc, &entry.clone); device->Release(); }
+        return entry.clone ? entry.clone : original;
+    }
+    // Pinned so the address cannot be reused by another sampler while it keys this cache.
+    original->AddRef();
+    self.biased_samplers.push_back({original, nullptr, std::numeric_limits<float>::quiet_NaN()});
+    return biased_sampler(self, context, original);
+}
+void STDMETHODCALLTYPE hooked_ps_set_samplers(ID3D11DeviceContext* context, UINT start_slot, UINT count,
+                                              ID3D11SamplerState* const* samplers)
+{
+    Tap& self = enter_hook();
+    const ps_set_samplers_fn forward = self.original_set_samplers;
+    if (!forward) return;
+    if (inside_hook || context != self.observed_context || !samplers || count == 0 ||
+        start_slot >= D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT ||
+        count > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - start_slot) {
+        forward(context, start_slot, count, samplers);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(self.sampler_guard);
+    ID3D11SamplerState* bound[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT]{};
+    for (UINT index = 0; index < count; ++index) {
+        auto* original = sampler_original(self, samplers[index]);
+        self.requested_samplers[start_slot + index] = original;
+        bound[index] = biased_sampler(self, context, original);
+    }
+    forward(context, start_slot, count, bound);
+}
 void STDMETHODCALLTYPE hooked_ps_set_constant_buffers(ID3D11DeviceContext* context, UINT start_slot,
                                                       UINT count, ID3D11Buffer* const* buffers)
 {
@@ -2633,6 +2709,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
          reinterpret_cast<void**>(&self.original_set_views)},
         {slot_ps_set_constant_buffers, reinterpret_cast<void*>(&hooked_ps_set_constant_buffers),
          reinterpret_cast<void**>(&self.original_set_constants)},
+        {slot_ps_set_samplers, reinterpret_cast<void*>(&hooked_ps_set_samplers),
+         reinterpret_cast<void**>(&self.original_set_samplers)},
         {slot_draw_indexed, reinterpret_cast<void*>(&hooked_draw_indexed),
          reinterpret_cast<void**>(&self.original_draw_indexed)},
         {slot_draw, reinterpret_cast<void*>(&hooked_draw),
@@ -2697,6 +2775,23 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     return RSF_FRAME_TAP_OK;
 }
 
+extern "C" rsf_frame_tap_result rsf_frame_tap_set_sampler_bias(float bias)
+{
+    if (!std::isfinite(bias) || bias < -16.0f || bias > 0.0f) return RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT;
+    Tap& self = tap();
+    if (!self.installed || !self.observed_context || !self.original_set_samplers) return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
+    std::lock_guard<std::mutex> lock(self.sampler_guard);
+    if (self.sampler_bias == bias) return RSF_FRAME_TAP_OK;
+    self.sampler_bias = bias;
+    // Unreal's state cache skips a sampler it believes is already bound, so the live bindings are
+    // rewritten here: with clones as the bias starts, and with the game's own as it ends.
+    ID3D11SamplerState* bound[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT]{};
+    for (UINT index = 0; index < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++index)
+        bound[index] = biased_sampler(self, self.observed_context, self.requested_samplers[index]);
+    self.original_set_samplers(self.observed_context, 0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, bound);
+    return RSF_FRAME_TAP_OK;
+}
+
 extern "C" rsf_frame_tap_result rsf_frame_tap_refresh(void)
 {
     Tap& self = tap();
@@ -2751,6 +2846,16 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     }
     if (constants) {
         constants->Release();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(self.sampler_guard);
+        for (auto& entry : self.biased_samplers) {
+            if (entry.clone) entry.clone->Release();
+            entry.original->Release();
+        }
+        self.biased_samplers.clear(); self.sampler_bias = 0;
+        for (auto& sampler : self.requested_samplers) sampler = nullptr;
     }
 
     // The patched blend states are ours: created here, cached here, and released here. Keyed by the

@@ -18,6 +18,9 @@ typedef struct rsf_sr12_setup {
     rsf_dlss_setup dlss;
     rsf_backend_log_fn log;
     void* user;
+    /* Backend zero normalizes inputs only. These extents may differ from output (FSR1). */
+    uint32_t render_width, render_height;
+    void* streamline_host;
 } rsf_sr12_setup;
 
 #ifdef __cplusplus

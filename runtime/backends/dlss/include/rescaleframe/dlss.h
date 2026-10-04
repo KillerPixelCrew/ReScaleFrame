@@ -26,7 +26,7 @@ extern "C" {
 
 /* 3: a frame names its viewport, may ask for alpha to be carried, and may pin its frame index so
    two viewports evaluated in one frame share it. */
-#define RSF_DLSS_ABI_VERSION 3u
+#define RSF_DLSS_ABI_VERSION 4u
 
 /* Which engine the host is. Streamline wants an identity before it will start NGX, and NGX is what
    DLSS runs on, so this is not optional decoration: with none of it supplied the DLSS plugin loads
@@ -97,6 +97,8 @@ rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup);
 /* Hand over the game's `ID3D11Device*`. D3D11 has no device proxy in Streamline, so this is the
    native device and stays the one the game uses. */
 rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
+/* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
+rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
 
 /* Requested model for viewport0, independent of render quality. Zero lets NVIDIA choose.
    E/F are legacy; J/K/L/M are current. Driver overrides may take precedence. */
@@ -228,6 +230,27 @@ typedef struct rsf_dlss_frame {
     /* The frame this evaluate belongs to, so two viewports evaluated in one frame share a frame
        token. Zero lets Streamline count frames itself. */
     uint32_t frame_index;
+
+    /* Appended in ABI 4. Optional translucency hints at render size, on the same API as the
+       textures above; null leaves a hint untagged. Streamline 2.14 hands DLSS SR only the
+       transparency and bias hints, and the DLSS 310 guide limits bias to preset F. The colour
+       before transparency and the layer are Ray Reconstruction inputs. The reactive mask is for
+       the FSR/XeSS adapter, which takes this structure too. */
+    void* color_before_transparency;
+    void* transparency_layer;
+    /* [0,0.9]. */
+    void* reactive_mask;
+    /* [0,1]: translucent coverage. */
+    void* transparency_hint;
+    /* {0,1}. */
+    void* bias_current_color;
+    /* Device depth layer for reprojecting unwritten motion, consumed by the motion resolve
+       before any backend sees the frame. DLSS itself never reads it. */
+    void* motion_depth_layer;
+    /* Non-zero when color_in carries the bounded colour transport (colour_transport.h) rather than
+       linear HDR: DLSS then runs with HDR input off and ignores the exposure texture. The caller
+       decodes color_out afterwards. */
+    uint32_t color_encoded;
 } rsf_dlss_frame;
 
 /* Run DLSS for this frame. `d3d11_context` is the `ID3D11DeviceContext*` the game renders with,
@@ -236,6 +259,10 @@ typedef struct rsf_dlss_frame {
    Streamline does not restore pipeline state, so the caller owns saving and restoring whatever it
    cares about around this call. */
 rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* frame);
+/* D3D12 resources and command list on the borrowed host, with its already minted CPU token.
+   Inputs are NON_PIXEL_SHADER_RESOURCE; output is UNORDERED_ACCESS. */
+rsf_dlss_result rsf_dlss_evaluate_shared(void* d3d12_list, const rsf_dlss_frame* frame,
+                                       uint64_t source_frame_id);
 
 /* Release DLSS resources for the viewport while leaving Streamline loaded. Worth doing when the
    render size changes, since the feature is built for a specific pair of sizes. */

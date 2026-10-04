@@ -249,6 +249,13 @@ typedef void (*rsf_frame_tap_compute_fn)(void* user, void* context, uint32_t x, 
 rsf_frame_tap_result rsf_frame_tap_set_research_callbacks(rsf_frame_tap_target_fn draw,
                                                         rsf_frame_tap_compute_fn compute,
                                                         void* user);
+/* Texture LOD bias for pixel-shader samplers that blend between mips, applied to the observed
+   context from now until it is set back to zero. Biased clones replace the game's samplers in
+   every slot already bound and in every later PSSetSamplers; zero restores the game's own. Call on
+   the observed context's thread, at a point in its command stream, such as a queued scope. This is
+   the mechanism only: which passes and how much belong to the caller. */
+rsf_frame_tap_result rsf_frame_tap_set_sampler_bias(float bias);
+
 /* Optional paired observations around Draw/DrawIndexed. Before and after use the same target
    draw ordinal. These callbacks observe the immediate context and must preserve its bindings. */
 rsf_frame_tap_result rsf_frame_tap_set_research_phase_callbacks(rsf_frame_tap_target_fn before,

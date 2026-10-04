@@ -65,6 +65,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_window_present(const rsf_observer_pres
             if (rsf_native_scene_for_window(&window, &scene)) {
                 last_present.scene_matched = 1; last_present.scene_submission_id = scene.submission_id;
                 last_present.scene_texture_bound = scene.texture_bound && scene.bound_window_key == window.window_key;
+                last_present.scene_direct_present = rsf_native_scene_present_path(&window) == RSF_NATIVE_SCENE_PRESENT_DIRECT;
                 last_present.scene_view_key = scene.view_key; last_present.scene_native_frame = scene.native_frame;
             }
         }
@@ -79,7 +80,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_window_present(const rsf_observer_pres
         rsf_native_scene_identity scene{}; scene.struct_size = sizeof(scene);
         if (!rsf_native_scene_for_window(&window, &scene) || scene.submission_id != last_present.scene_submission_id ||
             scene.view_key != last_present.scene_view_key || scene.native_frame != last_present.scene_native_frame)
-            { last_present.scene_matched = 0; last_present.scene_texture_bound = 0; }
+            { last_present.scene_matched = 0; last_present.scene_texture_bound = 0; last_present.scene_direct_present = 0; }
     }
     presenting = false; last_present.result = event->result; last_present.completed = 1;
     last_present.accepted = event->result == S_OK;

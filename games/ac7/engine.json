@@ -9,7 +9,7 @@
     "examined": "2026-09-06"
   },
   "frame_generation_cpu_research": {
-    "status": "static source/binary and Ghidra checked; hooks not installed or runtime validated",
+    "status": "guarded CPU, primary RHI and queued window hooks built; FG/Reflex connected in experimental cold profile; new game validation pending",
     "ghidra_name_manifest": "../../docs/research/evidence/ac7-fg-cpu-names-20260930.json",
     "runtime_active": false,
     "outer_loop_candidate_rva": "0x3a3f70",
@@ -17,9 +17,10 @@
     "slate_device_poll_call_rva": "0x3a4365",
     "engine_tick_virtual_call_rva": "0x3a43cd",
     "render_handoff_validated": false,
-    "render_handoff_status": "renderer/family/task ownership statically matched; game hooks and Present handoff not validated",
+    "render_handoff_status": "22:37 game logs confirm CPU/RHI/window/scene identity and flight classification; sampled/direct resource match gates FG; generated-frame activation pending",
     "render_handoff_manifest": "../../docs/research/evidence/ac7-render-frame-handoff-20260930.json",
-    "research": "../../docs/research/ac7-fg-cpu-boundaries.md"
+    "research": "../../docs/research/ac7-fg-cpu-boundaries.md",
+    "frame_generation_research": "../../docs/research/ac7-dlss-fg-20261003.md"
   },
   "engine": {
     "family": "Unreal Engine 4",
@@ -66,6 +67,19 @@
       "coverage_evidence": "docs/research/evidence/ac7-velocity-coverage-20260930.json",
       "clouds": "Installed TrueSky renderer exports render/view/matrix/texture boundaries and contains windSpeed/windDirection and raytrace_reproject_clouds_compute leads. Scene wind activity and useful cloud depth/motion export are unverified. Static clouds still need camera-induced reprojection at appropriate depth.",
       "shader_probe": "Independent packed SV_Target0 plus unquantized UV-motion SV_Target1 probe compiled and created on Windows D3D11 WARP. No draw readback or game test; no installation change."
+    },
+    "motion_depth_20261004": {
+      "state": "built, WARP-tested and deployed; not game-tested",
+      "research": "docs/research/ac7-motion-depth-20261004.md",
+      "coverage_measured": "flight: only the player aircraft and attachments write velocity (9.9-11.8% of pixels); size gate rejects sub-3-pixel primitives only; translucent effects, kill-cam and clouds are camera motion only",
+      "motion_precision": "decoded and resolved motion R32G32_FLOAT",
+      "translucency_scope": "RenderTranslucencyPass 0x1168d40 passes 0/1/2; scene colour SceneColor[] at scene targets +0x30/+0x38/+0x40; separate layer +0x1b0 (allocator 0x109f4d0)",
+      "translucency_hints": "reactive, coverage, bias, opaque-only colour and layer; DLSS SR reads transparency and bias hints only, bias limited to preset F",
+      "cloud_motion": "TrueSky composite_tile DrawIndirect relay at DLL RVA 0xabc6b; nearFar .z km converted with HdrConstants 448/464/580/636; unwritten pixels reproject at max(scene, cloud) device depth",
+      "gates": "docs/research/ue418-hook-map.md#velocity-gates-mapped-4-october",
+      "correction": "translucent-velocity gate 0x11823de alone cannot reach translucent batches (0x1184e4c, 0x10fdc7c reject earlier); 7 September result needs a retest",
+      "material_mip_bias": "4.27 SceneVisibility formula max(log2(render/output)-0.3,-2); PSSetSamplers clones for mip-filtered samplers inside RenderBasePass (RVA 0xebf050) and translucency scopes; not game-tested",
+      "newest_ue4_source": "4.27-plus tip 41b2c549 (2026-09-15); no velocity/depth changes after 4.27.2"
     }
   },
   "jitter": {
@@ -772,5 +786,39 @@
         "rescaleframe_overlay.dll": "a8bc047fa0ed2226890dd1be86f7b375f464e49d429fb690dd104ea35dae835f"
       }
     }
+  },
+  "lighting_shadow_investigation": {
+    "date": "2026-10-04",
+    "status": "phase_transform_created_but_visible_defect_persists_post_patch_capture_pending",
+    "research": "../../docs/research/ac7-lighting-shadow-20261004.md",
+    "user_scale_observation": "worst in Ultra Performance, less in native and Quality",
+    "captured_scale_comparison": false,
+    "directional_shader_hash": 3619939816,
+    "production_shader_corrected": "built_and_gpu_replayed_not_game_tested",
+    "production_shader_transform_deployed": true,
+    "next_capture": "matched close-ground Ultra Performance and Quality F9 with reserved live lighting uniforms and pre/post-light images"
+  },
+  "experimental_dlss_frame_generation": {
+    "date": "2026-10-03",
+    "status": "game_flight_and_hangar_active_driver_stall_caused_by_optimus_hybrid_presentation_resolved_by_dgpu_mode",
+    "game_abi": 13,
+    "overlay_abi": 8,
+    "profile": "D3D11 facade, one D3D12 presentation/SR host",
+    "source": "copied native CPU/render/view/window identity",
+    "synthetic_tagged_frames": 16,
+    "synthetic_sdk_presents": 32,
+    "synthetic_generated_per_source": 1,
+    "synthetic_activity": true,
+    "game_validated": false,
+    "game_flight_activation_validated": true,
+    "game_hangar_activation_validated": true,
+    "pacing_validated": false,
+    "additional_scenes": "hangar generation confirmed by user; briefing does not activate and is deferred at user request",
+    "proxy_reference": "OptiScaler 92337ebfbf07d533eabe3731fd8de1bb19437aea, separate interop queue and allocator/fence ownership",
+    "hudless_ui_guides": false,
+    "sr_requirement": "native DLSS SR currently supplies the FG export",
+    "research": "../../docs/research/ac7-dlss-fg-20261003.md",
+    "game_run_observation": "Hidden D3D11 Present worsened dips and was removed. Audit sees Streamline setters with zero FPS limit and disabled Reflex Sync. 09:40 fixes supported windowed flip-model VSync-off/tearing creation, Present and resize handling; live acceptance pending. All input types and PCL ping execute in game. 10:55: user reports hangar dips persist and gameplay is stable; the game-thread sleep now waits for the previous Present and RenderSubmitEnd precedes PresentStart (RSF_REFLEX_ASYNC=1 restores the overlap). Device fixture and Release gate pass; deployed 11:01. 11:15: user reports dips persist; the ordered path ran and 5 of 38 hangar seconds still stall, ownership audit clean. A driver latency-ring dump was deployed 11:31. 11:39 run: all five 33333 us stalls follow by four frames a frame with invalid crossAdapterCopyTimeUs (0x88000000/0x90000000) on this hybrid laptop; cause of the invalid sample not established. 12:17: user frame limit before generation deployed (ini RSF_FRAME_LIMIT_FPS, panel control, overlay ABI 8); effect on the stalls not yet game-tested.",
+    "fps_hud": "QPC-derived application and SDK aggregate present rates; no requested-multiplier estimate"
   }
 }

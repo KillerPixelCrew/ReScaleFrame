@@ -55,6 +55,9 @@ constexpr uint32_t max_blobs = 4096;
 constexpr size_t shader_budget = 64u * 1024u * 1024u;
 constexpr size_t blob_budget = 32u * 1024u * 1024u;
 constexpr uint32_t cloud_composite_shader = 0x83524e47u;
+// Captured directional light variant: screen-space contact ray and stationary IGN.
+constexpr uint32_t contact_light_shader = 3619939816u;
+constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
 struct EngineRecord {
     rsf_ac7_velocity_facts facts{};
@@ -113,6 +116,9 @@ struct Capture {
     uint32_t commands_dropped = 0;
     uint32_t readbacks = 0, readback_failed = 0;
     uint32_t readback_interval = UINT32_MAX, interval_readbacks = 0;
+    uint32_t lighting_readbacks = 0;
+    uint32_t lighting_interval = UINT32_MAX;
+    bool lighting_after_pending = false;
     uint32_t colour_readbacks = 0, colour_readback_failed = 0;
     std::atomic<uint32_t> failures{0};
 };
@@ -525,11 +531,14 @@ void install_roots(unsigned char* base)
     for (uint32_t i = first; i < made; ++i) { MH_DisableHook(root_targets[i]); MH_RemoveHook(root_targets[i]); }
     say("renderer root capture failed and was rolled back");
 }
-void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buffers, uint32_t mask = 0x3fffu)
+void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
+               uint32_t mask = 0x3fffu, bool lighting = false)
 {
     auto& s = state();
     const auto interval = s.interval.load();
-    if (s.readback_interval != interval) { s.readback_interval = interval; s.interval_readbacks = 0; }
+    if (s.readback_interval != interval) {
+        s.readback_interval = interval; s.interval_readbacks = 0; s.lighting_readbacks = 0;
+    }
     out << '['; bool first = true;
     for (uint32_t slot = 0; slot < 14; ++slot) {
         if (!buffers[slot] || !(mask & (1u << slot))) continue;
@@ -540,12 +549,18 @@ void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buf
             const auto found = s.buffers.find(buffers[slot]);
             if (found != s.buffers.end()) { bytes = found->second.data; serial = found->second.serial; }
         }
+        if (lighting) { bytes.clear(); serial = 0; }
         bool fallback = false;
-        if (bytes.empty() && s.interval_readbacks < 128) {
+        // Reserve eight of the existing 128 reads for the verified lighting producer.
+        // UI and base-pass reads otherwise exhaust the quota before its View/light values.
+        const bool budget = lighting ? s.interval_readbacks < 128 && s.lighting_readbacks < 8 :
+            s.interval_readbacks < 120;
+        if (bytes.empty() && budget) {
             auto* buffer = static_cast<ID3D11Buffer*>(buffers[slot]);
             D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
             if (desc.ByteWidth <= 8192 && desc.ByteWidth) {
                 ++s.readbacks; ++s.interval_readbacks; bytes.resize(desc.ByteWidth);
+                if (lighting) ++s.lighting_readbacks;
                 ComPtr<ID3D11Device> device; context->GetDevice(&device);
                 fallback = true;
                 if (rsf_read_constant_buffer(device.Get(), context, buffer, bytes.data(), desc.ByteWidth) != RSF_CONSTANT_BUFFER_OK) {
@@ -631,10 +646,12 @@ const char* colour_stage(uint32_t hash)
     }
 }
 void colour_snapshot(std::ostream& out, ID3D11DeviceContext* context, ID3D11Resource* resource,
-                     const char* role)
+                     const char* role, bool lighting = false)
 {
     auto& s = state();
-    if (!role || !resource || s.colour_readbacks >= 72) return;
+    // Eight reads at each sampled interval fit in twenty-four reserved slots. The total
+    // remains 72, including the existing cloud and post-processing observations.
+    if (!role || !resource || s.colour_readbacks >= (lighting ? 72u : 48u)) return;
     ComPtr<ID3D11Texture2D> texture;
     if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&texture)))) return;
     char name[96]{};
@@ -647,12 +664,58 @@ void colour_snapshot(std::ostream& out, ID3D11DeviceContext* context, ID3D11Reso
     if (result != RSF_TEXTURE_OK) ++s.colour_readback_failed;
     out << ",\"snapshot\":\"" << name << "\",\"snapshot_result\":" << result;
 }
+void lighting_before(ID3D11DeviceContext* context, const rsf_frame_tap_target_draw& draw, uint32_t hash)
+{
+    auto& s = state();
+    const auto interval = s.interval.load();
+    if (s.lighting_interval == interval) return;
+    s.lighting_interval = interval; s.lighting_after_pending = true;
+    std::ostringstream out;
+    out << "{\"kind\":\"contact_light_before\",\"qpc\":" << tick()
+        << ",\"interval\":" << interval << ",\"thread\":" << GetCurrentThreadId()
+        << ",\"ps_hash\":" << hash << ",\"colour\":{\"view\":";
+    resource(out, static_cast<ID3D11Resource*>(draw.render_target));
+    colour_snapshot(out, context, static_cast<ID3D11Resource*>(draw.render_target), "contact_light_before", true);
+    out << "},\"inputs\":[";
+    ID3D11ShaderResourceView* views[6]{}; context->PSGetShaderResources(0, 6, views);
+    ComPtr<ID3D11ShaderResourceView> retained[6];
+    for (uint32_t i = 0; i < 6; ++i) retained[i].Attach(views[i]);
+    constexpr const char* roles[]{"contact_ps_input_0", "contact_ps_input_1", "contact_ps_input_2",
+        "contact_light_mask", "contact_scene_depth", "contact_static_shadow"};
+    bool first = true;
+    for (uint32_t slot = 0; slot < 6; ++slot) {
+        if (!retained[slot]) continue;
+        ComPtr<ID3D11Resource> texture; retained[slot]->GetResource(&texture);
+        if (!first) out << ','; first = false;
+        out << "{\"slot\":" << slot << ",\"view\":"; resource(out, texture.Get());
+        colour_snapshot(out, context, texture.Get(), roles[slot], true); out << '}';
+    }
+    out << "],\"samplers\":[";
+    ID3D11SamplerState* samplers[6]{}; context->PSGetSamplers(0, 6, samplers);
+    first = true;
+    for (uint32_t slot = 0; slot < 6; ++slot) if (samplers[slot]) {
+        D3D11_SAMPLER_DESC sampler{}; samplers[slot]->GetDesc(&sampler); samplers[slot]->Release();
+        if (!first) out << ','; first = false;
+        out << "{\"slot\":" << slot << ",\"filter\":" << uint32_t(sampler.Filter)
+            << ",\"address\":[" << uint32_t(sampler.AddressU) << ',' << uint32_t(sampler.AddressV) << ',' << uint32_t(sampler.AddressW)
+            << "],\"comparison\":" << uint32_t(sampler.ComparisonFunc) << ",\"lod\":[" << sampler.MinLOD << ',' << sampler.MaxLOD << "]}";
+    }
+    out << "],\"ps_cb\":";
+    // Read the two live shader inputs before the light executes, using the reserved quota.
+    ID3D11Buffer* raw[14]{}; context->PSGetConstantBuffers(0, 2, raw);
+    ComPtr<ID3D11Buffer> retained_buffers[2]; void* buffers[14]{};
+    for (uint32_t i = 0; i < 2; ++i) { retained_buffers[i].Attach(raw[i]); buffers[i] = raw[i]; }
+    constants(out, context, buffers, 3u, true);
+    queued_scope(out); out << '}'; record_draw(out.str());
+}
 void before_draw_capture(void*, const rsf_frame_tap_target_draw* d) try
 {
     auto& s = state();
-    if (!s.active.load() || d->target_width < 400 || d->target_height < 200 ||
-        shader_hash(d->pixel_shader, 1) != cloud_composite_shader) return;
+    if (!s.active.load() || d->target_width < 400 || d->target_height < 200) return;
+    const auto ps = shader_hash(d->pixel_shader, 1);
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
+    if (ps == contact_light_shader || ps == contact_light_phased_shader) { lighting_before(c, *d, ps); return; }
+    if (ps != cloud_composite_shader) return;
     std::ostringstream out;
     out << "{\"kind\":\"cloud_composite_before\",\"qpc\":" << tick()
         << ",\"interval\":" << s.interval.load() << ",\"thread\":" << GetCurrentThreadId()
@@ -693,6 +756,8 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
     { std::lock_guard<std::mutex> lock(s.guard); if (s.draws.size() >= max_draws) { ++s.draw_dropped; return; } }
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
     const uint32_t ps = shader_hash(d->pixel_shader, 1);
+    const bool light_after = (ps == contact_light_shader || ps == contact_light_phased_shader) && s.lighting_after_pending;
+    if (light_after) s.lighting_after_pending = false;
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
     std::ostringstream out; out.precision(9);
@@ -744,6 +809,8 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
         out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get());
         if (i == 0 && d->target_width >= 400 && d->target_height >= 200)
             colour_snapshot(out, c, r.Get(), colour_stage(ps));
+        if (i == 0 && light_after)
+            colour_snapshot(out, c, r.Get(), "contact_light_after", true);
         if (i == 1 && ps == cloud_composite_shader && d->target_width >= 400 && d->target_height >= 200)
             colour_snapshot(out, c, r.Get(), "cloud_loss_after");
         out << '}';
@@ -1046,6 +1113,7 @@ extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uin
             s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
             s.engine_dropped = s.draw_dropped = s.blob_dropped = s.readbacks = s.readback_failed = 0;
             s.readback_interval = UINT32_MAX; s.interval_readbacks = 0;
+            s.lighting_readbacks = 0; s.lighting_interval = UINT32_MAX; s.lighting_after_pending = false;
             s.colour_readbacks = s.colour_readback_failed = 0;
             s.start = s.presents; s.session.fetch_add(1); s.interval.store(0); s.active.store(true);
             say((std::string("motion capture armed: ") + s.prefix).c_str());

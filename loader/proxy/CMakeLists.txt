@@ -40,3 +40,19 @@ if(NOT MSVC)
     # surface is ported. The shared Windows/MSVC binary contains both carrier export surfaces.
     target_compile_definitions(rsf_proxy_dinput8 PRIVATE rsf_ac7_proxy_process_event=DllMain)
 endif()
+
+# AC7's validated carrier keeps the DirectInput ABI and original entry path. The generic
+# version shim has a different ordinal contract and can evolve independently.
+add_library(rsf_proxy_ac7 SHARED src/dinput8_proxy.c src/dlss_bridge.c src/preferences.c)
+get_target_property(rsf_ac7_proxy_links rsf_proxy_dinput8 LINK_LIBRARIES)
+target_link_libraries(rsf_proxy_ac7 PRIVATE ${rsf_ac7_proxy_links})
+target_compile_definitions(rsf_proxy_ac7 PRIVATE _CRT_SECURE_NO_WARNINGS rsf_ac7_proxy_process_event=DllMain)
+set_target_properties(rsf_proxy_ac7 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/lib/$<CONFIG>"
+    PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>")
+add_dependencies(rsf_proxy_ac7 rsf_game_ac7)
+if(MSVC)
+    target_sources(rsf_proxy_ac7 PRIVATE src/ac7_exports.def)
+    target_link_options(rsf_proxy_ac7 PRIVATE "/MAP:$<TARGET_FILE_DIR:rsf_proxy_ac7>/dinput8.map")
+endif()

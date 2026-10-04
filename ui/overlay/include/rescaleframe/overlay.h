@@ -27,7 +27,8 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 5u
+#define RSF_OVERLAY_ABI_VERSION 9u
+#define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
@@ -108,6 +109,25 @@ typedef struct rsf_overlay_stats {
     uint32_t backend;
     uint32_t requested_backend;
     int32_t last_switch_result;
+    /* ABI 6: requested, effective and SDK-observed presentation are separate. */
+    uint32_t fg_available, fg_requested_mode, fg_requested_generated;
+    uint32_t fg_effective_mode, fg_effective_generated, fg_active, fg_max_generated;
+    uint32_t reflex_available, reflex_requested_mode, reflex_effective_mode;
+    uint32_t fg_reason;
+    int32_t fg_last_result;
+    uint64_t fg_total_presented;
+    /* ABI 7: real application Present and SDK aggregate counters, sampled against QPC. */
+    uint64_t application_presented_frames, sample_qpc, qpc_frequency;
+    uint32_t show_performance_hud, fg_present_count_valid;
+    /* ABI 8: requested minimum interval between rendered frames, before generation, in
+       microseconds (zero is unlimited), and the refresh rate of the display showing the game in
+       millihertz (zero when unknown). */
+    uint32_t frame_limit_us;
+    uint32_t display_refresh_mhz;
+    /* ABI 9: active provider, saved provider, implemented provider IDs as bits.
+       Zero is Off. GPU compatibility is checked at startup. */
+    uint32_t fg_backend, fg_requested_backend, fg_backend_choices;
+    int32_t fg_selection_result;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -141,6 +161,12 @@ typedef struct rsf_overlay_intent {
     uint32_t jitter;
     uint32_t backend_changed;
     uint32_t backend;
+    uint32_t fg_changed, fg_mode, fg_generated;
+    uint32_t reflex_changed, reflex_mode;
+    uint32_t performance_hud_changed, performance_hud;
+    /* ABI 8. */
+    uint32_t frame_limit_changed, frame_limit_us;
+    uint32_t fg_backend_changed, fg_backend;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

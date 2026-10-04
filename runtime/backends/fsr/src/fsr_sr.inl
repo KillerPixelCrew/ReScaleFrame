@@ -146,6 +146,8 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     dispatch.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth.resource));
     dispatch.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion.resource));
     dispatch.exposure = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->exposure.resource));
+    dispatch.reactive = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->reactive.resource));
+    dispatch.transparencyAndComposition = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->transparency.resource));
     dispatch.output = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->output.resource),
                                           FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dispatch.jitterOffset = {frame->jitter_x, frame->jitter_y};

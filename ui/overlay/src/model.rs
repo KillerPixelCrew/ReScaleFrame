@@ -77,6 +77,50 @@ impl Quality {
     }
 }
 
+/// Requested, configured and observed frame generation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GenerationStats {
+    /// Active presentation provider.
+    pub backend: u32,
+    /// Saved provider for next startup.
+    pub requested_backend: u32,
+    /// Implemented choices as provider ID bits.
+    pub backend_choices: u32,
+    /// Last persistence result.
+    pub selection_result: i32,
+    /// A cold presentation host exists.
+    pub available: bool,
+    /// Requested mode.
+    pub requested_mode: u32,
+    /// Requested generated count.
+    pub requested_generated: u32,
+    /// Configured mode after suspension policy.
+    pub effective_mode: u32,
+    /// Configured generated count.
+    pub effective_generated: u32,
+    /// SDK-observed generation activity.
+    pub active: bool,
+    /// SDK-supported maximum generated count.
+    pub max_generated: u32,
+    /// SDK-reported Reflex availability.
+    pub reflex_available: bool,
+    /// Requested Reflex mode.
+    pub requested_reflex: u32,
+    /// Effective Reflex mode.
+    pub effective_reflex: u32,
+    /// Suspension reason code.
+    pub reason: u32,
+    /// Last operation result.
+    pub last_result: i32,
+    /// SDK aggregate source and generated presents.
+    pub total_presented: u64,
+    /// Requested minimum interval between rendered frames, before generation, in microseconds.
+    /// Zero is unlimited.
+    pub frame_limit_us: u32,
+    /// Refresh rate of the display showing the game, in millihertz. Zero when unknown.
+    pub display_refresh_mhz: u32,
+}
+
 /// What the overlay was told about the session this frame.
 ///
 /// The string fields are borrowed for the duration of the frame call, as the header says.
@@ -144,6 +188,16 @@ pub struct Stats<'a> {
     pub requested_backend: u32,
     /// Runtime switch result.
     pub last_switch_result: i32,
+    /// Frame generation and latency selections with observed state.
+    pub generation: GenerationStats,
+    /// Real application Present counter.
+    pub application_presented_frames: u64,
+    /// Monotonic QPC sample and its frequency.
+    pub counter_clock: [u64; 2],
+    /// Show the compact performance overlay.
+    pub show_performance_hud: bool,
+    /// Whether the SDK aggregate present counter is usable.
+    pub fg_present_count_valid: bool,
 }
 
 impl Default for Stats<'_> {
@@ -181,6 +235,11 @@ impl Default for Stats<'_> {
             backend: 1,
             requested_backend: 1,
             last_switch_result: 0,
+            generation: GenerationStats::default(),
+            application_presented_frames: 0,
+            counter_clock: [0, 0],
+            show_performance_hud: false,
+            fg_present_count_valid: false,
         }
     }
 }
@@ -262,6 +321,28 @@ pub struct Intent {
     pub backend_changed: bool,
     /// Backend requested by the user.
     pub backend: u32,
+    /// FG mode or count changed.
+    pub fg_changed: bool,
+    /// Requested FG mode.
+    pub fg_mode: u32,
+    /// Requested generated count.
+    pub fg_generated: u32,
+    /// Request a generation provider and save the selection.
+    pub fg_backend_changed: bool,
+    /// Requested generation provider ID.
+    pub fg_backend: u32,
+    /// Reflex mode changed.
+    pub reflex_changed: bool,
+    /// Requested Reflex mode.
+    pub reflex_mode: u32,
+    /// The compact HUD toggle changed.
+    pub performance_hud_changed: bool,
+    /// Requested compact HUD visibility.
+    pub performance_hud: bool,
+    /// The frame limit changed.
+    pub frame_limit_changed: bool,
+    /// Requested minimum interval between rendered frames in microseconds. Zero is unlimited.
+    pub frame_limit_us: u32,
 }
 
 impl Intent {
@@ -278,6 +359,11 @@ impl Intent {
             && !self.capture_requested
             && !self.jitter_changed
             && !self.backend_changed
+            && !self.fg_changed
+            && !self.fg_backend_changed
+            && !self.reflex_changed
+            && !self.performance_hud_changed
+            && !self.frame_limit_changed
     }
 }
 

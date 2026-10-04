@@ -82,7 +82,8 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!frame->interpolate) return RSF_BACKEND_OK;
     if (!record.session_id || !record.resource_generation || !record.input_qpc || record.phase != RSF_PHASE_UI_COMPLETE ||
-        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY && record.screen != RSF_SCREEN_HANGAR))
+        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY &&
+         record.screen != RSF_SCREEN_HANGAR && record.screen != RSF_SCREEN_BRIEFING))
         return RSF_BACKEND_ERROR_NOT_READY;
     if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID))
         return RSF_BACKEND_ERROR_NOT_READY;

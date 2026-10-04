@@ -73,6 +73,7 @@ namespace ReScaleFrame.Unity
                 if (Native.Api.RenderEvent == IntPtr.Zero)
                     throw new NotSupportedException("Unity did not register its D3D12 native interface.");
                 UrpAdapter.Install();
+                CpuBoundaries.Install();
                 lock (producerGate) { if (state == 4) return; state = 2; }
                 Native.ReportState(2);
                 Native.Log("Unity main-thread URP adapter installed; waiting for native D3D12 provider plan.");
@@ -94,6 +95,7 @@ namespace ReScaleFrame.Unity
             lock (producerGate) { state = 4; if (producers != 0) return -1; }
             Harmony.UnpatchAll(Owner);
             UrpAdapter.Clear();
+            CpuBoundaries.Clear();
             Native.Log?.Invoke("Unity managed producers stopped; native queued work must drain.");
             Native.ReportState?.Invoke(4);
             state = 0;

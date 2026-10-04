@@ -16,6 +16,10 @@ typedef struct rsf_motion_resolve_params {
     float decoded_to_pixels[2];
     float sentinel;
     uint32_t has_sentinel;
+    /* Optional R32_FLOAT device-depth layer, origin-zero like the inputs (volumetric clouds).
+       Unwritten pixels reproject at the nearer of it and scene depth. The depth output stays the
+       scene depth. Null for none. */
+    void* depth_layer;
 } rsf_motion_resolve_params;
 int rsf_motion_resolve_create(void* d3d11_device, uint32_t width, uint32_t height,
                              rsf_motion_resolve** out);

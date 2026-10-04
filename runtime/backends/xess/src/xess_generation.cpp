@@ -27,6 +27,7 @@ struct XegSession {
     decltype(&xefgSwapChainGetLastPresentStatus) present_status{};
     decltype(&xefgSwapChainSetNumInterpolatedFrames) count{};
     decltype(&xefgSwapChainSetLatencyReduction) set_xell{};
+    decltype(&xefgSwapChainSetUiCompositionState) compose{};
     decltype(&xefgSwapChainDestroy) destroy{};
     decltype(&xefgSwapChainGetVersion) version{};
     decltype(&xellD3D12CreateContext) xell_create{};
@@ -56,7 +57,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
 {
     auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
     if (setup->chain.ui_mode == RSF_UI_MODE_UI_LAYER) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NEEDS_RESTART;
+    if (GetModuleHandleW(L"sl.dlss_g.dll") && !setup->streamline_host) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto* self = new (std::nothrow) XegSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device);
     self->ui_mode = setup->chain.ui_mode;
@@ -70,6 +71,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     XEG(present_id, xefgSwapChainSetPresentId); XEG(constants, xefgSwapChainTagFrameConstants);
     XEG(present_status, xefgSwapChainGetLastPresentStatus); XEG(count, xefgSwapChainSetNumInterpolatedFrames);
     XEG(set_xell, xefgSwapChainSetLatencyReduction); XEG(destroy, xefgSwapChainDestroy); XEG(version, xefgSwapChainGetVersion);
+    XEG(compose, xefgSwapChainSetUiCompositionState);
 #undef XEG
 #define XELL(member, function) self->member = rsf::entry<decltype(&function)>(self->xell_module, #function); if (!self->member) { destroy(self); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
     XELL(xell_create, xellD3D12CreateContext); XELL(xell_destroy, xellDestroyContext);
@@ -107,6 +109,10 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
             self->chain_ptr(self->context, IID_PPV_ARGS(&self->chain)) != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
             destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
         }
+        if (self->compose(self->context, self->ui_mode == RSF_UI_MODE_NONE ? XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_DISABLED :
+            XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED) != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
+            destroy(self); return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        }
     }
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
 }
@@ -120,6 +126,11 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     if (options->reflex_mode != RSF_REFLEX_OFF) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const uint32_t count = options->generated_frames > self.reserved ? self.reserved : options->generated_frames;
     if (options->mode != RSF_FG_OFF && !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (self.options.struct_size && self.options.mode == options->mode &&
+        self.options.generated_frames == options->generated_frames &&
+        self.options.frame_limit_us == options->frame_limit_us) return RSF_BACKEND_OK;
+    const bool reset_history = !self.options.struct_size || self.options.mode != options->mode ||
+        self.options.generated_frames != options->generated_frames;
     if (count && self.count(self.context, count) != XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     xell_sleep_params_t sleep{}; sleep.minimumIntervalUs = options->frame_limit_us;
     sleep.bLowLatencyMode = options->mode != RSF_FG_OFF;
@@ -130,7 +141,8 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     self.options = *options; self.state.effective_mode = options->mode;
     self.state.configured_mode = options->mode;
     self.state.effective_generated_frames = options->mode == RSF_FG_OFF ? 0 : count;
-    self.state.active = 0; self.history_valid = false; return RSF_BACKEND_OK;
+    if (reset_history) { self.state.active = 0; self.history_valid = false; }
+    return RSF_BACKEND_OK;
 }
 rsf_backend_result begin(void* pointer, uint64_t id)
 {

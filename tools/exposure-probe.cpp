@@ -3,6 +3,7 @@
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/colour_fidelity.h>
+#include <rescaleframe/colour_transport.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <wrl/client.h>
@@ -176,7 +177,19 @@ int main(int argc, char** argv)
         frame.clip_to_prev_clip[i * 5] = frame.prev_clip_to_clip[i * 5] = 1;
     }
     bool ok = true;
-    for (uint32_t i = 0; i < 60; ++i) {
+    // RSF_PROBE_TRANSPORT=1: encode with the bounded colour transport, run DLSS with HDR input off,
+    // decode the output. The exposure argument becomes the transport's E (0 means 1).
+    char transport_flag[8]{};
+    const bool transported = GetEnvironmentVariableA("RSF_PROBE_TRANSPORT", transport_flag, sizeof(transport_flag)) && transport_flag[0] == '1';
+    rsf_colour_transport* transport = nullptr;
+    if (transported) {
+        void* encoded = nullptr;
+        ok = rsf_colour_transport_create(device.Get(), &transport) &&
+            rsf_colour_transport_encode(transport, context.Get(), color.Get(), exposure.Get(), render_width, render_height, &encoded);
+        frame.color_in = encoded; frame.color_encoded = 1; frame.exposure = nullptr;
+        std::fprintf(stderr, "colour transport: encoded input, DLSS HDR input off\n");
+    }
+    for (uint32_t i = 0; ok && i < 60; ++i) {
 #ifdef RSF_PROBE_RENDERDOC
         if (capture && i == 59) capture->StartFrameCapture(device.Get(), nullptr);
 #endif
@@ -191,6 +204,12 @@ int main(int argc, char** argv)
         ok = saved != 0 && ok;
     }
 #endif
+    if (transport) {
+        const float no_jitter[2]{};
+        ok = rsf_colour_transport_decode(transport, context.Get(), output.Get(), exposure.Get(), 1600, 900,
+            color.Get(), render_width, render_height, no_jitter) && ok;
+        rsf_colour_transport_destroy(transport);
+    }
     rsf_texture_dump_options options{}; options.struct_size = sizeof(options); options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
     char fidelity[8]{};
     if (GetEnvironmentVariableA("RSF_PROBE_COLOUR_FIDELITY",fidelity,sizeof(fidelity)) && fidelity[0]=='1') {

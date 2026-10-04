@@ -4,6 +4,7 @@ add_library(rsf_graphics STATIC
     src/motion_decode.cpp
     src/motion_resolve.cpp
     src/colour_fidelity.cpp
+    src/colour_transport.cpp
     src/resource_roles.cpp
     src/constant_buffer_read.cpp
     src/resource_ref.cpp

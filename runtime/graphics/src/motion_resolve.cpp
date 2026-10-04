@@ -12,6 +12,7 @@ namespace {
 constexpr char shader_source[] = R"(
 Texture2D<float2> Motion : register(t0);
 Texture2D<float> Depth : register(t1);
+Texture2D<float> DepthLayer : register(t2);
 RWTexture2D<float2> Resolved : register(u0);
 RWTexture2D<float> ResolvedDepth : register(u1);
 cbuffer Params : register(b0) {
@@ -20,7 +21,8 @@ cbuffer Params : register(b0) {
     float Sentinel;
     uint HasSentinel;
     uint2 Size;
-    uint2 Padding;
+    uint HasLayer;
+    uint Padding;
 };
 [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= Size)) return;
@@ -29,7 +31,9 @@ cbuffer Params : register(b0) {
     float2 motion = decoded * DecodedToPixels;
     if (HasSentinel != 0 && all(decoded == Sentinel)) {
         float2 ndc = (float2(id.xy) + 0.5) / float2(Size) * float2(2,-2) + float2(-1,1);
-        float4 previous = mul(float4(ndc, depth, 1), ClipToPrevious);
+        // Reversed Z: the larger value is the nearer surface, such as a cloud in front of sky.
+        float reprojected = HasLayer != 0 ? max(depth, DepthLayer[id.xy]) : depth;
+        float4 previous = mul(float4(ndc, reprojected, 1), ClipToPrevious);
         motion = abs(previous.w) > 1e-8 ? (previous.xy / previous.w - ndc) * float2(Size) * float2(0.5,-0.5) : 0;
     }
     Resolved[id.xy] = all(isfinite(motion)) ? motion : 0;
@@ -37,7 +41,7 @@ cbuffer Params : register(b0) {
 })";
 struct Constants {
     float matrix[16]; float scale[2]; float sentinel; uint32_t has_sentinel;
-    uint32_t size[2]; uint32_t padding[2];
+    uint32_t size[2]; uint32_t has_layer; uint32_t padding;
 };
 }
 struct rsf_motion_resolve {
@@ -72,6 +76,9 @@ extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t
     for (uint32_t i = 0; i < 2; ++i) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+        // R16G16_FLOAT, not R32G32_FLOAT: this output crosses to D3D12 for DLSS-G, FSR and XeSS,
+        // and R32G32_FLOAT is not a D3D11 shareable format (CreateTexture2D E_INVALIDARG on the
+        // RTX 4070 Laptop, 4 October). The R32G32 decode upstream keeps the NDC precision.
         desc.Format = i == 0 ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R32_FLOAT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
         if (FAILED(pass->device->CreateTexture2D(&desc, nullptr, &pass->textures[i])) ||
@@ -107,7 +114,18 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
         }
         if (FAILED(pass->device->CreateShaderResourceView(inputs[i], &view, &source_views[i]))) return 0;
     }
+    ComPtr<ID3D11ShaderResourceView> layer_view;
+    if (params->struct_size >= sizeof(*params) && params->depth_layer) {
+        auto* layer = static_cast<ID3D11Texture2D*>(params->depth_layer);
+        ComPtr<ID3D11Device> owner; layer->GetDevice(&owner);
+        D3D11_TEXTURE2D_DESC desc{}; layer->GetDesc(&desc);
+        // A layer that does not fit is ignored: scene depth alone is the established behaviour.
+        if (owner.Get() == pass->device.Get() && desc.Format == DXGI_FORMAT_R32_FLOAT && desc.Width >= pass->width &&
+            desc.Height >= pass->height && desc.SampleDesc.Count == 1 && desc.ArraySize == 1)
+            pass->device->CreateShaderResourceView(layer, nullptr, &layer_view);
+    }
     Constants constants{};
+    constants.has_layer = layer_view ? 1u : 0u;
     std::memcpy(constants.matrix, params->clip_to_previous, sizeof(constants.matrix));
     std::memcpy(constants.scale, params->decoded_to_pixels, sizeof(constants.scale));
     constants.sentinel = params->sentinel; constants.has_sentinel = params->has_sentinel;
@@ -117,10 +135,10 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
     if (!rsf_d3d11_state_save(context, &saved)) return 0;
     context->SetPredication(nullptr, FALSE);
     context->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* sources[] = {source_views[0].Get(), source_views[1].Get()};
+    ID3D11ShaderResourceView* sources[] = {source_views[0].Get(), source_views[1].Get(), layer_view.Get()};
     ID3D11UnorderedAccessView* targets[] = {pass->views[0].Get(), pass->views[1].Get()};
     ID3D11Buffer* buffers[] = {pass->constants.Get()};
-    context->CSSetShader(pass->shader.Get(), nullptr, 0); context->CSSetShaderResources(0, 2, sources);
+    context->CSSetShader(pass->shader.Get(), nullptr, 0); context->CSSetShaderResources(0, 3, sources);
     context->CSSetUnorderedAccessViews(0, 2, targets, nullptr); context->CSSetConstantBuffers(0, 1, buffers);
     context->Dispatch((pass->width + 7) / 8, (pass->height + 7) / 8, 1);
     ID3D11UnorderedAccessView* empty[2]{}; context->CSSetUnorderedAccessViews(0, 2, empty, nullptr);

@@ -209,6 +209,9 @@ rsf_observer_result rsf_observer_uninstall(void);
 rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out);
 
 rsf_observer_result rsf_observer_get_status(rsf_observer_status* status);
+/* Paired around an application-facing D3D11 facade's Present. Updates normal observer
+   device/output/counter/dump bookkeeping without invoking callbacks recursively. */
+rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event);
 
 /* Ask for a dump to be taken. The work happens inside the next present, on whichever thread the
    game renders from.

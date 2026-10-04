@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/motion_resolve.h>
 #include <d3d11.h>
+#include <DirectXPackedVector.h>
 #include <wrl/client.h>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 using Microsoft::WRL::ComPtr;
 int main()
@@ -42,15 +44,50 @@ int main()
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return 1;
         if (i == 0) {
-            const auto* values = static_cast<const uint16_t*>(mapped.pData);
-            std::fprintf(stderr, "motion: %04x %04x / %04x %04x / %04x %04x\n",
+            float values[6];
+            for (uint32_t v = 0; v < 6; ++v)
+                values[v] = DirectX::PackedVector::XMConvertHalfToFloat(static_cast<const uint16_t*>(mapped.pData)[v]);
+            std::fprintf(stderr, "motion: %g %g / %g %g / %g %g\n",
                 values[0], values[1], values[2], values[3], values[4], values[5]);
-            // Half encodings: valid zero remains zero; written motion becomes (2,2);
-            // unwritten pixel uses the +0.25 NDC camera translation, becoming (1,0).
-            passed &= (values[0] & 0x7fff) == 0 && (values[1] & 0x7fff) == 0 &&
-                      values[2] == 0x4000 && values[3] == 0x4000 && values[4] == 0x3c00 &&
-                      (values[5] & 0x7fff) == 0;
+            // Valid zero remains zero; written motion becomes (2,2); the unwritten pixel uses
+            // the +0.25 NDC camera translation, becoming (1,0).
+            passed &= values[0] == 0 && values[1] == 0 && values[2] == 2 && values[3] == 2 &&
+                      values[4] == 1 && values[5] == 0;
         } else passed &= static_cast<const float*>(mapped.pData)[0] == 0.5f;
+        context->Unmap(staging.Get(), 0);
+    }
+    // A depth layer: previous.x = ndc.x + 0.5 * depth, so only the reprojection depth moves a
+    // pixel. Scene depth is 0 (sky). Pixel 2 has a nearer layer at 0.5 and moves one pixel;
+    // pixel 3 has none and stays; pixel 0 is written and ignores the layer.
+    float sky[64]{}, layer[64]{};
+    layer[0] = layer[2] = 0.5f;
+    ComPtr<ID3D11Texture2D> depths[2]; // sky, layer
+    for (uint32_t i = 0; i < 2; ++i) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = desc.Height = 8; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+        desc.Format = DXGI_FORMAT_R32_FLOAT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data{}; data.pSysMem = i == 0 ? sky : layer; data.SysMemPitch = 32;
+        if (FAILED(device->CreateTexture2D(&desc, &data, &depths[i]))) return 1;
+    }
+    rsf_motion_resolve_params layered = params;
+    layered.clip_to_previous[12] = 0; layered.clip_to_previous[8] = 0.5f;
+    layered.depth_layer = depths[1].Get();
+    passed &= rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), depths[0].Get(), &layered) != 0;
+    {
+        auto* output = static_cast<ID3D11Texture2D*>(rsf_motion_resolve_motion(pass));
+        D3D11_TEXTURE2D_DESC desc{}; output->GetDesc(&desc);
+        desc.BindFlags = 0; desc.Usage = D3D11_USAGE_STAGING; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, &staging))) return 1;
+        context->CopyResource(staging.Get(), output);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return 1;
+        float values[8];
+        for (uint32_t v = 0; v < 8; ++v)
+            values[v] = DirectX::PackedVector::XMConvertHalfToFloat(static_cast<const uint16_t*>(mapped.pData)[v]);
+        std::fprintf(stderr, "layered: %g %g / %g %g / %g %g\n", values[0], values[1], values[4], values[5], values[6], values[7]);
+        passed &= values[0] == 0 && values[1] == 0 && std::fabs(values[4] - 1) < 1e-5f && values[5] == 0 &&
+                  values[6] == 0 && values[7] == 0;
         context->Unmap(staging.Get(), 0);
     }
     params.clip_to_previous[0] = std::numeric_limits<float>::quiet_NaN();

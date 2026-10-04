@@ -3,11 +3,14 @@ target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_o
 
 add_executable(rsf_plugin_contract plugin_contract.cpp)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_unity_mono)
+add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_unity_mono)
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
 target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_orchestrator rsf_build_options d3d12 dxgi)
+if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
+    target_include_directories(rsf_unity_sr_d3d12_test SYSTEM PRIVATE "${RSF_STREAMLINE_INCLUDE}")
+endif()
 add_test(NAME unity_sr_d3d12_contract COMMAND rsf_unity_sr_d3d12_test)
 add_executable(rsf_gpu_policy_test gpu_policy.cpp)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_orchestrator rsf_build_options)
@@ -30,6 +33,10 @@ endif()
 add_test(NAME game_plugin_contract COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:rsf_game_ac7>" ac7)
 set_tests_properties(game_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_ac7>")
+add_test(NAME game_project_wingman_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_project_wingman>" project-wingman)
+set_tests_properties(game_project_wingman_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_project_wingman>")
 add_test(NAME game_unity_mono_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_unity_mono>" unity-mono)
 set_tests_properties(game_unity_mono_plugin_contract PROPERTIES
@@ -184,6 +191,14 @@ target_link_libraries(rsf_motion_resolve_test PRIVATE ReScaleFrame::Graphics rsf
 add_test(NAME motion_resolve COMMAND rsf_motion_resolve_test)
 set_tests_properties(motion_resolve PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+add_executable(rsf_colour_transport_test colour_transport.cpp)
+target_link_libraries(rsf_colour_transport_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME colour_transport COMMAND rsf_colour_transport_test)
+set_tests_properties(colour_transport PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+add_executable(rsf_native_translucency_test native_translucency.cpp)
+target_link_libraries(rsf_native_translucency_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME native_translucency COMMAND rsf_native_translucency_test)
+set_tests_properties(native_translucency PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_executable(rsf_sr_pipeline_test sr_pipeline.cpp)
 target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
@@ -198,6 +213,9 @@ add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_fg_provider_test fg_provider.cpp)
+add_executable(rsf_fg_choice_test fg_choice.cpp)
+target_link_libraries(rsf_fg_choice_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME fg_choice COMMAND rsf_fg_choice_test)
 target_link_libraries(rsf_fg_provider_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg_provider COMMAND rsf_fg_provider_test)
 set_tests_properties(fg_provider PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -212,6 +230,24 @@ target_include_directories(rsf_fg_c_header PRIVATE ../runtime/orchestrator/inclu
 target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_options)
 
 add_executable(rsf_fg_switching_test fg_switching.cpp)
+add_executable(rsf_d3d11_present_bridge_test d3d11_present_bridge.cpp)
+add_executable(rsf_fg_present_bridge_test fg_present_bridge.cpp)
+target_link_libraries(rsf_fg_present_bridge_test PRIVATE rsf_orchestrator_core rsf_build_options)
+set_target_properties(rsf_fg_present_bridge_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
+add_test(NAME shared_fg_present_bridge COMMAND rsf_fg_present_bridge_test)
+set_tests_properties(shared_fg_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_build_options)
+# Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
+set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
+add_test(NAME d3d11_present_bridge COMMAND rsf_d3d11_present_bridge_test)
+set_tests_properties(d3d11_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+add_dependencies(rsf_d3d11_present_bridge_test rsf_proxy_ac7)
+add_test(NAME ac7_proxy_startup COMMAND rsf_d3d11_present_bridge_test
+    --proxy-smoke $<TARGET_FILE:rsf_proxy_ac7>)
+set_tests_properties(ac7_proxy_startup PROPERTIES TIMEOUT 120)
 target_link_libraries(rsf_fg_switching_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg_switching COMMAND rsf_fg_switching_test)
 set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

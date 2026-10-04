@@ -8,8 +8,11 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_scene.cpp
     src/native_window.cpp
     src/native_cpu.cpp
+    src/native_fg.cpp
+    src/native_fg_d3d12.cpp
     src/native_composition.cpp
     src/native_sr.cpp
+    src/native_translucency.cpp
     src/native_sr_d3d12.cpp
     src/gpu_policy.cpp
     src/unity_sr_host.cpp
@@ -19,6 +22,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/frame_sequencer.cpp
     src/render_links.cpp
     src/fg_session.cpp
+    src/fg_choice.cpp
     src/fg_providers.cpp
     src/fg_leases.cpp
     src/sr_session.cpp
@@ -28,6 +32,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/dlss_pipeline.cpp)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
+target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation)

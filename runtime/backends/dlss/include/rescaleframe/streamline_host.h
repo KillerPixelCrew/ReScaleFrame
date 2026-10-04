@@ -59,13 +59,28 @@ typedef struct rsf_streamline_latency_status {
    Refuses an already loaded interposer rather than starting a second SDK/device registration.
    The host outlives every provider/context/COM object created from it. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_create(const rsf_streamline_host_setup*, rsf_streamline_host**);
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_adopt(const rsf_streamline_host_setup*, void* device12, void* queue12, rsf_streamline_host**);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host*, rsf_streamline_graphics*);
+/* Borrowed SDK module/token for the SR adapter on this host. No caller may mint another SDK
+   token. A token is usable only while its CPU-to-Present frame remains live. */
+RSF_SL_HOST_API void* rsf_streamline_host_module(rsf_streamline_host*);
+RSF_SL_HOST_API void* rsf_streamline_host_token(rsf_streamline_host*, uint64_t frame_id);
+/* Graphics owner, before retiring/reconfiguring SR resources. Joins submitted queue work. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host*);
 /* Independent of an FG provider. The caller carries one ID from actual input through Present.
    For Reflex profiles begin sleeps once, even in Off; PCL profile only mints the shared token. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_begin(rsf_streamline_host*, uint64_t frame_id);
+/* Threaded engines can reserve identity before queuing BeginFrame, then sleep at their
+   native pacing boundary. Each token accepts exactly one sleep. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host*, uint64_t frame_id);
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host*, uint64_t frame_id);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, uint64_t frame_id,
     rsf_latency_marker marker, uint32_t controller_input);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t frame_id);
+RSF_SL_HOST_API int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t frame_id);
+/* Device-kind bits follow game_renderer.h; registered message IDs are checked against PCL. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t frame_id,
+    uint32_t device_kinds, uint32_t message_id);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host*, rsf_reflex_mode, uint32_t frame_limit_us);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_host*, rsf_streamline_latency_status*);
 /* Immediately after chain creation. Recognizes an already upgraded factory-created interface.
@@ -73,6 +88,11 @@ RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_latency_status(rsf_stream
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_host*, void** idxgi_chain);
 /* Call only after destroying presentation and draining/releasing all graphics objects. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_destroy(rsf_streamline_host*);
+/* Present owner only, with all graphics callers quiescent and queues drained. Refreshes
+   the plugin entry points after reload; SR/PCL registration remains on the same device. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_generation_load(rsf_streamline_host*, uint32_t enabled);
+/* Borrowed native alias, valid through the supplied proxy object's lifetime. */
+RSF_SL_HOST_API void* rsf_streamline_host_native(rsf_streamline_host*, void* proxy);
 #ifdef __cplusplus
 }
 #endif

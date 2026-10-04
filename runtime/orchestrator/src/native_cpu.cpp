@@ -11,7 +11,7 @@ void* consumer_user = nullptr;
 }
 extern "C" RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* event)
 {
-    if (!event || event->struct_size < sizeof(*event) || event->stage > RSF_GAME_CPU_FRAME_END ||
+    if (!event || event->struct_size < sizeof(*event) || event->stage > RSF_GAME_CPU_PACING ||
         !event->session_id || !event->source_frame_id || !event->timestamp_qpc || !event->qpc_frequency) return 0;
     rsf_game_cpu_event_fn sink = nullptr; void* user = nullptr;
     {
@@ -32,6 +32,20 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* ev
                 return 0;
             }
         }
+        if (event->stage == RSF_GAME_CPU_PACING) {
+            if (frame.stage_mask != 1u || frame.pacing_qpc || frame.qpc_frequency != event->qpc_frequency ||
+                event->timestamp_qpc < frame.timestamps_qpc[0]) return 0;
+            frame.pacing_qpc = event->timestamp_qpc;
+            sink = consumer; user = consumer_user;
+        } else if (event->stage == RSF_GAME_CPU_INPUT_EVENT) {
+            if (event->input_kind & ~7u || (!event->input_kind && event->message_id < 0xc000u) ||
+                event->qpc_frequency != frame.qpc_frequency || event->timestamp_qpc < frame.timestamps_qpc[0]) return 0;
+            for (uint32_t i = 0; i < 3; ++i) if (event->input_kind & (1u << i)) {
+                frame.input_mask |= 1u << i;
+                ++frame.input_events[i]; frame.input_qpc[i] = event->timestamp_qpc;
+            }
+            sink = consumer; user = consumer_user;
+        } else {
         const uint32_t expected = (1u << event->stage) - 1u;
         // Idle/loading frames may close before input or simulation; they remain explicit partial
         // CPU records. They cannot be promoted to a complete render or latency frame.
@@ -49,6 +63,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* ev
         frame.stage_mask |= 1u << event->stage;
         frame.ended = event->stage == RSF_GAME_CPU_FRAME_END;
         sink = consumer; user = consumer_user;
+        }
     }
     if (sink) sink(user, event);
     return 1;

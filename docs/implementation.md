@@ -1,5 +1,51 @@
 # Implementation tracker
 
+## Shared frame generation, 4 October 2026
+
+Current acceptance: the user confirms the final Drag'n Wash corrections resolved the FSR
+image defect, after previously accepting XeSS and DLSS-G. Runtime provider changes and
+SDK-reported multiplier controls are deployed. Full Release verification passes 42 executed
+native checks with seven opt-in skips; 58 Rust tests and shipped-Mono checks pass. AC7's
+existing DLSS behavior is user-accepted; its new FSR/XeSS live acceptance and higher MFG
+counts on suitable hardware remain separate verification gaps. The entries below preserve
+the failures and corrections that led to the accepted Unity result.
+
+The user accepts AC7's earlier DLSS-FG behavior. Both game adapters now route independent
+SR and FG selection through a stable presentation facade, with provider replacement after
+a drained Present. Unity includes shared DLSS SR/FG registration, source CPU tokens and
+completed HUD-less colour plus normalized depth/motion. Multiplier controls use queried
+DLSS/XeSS limits; the pinned AMD API provides 2x. Unsupported creation retains the current
+provider. Controls no longer request a restart.
+[Implementation and evidence](research/shared-fg-20261004.md).
+
+The first Unity run crashed; the imported RTHandle null dereference was repaired. The next
+run still had inactive FG and an incorrectly disabled DLSS choice. Corrected the render-to-
+Present thread handoff by binding identity to engine buffers, shared Streamline registration,
+missing FG dependencies, token retirement on refused inputs, and a log sharing conflict.
+Release verification passes 42 executed native tests with seven opt-in skips and 58 Rust
+tests. CoreCLR/shipped Mono checks pass. Cross-thread hardware fixtures pass runtime provider
+handoffs with FSR3/XeSS activity and retained engine buffers. Shared DLSS SR evaluates and
+passes GPU readback. The hidden native DLSS FG fixture verifies tags and handoffs, without
+activity proof; the D3D11 fixture reports DLSS activity. Both installs contain the corrected
+Release files with backups; all 277 original Unity files are unchanged. Live game activation,
+runtime switching, moving-scene/HUD quality and MFG on capable hardware remain unaccepted.
+
+Latest user run confirms successful live switches and XeSS generation by RTSS, but reports
+inactive alternatives. The log exposes conflicting shared DLSS SR/FG viewport-zero constants;
+separated their viewports and verified both on one SDK token with GPU readback. Fixed captured
+input read states through asynchronous Present, and added bounded FSR preparation/dispatch
+activity logs. The mixed-resolution device fixture and full Release gate pass; corrections
+are deployed to both games. FSR activation in the user's run remains unexplained until fresh
+activity evidence is available. DLSS recovery and image quality still need the next game run.
+
+20:05 live correction: startup succeeds after native queue ownership repair; a subsequent
+switch crashes in the bridge's unguarded GetFullscreenState. Protected concurrent queries
+and physical publication, preserved application counts, and verified roughly three million
+queries across switches. Live FSR logs confirm generation; added its measured DXGI counter
+and Unity FPS clock samples. DLSS's ReflexNotDetected failure requires effective Reflex On
+while active. Built, gated and deployed these corrections. Live switch stability, DLSS
+activity and FSR pacing acceptance are still open.
+
 ## Unity Mono research and shared plugin direction, 3 October 2026
 
 4 October increment: shared drop-in shim, Mono/Harmony URP hooks, native DX12 SR and the
@@ -72,6 +118,31 @@ checks pass. This is documentation validation, not a new game/device test.
 [Scope and checks](research/skills-session-update-20261002.md).
 
 ReScaleFrame is a monorepo. All first-party components share this history and release version. Separate runtime/plugin DLLs do not imply separate repositories.
+
+## Project Wingman scaffold and static research, 3 October 2026
+
+- [x] Fingerprint the examined x64 executable and match its UE4.27.2 renderer against pinned
+      source and symbol-backed references. Twenty native functions named/annotated in Ghidra.
+      Temporal input/history/jitter fields, widget target owners and stereo texture setter are
+      statically identified. [Research and hook map](research/project-wingman-renderer.md).
+- [x] Add `rsf_game_project_wingman`, producing `ReScaleFrame.Game.ProjectWingman.dll` through
+      the existing game-plugin ABI. Exact name/hash/architecture detection is separate from
+      readiness. Preparation and activation refuse with `RSF_ERROR_NOT_READY`; status stays
+      inactive and unprepared. No hooks, retained host services or game-installation changes.
+      [Plugin guide](../games/project-wingman/README.md) and
+      [engine evidence](../games/project-wingman/engine.json).
+- [x] Build and synthetic-test on Windows/MSVC with
+      `eng/verify.ps1 -Configuration Release -VS2026`: 34 tests executed, five skipped; Rust
+      formatting and Clippy passed. Both game-plugin DLL contract tests pass. The new fixture
+      checks identity, wrong-build/architecture refusal, ABI/size guards, inactive lifecycle and
+      repeated cleanup. This is test-process DLL validation, not a game or graphics-device test.
+- [ ] Identify effective render-scale policy and verify live temporal input formats, camera/history
+      conventions, per-view/eye identity and RDG/RHI resource lifetimes.
+- [ ] Validate expected hook bytes and implement native SR/fallback output reinsertion.
+- [ ] Trace all live desktop/VR HUD routes and establish a completed HUD-less image and native
+      reinsertion. Separate widget textures alone do not complete this requirement.
+- [ ] Implement and game-test loading, renderer lifecycle, scale/scene/resize transitions and VR.
+      Project Wingman rendering, FG and latency support remain unimplemented.
 
 ## Active AC7 scope correction, 1 October 2026
 
@@ -695,6 +766,42 @@ producer extensions have not been game-tested.
       and preserve its promoted output; add final-screen raw/preview captures. Windows Release
       verification passes. Corrected AC7 run and pause/resume validation remain pending.
       [Research](research/ac7-ui-hdr-20260930.md).
+- [x] Measure current coverage and conventions from the 3 and 4 October F9 captures. In flight
+      only the player aircraft and its attached weapons write velocity; the submitted dense
+      field reproduces written vectors and depth reprojection to 0.000 px median error. The
+      size gate drops only sub-3-pixel primitives. Translucent effects, the kill-cam and clouds
+      (device depth 0) get camera motion only. Map all 4.18 velocity gates in the binary; this
+      calls the 7 September translucent-velocity result into question pending a retest.
+      [Research](research/ac7-motion-depth-20261004.md).
+- [x] Store decoded motion in R32G32_FLOAT. Storing the resolved motion that way too broke SR in
+      the 14:27 game run: R32G32_FLOAT is not D3D11 shareable, so the DLSS-G and FSR/XeSS
+      transfers refused every frame. The resolved motion is R16G16_FLOAT again; the
+      shared-host hardware test now covers this path. Redeployed; not yet game-tested.
+- [x] Fill translucency hints from a scene-colour snapshot at the first translucency pass and
+      the separate layer: DLSS transparency/bias/colour-before-transparency/layer tags, FSR
+      reactive and transparency-and-composition, XeSS responsive mask. DLSS SR with current
+      presets is not expected to read most of them. Built, WARP-tested, deployed; not
+      game-tested.
+- [x] Reproject unwritten pixels at TrueSky cloud depth, from a guarded relay at the
+      composite_tile draw (DLL RVA `0xabc6b`). Built, resolve WARP-tested, deployed; the
+      relay and conversion are not game-tested.
+- [x] Port 4.27's material texture mip bias, `max(log2(render/output) - 0.3, -2)`, as
+      biased sampler clones inside the primary view's base pass (`0xebf050`) and translucency
+      scopes. `4.27-plus` (tip `41b2c549`, 15 September 2026) was checked as the newest UE4
+      source; it changes no velocity or depth code. Built, hardware D3D11 tested, deployed; not
+      game-tested.
+- [x] Remove DLSS-only hangar shimmer and Performance/Ultra Performance banding without forcing a
+      preset: the post-DLSS colour correction is off by default (`RSF_DLSS_COLOUR_CORRECTION`),
+      and DLSS receives an invertible display-range encoding with HDR input off, decoded back to
+      linear with highlight recovery (`RSF_DLSS_TONEMAP`). Probe-measured on the real runtime,
+      WARP- and shared-host-tested, and game-confirmed by the user on 4 October.
+      [Research](research/ac7-motion-depth-20261004.md).
+- [ ] Run the hint and cloud build in flight near clouds and with smoke, on DLSS, FSR and XeSS.
+- [ ] Retest the translucent-velocity gate with the two earlier rejections (`0x1184e4c`,
+      `0x10fdc7c`) accounted for, or withdraw the 7 September result.
+- [ ] Trial `ShouldRenderVelocities` and the `HasVelocity` always-velocity jump (`0x118384c`)
+      separately for animated movable meshes and the kill-cam.
+- [ ] Fix the F9 recorder's `fraction_unwritten` summaries, which ignore both unwritten encodings.
 - [ ] Prioritize the reported carrier-launch and refuelling weapon/attached-missile omissions,
       then possibly missing moving ground vehicles. Match each visible colour draw to its
       velocity draw or exact rejection reason, separating per-primitive bounds from material/LOD
@@ -1053,3 +1160,227 @@ Ordinary Slate texture binding path implemented (ABI10): candidate-only source-s
 leased native texture across queued bind commands, exact source/window comparison and separate
 texture-bound Present evidence. MSVC built only, no tests/deployment/game run. Other consumers,
 late canvas/HUD-less resources and vendor sleep/markers remain unfinished.
+
+3 October DLSS-G/Reflex MVP (game ABI11, overlay ABI7): guarded primary RHI submission scope,
+copied flight classification, one D3D12 presentation/SR host, coherent constants/CPU tokens,
+leased FG inputs, physical Present markers and requested/effective/active controls. MSVC/Rust
+checks and RTX synthetic generation passed: 16 tagged source frames, 32 SDK presents, 17 sleeps
+and 96 markers. COM/resize and missing-runtime/Intel native fallback checked. No new AC7 game,
+HUD, latency or pacing acceptance. UE4.18.3 Launcher FID reference built/installed with 123,308
+signatures; user-completed analysis supplied confirmed camera/controller getter matches.
+The first new game run retained native presentation because its 10-bit buffer was excluded.
+R10G10B10A2 support now passes the same active 2x fixture. The redeployed ABI7 HUD separately
+reports rendered/application and SDK aggregate presented FPS with FG activity, using QPC and
+real counters. New game activation still requires a run. [Evidence](research/ac7-dlss-fg-20261003.md).
+
+Facade startup corrected after the user's Waiting for renderer report: shared observer
+presenter/device/output bookkeeping now runs before facade callbacks. An observer-installed
+RTX fixture verifies startup readiness, source counters and active 10-bit 2x. Paired build
+redeployed; the next game run is pending. Current full gate is blocked by unrelated concurrent
+Unity-header compilation; focused ownership checks are recorded separately.
+
+Latest FG correction: native Slate WINDOW/TEXTURE_BINDING scopes were always refused by a
+scene-only family/view requirement, so Present could not retire SDK tokens and shared SR
+stopped after filling all six slots. Role-specific owner validation now admits the native
+viewless packets while preserving source/viewport/window checks. Regression and RTX fixtures
+exercise the real AC7 queued scope path: 16 tags, 32 SDK source/generated presents, active 2x,
+all tokens retired, 96 latency markers. Full VS2026 Release verification passed: 36 tests,
+six opt-in skips, Rust format/lint. FG stays enabled with Reflex On; AC7 flight activation is
+still pending. [Cause and evidence](research/ac7-dlss-fg-20261003.md#slate-scope-rejection-and-exhausted-frame-tokens).
+
+The 22:37 AC7 run confirms matching CPU/RHI/window/scene identity and flight classification;
+the remaining refusal is the sampled-scene-texture prerequisite. Added the engine's direct
+backbuffer path using exact canonical COM identity and full output extent. The queued RTX
+fixture activates FG for both sampled and direct paths, rejects missing/mismatched ownership,
+and retires all tokens. Full Release verification passed (36 tests, six opt-in skips). Game
+activation and visual/pacing acceptance remain pending. [Evidence](research/ac7-dlss-fg-20261003.md#direct-backbuffer-presentation-path).
+
+AC7 flight FG is now game-confirmed: the 22:51 run matches the direct backbuffer and reports
+SDK active 2x; the user confirms generation. Real FPS fluctuates roughly 60-170 (also in RTSS).
+Pacing correction rotates the three command slots independently of fence serial, submits the
+D3D11 signal before flushing, and isolates SR/upload waits from the FG queue, following local
+OptiScaler revision 92337ebf. Added per-second timing evidence and guarded hangar/briefing
+classification. The 240-frame RTX fixture passes all three scene classes and both presentation
+paths. Native build passes; the shared full gate hits eight unrelated version-proxy collisions,
+and all eight identical binaries pass in isolation. Rust tests/format/lint pass. Corrected
+AC7 pacing and the two additional scenes await live validation.
+[Evidence](research/ac7-dlss-fg-20261003.md#flight-activation-pacing-correction-and-additional-scenes).
+
+The 23:27 pacing deployment hit a startup regression from the concurrently combined loader,
+before FG initialization. A dedicated `rsf_proxy_ac7` carrier now preserves DirectInput ordinal
+1 and the original AC7 entry path, while including the new pacing/scene code. Its isolated
+DLL-load/observer/D3D11 startup test passes and the 23:38 pair is deployed with FG On. The generic
+loader is preserved. AC7 launch/pacing/menu validation remains pending; the full shared gate
+still encounters version-shim collisions outside the isolated tests.
+
+4 October: user confirms AC7 startup plus hangar/flight FG; pacing improved but input-correlated
+dips remain. Briefing is deferred at the user's request. Deployed source-timing instrumentation
+at 00:07 to distinguish Reflex, engine/input, RHI and SR waits; no scheduling behavior changed
+in this increment. Exact diagnosis and a corrected pacing run remain pending.
+
+The hangar capture now measures up to roughly 29 ms in the Reflex begin path during 34 ms
+source-frame intervals. Corrected its ordering: next-frame sleep/input waits for preceding
+application Present plus SDK bookkeeping, rather than only scene RHI completion. Aborts
+release the wait; sent window messages can progress without consuming posted input. A queued
+two-thread regression proves next-token acquisition remains held until Present completion
+for sampled/direct paths, and abort recovery passes. Full Release gate is green (37 tests,
+six opt-in skips); the final wait adjustment passes focused build/ordering checks. Actual
+hangar dip resolution remains pending. Briefing and additional PCL input wiring remain deferred.
+
+The user rejected the full-Present join: it worsened dips, so that barrier was removed. User
+reports Reflex Off eliminates them. Corrected the separate bug that promoted requested Off
+to On during FG; SDK sleep and PCL calls still run in Off. Added applied-mode and split slow-call
+timing logs. Official NVIDIA guidance plus local UE4.27.2 source identify frame-wide marker
+boundaries that still need mapping to AC7 4.18; no verified 4.18 Reflex example was found.
+Saved RTSS marker injection is enabled, but effective interference is unproven; no-RTSS test
+requested. Full Release gate and Rust tests pass. Deployed 00:55, FG On; pacing remains open.
+
+The user reproduced dips with RTSS off, ruling out RTSS as a necessary trigger. Split timing
+shows 28-29 ms inside Reflex sleep. Reinvestigation in the user's AC7 Ghidra project verified
+full native frame boundaries: copied BeginFrame task identity, queued RHI BeginFrame/EndFrame,
+and pre-frame-sync simulation completion. Implemented full-frame markers, simulation start
+before input, six-marker token retirement and removal of the extra CPU join. ABI12 adds
+mouse/keyboard dequeue records, guarded controller-poll markers and SDK-registered PCL ping
+routing. Build/native gate and device contracts pass; corrected AC7 pacing and input behavior
+await a user-run hangar test. RTSS coexistence remains required, briefing remains deferred.
+Final full Release gate: 39 executed tests, six opt-in skips. Device fixture also verifies
+SimulationEnd after Present and token retention through EndFrame. Deployed 4 October 01:34,
+matching hashes in `.local/deploy-backups/ac7-pair-20261004-013424-912/deployment.json`;
+fixed 2x FG and Reflex On remain configured. No game pacing acceptance yet.
+
+The 07:57 run confirms fewer hangar dips, almost none in flight, and all input/PCL paths;
+On + Boost still dips. Remaining SDK sleeps reach 26-31 ms with short GPU-active work.
+ABI13 now reserves the token before BeginFrame dispatch and sleeps at verified native engine
+pacing RVA 0x1adbcb0, matching the engine-owned Reflex ordering. Added read-only actual driver
+sleep-state diagnostics. Full gate passes 39 executed tests/six skips; retail device contracts
+pass, including RHI begin before sleep and duplicate-sleep refusal. Deployed 08:16 with backup
+`.local/deploy-backups/ac7-pair-20261004-081610-248`; next hangar run is pending.
+
+The delegated [lighting investigation](research/ac7-lighting-shadow-20261004.md) finds stippling
+already in pre-SR colour. Directional contact-shadow noise is a lead; the existing F9 captures
+lack its live uniforms and all use Ultra Performance. Reserved existing capture quotas for
+its pre/post-light colour, live CBs, depth and shadow inputs, included in the 08:16 deployment.
+The lighting defect is unresolved; matched Ultra/Quality captures are requested.
+
+The user counted eight hangar dips on the native-pacing build and none in flight. Driver
+readback confirms 33,333-us sleep during a dip with low latency enabled, foreground true,
+2x FG, no VRR/forced VSync/DFG, and only about 3.3 ms GPU-active work. The 08:45 build moves
+the vendor RenderStart from pre-input BeginFrame to actual scene RHI submission, retaining
+full EndFrame/Present coverage and one start per token. This targets empty-queue timing in
+the cross-API proxy; actual resolution remains unverified.
+
+Fresh lighting captures prove the directional contact draw introduces the dots with contact
+length 0.04, flags 3 and advancing View phases 7/5/2. Applied a guarded DXBC transform that
+adds the missing per-view phase to contact noise, preserving all contact rays and shader
+signatures. Hooked the matched native pixel-shader factory and retained its resource metadata
+and optional trailer. Disassembly, WARP/hardware shader creation and refusal/preservation
+checks pass. Combined Release gate passes 39 tests/six skips; deployed 08:45 with backup
+`.local/deploy-backups/ac7-pair-20261004-084546-571`. Hangar pacing and visible lighting
+acceptance are pending; the latest F9 captures are all Ultra Performance.
+
+The user reports both defects remain after 08:45. Shader creation did apply; an offscreen
+execution probe proves its phase affects the contact branch, but moving-game quality remains
+unresolved. The next F9 must confirm the bound patched shader and lighting delta.
+
+09:20: restored the hidden native D3D11 swapchain/Present used by OptiScaler's DX11/DX12
+reference wrapper. Our previous facade never ended a frame on its native D3D11 device.
+Internal presents retain external hook forwarding but are explicitly excluded from application
+callbacks and counters. Added bounded, non-filtering NVAPI caller/queue-state diagnostics.
+Full gate passes 39 tests/six skips; hardware contracts verify no double-counting, resize and
+marker lineage. Deployed with backup `.local/deploy-backups/ac7-pair-20261004-092012-652`.
+Actual Reflex resolution and lighting correction remain open, pending the requested game run.
+
+The 09:20 hidden-Present experiment worsened dips and was removed. Audited mode/marker callers
+are Streamline with zero requested FPS limit; Reflex Sync feedback is disabled. Corrected the
+legacy-to-flip VSync-off translation to query/enable supported tearing, use its Present flag
+only with sync zero in windowed mode, and preserve the creation flag through resize. Full gate
+and retail device presentation/resize/input contracts pass. Deployed 09:40 with backup
+`.local/deploy-backups/ac7-pair-20261004-094032-444`; live acceptance remains open. Expanded
+the bounded lighting capture to include missing material/GBuffer inputs and sampler states.
+
+10:55: the Reflex sleep overlapped the previous frame. The game thread slept for frame N+1
+while the render thread was still submitting and presenting N, and RenderSubmitEnd followed
+PresentEnd. The game thread now waits for the previous source frame's Present to return (or
+its native EndFrame or abandonment) before its one sleep, still ahead of input, and
+RenderSubmitEnd precedes PresentStart. Simulation and input markers keep their real
+positions. The wait is bounded and services sent window messages. `RSF_REFLEX_ASYNC=1`
+restores the old order. Built; retail-runtime device fixture passes 17 sleeps/112 markers,
+ordered sequence, single-sleep rejection and both join paths; full Release gate passes.
+Deployed 11:01 with backup `.local/deploy-backups/ac7-pair-20261004-110157-411`; not yet
+game-tested. Expected cost is lost game/render overlap in flight. Research:
+`docs/research/ac7-dlss-fg-20261003.md`, "Ordered sleep after the previous Present".
+
+11:15: the user's hangar run rejects the ordered sleep. It executed (join 2.9 ms per frame,
+driver sleep about 0.7 ms) and five of 38 hangar seconds still stall at the driver's 33333 us
+interval. The frame ownership audit is clean in the hangar: one scene, SR call, Present and
+RHI frame per engine frame, no mismatches. Built, not deployed: a bounded dump of the driver's
+64-frame latency ring at stall onset plus unstalled baselines, diagnostics only. Fixture and
+Release gate pass. The cause of the driver-selected interval is still unknown.
+
+11:31: deployed the latency-ring diagnostic build, backup
+`.local/deploy-backups/ac7-pair-20261004-113112-520`. The 11:23 user run predates it and
+repeats the 11:01 result (four of 36 hangar seconds stalled).
+
+11:39 run on the diagnostic build: each of five hangar stalls follows, by exactly four
+frames, one frame whose driver-reported cross-adapter copy time is invalid (`0x88000000` or
+`0x90000000`). The machine is a hybrid laptop whose panel is driven by the Intel GPU. With
+generation active the driver interval oscillates between about 4.8 and 7.1 ms and the delay
+from PresentEnd to GPU end alternates between about 3.3 and 8.7 ms. The marker stream is
+clean. Why the copy sample turns invalid is not yet established. A refresh cap written as a
+test was removed undeployed at the user's direction. An accidental `git checkout` of
+`dinput8_proxy.c` was reverted from a dangling blob and verified against the deployed binary.
+
+12:17: added a user frame limit that applies to rendered frames before generation: ini
+`RSF_FRAME_LIMIT_FPS`, an Insert panel control (overlay ABI 8) and a runtime conversion to
+the driver's presented-frame limiter while generation is active. Measured on driver 616.92
+in the visible fixture: a 20000 us rendered-frame limit at 2x paced 238 generating frames at
+19.90 ms. Reflex mode and limit changes no longer reset generation history. Release gate,
+overlay Rust tests, format and Clippy pass. Deployed with backup
+`.local/deploy-backups/ac7-pair-20261004-121734-929`. Whether a limit removes the hangar
+stalls is not yet tested. An online search for the driver's invalid cross-adapter copy record
+found no public report of it.
+
+12:20: the panel's frame limit used a typed value box, which cannot work because the overlay
+has no keyboard input. Replaced with Off, minus, plus and a slider. Deployed with backup
+`.local/deploy-backups/ac7-pair-20261004-122029-147`; not yet tried in game.
+
+12:23: limit row simplified to a draggable value, a VRR button (OptiScaler's cap: presented
+interval 0.3 ms over the refresh interval, converted to rendered frames) and Off. ABI 8 limit
+fields now carry microseconds and the stats report the display refresh rate. Typing in the
+panel remains impossible: no text input in the overlay contract and AC7 reads the keyboard
+through DirectInput. Deployed with backup `.local/deploy-backups/ac7-pair-20261004-122354-572`.
+
+12:26 run with the VRR limit: the driver's 33333 us stall did not appear in the 12 seconds
+with generation active (too short to conclude), while a separate dip did: two adjacent
+seconds in which the render thread's scene submission ran at 8.7 and 13.3 ms per frame with
+52 and 55 ms peaks. The same pair of seconds exists in four of six earlier runs, once per
+session, and was being counted with the driver stalls. 12:29: deployed a limit-aware stall
+detector and a debug-only sampler that logs where the render thread is executing during such
+a hitch; backup `.local/deploy-backups/ac7-pair-20261004-122951-223`. Cause of the submission
+slowdown unknown.
+
+12:41 run, limit on, 101 generating hangar seconds: pacing is steady under the limit and one
+driver stall still occurred, again three frames after an invalid cross-adapter copy record,
+this time following a late frame that lost one of its two presents. Over-presenting is ruled
+out as the cause. Fixed my own activation hitch: the limit conversion lagged the SDK's activity
+report by a frame and the driver doubled the interval once per activation. The aircraft viewer
+was refused as an unknown screen because classification accepts only two view-target classes;
+added the plane selector (RVA 0x925e10, cache 0x3a82158) and the hangar pawn as possessed
+pawn, plus a log line stating each screen decision. The hitch sampler now waits for a settled
+generating screen. Deployed 12:50 with backup
+`.local/deploy-backups/ac7-pair-20261004-125005-200`; these changes are untested in game.
+
+13:10: with Optimus off the user's 12:58 run has no driver stall at all (driver reports VRR and
+independent flip for the first time), confirming the hybrid presentation path as that cause.
+The aircraft viewer was refused because its camera owner is none of the hangar classes; the
+hangar is now recognised by the world's game mode (`ANimbusHangarGameMode`), and history resets
+on any change of camera owner. The alt-tab hitch is inside Streamline's re-activation. Deployed
+with backup `.local/deploy-backups/ac7-pair-20261004-131031-130`; viewer untested in game.
+
+13:21: contact-shadow stippling corrected in the shader. The ray now starts half a texel's depth
+change above the surface, measured from the pixel's four neighbours, which removes the false
+self-shadowing that point-sampled depth causes at reduced internal resolution. GPU replay on all
+six captured frames: ground stipple gone, aircraft and vegetation contact shadows kept,
+bit-identical output outside the contact branch. New transformed CRC 4154163049. Deployed with
+backup `.local/deploy-backups/ac7-pair-20261004-132153-981`; not yet seen in game. Research:
+`docs/research/ac7-lighting-shadow-20261004.md`.

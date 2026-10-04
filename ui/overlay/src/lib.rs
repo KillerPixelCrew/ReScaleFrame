@@ -18,8 +18,8 @@
 //! deciding what a quality dropdown does is not.
 //!
 //! Honesty, since this is a status panel: it shows what it was told, plus ratios derived from it.
-//! There is no frame rate gain, no latency figure and no quality score, because the project cannot
-//! measure any of those yet.
+//! The compact HUD derives rendered and presented rates from host counters and the QPC clock.
+//! Requested generation does not invent a doubled rate. Latency and quality are not inferred.
 
 #![deny(missing_docs)]
 
@@ -28,6 +28,7 @@ pub mod ffi;
 pub mod model;
 mod overlay;
 mod panel;
+mod performance;
 
 pub use model::{FrameInput, Intent, Quality, Stats, TextureUpdate};
 pub use overlay::Overlay;

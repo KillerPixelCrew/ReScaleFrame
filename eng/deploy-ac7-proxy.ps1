@@ -24,7 +24,7 @@ Push-Location -LiteralPath $repoRoot
 try {
     # Configure and verify first with eng/verify.ps1; this uses that existing native build tree.
     Invoke-Checked cmake @('--build', 'build/windows-x64', '--config', $Configuration,
-                           '--target', 'rsf_proxy_dinput8', 'rsf_overlay_host')
+                           '--target', 'rsf_proxy_ac7', 'rsf_overlay_host')
     $cargoArguments = @('build', '-p', 'rescaleframe-overlay', '--locked')
     $rustConfiguration = 'debug'
     if ($Configuration -eq 'Release') {
@@ -33,16 +33,23 @@ try {
     }
     Invoke-Checked cargo $cargoArguments
     $nativeBin = Join-Path $repoRoot "build/windows-x64/bin/$Configuration"
+    $ac7Proxy = Join-Path $repoRoot "build/windows-x64/ac7/bin/$Configuration/dinput8.dll"
     $panel = Join-Path $repoRoot "target/$rustConfiguration/rescaleframe_overlay.dll"
     # This loads the real panel, exercises Insert, draws pixels and resizes a D3D11 swap chain.
-    Invoke-Checked (Join-Path $nativeBin 'rsf_overlay_host.exe') @($panel)
+    # Game-facing proxy names in the shared artifact directory can shadow Windows DLLs in
+    # the fixture. Run its unchanged executable separately, with the real panel's full path.
+    $overlayFixtureRoot = Join-Path $repoRoot "build/fixtures/ac7-overlay/$Configuration"
+    New-Item -ItemType Directory -Path $overlayFixtureRoot -Force | Out-Null
+    $overlayFixture = Join-Path $overlayFixtureRoot 'rsf_overlay_host.exe'
+    Copy-Item -LiteralPath (Join-Path $nativeBin 'rsf_overlay_host.exe') -Destination $overlayFixture
+    Invoke-Checked $overlayFixture @($panel)
     Assert-GameStopped
     # The overlay exposes FSR and XeSS; deploy their SR DLLs and notices too.
     & (Join-Path $PSScriptRoot 'deploy-ac7-sr-runtimes.ps1') -GameDirectory $gameRoot
     $backup = Join-Path $repoRoot ('.local/deploy-backups/ac7-pair-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
     New-Item -ItemType Directory -Path $backup | Out-Null
     $files = @(
-        @{ Name = 'dinput8.dll'; Source = (Join-Path $nativeBin 'dinput8.dll') },
+        @{ Name = 'dinput8.dll'; Source = $ac7Proxy },
         @{ Name = 'ReScaleFrame.Game.AC7.dll'; Source = (Join-Path $nativeBin 'ReScaleFrame.Game.AC7.dll') },
         @{ Name = 'rescaleframe_overlay.dll'; Source = $panel }
     )

@@ -99,8 +99,9 @@ inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
 inline rsf_backend_result validate_d3d12_resources(const rsf_sr_frame& frame, void* device)
 {
     const rsf_backend_resource* resources[] = {&frame.color, &frame.depth, &frame.motion,
-                                               &frame.output, &frame.exposure};
-    for (uint32_t i = 0; i < 5; ++i) {
+                                               &frame.output, &frame.exposure, &frame.reactive,
+                                               &frame.transparency};
+    for (uint32_t i = 0; i < 7; ++i) {
         const auto& resource = *resources[i];
         if (!resource.resource) continue;
         auto* texture = static_cast<ID3D12Resource*>(resource.resource);

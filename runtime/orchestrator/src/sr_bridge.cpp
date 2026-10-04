@@ -22,12 +22,14 @@ struct rsf_sr_bridge {
     uint32_t next_commands = 0;
     ComPtr<ID3D12Resource> output;
     rsf_shared_fence* fence = nullptr;
-    rsf_shared_surface* surfaces[5]{};
+    // Colour, depth, motion, exposure, output, then the reactive and transparency masks.
+    rsf_shared_surface* surfaces[7]{};
     rsf_sr_session* session = nullptr;
     uint64_t tick = 0;
     HANDLE event = nullptr;
     uint32_t width = 0, height = 0;
     DXGI_FORMAT color_format = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT motion_format = DXGI_FORMAT_UNKNOWN;
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
     bool faulted = false;
@@ -70,18 +72,19 @@ rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame)
 {
     const auto& record = *frame.record;
     auto* source = static_cast<ID3D11Texture2D*>(frame.color.resource);
-    D3D11_TEXTURE2D_DESC color{}; source->GetDesc(&color);
+    D3D11_TEXTURE2D_DESC color{}, motion{}; source->GetDesc(&color);
+    static_cast<ID3D11Texture2D*>(frame.motion.resource)->GetDesc(&motion);
     if (bridge->width == record.render_width && bridge->height == record.render_height &&
-        bridge->color_format == color.Format) return RSF_BACKEND_OK;
+        bridge->color_format == color.Format && bridge->motion_format == motion.Format) return RSF_BACKEND_OK;
     if (wait(bridge) != RSF_BACKEND_OK) return gpu_failure(bridge);
     release_surfaces(bridge);
-    for (uint32_t i = 0; i < 5; ++i) {
+    for (uint32_t i = 0; i < 7; ++i) {
         rsf_shared_surface_setup setup{};
         setup.struct_size = sizeof(setup);
         setup.abi_version = RSF_SHARED_SURFACE_ABI_VERSION;
         setup.width = i == 4 ? record.output_width : i == 3 ? 1 : record.render_width;
         setup.height = i == 4 ? record.output_height : i == 3 ? 1 : record.render_height;
-        setup.format = i == 1 || i == 3 ? DXGI_FORMAT_R32_FLOAT : i == 2 ? DXGI_FORMAT_R16G16_FLOAT : color.Format;
+        setup.format = i == 1 || i == 3 || i >= 5 ? DXGI_FORMAT_R32_FLOAT : i == 2 ? motion.Format : color.Format;
         setup.log = bridge->log; setup.log_user = bridge->log_user;
         if (rsf_shared_surface_create(bridge->device11.Get(), bridge->device12.Get(), &setup,
                                      &bridge->surfaces[i]) != RSF_SHARED_OK) {
@@ -100,6 +103,7 @@ rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame)
     }
     bridge->width = record.render_width; bridge->height = record.render_height;
     bridge->color_format = color.Format;
+    bridge->motion_format = motion.Format;
     return RSF_BACKEND_OK;
 }
 }
@@ -189,8 +193,17 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
             desc.SampleDesc.Count != 1 || desc.ArraySize != 1 ||
             (i == 4 && (desc.Width != width || desc.Height != height)) ||
             ((i == 1 || i == 3) && desc.Format != DXGI_FORMAT_R32_FLOAT) ||
-            (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT) ||
+            (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT && desc.Format != DXGI_FORMAT_R32G32_FLOAT) ||
             ((i == 0 || i == 4) && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    }
+    const rsf_backend_resource* masks[] = {frame->reactive.struct_size ? &frame->reactive : nullptr,
+        frame->transparency.struct_size ? &frame->transparency : nullptr};
+    for (auto*& mask : masks) {
+        if (!mask || !mask->resource) { mask = nullptr; continue; }
+        D3D11_TEXTURE2D_DESC desc{}; static_cast<ID3D11Texture2D*>(mask->resource)->GetDesc(&desc);
+        // An unusable mask is dropped rather than refusing the reconstruction.
+        if (desc.Format != DXGI_FORMAT_R32_FLOAT || desc.Width < frame->record->render_width ||
+            desc.Height < frame->record->render_height || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) mask = nullptr;
     }
     result = prepare(bridge, *frame);
     if (result != RSF_BACKEND_OK) return result;
@@ -208,6 +221,11 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
         context->CopySubresourceRegion(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(bridge->surfaces[i])),
             0, 0, 0, 0, static_cast<ID3D11Resource*>(inputs[i]->resource), 0, &box);
     }
+    for (uint32_t i = 0; i < 2; ++i) if (masks[i]) {
+        D3D11_BOX box{0, 0, 0, frame->record->render_width, frame->record->render_height, 1};
+        context->CopySubresourceRegion(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(bridge->surfaces[5 + i])),
+            0, 0, 0, 0, static_cast<ID3D11Resource*>(masks[i]->resource), 0, &box);
+    }
     auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(bridge->fence));
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(bridge->fence));
     const uint64_t ready = ++bridge->tick;
@@ -223,9 +241,20 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
         transition(list, static_cast<ID3D12Resource*>(targets[i]->resource),
                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+    rsf_backend_resource* mask_targets[] = {&translated.reactive, &translated.transparency};
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (!masks[i]) { *mask_targets[i] = {}; continue; }
+        mask_targets[i]->resource = rsf_shared_surface_d3d12(bridge->surfaces[5 + i]);
+        mask_targets[i]->state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        transition(list, static_cast<ID3D12Resource*>(mask_targets[i]->resource),
+                   D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
     translated.output.resource = bridge->output.Get();
     translated.output.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     result = rsf_sr_session_evaluate(bridge->session, list, &translated);
+    for (uint32_t i = 0; i < 2; ++i) if (masks[i])
+        transition(list, static_cast<ID3D12Resource*>(mask_targets[i]->resource),
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
     for (uint32_t i = 0; i < 4; ++i) {
         if (inputs[i]->resource) transition(list, static_cast<ID3D12Resource*>(targets[i]->resource),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);

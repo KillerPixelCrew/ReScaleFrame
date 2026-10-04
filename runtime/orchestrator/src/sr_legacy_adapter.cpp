@@ -79,6 +79,7 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     resolve.decoded_to_pixels[0] = -0.5f * input->render_width * input->motion_scale_x;
     resolve.decoded_to_pixels[1] = 0.5f * input->render_height * input->motion_scale_y;
     resolve.sentinel = input->motion_invalid_value; resolve.has_sentinel = has_sentinel;
+    resolve.depth_layer = input->motion_depth_layer;
     if (!rsf_motion_resolve_run(adapter->resolve, context, input->motion, input->depth, &resolve))
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
@@ -113,10 +114,24 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
         frame.exposure.width = frame.exposure.height = 1;
         frame.exposure.generation = adapter->generation;
     }
+    rsf_backend_resource* masks[] = {&frame.reactive, &frame.transparency};
+    void* mask_textures[] = {input->reactive_mask, input->transparency_hint};
+    for (uint32_t i = 0; i < 2; ++i) if (mask_textures[i]) {
+        masks[i]->struct_size = sizeof(*masks[i]); masks[i]->resource = mask_textures[i];
+        masks[i]->width = input->render_width; masks[i]->height = input->render_height;
+        masks[i]->generation = adapter->generation;
+    }
     return rsf_sr_bridge_evaluate(adapter->bridge, context, &frame);
 }
 void rsf_sr_legacy_destroy(rsf_sr_legacy_adapter* adapter)
 {
     if (!adapter) return;
     rsf_sr_bridge_destroy(adapter->bridge); rsf_motion_resolve_destroy(adapter->resolve); delete adapter;
+}
+int rsf_sr_legacy_fg_inputs(rsf_sr_legacy_adapter* adapter, void** depth, void** motion)
+{
+    if (!adapter || !adapter->resolve || !depth || !motion) return 0;
+    *depth = rsf_motion_resolve_depth(adapter->resolve);
+    *motion = rsf_motion_resolve_motion(adapter->resolve);
+    return *depth && *motion;
 }

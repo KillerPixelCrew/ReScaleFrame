@@ -45,6 +45,16 @@ DWORD WINAPI startup(void*) noexcept try
     if (GetFileAttributesW(configuration.c_str()) == INVALID_FILE_ATTRIBUTES) return 0;
     if (!GetPrivateProfileIntW(L"UnitySR", L"AutoStart", 1, configuration.c_str())) return 0;
     note("Version shim loaded; Windows API forwarding is independent of mod startup", 0);
+    // Vendor generation must own the first chain. Install its runtime interception before
+    // waiting for Mono; the worker still performs all loading outside DllMain's loader lock.
+    HMODULE module = nullptr;
+    {
+        module = LoadLibraryExW(runtime.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        if (!module) { note("Early generation runtime load refused", GetLastError()); return 1; }
+        using FgStart = uint32_t (__stdcall*)(const wchar_t*);
+        auto fg_start = reinterpret_cast<FgStart>(reinterpret_cast<void*>(GetProcAddress(module, "rsf_unity_fg_start")));
+        note("Cold generation startup result", fg_start ? fg_start(configuration.c_str()) : 1);
+    }
     // Unity initializes its scripting child domain after native libraries load. Nothing waits
     // under the loader lock, and no graphics device is created by this worker.
     const ULONGLONG deadline = GetTickCount64() + 90000;
@@ -53,7 +63,7 @@ DWORD WINAPI startup(void*) noexcept try
     note("Mono runtime appeared", GetCurrentProcessId());
     Sleep(2000);
     note("Loading RSF runtime", GetCurrentProcessId());
-    HMODULE module = LoadLibraryExW(runtime.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!module) module = LoadLibraryExW(runtime.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!module) { note("Runtime DLL load refused", GetLastError()); return 1; }
     note("RSF runtime loaded", GetCurrentProcessId());
     using Start = uint32_t (__stdcall*)(const wchar_t*);
@@ -93,6 +103,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
             const wchar_t* leaf = wcsrchr(executable, L'\\');
             if (_wcsicmp(leaf ? leaf+1 : executable, L"Ace7Game.exe") == 0)
                 return rsf_ac7_proxy_process_event(instance, reason, nullptr);
+            // Unity's crash reporter imports version.dll from this same directory.
+            // It needs Windows forwarding, without another renderer/mod startup.
+            if (_wcsicmp(leaf ? leaf+1 : executable, L"UnityCrashHandler64.exe") == 0 ||
+                _wcsicmp(leaf ? leaf+1 : executable, L"UnityCrashHandler32.exe") == 0) return TRUE;
         }
         HANDLE worker = CreateThread(nullptr, 0, startup, nullptr, 0, nullptr);
         if (worker) CloseHandle(worker);

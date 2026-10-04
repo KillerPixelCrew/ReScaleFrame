@@ -6,6 +6,10 @@
 extern "C" {
 #endif
 #define RSF_FG_ABI_VERSION 1u
+#define RSF_FG_BACKEND_DLSS 1u
+#define RSF_FG_BACKEND_FSR3 3u
+#define RSF_FG_BACKEND_FSR4 4u
+#define RSF_FG_BACKEND_XESS 5u
 typedef uint32_t rsf_fg_mode;
 #define RSF_FG_OFF 0u
 #define RSF_FG_FIXED 1u

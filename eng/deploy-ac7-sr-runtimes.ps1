@@ -16,9 +16,12 @@ if (-not $FidelityFxRoot) { $FidelityFxRoot = Join-Path $repoRoot 'vendor/fideli
 if (-not $XeSSRoot) { $XeSSRoot = Join-Path $repoRoot 'vendor/xess' }
 $inventory = @(
     @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll'); Relative = 'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll' },
+    @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll'); Relative = 'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll' },
     @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/docs/license.md'); Relative = 'ReScaleFrame/fidelityfx/LICENSE.md' },
     @{ Source = (Join-Path $FidelityFxRoot '3rdpartynotice.md'); Relative = 'ReScaleFrame/fidelityfx/3rdpartynotice.md' },
     @{ Source = (Join-Path $XeSSRoot 'bin/libxess.dll'); Relative = 'ReScaleFrame/xess/libxess.dll' },
+    @{ Source = (Join-Path $XeSSRoot 'bin/libxess_fg.dll'); Relative = 'ReScaleFrame/xess/libxess_fg.dll' },
+    @{ Source = (Join-Path $XeSSRoot 'bin/libxell.dll'); Relative = 'ReScaleFrame/xess/libxell.dll' },
     @{ Source = (Join-Path $XeSSRoot 'LICENSE.txt'); Relative = 'ReScaleFrame/xess/LICENSE.txt' }
 )
 # Validate every source before touching the installation. No SDK discovery or downloads.

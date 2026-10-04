@@ -7,10 +7,6 @@
 extern "C" {
 #endif
 typedef struct rsf_fg_session rsf_fg_session;
-#define RSF_FG_BACKEND_DLSS 1u
-#define RSF_FG_BACKEND_FSR3 3u
-#define RSF_FG_BACKEND_FSR4 4u
-#define RSF_FG_BACKEND_XESS 5u
 /* FSR2 is SR only. FSR3/4 share an entry point; select the family in setup.feature_major. */
 RSF_RUNTIME_API const rsf_generation_provider* rsf_fg_get_provider(uint32_t backend);
 typedef struct rsf_fg_host {

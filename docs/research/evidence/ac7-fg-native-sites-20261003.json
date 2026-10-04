@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "language": "x86:LE:64:default",
+  "executable": "Ace7Game.exe",
+  "executable_sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+  "dump_sha256": "fafd1db2808d32333caecf4056e8bcd676c2f07e4c1fabc0f270ef29f22d24db",
+  "status": "Full-frame Reflex boundaries mapped in AC7 GUI Ghidra on 2026-10-04; source guards checked against retained dump; corrected game pacing awaits user run.",
+  "functions": [
+    {
+      "rva": "0x938fb0",
+      "name": "AC7_GetPlayerPlaneStaticClass",
+      "evidence_length": 16,
+      "evidence_sha256": "92d2e64d489dbf86830287e8347b07e2fb9aa5abeb905165c94cef07667d9c5f",
+      "expected_hex": "4c8bdc4883ec78488b05a2b614034885"
+    },
+    {
+      "rva": "0x112ff00",
+      "name": "AC7_RenderViewFamily_RenderThread",
+      "evidence_length": 16,
+      "evidence_sha256": "5b9d502a0985ccb2aacc77a2abbffb90566ee20864d6ad2655d688b52d3205bc",
+      "expected_hex": "4c8bdc49895b0849896b185657415648"
+    },
+    {
+      "rva": "0x925860",
+      "name": "AC7_GetNimbusHangarMeshManagerStaticClass",
+      "evidence_length": 16,
+      "evidence_sha256": "1f4f0eec432e09db16983f825ecb771235cf28f03687361e44a61effaad5d25d",
+      "expected_hex": "4c8bdc4883ec78488b05c2c815034885",
+      "class_cache_rva": "0x3a82130"
+    },
+    {
+      "rva": "0x925d10",
+      "name": "AC7_GetNimbusHangarPawnStaticClass",
+      "evidence_length": 16,
+      "evidence_sha256": "08e5ff4d929c1f2cc9dd5d7532a4ec464eedf27c1db3f093cf68389a83c15b75",
+      "expected_hex": "4c8bdc4883ec78488b0522c415034885",
+      "class_cache_rva": "0x3a82140"
+    },
+    {
+      "rva": "0x8c1bd0",
+      "name": "AC7_GetCampaignBriefingWidgetStaticClass",
+      "evidence_length": 16,
+      "evidence_sha256": "d47085d3d7079d59d8460c2114c135488186017aecba4b032e73fbb8ef66900f",
+      "expected_hex": "4c8bdc4883ec78488b05b2501b034885",
+      "class_cache_rva": "0x3a76c90"
+    },
+    {
+      "rva": "0x3a5a20",
+      "name": "AC7_ConstructBeginFrameTask",
+      "evidence_length": 16,
+      "evidence_sha256": "02a0568ca512c1bc8d3d14f4ae9c436cbc21ebbec79aef7b98f41c6a6a131f87",
+      "expected_hex": "40534883ec20c74108ff000000488d05"
+    },
+    {
+      "rva": "0x3a8b60",
+      "name": "AC7_ExecuteBeginFrameTask",
+      "evidence_length": 16,
+      "evidence_sha256": "e83d15388f5f71ff5c0995d50c753902e03e272b3240210e2708dff37d120657",
+      "expected_hex": "48895c241048896c2418488974242057"
+    },
+    {
+      "rva": "0x1207df0",
+      "name": "AC7_EnqueueRhiBeginFrame",
+      "evidence_length": 16,
+      "evidence_sha256": "4459c32ffdd9f75d161a23f600680d4642e9a2ea8a52d503f2295043dcd2098f",
+      "expected_hex": "48895c2408574883ec20488b5130488b"
+    },
+    {
+      "rva": "0x120c540",
+      "name": "AC7_EnqueueRhiEndFrame",
+      "evidence_length": 16,
+      "evidence_sha256": "4459c32ffdd9f75d161a23f600680d4642e9a2ea8a52d503f2295043dcd2098f",
+      "expected_hex": "48895c2408574883ec20488b5130488b"
+    },
+    {
+      "rva": "0x1ada010",
+      "name": "AC7_SynchronizeEngineFrameEnd",
+      "evidence_length": 16,
+      "evidence_sha256": "cc42c0bc351fedeea108f928801f827376f07b4839781d742e1666b043fdbed9",
+      "expected_hex": "48895c24084889742410574883ec2048"
+    },
+    {
+      "rva": "0xa88dc0",
+      "name": "AC7_FWindowsPlatformApplicationMisc_PumpMessages",
+      "evidence_length": 16,
+      "evidence_sha256": "4b9b320036c1522c3ed5937dffecdfdecca68c43bf348fe19d2897dc1352a647",
+      "expected_hex": "4883ec684533c94533c033d284c9488d"
+    },
+    {
+      "rva": "0x1adbcb0",
+      "name": "AC7_UpdateTimeAndHandleMaxTickRate",
+      "evidence_length": 16,
+      "evidence_sha256": "9ad13390bad0ae5475cb5200766c8a03bdfae3af5e9685ae2081fa4e3c9bf8fe",
+      "expected_hex": "40555357488d6c24b94881ecc0000000"
+    },
+    {
+      "rva": "0xe31e90",
+      "name": "AC7_CreateNativePixelShader",
+      "evidence_length": 16,
+      "evidence_sha256": "442a19659fe9096de3a84e01a789d0005ab6710232eaa0a6a807ab732a813780",
+      "expected_hex": "48895c240848896c2410488974241857"
+    }
+  ]
+}

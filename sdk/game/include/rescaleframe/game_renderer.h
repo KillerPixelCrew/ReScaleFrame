@@ -60,6 +60,8 @@ typedef struct rsf_game_render_pass {
     /* Leased native texture supplied to a mapped ordinary Slate pixel-shader binding. */
     void* sampled_texture;
     uint32_t texture_slot;
+    /* CPU-owned classification copied with the renderer. Unknown suspends interpolation. */
+    uint32_t screen;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u
@@ -67,11 +69,33 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_WINDOW 9u
 #define RSF_GAME_RENDER_FINAL_SCENE 10u
 #define RSF_GAME_RENDER_TEXTURE_BINDING 11u
+#define RSF_GAME_RENDER_SUBMISSION 12u
+/* Entire native RHI frame, including Slate and Present. No scene view is required. */
+#define RSF_GAME_RENDER_FRAME 13u
+/* One translucency pass of a primary scene view. color_input is scene colour, leased through end
+   and resolved again there. Begin precedes every translucent draw of the pass, so scene colour at
+   begin is the opaque-only image. With TRANSLUCENCY_LAYER the pass draws an offscreen layer
+   instead, returned in color_output at end; it composites as scene * alpha + rgb. render_rect
+   is the view rectangle in scene colour. Identity matches the view's later SR pass. */
+#define RSF_GAME_RENDER_TRANSLUCENCY 14u
+/* Volumetric cloud depth for motion, delivered inline on the graphics context when the clouds
+   composite. depth is an R32_FLOAT device-depth texture in the scene's convention, zero where no
+   cloud qualifies, borrowed for the callback. render_rect is the view rectangle it covers. The
+   host reprojects pixels without object velocity at the nearer of this and scene depth. */
+#define RSF_GAME_RENDER_CLOUD_DEPTH 15u
+/* The material draws of a primary scene view rendered for reconstruction (the base pass).
+   render_rect and output_rect give the reconstruction ratio. Material textures sampled inside
+   this scope and TRANSLUCENCY scopes are resolved to output resolution afterwards. */
+#define RSF_GAME_RENDER_MATERIALS 16u
+/* Normalize depth/motion for generation without reconstructing scene colour. */
+#define RSF_GAME_RENDER_FG_INPUTS 17u
 #define RSF_GAME_RENDER_RESET 1u
 #define RSF_GAME_RENDER_PRIMARY 2u
 /* Constructor followed the engine update-to-redraw boundary. This does not promise vendor
    marker submission or final Present ownership. */
 #define RSF_GAME_RENDER_AFTER_SIMULATION 4u
+/* TRANSLUCENCY scopes only: the pass renders an offscreen layer rather than into scene colour. */
+#define RSF_GAME_RENDER_TRANSLUCENCY_LAYER 8u
 typedef struct rsf_game_render_config {
     uint32_t struct_size;
     uint32_t enabled;
@@ -93,6 +117,12 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_CPU_SIMULATION_BEGIN 2u
 #define RSF_GAME_CPU_SIMULATION_END 3u
 #define RSF_GAME_CPU_FRAME_END 4u
+#define RSF_GAME_CPU_INPUT_EVENT 5u
+/* After native BeginFrame was queued, before the engine's time update and input handling. */
+#define RSF_GAME_CPU_PACING 6u
+#define RSF_GAME_INPUT_KEYBOARD 1u
+#define RSF_GAME_INPUT_MOUSE 2u
+#define RSF_GAME_INPUT_CONTROLLER 4u
 typedef struct rsf_game_cpu_event {
     uint32_t struct_size;
     uint32_t stage;
@@ -100,6 +130,13 @@ typedef struct rsf_game_cpu_event {
     uint64_t source_frame_id;
     uint64_t timestamp_qpc;
     uint64_t qpc_frequency;
+    /* At FRAME_END, number of primary renderers submitted with this source identity.
+       This is an ownership fact, not a request to add a CPU or GPU wait. */
+    uint32_t render_expected;
+    /* INPUT_EVENT only. Zero kind with a registered Windows message is a latency-tool ping
+       candidate. The runtime validates its SDK message ID. Never contains key/button values. */
+    uint32_t input_kind;
+    uint32_t message_id;
 } rsf_game_cpu_event;
 /* Runs at the actual native CPU boundary. Borrowed only during the call; no graphics-context
    work may be performed here. FRAME_END closes CPU ownership, not GPU or Present ownership. */

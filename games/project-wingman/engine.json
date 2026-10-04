@@ -1,0 +1,121 @@
+{
+  "game": {
+    "id": "project-wingman",
+    "title": "Project Wingman",
+    "steam_appid": 895870,
+    "build": "16671873",
+    "executable": "ProjectWingman-Win64-Shipping.exe",
+    "sha256": "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
+    "bytes": 159688704,
+    "pe_machine": "0x8664",
+    "image_base": "0x140000000",
+    "pe_timestamp_utc": "2024-12-08T09:44:06Z",
+    "platform": "windows-x64",
+    "examined": "2026-10-03"
+  },
+  "plugin": {
+    "target": "rsf_game_project_wingman",
+    "dll": "ReScaleFrame.Game.ProjectWingman.dll",
+    "status": "scaffold; detection and inactive lifecycle only",
+    "rendering_ready": false,
+    "built_windows_msvc": true,
+    "contract_tested": true,
+    "hooks_implemented": false,
+    "game_tested": false,
+    "device_tested": false,
+    "automatic_loading_implemented": false,
+    "prepare_result": "RSF_ERROR_NOT_READY",
+    "research": "../../docs/research/project-wingman-renderer.md"
+  },
+  "engine": {
+    "family": "Unreal Engine 4",
+    "version": "4.27.2",
+    "how": "static executable metadata and source/binary control-flow matching",
+    "version_evidence": "Raw VS_FIXEDFILEINFO 4.27.2.0 and ++UE4+Release-4.27-CL-0 branch marker.",
+    "reference_tag": "4.27.2-release",
+    "reference_revision": "d94b38ae3446da52224bedd2568c078f828b4039",
+    "reference_launcher_changelist": 18319896,
+    "binary_identical_to_reference": false,
+    "blueprint_nativization": "Inclusive in packaged settings; native game-specific HUD call chains observed",
+    "notes": "Launcher Editor PDBs identify reference functions, not game layouts. Shipping member offsets are established independently."
+  },
+  "graphics": {
+    "d3d11": "D3D11CreateDevice and DXGI factory imports observed; active execution unmeasured",
+    "vulkan": "No active Vulkan game path established",
+    "vr": "Game assets/components and OpenXR/OpenVR/Oculus libraries present; runtime stereo path unmeasured"
+  },
+  "packaged_defaults": {
+    "how": "read-only PAK index and selected payload parsing; not effective runtime settings",
+    "r.DefaultFeature.AntiAliasing": 2,
+    "r.TemporalAA.Upsampling": true,
+    "r.BasePassOutputsVelocity": true,
+    "r.SeparateTranslucency": true,
+    "r.ForwardShading": false,
+    "vr.InstancedStereo": false,
+    "r.UsePreExposure": false,
+    "r.TemporalAASamples": 2,
+    "r.TemporalAACurrentFrameWeight": 0.25,
+    "r.TemporalAAFilterSize": 0.7,
+    "r.CustomDepth": 3,
+    "r.CustomDepthTemporalAAJitter": false
+  },
+  "temporal": {
+    "status": "native Gen4/Gen5 dispatch and three-texture input contract statically matched",
+    "active_algorithm": null,
+    "raw_velocity_format": null,
+    "raw_velocity_dense": null,
+    "source_convention": "ordinary written motion is current-minus-previous NDC with projection jitter removed; TAA uses depth/ClipToPrevClip fallback at unwritten pixels",
+    "coverage_limit": "PrimitiveHasVelocityForView retains camera-cut/history and screen-size eligibility checks",
+    "jitter_units": "render pixels",
+    "fpassinputs_offsets": {
+      "allow_downsample": "0x0",
+      "downsample_format": "0x4",
+      "scene_colour": "0x8",
+      "scene_depth": "0x10",
+      "scene_velocity": "0x18"
+    },
+    "view_offsets_static_only": {
+      "camera_cut": "0xd90",
+      "primary_screen_percentage_method": "0x15f4",
+      "view_rect": "0x1670",
+      "view_state": "0x1680",
+      "temporal_jitter_pixels_xy": "0x4fa4",
+      "previous_temporal_history": "0x53d0",
+      "view_state_output_temporal_history": "0x990",
+      "family_temporal_upscaler_interface": "0xb8"
+    }
+  },
+  "hud": {
+    "status": "widget textures, game radar consumers and stereo-layer setter identified statically",
+    "completed_hudless_surface_verified": false,
+    "runtime_alpha_convention": null,
+    "runtime_dimensions": null,
+    "asset_defaults": {
+      "HUDRenderTarget": "512x512 RTF_RGBA8",
+      "VR_CaptureTarget": "1920x1080"
+    },
+    "widget_component_offsets_static_only": {
+      "draw_size": "0x488",
+      "current_draw_size": "0x4a0",
+      "render_target": "0x520",
+      "material_instance": "0x528",
+      "slate_window_shared_pointer": "0x550",
+      "widget_renderer": "0x568"
+    },
+    "stereo_layer_offsets_static_only": {
+      "texture": "0x200",
+      "texture_dirty": "0x294"
+    },
+    "notes": "UWingmanWidgetComponent shares stock allocation and draw slots. World-space HUD can be composited before TAA; head-following does not prove a final separate HUD layer."
+  },
+  "native_candidates": {
+    "status": "source-matched RVAs; expected hook bytes and runtime invocation not yet validated",
+    "AddPostProcessingPasses": "0x5bbfd00",
+    "FDefaultTemporalUpscaler_AddPasses": "0x5c442b0",
+    "AddTemporalAAPass": "0x5c44910",
+    "AddTonemapPass": "0x5c072c0",
+    "UWidgetComponent_DrawWidgetToRenderTarget": "0x6836c60",
+    "UWidgetComponent_UpdateRenderTarget": "0x6898bf0",
+    "UStereoLayerComponent_SetTexture": "0x6c89630"
+  }
+}

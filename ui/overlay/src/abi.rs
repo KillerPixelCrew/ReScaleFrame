@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 5;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 9;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -112,6 +112,55 @@ pub struct RsfOverlayStats {
     pub requested_backend: u32,
     /// Result of the last switch.
     pub last_switch_result: i32,
+    /// A cold FG presentation host exists.
+    pub fg_available: u32,
+    /// Requested interpolation mode.
+    pub fg_requested_mode: u32,
+    /// Requested generated frames per source frame.
+    pub fg_requested_generated: u32,
+    /// Configured interpolation mode after deferral.
+    pub fg_effective_mode: u32,
+    /// Configured generated count.
+    pub fg_effective_generated: u32,
+    /// SDK-observed generation activity.
+    pub fg_active: u32,
+    /// SDK-supported maximum generated count.
+    pub fg_max_generated: u32,
+    /// Reflex availability from SDK state.
+    pub reflex_available: u32,
+    /// User-requested Reflex mode.
+    pub reflex_requested_mode: u32,
+    /// Effective Reflex mode, including FG requirements.
+    pub reflex_effective_mode: u32,
+    /// Deferral reason code.
+    pub fg_reason: u32,
+    /// Most recent FG operation result.
+    pub fg_last_result: i32,
+    /// SDK aggregate presents, including source frames.
+    pub fg_total_presented: u64,
+    /// Successful real, non-test application Present calls.
+    pub application_presented_frames: u64,
+    /// QPC at this snapshot.
+    pub sample_qpc: u64,
+    /// QPC ticks per second.
+    pub qpc_frequency: u64,
+    /// Show the compact performance HUD while the settings panel is closed.
+    pub show_performance_hud: u32,
+    /// The SDK aggregate present counter is available.
+    pub fg_present_count_valid: u32,
+    /// ABI 8. Requested minimum interval between rendered frames, before generation, in
+    /// microseconds. Zero is unlimited.
+    pub frame_limit_us: u32,
+    /// Refresh rate of the display showing the game, in millihertz. Zero when unknown.
+    pub display_refresh_mhz: u32,
+    /// ABI 9. Active generation provider (zero is Off).
+    pub fg_backend: u32,
+    /// Saved provider for next startup.
+    pub fg_requested_backend: u32,
+    /// Implemented provider IDs as bits; hardware compatibility is checked at startup.
+    pub fg_backend_choices: u32,
+    /// Last provider-selection persistence result.
+    pub fg_selection_result: i32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -154,6 +203,28 @@ pub struct RsfOverlayIntent {
     pub backend_changed: u32,
     /// Requested SR backend.
     pub backend: u32,
+    /// The FG selection changed.
+    pub fg_changed: u32,
+    /// Requested interpolation mode.
+    pub fg_mode: u32,
+    /// Requested generated count.
+    pub fg_generated: u32,
+    /// The Reflex selection changed.
+    pub reflex_changed: u32,
+    /// Requested Reflex mode.
+    pub reflex_mode: u32,
+    /// The performance HUD toggle changed.
+    pub performance_hud_changed: u32,
+    /// Requested performance HUD visibility.
+    pub performance_hud: u32,
+    /// ABI 8. The frame limit changed.
+    pub frame_limit_changed: u32,
+    /// Requested minimum interval between rendered frames in microseconds. Zero is unlimited.
+    pub frame_limit_us: u32,
+    /// Save a new provider for next startup.
+    pub fg_backend_changed: u32,
+    /// Provider ID; zero selects Off.
+    pub fg_backend: u32,
 }
 
 impl Default for RsfOverlayIntent {
@@ -177,6 +248,17 @@ impl Default for RsfOverlayIntent {
             jitter: 0,
             backend_changed: 0,
             backend: 1,
+            fg_changed: 0,
+            fg_mode: 0,
+            fg_generated: 1,
+            reflex_changed: 0,
+            reflex_mode: 0,
+            performance_hud_changed: 0,
+            performance_hud: 0,
+            frame_limit_changed: 0,
+            frame_limit_us: 0,
+            fg_backend_changed: 0,
+            fg_backend: 0,
         }
     }
 }
@@ -313,7 +395,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 144);
+        assert_eq!(size_of::<RsfOverlayStats>(), 256);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -333,11 +415,26 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, backend), 132);
         assert_eq!(offset_of!(RsfOverlayStats, requested_backend), 136);
         assert_eq!(offset_of!(RsfOverlayStats, last_switch_result), 140);
+        assert_eq!(offset_of!(RsfOverlayStats, fg_available), 144);
+        assert_eq!(offset_of!(RsfOverlayStats, fg_total_presented), 192);
+        assert_eq!(
+            offset_of!(RsfOverlayStats, application_presented_frames),
+            200
+        );
+        assert_eq!(offset_of!(RsfOverlayStats, show_performance_hud), 224);
+        // Appended in ABI 8.
+        assert_eq!(offset_of!(RsfOverlayStats, frame_limit_us), 232);
+        assert_eq!(offset_of!(RsfOverlayStats, display_refresh_mhz), 236);
+        assert_eq!(offset_of!(RsfOverlayStats, fg_backend), 240);
+        assert_eq!(offset_of!(RsfOverlayStats, fg_selection_result), 252);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 72);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 116);
+        assert_eq!(offset_of!(RsfOverlayIntent, fg_backend_changed), 108);
+        assert_eq!(offset_of!(RsfOverlayIntent, frame_limit_changed), 100);
+        assert_eq!(offset_of!(RsfOverlayIntent, fg_changed), 72);
         assert_eq!(offset_of!(RsfOverlayIntent, start_requested), 24);
         assert_eq!(offset_of!(RsfOverlayIntent, jitter_changed), 56);
         assert_eq!(offset_of!(RsfOverlayIntent, backend_changed), 64);

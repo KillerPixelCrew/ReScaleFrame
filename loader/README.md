@@ -93,6 +93,8 @@ beside the proxy, so neither path normally needs setting at all.
 | `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
 | `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |
 | `RSF_DLSS_QUALITY` | `3`: Performance; backend enum is Native=0, Quality=1, Balanced=2, Performance=3, Ultra Performance=4 |
+| `RSF_DLSS_TONEMAP` | `1`: DLSS receives an invertible display-range encoding with HDR input off, decoded back to linear; removes the dark banding of DLSS 310's auto-exposing presets on any preset or driver override. `0` sends linear HDR, for comparison only |
+| `RSF_DLSS_COLOUR_CORRECTION` | `0`: the post-DLSS colour correction stays off. `1` re-enables it for comparison; it adds edge shimmer in the hangar |
 | `RSF_DLSS_OUTPUT_WIDTH`, `RSF_DLSS_OUTPUT_HEIGHT` | Observer's presented dimensions |
 | `RSF_DECODE_MOTION` | `1`; controls decoded diagnostic dumps |
 | `RSF_OVERLAY_DLL` | Explicit path to `rescaleframe_overlay.dll`; otherwise looked for beside the proxy |
@@ -134,6 +136,55 @@ directories. `RSF_XESS_BIN` selects the directory containing `libxess.dll`, defa
 are installed by building or testing; preserve their distribution terms when preparing a package.
 
 [Architecture, SDK revisions, device checks and remaining validation](../docs/research/orchestrator-sr-switching.md).
+
+## AC7 frame generation
+
+Set `RSF_FG_ENABLE=1` in `ReScaleFrame.ini` before starting AC7. This selects the cold D3D12
+presentation/SR host while keeping the game-facing D3D11 renderer. `RSF_FG_MODE=0` starts Off;
+`1` requests fixed generation. `RSF_FG_GENERATED=1` requests 2x, clamped to the SDK maximum.
+`RSF_FG_BACKEND=1/3/4/5` selects DLSS-G, FSR3 FG, FSR4 FG or XeSS FG before startup,
+independently of SR. The default is DLSS-G. FSR uses `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, then
+`RSF_FFX_BIN`, then `ReScaleFrame/fidelityfx`; XeSS uses `RSF_XESS_BIN`, then
+`ReScaleFrame/xess`. Unsupported creation preserves original presentation. Change provider
+in the overlay during play. FSR3 is 2x; FSR4 and XeSS capabilities come from the actual SDK/hardware query.
+`RSF_REFLEX_MODE=0/1/2` selects Off/On/On + Boost. Sleep and PCL markers remain integrated in Off mode.
+Reflex controls apply to DLSS-G. XeSS uses XeLL. FSR does not apply the Reflex frame limiter.
+
+Insert exposes requested/effective/active FG and runtime Reflex controls. These FG/Reflex
+settings include Show FPS overlay. The compact top-right HUD remains visible with the panel
+closed and separately displays real application/rendered FPS and SDK aggregate presented FPS.
+It never multiplies the rendered rate by a requested FG setting; the badge reports actual activity.
+Reported presents are SDK/DXGI counters, not physical scanout or input-latency measurements. These
+changes are session settings. `RSF_FRAME_LIMIT_FPS` limits rendered frames per second before
+generation, through Reflex's limiter; the panel's Frame limit control changes it while running.
+With 2x generation a limit of 80 presents up to 160. `RSF_REFLEX_LIMIT_US` is the same limit
+written as a microsecond interval between rendered frames.
+Restart with `RSF_FG_ENABLE=0` to remove the presentation proxy. Default runtime mode is
+production; development requires `RSF_FG_DEVELOPMENT=1` and `RSF_STREAMLINE_BIN` pointing
+at development DLLs. `RSF_FG_DEBUG=1` records a bounded marker trace after tagged frames begin.
+The Reflex sleep waits for the previous frame's Present and still precedes input.
+`RSF_REFLEX_ASYNC=1` restores the earlier sleep that overlaps the previous frame, for comparison.
+
+The user accepts deployed DLSS-FG. FSR3/XeSS pass synthetic D3D11/D3D12 generation checks;
+their AC7 moving-scene quality, HUD and pacing have not been game-tested. Other screens,
+cuts, unmatched inputs and unsupported VSync suspend generation. HUD-less/UI guides remain open.
+[Evidence, dependencies and limits](../docs/research/ac7-dlss-fg-20261003.md).
+
+Unity Mono uses `[UnitySR] FrameGeneration=0/1/3/4/5` and `GeneratedFrames=1` in
+`ReScaleFrame.ini`, independently of `Backend`. Install the matching vendor DLLs with
+`eng/deploy-unity-sr.ps1 -FrameGeneration FSR3` (or `DLSS` / `FSR4` / `XeSS`).
+The shared runtime consumes the completed backbuffer and same-frame normalized depth/motion.
+Its CPU callbacks bracket EarlyUpdate through PreLateUpdate. These additions are built and
+synthetic-tested; Drag'n Wash startup, pixels and pacing remain unverified.
+[Shared implementation evidence](../docs/research/shared-fg-20261004.md).
+
+Insert now exposes the frame-generation provider separately from the upscaler. Choose Off,
+DLSS-G, FSR3, FSR4 or XeSS in Unity. Requests replace the provider after a drained Present,
+while the engine retains its render buffers. The selector shows the current and requested
+providers separately; GPU compatibility is checked when switching. Unity saves this choice in
+`ReScaleFrame/preferences.ini`, outside the deployment-owned INI. AC7's compiled selector
+also includes DLSS-G and uses its existing per-user preferences file. Both development
+installations contain this integration; live game switching acceptance is still pending.
 # AC7 motion research capture
 
 Set `RSF_MOTION_CAPTURE=1` in the proxy INI before launching AC7. With the game focused,

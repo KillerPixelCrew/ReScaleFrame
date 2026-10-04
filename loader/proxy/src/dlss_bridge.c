@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <dxgiformat.h>
+#include <dxgi.h>
 
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_motion_capture.h>
@@ -19,6 +20,8 @@
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/depth_replay.h>
 #include <rescaleframe/present_blit.h>
+#include <rescaleframe/native_fg.h>
+#include <rescaleframe/fg_choice.h>
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
@@ -28,6 +31,7 @@
 #include <rescaleframe/ui_layer.h>
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/native_sr.h>
+#include <rescaleframe/native_translucency.h>
 #include <rescaleframe/native_composition.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_window.h>
@@ -50,6 +54,8 @@
 #define RSF_MOTION_SENTINEL (-1000.0f)
 static rsf_plugin_session* game_session;
 static int game_prepared;
+static uint32_t performance_hud_enabled = 1;
+static SRWLOCK game_prepare_guard = SRWLOCK_INIT;
 static volatile LONG shutdown_requested;
 
 static volatile LONG native_owner;
@@ -59,7 +65,7 @@ static void route_dump(void* context, void* texture, const char* name);
 static void on_native_scope(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
 { (void)user; (void)list; rsf_ac7_motion_capture_native_pass(pass, begin); }
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
-{ (void)user; rsf_native_cpu_event(event); }
+{ (void)user; if (rsf_native_cpu_event(event)) rsf_native_fg_cpu(event); }
 
 int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
                             rsf_bridge_log_fn log, void* log_user)
@@ -67,7 +73,11 @@ int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_s
     rsf_plugin_session_options options;
     rsf_game_probe probe;
     rsf_result result;
-    if (game_session) return game_prepared;
+    AcquireSRWLockExclusive(&game_prepare_guard);
+    if (game_session) {
+        const int ready = game_prepared;
+        ReleaseSRWLockExclusive(&game_prepare_guard); return ready;
+    }
     memset(&probe, 0, sizeof(probe)); probe.struct_size = sizeof(probe);
     probe.pe_machine = 0x8664; probe.executable_name_utf8 = "Ace7Game.exe";
     probe.sha256_hex = executable_sha256;
@@ -82,6 +92,7 @@ int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_s
     result = rsf_plugin_session_prepare(&options, &game_session);
     game_prepared = result == RSF_OK;
     rsf_ac7_motion_capture_native_owner(game_prepared);
+    ReleaseSRWLockExclusive(&game_prepare_guard);
     return result == RSF_OK;
 }
 
@@ -171,6 +182,7 @@ static struct {
     rsf_present_blit* blit;
     int show;
     unsigned long frames_shown;
+    uint64_t application_presented_frames;
 
     /* Which pass within the current frame, and how many frames have been described.
        The set is recognised more than once per frame and the last one wins, because on_pass
@@ -741,8 +753,19 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
         route_dump(bridge.context, pass->color_output, name);
     }
     if (pass->role == RSF_GAME_RENDER_TEXTURE_BINDING && !begin) rsf_native_scene_texture_binding(pass);
-    if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) rsf_native_scene_pass(pass, begin);
-    if (pass->role == RSF_GAME_RENDER_WINDOW) rsf_native_window_scope(pass, begin);
+    if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
+        rsf_native_scene_pass(pass, begin);
+        if (!begin) rsf_native_fg_final(bridge.context, pass);
+    }
+    if (pass->role == RSF_GAME_RENDER_WINDOW) {
+        if (!begin) rsf_native_fg_window_end(pass);
+        rsf_native_window_scope(pass, begin);
+    }
+    if ((pass->role == RSF_GAME_RENDER_TRANSLUCENCY || pass->role == RSF_GAME_RENDER_CLOUD_DEPTH ||
+         pass->role == RSF_GAME_RENDER_MATERIALS) && bridge.started)
+        rsf_native_translucency_pass(bridge.context, pass, begin);
+    if (pass->role == RSF_GAME_RENDER_SUBMISSION) rsf_native_fg_submission(pass, begin);
+    if (pass->role == RSF_GAME_RENDER_FRAME) rsf_native_fg_frame(pass, begin);
     if (bridge.started && pass->role == RSF_GAME_RENDER_UI_COMPOSITE) {
         const int captured = rsf_native_composition_capture(bridge.context, pass, begin);
         if (captured && !begin && bridge.route_dump_frames) {
@@ -2592,6 +2615,28 @@ static void show_result(void* swapchain)
    It is filled every frame the panel is open rather than kept as state, because a number the panel
    shows and a number the bridge holds disagreeing is the failure this is meant to catch, not to
    introduce. */
+/* Refresh rate of the display the game is on, for the panel's VRR cap. Read only while the
+   panel is open, and at most once a second. */
+static uint32_t display_refresh_mhz(void)
+{
+    static uint32_t cached;
+    static ULONGLONG checked;
+    const ULONGLONG now = GetTickCount64();
+    if (rsf_overlay_host_visible() && (!checked || now - checked >= 1000)) {
+        MONITORINFOEXW info;
+        DEVMODEW mode;
+        const HWND window = GetForegroundWindow();
+        ZeroMemory(&info, sizeof(info)); info.cbSize = sizeof(info);
+        ZeroMemory(&mode, sizeof(mode)); mode.dmSize = sizeof(mode);
+        checked = now ? now : 1;
+        if (window && GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), (MONITORINFO*)&info) &&
+            EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1) {
+            cached = mode.dmDisplayFrequency * 1000u;
+        }
+    }
+    return cached;
+}
+
 static void fill_overlay_stats(rsf_overlay_stats* stats)
 {
     rsf_dlss_pipeline_status pipeline;
@@ -2660,6 +2705,40 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->jitter_pixels[0] = bridge.held_camera.jitter_pixels[0];
     stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
     stats->frames_presented = bridge.frames_shown;
+    {
+        const rsf_fg_choice choice = rsf_fg_choice_get();
+        stats->fg_backend = rsf_d3d11_present_has_owner() ? rsf_d3d11_present_backend() : 0;
+        stats->fg_requested_backend = choice.backend; stats->fg_backend_choices = choice.choices | RSF_OVERLAY_FG_RUNTIME_SWITCH;
+        stats->fg_selection_result = choice.last_result;
+        if (!stats->fg_selection_result) stats->fg_selection_result = rsf_d3d11_present_switch_result();
+    }
+    {
+        rsf_native_fg_status fg = {0}; fg.struct_size = sizeof(fg);
+        if (rsf_native_fg_status_get(&fg)) {
+            stats->fg_available = fg.available;
+            stats->fg_requested_mode = fg.requested.mode;
+            stats->fg_requested_generated = fg.requested.generated_frames;
+            stats->fg_effective_mode = fg.vendor.effective_mode;
+            stats->fg_effective_generated = fg.vendor.effective_generated_frames;
+            stats->fg_active = fg.vendor.active;
+            stats->fg_max_generated = fg.vendor.max_generated_frames;
+            stats->reflex_available = fg.vendor.low_latency_available;
+            stats->reflex_requested_mode = fg.requested.reflex_mode;
+            stats->reflex_effective_mode = fg.vendor.effective_reflex;
+            stats->fg_reason = fg.reason; stats->fg_last_result = fg.last_result;
+            stats->fg_total_presented = fg.vendor.total_presented;
+            stats->fg_present_count_valid = fg.available && (fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED) != 0;
+            stats->frame_limit_us = fg.requested.frame_limit_us;
+            stats->display_refresh_mhz = display_refresh_mhz();
+        }
+    }
+    {
+        LARGE_INTEGER now, frequency;
+        QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+        stats->application_presented_frames = bridge.application_presented_frames;
+        stats->sample_qpc = (uint64_t)now.QuadPart; stats->qpc_frequency = (uint64_t)frequency.QuadPart;
+        stats->show_performance_hud = performance_hud_enabled;
+    }
     stats->enabled = InterlockedCompareExchange(&native_owner, 0, 0) ? (uint32_t)bridge.enabled_requested : (uint32_t)bridge.reinsert_on;
     stats->debug_view_on = (uint32_t)bridge.show;
     stats->reinsert_on = InterlockedCompareExchange(&native_owner, 0, 0) ? (uint32_t)bridge.enabled_requested : (uint32_t)bridge.reinsert_on;
@@ -2817,6 +2896,23 @@ static void overlay_tick(void* swapchain)
     if (!rsf_overlay_host_present(swapchain, &stats, &intent)) {
         return;
     }
+    if (intent.fg_backend_changed) {
+        const rsf_backend_result result = rsf_d3d11_present_request(intent.fg_backend);
+        if (result == RSF_BACKEND_OK) rsf_fg_choice_save(intent.fg_backend);
+        say("FG provider requested at Present: backend=%u result=%d", intent.fg_backend, result);
+    }
+    if (intent.fg_changed || intent.reflex_changed || intent.frame_limit_changed) {
+        rsf_native_fg_status current = {0}; current.struct_size = sizeof(current);
+        if (rsf_native_fg_status_get(&current)) {
+            if (intent.fg_changed) { current.requested.mode = intent.fg_mode; current.requested.generated_frames = intent.fg_generated; }
+            if (intent.reflex_changed) current.requested.reflex_mode = intent.reflex_mode;
+            if (intent.frame_limit_changed) current.requested.frame_limit_us = intent.frame_limit_us;
+            rsf_native_fg_options_set(&current.requested);
+            say("FG selection: requested mode=%u generated=%u Reflex=%u frame limit=%u us", current.requested.mode,
+                current.requested.generated_frames, current.requested.reflex_mode, current.requested.frame_limit_us);
+        }
+    }
+    if (intent.performance_hud_changed) performance_hud_enabled = intent.performance_hud != 0;
     /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
        That is the boundary the review finding asks for: the panel records what was clicked and the
        change happens where the rendering already is, rather than from the message thread while a
@@ -3190,7 +3286,12 @@ void rsf_bridge_toggle_display(void)
 }
 
 static void on_present_event(void* user, const rsf_observer_present_event* event)
-{ (void)user; rsf_native_window_present(event); }
+{
+    (void)user;
+    rsf_native_window_present(event);
+    if (event && event->completed && event->result == S_OK && !(event->flags & DXGI_PRESENT_TEST))
+        ++bridge.application_presented_frames;
+}
 rsf_observer_present_event_fn rsf_bridge_present_event_hook(void)
 { return on_present_event; }
 

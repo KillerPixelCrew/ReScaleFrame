@@ -583,46 +583,8 @@ void perform_pending_dump(Observer& self)
 // refused rather than forwarded, which costs that frame and saves the process.
 thread_local uint32_t present_depth = 0;
 
-template<class Forward> HRESULT observe_present(IDXGISwapChain* swapchain, UINT interval, UINT flags,
-    uint32_t method, Forward&& forward)
+void update_presenter(Observer& self, IDXGISwapChain* swapchain)
 {
-    Observer& self = observer();
-    struct CallLifetime {
-        std::atomic<uint32_t>& calls;
-        explicit CallLifetime(std::atomic<uint32_t>& value) : calls(value) { ++calls; }
-        ~CallLifetime() { --calls; }
-    } lifetime(self.present_calls);
-    if (present_depth != 0) {
-        static bool said = false;
-        if (!said && self.options.log) {
-            said = true;
-            self.options.log(self.options.log_user,
-                             "observer: Present re-entered from inside its own hook, so another "
-                             "hook forwards to this one. The inner call goes straight to the "
-                             "genuine Present where that is known, and is refused otherwise");
-        }
-        return forward(true);
-    }
-    struct Depth {
-        Depth() { ++present_depth; }
-        ~Depth() { --present_depth; }
-    } depth;
-    const auto event_callback = self.options.on_present_event;
-    void* const event_user = self.options.on_present_event_user;
-    auto notify_present = [&](uint32_t completed, HRESULT result) {
-        if (!event_callback) return;
-        const rsf_observer_present_event event{sizeof(event), completed, swapchain, interval, flags, result, method};
-        try { event_callback(event_user, &event); }
-        catch (...) { /* Telemetry cannot interrupt the game's original Present. */ }
-    };
-    notify_present(0, S_OK);
-    if (flags & DXGI_PRESENT_TEST) {
-        // Testing visibility must not advance frame counters, dump textures, change settings,
-        // draw an overlay or activate a graphics backend.
-        const HRESULT result = forward(false);
-        notify_present(1, result); return result;
-    }
-
     bool need_details = false;
     {
         std::lock_guard<std::mutex> lock(self.guard);
@@ -706,6 +668,55 @@ template<class Forward> HRESULT observe_present(IDXGISwapChain* swapchain, UINT 
         self.options.log(self.options.log_user, message);
     }
     perform_pending_dump(self);
+}
+
+template<class Forward> HRESULT observe_present(IDXGISwapChain* swapchain, UINT interval, UINT flags,
+    uint32_t method, Forward&& forward)
+{
+    Observer& self = observer();
+    struct CallLifetime {
+        std::atomic<uint32_t>& calls;
+        explicit CallLifetime(std::atomic<uint32_t>& value) : calls(value) { ++calls; }
+        ~CallLifetime() { --calls; }
+    } lifetime(self.present_calls);
+    // DXGI implementations are shared across APIs. The FG provider's D3D12 real/generated
+    // presents must not re-enter D3D11 callbacks, disturb window identity, or count as source frames.
+    ID3D11Device* application_device = nullptr;
+    const auto api = swapchain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&application_device));
+    if (FAILED(api) || !application_device) return forward(false);
+    application_device->Release();
+    if (present_depth != 0) {
+        static bool said = false;
+        if (!said && self.options.log) {
+            said = true;
+            self.options.log(self.options.log_user,
+                             "observer: Present re-entered from inside its own hook, so another "
+                             "hook forwards to this one. The inner call goes straight to the "
+                             "genuine Present where that is known, and is refused otherwise");
+        }
+        return forward(true);
+    }
+    struct Depth {
+        Depth() { ++present_depth; }
+        ~Depth() { --present_depth; }
+    } depth;
+    const auto event_callback = self.options.on_present_event;
+    void* const event_user = self.options.on_present_event_user;
+    auto notify_present = [&](uint32_t completed, HRESULT result) {
+        if (!event_callback) return;
+        const rsf_observer_present_event event{sizeof(event), completed, swapchain, interval, flags, result, method};
+        try { event_callback(event_user, &event); }
+        catch (...) { /* Telemetry cannot interrupt the game's original Present. */ }
+    };
+    notify_present(0, S_OK);
+    if (flags & DXGI_PRESENT_TEST) {
+        // Testing visibility must not advance frame counters, dump textures, change settings,
+        // draw an overlay or activate a graphics backend.
+        const HRESULT result = forward(false);
+        notify_present(1, result); return result;
+    }
+
+    update_presenter(self, swapchain);
 
     // Before the game's own Present, which is the one moment the finished frame exists and nothing
     // has been shown yet. No lock is held: this calls into D3D and back into the caller, and
@@ -1466,6 +1477,22 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
     status->dumps_completed = self.dumps_completed;
     status->textures_written = self.textures_written;
     status->constant_bytes_written = self.constant_bytes_written;
+    return RSF_OBSERVER_OK;
+}
+extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event)
+{
+    if (!event || event->struct_size < sizeof(*event) || !event->swapchain || event->completed > 1)
+        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
+    auto& self = observer();
+    if (!event->completed) {
+        ++self.present_calls;
+        if (!(event->flags & DXGI_PRESENT_TEST)) update_presenter(self, static_cast<IDXGISwapChain*>(event->swapchain));
+    } else {
+        if (event->result == S_OK && !(event->flags & DXGI_PRESENT_TEST)) {
+            std::lock_guard<std::mutex> lock(self.guard); ++self.frames;
+        }
+        --self.present_calls;
+    }
     return RSF_OBSERVER_OK;
 }
 

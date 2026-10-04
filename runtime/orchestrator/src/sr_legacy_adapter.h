@@ -11,3 +11,5 @@ rsf_backend_result rsf_sr_legacy_select(rsf_sr_legacy_adapter* adapter, uint32_t
 rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* context,
     const rsf_dlss_frame* frame, uint32_t has_sentinel);
 void rsf_sr_legacy_destroy(rsf_sr_legacy_adapter* adapter);
+/* Borrowed normalized current-frame inputs, valid until the next evaluation/destroy. */
+int rsf_sr_legacy_fg_inputs(rsf_sr_legacy_adapter*, void** depth, void** motion);

@@ -19,6 +19,9 @@ constexpr Fixture fixtures[] = {
     {L"ac7", "ac7", "Ace7Game.exe",
      "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
      RSF_ERROR_NATIVE_REFUSED},
+    {L"project-wingman", "project-wingman", "ProjectWingman-Win64-Shipping.exe",
+     "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
+     RSF_ERROR_NOT_READY},
     {L"unity-mono", "unity-mono", "DragNWash.exe",
      "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
      RSF_ERROR_NOT_READY}};

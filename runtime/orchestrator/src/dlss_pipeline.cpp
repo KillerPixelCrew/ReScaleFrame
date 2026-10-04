@@ -4,8 +4,10 @@
 
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/native_sr.h>
+#include <rescaleframe/native_fg.h>
 #include <rescaleframe/motion_resolve.h>
 #include <rescaleframe/colour_fidelity.h>
+#include <rescaleframe/colour_transport.h>
 #include "sr_legacy_adapter.h"
 
 #include <windows.h>
@@ -17,6 +19,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -38,7 +41,12 @@ struct Pipeline {
     ID3D11Texture2D* output = nullptr;
     rsf_motion_decode* decode = nullptr;
     rsf_motion_resolve* dense_motion = nullptr;
+    bool hints_reported = false;
+    bool clouds_reported = false;
     rsf_colour_fidelity* colour_fidelity = nullptr;
+    rsf_colour_transport* transport = nullptr;
+    bool transport_create_failed = false;
+    bool transport_reported = false;
     bool colour_fidelity_create_failed = false;
     uint32_t dense_width = 0, dense_height = 0;
     rsf_motion_decode_params motion{};
@@ -134,6 +142,8 @@ void release_layer(Pipeline& self)
     self.layer_height = 0;
 }
 
+std::atomic<bool> colour_correction{false};
+std::atomic<bool> colour_transport{true};
 Pipeline& pipeline()
 {
     static Pipeline instance;
@@ -196,8 +206,12 @@ void tear_down(Pipeline& self)
 {
     rsf_native_sr_release_resources();
     rsf_colour_fidelity_destroy(self.colour_fidelity); self.colour_fidelity = nullptr;
+    rsf_colour_transport_destroy(self.transport); self.transport = nullptr;
+    self.transport_create_failed = false; self.transport_reported = false;
     self.colour_fidelity_create_failed = false;
     rsf_motion_resolve_destroy(self.dense_motion); self.dense_motion = nullptr;
+    self.hints_reported = false;
+    self.clouds_reported = false;
     self.dense_width = self.dense_height = 0;
     if (self.decode) {
         rsf_motion_decode_destroy(self.decode);
@@ -364,7 +378,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
     dlss.require_signature = setup->require_signature;
     dlss.log = from_dlss;
 
-    const rsf_dlss_result loaded = rsf_dlss_load(&dlss);
+    auto* shared = rsf_d3d11_present_host();
+    const rsf_dlss_result loaded = shared ? rsf_dlss_share_host(shared, setup->log, setup->log_user) : rsf_dlss_load(&dlss);
     if (loaded != RSF_DLSS_OK) {
         say(self, "streamline did not load (result %d)", int(loaded));
         tear_down(self);
@@ -593,9 +608,10 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         decode.abi_version = RSF_MOTION_DECODE_ABI_VERSION;
         decode.width = frame->render_width;
         decode.height = frame->render_height;
-        // Zero means R16G16_FLOAT, which is what backends expect and what the default sentinel was
-        // chosen to be representable in.
-        decode.output_format = 0;
+        // Decoded NDC motion spans [-2,2]. R16G16_FLOAT steps by about 5e-4 NDC near one, which is
+        // a few tenths of a pixel at common render widths, coarser than the UNORM16 source. The
+        // dense resolve consumes it on D3D11; only its R16G16_FLOAT output is shared with D3D12.
+        decode.output_format = DXGI_FORMAT_R32G32_FLOAT;
         decode.log = from_decode;
         const rsf_motion_decode_result built =
             rsf_motion_decode_create(self.device, &decode, &self.decode);
@@ -688,6 +704,21 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
         return finish(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
     }
+    dlss_frame.color_before_transparency = frame->color_before_transparency;
+    dlss_frame.transparency_layer = frame->transparency_layer;
+    dlss_frame.reactive_mask = frame->reactive_mask;
+    dlss_frame.transparency_hint = frame->transparency_mask;
+    dlss_frame.bias_current_color = frame->bias_mask;
+    dlss_frame.motion_depth_layer = frame->motion_depth_layer;
+    if (frame->reactive_mask && !self.hints_reported) {
+        self.hints_reported = true;
+        say(self, "translucency hints: opaque-only colour%s, reactive, coverage and bias masks at %ux%u",
+            frame->transparency_layer ? ", separate layer" : "", frame->render_width, frame->render_height);
+    }
+    if (frame->motion_depth_layer && !self.clouds_reported) {
+        self.clouds_reported = true;
+        say(self, "cloud motion: unwritten pixels reproject at the nearer of cloud and scene depth");
+    }
 
     if (self.backend == 1 && !camera.camera_motion_included && camera.has_motion_sentinel) {
         if (!self.dense_motion || self.dense_width != frame->render_width || self.dense_height != frame->render_height) {
@@ -705,6 +736,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         resolve.decoded_to_pixels[0] = -float(frame->render_width) * dlss_frame.motion_scale_x;
         resolve.decoded_to_pixels[1] = -float(frame->render_height) * dlss_frame.motion_scale_y;
         resolve.sentinel = camera.motion_sentinel; resolve.has_sentinel = 1;
+        resolve.depth_layer = frame->motion_depth_layer;
         if (!rsf_motion_resolve_run(self.dense_motion, context_pointer, dlss_frame.motion, dlss_frame.depth, &resolve))
             return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
         dlss_frame.motion = rsf_motion_resolve_motion(self.dense_motion);
@@ -713,7 +745,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         dlss_frame.motion_scale_x = 1.0f / float(frame->render_width);
         dlss_frame.motion_scale_y = 1.0f / float(frame->render_height);
     }
-    if (self.backend == 1 && !self.colour_fidelity) {
+    const bool correct_colour = self.backend == 1 && colour_correction.load(std::memory_order_acquire);
+    if (correct_colour && !self.colour_fidelity) {
         if (!self.colour_fidelity_create_failed &&
             !rsf_colour_fidelity_create(self.device, &self.colour_fidelity)) {
             self.colour_fidelity_create_failed = true;
@@ -724,8 +757,35 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     }
     if (self.backend == 1 && rsf_dlss_set_preset(self.dlss_preset) != RSF_DLSS_OK)
         return finish(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
-    const rsf_dlss_result evaluated = self.backend == 1 ? rsf_dlss_evaluate(context_pointer, &dlss_frame) :
+    // DLSS 310's Performance and Ultra Performance defaults (presets M and L) auto-expose and band in
+    // AC7's dark linear HDR; a preset choice cannot fix that, since a driver override replaces it.
+    // DLSS instead receives an invertible display-range encoding and runs with HDR input off, on
+    // every preset, and its output is decoded back to linear before the engine grades it.
+    const bool transported = self.backend == 1 && colour_transport.load(std::memory_order_acquire);
+    if (transported && !self.transport && !self.transport_create_failed &&
+        !rsf_colour_transport_create(self.device, &self.transport)) {
+        self.transport_create_failed = true;
+        say(self, "DLSS colour transport could not create its GPU passes; DLSS receives linear HDR");
+    }
+    if (transported && self.transport) {
+        void* encoded = nullptr;
+        if (!rsf_colour_transport_encode(self.transport, context_pointer, frame->scene_color, frame->exposure,
+                frame->render_width, frame->render_height, &encoded))
+            return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        dlss_frame.color_in = encoded; dlss_frame.color_encoded = 1; dlss_frame.exposure = nullptr;
+        if (!self.transport_reported) {
+            self.transport_reported = true;
+            say(self, "DLSS colour transport: exposed display-range encoding in, HDR input off, decoded to linear with highlight recovery");
+        }
+    }
+    const rsf_dlss_result evaluated = self.backend == 1 ? rsf_native_fg_evaluate(context_pointer, &dlss_frame) :
         rsf_sr_legacy_evaluate(self.alternate, context_pointer, &dlss_frame, self.motion.zero_means_unwritten);
+    if (evaluated == RSF_DLSS_OK && rsf_d3d11_present_has_owner() && (!rsf_d3d11_present_host() || self.backend != 1)) {
+        auto generation_frame = dlss_frame;
+        if (self.backend != 1 && rsf_sr_legacy_fg_inputs(self.alternate, &generation_frame.depth, &generation_frame.motion))
+            generation_frame.camera_motion_included = 1;
+        rsf_native_fg_capture(context_pointer, &generation_frame);
+    }
     if (evaluated != RSF_DLSS_OK) {
         ++self.consecutive_evaluate_failures;
         if (self.consecutive_evaluate_failures >= kEvaluateFailureLimit) {
@@ -742,6 +802,13 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             say(self, "SR did not evaluate this frame (result %d)", int(evaluated));
         }
         return finish(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
+    }
+    if (dlss_frame.color_encoded &&
+        !rsf_colour_transport_decode(self.transport, context_pointer, self.output, frame->exposure,
+            output_width, output_height, frame->scene_color, frame->render_width, frame->render_height,
+            camera.jitter_pixels)) {
+        self.reset_pending = true;
+        return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
     }
     if (first) {
         // Deliberately not "DLSS is working". Streamline accepted the inputs and wrote the output
@@ -762,7 +829,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             prefix = self.dump_prefix;
         }
     }
-    if (self.backend == 1) {
+    if (correct_colour) {
         if (!prefix.empty()) {
             const std::string raw_prefix = prefix + "_output_uncorrected";
             rsf_texture_dump_options raw{}; raw.struct_size = sizeof(raw);
@@ -1085,6 +1152,16 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
 extern "C" void* rsf_dlss_pipeline_layer_output(void)
 {
     return pipeline().layer_output;
+}
+
+extern "C" void rsf_dlss_pipeline_set_colour_correction(uint32_t enabled)
+{
+    colour_correction.store(enabled != 0, std::memory_order_release);
+}
+
+extern "C" void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled)
+{
+    colour_transport.store(enabled != 0, std::memory_order_release);
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,

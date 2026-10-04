@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_d3d12.h>
+#include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/dlss_native12.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -84,10 +85,10 @@ Texture2D<float2> motion : register(t2);
 RWTexture2D<float4> sceneOut : register(u0);
 RWTexture2D<float> depthOut : register(u1);
 RWTexture2D<float2> motionOut : register(u2);
-cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; };
+cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; uint inputsOnly; };
 [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= extent)) return;
-    sceneOut[id.xy] = scene.Load(int3(id.xy,0));
+    if (!inputsOnly) sceneOut[id.xy] = scene.Load(int3(id.xy,0));
     depthOut[id.xy] = depth.Load(int3(id.xy,0));
     motionOut[id.xy] = motion.Load(int3(id.xy,0)) * toPixels;
 })";
@@ -117,7 +118,7 @@ bool prepare_shader(rsf_sr12& self)
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     parameters[0].DescriptorTable = {2, ranges};
     parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    parameters[1].Constants = {0, 0, 4};
+    parameters[1].Constants = {0, 0, 5};
     D3D12_ROOT_SIGNATURE_DESC desc{2, parameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> serialized, errors, shader;
     if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)) ||
@@ -143,6 +144,7 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
         return false;
     void* pointers[] = {pass.color_input, pass.depth, pass.motion, pass.color_output};
     for (size_t i = 0; i < 4; ++i) {
+        if (i == 3 && !self.backend) continue;
         if (!pointers[i]) return false;
         auto* resource = static_cast<ID3D12Resource*>(pointers[i]);
         const auto desc = resource->GetDesc();
@@ -169,7 +171,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
     if (!setup || setup->struct_size < sizeof(*setup) || !setup->device || !setup->output_width || !setup->output_height ||
-        setup->backend < 1 || setup->backend > 5 || setup->quality > 5) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        setup->backend > 5 || setup->quality > 5) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != 1) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     std::unique_ptr<rsf_sr12, decltype(&rsf_sr12_destroy)> self(new rsf_sr12, rsf_sr12_destroy);
     self->device = static_cast<ID3D12Device*>(setup->device);
@@ -177,8 +179,12 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
     self->backend = setup->backend; self->quality = setup->quality;
     self->output_width = setup->output_width; self->output_height = setup->output_height;
     rsf_backend_result result = RSF_BACKEND_OK;
-    if (setup->backend == 1) {
-        result = rsf_dlss_native12_create(setup->device, &setup->dlss, &self->dlss);
+    if (!setup->backend) {
+        self->width = setup->render_width ? setup->render_width : setup->output_width;
+        self->height = setup->render_height ? setup->render_height : setup->output_height;
+    } else if (setup->backend == 1) {
+        result = setup->streamline_host ? rsf_dlss_native12_create_shared(setup->device, &setup->dlss,
+            static_cast<rsf_streamline_host*>(setup->streamline_host), &self->dlss) : rsf_dlss_native12_create(setup->device, &setup->dlss, &self->dlss);
         if (result == RSF_BACKEND_OK) result = rsf_dlss_native12_plan(self->dlss, self->output_width, self->output_height,
             self->quality, &self->width, &self->height);
     } else {
@@ -200,10 +206,10 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         }
     }
     if (result != RSF_BACKEND_OK) return result;
-    if (!prepare_shader(*self) || !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
+    if (!prepare_shader(*self) || !texture(*self, self->backend ? self->width : 1u, self->backend ? self->height : 1u, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R32_FLOAT, self->normalized[1]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16_FLOAT, self->normalized[2]) ||
-        !texture(*self, self->output_width, self->output_height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->output))
+        (self->backend && !texture(*self, self->output_width, self->output_height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->output)))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
 }
@@ -247,9 +253,9 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     }
     list->SetDescriptorHeaps(1, &heap); list->SetComputeRootSignature(self->root.Get());
     list->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart()); list->SetPipelineState(self->pipeline.Get());
-    struct Constants { uint32_t width, height; float x, y; } constants{self->width, self->height,
-        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1]};
-    list->SetComputeRoot32BitConstants(1, 4, &constants, 0);
+    struct Constants { uint32_t width, height; float x, y; uint32_t inputs_only; } constants{self->width, self->height,
+        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], self->backend == 0};
+    list->SetComputeRoot32BitConstants(1, 5, &constants, 0);
     list->Dispatch((self->width + 7) / 8, (self->height + 7) / 8, 1);
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -278,11 +284,12 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     // The producer measures pixel jitter from the actual GPU projection, including its Y conversion.
     frame.motion_scale_x = frame.motion_scale_y = 1; frame.pre_exposure = frame.view_space_to_meters = 1;
     frame.reset = reset;
-    const auto result = self->dlss ? rsf_dlss_native12_evaluate(self->dlss, list, &frame) :
+    const auto result = !self->backend ? RSF_BACKEND_OK : self->dlss ? rsf_dlss_native12_evaluate(self->dlss, list, &frame) :
         rsf_sr_session_evaluate(self->alternate, list, &frame);
+    if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    if (result == RSF_BACKEND_OK) {
+    if (result == RSF_BACKEND_OK && self->backend) {
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->output.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = static_cast<ID3D12Resource*>(pass->color_output); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -292,6 +299,10 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         self->last_frame = pass->native_frame; self->last_view = pass->history_key;
         self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
     } else self->last_frame = 0;
+    if (!self->backend && result == RSF_BACKEND_OK) {
+        self->last_frame = pass->native_frame; self->last_view = pass->history_key;
+        self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
+    }
     return result;
 }
 extern "C" void rsf_sr12_destroy(rsf_sr12* self)

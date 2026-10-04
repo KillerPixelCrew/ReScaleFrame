@@ -2,6 +2,8 @@
 #include <rescaleframe/ac7_native_renderer.h>
 #include <rescaleframe/ac7_view.h>
 #include "truesky_depth.h"
+#include "truesky_motion.h"
+#include "contact_shadow.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -75,6 +77,16 @@ Site sites[] = {
     {0x222afa0, 0, "\x40\x55\x41\x54\x41\x55\x41\x57\x48\x8d\xac\x24\x38\xfc\xff\xff"},
     {0x10ecdd0, 0, "\x0f\xb6\x81\x1c\x0c\x00\x00\xc3\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc"},
     {0x109f300, 0, "\x83\xb9\x58\x02\x00\x00\x02\x41\xba\x0a\x00\x00\x00\x45\x8b\xc2"},
+    {0x112ff00, 0, "\x4c\x8b\xdc\x49\x89\x5b\x08\x49\x89\x6b\x18\x56\x57\x41\x56\x48"},
+    {0x3a5a20, 0, "\x40\x53\x48\x83\xec\x20\xc7\x41\x08\xff\x00\x00\x00\x48\x8d\x05"},
+    {0x3a8b60, 0, "\x48\x89\x5c\x24\x10\x48\x89\x6c\x24\x18\x48\x89\x74\x24\x20\x57"},
+    {0x1207df0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x51\x30\x48\x8b"},
+    {0x120c540, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x51\x30\x48\x8b"},
+    {0x1ada010, 0, "\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x48"},
+    {0xa88dc0, 0, "\x48\x83\xec\x68\x45\x33\xc9\x45\x33\xc0\x33\xd2\x84\xc9\x48\x8d"},
+    {0x1adbcb0, 0, "\x40\x55\x53\x57\x48\x8d\x6c\x24\xb9\x48\x81\xec\xc0\x00\x00\x00"},
+    {0xe31e90, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
+    {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
 };
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
 std::atomic<uint32_t> entry_calls{0};
@@ -108,7 +120,10 @@ namespace { struct PassLease; }
 struct RendererIdentity {
     uint64_t renderer = 0, source = 0, submission = 0, viewport = 0;
     bool after_simulation = false;
+    uint32_t screen = RSF_SCREEN_UNKNOWN;
+    uint32_t reset = 0;
 };
+namespace { void log(rsf_ac7_native_renderer&, const char*); }
 struct WindowSource {
     uint64_t task = 0, source = 0, viewport = 0, window = 0;
     uint64_t renderer = 0, info = 0, elements = 0;
@@ -133,6 +148,10 @@ struct rsf_ac7_native_renderer {
     std::atomic<bool> cloud_depth_ready{false};
     std::atomic<uint32_t> cloud_depth_dispatches{0};
     std::atomic<uint32_t> cloud_depth_binding_refusals{0};
+    unsigned char* cloud_motion_call = nullptr;
+    void* cloud_motion_relay = nullptr;
+    rsf_ac7_cloud_depth cloud_motion{};
+    std::atomic<uint32_t> cloud_motion_reports{0};
     bool cloud_depth_shader_refused = false;
     unsigned char* scene_precision_site = nullptr;
     bool cloud_resolution_refused = false;
@@ -143,10 +162,18 @@ struct rsf_ac7_native_renderer {
     std::mutex identities_guard;
     std::array<RendererIdentity, 512> identities{};
     uint64_t next_submission = 1;
+    uint32_t previous_primary_screen = RSF_SCREEN_UNKNOWN;
+    uint32_t previous_screen_why = 0, screen_lines = 0;
+    uint64_t previous_view_target = 0;
     std::atomic<uint32_t> live_renderers{0};
     std::atomic<uint64_t> next_source{1};
     std::array<WindowSource, 512> window_tasks{};
     std::atomic<uint32_t> live_window_tasks{0};
+    struct FrameTask { void* task = nullptr; uint64_t source = 0; };
+    std::array<FrameTask, 128> frame_tasks{};
+    std::atomic<uint32_t> live_frame_tasks{0};
+    HHOOK input_hook = nullptr;
+    std::atomic<uint32_t> contact_reports{0};
     std::array<FinalSurfaceSource, 64> final_surfaces{};
     std::array<UniformOwner, 4096> uniform_owners{};
     std::atomic<uint32_t> pending_uniforms{0};
@@ -160,33 +187,149 @@ void drain_retired(rsf_ac7_native_renderer&);
 void retire_renderer_uniforms(rsf_ac7_native_renderer&, void*, void*);
 thread_local bool inside_engine_tick = false;
 thread_local bool inside_simulation = false, after_simulation = false;
+thread_local bool simulation_closed = false, simulation_started = false, input_sampled = false;
 thread_local uint64_t input_source_frame = 0, reserved_source_frame = 0;
+thread_local uint32_t source_render_expected = 0;
+bool object_has_class(uint64_t object, uint32_t cache_rva)
+{
+    uint64_t expected = 0, actual = 0, bases = 0, entry = 0;
+    int32_t depth = 0, actual_depth = 0;
+    const auto module = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    return object && copy(&expected, module + cache_rva, 8) && expected && read(object, 0x10, actual) &&
+        read(expected, 0x90, depth) && read(actual, 0x90, actual_depth) && depth >= 0 &&
+        depth <= actual_depth && actual_depth <= 4096 && read(actual, 0x88, bases) &&
+        read(bases, size_t(depth) * 8, entry) && entry == expected + 0x88;
+}
+// Copy classification with the renderer. A later world at Present cannot establish which
+// screen produced this frame. Unsupported ownership, pause and camera transitions refuse FG.
+// `why` is zero or class bits for an accepted screen, and a reason code in its low byte for a
+// refused one: 1 unreadable player chain, 2 no view target, 3 a pending view target, 4 level
+// state unreadable, 5 paused, 6 no known scene owner. Bits from 0x100 name what was found:
+// 0x100 target is the hangar mesh manager, 0x200 target is the hangar pawn, 0x400 target is the
+// hangar plane selector, 0x800 pawn is the hangar pawn, 0x1000 target is the pawn, 0x2000 pawn
+// is the player plane, 0x4000 the world's game mode is the hangar's, 0x8000 target is the asset
+// viewer manager, 0x10000 target is an engine camera actor. `view_target` returns the actor
+// that owns the camera, so a change of owner can reset history.
+uint32_t render_screen(uint32_t& reset, uint32_t& why, uint64_t& view_target)
+{
+    uint64_t engine_object = 0, client = 0, world = 0, instance = 0, players = 0;
+    uint64_t player = 0, controller = 0, pawn = 0, camera = 0, target = 0, pending = 0;
+    uint64_t level = 0, settings = 0, pauser = 0, hud = 0, ui = 0, layer = 0, focused = 0, mode = 0;
+    int32_t count = 0; uint8_t camera_input = 0, vr = 0, cut = 0;
+    view_target = 0;
+    const auto module = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    why = 1;
+    if (!copy(&engine_object, module + 0x3cbbc28, 8) || !read(engine_object, 0x720, client) ||
+        !read(client, 0x80, world) || !read(client, 0x88, instance) || !read(instance, 0x38, players) ||
+        !read(instance, 0x40, count) || count != 1 || !read(players, 0, player) || !read(player, 0x30, controller) ||
+        !read(controller, 0x370, pawn) || !read(controller, 0x400, camera) ||
+        !read(camera, 0xfb0, target)) return RSF_SCREEN_UNKNOWN;
+    why = 2; if (!target) return RSF_SCREEN_UNKNOWN;
+    view_target = target;
+    why = 3; if (!read(camera, 0x15a0, pending) || pending) return RSF_SCREEN_UNKNOWN;
+    why = 4;
+    if (!read(camera, 0x1c99, cut) || !read(world, 0x30, level) || !read(level, 0x300, settings) ||
+        !read(settings, 0x4e8, pauser)) return RSF_SCREEN_UNKNOWN;
+    why = 5; if (pauser) return RSF_SCREEN_UNKNOWN;
+    if (cut & 4u) reset = 1;
+    // UWorld::AuthorityGameMode at +0xf0 (SDK reflection dump). A wrong offset fails the
+    // class check and leaves this bit clear; it cannot accept a screen by itself.
+    const bool hangar_mode = read(world, 0xf0, mode) && object_has_class(mode, 0x3a82008);
+    const uint32_t found = (object_has_class(target, 0x3a82130) ? 0x100u : 0u) |
+        (object_has_class(target, 0x3a82140) ? 0x200u : 0u) | (object_has_class(target, 0x3a82158) ? 0x400u : 0u) |
+        (object_has_class(pawn, 0x3a82140) ? 0x800u : 0u) | (target == pawn ? 0x1000u : 0u) |
+        (object_has_class(pawn, 0x3a84660) ? 0x2000u : 0u) | (hangar_mode ? 0x4000u : 0u) |
+        (object_has_class(target, 0x3a74730) ? 0x8000u : 0u) | (object_has_class(target, 0x3cc0150) ? 0x10000u : 0u);
+    why = found;
+    // The briefing owns a 3D scene. Its focused widget identifies this particular menu;
+    // generic menu/video/loading frames remain unknown even when a background view exists.
+    if (read(controller, 0x3f8, hud) && read(hud, 0x288, ui) && read(ui, 0xf00, layer) &&
+        read(layer, 0x820, focused) && object_has_class(focused, 0x3a76c90)) return RSF_SCREEN_BRIEFING;
+    // The hangar is a level with its own game mode. Its aircraft viewer hands the camera to an
+    // actor that is none of the hangar classes, so the level decides, not the camera owner.
+    if (found & 0x4f00u) return RSF_SCREEN_HANGAR;
+    why = found | 6u;
+    if (target != pawn || !object_has_class(pawn, 0x3a84660) ||
+        !read(pawn, 0xe12, camera_input) || !camera_input || !read(pawn, 0xb52, vr) || vr) return RSF_SCREEN_UNKNOWN;
+    why = found;
+    return RSF_SCREEN_FLIGHT;
+}
 thread_local uint64_t submitting_viewport = 0;
-void cpu_event(rsf_ac7_native_renderer* self, uint64_t source, uint32_t stage)
+void cpu_event(rsf_ac7_native_renderer* self, uint64_t source, uint32_t stage, uint32_t kind = 0, uint32_t message = 0)
 {
     if (!self || !source || !self->options.cpu_event) return;
     LARGE_INTEGER now{}, frequency{};
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{sizeof(event), stage, self->options.session_id, source,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart)};
+        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), source_render_expected, kind, message};
     self->options.cpu_event(self->options.user, &event);
 }
 thread_local std::array<uint64_t, 2> shared_repaint_targets{};
+LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
+{
+    OuterGuard lifetime;
+    if (code >= 0 && removed == PM_REMOVE && inside_engine_tick && input_source_frame) {
+        const auto* message = reinterpret_cast<const MSG*>(argument);
+        uint32_t kind = 0;
+        if (message->message >= WM_KEYFIRST && message->message <= WM_KEYLAST) kind = RSF_GAME_INPUT_KEYBOARD;
+        else if (message->message >= WM_MOUSEFIRST && message->message <= WM_MOUSELAST) kind = RSF_GAME_INPUT_MOUSE;
+        else if (message->message == WM_INPUT) {
+            RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(message->lParam), RID_HEADER, &header, &bytes, sizeof(header)) == sizeof(header))
+                kind = header.dwType == RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD :
+                    header.dwType == RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
+        }
+        if (kind || message->message >= 0xc000u)
+            cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_INPUT_EVENT, kind, message->message);
+    }
+    return CallNextHookEx(nullptr, code, removed, argument);
+}
+bool source_primary_renderer(rsf_ac7_native_renderer& self, void* renderer)
+{
+    rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    uint64_t views = 0; int32_t count = 0, rect[4]{}; unsigned char capture[3]{};
+    return self.options.render_config && self.options.render_config(self.options.user, &config) &&
+        config.output_width && config.output_height && read(uint64_t(uintptr_t(renderer)), 0xb8, views) &&
+        read(uint64_t(uintptr_t(renderer)), 0xc0, count) && count == 1 && read(views, 0x90, rect) &&
+        read(views, 0xc42, capture) && !capture[0] && !capture[1] && !capture[2] &&
+        !rect[0] && !rect[1] && rect[2] == int32_t(config.output_width) && rect[3] == int32_t(config.output_height);
+}
 void bind_renderer(rsf_ac7_native_renderer& self, void* object)
 {
     if (!input_source_frame || !inside_engine_tick) return;
+    const bool primary = submitting_viewport && after_simulation && source_primary_renderer(self, object);
     const auto key = uint64_t(uintptr_t(object));
     bool refused = false;
+    char screen_text[120]{};
     {
         std::lock_guard<std::mutex> lock(self.identities_guard);
         for (const auto& slot : self.identities) if (slot.renderer == key) return;
         auto empty = std::find_if(self.identities.begin(), self.identities.end(),
             [](const RendererIdentity& entry) { return !entry.renderer; });
         if (empty == self.identities.end()) refused = true;
-        else { *empty = {key, input_source_frame, self.next_submission++, submitting_viewport, after_simulation}; ++self.live_renderers; }
+        else {
+            uint32_t reset = 0, why = 0; uint64_t view_target = 0;
+            const auto screen = primary ? render_screen(reset, why, view_target) : RSF_SCREEN_UNKNOWN;
+            if (primary) {
+                // A new camera owner is a hard cut even when the screen stays the same.
+                if (self.previous_primary_screen != screen || self.previous_view_target != view_target) reset = 1;
+                self.previous_view_target = view_target;
+                // Bounded: says which rule accepted or refused the frame's screen, on change.
+                if ((self.previous_primary_screen != screen || self.previous_screen_why != why) && self.screen_lines < 96) {
+                    ++self.screen_lines;
+                    std::snprintf(screen_text, sizeof(screen_text), "AC7 screen %u -> %u, source %llu, detail 0x%x",
+                        self.previous_primary_screen, screen, static_cast<unsigned long long>(input_source_frame), why);
+                }
+                self.previous_primary_screen = screen; self.previous_screen_why = why;
+            }
+            *empty = {key, input_source_frame, self.next_submission++, submitting_viewport, after_simulation, screen, reset};
+            if (primary) ++source_render_expected;
+            ++self.live_renderers;
+        }
     }
     if (refused && self.options.log) self.options.log(self.options.user,
         "AC7 renderer identity refused: live renderer capacity reached; no association evicted");
+    if (screen_text[0] && self.options.log) self.options.log(self.options.user, screen_text);
 }
 void renderer_identity(rsf_ac7_native_renderer& self, rsf_game_render_pass& pass)
 {
@@ -195,6 +338,8 @@ void renderer_identity(rsf_ac7_native_renderer& self, rsf_game_render_pass& pass
     for (const auto& slot : self.identities) if (slot.renderer == pass.family_key - 0x10) {
         pass.source_frame_id = slot.source; pass.submission_id = slot.submission;
         pass.viewport_key = slot.viewport;
+        pass.screen = slot.screen;
+        if (slot.reset) pass.flags |= RSF_GAME_RENDER_RESET;
         if (slot.after_simulation) pass.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
         return;
     }
@@ -205,18 +350,28 @@ void hooked_engine_tick(void* loop)
     const auto old_tick = inside_engine_tick;
     const auto old_source = input_source_frame, old_reserved = reserved_source_frame;
     const auto old_viewport = submitting_viewport; submitting_viewport = 0;
+    const auto old_render_expected = source_render_expected; source_render_expected = 0;
     auto* self = installed.load(std::memory_order_acquire);
     reserved_source_frame = self && self->active.load() ? self->next_source.fetch_add(1) : 0;
     const auto old_repaint = shared_repaint_targets;
     const auto old_simulation = inside_simulation, old_after = after_simulation;
+    const auto old_closed = simulation_closed, old_started = simulation_started, old_sampled = input_sampled;
+    simulation_closed = simulation_started = input_sampled = false;
     inside_simulation = false; after_simulation = false;
-    inside_engine_tick = true; input_source_frame = 0; shared_repaint_targets = {};
+    inside_engine_tick = true; input_source_frame = reserved_source_frame; shared_repaint_targets = {};
+    if (self && !self->input_hook) {
+        self->input_hook = SetWindowsHookExW(WH_GETMESSAGE, input_message, nullptr, GetCurrentThreadId());
+        log(*self, self->input_hook ? "AC7 input markers: game-thread message dequeue and controller poll installed" :
+            "AC7 input markers refused: game-thread message hook failed");
+    }
     cpu_event(self, reserved_source_frame, RSF_GAME_CPU_FRAME_BEGIN);
     reinterpret_cast<void(*)(void*)>(sites[19].original)(loop);
     cpu_event(self, reserved_source_frame, RSF_GAME_CPU_FRAME_END);
     reserved_source_frame = old_reserved; submitting_viewport = old_viewport;
     inside_engine_tick = old_tick; input_source_frame = old_source; shared_repaint_targets = old_repaint;
     inside_simulation = old_simulation; after_simulation = old_after;
+    simulation_closed = old_closed; simulation_started = old_started; input_sampled = old_sampled;
+    source_render_expected = old_render_expected;
 }
 bool current_game_engine(void* object)
 {
@@ -232,11 +387,11 @@ template<uint32_t Index> void hooked_simulation(void* object, float delta, uint8
         !inside_simulation && current_game_engine(object);
     if (owner) {
         inside_simulation = true; after_simulation = false;
+        simulation_started = true;
         cpu_event(self, input_source_frame, RSF_GAME_CPU_SIMULATION_BEGIN);
     }
     reinterpret_cast<void(*)(void*, float, uint8_t)>(sites[Index].original)(object, delta, idle);
     if (owner) {
-        if (!after_simulation) cpu_event(self, input_source_frame, RSF_GAME_CPU_SIMULATION_END);
         inside_simulation = false;
     }
 }
@@ -246,7 +401,6 @@ void hooked_redraw(void* object, uint8_t present)
     // UGameEngine::Tick enters redraw after world/viewport updates. Bind this CPU state into
     // renderer packets instead of inspecting it later from the render or RHI thread.
     if (inside_engine_tick && inside_simulation && input_source_frame && !after_simulation && current_game_engine(object)) {
-        cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_SIMULATION_END);
         after_simulation = true;
     }
     reinterpret_cast<void(*)(void*, uint8_t)>(sites[26].original)(object, present);
@@ -269,11 +423,156 @@ void hooked_poll_input(void* slate)
 {
     EntryGuard entry;
     auto* self = installed.load(std::memory_order_acquire);
-    if (self && self->active.load() && inside_engine_tick && !input_source_frame && reserved_source_frame) {
-        input_source_frame = reserved_source_frame;
+    if (self && self->active.load() && inside_engine_tick && input_source_frame && !input_sampled) {
+        input_sampled = true;
         cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_SAMPLE);
     }
+    int32_t modal_count = -1;
+    if (self && self->active.load() && inside_engine_tick && input_source_frame &&
+        read(uint64_t(uintptr_t(slate)), 0x1b0, modal_count) && modal_count == 0)
+        cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_INPUT_CONTROLLER);
     reinterpret_cast<void(*)(void*)>(sites[21].original)(slate);
+}
+void hooked_pump_messages(uint8_t main_loop)
+{
+    OuterGuard lifetime;
+    if (main_loop && inside_engine_tick && input_source_frame && !input_sampled) {
+        input_sampled = true;
+        cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_INPUT_SAMPLE);
+    }
+    reinterpret_cast<void(*)(uint8_t)>(sites[54].original)(main_loop);
+}
+void hooked_frame_sync(void* sync, uint8_t one_frame_lag)
+{
+    OuterGuard lifetime;
+    const auto* engine_sync = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x3a4a6f8;
+    if (sync == engine_sync && inside_engine_tick && input_source_frame && simulation_started && !simulation_closed) {
+        simulation_closed = true;
+        cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_SIMULATION_END);
+    }
+    reinterpret_cast<void(*)(void*, uint8_t)>(sites[53].original)(sync, one_frame_lag);
+}
+void hooked_engine_pacing(void* object)
+{
+    OuterGuard lifetime;
+    if (inside_engine_tick && reserved_source_frame && current_game_engine(object))
+        cpu_event(installed.load(std::memory_order_acquire), reserved_source_frame, RSF_GAME_CPU_PACING);
+    // This runs after BeginFrame dispatch, and before PumpMessages/PollGameDeviceState.
+    // Sleeping before the native time update also includes that delay in FApp's delta time.
+    reinterpret_cast<void(*)(void*)>(sites[55].original)(object);
+}
+struct NativeShaderCode { const uint8_t* data; int32_t count, capacity; };
+static_assert(sizeof(NativeShaderCode) == 16 && offsetof(NativeShaderCode, count) == 8);
+void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode* code)
+{
+    OuterGuard lifetime;
+    using Create = void*(*)(void*, void*, const NativeShaderCode*);
+    auto original = reinterpret_cast<Create>(sites[56].original);
+    auto* self = installed.load(std::memory_order_acquire);
+    NativeShaderCode input{};
+    if (!self || self->quiescing.load() || !copy(&input, code, sizeof(input)) || !input.data ||
+        input.count < 32 || input.count > 8 * 1024 * 1024 || input.capacity < input.count)
+        return original(rhi, result, code);
+    // The matched native factory reads ResourceTableBits and five uint32 arrays, then DXBC.
+    // It consumes the borrowed bytes synchronously and retains only shader/table metadata.
+    size_t offset = 4;
+    for (uint32_t i = 0; i < 5; ++i) {
+        uint32_t count = 0;
+        if (offset + 4 > size_t(input.count) || !copy(&count, input.data + offset, 4) ||
+            count > 65536 || size_t(count) * 4 > size_t(input.count) - offset - 4)
+            return original(rhi, result, code);
+        offset += 4 + size_t(count) * 4;
+    }
+    uint32_t optional = 0, dxbc_size = 0; char magic[4]{};
+    if (offset + 32 > size_t(input.count) || !copy(magic, input.data + offset, 4) || std::memcmp(magic, "DXBC", 4) ||
+        !copy(&optional, input.data + input.count - 4, 4) || optional < 4 || optional > size_t(input.count) - offset ||
+        !copy(&dxbc_size, input.data + offset + 24, 4) || dxbc_size != size_t(input.count) - offset - optional)
+        return original(rhi, result, code);
+    std::vector<uint8_t> transformed;
+    const auto patched = rsf_ac7_contact_shadow_correct(input.data + offset, size_t(input.count) - offset, transformed);
+    if (patched != rsf_ac7_contact_shadow_result::patched) {
+        if (patched == rsf_ac7_contact_shadow_result::refused && self->contact_reports.fetch_add(1) < 8)
+            log(*self, "AC7 contact-shadow correction refused: shader fingerprint matched but transform validation failed");
+        return original(rhi, result, code);
+    }
+    try {
+        std::vector<uint8_t> complete(offset + transformed.size());
+        std::memcpy(complete.data(), input.data, offset);
+        std::memcpy(complete.data() + offset, transformed.data(), transformed.size());
+        NativeShaderCode replacement{complete.data(), int32_t(complete.size()), int32_t(complete.size())};
+        auto* created = original(rhi, result, &replacement);
+        uint64_t shader = 0, native = 0;
+        const bool accepted = copy(&shader, result, sizeof(shader)) && read(shader, 0xa0, native) && native;
+        if (self->contact_reports.fetch_add(1) < 8) {
+            char message[288]{};
+            std::snprintf(message, sizeof(message),
+                "AC7 contact-shadow correction: native factory resource=%u RHI=%llx D3D11=%llx CRC=%u; View noise phase and depth quantisation bias, native light/ray parameters preserved",
+                accepted ? 1u : 0u, static_cast<unsigned long long>(shader), static_cast<unsigned long long>(native),
+                rsf_ac7_contact_shadow_crc(transformed.data(), transformed.size()));
+            log(*self, message);
+        }
+        return created;
+    } catch (...) {
+        log(*self, "AC7 contact-shadow correction refused: temporary native shader code allocation failed");
+        return original(rhi, result, code);
+    }
+}
+thread_local uint64_t frame_task_source = 0;
+thread_local rsf_ac7_render_ticket* full_frame_ticket = nullptr;
+void* hooked_frame_task_construct(void* task, void* completion, int32_t prerequisites)
+{
+    OuterGuard lifetime;
+    auto* result = reinterpret_cast<void*(*)(void*, void*, int32_t)>(sites[49].original)(task, completion, prerequisites);
+    auto* self = installed.load(std::memory_order_acquire);
+    if (self && self->active.load() && inside_engine_tick && reserved_source_frame) {
+        bool bound = false;
+        { std::lock_guard<std::mutex> lock(self->identities_guard);
+          for (auto& entry : self->frame_tasks) if (!entry.task) {
+              entry = {task, reserved_source_frame}; ++self->live_frame_tasks; bound = true; break;
+          } }
+        if (!bound) { self->active.store(false); log(*self, "AC7 frame identity refused: BeginFrame task capacity reached"); }
+    }
+    return result;
+}
+void hooked_frame_task_execute(void* task, void* scratch, uint32_t thread)
+{
+    OuterGuard lifetime;
+    const auto saved = frame_task_source; frame_task_source = 0;
+    auto* self = installed.load(std::memory_order_acquire);
+    if (self) {
+        std::lock_guard<std::mutex> lock(self->identities_guard);
+        for (auto& entry : self->frame_tasks) if (entry.task == task) {
+            frame_task_source = entry.source; entry = {}; --self->live_frame_tasks; break;
+        }
+    }
+    reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[50].original)(task, scratch, thread);
+    frame_task_source = saved;
+}
+void hooked_rhi_frame_begin(void* list)
+{
+    OuterGuard lifetime;
+    auto* self = installed.load(std::memory_order_acquire);
+    const auto source = frame_task_source ? frame_task_source : inside_engine_tick ? reserved_source_frame : 0;
+    if (self && self->active.load() && source) {
+        rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_FRAME;
+        pass.session_id = self->options.session_id; pass.source_frame_id = source;
+        if (full_frame_ticket || !rsf_ac7_render_scope_open(self->scopes, list, &pass, &full_frame_ticket)) {
+            self->active.store(false); log(*self, "AC7 full RHI frame refused: overlapping or invalid BeginFrame");
+        }
+    }
+    reinterpret_cast<void(*)(void*)>(sites[51].original)(list);
+}
+void hooked_rhi_frame_end(void* list)
+{
+    OuterGuard lifetime;
+    if (full_frame_ticket) {
+        if (!rsf_ac7_render_scope_close(full_frame_ticket, list)) {
+            auto* self = installed.load(std::memory_order_acquire);
+            if (self) { self->active.store(false); log(*self, "AC7 full RHI frame refused: EndFrame could not queue"); }
+        }
+        full_frame_ticket = nullptr;
+    }
+    reinterpret_cast<void(*)(void*)>(sites[52].original)(list);
 }
 void hooked_renderer_retire(void* list, void* renderer)
 {
@@ -299,6 +598,35 @@ void hooked_renderer_retire(void* list, void* renderer)
         // this module and its controller alive until the final render-owner drain returns.
         if (self) drain_retired(*self);
         if (self) retire_renderer_uniforms(*self, renderer, list);
+    }
+}
+void hooked_render_family(void* list, void* renderer)
+{
+    OuterGuard lifetime;
+    auto* self = installed.load(std::memory_order_acquire);
+    rsf_ac7_render_ticket* ticket = nullptr;
+    if (self && self->active.load()) {
+        rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SUBMISSION;
+        pass.session_id = self->options.session_id; pass.family_key = uint64_t(uintptr_t(renderer)) + 0x10;
+        pass.pass_key = uint64_t(uintptr_t(renderer)); pass.flags = RSF_GAME_RENDER_PRIMARY;
+        renderer_identity(*self, pass);
+        // The scope contract requires the same concrete primary view used by SR. A family
+        // key alone refuses open and cannot produce a completion marker for the CPU join.
+        read(uint64_t(uintptr_t(renderer)), 0xb8, pass.view_key);
+        if (pass.view_key) {
+            read(pass.view_key, 0x70, pass.render_rect);
+            read(pass.view_key, 0x80, pass.output_rect);
+        }
+        uint32_t native_frame = 0;
+        if (read(pass.family_key, 0x68, native_frame)) pass.native_frame = native_frame;
+        if (pass.source_frame_id && pass.viewport_key && (pass.flags & RSF_GAME_RENDER_AFTER_SIMULATION) &&
+            source_primary_renderer(*self, renderer) &&
+            !rsf_ac7_render_scope_open(self->scopes, list, &pass, &ticket))
+            log(*self, "AC7 submission scope refused: no RHI completion marker will be queued");
+    }
+    reinterpret_cast<void(*)(void*, void*)>(sites[48].original)(list, renderer);
+    if (ticket && !rsf_ac7_render_scope_close(ticket, list)) {
+        self->active.store(false); log(*self, "AC7 submission source deactivated: RHI scope could not close");
     }
 }
 
@@ -876,6 +1204,69 @@ void hooked_unmodified_resolve(void* scene, void* list, void* view, uint8_t glow
     if (ui_producer.active && ui_producer.plan.scene == scene && ui_producer.plan.packet.view_key == uint64_t(uintptr_t(view)))
         restore_ui_producer();
 }
+// FSceneRenderTargets::GetSceneColor: the shading path at +0x25c and the alpha/format selection
+// at +0x260/+0x230 pick SceneColor[Mobile/HighEnd/HighEndWithAlpha] at +0x30/+0x38/+0x40,
+// matching AC7_FSceneRenderTargets_AllocateSceneColor (RVA 0x1095010). Unknown paths refuse.
+uint64_t scene_colour_pool(void* scene)
+{
+    int32_t path = 0, format = 0; uint8_t alpha = 0; uint64_t pool = 0;
+    const auto targets = uint64_t(uintptr_t(scene));
+    if (!read(targets, 0x25c, path) || !read(targets, 0x260, alpha) || !read(targets, 0x230, format)) return 0;
+    const size_t offset = path == 0 ? 0x30 : path == 1 ? (alpha || format == 10 ? 0x40 : 0x38) : 0;
+    return offset && read(targets, offset, pool) ? pool : 0;
+}
+// Passes 0 (standard), 1 (after DOF, the separate layer at scene+0x1b0, allocator RVA 0x109f4d0)
+// and 2 (all) of the single primary view. Pass 4 is AC7's interface layer and stays outside.
+// Scene colour is leased through the pass so the runtime can snapshot it at begin and compare at end.
+// Identity of the single primary view of a renderer that SR reconstructs, or false.
+bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role, rsf_ac7_render_scope& scope)
+{
+    rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    if (!self.active.load() || !self.options.render_config ||
+        !self.options.render_config(self.options.user, &config) || !config.enabled) return false;
+    uint64_t storage = 0; int32_t count = 0; uint32_t frame = 0;
+    scope = {}; scope.struct_size = sizeof(scope); scope.role = role; scope.session_id = self.options.session_id;
+    if (!read(uint64_t(uintptr_t(renderer)), 0xb8, storage) || !read(uint64_t(uintptr_t(renderer)), 0xc0, count) ||
+        count != 1 || !read(storage, 0, scope.family_key) || !read(scope.family_key, 0x68, frame) ||
+        !read(storage, 0x70, scope.render_rect) || !read(storage, 0x80, scope.output_rect) ||
+        !primary_view(storage, config)) return false;
+    scope.view_key = storage; scope.native_frame = frame;
+    return true;
+}
+rsf_ac7_render_ticket* open_translucency(rsf_ac7_native_renderer& self, void* renderer, void* list,
+    uint32_t pass, void* scene, PassLease*& out)
+{
+    out = nullptr;
+    rsf_ac7_render_scope scope{};
+    if (pass > 2 || !scene || !primary_scope(self, renderer, RSF_GAME_RENDER_TRANSLUCENCY, scope)) return nullptr;
+    scope.pass_key = pass;
+    scope.flags = RSF_GAME_RENDER_PRIMARY | (pass == 1 ? RSF_GAME_RENDER_TRANSLUCENCY_LAYER : 0u);
+    const auto colour = scene_colour_pool(scene);
+    if (!colour) return nullptr;
+    auto* lease = new(std::nothrow) PassLease;
+    if (!lease) return nullptr;
+    lease->owner = &self; lease->input_pool = colour; pool_ref(colour, 0x28);
+    rsf_ac7_render_ticket* ticket = nullptr;
+    const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
+    if (!rsf_ac7_render_scope_open_leased(self.scopes, list, &scope, &owned, &ticket)) {
+        pool_ref(colour, 0x30); delete lease; return nullptr;
+    }
+    out = lease; return ticket;
+}
+// RenderBasePass, RVA 0xebf050 (DeferredShadingRenderer.cpp:954): the material draws of the
+// primary view, including parallel lists submitted before it returns, inside one queued scope.
+uint8_t hooked_base_pass(void* renderer, void* list, uint32_t access)
+{
+    OuterGuard lifetime;
+    auto* self = installed.load(std::memory_order_acquire);
+    rsf_ac7_render_scope scope{};
+    rsf_ac7_render_ticket* ticket = nullptr;
+    if (self && primary_scope(*self, renderer, RSF_GAME_RENDER_MATERIALS, scope) &&
+        !rsf_ac7_render_scope_open(self->scopes, list, &scope, &ticket)) ticket = nullptr;
+    const auto result = reinterpret_cast<uint8_t(*)(void*, void*, uint32_t)>(sites[57].original)(renderer, list, access);
+    if (ticket && !rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 base pass scope could not close");
+    return result;
+}
 void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
 {
     OuterGuard lifetime;
@@ -906,7 +1297,19 @@ void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
             if (reports++ < 6) log(*self, "native translucency: populated missing scaled-view uniform before material selection");
         }
     }
+    PassLease* lease = nullptr;
+    auto* ticket = self ? open_translucency(*self, renderer, list, pass, scene, lease) : nullptr;
     reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[36].original)(renderer, list, pass);
+    if (ticket) {
+        // The layer is allocated on demand inside the pass. Publish it before end is queued.
+        uint64_t layer = 0;
+        if (pass == 1 && read(uint64_t(uintptr_t(scene)), 0x1b0, layer) && layer) {
+            pool_ref(layer, 0x28); lease->output_pool.store(layer, std::memory_order_release);
+        }
+        if (!rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 translucency scope could not close");
+        static uint32_t reports = 0;
+        if (reports++ < 3) log(*self, "native translucency: scene colour leased around passes 0/1/2 for reactive and transparency inputs");
+    }
     // Stereo/empty branches may omit Resolve. Do not leave a changed view after this producer.
     if (ui_producer.active) restore_ui_producer();
     translucency_renderer = previous;
@@ -1560,7 +1963,11 @@ void hooked_slate_window(void* renderer, void* list, void* info, void* elements,
                 scope.pass_key = source.task ? source.task : element_key; scope.flags = RSF_GAME_RENDER_PRIMARY;
                 if (source.after_simulation) scope.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
                 const rsf_ac7_scope_lease owned{lease, resolve_window, release_window};
-                if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) release_window(lease);
+                if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
+                    release_window(lease);
+                    static std::atomic<uint32_t> refusals{0};
+                    if (refusals.fetch_add(1) < 4) log(*self, "AC7 window scope refused: source Present ownership was not queued");
+                }
             } else if (lease) release_window(lease);
         }
     }
@@ -1613,7 +2020,11 @@ void hooked_slate_texture(void* shader, void* list, void* rhi_texture, void* sam
                 scope.texture_slot = slot; scope.flags = RSF_GAME_RENDER_PRIMARY;
                 if (source.after_simulation) scope.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
                 const rsf_ac7_scope_lease owned{lease, resolve_texture_binding, release_texture_binding};
-                if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) release_texture_binding(lease);
+                if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
+                    release_texture_binding(lease);
+                    static std::atomic<uint32_t> refusals{0};
+                    if (refusals.fetch_add(1) < 4) log(*self, "AC7 texture-binding scope refused: final scene/window association was not queued");
+                }
             } else delete lease;
         }
     }
@@ -1816,6 +2227,57 @@ bool install_depth_dispatch(rsf_ac7_native_renderer& self, unsigned char* module
     log(self,"native TrueSky depth: guarded one-to-one pass route installed at DLL RVAs 0xbff0b/0xc003f; waiting for GPU shader preparation");
     return true;
 }
+// composite_tile reaches TrueSky's render platform at DLL RVA 0xabc6b, `call [rax+0x130]` with
+// (platform, deviceContext&, count). The relay forwards it, then reads the pass's still-bound
+// cloud inputs before TrueSky's Unapply and hands the host a device depth for cloud motion.
+void native_cloud_composite_draw(void* platform, void* device_context, uint32_t count)
+{
+    OuterGuard outer; EntryGuard entry;
+    using PlatformDraw = void(*)(void*, void*, uint32_t);
+    reinterpret_cast<PlatformDraw>((*static_cast<void***>(platform))[0x130 / 8])(platform, device_context, count);
+    auto* self = installed.load(std::memory_order_acquire);
+    if (!self || !self->active.load() || !self->options.on_stage) return;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    {
+        std::lock_guard<std::mutex> lock(self->cloud_resolution_guard);
+        if (!self->cloud_depth_device) return; // Known only after TrueSky's depth producer ran.
+        self->cloud_depth_device->GetImmediateContext(&context);
+    }
+    D3D11_VIEWPORT viewport{}; UINT viewports = 1; context->RSGetViewports(&viewports, &viewport);
+    auto* depth = viewports == 1 ? rsf_ac7_cloud_depth_write(self->cloud_motion, context.Get(), viewport) : nullptr;
+    const auto reports = self->cloud_motion_reports.fetch_add(1);
+    if (!depth) {
+        if (reports < 3) log(*self, "native TrueSky cloud motion refused: composite_tile bindings differ from the measured t1/t2/b12 layout");
+        return;
+    }
+    rsf_ac7_render_scope pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_CLOUD_DEPTH;
+    pass.session_id = self->options.session_id; pass.depth = depth;
+    pass.render_rect[0] = int32_t(viewport.TopLeftX); pass.render_rect[1] = int32_t(viewport.TopLeftY);
+    pass.render_rect[2] = pass.render_rect[0] + int32_t(viewport.Width); pass.render_rect[3] = pass.render_rect[1] + int32_t(viewport.Height);
+    self->options.on_stage(self->options.user, nullptr, &pass, 1);
+    if (reports < 3) log(*self, "native TrueSky cloud motion: composite_tile cloud distance converted to scene device depth");
+}
+void install_cloud_motion(rsf_ac7_native_renderer& self, unsigned char* module)
+{
+    if (self.cloud_motion_call) return;
+    auto* call = module + 0xabc6b;
+    constexpr unsigned char before[]{0x49,0x8b,0x8e,0x28,0x02,0x00,0x00,0x45,0x8b,0xc4,0x49,0x8b,0xd7,0x48,0x8b,0x01};
+    constexpr unsigned char expected[]{0xff,0x90,0x30,0x01,0x00,0x00,0x49,0x8b,0x9e,0x60,0x02,0x00,0x00,0x48,0x8d,0x0d};
+    unsigned char actual[16]{};
+    if (!copy(actual, call - 16, 16) || std::memcmp(actual, before, 16) || !copy(actual, call, 16) || std::memcmp(actual, expected, 16)) {
+        log(self, "native TrueSky cloud motion refused: composite_tile draw bytes differ at DLL RVA 0xabc6b"); return;
+    }
+    auto* relay = allocate_depth_relay(call); if (!relay) return;
+    const auto handler = reinterpret_cast<void*>(&native_cloud_composite_draw);
+    std::memcpy(relay, &handler, sizeof(handler));
+    unsigned char replacement[]{0xff,0x15,0,0,0,0};
+    const auto distance = intptr_t(relay) - intptr_t(call + 6);
+    if (distance < INT32_MIN || distance > INT32_MAX) { VirtualFree(relay, 0, MEM_RELEASE); return; }
+    const int32_t relative = int32_t(distance); std::memcpy(replacement + 2, &relative, 4);
+    if (!write_render_code(call, expected, replacement, sizeof(replacement))) { VirtualFree(relay, 0, MEM_RELEASE); return; }
+    self.cloud_motion_call = call; self.cloud_motion_relay = relay;
+    log(self, "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b");
+}
 bool apply_scene_precision_patch(rsf_ac7_native_renderer& self)
 {
     if (self.scene_precision_site) return true;
@@ -1839,6 +2301,7 @@ void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
     if (self.cloud_resolution_site || self.cloud_resolution_refused) return;
     auto* module = reinterpret_cast<unsigned char*>(GetModuleHandleW(L"TrueSkyPluginRender_MT.dll"));
     if (!module) return;
+    install_cloud_motion(self, module);
     if (!install_depth_dispatch(self,module)) {
         self.cloud_resolution_refused=true;
         log(self,"native TrueSky full-resolution patch refused: depth producer code/effect fingerprint or relay allocation differs");
@@ -1933,7 +2396,12 @@ void* hooks[] = {reinterpret_cast<void*>(&hooked_process<0>), reinterpret_cast<v
     reinterpret_cast<void*>(&hooked_pixel_enqueue<41>), reinterpret_cast<void*>(&hooked_pixel_enqueue<42>),
     reinterpret_cast<void*>(&hooked_pixel_enqueue<43>), reinterpret_cast<void*>(&hooked_sky_projection),
     reinterpret_cast<void*>(&hooked_sky_render), reinterpret_cast<void*>(&hooked_temporal_sample_index),
-    reinterpret_cast<void*>(&hooked_scene_colour_format)};
+    reinterpret_cast<void*>(&hooked_scene_colour_format), reinterpret_cast<void*>(&hooked_render_family),
+    reinterpret_cast<void*>(&hooked_frame_task_construct), reinterpret_cast<void*>(&hooked_frame_task_execute),
+    reinterpret_cast<void*>(&hooked_rhi_frame_begin), reinterpret_cast<void*>(&hooked_rhi_frame_end),
+    reinterpret_cast<void*>(&hooked_frame_sync), reinterpret_cast<void*>(&hooked_pump_messages),
+    reinterpret_cast<void*>(&hooked_engine_pacing), reinterpret_cast<void*>(&hooked_create_pixel_shader),
+    reinterpret_cast<void*>(&hooked_base_pass)};
 }
 extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_options* options,
     rsf_ac7_native_renderer** out) try
@@ -1959,6 +2427,14 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
         {0x109e0d0, 0, "\x4c\x89\x44\x24\x18\x53\x56\x57\x48\x81\xec\xa0\x00\x00\x00\x48"},
         {0xee93f0, 0, "\x48\x89\x5c\x24\x08\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57"},
         {0x923e60, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x0a\xe1\x15\x03\x48\x85"},
+        {0x938fb0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xa2\xb6\x14\x03\x48\x85"},
+        {0x925860, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xc2\xc8\x15\x03\x48\x85"},
+        {0x925d10, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x22\xc4\x15\x03\x48\x85"},
+        {0x925e10, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x3a\xc3\x15\x03\x48\x85"},
+        {0x925710, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xea\xc8\x15\x03\x48\x85"},
+        {0x8b3100, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x22\x16\x1c\x03\x48\x85"},
+        {0x1b495f0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x52\x6b\x17\x02\x48\x85"},
+        {0x8c1bd0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xb2\x50\x1b\x03\x48\x85"},
         {0xfcf880, 0, "\x48\x8b\xc4\x55\x53\x57\x41\x55\x48\x8d\x68\xa1\x48\x81\xec\x88"},
         {0x1ab0200, 0, "\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"},
         {0x1ab7dc0, 0, "\x48\x89\x5c\x24\x10\x57\x48\x83\xec\x40\x48\x83\x79\x70\x00\x0f"},
@@ -2056,7 +2532,11 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     // Keep inactive CPU observers installed until their render-thread-only pool refs retire.
     // Disabling first would remove the only owner that can drain an asynchronous RHI release.
     drain_retired(*self);
-    if (entry_calls.load() || self->live_renderers.load() || self->live_window_tasks.load() || self->pending_uniforms.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
+    if (entry_calls.load() || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
+    if (self->input_hook) {
+        if (!UnhookWindowsHookEx(self->input_hook)) return 0;
+        self->input_hook = nullptr;
+    }
     for (uint32_t i = 0; i < self->hooks; ++i) MH_DisableHook(sites[i].target);
     if (entry_calls.load() || outer_calls.load()) return 0;
     if (self->scene_precision_site) {
@@ -2070,6 +2550,18 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
             log(*self, "native TrueSky cloud-resolution patch could not restore; renderer retained"); return 0;
         }
         self->cloud_resolution_site = nullptr;
+    }
+    if (self->cloud_motion_call) {
+        constexpr unsigned char native_draw[]{0xff,0x90,0x30,0x01,0x00,0x00};
+        unsigned char relayed[6]{0xff,0x15};
+        const int32_t relative = int32_t(intptr_t(self->cloud_motion_relay) - intptr_t(self->cloud_motion_call + 6));
+        std::memcpy(relayed + 2, &relative, 4);
+        if (!write_render_code(self->cloud_motion_call, relayed, native_draw, sizeof(native_draw))) {
+            log(*self,"native TrueSky cloud motion relay could not restore; renderer retained"); return 0;
+        }
+        self->cloud_motion_call = nullptr;
+        VirtualFree(self->cloud_motion_relay, 0, MEM_RELEASE); self->cloud_motion_relay = nullptr;
+        rsf_ac7_cloud_depth_release(self->cloud_motion);
     }
     if (self->cloud_depth_call) {
         constexpr unsigned char native_call[]{0x41,0xff,0x92,0x48,0x01,0x00,0x00};

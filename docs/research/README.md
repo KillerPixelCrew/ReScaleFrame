@@ -10,8 +10,11 @@ route general Unreal 4, version-specific UE4.18 and TrueSky research.
 
 | Document | Read it for |
 | --- | --- |
+| [Shared FSR/XeSS generation](shared-fg-20261004.md) | Independent SR/FG selection, shared D3D11/D3D12 presentation, Unity timing, hardware fixtures and remaining game validation |
 | [Shared Unity Mono plugin](unity-mono-plugin.md) | Reflection/Harmony adapters, existing-domain bootstrap, RenderGraph execution and lifecycle design |
 | [Drag'n Wash renderer](drag-n-wash-renderer.md) | First Unity case: 6000.3.14f1 Mono/URP, complete selected assembly decompiles, temporal/UI boundaries and unmeasured runtime limits |
+| [AC7 DLSS-G/Reflex MVP](ac7-dlss-fg-20261003.md) | Shared presentation/SR host, frame identity, synthetic enabled FG, UE4.18.3 FID reference and pending game validation |
+| [Project Wingman renderer](project-wingman-renderer.md) | UE4.27.2 fingerprint, Function ID results, temporal/widget hook map and remaining HUD/VR validation |
 | [Native AC7 renderer](ac7-native-renderer-refactor-20261001.md) | Native view/graph/UI ownership, copied RHI identity, shared-uniform crash correction and retirement |
 | [Reconstruction stability](ac7-stability-20261001.md) | Exact input rectangles, bloom/exposure order, TrueSky jitter and valid-zero motion |
 | [Aircraft and cloud corrections](ac7-plane-artifacts-20261002.md) | TrueSky x1 activation, actual Texture2D views, RG32F depth bounds, FP16 production and user acceptance |

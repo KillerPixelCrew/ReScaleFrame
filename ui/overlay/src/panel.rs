@@ -3,9 +3,8 @@
 //! This is the half worth testing. It needs an egui context and nothing else, so every widget here
 //! can be laid out, clicked and asserted on without a device, a swap chain or a game.
 //!
-//! What it deliberately does not show: a frame rate gain, a latency figure, or a quality score.
-//! The project cannot measure any of the three yet, and a status panel that implies otherwise is
-//! worse than no panel.
+//! Counter-derived FPS is shown separately from generation activity. Latency, quality and
+//! unmeasured speed improvements are not inferred from a requested mode.
 
 use egui::{Color32, Context, Rect, RichText, Ui, Window};
 
@@ -90,6 +89,10 @@ pub struct Controls {
     pub enabled: Option<Rect>,
     /// One control per SR backend.
     pub backend: [Option<Rect>; 5],
+    /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
+    pub fg_backend: [Option<Rect>; 5],
+    /// Track of the hardware-supported frame generation multiplier slider.
+    pub fg_multiplier: Option<Rect>,
 }
 
 /// Lay out one frame of the panel, recording what the user did into `intent`.
@@ -137,6 +140,11 @@ fn controls_section(
     intent: &mut Intent,
     controls: &mut Controls,
 ) {
+    let mut performance = stats.show_performance_hud;
+    if ui.checkbox(&mut performance, "Show FPS overlay").changed() {
+        intent.performance_hud_changed = true;
+        intent.performance_hud = performance;
+    }
     let mut enabled = selection.enabled;
     let toggle = ui.checkbox(&mut enabled, "Enable upscaling");
     controls.enabled = Some(toggle.rect);
@@ -174,6 +182,257 @@ fn controls_section(
     if stats.last_switch_result != 0 {
         ui.label(
             RichText::new("Requested configuration refused; check runtime status").color(WARN),
+        );
+    }
+
+    ui.separator();
+    let generation = stats.generation;
+    let runtime_switching = generation.backend_choices & 0x8000_0000 != 0;
+    ui.label("Frame generation provider");
+    let mut fg_backend = generation.requested_backend;
+    ui.horizontal_wrapped(|ui| {
+        for (index, (id, name)) in [
+            (0, "Off"),
+            (1, "DLSS-G"),
+            (3, "FSR3"),
+            (4, "FSR4"),
+            (5, "XeSS"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let allowed = generation.backend_choices & (1 << id) != 0;
+            let response = ui.add_enabled(allowed, egui::RadioButton::new(fg_backend == id, name));
+            controls.fg_backend[index] = Some(response.rect);
+            if response.clicked() && fg_backend != id {
+                fg_backend = id;
+                intent.fg_backend_changed = true;
+                intent.fg_backend = id;
+            }
+        }
+    });
+    let pending = fg_backend != generation.backend;
+    if pending {
+        ui.label(
+            RichText::new(format!(
+                "{} {}{}",
+                if runtime_switching {
+                    if generation.selection_result == 0 {
+                        "Applying"
+                    } else {
+                        "Requested"
+                    }
+                } else {
+                    "Saved:"
+                },
+                fg_backend_name(fg_backend),
+                if runtime_switching {
+                    if generation.selection_result == 0 {
+                        " at the next frame."
+                    } else {
+                        "."
+                    }
+                } else {
+                    ". Awaiting the presentation owner."
+                }
+            ))
+            .color(MUTED),
+        );
+    } else if generation.available {
+        ui.label(
+            RichText::new(format!(
+                "Current provider: {}",
+                fg_backend_name(generation.backend)
+            ))
+            .small()
+            .color(MUTED),
+        );
+    }
+    ui.label(
+        RichText::new(if runtime_switching {
+            "Provider changes apply during play."
+        } else {
+            "GPU compatibility is checked at startup."
+        })
+        .small()
+        .color(MUTED),
+    );
+    if generation.selection_result != 0 {
+        ui.label(
+            RichText::new(if runtime_switching {
+                "Provider change failed; current provider retained."
+            } else {
+                "Could not save the provider choice."
+            })
+            .color(MUTED),
+        );
+    }
+    ui.add_enabled_ui(generation.available && !pending, |ui| {
+        let mut mode = generation.requested_mode;
+        let mut count = generation.requested_generated.max(1);
+        let mut enabled = mode != 0;
+        if ui.checkbox(&mut enabled, "Frame Generation").changed() {
+            mode = u32::from(enabled);
+            intent.fg_changed = true;
+        }
+        {
+            let maximum = generation.max_generated.saturating_add(1).max(2);
+            let mut multiplier = count.saturating_add(1).clamp(2, maximum);
+            let response = ui.add_enabled(
+                generation.max_generated > 1,
+                egui::Slider::new(&mut multiplier, 2..=maximum)
+                    .text("Frame generation multiplier")
+                    .custom_formatter(|value, _| format!("{value:.0}x")),
+            );
+            controls.fg_multiplier = Some(Rect::from_min_max(
+                response.rect.min,
+                egui::pos2(
+                    response.rect.left() + ui.spacing().slider_width,
+                    response.rect.bottom(),
+                ),
+            ));
+            if response.changed() {
+                count = multiplier - 1;
+            }
+            intent.fg_changed |= response.changed();
+            if generation.available && generation.max_generated == 1 {
+                ui.label(
+                    RichText::new("This provider reports a maximum of 2x on the current GPU.")
+                        .small()
+                        .color(MUTED),
+                );
+            }
+        }
+        if intent.fg_changed {
+            intent.fg_mode = mode;
+            intent.fg_generated = count;
+        }
+    });
+    if !generation.available {
+        ui.label(
+            RichText::new("Select a supported provider to enable frame generation")
+                .small()
+                .color(MUTED),
+        );
+    } else if generation.active {
+        ui.label(format!(
+            "Generating {} frame(s) per rendered frame",
+            generation.effective_generated
+        ));
+    } else if generation.requested_mode != 0 {
+        let reason = match generation.reason {
+            1 => "Waiting for a matching scene and window",
+            2 => "Waiting for reconstruction inputs",
+            3 => "Waiting for a complete frame submission",
+            4 => "Waiting for flight, hangar, or briefing",
+            5 => "Suspended for a camera cut",
+            6 => "Current VSync mode is unsupported",
+            _ => "Waiting for SDK-confirmed generation",
+        };
+        ui.label(RichText::new(reason).color(MUTED));
+    }
+    ui.add_enabled_ui(generation.reflex_available, |ui| {
+        if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex {
+            ui.label(
+                RichText::new("DLSS-G requires Reflex On while generating frames.")
+                    .small()
+                    .color(MUTED),
+            );
+        }
+        ui.horizontal(|ui| {
+            ui.label("Reflex");
+            let mut mode = generation.requested_reflex;
+            for (id, name) in [(0, "Off"), (1, "On"), (2, "On + Boost")] {
+                ui.radio_value(&mut mode, id, name);
+            }
+            if mode != generation.requested_reflex {
+                intent.reflex_changed = true;
+                intent.reflex_mode = mode;
+            }
+        });
+        // Reflex's own limiter. The value is rendered frames, so generation multiplies it.
+        // The panel receives the mouse only: the value is dragged, never typed.
+        let presents = if generation.requested_mode != 0 {
+            f64::from(generation.requested_generated.max(1) + 1)
+        } else {
+            1.0
+        };
+        let refresh_us = if generation.display_refresh_mhz > 0 {
+            1.0e9 / f64::from(generation.display_refresh_mhz)
+        } else {
+            0.0
+        };
+        let stored = generation.frame_limit_us;
+        ui.horizontal(|ui| {
+            ui.label("Frame limit");
+            let mut fps = if stored == 0 {
+                0.0
+            } else {
+                1.0e6 / f64::from(stored)
+            };
+            let dragged = ui
+                .add(
+                    egui::DragValue::new(&mut fps)
+                        .range(0.0..=500.0)
+                        .speed(0.25)
+                        .custom_formatter(|value, _| {
+                            if value < 1.0 {
+                                "Off".to_owned()
+                            } else {
+                                format!("{value:.1} fps")
+                            }
+                        }),
+                )
+                .changed();
+            let mut requested = None;
+            if dragged {
+                requested = Some(if fps < 1.0 { 0.0 } else { 1.0e6 / fps });
+            }
+            // The cap OptiScaler calculates for VRR: presented frames 0.3 ms slower than the
+            // refresh interval, here converted to the rendered frames this limit counts.
+            if ui
+                .add_enabled(refresh_us > 0.0, egui::Button::new("VRR"))
+                .clicked()
+            {
+                requested = Some(presents * (refresh_us + 300.0));
+            }
+            if ui.button("Off").clicked() {
+                requested = Some(0.0);
+            }
+            if let Some(interval) = requested {
+                // Saturating float to integer conversion; the range above keeps it small.
+                let interval = interval.round() as u32;
+                if interval != stored {
+                    intent.frame_limit_changed = true;
+                    intent.frame_limit_us = interval;
+                }
+            }
+        });
+        let note = if stored == 0 {
+            if refresh_us > 0.0 {
+                format!(
+                    "Drag the value. VRR caps presented frames just under {:.0} Hz.",
+                    1.0e6 / refresh_us
+                )
+            } else {
+                "Drag the value. It limits rendered frames, before generation.".to_owned()
+            }
+        } else {
+            let rendered = 1.0e6 / f64::from(stored);
+            format!(
+                "{rendered:.1} fps rendered, up to {:.1} presented",
+                rendered * presents
+            )
+        };
+        ui.label(RichText::new(note).small().color(MUTED));
+    });
+    if generation.last_result != 0 {
+        ui.label(
+            RichText::new(format!(
+                "Frame generation request refused ({})",
+                generation.last_result
+            ))
+            .color(WARN),
         );
     }
 
@@ -233,6 +492,54 @@ fn controls_section(
             .color(WARN),
         );
     }
+}
+
+fn fg_backend_name(backend: u32) -> &'static str {
+    match backend {
+        1 => "DLSS-G",
+        3 => "FSR3",
+        4 => "FSR4",
+        5 => "XeSS",
+        _ => "Off",
+    }
+}
+
+pub(crate) fn performance_hud(ctx: &Context, rates: crate::performance::Rates, stats: &Stats<'_>) {
+    let format_rate =
+        |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
+    egui::Area::new(egui::Id::new("rsf-performance"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(Color32::from_black_alpha(190))
+                .inner_margin(9.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!("Rendered FPS   {}", format_rate(rates.rendered)))
+                            .monospace(),
+                    );
+                    ui.label(
+                        RichText::new(format!("Presented FPS  {}", format_rate(rates.presented)))
+                            .monospace(),
+                    );
+                    let generation = stats.generation;
+                    let state = if generation.active {
+                        format!("FG active  {}x", generation.effective_generated + 1)
+                    } else if generation.requested_mode == 0 {
+                        "FG off".to_owned()
+                    } else if !generation.available {
+                        "FG unavailable".to_owned()
+                    } else {
+                        "FG suspended".to_owned()
+                    };
+                    ui.label(RichText::new(state).small().color(if generation.active {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        MUTED
+                    }));
+                });
+        });
 }
 
 fn on_off(value: bool) -> &'static str {
@@ -336,11 +643,14 @@ mod tests {
             frames_evaluated: 238,
             ..Stats::default()
         };
-        let said = words(&Selection::default(), &stats).to_lowercase();
+        // "On + Boost" names the SDK's Reflex option, rather than a measured speed claim.
+        let said = words(&Selection::default(), &stats)
+            .to_lowercase()
+            .replace("on + boost", "on");
 
-        // The project measures none of these, so nothing on the panel may imply it does. This is
-        // the honesty rule as a test rather than as a review comment.
-        for forbidden in ["fps", "faster", "gain", "boost", "speedup", "score"] {
+        // Counter-derived FPS is available. Unmeasured improvements and quality claims remain
+        // forbidden; requested generation alone must never invent a measured FPS gain.
+        for forbidden in ["faster", "gain", "boost", "speedup", "score"] {
             assert!(
                 !said.contains(forbidden),
                 "the panel said {forbidden:?}, which this build cannot measure"

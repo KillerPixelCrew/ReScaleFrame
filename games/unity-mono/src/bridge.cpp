@@ -2,7 +2,7 @@
 #include "bridge.h"
 #include <windows.h>
 #include <d3d12.h>
-#include <dxgi.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <array>
 #include <atomic>
@@ -33,15 +33,18 @@ std::mutex guard;
 rsf_game_host_services services{};
 std::array<Pending, 32> pending;
 std::array<Commands, 3> commands;
+std::array<Commands, 3> hud_commands;
 ComPtr<ID3D12Fence> fence;
 std::atomic<bool> active{false};
 std::atomic<uint32_t> callbacks{0};
 std::atomic<uint32_t> managed_stage{0};
 uint32_t next_commands = 0;
+uint32_t next_hud_commands = 0;
 std::atomic<uint32_t> backend{1}, quality{1}, generation{1};
 std::atomic<bool> policy_pending{false};
 uint32_t refusals = 0;
 uint32_t output_width = 0, output_height = 0;
+uint32_t input_width = 0, input_height = 0;
 bool submission_unknown = false;
 int event_id = 0;
 void report_state(uint32_t stage) { managed_stage.store(stage); }
@@ -100,13 +103,14 @@ bool valid(const rsf_unity_packet& packet)
 {
     const auto& c = packet.camera;
     if (packet.struct_size != sizeof(packet) || packet.abi_version != RSF_UNITY_BRIDGE_ABI_VERSION ||
-        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & 4) && !packet.color) ||
+        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & 12) && !packet.color) ||
         c.struct_size != sizeof(c) || c.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         !c.render_width || !c.render_height || !c.output_width || !c.output_height ||
         c.render_width > 16384 || c.render_height > 16384 || c.output_width > 16384 || c.output_height > 16384 ||
         !std::isfinite(c.near_plane) || !std::isfinite(c.far_plane) || c.near_plane <= 0 || c.far_plane <= c.near_plane)
         return false;
     if (!(packet.flags & 6) && (!packet.depth || !packet.motion || !packet.output)) return false;
+    if ((packet.flags & 32) && (!packet.depth || !packet.motion)) return false;
     for (float value : c.view_to_clip) if (!std::isfinite(value)) return false;
     for (float value : c.clip_to_view) if (!std::isfinite(value)) return false;
     for (float value : c.clip_to_previous_clip) if (!std::isfinite(value)) return false;
@@ -131,9 +135,11 @@ void* enqueue(const rsf_unity_packet* packet)
     pass = {}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
     pass.session_id = packet.session_id; pass.family_key = pass.view_key = packet.view_key;
     pass.history_key = packet.view_key; pass.native_frame = packet.frame_id; pass.resource_generation = packet.generation;
+    pass.source_frame_id = packet.frame_id;
     pass.flags = packet.flags & 1; pass.color_input = packet.color; pass.color_output = packet.output;
     pass.depth = packet.depth; pass.motion = packet.motion; pass.camera = packet.camera;
-    pass.camera_valid = (packet.flags & 2) ? 0u : 1u;
+    pass.camera_valid = (packet.flags & 2) && !(packet.flags & 32) ? 0u : 1u;
+    if (packet.flags & 32) pass.role = RSF_GAME_RENDER_FG_INPUTS;
     pass.render_rect[2] = static_cast<int32_t>(packet.camera.render_width);
     pass.render_rect[3] = static_cast<int32_t>(packet.camera.render_height);
     pass.output_rect[2] = static_cast<int32_t>(packet.camera.output_width);
@@ -158,6 +164,13 @@ void __stdcall render(int id, void* address) noexcept try
     if (!active.load() || !unity || !services.render_pass) return;
     ID3D12Device* device = unity->GetDevice();
     if (!device) return;
+    if (entry.packet.flags & 8) {
+        ComPtr<IDXGISwapChain3> chain;
+        auto* owned = unity->GetSwapChain();
+        if (!owned || FAILED(owned->QueryInterface(IID_PPV_ARGS(&chain))) ||
+            FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&entry.resources[0])))) return;
+        entry.packet.color = entry.resources[0].Get();
+    }
     if (id == event_id + 1 && (entry.packet.flags & 4)) {
         rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
         pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity->GetSwapChain();
@@ -166,9 +179,17 @@ void __stdcall render(int id, void* address) noexcept try
     }
     if (!fence) fence = unity->GetFrameFence();
     if (!fence) return;
+    const bool hudless = (entry.packet.flags & 8) != 0;
+    if (!hudless && (input_width != entry.packet.camera.render_width || input_height != entry.packet.camera.render_height)) {
+        for (const auto& previous : commands)
+            if (previous.complete && fence->GetCompletedValue() < previous.complete) return;
+        input_width = entry.packet.camera.render_width; input_height = entry.packet.camera.render_height;
+    }
     const bool changing = policy_pending.load();
     if (changing) {
         for (const auto& previous : commands)
+            if (previous.complete && fence->GetCompletedValue() < previous.complete) return;
+        for (const auto& previous : hud_commands)
             if (previous.complete && fence->GetCompletedValue() < previous.complete) return;
         policy_pending.store(false);
     } else if (entry.packet.generation != generation.load()) return;
@@ -177,7 +198,7 @@ void __stdcall render(int id, void* address) noexcept try
             if (previous.complete && fence->GetCompletedValue() < previous.complete) return;
         output_width = entry.packet.camera.output_width; output_height = entry.packet.camera.output_height;
     }
-    auto& slot = commands[next_commands];
+    auto& slot = hudless ? hud_commands[next_hud_commands] : commands[next_commands];
     // Reuse only after Unity's completion fence. Busy slots leave the queued spatial fallback.
     if (slot.complete && fence->GetCompletedValue() < slot.complete) return;
     slot.leases = {};
@@ -195,21 +216,23 @@ void __stdcall render(int id, void* address) noexcept try
     }
     if (FAILED(slot.allocator->Reset()) || FAILED(slot.list->Reset(slot.allocator.Get(), nullptr))) return;
     rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
+    if (hudless) pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     if (changing) { pass.flags |= 0x80000000u; pass.camera_valid = 0; }
     services.render_pass(services.user, slot.list.Get(), &pass, 1);
-    services.render_pass(services.user, slot.list.Get(), &pass, 0);
     if (FAILED(slot.list->Close())) return;
     std::array<UnityGraphicsD3D12ResourceState, 4> states{};
     int count = 0;
     for (size_t i = 0; i < 4; ++i) if (entry.resources[i]) {
-        auto state = i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        auto state = hudless ? D3D12_RESOURCE_STATE_RENDER_TARGET : i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         states[static_cast<size_t>(count++)] = {entry.resources[i].Get(), state, state};
     }
     slot.leases = std::move(entry.resources);
     slot.complete = unity->ExecuteCommandList(slot.list.Get(), count, states.data());
     // A zero completion identity is an ownership failure, not permission to reuse the allocator.
     if (!slot.complete) { submission_unknown = true; active.store(false); log("Unity D3D12 submission returned no fence; adapter stopped and remains owned."); return; }
-    next_commands = (next_commands + 1) % static_cast<uint32_t>(commands.size());
+    services.render_pass(services.user, slot.list.Get(), &pass, 0);
+    if (hudless) next_hud_commands = (next_hud_commands + 1) % static_cast<uint32_t>(hud_commands.size());
+    else next_commands = (next_commands + 1) % static_cast<uint32_t>(commands.size());
 #else
     (void)entry;
 #endif
@@ -217,13 +240,23 @@ void __stdcall render(int id, void* address) noexcept try
 catch (...) { if (++refusals <= 3) log("Unity render callback refused; spatial fallback remains queued."); }
 }
 
+namespace {
+void cpu_event(uint32_t stage, uint64_t frame_id) {
+    if (!active.load() || !frame_id || !services.cpu_event) return;
+    LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.stage = stage;
+    event.session_id = services.session_id; event.source_frame_id = frame_id;
+    event.timestamp_qpc = uint64_t(now.QuadPart); event.qpc_frequency = uint64_t(frequency.QuadPart);
+    services.cpu_event(services.user, &event);
+}
+}
 bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_native_api* api) noexcept
 {
     if (!api || !host.render_pass || !host.render_config || !host.log) return false;
     std::lock_guard<std::mutex> lock(guard);
     services = host;
-    *api = {sizeof(*api), RSF_UNITY_BRIDGE_ABI_VERSION, host.session_id, log, config, enqueue,
-        reinterpret_cast<void*>(render), report_state};
+    *api = {sizeof(*api), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id, log, config, enqueue,
+        reinterpret_cast<void*>(render), report_state, cpu_event};
     return true;
 }
 void rsf_unity_bridge_activate(bool enabled) noexcept { active.store(enabled); }
@@ -233,13 +266,15 @@ bool rsf_unity_bridge_drained() noexcept
     if (callbacks.load() || submission_unknown) return false;
     for (const auto& entry : pending) if (entry.used) return false;
     for (const auto& slot : commands) if (slot.complete && (!fence || fence->GetCompletedValue() < slot.complete)) return false;
+    for (const auto& slot : hud_commands) if (slot.complete && (!fence || fence->GetCompletedValue() < slot.complete)) return false;
     return true;
 }
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = 0;
+    commands = {}; hud_commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = next_hud_commands = 0;
     output_width = output_height = 0;
+    input_width = input_height = 0;
     submission_unknown = false;
     managed_stage.store(0);
 }

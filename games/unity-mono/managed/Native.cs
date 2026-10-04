@@ -40,7 +40,7 @@ namespace ReScaleFrame.Unity
     {
         internal uint Size, Version;
         internal ulong Session;
-        internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState;
+        internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent;
     }
 
     internal static class Native
@@ -49,11 +49,13 @@ namespace ReScaleFrame.Unity
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ConfigDelegate(uint width, uint height, ref Configuration config);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr EnqueueDelegate(ref Packet packet);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void StateDelegate(uint state);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CpuDelegate(uint stage, ulong frame);
         internal static Api Api;
         internal static LogDelegate Log;
         internal static ConfigDelegate GetConfig;
         internal static EnqueueDelegate Enqueue;
         internal static StateDelegate ReportState;
+        internal static CpuDelegate ReportCpu;
 
         // Resolve through Unity's native-plugin loader so UnityPluginLoad receives its registry.
         [DllImport("ReScaleFrame.Game.UnityMono.dll", CallingConvention = CallingConvention.Cdecl)]
@@ -64,13 +66,14 @@ namespace ReScaleFrame.Unity
         internal static void Initialize(IntPtr address)
         {
             Api = Marshal.PtrToStructure<Api>(address);
-            if (Api.Size != Marshal.SizeOf<Api>() || Api.Version != 1 || Api.Session == 0 ||
+            if (Api.Size != Marshal.SizeOf<Api>() || Api.Version != 2 || Api.Session == 0 ||
                 Api.Log == IntPtr.Zero || Api.Config == IntPtr.Zero || Api.Enqueue == IntPtr.Zero)
                 throw new InvalidOperationException("Unity native bridge ABI mismatch.");
             Log = Marshal.GetDelegateForFunctionPointer<LogDelegate>(Api.Log);
             GetConfig = Marshal.GetDelegateForFunctionPointer<ConfigDelegate>(Api.Config);
             Enqueue = Marshal.GetDelegateForFunctionPointer<EnqueueDelegate>(Api.Enqueue);
             ReportState = Marshal.GetDelegateForFunctionPointer<StateDelegate>(Api.ManagedState);
+            ReportCpu = Api.CpuEvent == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<CpuDelegate>(Api.CpuEvent);
         }
 
         internal static Configuration Configuration(Camera camera)

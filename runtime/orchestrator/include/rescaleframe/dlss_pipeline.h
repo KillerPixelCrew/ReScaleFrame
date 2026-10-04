@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /* 2: a second feature for a layer at one to one, and its counts in the status. */
-#define RSF_DLSS_PIPELINE_ABI_VERSION 3u
+#define RSF_DLSS_PIPELINE_ABI_VERSION 4u
 
 typedef int32_t rsf_dlss_pipeline_result;
 #define RSF_DLSS_PIPELINE_OK ((rsf_dlss_pipeline_result)0)
@@ -160,6 +160,22 @@ typedef struct rsf_dlss_pipeline_frame {
        given except the motion fields this pipeline is the one to know: see
        `rsf_dlss_pipeline_on_frame`. */
     const rsf_pipeline_camera_frame* camera;
+
+    /* Appended in ABI 4. Optional translucency hints, rect-local at render size like the inputs
+       above. Each backend consumes the ones it documents; the rest are ignored. */
+    /* Scene colour before translucency (DLSS ColorBeforeTransparency, FSR opaque-only colour). */
+    void* color_before_transparency;
+    /* Offscreen translucency layer at render size, when the game drew one. */
+    void* transparency_layer;
+    /* R32_FLOAT [0,0.9]: FSR reactive, XeSS responsive pixel mask. */
+    void* reactive_mask;
+    /* R32_FLOAT [0,1]: FSR transparency and composition, DLSS transparency hint. */
+    void* transparency_mask;
+    /* R32_FLOAT {0,1}: DLSS bias current colour. */
+    void* bias_mask;
+    /* R32_FLOAT device depth layer (volumetric clouds). Pixels without object velocity are
+       reprojected at the nearer of it and scene depth. The depth handed to backends is unchanged. */
+    void* motion_depth_layer;
 } rsf_dlss_pipeline_frame;
 
 typedef struct rsf_dlss_pipeline_status {
@@ -277,6 +293,14 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
    feature on the mode change itself. The render size is returned so the caller can move the game's
    screen percentage to it, since a frame outside the new range is refused. Call it from the thread
    that evaluates. */
+/* The DLSS-only colour correction after evaluation (colour_fidelity). It pulls the output toward
+   the current jittered frame where depth is continuous, and measured hangar output oscillates
+   with it, so it is off unless enabled. Takes effect from the next frame. */
+RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_correction(uint32_t enabled);
+/* DLSS receives an invertible display-range encoding of the scene with HDR input off, and its output
+   is decoded back to linear (colour_transport.h). On by default: DLSS 310's auto-exposing presets
+   band in AC7's dark linear HDR, independently of which preset a driver override selects. */
+RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled);
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,
                                                                        uint32_t* render_width,
                                                                        uint32_t* render_height);

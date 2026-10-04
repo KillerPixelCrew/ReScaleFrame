@@ -2,8 +2,10 @@
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_composition.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_window.h>
 #include <rescaleframe/native_scene.h>
+#include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include "native_regions.h"
@@ -166,7 +168,17 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         frame.scene_color = color; frame.depth = depth; frame.game_motion = motion;
     }
     frame.exposure = scalar_exposure(static_cast<ID3D11DeviceContext*>(context), static_cast<ID3D11Texture2D*>(pass->exposure));
+    // Rect-local like the cropped inputs, and only for this view's own frame and rectangle.
+    rsf_native_translucency_masks masks{}; masks.struct_size = sizeof(masks);
+    if (rsf_native_translucency_take(pass, &masks)) {
+        frame.color_before_transparency = masks.color_before_transparency;
+        frame.transparency_layer = masks.transparency_layer;
+        frame.reactive_mask = masks.reactive; frame.transparency_mask = masks.coverage; frame.bias_mask = masks.bias;
+        frame.motion_depth_layer = masks.motion_depth;
+    }
+    rsf_native_fg_scene(pass);
     const auto result = rsf_dlss_pipeline_on_frame(context, &frame);
+    rsf_native_fg_scene(nullptr);
     if (result != RSF_DLSS_PIPELINE_OK) { history = {}; return result; }
     auto* output = static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
     auto* target = static_cast<ID3D11Texture2D*>(pass->color_output);
@@ -197,6 +209,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
 {
     rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
     native_enabled.store(0, std::memory_order_release); exposure_resources().release(); rsf_native_regions_release(); history = {};
+    rsf_native_translucency_release();
     std::lock_guard<std::mutex> lock(surface_guard); surface_config = {};
 }
 

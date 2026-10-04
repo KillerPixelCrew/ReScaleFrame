@@ -27,7 +27,7 @@ target_include_directories(rsf_ac7_motion_capture PUBLIC include)
 target_link_libraries(rsf_ac7_motion_capture PUBLIC ReScaleFrame::GameSDK PRIVATE ReScaleFrame::Graphics minhook rsf_build_options)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
-add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/truesky_depth.cpp)
+add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/truesky_depth.cpp src/truesky_motion.cpp src/contact_shadow.cpp)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view minhook rsf_build_options)
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)

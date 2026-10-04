@@ -37,6 +37,17 @@ struct rsf_ac7_render_ticket {
 };
 
 namespace {
+bool valid_identity(const rsf_ac7_render_scope& scope)
+{
+    if (scope.role == RSF_GAME_RENDER_FRAME) return scope.source_frame_id != 0;
+    // Slate window and texture-binding work has no scene view. Its queued ownership is
+    // established by the source, game viewport and window instead. Resources resolve from
+    // the lease at execution time, so they need not be available while recording.
+    if (scope.role == RSF_GAME_RENDER_WINDOW || scope.role == RSF_GAME_RENDER_TEXTURE_BINDING)
+        return scope.source_frame_id && scope.viewport_key && scope.window_key && scope.pass_key &&
+            (scope.role != RSF_GAME_RENDER_WINDOW || scope.rhi_viewport_key);
+    return scope.family_key && scope.view_key;
+}
 // Root +0, tail link +8, executing +0x10, NumCommands +0x14, UID +0x18.
 // The native iterator saves Next before invoking execute, allowing the final marker to retire
 // its own heap allocation. Engine reset owns only its memory stack, not these private records.
@@ -128,7 +139,7 @@ extern "C" int rsf_ac7_render_scope_open_leased(rsf_ac7_render_scopes* s, void* 
     const rsf_ac7_render_scope* scope, const rsf_ac7_scope_lease* lease, rsf_ac7_render_ticket** out) try
 {
     if (!s || !list || !scope || !out || scope->struct_size < sizeof(*scope) ||
-        scope->session_id != s->session || !scope->family_key || !scope->view_key) return 0;
+        scope->session_id != s->session || !valid_identity(*scope)) return 0;
     *out = nullptr;
     auto* ticket = new(std::nothrow) rsf_ac7_render_ticket;
     if (!ticket) return 0;

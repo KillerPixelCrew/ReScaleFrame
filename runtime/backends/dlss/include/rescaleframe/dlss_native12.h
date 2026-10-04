@@ -2,9 +2,11 @@
 #pragma once
 #include <rescaleframe/backend.h>
 #include <rescaleframe/dlss.h>
+#include <rescaleframe/streamline_host.h>
 
 typedef struct rsf_dlss_native12 rsf_dlss_native12;
 rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* setup, rsf_dlss_native12** out);
+rsf_backend_result rsf_dlss_native12_create_shared(void* device, const rsf_dlss_setup*, rsf_streamline_host*, rsf_dlss_native12**);
 rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t width, uint32_t height,
     rsf_quality quality, uint32_t* render_width, uint32_t* render_height);
 // D3D12 inputs are NON_PIXEL_SHADER_RESOURCE, output UNORDERED_ACCESS. Caller retires GPU work
