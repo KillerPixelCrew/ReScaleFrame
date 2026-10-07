@@ -1,5 +1,9 @@
 # AC7 CPU-to-render frame handoff
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 30 September 2026. Static binary/source inspection and synthetic runtime tests. No new AC7
 hook is installed by this work, and association through the RHI thread, final HUD-less/UI
 export and Present remains unvalidated.

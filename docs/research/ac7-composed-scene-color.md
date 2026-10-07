@@ -1,5 +1,9 @@
 # AC7 composed scene colour selection
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 7 September 2026. Implementation based on repository revision `56ed05b` and the already established
 [briefing and hangar evidence](ac7-frame-capture.md#menu-screens-render-two-scenes-and-only-one-is-reconstructed).
 No new game run or capture replay was performed for this change.

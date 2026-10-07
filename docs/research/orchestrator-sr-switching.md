@@ -1,5 +1,9 @@
 # Reusable SR orchestration, 29 September 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 ## Question and approach
 
 Can the working D3D11 reconstruction integration select FSR2, FSR3, FSR4 and XeSS at runtime,

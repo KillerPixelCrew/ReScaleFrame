@@ -4,9 +4,10 @@
 
 The integration starts with the game and keeps the original lighting, post-processing and UI.
 Menus, HUD, briefing terrain and aircraft icons render at full output resolution, independently
-of the selected quality preset. The corrected TrueSky depth path keeps clouds and aircraft details clean.
+of the selected quality preset. The corrected TrueSky depth path has user acceptance for cloud
+blocks and aircraft overlap; later low-resolution lighting/shadow defects remain under investigation.
 
-[Download the AC7 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/latest)
+[Download the AC7 v0.1.0 SR release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0)
 · [Installation details](../../docs/releases/ac7-install.md)
 · [Report an issue](https://github.com/KillerPixelCrew/ReScaleFrame/issues)
 
@@ -19,7 +20,8 @@ of the selected quality preset. The corrected TrueSky depth path keeps clouds an
 
 The release includes all required SR runtime files and the overlay. The corrected build was
 accepted in game on RTX 4070 Laptop. Other GPU families, game builds and Proton have not received
-the same AC7 visual validation. Frame generation and Reflex remain separate work.
+the same AC7 visual validation. This published ZIP is SR-only. The current source also implements
+FG and latency services; those features require a separately built and configured deployment.
 
 ## Install
 
@@ -70,6 +72,19 @@ To uninstall, remove the three mod DLLs, `ReScaleFrame.ini` and the installed `R
 Restore any files you backed up. Delete `%LOCALAPPDATA%\ReScaleFrame\AC7.ini` if you also want
 to reset your saved preferences.
 
+## Current-source frame generation
+
+Current `main` implements independent DLSS-G, FSR3, FSR4 and XeSS FG selection, live provider
+replacement, SDK-limited multipliers, Reflex controls and rendered/presented FPS reporting.
+AC7's earlier DLSS-G path is user-accepted. Additional FSR/XeSS FG paths have synthetic device
+evidence, with AC7 moving-scene acceptance pending. Briefing generation is deferred. Higher MFG
+counts and measured latency reductions are unproven; FSR4 SR compatibility does not imply FSR4 FG.
+
+Use [the current-source loader guide](../../loader/README.md#ac7-frame-generation) for configuration
+and runtime files. The v0.1.0 installation steps above do not install FG/Reflex. See
+[current status](../../docs/current-status.md) and
+[shared FG evidence](../../docs/research/shared-fg-20261004.md) for validation limits.
+
 ## Integration notes
 
 AC7 uses a modified UE4.18 renderer on D3D11. The proxy loads the game plugin, which owns guarded
@@ -77,8 +92,9 @@ engine hooks, per-view resources and reconstruction insertion before bloom, expo
 The shared runtime owns vendor SDKs and the GPU-ordered D3D11/D3D12 SR bridge.
 
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
-removal, and the engine's camera transform supplies camera motion. The integration promotes the
-game's own UI/composition targets, preserving its grading and glow. Enlarged separate translucency
+removal, and the engine's camera transform supplies camera motion. The native integration sizes the
+game's own UI targets through engine owners, preserving grading and glow; texture promotion
+remains a compatibility mechanism. Enlarged separate translucency
 uses matching view/depth selections and unjittered constants across VS, PS, HS, DS and GS.
 
 - [Accepted result and debugging history](../../docs/research/ac7-consumer-session.md)

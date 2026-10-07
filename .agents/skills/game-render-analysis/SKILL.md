@@ -124,8 +124,9 @@ resize and teardown. A clean aircraft with missing clouds is a regression.
 Update research, engine evidence and tracker with question, rationale, discovery, revisions,
 units, identities, lifetimes, failed attempts, runtime use and uncertainty. Separate source review,
 build, synthetic/device fixtures, captured game data and user-run visual acceptance. Numeric
-fixtures do not prove moving-game quality, FPS gains or latency. FG/Reflex and missing-object
-motion coverage remain separate work.
+fixtures do not prove moving-game quality, FPS gains or latency. FG/Reflex acceptance and missing-object motion coverage require their own evidence. Current
+AC7 DLSS-G and final Unity FG corrections have recorded acceptance; higher MFG, new AC7 vendor FG,
+Claw and measured latency claims remain separate gaps. See [current status](../../../docs/current-status.md).
 
 Use focused checks for documentation. Native/SDK changes require `eng/verify.ps1`; Rust behavior
 also requires `cargo test --workspace --locked`. Verification must not alter a game installation.

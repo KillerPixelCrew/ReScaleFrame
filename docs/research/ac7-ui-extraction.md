@@ -1,5 +1,9 @@
 # AC7 UI extraction
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Design record for the interface work in the [representation plan](../representation-plan.md),
 written 7 September 2026 from the findings in [ac7-ui-composition.md](ac7-ui-composition.md), the
 UE 4.18.3 source, the AC7 SDK, and Skyrim Community Shaders. Per-screen measurements are appended

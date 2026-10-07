@@ -1,6 +1,6 @@
 # Graphics helpers
 
-D3D11 utilities shared by the research proxy and runtime. Game-specific view interpretation lives in `games/ac7`; vendor evaluation lives in `runtime/backends`.
+D3D11 utilities shared by the carriers and runtime. Game-specific view interpretation lives in `games/ac7`; vendor evaluation lives in `runtime/backends`.
 
 | Module | Purpose |
 | --- | --- |
@@ -8,20 +8,29 @@ D3D11 utilities shared by the research proxy and runtime. Game-specific view int
 | `resource_roles`, `frame_tap` | Classify resources, find candidate colour/depth/motion bindings, and describe the draws into a named target |
 | `resource_ref` | Retain and release COM resources across the C ABI |
 | `constant_buffer_read` | Stage and read a buffer with type/device checks |
-| `motion_decode` | Convert biased velocity to float motion and preserve unwritten pixels |
+| `motion_decode`, `motion_resolve` | Decode biased sparse velocity and resolve dense camera/object motion with validity/depth conventions |
 | `scene_promote` | Put a reconstructed scene back into the game's frame by promoting its composite, the interface layers the classifier names, and the chain between the tonemap and the interface composite, all to output resolution |
 | `depth_replay` | Replay the separate translucency layer's draws depth-only into an output-resolution copy of scene depth, for the backend's camera-motion resolve |
 | `d3d11_state` | Save everything the device context has bound, and put it back |
 | `texture_dump` | Read supported texture formats into diagnostic TGA/JSON files |
 | `present_blit` | Show reconstructed scene colour over the back buffer. Superseded by `fullscreen_pass` and kept only until the debug view moves across |
-| `fullscreen_pass` | One triangle, four modes: copy, tonemap, premultiplied composite, and coverage as grey. The composite is `ui.rgb + (1 - ui.a) * dst`, which is what all three frame generation SDKs specify, so the picture we make and the picture a vendor makes cannot drift |
+| `fullscreen_pass` | Fullscreen copy, tonemap, premultiplied composite and coverage modes; composite formula `ui.rgb + (1 - ui.a) * dst` does not by itself validate a game UI guide |
 | `ui_layer` | A double-buffered `R8G8B8A8_UNORM` surface at back-buffer extent, cleared to zero and never bound with a depth view, for interface draws to be diverted into |
 | `ui_identify` | Membership sets of pipeline objects held by address, with eviction before an address is reused, and Castagnoli hashes for naming a shader in a settings file |
 | `overlay_renderer`, `overlay_input` | Render egui meshes and collect window input |
 
-The frame tap uses format and binding heuristics. It does not yet identify a verified AC7 shader, view, and frame. A retained texture can still be overwritten by the game; choose the consumption or copy point explicitly.
+The frame tap is retained compatibility/diagnostic machinery using format and binding heuristics.
+The default AC7 native plugin uses engine-owned views, graph roles and queued identity instead. A retained texture can still be overwritten by the game; choose the consumption or copy point explicitly.
 
 `rsf_frame_tap_watch_target` asks where the reconstruction goes back in. It names a render target and describes the next few draws into it: extent, the viewport actually in effect, the ordinal within the pass, indexed or not, and every pixel shader input with its slot. Pointed at the back buffer, the single texture that draw reads is the composite; pointed at that composite, the draw that reads scene colour is the tonemap. Neither fact is available from the captures here, because the exported action list records render-target bindings and not shader resource bindings. Each watch carries a draw budget: watching the back buffer holds a reference on it, which makes `ResizeBuffers` fail, so a permanent watch trades an answer for a later mode change that breaks.
+
+## Historical compatibility mechanisms
+
+The extraction/promotion sections below describe the earlier D3D11 route and its limitations.
+The accepted native AC7 integration sizes engine UI targets and routes bloom/exposure through its
+SR graph; it does not rely on these heuristics as its default renderer. A widget target is not
+inherently a premultiplied vendor FG UI guide. See [current status](../../docs/current-status.md)
+and [the native refactor](../../docs/research/ac7-native-renderer-refactor-20261001.md).
 
 ## Interface extraction, and why it is not the route it looked like
 
@@ -40,7 +49,7 @@ process, and compositing it back at present skips that processing.
 
 So the mechanism stays and the insertion point changes: promote AC7's own interface layers and let
 the game composite them, which keeps the colour and the glow, and take the frame generation layer
-from a promoted layer later, since it already holds premultiplied colour with coverage. See
+from a promoted layer later, only after its alpha/effects conventions have been validated for that use. See
 [the extraction note](../../docs/research/ac7-ui-extraction.md) for the measurements and for the
 argument this reverses.
 

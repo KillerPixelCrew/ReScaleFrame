@@ -1,5 +1,9 @@
 # AC7 briefing isolation and consumer session controls
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 29 September 2026. Source review and implementation against `37360603681ce20e6afff86745384173872a5df0`
 plus the existing local gate tracing additions. No new binary addresses were discovered. The
 inherited AC7 evidence names Steam build 9855922, `Ace7Game.exe`, SHA-256

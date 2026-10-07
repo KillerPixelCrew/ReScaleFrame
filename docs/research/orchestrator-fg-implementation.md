@@ -1,5 +1,9 @@
 # Frame-generation runtime implementation
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 30 September 2026. Work in progress against `0e2df170a9f276e24c76b75039065393b760ccd7`.
 This records the implemented portion of the [FG plan](../frame-generation-plan.md), not completion
 of that plan or working frame generation in AC7.

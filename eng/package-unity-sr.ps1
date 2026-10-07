@@ -99,7 +99,21 @@ support and image quality on your Claw have not been validated yet.
 This is a Unity Mono/URP DX12 test build for Steam build 25286774,
 Unity 6000.3.14f1. It refuses an unrecognized executable or native player.
 Temporal SR runs before DoF/blur, bloom and tone mapping. UI is drawn afterward.
-Frame generation and Reflex are not implemented in this Unity path.
+This build includes independent DLSS-G, FSR3/4 and XeSS FG selection in Insert,
+with live provider changes and SDK-limited multiplier controls. The FG startup
+default is inherited from the deployment INI; a fresh deployment defaults Off.
+One generated frame means 2x. DLSS-G uses Reflex (effective mode at least On
+while active), XeSS uses XeLL, and the pinned FSR path stays 2x. Unsupported
+requests retain the working provider. FSR4 SR INT8 does not establish FSR4 FG.
+Unity saves the FG provider in ReScaleFrame/preferences.ini; that file is not
+included here. Other controls can remain session settings. SR Off/FSR1 can still
+supply FG depth/motion inputs.
+
+Recorded 4 October user acceptance covers XeSS/DLSS-G and the final FSR image/
+switching correction. This does not validate every package, scene, resize or
+hardware family. Higher DLSS/Intel MFG counts and MSI Claw acceptance are pending.
+The HUD separates rendered FPS from SDK/DXGI presented counts; it does not
+measure input latency or physical scanout.
 
 No original game file is included or needs replacing. If a different mod already
 owns version.dll, do not overwrite it. Remove or resolve that mod first.

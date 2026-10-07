@@ -62,7 +62,8 @@ ctest --preset windows-debug
 ctest --preset windows-debug -R game_plugin_contract   # a single test
 ```
 
-Binaries land in `build/windows-x64/bin/<Config>/`.
+Shared binaries land in `build/windows-x64/bin/<Config>/`; the dedicated AC7 DirectInput carrier
+lands in `build/windows-x64/ac7/bin/<Config>/`. The Unity version alias is in `bin/<Config>/carriers/`.
 
 ### Building off Windows
 
@@ -87,14 +88,19 @@ Windows unless it was actually built there.
 
 ## Architecture
 
-Three artifacts load into the game process, plus one out-of-process frontend:
+The native targets have these roles. Current game entry uses a carrier; bootstrap and launcher
+remain scaffolds. AC7 links runtime objects into its proxy, while Unity loads the runtime DLL:
 
 | Target | Output name | Role |
 | --- | --- | --- |
-| `rsf_bootstrap` | `ReScaleFrame.Bootstrap.dll` | injected entry point, loads the orchestrator |
+| `rsf_bootstrap` | `ReScaleFrame.Bootstrap.dll` | version-only scaffold for the intended injected entry |
 | `rsf_orchestrator` | `ReScaleFrame.Runtime.dll` | vendor SDKs, plugin lifecycle, GPU resources, presentation |
-| `rsf_game_ac7` | `ReScaleFrame.Game.AC7.dll` | game plugin: detection, hooks, engine data |
-| `rsf_launcher` | `ReScaleFrame.exe` | standalone launcher and profile frontend |
+| `rsf_game_ac7` | `ReScaleFrame.Game.AC7.dll` | native AC7 detection, hooks and engine data |
+| `rsf_game_project_wingman` | `ReScaleFrame.Game.ProjectWingman.dll` | exact-build detection scaffold, rendering refused |
+| `rsf_game_unity_mono` | `ReScaleFrame.Game.UnityMono.dll` | shared Mono/Harmony URP DX12 adapter |
+| `rsf_proxy_ac7` | `dinput8.dll` in `ac7/bin/<Config>` | dedicated AC7 carrier |
+| `rsf_proxy_dinput8` | `ReScaleFrame.Loader.dll`, `carriers/version.dll` aliases | shared Windows shim; Unity drop-in carrier |
+| `rsf_launcher` | `ReScaleFrame.exe` | help/version scaffold; launching and profiles pending |
 | `rsf_game_sdk` | `ReScaleFrame::GameSDK` (INTERFACE) | the C header both sides compile against |
 
 Working consequences of the ownership split above:
@@ -146,13 +152,16 @@ Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
   are borrowed for the duration of the call.
-- Frame callbacks are deliberately absent for now (their shape, ABI 2, is specified in
-  `docs/representation-plan.md` and lands with its M5). They land after the renderer experiments settle
-  their shape.
+- Current game ABI is 13. `game_renderer.h` defines leased rendering passes, CPU events and host
+  services; `game_frame.h` defines frame/camera ABI 1. The older ABI 2 sketches in the representation
+  plan are historical design, not the current contract. Native resource pointers cross under explicit
+  callback leases; frame identity alone does not establish final Present ownership.
 
-The honesty rule is testable here: `rsf_game_info.rendering_ready` stays `0` and `status` stays
-truthful until rendering works through the plugin lifecycle, and the contract test asserts it. The same applies to
-prose. Built is not injected, recognized is not supported, and a higher presentation counter is not
+The honesty rule is testable here: all current plugins keep `rsf_game_info.rendering_ready` and
+renderer status readiness at `0`, and contract tests assert it. AC7 and Unity implement lifecycle
+rendering and have recorded acceptance for particular deployed paths; that does not imply broad
+plugin readiness. Keep code-level flags, actual implementation and acceptance scope distinct in prose.
+[Current status](docs/current-status.md) records those boundaries. Built is not injected, recognized is not supported, and a higher presentation counter is not
 lower latency. Do not soften README or status wording ahead of the code.
 
 ## Conventions

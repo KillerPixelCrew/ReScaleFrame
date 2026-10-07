@@ -1,5 +1,9 @@
 # Hooking Present on Windows next to Steam and RivaTuner
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Measured 26 September 2026 on Windows 11 Pro 26200, the first day this project ran in the game on
 Windows rather than under Proton. Every claim below is from the proxy's own log, its crash
 reporter, or a scratch probe linked against the built `rsf_graphics` library; none is from reading

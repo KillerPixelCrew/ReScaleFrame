@@ -1,5 +1,9 @@
 # The Windows D3D11 runtime rewrites its own vtable
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Measured 26 September 2026 on Windows 11 Pro 26200 with the stock `d3d11.dll`, on a hardware
 device created with no flags, feature level 11.0. Nothing here is from a game; every number is from
 a scratch probe linked against the built `rsf_graphics` library.

@@ -1,5 +1,9 @@
 # Naming Unreal functions from reflection data
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Inspection: 7 September 2026, against the decrypted AC7 module dump described in
 [binary analysis](ghidra-tooling.md) and the Ghidra project `AC7Dump` (image base `0x140000000`,
 161,554 functions). Engine source is the pinned `4.18.3-release` checkout, `0a14a8d537a3`.

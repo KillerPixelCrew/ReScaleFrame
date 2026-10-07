@@ -1,6 +1,10 @@
 # Loader and research proxy
 
-`rsf_bootstrap` exports a version only. The product launcher, early-loading handshake, and plugin lifecycle are pending. Current AC7 experiments use `proxy/`, built as `dinput8.dll`, with helpers in `diagnostics/` and `runtime/`.
+`rsf_bootstrap` exports a version only; product launching and frontend IPC remain pending.
+Current game loading uses the AC7 DirectInput carrier and shared Unity version shim. Runtime-owned
+plugin preparation/start/quiesce/stop and renderer/CPU callbacks are implemented. The published
+v0.1.0 AC7 ZIP is SR-only; FG/Reflex below describe current source/development deployments.
+See [current implementation and validation](../docs/current-status.md).
 
 ## Research setup
 
@@ -16,8 +20,9 @@ deployment command with AC7 closed:
 ./eng/deploy-ac7-proxy.ps1 -GameDirectory 'D:/SteamLibrary/steamapps/common/ACE COMBAT 7'
 ```
 
-It builds both DLLs, checks the real overlay's ABI, Insert handling, rendering and resize, then
-backs up and deploys the matching pair. Routine `eng/verify.ps1` does not touch the game installation.
+It builds the dedicated AC7 carrier and matching Rust overlay, checks the real overlay's ABI,
+Insert handling, rendering and resize, then backs up and deploys the proxy, game plugin, overlay
+and SR runtimes. Routine `eng/verify.ps1` does not touch the game installation.
 
 Keep the separately obtained NVIDIA runtime in a directory visible to the game, for example `ReScaleFrame/streamline/` beside the executable. The tested set includes `sl.interposer.dll`, `sl.common.dll`, `sl.dlss.dll`, `sl.pcl.dll`, and `nvngx_dlss.dll`. See [dependencies](../docs/dependencies.md) for versions and terms.
 
@@ -34,21 +39,23 @@ exists. The first few rendered frames identify the scene and its composition pat
 not require a capture directory or a developer hotkey. Missing backend support leaves DLSS inactive
 and reports the reason.
 
-**Insert** opens or closes the overlay. Its only controls are **Enable DLSS** and the five presets.
-The old function-key actions are removed. Disable restores 100% scene resolution, stops reinsertion
+**Insert** opens or closes the overlay. Current controls include **Enable upscaling**, SR backend
+and five presets, plus independent FG provider/multiplier, Reflex and FPS controls where available.
+The old consumer function-key actions are removed; opt-in F9 motion capture remains.
+Disable restores 100% scene resolution, stops reinsertion
 and closes the forced jitter gate. Native selects DLAA with reinsertion at output resolution.
 
-The selected preset determines screen percentage through DLSS's render-size query, both at startup
-and when changed. The setter accepts the last successfully applied value or the game's reset to
-100%; it no longer assumes every preset change starts at 100%. A refused game write rolls the
-backend mode back. Changes reset temporal history and wait for a fresh evaluated frame before
-rebuilding reinsertion. The backend remains loaded while disabled so another preset can be selected.
+The selected SDK supplies the render sizes at startup and on quality changes. Native mode sizes
+engine-owned views; the compatibility setter accepts the last applied percentage or the game's
+reset to 100%. A refused compatibility write rolls the mode back. Changes reset history and wait
+for a fresh accepted frame before rebuilding reinsertion. The backend stays loaded while disabled.
 
-Choices persist in `%LOCALAPPDATA%\ReScaleFrame\AC7.ini`, independently of the installation's
-advanced settings. Without saved choices, DLSS starts enabled with Performance selected.
+Enable, quality and FG provider choices persist in `%LOCALAPPDATA%\ReScaleFrame\AC7.ini`,
+independently of the installation's advanced settings. SR backend choice remains per session.
+Without saved choices, DLSS starts enabled with Performance selected.
 
 The briefing layer targets 100% of output resolution at every scene quality, using the
-existing expected-byte-checked allocation-scale patch. It uses an unjittered view in both VS and PS
+existing expected-byte-checked allocation-scale patch. It uses unjittered views across VS, PS, HS, DS and GS
 and is recombined after scene SR, before tonemapping. This replaces the default secondary DLSS
 integration. See [the implementation and validation limits](../docs/research/ac7-consumer-session.md).
 
@@ -67,7 +74,11 @@ were [review findings](../docs/review.md) against the old parser.
 The vendor runtime is found at `ReScaleFrame\streamline` beside the proxy, and `renderdoc.dll`
 beside the proxy, so neither path normally needs setting at all.
 
-## Environment settings
+## AC7 environment settings
+
+These keys belong to the AC7 carrier. Several observer/promotion overrides describe the retained
+compatibility path; the default native plugin sizes engine views/targets and inserts SR in its
+post-process graph. Do not apply this flat AC7 configuration format to Unity's `[UnitySR]` INI.
 
 | Variable | Default / purpose |
 | --- | --- |
@@ -108,7 +119,9 @@ beside the proxy, so neither path normally needs setting at all.
 
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 
-Quality selection does not choose `RSF_SCREEN_PERCENTAGE` automatically; the [representation plan](../docs/representation-plan.md) derives the render scale from the vendor's plan per quality level.
+Quality selection derives input dimensions from the selected SDK. Native mode sizes the renderer
+through engine-owned views; compatibility mode applies the planned percentage. `RSF_SCREEN_PERCENTAGE`
+is a legacy diagnostic override, not a second independent consumer quality setting.
 
 ## Startup and diagnostics
 
@@ -118,15 +131,17 @@ a failing vendor runtime. Use Enable DLSS to retry after a failure. Renderer mai
 the render thread. Module dumps are opt-in; vendor informational spam is not forwarded to the log.
 Warnings, errors and state changes remain available in `rsf-dump.log`.
 
-The proxy and overlay are still the research carrier, not the completed plugin lifecycle or product
-installer. Synthetic Windows checks do not establish briefing image quality or flight regression.
+The carriers implement current plugin lifecycle loading, while the general product bootstrap and
+installer remain incomplete. Recorded game acceptance and synthetic/device checks have separate
+scope; neither a build nor a successful deployment proves new game image quality.
 
-## Development SR backend switching
+## SR backend switching
 
 The current development overlay offers DLSS, FSR2, FSR3, FSR4 and XeSS after startup. Selection is
 applied on the render thread; a refused backend keeps the active one. Existing startup is DLSS-first.
-The published 0.1.0 package contains DLSS only and is not automatically updated by these changes.
-New FSR/XeSS paths are built and synthetic device-tested, not yet game-tested in AC7.
+The corrected published v0.1.0 package includes DLSS, FSR2/3/4 and XeSS SR. The optimized bridge
+and FSR4 INT8 SR path received user acceptance on 2 October. New source work does not update
+that published ZIP; later FG/Reflex changes are separate.
 
 `RSF_FFX_BIN` selects the absolute directory containing `amd_fidelityfx_upscaler_dx12.dll`.
 It defaults to `ReScaleFrame\fidelityfx` beside the proxy. SDK 2.3.0 can supply all three FSR
@@ -146,7 +161,7 @@ presentation/SR host while keeping the game-facing D3D11 renderer. `RSF_FG_MODE=
 independently of SR. The default is DLSS-G. FSR uses `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, then
 `RSF_FFX_BIN`, then `ReScaleFrame/fidelityfx`; XeSS uses `RSF_XESS_BIN`, then
 `ReScaleFrame/xess`. Unsupported creation preserves original presentation. Change provider
-in the overlay during play. FSR3 is 2x; FSR4 and XeSS capabilities come from the actual SDK/hardware query.
+in the overlay during play. FSR3/4 are 2x in the pinned swapchain API; XeSS limits come from the SDK/hardware query.
 `RSF_REFLEX_MODE=0/1/2` selects Off/On/On + Boost. Sleep and PCL markers remain integrated in Off mode.
 Reflex controls apply to DLSS-G. XeSS uses XeLL. FSR does not apply the Reflex frame limiter.
 
@@ -154,28 +169,34 @@ Insert exposes requested/effective/active FG and runtime Reflex controls. These 
 settings include Show FPS overlay. The compact top-right HUD remains visible with the panel
 closed and separately displays real application/rendered FPS and SDK aggregate presented FPS.
 It never multiplies the rendered rate by a requested FG setting; the badge reports actual activity.
-Reported presents are SDK/DXGI counters, not physical scanout or input-latency measurements. These
-changes are session settings. `RSF_FRAME_LIMIT_FPS` limits rendered frames per second before
+Reported presents are SDK/DXGI counters, not physical scanout or input-latency measurements.
+FG provider choice is saved per user; mode, multiplier, Reflex and frame-limit changes are session
+settings. `RSF_FRAME_LIMIT_FPS` limits rendered frames per second before
 generation, through Reflex's limiter; the panel's Frame limit control changes it while running.
 With 2x generation a limit of 80 presents up to 160. `RSF_REFLEX_LIMIT_US` is the same limit
 written as a microsecond interval between rendered frames.
-Restart with `RSF_FG_ENABLE=0` to remove the presentation proxy. Default runtime mode is
+Choose Off in Insert to stop generation through the stable facade. For a cold start, clear the
+saved `[Rendering] FrameGeneration` choice to 0 as well as `RSF_FG_ENABLE=0`; saved provider choice
+can override that default. Live provider changes no longer require restart. Default runtime mode is
 production; development requires `RSF_FG_DEVELOPMENT=1` and `RSF_STREAMLINE_BIN` pointing
 at development DLLs. `RSF_FG_DEBUG=1` records a bounded marker trace after tagged frames begin.
 The Reflex sleep waits for the previous frame's Present and still precedes input.
 `RSF_REFLEX_ASYNC=1` restores the earlier sleep that overlaps the previous frame, for comparison.
 
 The user accepts deployed DLSS-FG. FSR3/XeSS pass synthetic D3D11/D3D12 generation checks;
-their AC7 moving-scene quality, HUD and pacing have not been game-tested. Other screens,
-cuts, unmatched inputs and unsupported VSync suspend generation. HUD-less/UI guides remain open.
+their AC7 moving-scene quality, HUD and pacing have not been game-tested. Cuts, unmatched inputs
+and unsupported VSync suspend generation. Compatible native AC7 family
+surfaces now supply optional pre-Slate HUD-less guides, with unclassified UI fallback retained.
+That does not establish complete HUD separation or new vendor game acceptance.
 [Evidence, dependencies and limits](../docs/research/ac7-dlss-fg-20261003.md).
 
 Unity Mono uses `[UnitySR] FrameGeneration=0/1/3/4/5` and `GeneratedFrames=1` in
 `ReScaleFrame.ini`, independently of `Backend`. Install the matching vendor DLLs with
 `eng/deploy-unity-sr.ps1 -FrameGeneration FSR3` (or `DLSS` / `FSR4` / `XeSS`).
 The shared runtime consumes the completed backbuffer and same-frame normalized depth/motion.
-Its CPU callbacks bracket EarlyUpdate through PreLateUpdate. These additions are built and
-synthetic-tested; Drag'n Wash startup, pixels and pacing remain unverified.
+Its CPU callbacks bracket EarlyUpdate through PreLateUpdate. SR Off/FSR1 also supply normalized
+inputs. The user accepted XeSS/DLSS-G and the final FSR correction after the recorded runtime
+switch/input/pacing repairs. General scene/resize coverage, higher MFG and Claw remain unverified.
 [Shared implementation evidence](../docs/research/shared-fg-20261004.md).
 
 Insert now exposes the frame-generation provider separately from the upscaler. Choose Off,
@@ -183,8 +204,11 @@ DLSS-G, FSR3, FSR4 or XeSS in Unity. Requests replace the provider after a drain
 while the engine retains its render buffers. The selector shows the current and requested
 providers separately; GPU compatibility is checked when switching. Unity saves this choice in
 `ReScaleFrame/preferences.ini`, outside the deployment-owned INI. AC7's compiled selector
-also includes DLSS-G and uses its existing per-user preferences file. Both development
-installations contain this integration; live game switching acceptance is still pending.
+also includes DLSS-G and uses its existing per-user preferences file. Unity live switching and
+final corrections have recorded user acceptance; new AC7 FSR/XeSS FG acceptance remains pending.
+Active DLSS-G applies effective Reflex at least On even if requested Off; XeSS uses XeLL and FSR
+owns its pacing without an NVIDIA SR sleep. FSR3/4 stay 2x in the pinned API; higher DLSS/XeSS
+counts follow SDK queries and lack device/game proof on the tested RTX 4070.
 # AC7 motion research capture
 
 Set `RSF_MOTION_CAPTURE=1` in the proxy INI before launching AC7. With the game focused,
@@ -224,7 +248,8 @@ pause capture validation is pending; the nine completed sessions do not need rep
 The matching `ReScaleFrame.Game.AC7.dll` is deployed beside the proxy. The runtime prepares it after
 decryption and activates it after SR initialization. Expected-byte refusal uses the compatibility
 renderer. Native mode sizes renderer-owned views and inserts SR in the native graph; texture
-promotion, constant-buffer rewriting and timed rediscovery are disabled there. It still needs live
-AC7 validation. [Details and current limits](../docs/research/ac7-native-renderer-refactor-20261001.md).
+promotion, constant-buffer rewriting and timed rediscovery are disabled there. The corrected native
+SR/UI and TrueSky wing/cloud path has user acceptance; later lighting and
+motion-coverage changes retain their own validation gaps. [Details and current limits](../docs/research/ac7-native-renderer-refactor-20261001.md).
 F9 records copied RHI scope/role/frame identity along with the existing paired images, GPU bindings,
 widget observations and screenshot. Native family IDs do not prove simulation/FG identity.

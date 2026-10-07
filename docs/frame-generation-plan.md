@@ -2,9 +2,12 @@
 
 30 September 2026. This document records the plan and source review. Subsequent implementation
 and device lifecycle evidence are recorded in [the implementation notes](research/orchestrator-fg-implementation.md).
-Those checks do not establish enabled FG, game visuals or measured latency.
+Later [AC7 DLSS-G](research/ac7-dlss-fg-20261003.md) and
+[shared FG corrections](research/shared-fg-20261004.md) record activation and user acceptance.
+[current status](current-status.md) separates implemented features from still-unproven targets,
+including higher MFG counts, Dynamic MFG acceptance and measured latency reduction.
 
-This is the current FG/latency plan. It replaces the corresponding assumptions and milestones in
+This is the 30 September FG/latency design baseline. It replaces the corresponding assumptions and milestones in
 [the representation plan](representation-plan.md), while preserving that document's research trail.
 The working [SR orchestrator](research/orchestrator-sr-switching.md) is the starting point.
 
@@ -19,9 +22,9 @@ the swapchain facade. A game plugin owns engine hooks, actual input/simulation b
 and resource identification, screen classification, renderer preparation and reinsertion. The
 frontends receive bounded commands and status, never textures or a per-frame graphics loop.
 
-Shader replacement and motion-quality improvement are owned by the separately running agent.
-This work consumes that output through a documented motion contract and tests its compatibility
-with FG. It does not take ownership of shader replacement or duplicate that investigation.
+Shader replacement and motion-quality improvement are distinct engine/graphics work. FG consumes
+their output through an explicit motion contract. The original session's parallel agent assignment
+was execution context, not a permanent ownership rule.
 
 ```mermaid
 flowchart LR

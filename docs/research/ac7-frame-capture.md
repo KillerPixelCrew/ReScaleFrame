@@ -1,5 +1,9 @@
 # AC7 frame capture
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Evidence from 6–7 September 2026: 22 RenderDoc captures under Proton, Windows replay, live buffer dumps, and subsequent reduced-scale DLSS runs. Scenes included aircraft selection, camera pans, flight over ground/water, clouds, and screen droplets. Resource numbers below identify these captures, not objects that can be looked up by that number at runtime.
 
 ## Current result

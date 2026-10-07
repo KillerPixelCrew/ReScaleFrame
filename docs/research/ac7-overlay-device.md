@@ -1,5 +1,9 @@
 # AC7 overlay device mismatch
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 7 September 2026. Investigated from RSF `c82772d` and the user's failing game run, then
 reproduced with the unchanged host in a synthetic process. Game identity: `Ace7Game.exe`,
 Steam build 9855922, recorded SHA-256

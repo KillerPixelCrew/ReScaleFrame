@@ -1,5 +1,9 @@
 # The DX11 to DX12 presentation bridge
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Design record for the bridge in the [representation plan](../representation-plan.md), written
 7 September 2026 before any of it was built. Measurements are added per milestone; until then every
 statement here is design, and the status section says so.

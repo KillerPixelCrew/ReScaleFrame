@@ -1,5 +1,9 @@
 # Repository skills update, 2 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The user requested UE4.18 and TrueSky skills, an overhaul of existing repository skills from
 the session transcript, and a separate skill for general Unreal 4 knowledge. This fork handles
 skills and documentation; another session handles the startup hint and release package.

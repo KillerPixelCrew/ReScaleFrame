@@ -1,5 +1,9 @@
 # AC7 renderer ownership audit, 30 September 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The question is whether ReScaleFrame can replace draw-pattern discovery and late texture
 promotion with the engine's own view, post-process graph and widget producer identity. The
 user reported missing reflections and lighting, plus UI that briefly changes size or sharpness.

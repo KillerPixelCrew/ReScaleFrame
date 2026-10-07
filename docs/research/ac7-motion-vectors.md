@@ -1,5 +1,9 @@
 # AC7 motion vectors and shader replacement
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Investigation on 30 September 2026 against repository revision `0e2df170a9f2`.
 The question is whether engine and shader changes can improve independently moving geometry,
 particles and temporal reconstruction. The answer is yes, with two distinct tasks: correct the

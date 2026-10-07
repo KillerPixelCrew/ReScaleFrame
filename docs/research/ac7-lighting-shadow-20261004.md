@@ -1,5 +1,9 @@
 # AC7 close-ground shadow stippling, 4 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The user supplied a flight screenshot with regular dark stippling across the ground and
 aircraft, plus three F9 captures. The defect is already visible in the raw pre-SR scene
 colour. The investigation therefore follows native lighting production before changing

@@ -1,5 +1,14 @@
 # Unity Mono DX12 runtime and shared overlay
 
+Current continuation: Mono/Harmony hooks, live DX12 SR and improved pre-DoF ordering are recorded
+below. Subsequent independent FG, live switching and final user acceptance are in
+[shared FG research](shared-fg-20261004.md). Earlier shimmer/pending notes retain their experiment
+scope; broader scenes, resize, higher MFG and Claw acceptance remain unproven.
+
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 This increment implements normal drop-in loading, native DX12 SR and shared overlay controls
 for Drag'n Wash. Mono/Harmony provides the inspected URP camera and graph hooks. The game
 plugin owns those hooks and resource leases; the orchestrator owns vendor contexts and UI.

@@ -10,13 +10,19 @@ The repository pins Rust in `rust-toolchain.toml` and selects Visual Studio 2022
 | --- | --- |
 | [Git](https://git-scm.com/downloads) | Repository and reference revisions |
 | [Visual Studio / C++ Build Tools](https://visualstudio.microsoft.com/downloads/) | VS 2022 or 2026 C++ tools and Windows SDK for the reference x64 build |
-| [CMake](https://cmake.org/download/) | 3.25+ for the checked-in presets. Configuring fetches [MinHook](https://github.com/TsudaKageyu/minhook) v1.3.4 (BSD-2-Clause) from GitHub for the Present and cursor detours, so the first configure needs the network |
+| [CMake](https://cmake.org/download/) | A version supporting the selected VS generator (preset schema requires 3.25+; VS 2026 needs a newer generator-capable CMake). Configuring fetches [MinHook](https://github.com/TsudaKageyu/minhook) v1.3.4 (BSD-2-Clause) from GitHub for the Present and cursor detours, so the first configure needs the network |
 | [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline/releases) | `sl.h` and its headers under `vendor/streamline/include` (untracked), or the DLSS backend compiles out and reports `RSF_DLSS_ERROR_NOT_COMPILED`; the game folder's `ReScaleFrame\streamline` holds the release's `bin/x64` |
 | [Rust via rustup](https://rustup.rs/) | Pinned Rust toolchain and egui tests |
 | [PowerShell](https://github.com/PowerShell/PowerShell) | `eng/verify.ps1` |
 | [Python 3](https://www.python.org/downloads/) | PE, capture, and view-buffer tools |
 
 Run `./eng/verify.ps1` and `cargo test --workspace --locked`. The script currently runs Clippy but does not execute Rust tests. Linux cross-builds additionally use MinGW-w64 and Wine; see [AGENTS.md](../AGENTS.md).
+
+Unity managed builds also need a .NET SDK capable of building the netstandard2.1 helper, locked
+Harmony 2.4.2, the researched game's Managed directory and Unity native rendering headers.
+See [dependencies](dependencies.md) and [the build script](../eng/build-unity-sr.ps1).
+SDK/GPU/managed fixtures are separate from a clean native CI run; availability depends on local
+untracked dependencies. Recorded runs in research are not automatic results for this workspace.
 
 ## Binary and frame analysis
 
@@ -76,17 +82,18 @@ prefix is the one that lies. Wine's own D3D11 does not implement shared NT handl
 passes and the bridge is possible. A fixture that had only run in the default prefix would have
 reported the wrong answer about the only environment that matters.
 
-Both presets are worth running. `texture_dump` currently passes under WineD3D and fails under DXVK
-with the subprocess killed, reproducibly, which is unexamined and is the kind of difference the
-second preset exists to surface.
+The recorded September run found `texture_dump` passing under WineD3D and failing under DXVK
+with the subprocess killed. That dated observation has not been rerun for this documentation audit;
+check the actual environment before describing it as a current failure.
 
 ## Unreal source
 
 Recommend authorized [Unreal Engine GitHub access](https://www.unrealengine.com/en-US/ue-on-github) for Unreal research. The AC7 reference is stock `4.18.3-release`, recorded in [the hook map](research/ue418-hook-map.md). It explains engine behaviour but is not the game's exact source or a guarantee of matching offsets.
 
-The checkout at `references/UnrealEngine` is a full clone whose default branch is 5.8.2. It is kept
-checked out at `4.18.3-release` (`0a14a8d537a3`), and every read for this project must be at that
-tag. The engine's structures are not stable across that gap: `FSimpleElementVertex` alone gained a
+The recorded AC7 reference checkout at `references/UnrealEngine` was a full clone with newer
+branches, checked out at `4.18.3-release` (`0a14a8d537a3`). AC7/UE4.18 reads must use that tag;
+Project Wingman uses its separately pinned UE4.27.2 reference. Inspect current availability and
+revision rather than assuming the reference checkout exists or is still on the recorded branch. The engine's structures are not stable across that gap: `FSimpleElementVertex` alone gained a
 `FDFVector4` position, which moves every offset after it, so a signature taken from the default
 branch matches nothing in the game and fails silently. If the shared checkout has moved, read
 through `git show 4.18.3-release:<path>` rather than silently changing another task's checkout.

@@ -1,5 +1,10 @@
 # Plan: Representation — UI extraction, presentation bridge, SR+FG for DLSS, FSR and XeSS
 
+Historical design and milestone record. ABI 2 sketches, UI diversion and planned deletion lists
+below are not the current implementation. Game ABI is now 13, overlay ABI is 9, and native UI
+ownership plus shared SR/FG services supersede earlier assumptions. See
+[current status](current-status.md) and the current SDK headers for implementation and limits.
+
 ## Context
 
 30 September 2026: use [the frame-generation orchestrator plan](frame-generation-plan.md) for

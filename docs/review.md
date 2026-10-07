@@ -1,5 +1,10 @@
 # Repository review: 7 September 2026
 
+Historical review of `a9f3d5d`, not a fresh defect list for current `main`. Later fixes and remaining
+checks are recorded in [the implementation follow-up](implementation.md#repository-review-follow-up).
+[Current status](current-status.md) records the implemented lifecycle, rendering and FG paths.
+Reproductions below retain their original revision and environment scope.
+
 Reviewed code at `a9f3d5d` (the user's README-instructions commit; runtime code is unchanged from `a65e69a`). Scope: loader/proxy, diagnostics, AC7 plugin and view reader, graphics helpers, DLSS adapter/orchestrator, Rust input model and egui/FFI, analysis tools, native tests, build/CI, and documentation.
 
 The diagnostic DLSS path has recorded in-game results. It is not yet a complete plugin-driven integration: reinsertion, UI wiring, lifecycle, and target-device validation remain open. This change rewrites documentation and the shared agent skill; it does not fix runtime code.
