@@ -7,7 +7,14 @@
 #include <cwchar>
 #include <d3d12.h>
 
+/** @file Shared DX12 SR argument, texture, and runtime-loading checks.
+ * Helpers borrow every argument. They neither retain textures nor transition resource states.
+ */
 namespace rsf {
+/** Load name from an absolute UTF-8 runtime directory, restricting dependency search to that
+ * DLL's directory and System32. Returns null on invalid path/conversion or loading failure;
+ * the caller owns the returned HMODULE and must FreeLibrary after destroying SDK contexts.
+ */
 inline HMODULE load_runtime(const rsf_sr_open_desc& desc, const wchar_t* name)
 {
     wchar_t directory[1024]{};
@@ -32,10 +39,14 @@ inline HMODULE load_runtime(const rsf_sr_open_desc& desc, const wchar_t* name)
     }
     return module;
 }
+/** Resolve an optional typed runtime export; null denotes a missing entry point. */
 template<class T> T entry(HMODULE module, const char* name)
 {
     return reinterpret_cast<T>(reinterpret_cast<void*>(GetProcAddress(module, name)));
 }
+/** Check the common SR descriptor and DX12 API. A well-formed call clears *out before ABI/API
+ * checks, so subsequent creation failures cannot leave a stale session pointer.
+ */
 inline rsf_backend_result validate_open(const rsf_sr_open_desc* desc, void** out)
 {
     if (!desc || !out || desc->struct_size < sizeof(*desc) || !desc->device ||
@@ -48,6 +59,10 @@ inline rsf_backend_result validate_open(const rsf_sr_open_desc* desc, void** out
     }
     return desc->api == RSF_API_D3D12 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_WRONG_API;
 }
+/** Check frame/camera ABI, finite units, render/output extents, required ONLY_NOW textures,
+ * and generation identity. NO_SR returns NOT_READY; mismatched generations return STALE_RESOURCES.
+ * This validates metadata; validate_d3d12_resources checks native texture ownership and state.
+ */
 inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
 {
     if (!frame || frame->struct_size < sizeof(*frame) || !frame->record ||
@@ -96,6 +111,10 @@ inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
         return RSF_BACKEND_ERROR_STALE_RESOURCES;
     return RSF_BACKEND_OK;
 }
+/** Verify single-sample 2D textures on device. Inputs must already be NON_PIXEL_SHADER_RESOURCE,
+ * output UNORDERED_ACCESS; input/output cannot alias. exposure only needs a 1x1 extent.
+ * GetDevice's temporary COM reference is released for every successfully inspected texture.
+ */
 inline rsf_backend_result validate_d3d12_resources(const rsf_sr_frame& frame, void* device)
 {
     const rsf_backend_resource* resources[] = {&frame.color, &frame.depth, &frame.motion,

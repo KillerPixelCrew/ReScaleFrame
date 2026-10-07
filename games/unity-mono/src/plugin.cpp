@@ -9,6 +9,8 @@
 #include <mutex>
 #include <string>
 
+// Bridges the native Game SDK lifecycle to the managed Unity adapter. Native preparation loads the
+// managed assembly once; per-frame work then crosses the bounded bridge defined in bridge.cpp.
 namespace {
 constexpr char drag_n_wash_sha256[] =
     "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc";
@@ -18,6 +20,7 @@ bool prepared = false, running = false;
 rsf_unity_native_api managed_api{};
 const char* reason = "Unity Mono adapter has not been prepared.";
 
+// The managed helper and Harmony runtime live beside this native plugin, not the game executable.
 std::wstring managed_path()
 {
     HMODULE module = nullptr;
@@ -41,6 +44,8 @@ template<class T> rsf_result validate(const T* value) noexcept
     return value->abi_version == RSF_GAME_ABI_VERSION ? RSF_OK : RSF_ERROR_ABI_MISMATCH;
 }
 
+// Validate host identity/services, publish the native table and load Bootstrap in the existing
+// Mono domain. Preparation success precedes main-thread managed adapter activation.
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept
 {
     const auto valid = validate(args);
@@ -66,6 +71,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
     } catch (...) { return RSF_ERROR_NOT_READY; }
 }
 
+// Open native packet admission; active status additionally waits for managed installed stage 2.
 rsf_result start(const rsf_game_start_args* args) noexcept
 {
     const auto valid = validate(args);
@@ -77,6 +83,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept
     return RSF_OK;
 }
 
+// Close native enqueue admission while allowing already-queued plugin events to consume packets.
 rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -86,10 +93,13 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
     return RSF_OK;
 }
 
+// Stop only after packet/callback/GPU drainage, then remove managed producers and native services.
+// A busy result preserves the plugin and callback addresses so the host can retry.
 rsf_result stop(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(lifecycle);
+    // Do not stop the Mono bridge while callbacks or queued GPU commands can still reach it.
     if (running || !rsf_unity_bridge_drained()) return RSF_ERROR_BUSY;
     if (!rsf_unity_mono_stop()) return RSF_ERROR_BUSY;
     rsf_unity_bridge_release(); prepared = false;
@@ -97,6 +107,8 @@ rsf_result stop(const rsf_game_control_args* args) noexcept
     return RSF_OK;
 }
 
+// Report managed activation/refusal; rendering_ready stays zero rather than inferring acceptance
+// from successful preparation or a recorded source frame.
 rsf_result status(rsf_game_renderer_status* output) noexcept
 {
     const auto valid = validate(output);
@@ -146,6 +158,7 @@ rsf_detection detect(const rsf_game_probe* probe) noexcept
 }
 }
 
+// Return plugin-owned metadata/callbacks through the size-checked C ABI. Strings last until unload.
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api) noexcept
 {

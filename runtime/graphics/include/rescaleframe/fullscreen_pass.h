@@ -1,23 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Draw one texture over another, with the blend the job needs and nothing else.
-
-   Three things in this runtime want the same triangle: the debug view that puts a reconstruction on
-   the screen, the composite that puts the interface back over a HUD-less frame, and the overlay's
-   own background. They differ in where they draw, what blend they use and whether they tonemap, and
-   in nothing else, so they are one pass with a mode rather than three copies of a pipeline.
-
-   The composite is why the blend matters. Every frame generation SDK this project targets asks for
-   the interface premultiplied and composited as
-
-       final = ui.rgb + (1 - ui.a) * scene.rgb
-
-   which is `ONE / INV_SRC_ALPHA` with the layer's own alpha, and is identical across Streamline,
-   FidelityFX and XeFG. Getting it from the same code that draws the debug view means the picture
-   the vendor composites and the picture we composite cannot drift apart.
-
-   Every piece of pipeline state this touches is saved and restored, scissor rectangles included.
-   The game is between its own draws and did not ask for its bindings to change; a state left
-   altered here is a rendering fault somewhere else entirely, which is the hardest kind to trace. */
+/* Fullscreen-triangle copy, diagnostic tonemap, coverage view, and premultiplied UI composite.
+   The composite uses ui.rgb + (1 - ui.a) * scene.rgb, matching the frame-generation UI contract.
+   Inputs are caller-owned views on the same device. Draws save and restore their affected context
+   bindings, including scissors; serialize use and destruction on the owning render thread. */
 
 #ifndef RSF_FULLSCREEN_PASS_H
 #define RSF_FULLSCREEN_PASS_H
@@ -47,20 +32,11 @@ typedef uint32_t rsf_fullscreen_mode;
 /* Composite a premultiplied layer over what is already there: `ui.rgb + (1 - ui.a) * dst`. The one
    mode with a blend, and the one the vendor contract names. */
 #define RSF_FULLSCREEN_PREMULTIPLIED ((rsf_fullscreen_mode)2)
-/* The source's alpha as a grey picture, opaque. This is how a layer that looks empty is told from
-   one that is empty: a layer with no alpha composites to nothing and looks identical to a broken
-   one, and this frame has spent runs on exactly that kind of ambiguity. */
+/* Visualise source alpha as opaque grey, including coverage that contributes no visible RGB. */
 #define RSF_FULLSCREEN_ALPHA ((rsf_fullscreen_mode)3)
-/* Premultiplied, with the destination's transfer function applied to the layer first.
- *
- * Needed when the layer holds linear values and the target holds transformed ones, which is the
- * case here: AC7 stores its interface as linear in a plain UNORM target and transforms it in a
- * later pass, while the back buffer this composites onto has already been transformed. Blending one
- * into the other untransformed is what makes an extracted interface arrive dark.
- *
- * Two curves because which one a game used is not something the API records, and the difference
- * between them is visible in the shadows. sRGB is the piecewise standard; GAMMA22 is the pure power
- * curve that a lot of engines actually apply. */
+/* Encode the layer before premultiplied blending when it stores linear values and the destination
+   already stores encoded values. The caller selects the transfer curve: sRGB is piecewise;
+   GAMMA22 is a pure power curve. The API cannot infer the game's transfer function. */
 #define RSF_FULLSCREEN_PREMULTIPLIED_SRGB ((rsf_fullscreen_mode)4)
 #define RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22 ((rsf_fullscreen_mode)5)
 
@@ -98,13 +74,15 @@ typedef struct rsf_fullscreen_draw {
    one would also mean matching its extent to the target's, which is a constraint the caller should
    not inherit from a blit.
 
-   Taking views rather than textures is deliberate. The caller already has them, creating one per
-   draw would allocate on the frame's hottest path, and a view is also where the format
-   reinterpretation lives that a typeless render target needs. */
+   Caller-owned views avoid per-draw texture-view allocation and specify typed formats for
+   typeless resources. This narrow snapshot does not preserve OM UAVs or shader linkage, and
+   does not disable inherited GS/HS/DS, predication, or stream output. Use a compatible fullscreen
+   scope or wrap the call in a full state snapshot and configure those effects explicitly. */
 rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* pass, void* context,
                                                void* target, void* source,
                                                const rsf_fullscreen_draw* parameters);
 
+/* Release pass-owned resources; null is accepted. Finish outstanding use before destruction. */
 void rsf_fullscreen_pass_destroy(rsf_fullscreen_pass* pass);
 
 #ifdef __cplusplus

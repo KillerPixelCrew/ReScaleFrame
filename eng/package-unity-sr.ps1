@@ -1,3 +1,22 @@
+<#
+.SYNOPSIS
+Stage a Drag'n Wash test ZIP from an existing deployment manifest and Release artifacts.
+.DESCRIPTION
+Checks the deployment's exact expected file set and hashes, then stages a package under
+.local/packages. First-party DLLs are taken from the current Release build; vendor payloads
+come from the verified deployment. Overrides package SR settings, adds notices/metadata,
+and verifies every ZIP entry against staged hashes. Does not build, launch or alter the game.
+The recorded deployment hashes do not establish that replacement Release DLLs were
+tested; package.json records the source baseline and pending handheld acceptance separately.
+.PARAMETER GameDirectory
+Installation containing ReScaleFrame/deployment.json and its unchanged deployed payload.
+.PARAMETER Backend
+SR provider requested in the package's generated settings.
+.PARAMETER Quality
+Package quality ID: Native through Ultra Performance (0 through 4).
+.OUTPUTS
+ZIP path and SHA256 on stdout; staging directory, ZIP and checksum sidecar in .local/packages.
+#>
 param(
     [Parameter(Mandatory)][string]$GameDirectory,
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
@@ -53,6 +72,7 @@ foreach ($taskFile in $taskFiles) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null
     $taskSource = Join-Path $taskGame $taskFile.path
     $taskLeaf = [IO.Path]::GetFileName($taskFile.path)
+    # Deployment checks cover input payload; first-party substitutions use the current build.
     if ($taskFile.path -eq 'version.dll') { $taskSource = Join-Path $taskBin 'ReScaleFrame.Loader.dll' }
     elseif ($taskLeaf -in $taskFirstParty) { $taskSource = Join-Path $taskBin $taskLeaf }
     $taskSourceHash = (Get-FileHash -LiteralPath $taskSource).Hash
@@ -86,7 +106,8 @@ Install
 5. Press Insert to open the overlay. On a handheld without Insert, use a keyboard
    or Windows' full On-Screen Keyboard (osk.exe).
 
-Default: Auto, Quality. All vendor runtimes are included.
+Configured defaults are in ReScaleFrame.ini. The packaging script defaults to Auto
+and Quality unless overridden. All vendor runtimes are included.
 Auto identifies the GPU owning the game's DX12 device: NVIDIA selects DLSS,
 Intel selects XeSS, AMD selects FSR3. Software adapters disable SR.
 FSR4 is a manual experimental choice; RDNA4 auto-detection is not implemented.
@@ -131,8 +152,9 @@ Uninstall
 Close the game, then remove the added version.dll, ReScaleFrame.ini and
 ReScaleFrame folder. Leave every original game file in place.
 
-This package contains the verified Release build and hash-verified deployed vendor
-payload, including the accepted post-processing correction and new Auto policy.
+This package contains the current Release artifacts and hash-verified deployed
+vendor payload. Packaging verifies copies and archive integrity, not whether the
+replacement Release artifacts were exercised in the game.
 MSI Claw hardware acceptance is pending. The existing game installation is not
 changed by packaging.
 First-party code is GPL-3.0-only; see LICENSE.txt. Vendor and Harmony notices
@@ -143,7 +165,7 @@ decompiles, logs or machine-specific deployment baseline are included.
 $taskManifest = [ordered]@{
     format = 1; version = $taskVersion; game = 'drag-n-wash'; steam_build = '25286774'
     executable_sha256 = '5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc'
-    artifact_source = 'verified Release build with hash-verified deployed vendor payload'; backend = $Backend; quality = $Quality
+    artifact_source = 'current Release artifacts with hash-verified deployed vendor payload'; backend = $Backend; quality = $Quality
     source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim(); source_has_uncommitted_changes = $true
     claw_device_tested = $false; created_utc = [DateTime]::UtcNow.ToString('o')
 }

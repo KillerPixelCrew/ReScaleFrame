@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+// unmatched: another shader; patched: output owns corrected bytes; refused: fingerprint matched
+// but token/container validation or allocation failed, so the caller must keep original bytes.
 enum class rsf_ac7_contact_shadow_result { unmatched, patched, refused };
 
 // Internal plugin helper for AC7's directional light shader (SHA-256 60a2ca61...): adds the

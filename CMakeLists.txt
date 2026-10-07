@@ -1,3 +1,5 @@
+# Native Windows x64 target graph. VERSION supplies generated ABI-visible version text;
+# Cargo builds the Rust DLLs separately. Component CMake files document optional SDK gates.
 cmake_minimum_required(VERSION 3.25)
 
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" RSF_VERSION LIMIT_COUNT 1)
@@ -8,8 +10,7 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 if(NOT MSVC)
-    # mingw would otherwise emit libReScaleFrame.Bootstrap.dll. Windows DLL names are exact, and
-    # a forwarder has to match the name the game imports, so the cross build keeps MSVC's naming.
+    # Carrier forwarders require exact Windows DLL names without MinGW's default lib prefix.
     set(CMAKE_SHARED_LIBRARY_PREFIX "")
     set(CMAKE_SHARED_MODULE_PREFIX "")
 endif()
@@ -29,8 +30,7 @@ target_include_directories(rsf_build_options INTERFACE "${CMAKE_BINARY_DIR}/gene
 target_compile_definitions(rsf_build_options INTERFACE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(MSVC)
     target_compile_options(rsf_build_options INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:/W4;/WX;/utf-8>)
-    # fopen and friends are used on purpose in the diagnostics. The secure-CRT deprecation is not
-    # a defect and must not fail the warnings-are-errors build; it is what failed every CI run.
+    # Diagnostics use standard C file APIs; suppress MSVC's secure-CRT deprecation warning.
     target_compile_definitions(rsf_build_options INTERFACE _CRT_SECURE_NO_WARNINGS)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # The mingw cross build enforces the same warnings-are-errors rule as the MSVC reference build.
@@ -39,11 +39,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_link_options(rsf_build_options INTERFACE -static -static-libgcc -static-libstdc++)
 endif()
 
-# MinHook, for hooking by detour where a vtable entry is contested. Steam's overlay hooks
-# IDXGISwapChain::Present both in the table and at the function's entry and re-asserts either when
-# displaced, so a table patch and the overlay chase each other; a detour with a trampoline built
-# from the genuine bytes sits in the same chain without ever routing through the entry again.
-# BSD-2-Clause, pinned to v1.3.4.
+# MinHook detours coexist with other Present hooks via trampolines. BSD-2-Clause, pinned v1.3.4.
+# Rationale and observed coexistence: docs/research/windows-present-hook-coexistence.md.
 include(FetchContent)
 FetchContent_Declare(minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git

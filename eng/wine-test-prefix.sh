@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Build a Wine prefix with DXVK and vkd3d-proton, for the tests that need them.
-#
-# The default prefix on this machine has Wine's own D3D11, which does not implement shared NT
-# handles: `CreateSharedHandle` returns E_NOTIMPL, so `shared_surface` skips and the presentation
-# bridge cannot be measured. That is a fact about WineD3D and says nothing about DXVK, which is what
-# the game actually runs under. This prefix is how the difference gets measured here instead of
-# being deferred to a run of the game.
-#
-# The DLLs are borrowed from an installed Proton rather than downloaded. Same builds the game runs
-# with, nothing fetched, and nothing added to the repository.
+# Prepare a dedicated Wine prefix for graphics fixtures using installed Proton DLLs.
+# Copies DXVK/vkd3d-proton into system32 and sets native-only registry overrides, replacing
+# any existing graphics DLLs in the selected prefix. Nothing is downloaded or added to git.
+# Shared NT-handle fixtures need an implementation beyond WineD3D's unsupported path;
+# fixture results remain distinct from validation inside a game.
 #
 # Usage:
 #   eng/wine-test-prefix.sh [--proton DIR] [--prefix DIR]
 #   WINEPREFIX=.local/wine-test-prefix wine build/linux-cross-x64/bin/rsf_shared_surface.exe
+#
+# --proton: installed Proton files/ directory containing both graphics implementations.
+#           Without it, the last matching installed path wins; versions are not sorted.
+# --prefix: destination Wine prefix; default is .local/wine-test-prefix under the repo.
+# Requirements: wineboot, wineserver, regedit and readable x86_64 Proton DLLs.
+# Outputs: system32 graphics DLLs and overrides.reg in the selected prefix.
+# Existing prefix contents are updated in place; no backup or rollback is provided.
+# Failed setup may leave partial copies. Inspect output before treating fixtures as covered.
+# Exit 2 indicates an unknown option; missing graphics inputs exit 1.
+# Use ctest --preset linux-cross-dxvk with the default prefix, or pass a matching environment.
 set -euo pipefail
 
 proton=""
@@ -28,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$proton" ]; then
-    # Newest first, so a machine with several gets the one most likely to match the game's.
+    # The last matching glob entry wins; pass --proton to select a specific installed build.
     for candidate in \
         /usr/share/steam/compatibilitytools.d/*/files \
         "$HOME"/.local/share/Steam/steamapps/common/Proton*/files \
@@ -59,17 +64,15 @@ mkdir -p "$prefix"
 export WINEPREFIX="$prefix"
 export WINEDEBUG="${WINEDEBUG:--all}"
 
-# Quietly, and waited for: wineboot returns before the prefix is finished and copying into a
-# half-built system32 loses the files to the rest of the setup.
+# Wait for prefix initialization before replacing files that setup could overwrite.
 wineboot -u >/dev/null 2>&1 || true
 wineserver -w
 
 system32="$prefix/drive_c/windows/system32"
 mkdir -p "$system32"
 
-# Overwriting Wine's own, which is what an override of "native" then selects. The alternative,
-# leaving both and relying on the override alone, silently falls back to the builtin when the
-# native one fails to load, and a silent fallback is exactly what this prefix exists to avoid.
+# Replace system32 copies and use native-only overrides so missing native support cannot silently
+# fall back to the builtins.
 for dll in d3d11 dxgi d3d10core; do
     if [ -f "$dxvk/$dll.dll" ]; then
         cp -f "$dxvk/$dll.dll" "$system32/$dll.dll"

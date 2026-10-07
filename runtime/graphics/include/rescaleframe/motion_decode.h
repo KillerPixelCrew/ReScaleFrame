@@ -1,21 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Turn a game's stored motion vectors into what a reconstruction backend can read.
-
-   Every backend takes a scale factor for motion and offers nothing to subtract a bias with.
-   Unreal's storage is biased, `In * (0.499 * 0.5) + 32767/65535`, so a backend handed the raw
-   target reads a large constant motion across a still image. That makes this pass mandatory for
-   DLSS, XeSS and FSR alike, rather than something only the backends that cannot reconstruct camera
-   motion need.
-
-   The pass is deliberately parameterised rather than written around Unreal. The encoding is a
-   property of the game, so it arrives as numbers from the plugin, and the same pass serves a game
-   that stores motion some other way. What lives here is the graphics work: a target, a compute
-   shader, and the state save and restore around a dispatch inside somebody else's frame.
-
-   The clear value is the part that cannot survive the decode. Unreal reserves a stored zero to mean
-   "nothing wrote this pixel", which works because the bias keeps real motion away from zero. Decode
-   that and zero becomes an ordinary value that real motion can take, so the sentinel has to be
-   re-established explicitly at a value outside any real motion, and the backend told about it. */
+/* Convert plugin-defined biased motion storage to a backend-readable floating-point field:
+   decoded = (stored - bias) * scale * output_scale. The plugin owns units and axis conventions.
+   When stored zero marks an unwritten pixel, test it before decoding and write invalid_value
+   instead. Outputs belong to the pass and are overwritten by the next run. Call on the owning
+   immediate-context thread with resources from the pass's device. */
 
 #ifndef RSF_MOTION_DECODE_H
 #define RSF_MOTION_DECODE_H
@@ -39,8 +27,7 @@ typedef int32_t rsf_motion_decode_result;
 /* The source texture does not match what this pass was built for. */
 #define RSF_MOTION_DECODE_ERROR_SOURCE_MISMATCH ((rsf_motion_decode_result)-5)
 
-/* Progress and diagnostics, same shape and same reason as the texture dump sink: this runs inside
-   a game's render thread, where a returned code often never arrives. */
+/* Optional synchronous diagnostics; message text is borrowed for the call. */
 typedef void (*rsf_motion_decode_log_fn)(void* user, const char* message);
 
 typedef struct rsf_motion_decode_setup {
@@ -64,10 +51,7 @@ typedef struct rsf_motion_decode_params {
     float scale_y;
     float bias_x;
     float bias_y;
-    /* Applied after the decode, to reach the backend's convention. Streamline wants motion in the
-       [-1,1] range Unreal already decodes to, so 1 and 1 leave it alone; the axis directions and
-       the sign of the difference are the part that has to be checked against a rendered result,
-       and this is where a flip belongs when it turns out to be needed. */
+    /* Post-decode axis scale for the backend's units and direction. The plugin supplies it. */
     float output_scale_x;
     float output_scale_y;
     /* Written wherever the source held the clear value. Must be outside any real motion, and
@@ -81,7 +65,7 @@ typedef struct rsf_motion_decode_params {
 
 typedef struct rsf_motion_decode rsf_motion_decode;
 
-/* Build the pass for one render size. `device` is an `ID3D11Device*`. */
+/* Build for one render size; retains ID3D11Device until destroy. Recreate to resize. */
 rsf_motion_decode_result rsf_motion_decode_create(void* device,
                                                   const rsf_motion_decode_setup* setup,
                                                   rsf_motion_decode** out);
@@ -89,8 +73,8 @@ rsf_motion_decode_result rsf_motion_decode_create(void* device,
 /* Decode `source` into the pass's own target. `context` is an `ID3D11DeviceContext*` and `source`
    an `ID3D11Texture2D*` of the size this pass was built for.
 
-   Compute state is saved and restored around the dispatch, because this runs inside a frame the
-   game is in the middle of and did not ask for its bindings to change. Nothing else is touched. */
+   Saves/restores the compute shader/linkage and SRV/UAV/constant slot 0. The owner must avoid
+   conflicting source/output bindings in unsaved stages, which D3D11 may automatically unbind. */
 rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pass, void* context,
                                                void* source,
                                                const rsf_motion_decode_params* params);

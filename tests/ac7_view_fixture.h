@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Build synthetic AC7 view-uniform buffers shared by view and graph fixtures.
+ * Offsets are bytes in the researched AC7 layout. Storage uses floats for alignment;
+ * returned byte pointers borrow the Buffer and remain valid until it is modified or
+ * destroyed. A rotated basis exposes transpose errors that an identity would hide.
+ */
 #pragma once
 #include <rescaleframe/ac7_view.h>
 #include <vector>
@@ -20,9 +27,10 @@ constexpr uint32_t kViewSize = 0x7F0;
 constexpr uint32_t kBufferSize = 0x800;
 
 struct Buffer {
-    // Parentheses, not braces: braces here would build a two element vector holding 1024 and 0.
+    // The size/value constructor is required; an initializer list would create only two floats.
     std::vector<float> values = std::vector<float>(RSF_AC7_VIEW_BUFFER_BYTES / 4, 0.0f);
 
+    /** Store known fixture values at a byte offset; callers supply aligned, in-range spans. */
     void put(uint32_t offset, std::initializer_list<float> data)
     {
         uint32_t index = offset / 4;
@@ -34,8 +42,7 @@ struct Buffer {
     const void* bytes() const { return values.data(); }
 };
 
-// A view buffer that satisfies every relationship the reader tests. The camera basis is a real
-// rotation rather than the identity, so a reader that transposed a matrix would be caught.
+/** Build a consistent reversed-Z perspective view with dimensions in render pixels. */
 Buffer make_view(float horizontal_scale, float vertical_scale, float near_plane,
                  uint32_t view_width, uint32_t view_height, uint32_t buffer_width,
                  uint32_t buffer_height)

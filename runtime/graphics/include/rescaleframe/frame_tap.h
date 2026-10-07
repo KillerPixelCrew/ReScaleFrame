@@ -1,52 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Find the frame's reconstruction inputs while the game is rendering them.
-
-   A super resolution backend needs scene colour, motion, depth and an exposure value from the same
-   frame, at render resolution, before tonemapping. `docs/research/ac7-frame-capture.md` shows that
-   Ace Combat 7 already binds all of them together: one pass takes scene colour, a history target,
-   the velocity target, depth and a 1x1 exposure target in a single call. That combination occurs
-   once in the frame, so the binding itself is the identification.
-
-   Earlier research named that pass after the Unreal pass whose inputs match. That was an inference
-   and it is not repeated here. The game offers only FXAA and none as anti-aliasing modes, this
-   project's jitter patch deliberately does not turn a temporal mode on, and nothing at runtime
-   labels a pass. What is established is the input set, so that is what this looks for.
-
-   Identification comes from the bound resources alone: each view's resource is queried as a
-   texture and classified through `resource_roles.h`. Nothing is remembered from creation time, so
-   this module needs neither the observer nor agreement with it, and it works on textures allocated
-   before it was installed.
-
-   The callback runs synchronously inside the hook, on the game's render thread. That is the only
-   moment the resources hold this frame's contents; anything deferred to present would read the
-   frame after it finished.
-
-   The same shadowed bindings answer a second question, which is where the reconstruction goes back
-   in. `docs/research/ac7-frame-capture.md` establishes that at a reduced render scale the frame
-   ends with one draw that reads a single render resolution composite and writes the output
-   resolution back buffer, and that the interface is composited into that composite before it. So
-   the scene has to be replaced before those composite draws, not at the last one. Which draws
-   write that target and what each of them reads is not in any capture in this repository: the
-   exported action list records render target bindings and not shader resource bindings, which is
-   stated as a limitation there twice. It is in the shadow this module already keeps.
-
-   Hence `rsf_frame_tap_watch_target`. Name a render target and the tap reports the next few draws
-   into it with their pixel shader inputs, sizes and viewport. Point it at the back buffer and the
-   answer names the composite; point it at the composite and the answer names the draw that reads
-   scene colour, which is the one to intervene at.
-
-   And then the intervention itself, because this module owns the hooks the substitution has to
-   happen in. `rsf_frame_tap_set_plan` names textures to swap out: a shader resource view onto one
-   of them is bound as something else, a render target view onto one is bound as something else,
-   and viewports and scissor rectangles are scaled while a substituted target is bound. That is
-   enough to make the game draw its own tail at output resolution over a reconstructed scene, and
-   `scene_promote.h` is what decides which textures those are and creates the replacements.
-
-   The watch is an observer and the plan is not, so the honest split is per call rather than per
-   module: a binding named by the plan is altered before it is forwarded, and everything else is
-   forwarded first and looked at afterwards. The shadow always records what the game asked for
-   rather than what was bound in its place, because everything else here is a description of the
-   game's frame and would stop being one otherwise. */
+/* Observes render work on one immediate D3D11 context and can optionally substitute selected
+   resources and redirect render targets. Callbacks run synchronously on the render thread; all
+   callback pointers are borrowed unless a field says otherwise. AC7 pass-classification evidence
+   and limits are recorded in docs/research/ac7-frame-capture.md. */
 
 #ifndef RSF_FRAME_TAP_H
 #define RSF_FRAME_TAP_H
@@ -57,38 +13,16 @@
 extern "C" {
 #endif
 
-/* 9: the constant watch covers every constant buffer when asked with zero bytes, hands over the
-   upload as writable memory, and the target the game has bound can be asked for. Together these
-   let a caller correct the size constants of a draw the plan runs into a promoted target. */
-/* 10: the constant override replaces every slot the caller names, not one. D3D11 leaves a
-   buffer bound in its slot until something replaces it, so a draw arrives with the view buffers of
-   earlier draws still in other slots, and replacing the first one found could leave the one the
-   shader reads untouched. */
-/* 11: a gate callback says whether it took the gate. One that returns zero leaves the gate shut,
-   so the next binding of the same target in the frame asks again. A frame that renders the same
-   scene several times, the briefing's among them, binds the recombined target once per render,
-   and only the main view's is the one to reconstruct at. */
 #define RSF_FRAME_TAP_ABI_VERSION 13u
 #define RSF_FRAME_TAP_CONSTANT_SLOTS 70u
 
-/* Render targets watched at once. The first two answer the tail's question: the swap chain's back
-   buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
-   intermediates a composite draw reads, by describing the draw that writes each one. Raised from
-   two in ABI 8, when the shape hunt was removed. */
+/* Maximum simultaneous render-target watches. */
 #define RSF_FRAME_TAP_WATCH_SLOTS 4u
 
-/* Pixel shader resources reported per watched draw. Sixteen covers every post process pass in this
-   game's frame; a pass binding more is reported truncated, with `input_count` saying so, rather
-   than not reported at all. */
+/* Maximum pixel-shader inputs in one report; detailed reports flag excess inputs as truncated. */
 #define RSF_FRAME_TAP_MAX_INPUTS 16u
 
-/* Textures a plan may substitute at once. Three, plus room: the composite, the interface's target
-   and the scene colour is the whole of the tail this was written for. */
-/* Eight, because four was exactly the composite, scene colour and one interface target with one to
-   spare, and the interface turned out to be composited into more than one surface. A plan that
-   describes the frame correctly and is then refused for being one entry too long is a silent
-   failure: reinsertion reports itself on and nothing is substituted. Twelve since the recombine
-   route adds the recombined target and scene colour as whole surfaces. */
+/* Maximum resource substitutions in one plan. */
 #define RSF_FRAME_TAP_MAX_SUBSTITUTIONS 12u
 
 typedef int32_t rsf_frame_tap_result;
@@ -99,35 +33,27 @@ typedef int32_t rsf_frame_tap_result;
 #define RSF_FRAME_TAP_ERROR_NOT_INSTALLED ((rsf_frame_tap_result)-4)
 #define RSF_FRAME_TAP_ERROR_PATCH_FAILED ((rsf_frame_tap_result)-5)
 
-/* Same shape and same reason as the other sinks here: this runs inside a game's render thread,
-   where a returned code often never arrives. Called before a step rather than after it. */
+/* Optional diagnostics sink. */
 typedef void (*rsf_frame_tap_log_fn)(void* user, const char* message);
 
-/* One recognised binding of the reconstruction input set.
-
-   Every pointer is borrowed for the duration of the callback and must not be retained past it. The
-   tap holds a reference on each while calling, and drops it on return; keeping one afterwards means
-   holding a reference of your own, which changes the lifetime of a resource the game pools and
-   reuses. Copy what you need instead. */
+/* One heuristic reconstruction-input set. Texture pointers borrow shadow-owned references for
+   the callback; retain separately to outlive it, or copy at a chosen consumption point. Retaining a
+   pooled texture does not preserve its contents or establish the input's frame/view identity. */
 typedef struct rsf_frame_tap_pass {
     uint32_t struct_size;
     /* The installed `ID3D11DeviceContext*` that made the call. */
     void* context;
-    /* `ID3D11Texture2D*`, taken to be the view bound at slot 0. Unreal's post process inputs put
-       the primary input there, and several full resolution targets in this frame share scene
-       colour's descriptor, so nothing in the binding distinguishes it. This assumption cannot be
-       checked without the running game. */
+    /* Selected floating colour texture matching the motion extent and render-target binding.
+       Selection is a descriptor/binding heuristic, not a verified scene/view identity. */
     void* scene_color;
-    /* `ID3D11Texture2D*`, the second target sharing scene colour's shape. Null when only one was
-       bound, which is what the first frame after a cut or a resolution change looks like. */
+    /* Optional RGBA16F scene-colour-shaped candidate from the binding scan. Its contents are
+       not verified as accumulated history; null if no such candidate was bound. */
     void* history;
     /* `ID3D11Texture2D*`, the engine's velocity target, still in the engine's own encoding. */
     void* motion;
     /* `ID3D11Texture2D*`. */
     void* depth;
-    /* `ID3D11Texture2D*`, the 1x1 eye adaptation target. A 1x1 texture is part of what qualifies
-       the set, so this is non-null in practice. The field stays nullable because the qualifying
-       rule is a property of this game's frame rather than of the ABI. */
+    /* Optional 1x1 eye-adaptation-shaped texture. Exposure is not required for qualification. */
     void* exposure;
     /* `ID3D11Buffer*`, the most recent buffer of `view_constant_bytes` bound to the pixel stage.
        Null until one has been seen. It is the buffer bound around this pass rather than a buffer
@@ -164,10 +90,10 @@ typedef struct rsf_frame_tap_input {
     uint32_t format;
 } rsf_frame_tap_input;
 
-/* One draw into a render target named by `rsf_frame_tap_watch_target`.
-
-   This is a description of the game's own draw, taken after it has been forwarded. Nothing about
-   the draw is altered. */
+/* Application draw facts used by watches, research callbacks, verdicts and constant overrides.
+   Identities describe requested game state; resource substitution or temporary overrides may
+   change the actual draw. Detailed reports query the effective viewport after override restoration.
+   Pre-draw verdict/constant facts omit context, viewport, ordinal and truncation diagnostics. */
 typedef struct rsf_frame_tap_target_draw {
     uint32_t struct_size;
     /* The `ID3D11DeviceContext*` that made the call. */
@@ -185,9 +111,8 @@ typedef struct rsf_frame_tap_target_draw {
        reported no viewport. */
     uint32_t viewport_width;
     uint32_t viewport_height;
-    /* Ordinal among the draws into this target since it was last bound, starting at zero. This is
-       what separates "the tonemap, first draw into the composite" from "the eleventh interface
-       element drawn on top of it". */
+    /* Zero-based ordinal since the requested RTV identity last changed. Rebinding the same view
+       continues the ordinal; changing views resets it, even if both reference one texture. */
     uint32_t draw_index;
     /* Non-zero for `DrawIndexed`. Captured fullscreen passes include indexed and unindexed triangles;
        callers must consider both this flag and the element count. */
@@ -226,9 +151,8 @@ typedef struct rsf_frame_tap_target_draw {
        says whether a draw's colour is being encoded on the way in. A layer that does not encode
        where the original did holds linear values that later read as too dark. */
     uint32_t target_view_format;
-    /* Appended in ABI 8. The vertex stage's constant buffers as bound for this draw, by slot,
-       `ID3D11Buffer*` compared by address only. Filled for divert and nudge callbacks, where the
-       question is which view's projection the draw was made with. */
+    /* Appended in ABI 8. Borrowed ID3D11Buffer identities by slot. Constant arrays are populated
+       for verdict/constant-override and research callbacks, not ordinary watch/candidate reports. */
     void* vertex_constants[14];
     /* ABI 12: pixel-stage view buffers for per-draw overrides, in the same slot order. */
     void* pixel_constants[14];
@@ -263,16 +187,9 @@ rsf_frame_tap_result rsf_frame_tap_set_research_phase_callbacks(rsf_frame_tap_ta
                                                               rsf_frame_tap_compute_fn compute,
                                                               void* user);
 
-/* The pipeline objects worth a second look, so the tap can reject the rest of the frame inline.
-
-   A frame is tens of thousands of draws and a handful of them are the interface. Asking a callback
-   about each one would put a call on the game's hottest path to be told "no" almost every time, so
-   the test lives here and only a draw that passes it is reported. The test is pointer comparisons
-   against these sets and nothing else: no device calls, no descriptors, no allocation.
-
-   The arrays are copied, so the caller may rebuild its own storage freely afterwards. Membership is
-   by address, which is only meaningful while an object is alive, so whoever fills these has to drop
-   an address the moment the game releases it. See `ui_identify.h`, which exists for that. */
+/* Pointer sets for a cheap draw prefilter. Arrays are copied and can be released after the call;
+   objects are borrowed identities and must be invalidated on reuse. Replace sets on the observed
+   render thread, or with its readers quiescent; publication atomics do not retire prior readers. */
 typedef struct rsf_frame_tap_candidates {
     uint32_t struct_size;
     /* Input layouts that name an interface producer. */
@@ -307,13 +224,9 @@ typedef uint32_t rsf_frame_tap_verdict;
 #define RSF_FRAME_TAP_LEAVE ((rsf_frame_tap_verdict)0)
 /* Send it to the layer instead of to the target the game bound. */
 #define RSF_FRAME_TAP_DIVERT ((rsf_frame_tap_verdict)1)
-/* Divert, and patch the blend's alpha operations to `One / InvSrcAlpha` first.
- *
- * Needed for anything drawn with Unreal's base pass translucent blend, whose alpha factors are
- * `Zero / InvSrcAlpha`: on a layer cleared to zero the alpha stays at zero however much colour
- * lands, so the layer composites to nothing while looking, in a debug view, exactly like a divert
- * that never happened. Slate's own blend already accumulates and must be left alone. The colour
- * factors are never touched. */
+/* Divert, enable alpha writes, and set enabled blends' alpha factors to One/InvSrcAlpha/Add.
+   Unreal's Zero/InvSrcAlpha base-pass blend otherwise leaves coverage zero on a cleared layer.
+   Colour factors and blend enable are unchanged; an already accumulating blend needs no patch. */
 #define RSF_FRAME_TAP_DIVERT_PATCH_ALPHA ((rsf_frame_tap_verdict)2)
 
 /* Called before the game's draw is forwarded, for every draw that passes the candidate prefilter.
@@ -350,15 +263,16 @@ typedef struct rsf_frame_tap_divert_setup {
     void* verdict_user;
 } rsf_frame_tap_divert_setup;
 
-/* Arm or disarm diverting. Null, or a null layer or verdict, disarms.
+/* Arm or disarm diverting. Null, or a null layer or verdict, disarms. Coordinate setup changes
+   with the observed render thread; keep borrowed layer/callback storage alive until old draws exit.
 
-   Nothing is diverted until this is called, so the classification milestone and the divert are the
-   same code with this switched off. */
+   Diversion remains disabled until armed. */
 rsf_frame_tap_result rsf_frame_tap_set_divert(const rsf_frame_tap_divert_setup* setup);
 
 /* Asked before a candidate draw is forwarded: which constant buffers to replace for that draw
    only. Fill `slots` and `buffers` (`ID3D11Buffer*`), up to RSF_FRAME_TAP_CONSTANT_SLOTS pairs.
-   Consecutive groups of 14 name VS, PS, GS, HS and DS b0..b13. Zero leaves the draw alone.
+   Consecutive groups of 14 name VS, PS, GS, HS and DS b0..b13. Return the pair count; zero or
+   a negative value leaves the draw alone. Duplicate/out-of-range slots and null buffers are ignored.
 
    For drawing the interface with an unjittered copy of its view's uniform buffer. The tap binds
    each buffer through the original entry, forwards the draw, and puts the game's own buffers back,
@@ -431,10 +345,8 @@ typedef struct rsf_frame_tap_substitution {
    binding is forwarded. One callback covers all closed gates waiting on that target. MRT binds
    never open these gates: a pooled post-process target can still be a GBuffer earlier in the frame.
 
-   It is the one moment where the scene is finished and nothing downstream has read it yet, which
-   is where a reconstruction has to run. Whatever it does to the device context it must put back:
-   the game is midway through its frame and will not rebind what it believes is still there.
-   `d3d11_state.h` exists for that. */
+   The owner identifies the finished-scene boundary and restores any changed context bindings.
+   Return nonzero to open the waiting gates; zero leaves them closed for a later binding retry. */
 typedef int (*rsf_frame_tap_gate_fn)(void* user, void* context, void* texture);
 
 typedef struct rsf_frame_tap_plan {
@@ -448,28 +360,11 @@ typedef struct rsf_frame_tap_plan {
     float viewport_scale_y;
     rsf_frame_tap_gate_fn on_gate;
     void* on_gate_user;
-    /* What to do when a substituted target is bound alongside a depth stencil that is not the same
-       size as it.
-
-       A promoted target is at output resolution while the game's depth is still at render
-       resolution, and D3D11 refuses that pair, so every draw in such a pass is dropped. Flat
-       interface draws bind no depth and are unaffected, which is how this loses scene geometry and
-       leaves the interface looking correct.
-
-       There is no right answer available here, only three wrong ones with different costs, so it is
-       a choice rather than a rule:
-
-         DROP    unbind the depth and keep the substitution. The pass draws, without its depth test
-                 or depth writes. Content survives, occlusion within the pass does not.
-         KEEP    forward both, which is what this did before the mismatch was understood. The pair
-                 is invalid and the pass draws nothing.
-         REFUSE  leave the target alone for that binding. The pass draws correctly into the game's
-                 own render resolution target, which nothing downstream reads once the promoted one
-                 is in the frame, so its content is lost anyway.
-
-       The honest fix is a depth of the right size with the right contents, which needs a resource
-       this module does not own and a rescale pass that does not exist yet. Until then DROP is the
-       default because it is the only one of the three that keeps the pixels. */
+    /* Policy for depth whose measured extent differs from the promoted target:
+       DROP removes the depth view and preserves the colour substitution, losing scene occlusion;
+       KEEP forwards the mismatched pair and may produce an invalid D3D11 binding;
+       REFUSE keeps the native target for that binding, possibly bypassing promoted downstream data.
+       DROP is zero/default. Matching-size depth with correct contents is the owner's responsibility. */
     uint32_t depth_policy;
 } rsf_frame_tap_plan;
 
@@ -511,17 +406,8 @@ typedef struct rsf_frame_tap_options {
        a parameter because which buffer carries view data belongs to the game and its engine
        version, not to this module. */
     uint32_t view_constant_bytes;
-    /* The presented resolution, which is what sizes are judged against.
-
-       Deriving it from the bound set instead does not work, and failing to do so is what made the
-       first version of this recognise nothing at all. Taking the largest bound texture as the
-       render size makes it an exact requirement, so a single full resolution texture bound
-       alongside the half resolution scene targets rejects every one of them. Judging against the
-       presented size lets the classifier accept anything from half of it upwards that keeps the
-       frame's aspect ratio, which is what a scaled render target is.
-
-       Zero leaves this module unable to judge a size, and the classifier refuses rather than
-       guessing, so a caller that does not know the presented size yet will see no passes. */
+    /* Presented extent used for descriptor size/aspect judgment. Zero prevents qualifying sets.
+       Auxiliary full-size bindings must not be mistaken for the render resolution. */
     uint32_t output_width;
     uint32_t output_height;
     /* Where watched render target draws are reported. Optional: leaving it null leaves
@@ -545,19 +431,13 @@ typedef struct rsf_frame_tap_options {
 typedef struct rsf_frame_tap_status {
     uint32_t struct_size;
     uint32_t installed;
-    /* Calls that reached the hook with enough views bound to be worth examining. Calls rejected by
-       the view count early out are not counted, since counting them would put an atomic write on
-       the game's hottest binding path for nothing. */
-    /* Every intercepted binding call, and the subset that actually changed what was bound.
-       Separating them matters: a zero in the first says the hook never ran, a zero in the second
-       with a non-zero first says it ran and never saw a change, and those are different faults
-       with the same symptom of nothing happening. */
+    /* Requested PSSetShaderResources calls on the observed context, excluding hook reentry. */
     uint32_t calls_seen;
+    /* Calls that changed at least one tracked SRV slot. */
     uint32_t calls_inspected;
     uint32_t passes_seen;
-    /* How many times each role has been recognised in a binding. When no pass ever matches, these
-       say which of the three the signature is waiting for, which is otherwise indistinguishable
-       from the hook not working at all. */
+    /* Cumulative descriptor-role observations, including repeated bindings. Exposure is optional
+       for input qualification; there is no corresponding scene-colour counter in this ABI. */
     uint32_t motion_seen;
     uint32_t depth_seen;
     uint32_t exposure_seen;
@@ -601,7 +481,7 @@ typedef struct rsf_frame_tap_status {
        flush, and a run where it stays at zero while draws go unobserved is a run on a runtime this
        module has not met. See `rsf_frame_tap_refresh`. */
     uint32_t vtable_refreshes;
-    /* Draws given a different vertex constant buffer by the override callback. */
+    /* Draws given one or more temporary VS/PS/GS/HS/DS constant replacements. */
     uint32_t draws_overridden;
     /* CopyResource calls between two promoted textures sent between their stand-ins, and calls
        with only one side promoted, which D3D11 would drop for the size difference. */
@@ -617,7 +497,9 @@ typedef struct rsf_frame_tap_status {
    Other contexts share the vtable but are forwarded without observation or substitution, so
    deferred bindings cannot contaminate the single-context shadow.
 
-   Safe to call from a worker thread. It touches no D3D state, only the vtable pages. */
+   The context is borrowed and must outlive installation. A worker can install at a point where
+   the observed render thread is quiescent; installation changes vtable pages, not D3D bindings.
+   Callback functions/user storage must outlive in-flight hooks, including teardown. */
 rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
                                            const rsf_frame_tap_options* options);
 
@@ -641,12 +523,13 @@ rsf_frame_tap_result rsf_frame_tap_uninstall(void);
    a caller that lets it go while a watch is live risks matching a later texture at the same
    address, not a use after free. Hold a reference for as long as the watch is set.
 
-   Setting a slot resets its budget and its per-target draw ordinal. Safe to call from any thread,
+   Setting a slot resets its budget; ordinal follows target-binding changes, not watch setup.
+   Safe to call from any thread,
    including from inside `on_target_draw`, which is how the second question follows the first. */
 rsf_frame_tap_result rsf_frame_tap_watch_target(uint32_t index, void* texture, uint32_t limit);
 
 /* Observe draws with a pixel shader SRV onto texture. One persistent watch, independent of the
-   two target watches. Set/clear only on the render thread, including from on_pass. The caller
+   target watches. Set/clear only on the render thread, including from on_pass. The caller
    retains texture while armed. No allocations or resource copies are made. Null clears it.
    Reports use watch_index == RSF_FRAME_TAP_WATCH_SLOTS. Bindings establish possible reads, not
    shader identity. A caller must qualify the draw before assigning meaning to its output. */
@@ -658,10 +541,10 @@ rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
    Every view in the plan has to outlive it, and clearing the plan does not put back a binding that
    is already in place. Clear it and let a frame pass before releasing anything it named.
 
-   Setting a plan changes what the game draws, which nothing else in this module does. It is refused
-   unless the plan is complete enough to be coherent: a substitution with a texture and no
+   A plan is refused unless it is complete enough to be coherent: a substitution with a texture and no
    replacement, or a viewport scale of zero, is `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT` rather than a
-   frame that half works. Safe to call from any thread; it takes effect on the next binding. */
+   incoherent plan. Set/clear on the observed render thread or while it is quiescent; the writer
+   mutex and active flag do not retire an already-entered reader. It affects later bindings. */
 rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
 
 /* Put the hooks back if the runtime has rewritten its vtable underneath them.
@@ -678,12 +561,14 @@ rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
    Call it from the present hook. Cheap when nothing changed: one comparison. */
 rsf_frame_tap_result rsf_frame_tap_refresh(void);
 
-/* Close every gate a plan opened, so the next frame opens them again.
+/* Close every gate a plan opened on the observed render thread, so the next frame opens them again.
 
    Called from the caller's own per frame point, normally the present hook, because this module has
    no idea where a frame ends: it watches bindings and draws, and nothing in either says so. */
 rsf_frame_tap_result rsf_frame_tap_end_frame(void);
 
+/* Copy atomic diagnostic counters and latest extents. Caller initializes status.struct_size;
+   counters can advance during the read, so this is not one transactional frame snapshot. */
 rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* status);
 
 #ifdef __cplusplus

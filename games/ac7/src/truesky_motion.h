@@ -3,8 +3,9 @@
 #include <d3d11.h>
 #include <cstdint>
 
-// Device depth of the dominant cloud surface at each scene pixel, for reprojecting pixels that
-// have no object velocity. Written at TrueSky's composite_tile draw while its inputs are bound.
+// Device depth of the dominant cloud surface for unwritten-motion camera reprojection.
+// RHI/immediate-context owner only; retains every COM field until device change or release.
+// Written at TrueSky's composite_tile draw while its measured inputs remain bound.
 struct rsf_ac7_cloud_depth {
     ID3D11Device* device = nullptr;
     ID3D11ComputeShader* shader = nullptr;
@@ -20,4 +21,5 @@ struct rsf_ac7_cloud_depth {
 // Returns the texture (owned by state) or null when the bindings do not match the measured ABI.
 ID3D11Texture2D* rsf_ac7_cloud_depth_write(rsf_ac7_cloud_depth& state, ID3D11DeviceContext* context,
     const D3D11_VIEWPORT& viewport);
+// Release owned device/shader/buffer/texture/view references and reset refusal/extent state.
 void rsf_ac7_cloud_depth_release(rsf_ac7_cloud_depth& state);

@@ -1,5 +1,9 @@
-/* Entropy measurement against inputs whose answers are known independently. */
-
+/**
+ * @file
+ * Check entropy measurement against independently known byte distributions.
+ * Uniform, constant, two-symbol and mixed ranges exercise bits-per-byte results,
+ * window sampling and small-range fallback without reading a game module.
+ */
 #include <rescaleframe/module_dump.h>
 
 #include <stdio.h>

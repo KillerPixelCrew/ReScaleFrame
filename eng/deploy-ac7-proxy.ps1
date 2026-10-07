@@ -1,4 +1,19 @@
-# Explicit local deployment, separate from verify.ps1. The caller names the game installation.
+<#
+.SYNOPSIS
+Build and deploy the matching AC7 carrier, plugin and Rust overlay.
+.DESCRIPTION
+Uses an already configured native build tree, builds selected targets, and runs the real-overlay
+host fixture in an isolated directory to avoid carrier DLL shadowing. Requires a stopped AC7
+installation and locally available vendor SDK runtimes. The SDK deployment runs first as its own
+transaction. Backs up the carrier/plugin/overlay and restores that trio on copy/hash failure;
+an earlier successful SDK deployment is not rolled back with the trio. No AC7 game run is performed.
+.PARAMETER GameDirectory
+Installation directory containing Ace7Game.exe. Existing target files may be replaced after backup.
+.PARAMETER Configuration
+Native and Rust build configuration to deploy.
+.OUTPUTS
+Deployment summary and backup path; a manifest records copied hashes and fixture-only validation.
+#>
 param(
     [Parameter(Mandatory = $true)][string]$GameDirectory,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release'
@@ -35,16 +50,14 @@ try {
     $nativeBin = Join-Path $repoRoot "build/windows-x64/bin/$Configuration"
     $ac7Proxy = Join-Path $repoRoot "build/windows-x64/ac7/bin/$Configuration/dinput8.dll"
     $panel = Join-Path $repoRoot "target/$rustConfiguration/rescaleframe_overlay.dll"
-    # This loads the real panel, exercises Insert, draws pixels and resizes a D3D11 swap chain.
-    # Game-facing proxy names in the shared artifact directory can shadow Windows DLLs in
-    # the fixture. Run its unchanged executable separately, with the real panel's full path.
+    # Isolate the fixture from carrier DLL names that can shadow Windows imports.
     $overlayFixtureRoot = Join-Path $repoRoot "build/fixtures/ac7-overlay/$Configuration"
     New-Item -ItemType Directory -Path $overlayFixtureRoot -Force | Out-Null
     $overlayFixture = Join-Path $overlayFixtureRoot 'rsf_overlay_host.exe'
     Copy-Item -LiteralPath (Join-Path $nativeBin 'rsf_overlay_host.exe') -Destination $overlayFixture
     Invoke-Checked $overlayFixture @($panel)
     Assert-GameStopped
-    # The overlay exposes FSR and XeSS; deploy their SR DLLs and notices too.
+    # This deployment completes independently of the carrier/plugin/overlay rollback below.
     & (Join-Path $PSScriptRoot 'deploy-ac7-sr-runtimes.ps1') -GameDirectory $gameRoot
     $backup = Join-Path $repoRoot ('.local/deploy-backups/ac7-pair-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
     New-Item -ItemType Directory -Path $backup | Out-Null

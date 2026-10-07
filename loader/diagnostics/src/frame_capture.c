@@ -11,6 +11,8 @@
 
 #define RSF_NVIDIA_VENDOR_ID 0x10DE
 
+/* Borrowed API table backed by a deliberately retained loaded RenderDoc DLL. Initialization
+   publishes this once; the module has no teardown or synchronization for concurrent setup. */
 static RENDERDOC_API_1_6_0* api;
 
 rsf_capture_result rsf_capture_initialise(const char* library_path_utf8,
@@ -27,8 +29,7 @@ rsf_capture_result rsf_capture_initialise(const char* library_path_utf8,
     if (MultiByteToWideChar(CP_UTF8, 0, library_path_utf8, -1, path, MAX_PATH * 2) == 0) {
         return RSF_CAPTURE_ERROR_INVALID_ARGUMENT;
     }
-    /* Load only from the path we were given. Falling back to the search path could pick up an
-       unrelated build and make a failure hard to explain. */
+    /* Use the supplied library path without a fallback search attempt. */
     HMODULE library = LoadLibraryW(path);
     if (!library) {
         return RSF_CAPTURE_ERROR_LIBRARY_MISSING;
@@ -50,10 +51,8 @@ rsf_capture_result rsf_capture_initialise(const char* library_path_utf8,
     api->MaskOverlayBits(eRENDERDOC_Overlay_None, eRENDERDOC_Overlay_None);
     api->SetCaptureKeys(NULL, 0);
 
-    /* RenderDoc blocks vendor extensions by default, which makes nvapi_QueryInterface return null.
-       On an NVIDIA hybrid-graphics machine that costs the device at the first present and takes
-       the game with it. AC7 loads nvapi64.dll, so this matters here. Community Shaders hit the
-       same failure and documented the same fix. */
+    /* Allow NVIDIA extensions: the observed hybrid-device path requires nvapi on first
+       Present. This follows Community Shaders' documented RenderDoc workaround. */
     api->SetCaptureOptionU32(eRENDERDOC_Option_AllowUnsupportedVendorExtensions,
                              RSF_NVIDIA_VENDOR_ID);
     return RSF_CAPTURE_OK;

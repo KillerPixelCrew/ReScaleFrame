@@ -19,6 +19,8 @@
 
 namespace {
 using Microsoft::WRL::ComPtr;
+// Settings/status are copied across frontend, game and render threads. CPU ownership uses
+// cpu_guard separately; graphics transfer slots and scoped scene identity belong to one renderer.
 std::mutex settings_guard;
 rsf_native_fg_options requested{sizeof(requested), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
 rsf_native_fg_status cached{};
@@ -55,6 +57,8 @@ std::atomic<uint64_t> presented_through{0};
 std::atomic<uint64_t> last_begun{0};
 std::atomic<uint32_t> join_skip{0};
 HANDLE completion_event() { static const HANDLE value = CreateEventW(nullptr, FALSE, FALSE, nullptr); return value; }
+// Monotonic source completion releases the next game-thread pacing join for presented, ended
+// or deliberately abandoned frames. It does not prove GPU or vendor input retirement.
 void complete_frame(uint64_t id) {
     auto seen = presented_through.load(std::memory_order_relaxed);
     while (seen < id && !presented_through.compare_exchange_weak(seen, id)) {}
@@ -159,6 +163,8 @@ void watch_submission(uint64_t id, uint32_t screen, bool open) {
     submission_opened_id.store(id, std::memory_order_release);
     submission_opened_qpc.store(now_qpc(), std::memory_order_release);
 }
+// Bind real CPU pacing/input and queued RHI/scene/window ownership to one source ID and provider
+// generation. Statistics diagnose association; only the explicit readiness fields authorize FG.
 struct CpuOwner {
     uint64_t provider_generation = 0;
     uint64_t id = 0;
@@ -218,6 +224,8 @@ void audit_frame(uint64_t id) {
     { std::lock_guard<std::mutex> lock(settings_guard); if (requested.debug) { sink = logger; user = log_user; } }
     if (sink && text[0]) sink(user, text);
 }
+// Six immutable cross-API input slots. complete joins D3D11 copies/D3D12 work; vendor_fence/value
+// separately guards asynchronous interpolation reads. Both must retire before storage changes.
 struct Transfer {
     ComPtr<ID3D11Device> device11;
     ComPtr<ID3D11DeviceContext4> context11;
@@ -250,6 +258,8 @@ thread_local Transfer::Slot* tagged_slot = nullptr;
 // Process-owned because CPU/vendor callbacks and presentation hooks remain installed. Explicit
 // ownership transitions are cold-start only; no shutdown callback frees in-flight inputs.
 Transfer& transfer() { static auto* value = new Transfer; return *value; }
+// Reuse the installed presentation owner's graphics queue/device, preserving a single vendor
+// SDK owner. The plugin's immediate context supplies the D3D11 side of shared transfers.
 bool initialize(Transfer& value, void* context) {
     if (value.fence) return true;
     value.graphics.struct_size = sizeof(value.graphics);
@@ -275,6 +285,8 @@ void barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
     D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to}; list->ResourceBarrier(1, &b);
 }
+// Join both completion domains before allocator reset or texture replacement. A failed vendor
+// query sets UINT64_MAX, deliberately making the old slot permanently unrecyclable.
 bool resources(Transfer& value, Transfer::Slot& slot, const rsf_dlss_frame& frame) {
     const auto started = now_qpc();
     if (!wait(value, static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(value.fence)), slot.complete) ||
@@ -716,6 +728,8 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         !cpu.failed && (cpu.stage_mask & 7u) == 7u;
     // Slate/RHI may present while the game thread is finishing its frame. The renderer's
     // copied post-update identity authorizes these inputs; full SimulationEnd can arrive later.
+    // All evidence must describe the same producer/window. No latest-frame or descriptor-only
+    // match can substitute for a completed composition, real input timing and paced submission.
     const bool valid = matched && inputs && submitted_frame && identity && scene_supported && continuous && vsync && cpu_valid;
     if (options.debug && inputs && cpu_valid && cpu_owner.id == window.source_frame_id)
         report_frame_timing(cpu, cpu_owner, *selected);

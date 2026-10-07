@@ -1,3 +1,11 @@
+/**
+ * @file
+ * Check each shipped plugin DLL's C ABI, fingerprint and inactive lifecycle.
+ * CTest selects an AC7, Project Wingman or Unity Mono fixture by argument. Probe
+ * strings are synthetic and no game is loaded: preparation must refuse this process,
+ * cleanup must remain safe and status must report rendering readiness honestly.
+ * The same executable also pins public frame eligibility policy.
+ */
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/game_frame.h>
 #include <windows.h>
@@ -35,10 +43,8 @@ bool check(bool condition, const char* message)
 }
 }
 
-// The LOAD_LIBRARY_SEARCH_* flags only accept a fully qualified path, so resolve the plugin
-// against this executable's own directory. That is where it sits in the build tree and next to
-// the host in a real load, and it keeps the path valid under a cross-build emulator, which
-// cannot be handed a host path.
+// Resolve a plugin leaf beside this executable: LOAD_LIBRARY_SEARCH_* requires an
+// absolute guest path, and a cross-build emulator cannot use a host filesystem path.
 bool resolve_beside_self(const wchar_t* leaf, wchar_t* buffer, DWORD capacity)
 {
     const DWORD length = GetModuleFileNameW(nullptr, buffer, capacity);
@@ -199,9 +205,7 @@ int wmain(int argc, wchar_t* argv[])
     passed &= check(api.detect(nullptr) == RSF_GAME_UNKNOWN,
                     "A null probe must not match.");
 
-    // The frame record's eligibility rules. They are asked in several places and the answer has to
-    // be the same in all of them, so they live in the header as inline functions and are pinned
-    // here rather than being restated by each caller.
+    // Pin the shared inline frame policy used by both plugins and runtime callers.
     {
         rsf_frame_record record{};
         record.struct_size = sizeof(record);

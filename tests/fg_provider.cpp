@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check a deployed FG provider's device, swap-chain and retirement lifecycle.
+ * This manual hardware fixture presents with FG disabled and supplies no interpolation
+ * inputs. Queue and provider fences must retire before teardown; generated pixels
+ * and latency are outside its coverage.
+ */
 #include <rescaleframe/fg_session.h>
 #include <rescaleframe/streamline_host.h>
 #include <windows.h>

@@ -79,6 +79,7 @@ compile_fn load_compiler()
 
 } // namespace
 
+// Own the device and reusable pipeline; per-draw backbuffer/source views are released before return.
 struct rsf_present_blit {
     ID3D11Device* device = nullptr;
     ID3D11VertexShader* vertex_shader = nullptr;
@@ -127,9 +128,8 @@ bool compile_one(rsf_present_blit* blit, compile_fn compile, const char* entry, 
     return true;
 }
 
-// Everything this draw disturbs. Restored in full, because the game is mid frame and a state left
-// changed here is a rendering fault somewhere else entirely, which is the hardest kind to trace
-// back to its cause.
+// Narrow debug-draw snapshot. Getter references are released by restore; shader linkage and OM
+// UAVs are not captured. The caller provides a compatible Present scope and same-device input.
 struct SavedState {
     ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     ID3D11DepthStencilView* depth_view = nullptr;

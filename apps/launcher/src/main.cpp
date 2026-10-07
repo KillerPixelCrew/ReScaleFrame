@@ -3,6 +3,8 @@
 #include <iostream>
 #include <string_view>
 
+// Metadata/help frontend scaffold. Exit 0 for help/version, 2 for unsupported arguments.
+// This executable does not yet launch games, inject a carrier or exchange runtime settings.
 int main(int argc, char* argv[])
 {
     if (argc == 2 && std::string_view(argv[1]) == "--version") {

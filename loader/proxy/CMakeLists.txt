@@ -1,4 +1,5 @@
-# Research carrier DLL. Its file name is the mechanism, so it is deliberately not ReScaleFrame.*.
+# Generic Windows carrier and validated AC7 carrier share bridge/configuration sources.
+# Output basenames are loader contracts: game import resolution selects dinput8/version.dll.
 add_library(rsf_proxy_dinput8 SHARED
     src/dinput8_proxy.c
     src/dlss_bridge.c
@@ -6,9 +7,8 @@ add_library(rsf_proxy_dinput8 SHARED
 target_link_libraries(rsf_proxy_dinput8 PRIVATE
     ReScaleFrame::LoaderDiagnostics
     ReScaleFrame::Graphics
-    # The backend path and the game's view buffer reader, linked in rather than loaded, so getting
-    # into the game stays one added file. Both belong on the other side of the ownership line in
-    # AGENTS.md and are here because this is what can be loaded today.
+    # Carrier currently links runtime graphics/backend helpers. The native game DLL is loaded
+    # separately; these links do not make bootstrap/launcher scaffolds a completed product path.
     ReScaleFrame::OrchestratorCore
     ReScaleFrame::AC7SceneColor
     ReScaleFrame::AC7UIRules
@@ -36,8 +36,7 @@ if(MSVC)
         "/MAP:$<TARGET_FILE_DIR:rsf_proxy_dinput8>/dinput8.map")
 endif()
 if(NOT MSVC)
-    # Existing cross-build carrier retains its AC7 entry until the x64 assembler forwarding
-    # surface is ported. The shared Windows/MSVC binary contains both carrier export surfaces.
+    # The cross-build uses the AC7 DllMain path; MASM version forwarding is MSVC-only.
     target_compile_definitions(rsf_proxy_dinput8 PRIVATE rsf_ac7_proxy_process_event=DllMain)
 endif()
 

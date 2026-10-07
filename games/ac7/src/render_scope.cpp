@@ -8,12 +8,16 @@
 #include <new>
 #include <vector>
 
+// Private commands match the researched UE4.18 linked-list ABI. Tickets own both markers on the
+// heap; the final marker releases them after execution, independently of the engine memory stack.
 struct NativeCommand {
     NativeCommand* next = nullptr;
     void (*execute)(void*, NativeCommand*) = nullptr;
 };
 static_assert(offsetof(NativeCommand, next) == 0 && offsetof(NativeCommand, execute) == 8);
 
+// Producer admission and current execution stack share a guard. Capacity bounds outstanding
+// tickets and pre-reserves stack storage before markers can execute on the RHI stream.
 struct rsf_ac7_render_scopes {
     std::mutex guard;
     uint64_t session = 0, serial = 0;
@@ -28,6 +32,7 @@ struct ScopeCommand : NativeCommand {
     rsf_ac7_render_ticket* ticket = nullptr;
     bool begin = false;
 };
+// Copied pass metadata plus optional resources survives CPU recording until the matching end.
 struct rsf_ac7_render_ticket {
     rsf_ac7_render_scopes* owner = nullptr;
     rsf_ac7_render_scope scope{};
@@ -37,6 +42,8 @@ struct rsf_ac7_render_ticket {
 };
 
 namespace {
+// Frame, window and view-backed passes have different identity requirements; no raw engine view
+// pointer is required for a window or full-frame marker.
 bool valid_identity(const rsf_ac7_render_scope& scope)
 {
     if (scope.role == RSF_GAME_RENDER_FRAME) return scope.source_frame_id != 0;
@@ -67,6 +74,8 @@ bool append(void* native, NativeCommand* command)
     std::memcpy(bytes + 0x14, &count, sizeof(count));
     return true;
 }
+// Resolve leased resources at both edges. Pass callbacks receive the original ticket identity;
+// state callbacks receive the restored enclosing scope when an end marker pops the stack.
 void execute_scope(void* command_list, NativeCommand* base) noexcept
 {
     auto* command = static_cast<ScopeCommand*>(base);

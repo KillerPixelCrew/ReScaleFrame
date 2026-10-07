@@ -1,9 +1,8 @@
 """Build a Ghidra Function ID database from reference binaries that carry symbols.
 
-Function ID matches a function by hashing its instruction sequence with operands masked, so it
-survives relocation and address changes but not a different inlining decision. That makes the
-reference build the whole problem: to name functions in a shipped Unreal game, the database has to
-come from an engine built the way the game was, and the names have to come from a PDB.
+Function ID hashes instruction sequences with selected operands masked. Reference configuration
+and PDB provenance determine which functions/names can match; relocation can preserve a match,
+while different optimization, inlining, or engine patches can change it.
 
 Give it one or more binaries with their PDBs beside them. It imports and analyses each into a
 project folder shaped `<library>/<version>/<variant>`, which is the layout Ghidra's
@@ -14,13 +13,9 @@ CreateMultipleLibraries script expects, then populates a `.fidb` from the whole 
         --binary ~/ue4/Blank.exe --variant Development-Win64 \\
         --library UnrealEngine --release 4.18.3
 
-Function ID analysis is switched off while ingesting, because matching against an existing database
-while building one corrupts the names it records. That is what Ghidra's own pre-script does and why
-it is used here rather than a plain analysis run.
-
-A populated database says a function's bytes match a function that was named in the reference
-build. It does not say the game's engine is unmodified, and a game with a patched engine will miss
-exactly the functions someone changed.
+Imports overwrite matching reference-program entries unless --skip-import is supplied. Function ID
+matching/demangling are disabled during ingest to preserve symbol-derived reference names. The script
+creates or reuses a .fidb and populates it with Ghidra's Java scripts. It does not modify a game program.
 """
 
 import argparse
@@ -41,6 +36,7 @@ COMMON_SYMBOLS = Path("Ghidra/Features/FunctionID/data/common_symbols_win64.txt"
 
 
 def headless(ghidra_home):
+    """Locate this installation's headless launcher or fail before invoking Ghidra."""
     launcher = ghidra_home / "support" / "analyzeHeadless"
     if not launcher.exists():
         raise SystemExit(f"no analyzeHeadless under {ghidra_home}")
@@ -48,6 +44,7 @@ def headless(ghidra_home):
 
 
 def run(command, description):
+    """Run an argument-vector command with inherited output; stop on a nonzero exit code."""
     print(f"\n== {description}")
     print("   " + " ".join(str(part) for part in command))
     result = subprocess.run(command, check=False)
@@ -56,7 +53,11 @@ def run(command, description):
 
 
 def ingest(ghidra_home, project_dir, project, binary, folder, timeout):
-    """Import one reference binary and analyse it with Function ID matching disabled."""
+    """Overwrite/import one binary into library/release/variant and run reference analysis.
+
+    Require the binary; a missing sibling PDB warns but does not abort. timeout is per-file seconds.
+    Ghidra's FunctionID pre/post scripts establish analyzer settings for database construction.
+    """
     if not binary.exists():
         raise SystemExit(f"no such binary: {binary}")
     symbols = binary.with_suffix(".pdb")
@@ -76,7 +77,7 @@ def ingest(ghidra_home, project_dir, project, binary, folder, timeout):
 
 
 def write_properties(directory, database, common_symbols, duplicates):
-    """Answer CreateMultipleLibraries' prompts.
+    """Replace the generated properties file and return its path for CreateMultipleLibraries.
 
     Headless scripts read `askXxx` answers from a properties file whose key is the space separated
     concatenation of the prompt's title and message, with surrounding spaces stripped.
@@ -99,6 +100,11 @@ def write_properties(directory, database, common_symbols, duplicates):
 
 
 def main():
+    """Validate paired variants, optionally import references, then populate/reuse the local FIDB.
+
+    Artifacts live beneath workspace: project/, properties/, <library>-<release>.fidb and duplicates.txt.
+    Each subprocess must succeed before the next phase; there is no rollback of earlier imports.
+    """
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("workspace", type=Path, help="untracked directory for project and database")

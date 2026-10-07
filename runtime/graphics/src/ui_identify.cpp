@@ -6,8 +6,7 @@
 
 namespace {
 
-/* Fixed capacity per set, so nothing here allocates after creation. The caller runs inside the
-   game's own resource creation, where an allocation is a lock in someone else's allocator. */
+/* Fixed capacity permits allocation-free membership updates inside resource-creation hooks. */
 constexpr uint32_t capacity_for(rsf_ui_set set)
 {
     switch (set) {
@@ -26,8 +25,7 @@ struct Set {
     uint32_t count = 0;
 };
 
-/* Castagnoli, reflected, table free. A shader blob is hashed once at creation, so the loop is not
-   worth a 1 KiB table that would sit in cache the game wants. */
+/* Reflected, table-free Castagnoli CRC32C, computed once per shader creation. */
 uint32_t crc32c(const uint8_t* data, uint32_t bytes)
 {
     uint32_t crc = 0xFFFFFFFFu;
@@ -43,6 +41,8 @@ uint32_t crc32c(const uint8_t* data, uint32_t bytes)
 
 } // namespace
 
+// Arrays hold borrowed identities only; no COM reference or release interception lives here.
+// recorded is cumulative, while Set::count is the current membership size.
 struct rsf_ui_registry {
     Set sets[RSF_UI_SET_COUNT];
     rsf_ui_registry_counters counters{};
@@ -126,8 +126,7 @@ extern "C" void rsf_ui_registry_forget(rsf_ui_registry* registry, void* object)
             if (target.entries[index] != object) {
                 continue;
             }
-            /* Order does not carry meaning in a membership set, so the last entry fills the hole
-               and the scan stays linear. */
+            /* Unordered removal; subsequent note_recent observations rebuild recency order. */
             target.entries[index] = target.entries[target.count - 1];
             target.entries[target.count - 1] = nullptr;
             --target.count;

@@ -18,6 +18,8 @@ namespace {
 constexpr float velocity_scale = 0.499f * 0.5f;
 constexpr float velocity_bias = 32767.0f / 65535.0f;
 
+// Decoded diagnostic RGB/motion sample. written distinguishes clear/sentinel values before
+// range statistics and display remapping; it is not an alpha or geometry-coverage value.
 struct Sample {
     float x;
     float y;
@@ -283,9 +285,8 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         return RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT;
     }
 
-    // Copying between resources of different devices is invalid and takes the process down rather
-    // than failing a call. A runtime with more than one device is not exotic: the observer creates
-    // a throwaway one to reach the vtables, and any overlay in the process may create its own.
+    // Reject foreign textures before the copy; D3D11 copy commands have no failure return.
+    // The caller also supplies an immediate context belonging to device.
     ID3D11Device* owner = nullptr;
     texture->GetDevice(&owner);
     const bool same_device = owner == device;
@@ -421,6 +422,8 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
 
     const size_t total = size_t(desc.Width) * desc.Height;
     const float fraction = total ? float(unwritten) / float(total) : 0.0f;
+    // Metadata is best effort here: the visual dump reports success after its TGA is written.
+    // Use raw readback when metadata and exact stored bytes must both be required.
     if (std::FILE* stream = std::fopen((prefix + ".json").c_str(), "wb")) {
         std::fprintf(stream,
                      "{\n  \"width\": %u,\n  \"height\": %u,\n  \"format\": %u,\n"

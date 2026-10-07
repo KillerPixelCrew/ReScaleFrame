@@ -12,8 +12,12 @@ using UnityEngine.Rendering.Universal;
 
 namespace ReScaleFrame.Unity
 {
+    /// <summary>Selects Unity 6000.3 URP dimensions, records same-frame SR inputs and preserves spatial fallback.</summary>
+    /// <remarks>Camera metadata is main-thread owned. Native texture pointers are resolved only during
+    /// graph execution; the native bridge then leases them through queued events and GPU completion.</remarks>
     internal static class UrpAdapter
     {
+        // Temporal state is keyed per camera and invalidated by frame gaps or resource rebuilds.
         private sealed class ViewState
         {
             internal Matrix4x4 PreviousVp;
@@ -22,6 +26,7 @@ namespace ReScaleFrame.Unity
             internal uint Generation;
             internal int ReconstructedFrame = -1;
         }
+        /// <summary>Graph-owned texture handles and a copied packet used by one unsafe execution pass.</summary>
         private sealed class PassData
         {
             internal TextureHandle Color, Depth, Motion, Output;
@@ -39,6 +44,8 @@ namespace ReScaleFrame.Unity
         private static uint jitterReports;
         [ThreadStatic] private static bool inputScope;
 
+        /// <summary>Preflight all twelve method contracts, then install this owner's Harmony adapter hooks.</summary>
+        /// <remarks>Bootstrap removes all owned patches if installation throws after preflight.</remarks>
         internal static void Install()
         {
             MethodInfo[] methods = Contracts();
@@ -56,7 +63,9 @@ namespace ReScaleFrame.Unity
             Patch(methods[11], prefix: nameof(RequireMotion));
         }
 
-        // Pure metadata preflight. Resolve the complete contract before installing any patch.
+        /// <summary>Resolve fields, properties, enum values and exact method signatures before patching.</summary>
+        /// <returns>The ordered twelve-method contract consumed by Install.</returns>
+        /// <exception cref="MissingMemberException">Required player metadata or managed bodies are unavailable.</exception>
         internal static MethodInfo[] Contracts()
         {
             var pipeline = typeof(UniversalRenderPipeline);
@@ -94,6 +103,7 @@ namespace ReScaleFrame.Unity
 
         private static FieldInfo RequireField(Type owner, string name) =>
             AccessTools.Field(owner, name) ?? throw new MissingFieldException(owner.FullName, name);
+        // Require an exact signature and an IL body; an overloaded name alone is insufficient.
         private static MethodInfo RequireMethod(Type owner, string name, params Type[] arguments)
         {
             MethodInfo method = AccessTools.Method(owner, name, arguments);
@@ -109,6 +119,7 @@ namespace ReScaleFrame.Unity
             Bootstrap.Harmony.Patch(original, prefix: p, postfix: q, finalizer: f);
             Native.Log("URP method matched: " + original.DeclaringType.FullName + "." + original.Name);
         }
+        /// <summary>Admit the full-window perspective Camera.main base view without stereo, stacks or dynamic resolution.</summary>
         private static bool Eligible(Camera camera, UniversalAdditionalCameraData additional = null)
         {
             return Bootstrap.OnMainThread && camera != null && camera == Camera.main &&
@@ -117,6 +128,7 @@ namespace ReScaleFrame.Unity
                 camera.rect == new Rect(0, 0, 1, 1) && (additional == null ||
                     (additional.renderType == CameraRenderType.Base && additional.cameraStack.Count == 0 && additional.renderPostProcessing));
         }
+        // Scope the motion-input request to this camera's graph recording; the finalizer restores TLS.
         private static void InputScope(UniversalRenderer __instance, out bool __state)
         {
             __state = inputScope;
@@ -133,6 +145,7 @@ namespace ReScaleFrame.Unity
             // remain untouched; its existing true branch schedules depth and motion producers.
             if (inputScope) isTemporalAAEnabled = true;
         }
+        /// <summary>Commit vendor input dimensions before allocation, with single sampling and the chosen URP route.</summary>
         private static void StackedCamera(Camera baseCamera, UniversalAdditionalCameraData baseAdditionalCameraData, UniversalCameraData cameraData)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -160,11 +173,14 @@ namespace ReScaleFrame.Unity
             // Commit the vendor's exact width/height after that computation, before any allocation.
             StackedCamera(camera, additionalCameraData, __result);
         }
+        // Adaptive performance can overwrite dimensions; reapply the same exact policy afterward.
         private static void AdaptiveCamera(UniversalCameraData cameraData)
         {
             cameraData.camera.TryGetComponent<UniversalAdditionalCameraData>(out var additional);
             StackedCamera(cameraData.camera, additional, cameraData);
         }
+        // Borrow temporal AA for URP preparation and restore the game's additional-camera setting
+        // through the Harmony finalizer, including when the original method throws.
         private static void AdditionalCamera(Camera camera, UniversalAdditionalCameraData additionalCameraData, out AntialiasingMode? __state)
         {
             __state = null;
@@ -182,6 +198,7 @@ namespace ReScaleFrame.Unity
             if (__state.HasValue && additionalCameraData != null) additionalCameraData.antialiasing = __state.Value;
             return __exception;
         }
+        /// <summary>Get bounded per-camera history; clearing at capacity makes the next snapshot reset safely.</summary>
         private static ViewState State(Camera camera)
         {
             int id = camera.GetInstanceID();
@@ -192,6 +209,7 @@ namespace ReScaleFrame.Unity
             }
             return state;
         }
+        /// <summary>Record URP's projection-space jitter in render pixels for bounded diagnostics.</summary>
         private static void Jitter(UniversalCameraData cameraData, Matrix4x4 __result)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -202,6 +220,10 @@ namespace ReScaleFrame.Unity
                 __result.m13 * cameraData.cameraTargetDescriptor.height * 0.5f);
             }
         }
+        /// <summary>Copy this camera's unjittered transforms, measured raster jitter and source-frame identity.</summary>
+        /// <param name="probe">True preserves SR history; false advances it for the current frame.</param>
+        /// <remarks>History resets on a frame gap or policy-generation change. GPU projection conversion
+        /// determines the raster Y sign; dimensions are pixels, FOV radians and delta time seconds.</remarks>
         private static Packet Snapshot(UniversalCameraData data, bool probe)
         {
             var camera = data.camera;
@@ -236,6 +258,7 @@ namespace ReScaleFrame.Unity
             if (!probe) { state.Frame = Time.frameCount; state.Generation = config.Generation; state.PreviousVp = vp; state.PreviousJitter = rasterJitter; }
             return packet;
         }
+        /// <summary>Insert SR before post-processing, or observe available FG inputs when temporal SR is inactive.</summary>
         private static void Probe(object __instance, RenderGraph renderGraph, ContextContainer frameData, ref TextureHandle activeCameraColorTexture)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -258,6 +281,7 @@ namespace ReScaleFrame.Unity
             }
             }
         }
+        /// <summary>Queue one final-target window event per frame for native overlay/presentation work.</summary>
         private static void Overlay(UniversalRenderer __instance, RenderGraph renderGraph)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -284,6 +308,8 @@ namespace ReScaleFrame.Unity
                 }
             }
         }
+        /// <summary>Observe the completed SDR scene before screen-space UI for an eligible final camera.</summary>
+        /// <remarks>HDR output is refused; recording this boundary alone does not prove FG acceptance.</remarks>
         private static void Hudless(RenderGraph renderGraph, ContextContainer frameData, ref TextureHandle colorBuffer)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -300,6 +326,9 @@ namespace ReScaleFrame.Unity
                 }
             }
         }
+        /// <summary>Replace the stock temporal route with an output-size FP16 pass and update downstream resolution.</summary>
+        /// <returns>False when destination replaces the original route; true retains native STP.</returns>
+        /// <remarks>Unsupported temporal inputs select spatial fallback; duplicate calls reuse this frame's result.</remarks>
         private static bool Reconstruct(object __instance, RenderGraph renderGraph, UniversalResourceData resourceData,
             UniversalCameraData cameraData, ref TextureHandle source, ref TextureHandle destination)
         {
@@ -341,6 +370,7 @@ namespace ReScaleFrame.Unity
             }
             }
         }
+        /// <summary>Declare graph resource access and queue an uncullable native execution pass.</summary>
         private static void Record(RenderGraph graph, Packet packet, TextureHandle color, TextureHandle depth, TextureHandle motion, TextureHandle output)
         {
             using (var builder = graph.AddUnsafePass<PassData>("ReScaleFrame native D3D12", out var pass))
@@ -354,6 +384,9 @@ namespace ReScaleFrame.Unity
                 builder.SetRenderFunc<PassData>(Execute);
             }
         }
+        /// <summary>Resolve native resources during graph execution, queue fallback first and submit opaque event data.</summary>
+        /// <remarks>Every successful enqueue must have one matching event. Imported swap-chain buffers are
+        /// resolved by the native callback; ordinary RTHandle textures supply native pointers here.</remarks>
         private static void Execute(PassData pass, UnsafeGraphContext context)
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -398,6 +431,7 @@ namespace ReScaleFrame.Unity
             if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id(), owned);
             }
         }
+        /// <summary>Drop camera histories and bounded diagnostic counters after producers have stopped.</summary>
         internal static void Clear() { views.Clear(); failures = jitterReports = 0; overlayFrame = hudlessFrame = -1; }
     }
 }

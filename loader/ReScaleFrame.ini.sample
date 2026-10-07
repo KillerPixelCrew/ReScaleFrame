@@ -1,4 +1,7 @@
 # ReScaleFrame for AC7. Copy beside Ace7Game.exe as ReScaleFrame.ini.
+# Flat NAME=value defaults, cached on first read. # and ; start comments anywhere on a line;
+# values are unquoted. Environment overrides win, then saved enable/quality/provider choices.
+# This AC7 format is separate from the version shim's sectioned [UnitySR] configuration.
 # Insert opens the overlay. It offers Enable upscaling, backend selection and the quality presets.
 # DLSS and reinsertion start automatically after the renderer is ready.
 # Enable and quality choices are saved in %LOCALAPPDATA%\ReScaleFrame\AC7.ini and

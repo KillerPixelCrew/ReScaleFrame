@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// DX12 SR uses a private viewport when borrowing the presentation host, keeping pre-tonemap
+// reconstruction history separate from completed-frame generation on viewport zero.
 #include <rescaleframe/dlss_native12.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -18,6 +20,7 @@
 namespace sl::security { bool verifyEmbeddedSignature(const wchar_t* path); }
 #endif
 
+/** Context lifetime distinguishes a borrowed host/module from an owned standalone registration. */
 struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
@@ -38,11 +41,13 @@ struct rsf_dlss_native12 {
 };
 #if RSF_HAVE_STREAMLINE
 namespace {
+/* Bind an official SDK function type; null remains a reported missing-export failure. */
 template<typename T> bool entry(HMODULE module, const char* name, T*& out)
 {
     out = reinterpret_cast<T*>(reinterpret_cast<void*>(GetProcAddress(module, name)));
     return out != nullptr;
 }
+/* Public entry points validate quality before reaching this native/DLSS mode mapping. */
 sl::DLSSMode mode(rsf_quality quality)
 {
     switch (quality) {
@@ -53,6 +58,7 @@ sl::DLSSMode mode(rsf_quality quality)
     default: return sl::DLSSMode::eUltraPerformance;
     }
 }
+/* Both contracts use row-major matrices, so no transpose or axis conversion is performed. */
 sl::float4x4 matrix(const float* values)
 {
     sl::float4x4 out{};
@@ -61,6 +67,10 @@ sl::float4x4 matrix(const float* values)
 }
 }
 #endif
+/** Build standalone SR or borrow a matching host. The unique_ptr owns every partial state until
+ * publication, and exceptions return INIT_FAILED. Shared creation neither initializes nor shuts
+ * down the host SDK; standalone creation rejects any independently loaded interposer.
+ */
 static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared, rsf_dlss_native12** out) try
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -145,6 +155,7 @@ rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* 
 rsf_backend_result rsf_dlss_native12_create_shared(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* host, rsf_dlss_native12** out) {
     return create_context(device, setup, host, out);
 }
+/** Ask the runtime for valid optimal input dimensions and retain quality for evaluate. */
 rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t width, uint32_t height,
     rsf_quality quality, uint32_t* render_width, uint32_t* render_height)
 {
@@ -162,6 +173,10 @@ rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t w
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
+/** Record SR on a caller-owned list with decoded, complete, non-jittered motion in pixel units.
+ * A shared call requires the host's still-live source token. This path uses HDR/auto exposure,
+ * fixed shader/UAV states, and the previously planned quality; the caller submits and retires work.
+ */
 rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame)
 {
     if (!context || !list || !frame || frame->struct_size < sizeof(*frame) || !frame->record ||
@@ -189,6 +204,7 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     if (!std::isfinite(det) || std::abs(det) < 1e-12f) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     constants.prevClipToClip = matrix(&inverted.m[0][0]);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
+    // This native path expects already resolved pixel motion rather than frame.motion_scale.
     constants.mvecScale = {1.0f / record.render_width, 1.0f / record.render_height};
     constants.cameraPinholeOffset = {0, 0};
     constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
@@ -227,6 +243,7 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
+/** Dispose after GPU retirement; only the standalone context owns shutdown and module unloading. */
 void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 {
     if (!context) return;

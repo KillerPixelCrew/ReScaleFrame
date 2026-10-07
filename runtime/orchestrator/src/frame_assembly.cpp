@@ -6,10 +6,8 @@
 
 namespace {
 
-// A reversed-Z projection with an infinite far plane has no far value to read, and a backend wants
-// a number. Ace Combat 7 works in centimetres with world coordinates in the hundreds of thousands,
-// so this is a hundred kilometres: past anything the game draws, and small enough that the depth
-// range stays usable. Chosen, not measured, which is why it is named here rather than buried.
+// Legacy finite fallback for an infinite far plane: 1e7 view units, 100 km for AC7 centimetres.
+// This is a chosen compatibility value, not a measured scene extent or universal world scale.
 constexpr float default_far_plane = 1.0e7f;
 
 } // namespace
@@ -29,17 +27,12 @@ extern "C" rsf_frame_assembly_result rsf_assemble_dlss_frame(const rsf_pipeline_
         return RSF_FRAME_ASSEMBLY_ERROR_INVALID_ARGUMENT;
     }
 
-    // No backend can undo the bias in Unreal's storage, so handing over the game's own target
-    // gives every static pixel a large constant motion. This is the check that keeps that from
-    // being discovered by looking at the result.
+    // Scale-only vendor motion parameters cannot subtract the packed engine encoding's bias.
     if (!camera->motion_decoded) {
         return RSF_FRAME_ASSEMBLY_ERROR_MOTION_NOT_DECODED;
     }
 
-    // Without a jittered projection there are no extra sub-pixel samples, so a reconstruction can
-    // sharpen but cannot recover detail. Ace Combat 7 is in this state until the anti-aliasing gate
-    // is patched, and it is a refusal rather than a warning because the result looks like a working
-    // integration that is simply soft.
+    // The reconstruction contract requires a jitter sequence, even on a zero-offset sample.
     if (!camera->has_jitter) {
         return RSF_FRAME_ASSEMBLY_ERROR_NOT_USABLE;
     }
@@ -90,10 +83,8 @@ extern "C" rsf_frame_assembly_result rsf_assemble_dlss_frame(const rsf_pipeline_
     out->camera_motion_included = camera->camera_motion_included;
     out->reset = camera->reset;
 
-    // Streamline reconstructs camera motion for the pixels this value marks, which is what makes an
-    // object-only motion buffer usable without a composition pass. Without a sentinel there is
-    // nothing to mark them with, so the field is left at zero and the buffer is taken at face
-    // value: a decode pass that establishes one is what makes this meaningful.
+    // An explicit unwritten marker lets the consumer reconstruct camera motion for sparse
+    // object-only velocity. No sentinel leaves the decoded buffer's values unchanged.
     out->motion_invalid_value = camera->has_motion_sentinel ? camera->motion_sentinel : 0.0f;
     return RSF_FRAME_ASSEMBLY_OK;
 }

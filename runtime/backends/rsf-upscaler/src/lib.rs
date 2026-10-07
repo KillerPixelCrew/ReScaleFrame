@@ -1,13 +1,5 @@
-//! What a super resolution backend needs, what one can do, and whether a given game can feed it.
-//!
-//! Deliberately free of any vendor SDK and of any platform API, so the rules live somewhere they
-//! can be read and tested without a GPU, a game, or Windows. Backends implement [`Backend`]; the
-//! orchestrator asks this crate whether a pairing is viable and gets a reason when it is not.
-//!
-//! The shape of this comes from measuring one game rather than from reading marketing. Ace Combat
-//! 7 supplies object-only motion vectors against a zero clear, no projection jitter until it is
-//! re-enabled, and an exposure value in a one-by-one texture. Every one of those is a fact a
-//! backend has to be told, and every one of them was initially assumed wrong.
+//! Vendor-independent super-resolution inputs, capabilities, unit conversions, and compatibility
+//! checks. This crate has no graphics API or SDK dependency, so the rules can be used without a GPU.
 
 pub mod frame;
 pub mod motion;
@@ -31,14 +23,19 @@ pub enum Vendor {
 pub enum Quality {
     /// Render at output resolution. Antialiasing without upscaling.
     Native,
+    /// Model scale of 1/1.5 per output axis.
     Quality,
+    /// Model scale of 1/1.7 per output axis.
     Balanced,
+    /// Half the output extent per axis.
     Performance,
+    /// One third of the output extent per axis.
     UltraPerformance,
 }
 
 impl Quality {
-    /// Linear scale applied to each axis of the output size.
+    /// Approximate linear scale applied to each output axis in this pure model.
+    /// Live adapters query their SDK's optimal dimensions rather than using these ratios.
     #[must_use]
     pub fn scale(self) -> f32 {
         match self {
@@ -52,8 +49,8 @@ impl Quality {
 
     /// The render size this quality asks for, given an output size.
     ///
-    /// Rounded rather than truncated, and never below one pixel, because a zero-sized render
-    /// target is a crash rather than a small picture.
+    /// Rounds each axis to the nearest pixel and clamps it to at least one, including zero output.
+    /// This is a model sizing helper; callers validate actual output dimensions separately.
     #[must_use]
     pub fn render_size(self, output: Extent) -> Extent {
         let scale = self.scale();
@@ -67,11 +64,14 @@ impl Quality {
 /// A pixel size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extent {
+    /// Horizontal pixel count; zero is representable and may require caller validation.
     pub width: u32,
+    /// Vertical pixel count.
     pub height: u32,
 }
 
 impl Extent {
+    /// Construct an extent without validation or clamping.
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
@@ -87,19 +87,19 @@ pub struct GameInputs {
     pub output: Extent,
     /// How the game's motion vectors are stored.
     pub motion: MotionVectors,
-    /// Whether the projection is jittered per frame. Without this a reconstruction has no extra
-    /// sub-pixel samples to work with, so it can sharpen but cannot recover detail.
+    /// Whether per-frame projection jitter is available for temporal reconstruction.
     pub jitter: bool,
-    /// Whether an exposure value is available. Its absence is survivable: backends fall back to
-    /// deriving exposure themselves, at some cost to quality.
+    /// Whether explicit exposure is available. This model does not reject its absence;
+    /// the live provider configuration decides whether auto exposure is permitted.
     pub exposure: bool,
-    /// Whether depth is available. Its absence is not survivable.
+    /// Whether the depth input required by this model is available.
     pub depth: bool,
 }
 
 /// What a backend is able to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
+    /// Provider family described by these flags.
     pub vendor: Vendor,
     /// Whether the backend can build camera motion itself from depth and a previous-frame
     /// transform, given a value marking untouched pixels.
@@ -120,26 +120,22 @@ pub enum Unusable {
     /// The backend needs a complete motion field and the game supplies object motion only, so a
     /// composition pass has to exist before this pairing is viable.
     MotionNeedsComposition,
-    /// The motion is stored in an encoding no backend can undo for itself.
-    ///
-    /// Backends offer a scale factor and nothing else. Unreal's storage carries a bias as well, so
-    /// a backend handed the raw target reads a large constant motion where there is none. This is
-    /// separate from [`Unusable::MotionNeedsComposition`]: a backend that reconstructs camera
-    /// motion still cannot subtract a bias.
+    /// Storage has a bias that requires a decode pass before the vendor's multiplicative scale.
+    /// This can apply independently of [`Unusable::MotionNeedsComposition`].
     MotionNeedsDecode,
 }
 
 /// A backend the orchestrator can drive.
 pub trait Backend {
-    /// What this backend can do. Reported, not assumed: a backend that is present is not
-    /// necessarily usable on this device.
+    /// Return the provider's measured/configured input capabilities.
     fn capabilities(&self) -> Capabilities;
 }
 
 /// Whether a backend can be driven from these inputs, and why not when it cannot.
 ///
-/// Returns every reason rather than the first, because discovering three blockers one run at a
-/// time is how an afternoon disappears.
+/// Reports every modeled blocker in declaration/check order. Equal render/output extents are
+/// allowed for native AA. This function does not query hardware, validate zero/finite dimensions,
+/// or enforce `native_api`/exposure availability; live session creation performs those checks.
 pub fn check(inputs: &GameInputs, capabilities: &Capabilities) -> Result<(), Reasons> {
     let mut reasons = Reasons::default();
     if !inputs.jitter {
@@ -176,6 +172,7 @@ pub struct Reasons {
 }
 
 impl Reasons {
+    // Capacity equals the five checks above. Additional blockers require extending entries too.
     fn push(&mut self, reason: Unusable) {
         if self.count < self.entries.len() {
             self.entries[self.count] = Some(reason);
@@ -183,11 +180,13 @@ impl Reasons {
         }
     }
 
+    /// Whether no modeled incompatibilities were recorded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
 
+    /// Whether this failure set contains the specified blocker.
     #[must_use]
     pub fn contains(&self, reason: Unusable) -> bool {
         self.entries.iter().flatten().any(|entry| *entry == reason)
@@ -233,9 +232,7 @@ mod tests {
 
     #[test]
     fn ac7_needs_its_motion_decoded_even_for_streamline() {
-        // Streamline handles the missing camera motion, which was the blocker everyone expects.
-        // It cannot handle the bias in the storage, which is the one that was missed: sl::Constants
-        // offers a scale and nothing to subtract with.
+        // Camera reconstruction does not remove Unreal's biased storage encoding.
         let reasons = check(&ac7(), &streamline()).expect_err("the raw target carries a bias");
         assert!(reasons.contains(Unusable::MotionNeedsDecode));
         assert!(!reasons.contains(Unusable::MotionNeedsComposition));
@@ -287,9 +284,7 @@ mod tests {
 
     #[test]
     fn rendering_at_output_size_is_allowed() {
-        // Native quality is antialiasing without upscaling, which is a real mode, so equal sizes
-        // must pass. An earlier version of this test asserted the opposite and contradicted the
-        // documentation on Quality::Native.
+        // Native AA accepts equal sizes; this guards the former strictly-larger output check.
         let inputs = GameInputs {
             render: Extent::new(2048, 1152),
             motion: MotionVectors::unreal_object_only().decoded(),

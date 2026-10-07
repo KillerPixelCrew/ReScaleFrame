@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: MIT */
+/* Renderer and CPU callback contracts shared by plugins and their host. Pass identities are
+   copied values; resource pointers are native leases, never ownership-transferring allocations.
+   Lifecycle call structures use the enclosing RSF_GAME_ABI_VERSION from game_api.h. */
 #ifndef RSF_GAME_RENDERER_H
 #define RSF_GAME_RENDERER_H
 #include <stdint.h>
@@ -20,8 +23,10 @@ typedef struct rsf_game_render_pass {
     uint64_t scope_id;
     uint32_t resource_generation;
     uint32_t flags;
+    /* Pixel rectangles in left, top, right, bottom order, before engine allocation padding. */
     int32_t render_rect[4];
     int32_t output_rect[4];
+    /* Current/previous projection jitter in render-resolution pixels. */
     float jitter_pixels[2];
     float previous_jitter_pixels[2];
     /* Native graphics resources leased by the plugin until the matching end callback. */
@@ -31,8 +36,11 @@ typedef struct rsf_game_render_pass {
     void* motion;
     void* exposure;
     rsf_camera_frame camera;
+    /* Row-major transform from previous clip coordinates to current clip coordinates. */
     float previous_clip_to_clip[16];
+    /* Non-zero only when camera metadata for this pass was accepted by the plugin. */
     uint32_t camera_valid;
+    /* Opaque engine history identity; zero means no association was supplied. */
     uint64_t history_key;
     void* color_output_readable;
     /* Decoded game motion -> current-minus-previous UV, Y down. Sparse coverage may still need
@@ -96,6 +104,8 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_AFTER_SIMULATION 4u
 /* TRANSLUCENCY scopes only: the pass renders an offscreen layer rather than into scene colour. */
 #define RSF_GAME_RENDER_TRANSLUCENCY_LAYER 8u
+/* Host settings copied by the plugin at renderer construction. Extents are pixels; output is
+   the intended scene result and render is the requested internal raster size. */
 typedef struct rsf_game_render_config {
     uint32_t struct_size;
     uint32_t enabled;
@@ -107,6 +117,7 @@ typedef struct rsf_game_render_config {
 /* Read on the engine producer thread. The host publishes a consistent settings snapshot. */
 typedef int (*rsf_game_render_config_fn)(void* user, rsf_game_render_config* config);
 
+/* Optional synchronous log sink. message is borrowed, terminated UTF-8 for the call only. */
 typedef void (*rsf_game_log_fn)(void* user, const char* message);
 /* Called on the graphics execution stream, before/after the engine pass's commands. The pass
    is borrowed only for the callback. The host restores its graphics state before returning. */
@@ -123,6 +134,8 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_INPUT_KEYBOARD 1u
 #define RSF_GAME_INPUT_MOUSE 2u
 #define RSF_GAME_INPUT_CONTROLLER 4u
+/* Copied CPU-boundary identity and timestamps. Frequency converts QPC ticks to seconds; a
+   FRAME_END event closes CPU submission ownership even while its queued rendering is pending. */
 typedef struct rsf_game_cpu_event {
     uint32_t struct_size;
     uint32_t stage;
@@ -142,6 +155,9 @@ typedef struct rsf_game_cpu_event {
    work may be performed here. FRAME_END closes CPU ownership, not GPU or Present ownership. */
 typedef void (*rsf_game_cpu_event_fn)(void* user, const rsf_game_cpu_event* event);
 
+/* Host callback table copied during prepare. Function pointers and user storage must remain
+   valid until quiesce prevents new producers and stop confirms queued callbacks have drained.
+   Render/CPU callbacks run on their native execution threads; user storage must support that. */
 typedef struct rsf_game_host_services {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -155,19 +171,25 @@ typedef struct rsf_game_host_services {
        (or a zero scope). render_pass still receives the pass that actually completed. */
     rsf_game_render_pass_fn scope_state;
 } rsf_game_host_services;
+/* Validate executable sites and copy host services without enabling producer hooks. The host
+   supplies a full size/versioned services table and keeps callback targets alive through stop. */
 typedef struct rsf_game_prepare_args {
     uint32_t struct_size;
     uint32_t abi_version;
     const rsf_game_host_services* host;
 } rsf_game_prepare_args;
+/* Activate a previously prepared renderer. No host services are replaced by this call. */
 typedef struct rsf_game_start_args {
     uint32_t struct_size;
     uint32_t abi_version;
 } rsf_game_start_args;
+/* Shared size/version envelope for quiesce and stop. BUSY preserves plugin ownership for retry. */
 typedef struct rsf_game_control_args {
     uint32_t struct_size;
     uint32_t abi_version;
 } rsf_game_control_args;
+/* Caller initializes size/version; plugin fills its current state. reason is borrowed
+   plugin-owned UTF-8. active/prepared describe lifecycle state, not completed game validation. */
 typedef struct rsf_game_renderer_status {
     uint32_t struct_size;
     uint32_t abi_version;

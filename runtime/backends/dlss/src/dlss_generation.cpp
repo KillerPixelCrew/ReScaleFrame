@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// One process-wide Streamline registration owns proxy graphics and CPU-to-Present tokens.
+// FG sessions borrow that host; lifecycle/presentation remains on the graphics owner thread.
 #include <rescaleframe/streamline_host.h>
 #include "streamline_frame.h"
 #include "reflex_audit.h"
@@ -21,6 +23,10 @@
 #endif
 bool rsf_dlss_verify_runtime_signature(const wchar_t* path);
 using Microsoft::WRL::ComPtr;
+/** Owns SDK state and native/proxy COM references. marker_guard protects the source-token ring,
+ * markers and telemetry. reflex_guard serializes sleeping against option changes; Present markers
+ * can advance while sleep is blocked. host_guard serializes process registration/destruction.
+ */
 struct rsf_streamline_host {
     HMODULE module = nullptr;
     bool initialized = false;
@@ -58,6 +64,8 @@ struct rsf_streamline_host {
     PFun_slPCLSetMarker* pcl_marker{};
     PFun_slPCLSetOptions* pcl_options{};
     PFun_slPCLGetState* pcl_state{};
+    // Source IDs remain 64-bit; native_index independently allocates SDK's 32-bit frame identities.
+    // A slot retires after all six normal markers or abort, rather than GPU fence completion.
     struct Token { uint64_t id = 0; sl::FrameToken* token = nullptr; bool common[2]{};
         uint32_t markers = 0; bool controller_sampled = false, sleep_claimed = false; } tokens[sl::MAX_FRAMES_IN_FLIGHT];
     uint32_t cursor = 0, native_index = 0;
@@ -76,6 +84,7 @@ struct rsf_streamline_host {
 namespace {
 std::mutex host_guard;
 std::atomic<rsf_streamline_host*> logging_host{nullptr};
+/* Read driver sleep policy from Streamline's already-loaded NVAPI without owning pacing. */
 void report_driver_sleep(rsf_streamline_host& host)
 {
 #if RSF_HAVE_NVAPI_DIAGNOSTICS
@@ -137,18 +146,23 @@ void report_latency_ring(rsf_streamline_host& host, const char* reason, uint64_t
         previous_sim = r.simStartTime;
     }
 }
+/* Streamline log callback; development profiles retain verbose output, others retain warnings/errors. */
 void message(sl::LogType type, const char* text)
 {
     const auto* host = logging_host.load();
     if (host && !host->development_runtime && type != sl::LogType::eError && type != sl::LogType::eWarn) return;
     if (host && host->log) host->log(host->log_user, text);
 }
+/* Resolve an optional feature function after the host has registered its graphics device. */
 template<class T> bool feature(rsf_streamline_host& host, sl::Feature id, const char* name, T*& out)
 {
     void* pointer = nullptr;
     if (host.function(id, name, pointer) != sl::Result::eOk || !pointer) return false;
     out = reinterpret_cast<T*>(pointer); return true;
 }
+/** Destroy partial or quiescent host state. Stop audit callbacks and release proxy graphics before
+ * SDK shutdown, then clear logging and unload the interposer. Caller proves all borrowers are gone.
+ */
 void dispose(rsf_streamline_host* host)
 {
     rsf_reflex_audit_stop();
@@ -159,11 +173,13 @@ void dispose(rsf_streamline_host* host)
     if (host->module) FreeLibrary(host->module);
     delete host;
 }
+/* Identity strings must be nonempty and fit exactly; refuse truncation before passing them to NGX. */
 bool copy_text(char* destination, size_t size, const char* source)
 {
     if (!source || !source[0] || std::strlen(source) >= size) return false;
     std::memcpy(destination, source, std::strlen(source) + 1); return true;
 }
+/** Per-chain FG policy/history borrowing the process host. SDK statistics are polled after Present. */
 struct DlssSession {
     rsf_streamline_host* host = nullptr;
     ComPtr<IDXGISwapChain4> chain;
@@ -174,11 +190,15 @@ struct DlssSession {
     bool history_valid = false, prepared_enabled = false;
     uint64_t last_prepare = 0;
 };
+/* Caller holds marker_guard, or otherwise owns a quiescent host. Returned token is borrowed. */
 sl::FrameToken* find_token(rsf_streamline_host& host, uint64_t id)
 {
     for (const auto& token : host.tokens) if (token.id == id) return token.token;
     return nullptr;
 }
+/** Consume DLSS-G's last-Present count and cache capability/activity plus Reflex report availability.
+ * Counts come from the SDK; elapsed GPU/render spans are diagnostics, not end-to-end input latency.
+ */
 rsf_backend_result poll(DlssSession& self)
 {
     if (self.host->get_state(sl::ViewportHandle(0), self.sdk_state, nullptr) != sl::Result::eOk)
@@ -220,6 +240,9 @@ rsf_backend_result poll(DlssSession& self)
     self.host->cached_capability = state;
     return RSF_BACKEND_OK;
 }
+/** Disable this chain's FG policy and release its host borrow. Does not shut down the shared SDK;
+ * caller retires provider reads and GPU work before releasing chain/context ownership.
+ */
 void destroy(void* pointer)
 {
     auto* self = static_cast<DlssSession*>(pointer); if (!self) return;
@@ -231,6 +254,10 @@ void destroy(void* pointer)
     }
     --self->host->borrowers; delete self;
 }
+/** Borrow an existing D3D12 host with matching identity/device/queue and supported FG/Reflex.
+ * Real HWND chain creation allows one borrower; capability-only borrowers reuse cached support.
+ * The returned chain is borrowed from the session and must be released before host destruction.
+ */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     const auto header_result = rsf::fg_setup_header(setup, out, chain); if (header_result != 0) return header_result;
@@ -307,6 +334,9 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     }
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
 }
+/** Apply supported generation policy and effective Reflex state. Enabled FG promotes requested
+ * Reflex OFF to ON. Identical options are idempotent; latency-only changes preserve FG history.
+ */
 rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -362,6 +392,9 @@ extern "C" rsf_backend_result rsf_streamline_host_begin(rsf_streamline_host* poi
     const auto result = rsf_streamline_host_acquire(pointer, id);
     return result == RSF_BACKEND_OK ? rsf_streamline_host_sleep(pointer, id) : result;
 }
+/** Allocate a ring slot for a strictly increasing source ID. Refuse overwrite of a live slot;
+ * return NEEDS_RESTART before the independent SDK frame index wraps.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -376,6 +409,10 @@ extern "C" rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host* p
     slot.sleep_claimed = false;
     return RSF_BACKEND_OK;
 }
+/** Claim at most one sleep for a live token. Release marker_guard before entering the vendor
+ * sleeper so overlapping Present markers can progress. PCL-only profiles claim the slot without
+ * sleeping; bounded timing diagnostics distinguish lock waits from the SDK sleep itself.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -451,6 +488,9 @@ bool rsf_streamline_common_exists(rsf_streamline_host* host, uint64_t id, uint32
     for (const auto& slot : host->tokens) if (slot.id == id) return slot.common[viewport];
     return false;
 }
+/** Reject duplicate normal markers, forward PCL timing, then retire a token after all six
+ * simulation/render/Present markers. InputSample maps only controllers to current PCL marker 13.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host* pointer, uint64_t id, rsf_latency_marker marker, uint32_t controller)
 {
     if (!pointer || !id || marker > RSF_LATENCY_INPUT_SAMPLE || controller > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -481,6 +521,9 @@ extern "C" int rsf_streamline_host_presented(rsf_streamline_host* host, uint64_t
     for (const auto& slot : host->tokens) if (slot.id == id) return (slot.markers & (1u << RSF_LATENCY_PRESENT_END)) != 0;
     return 0;
 }
+/** Count input kinds for a live token and emit a verified PCL ping or one controller sample.
+ * Mouse/keyboard timing stays tied to actual dequeue/PCL events rather than deprecated markers.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host* host, uint64_t id, uint32_t kinds, uint32_t message_id)
 {
     if (!host || !id || kinds & ~7u) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -554,6 +597,10 @@ extern "C" rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_h
     return upgraded || host->upgrade(chain) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 namespace {
+/** Tag completed source resources with ValidUntilPresent and the already minted CPU token.
+ * Missing/gapped/disabled source frames break history. SR and FG share token identity while common
+ * camera constants are written once per viewport. Caller retains resources through SDK retirement.
+ */
 rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* frame)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -603,6 +650,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
             return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
     constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]}; constants.cameraPinholeOffset = {0, 0};
+    // Common motion scales convert stored motion to pixels; Streamline consumes normalized motion.
     constants.mvecScale = {frame->motion_scale_x / frame->motion.width, frame->motion_scale_y / frame->motion.height};
     constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
     constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
@@ -640,6 +688,7 @@ rsf_backend_result status(void* pointer, rsf_fg_status* out)
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = static_cast<DlssSession*>(pointer)->state; return RSF_BACKEND_OK;
 }
+/** Return the SDK's borrowed input-processing fence from the latest after-Present poll. */
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -657,6 +706,11 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
 }
 const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
 }
+/** Establish the sole D3D12 SDK owner before exposing graphics interfaces. Copy identity/path
+ * storage, load requested feature profile, create/adopt the native device, upgrade device/factory,
+ * then create a host direct queue. existing_queue validates adoption intent but is not reused.
+ * Each failure disposes partial registration and returns its loading/ABI/initialization category.
+ */
 static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, void* existing_device, void* existing_queue, rsf_streamline_host** out)
 {
     if (!setup || !out || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -765,6 +819,9 @@ extern "C" rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host* 
 }
 extern "C" void* rsf_streamline_host_module(rsf_streamline_host* host)
 { return host ? host->module : nullptr; }
+/** Join submitted work on the host queue using a temporary fence/event with a ten-second timeout.
+ * This proves queue completion only; source-token retirement remains a separate marker obligation.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host* host)
 {
     if (!host || !host->queue || !host->device) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -783,6 +840,9 @@ extern "C" void* rsf_streamline_host_token(rsf_streamline_host* host, uint64_t i
     std::lock_guard<std::mutex> lock(host->marker_guard);
     return find_token(*host, id);
 }
+/** Refuse destruction while provider borrowers or CPU-to-Present tokens remain live. Caller also
+ * quiesces graphics/input callbacks and drains every queue referencing host objects before calling.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_destroy(rsf_streamline_host* host)
 {
     if (!host) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -792,6 +852,9 @@ extern "C" rsf_backend_result rsf_streamline_host_destroy(rsf_streamline_host* h
     dispose(host); return RSF_BACKEND_OK;
 }
 extern "C" const rsf_generation_provider* rsf_generation_dlss() { return &provider; }
+/** Toggle the FG plugin only with no provider borrower and quiescent drained graphics.
+ * Reload invalidates old feature pointers and resolves fresh ones on the same SDK registration.
+ */
 extern "C" rsf_backend_result rsf_streamline_host_generation_load(rsf_streamline_host* host, uint32_t enabled) {
     if (!host || !host->loaded || host->borrowers) return RSF_BACKEND_ERROR_NOT_READY;
     if (host->generation_loaded == bool(enabled)) return RSF_BACKEND_OK;
@@ -809,6 +872,7 @@ extern "C" void* rsf_streamline_host_native(rsf_streamline_host* host, void* pro
 }
 #else
 namespace {
+/* Stub tables preserve ABI shape; feature operations report absent SDK build capability. */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     const auto result = rsf::fg_setup_header(setup, out, chain);

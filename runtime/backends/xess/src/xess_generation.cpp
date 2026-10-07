@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Live XeFG proxy-chain provider with XeLL pacing. Native frame-resource states and identity
+// are supplied by the presentation owner; marker/sleep access is serialized separately.
 #include "../../common/fg_helpers.h"
 #include <wrl/client.h>
 #include <new>
@@ -9,6 +11,9 @@
 #include <xell/xell_d3d12.h>
 using Microsoft::WRL::ComPtr;
 namespace {
+/** Owns both runtime modules, their contexts, and the proxy chain. latency_guard protects XeLL
+ * calls across CPU/render threads; remaining session state belongs to the presentation owner.
+ */
 struct XegSession {
     HMODULE module = nullptr, xell_module = nullptr;
     xefg_swapchain_handle_t context = nullptr;
@@ -43,6 +48,9 @@ struct XegSession {
     uint64_t last_prepare = 0;
     rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
 };
+/** Release the proxy before its XeFG/XeLL contexts and DLLs. Caller drains GPU work and stops
+ * marker callers first. Also accepts partially initialized sessions during create failure cleanup.
+ */
 void destroy(void* pointer)
 {
     auto* self = static_cast<XegSession*>(pointer); if (!self) return;
@@ -53,6 +61,10 @@ void destroy(void* pointer)
     if (self->xell_module) FreeLibrary(self->xell_module);
     delete self;
 }
+/** Load XeFG and XeLL, reserve the lesser of the requested/device interpolation count, and
+ * optionally create an HWND proxy. UI_LAYER alone is unsupported; other modes map to XeFG modes.
+ * Version selection is exact when nonzero. Null hwnd leaves a capability-only session.
+ */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
@@ -116,6 +128,10 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     }
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
 }
+/** Apply OFF/FIXED generation and a XeLL minimum interval in microseconds. Clamp interpolation
+ * to the creation reservation; changed count/mode breaks history, interval-only changes retain it.
+ * Reflex/AUTO/DYNAMIC policy is unsupported by this integration.
+ */
 rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -144,6 +160,9 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     if (reset_history) { self.state.active = 0; self.history_valid = false; }
     return RSF_BACKEND_OK;
 }
+/** Sleep once at the CPU pacing boundary for a strictly increasing source ID. XeLL accepts only
+ * 32-bit IDs, so the caller must restart before its 64-bit identity exceeds UINT32_MAX.
+ */
 rsf_backend_result begin(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -155,6 +174,7 @@ rsf_backend_result begin(void* pointer, uint64_t id)
     if (result == XELL_RESULT_SUCCESS) self.last_begin = id;
     return result == XELL_RESULT_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+/** Forward common marker values to XeLL under latency_guard using the same 32-bit source ID. */
 rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t)
 {
     if (!pointer || !id || id > UINT32_MAX || marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -163,6 +183,11 @@ rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id,
     return self.marker(self.xell, static_cast<uint32_t>(id), static_cast<xell_latency_marker_type_t>(marker)) == XELL_RESULT_SUCCESS ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+/** Associate the next Present with this source ID, then tag current-generation textures and
+ * camera constants on the direct list. Resource rectangles and incoming states are forwarded;
+ * ONLY_NOW tagging records the required work, while caller leases still cover GPU completion.
+ * Disabled frames and source-ID gaps break interpolation history.
+ */
 rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -212,6 +237,9 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
     self.state.effective_generated_frames = self.options.generated_frames > self.reserved ? self.reserved : self.options.generated_frames;
     return RSF_BACKEND_OK;
 }
+/** Consume XeFG's last-Present status. Negative SDK results fail; positive warnings preserve
+ * the call but do not add counters. Only a successful report marks total-present statistics valid.
+ */
 rsf_backend_result after(void* pointer)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -228,16 +256,21 @@ rsf_backend_result after(void* pointer)
         status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS;
     return RSF_BACKEND_OK;
 }
+/** Copy the cached effective policy and SDK Present snapshot. */
 rsf_backend_result status(void* pointer, rsf_fg_status* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = static_cast<XegSession*>(pointer)->state; return RSF_BACKEND_OK;
 }
+/** No separate vendor-read fence is exposed by this integration. The caller must still honor
+ * its source command-list submission fence before reusing tagged resources.
+ */
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     out->fence = nullptr; out->value = 0; return RSF_BACKEND_OK;
 }
+/** Invalidate cached activity/history after an abandoned source presentation. */
 rsf_backend_result abort_frame(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -249,6 +282,7 @@ const rsf_generation_provider provider{sizeof(provider), create, configure, begi
 extern "C" const rsf_generation_provider* rsf_generation_xess() { return &provider; }
 #else
 namespace {
+/* Keep the common table available without XeFG/XeLL headers; feature calls return NOT_COMPILED. */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     const auto result = rsf::fg_setup_header(setup, out, chain);

@@ -1,18 +1,12 @@
-// Drive the frame tap's render target watch the way a game's frame tail drives it: bind a target,
-// bind inputs, draw, and check that what comes back describes the draw that was made.
-//
-// The reconstruction input set is not exercised here. It is recognised from a combination of
-// textures that only a real engine frame produces, and a synthetic imitation of it would test the
-// imitation. The watch is different: it reports the game's own draw with no rule about what
-// qualifies, so a synthetic draw is the same draw a game makes.
-//
-// The draws are real ones, with shaders and an index buffer, even though nothing here looks at a
-// rendered pixel. Leaving the pipeline empty was the first attempt, on the reasoning that the hook
-// is on the vtable entry and runs on the call rather than on the rendering. It is, and it does, and
-// DXVK still faults on its own worker thread a moment later: it does not validate that a vertex
-// shader is bound the way the Windows runtime does. So the draws are made valid, which costs a
-// trivial shader and removes a crash that has nothing to do with what is being tested.
-
+/**
+ * @file
+ * Exercise D3D11 draw observation, substitution and replay with synthetic pipelines.
+ * Valid shaders and buffers keep runtime execution well-defined, including under
+ * DXVK. Cases cover borrowed reports, inherited bindings, callback re-entry, UI
+ * diversion, depth replay, composed-colour discovery, phase gates and restoration.
+ * Engine input discovery and correctness of a complete game frame require separate
+ * evidence; the fixture uses draw metadata and selected pixel readbacks.
+ */
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/depth_replay.h>
 #include <rescaleframe/ac7_scene_color.h>
@@ -40,8 +34,7 @@ void check(bool condition, const char* message)
     }
 }
 
-// This patches vtables and drives a graphics runtime, so a hang is a realistic failure. Announcing
-// each stage means a stall says where it stalled rather than nothing at all.
+// Flush stage labels before runtime calls so timeout output identifies the stalled phase.
 void stage(const char* what)
 {
     std::fprintf(stderr, "[stage] %s\n", what);
@@ -70,8 +63,7 @@ struct Report {
 
 std::vector<Report> reports;
 
-// Set for one stage only, so the rest of the test keeps its plain behaviour. Null means the
-// callback does nothing beyond recording, which is what it did before.
+// Non-null only during the callback re-entry stage; other stages record without rebinding.
 struct {
     ID3D11DeviceContext* context = nullptr;
     ID3D11RenderTargetView* other_target = nullptr;
@@ -91,8 +83,7 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     report.draw_index = draw->draw_index;
     report.indexed = draw->indexed;
     report.element_count = draw->element_count;
-    // Copied rather than kept. The header says every pointer in the report is borrowed for the
-    // duration of the call, and `inputs` is a stack array inside the hook.
+    // Inputs borrow hook-local storage; copy the fields before the callback returns.
     for (uint32_t index = 0; index < draw->input_count; ++index) {
         report.inputs.push_back(draw->inputs[index]);
     }
@@ -105,22 +96,13 @@ void collect_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     report.topology = draw->topology;
     reports.push_back(report);
 
-    // Act like a divert: bind somewhere else and put it back, from inside the hook. This is the
-    // shape of what M2 does for real, and what it must not disturb is the shadow of the game's own
-    // bindings.
-    //
-    // Honest about its reach: this passes with re-entry suppressed by a flag as well as by a
-    // depth, because the hooks it goes through check and return before constructing a guard, so a
-    // nested call leaves a flag alone. The case that separates the two needs a plan active, where
-    // the substitution guard is constructed ahead of that check; it becomes reachable when the
-    // divert lands and is worth a case of its own then. What this covers today is that a callback
-    // may bind from inside a hook at all without the next draw being misattributed.
+    // Rebind from inside the draw callback, then restore the runtime state. Internal
+    // calls must leave the game-facing shadow unchanged. This case checks callback
+    // re-entry; it does not isolate nesting behavior with an active substitution plan.
     if (divert_rehearsal.context) {
         ID3D11RenderTargetView* elsewhere = divert_rehearsal.other_target;
         divert_rehearsal.context->OMSetRenderTargets(1, &elsewhere, nullptr);
-        // Slot two specifically, the one the game bound and the assertions below read. Clearing an
-        // unread slot would let this pass without meaning anything, which an earlier version of
-        // this test did.
+        // Rebind slot two, which the following report assertions actually inspect.
         ID3D11ShaderResourceView* nothing = nullptr;
         divert_rehearsal.context->PSSetShaderResources(2, 1, &nothing);
         divert_rehearsal.context->OMSetRenderTargets(1, &divert_rehearsal.original_target, nullptr);
@@ -197,12 +179,8 @@ int note_gate(void* user, void* context, void* texture)
     return 1;
 }
 
-// What the runtime actually has bound, as against what the test asked for. The two differing is
-// the entire claim a substitution makes, so every check of one is a call to the other.
-//
-// Both of these hand back a reference and both drop it before returning. Comparing addresses is
-// all the caller does, and holding the reference would keep a view alive past the point the test
-// releases it, which is where a leak turns into a crash on shutdown instead.
+// Query actual runtime bindings and release getter-acquired references immediately.
+// Fixture-owned objects keep the returned identity alive for comparison.
 ID3D11RenderTargetView* bound_target(ID3D11DeviceContext* context)
 {
     ID3D11RenderTargetView* view = nullptr;
@@ -241,9 +219,7 @@ ID3D11Texture2D* make_target(ID3D11Device* device, UINT width, UINT height, DXGI
     return texture;
 }
 
-// A triangle covering the target, addressed by vertex id, and a constant colour. Neither reads the
-// bound shader resource: the tap shadows the binding call, not the shader, so what the pixels do
-// with it is beside the point.
+// Valid fullscreen shaders leave SRVs unread so metadata tests isolate binding observation.
 const char* const shader_source = R"(
 float4 vertex_main(uint id : SV_VertexID) : SV_Position
 {
@@ -307,6 +283,11 @@ void collect_input_draw(void*, const rsf_frame_tap_target_draw* draw)
     rsf_ac7_scene_color_draw(&selection, draw);
 }
 
+/**
+ * Check input-driven recombine selection across bind hazards and frame boundaries.
+ * High SRV slots, deferred-context calls and the tonemap boundary distinguish a
+ * qualifying source read from stale shadow state. Resources remain fixture-owned.
+ */
 void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
 {
     stage("selecting composed scene colour from real D3D11 draws");
@@ -399,8 +380,7 @@ void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* context)
     context->DrawIndexed(3, 0, 0);
     check(rsf_ac7_scene_color_selected(&selection, base) == composed,
           "The captured recombine-shaped draw must select the composed target.");
-    // A full-output layer is approximately three times the scene at Ultra Performance.
-    // The old two-times ceiling lost recombine discovery at that preset.
+    // Ultra Performance can make the output-sized layer three times the scene extent.
     ID3D11Texture2D* native_layer = make_target(device, 768, 432, DXGI_FORMAT_R16G16B16A16_FLOAT);
     ID3D11ShaderResourceView* native_layer_srv = nullptr;
     check(native_layer && SUCCEEDED(device->CreateShaderResourceView(native_layer, nullptr, &native_layer_srv)),
@@ -489,6 +469,7 @@ rsf_depth_replay* depth_fixture = nullptr;
 rsf_frame_tap_geometry last_geometry{};
 uint32_t geometry_reports = 0, depth_draws = 0, geometry_calls = 0, geometry_rejected = 0;
 
+// Replay synchronously while callback-borrowed geometry bindings are valid.
 void collect_geometry(void*, const rsf_frame_tap_geometry* draw)
 {
     ++geometry_calls;
@@ -501,6 +482,11 @@ void collect_geometry(void*, const rsf_frame_tap_geometry* draw)
     depth_draws += rsf_depth_replay_draw(depth_fixture, draw);
 }
 
+/**
+ * Read back seeded depth after replaying qualifying translucent geometry.
+ * Real shader/input bindings isolate geometry capture and viewport/depth semantics;
+ * rejection cases must leave the replay target and application pipeline intact.
+ */
 void test_depth_replay(ID3D11Device* device, ID3D11DeviceContext* context, compile_fn compile)
 {
     stage("replaying translucent geometry into seeded depth and reading pixels");
@@ -737,9 +723,7 @@ float4 ps() : SV_Target { return float4(1,0,0,1); }
     ID3D11ShaderResourceView* composition_inputs[] = {base_srv, layer_srv};
     context->PSSetShaderResources(0, 2, composition_inputs);
     context->Draw(3, 1);
-    /* The layer is now one of a set, because a recombine arrives with several half-float inputs
-       bound and picking one of them would be a guess. The claim is that the replayed layer is
-       among what this frame reads, which is the question that actually matters. */
+    // Recombine may read several half-float inputs; assert membership rather than assume one layer.
     bool layer_offered = false;
     void* depth_from_layers = depth;
     for (uint32_t i = 0; i < selection.composed_layer_count; ++i) {
@@ -883,8 +867,7 @@ int main()
           "A watch slot past the end must be refused.");
 
     stage("creating resources");
-    // Two targets of different shapes, standing in for the frame's composite and something else,
-    // and one texture to bind as an input so a report has something to describe.
+    // Distinct target shapes and an SRV make target attribution and input reports observable.
     ID3D11Texture2D* composite = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_UNORM);
     ID3D11Texture2D* other = make_target(device, 128, 72, DXGI_FORMAT_B8G8R8A8_UNORM);
     ID3D11Texture2D* source = make_target(device, 64, 36, DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -922,9 +905,7 @@ int main()
                                                   pixel_code->GetBufferSize(), nullptr,
                                                   &pixel_shader)),
           "The test shaders must be created.");
-    // An input layout to name as a candidate. The shader reads nothing from the input assembler,
-    // and a declaration may supply more than a shader consumes, so one element is enough: what is
-    // being tested is that the tap recognises the object, not what it describes.
+    // A valid one-element declaration tests layout identity without shader input dependencies.
     const D3D11_INPUT_ELEMENT_DESC layout_elements[] = {
         {"ATTRIBUTE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
@@ -938,9 +919,7 @@ int main()
     vertex_code->Release();
     pixel_code->Release();
 
-    // Indices for the one indexed draw. Their values do not matter; the buffer has to exist,
-    // because an indexed draw with nothing bound is the same unvalidated state as a draw with no
-    // shader.
+    // Bind a valid index buffer so the indexed observation stage remains safe under DXVK.
     const uint16_t index_values[12] = {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2};
     D3D11_BUFFER_DESC index_description{};
     index_description.ByteWidth = sizeof(index_values);
@@ -1016,10 +995,7 @@ int main()
 
     stage("a callback that binds, as a divert will");
     {
-        // The watch budget is spent by the draws above, so re-arm with exactly what this stage
-        // uses: two draws, one to bind through the callback and one to see what the shadow held
-        // afterwards. Exactly two, so the stage leaves the watch spent and the stages below start
-        // where they did before this one existed.
+        // Two reports cover callback rebinding and the following draw, then exhaust the watch.
         check(rsf_frame_tap_watch_target(0, composite, 2) == RSF_FRAME_TAP_OK,
               "Re-arming the watch must succeed.");
         reports.clear();
@@ -1174,9 +1150,7 @@ int main()
 
     stage("diverting a draw into the layer");
     {
-        // The layer stands in for the UI layer: a target of a different extent that the draw was
-        // never bound to. What is being checked is that the draw lands there, that everything the
-        // divert touched goes back, and that a refusal leaves the draw exactly where it was.
+        // A different-sized layer checks diversion, complete restoration and unchanged refusal.
         ID3D11Texture2D* layer = make_target(device, 512, 288, DXGI_FORMAT_R8G8B8A8_UNORM);
         ID3D11RenderTargetView* layer_view = nullptr;
         check(layer && SUCCEEDED(device->CreateRenderTargetView(layer, nullptr, &layer_view)),
@@ -1197,9 +1171,7 @@ int main()
         divert.verdict = decide_divert;
         check(rsf_frame_tap_set_divert(&divert) == RSF_FRAME_TAP_OK, "Arming must succeed.");
 
-        // A viewport covering half the width of a 256x144 target. After the divert it must cover
-        // half the width of the layer, because a draw covers a fraction of the frame and the
-        // fraction is what has to be preserved.
+        // Preserve normalized coverage when moving the half-width viewport to a larger layer.
         context->IASetInputLayout(test_layout);
         context->OMSetRenderTargets(1, &composite_view, nullptr);
         set_viewport(context, 128.0f, 144.0f);
@@ -1258,10 +1230,7 @@ int main()
 
         stage("the viewport is scaled by what the draw covered");
         {
-            // The draw covered the left half of a 256 wide target. On a 512 wide layer it has to
-            // cover the left half again, not the left quarter: what a draw covers is a fraction of
-            // the frame, and preserving pixels instead would put the interface in the corner at a
-            // reduced render scale, which is the case this exists for.
+            // Doubling target width must retain half-frame coverage in the layer.
             check(pixel_written(device, context, layer, 200, 8),
                   "A pixel inside the scaled half must be written.");
             check(!pixel_written(device, context, layer, 400, 8),
@@ -1498,10 +1467,8 @@ int main()
                  "vtable_refreshes=%u]\n",
                  status.target_draws_reported, status.candidate_draws, status.draws_diverted,
                  status.calls_seen, status.vtable_refreshes);
-    // Zero under DXVK, whose table is static. On the Windows runtime the Map in the depth replay
-    // stage rewrote the table and every draw after it went unobserved until the refresh existed,
-    // so a Windows run reporting zero here while the draw checks above passed would be a runtime
-    // this test has not met.
+    // DXVK may keep a static vtable. Windows Map can replace it, so refresh coverage
+    // depends on the runtime; the draw checks above still require continued observation.
     std::fprintf(stderr, "  [runtime rewrote its vtable %u time%s]\n", status.vtable_refreshes,
                  status.vtable_refreshes == 1 ? "" : "s");
 

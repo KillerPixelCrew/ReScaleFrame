@@ -25,16 +25,21 @@ typedef rsf_game_render_pass rsf_ac7_render_scope;
 #define RSF_AC7_ROLE_COMPOSITE 7u
 #define RSF_AC7_ROLE_OUTPUT 8u
 
-/* Runs on the engine's RHI execution stream. The callback must restore graphics state and must
-   not retain scope. begin=0 restores the enclosing scope, or closes the outermost one. */
+/* Runs on the engine's RHI execution stream; restore graphics state and do not retain scope.
+   State callbacks at begin=0 receive the enclosing scope (zeroed at outermost close); pass
+   callbacks receive their own original ticket identity at both begin=1 and end=0. */
 typedef void (*rsf_ac7_render_scope_fn)(void* user, void* command_list,
                                        const rsf_ac7_render_scope* scope, uint32_t begin);
+/* Resource owner transferred by a successful open. resolve refreshes borrowed resource fields
+   immediately before each execution callback; release runs after the end marker on the RHI stream. */
 typedef struct rsf_ac7_scope_lease {
     void* object;
     void (*resolve)(void* object, rsf_ac7_render_scope* scope);
     void (*release)(void* object);
 } rsf_ac7_scope_lease;
 
+/* Create an accepting owner with nonzero session and capacity 1..4096. Returns 1 on success,
+   0 on invalid arguments/allocation failure. Callback/user remain borrowed until destruction. */
 int rsf_ac7_render_scopes_create(uint64_t session_id, uint32_t capacity,
                                  rsf_ac7_render_scope_fn callback, void* user,
                                  rsf_ac7_render_scopes** out);
@@ -53,6 +58,8 @@ int rsf_ac7_render_scope_open(rsf_ac7_render_scopes*, void* native_command_list,
 /* Takes lease ownership on success only. Resolution occurs on the RHI stream, release after end. */
 int rsf_ac7_render_scope_open_leased(rsf_ac7_render_scopes*, void* native_command_list,
     const rsf_ac7_render_scope*, const rsf_ac7_scope_lease*, rsf_ac7_render_ticket** out);
+/* Append the reserved end marker to a recording list exactly once. Returns 0 if append fails;
+   keep the ticket and owner alive and retry while the list can still accept native commands. */
 int rsf_ac7_render_scope_close(rsf_ac7_render_ticket*, void* native_command_list);
 
 /* A snapshot for the current graphics stream. Zero means no identified engine scope. */

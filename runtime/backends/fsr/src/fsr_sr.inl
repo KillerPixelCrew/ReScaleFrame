@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Included inside the backend's private namespace, with SDK headers included at file scope.
+/** Owns the loaded FFX runtime, selected provider context, descriptor chain, and version text.
+ * The compatibility lease must survive context destruction; the supplied device remains borrowed.
+ */
 struct FsrSession {
     std::shared_ptr<Fsr4Compatibility> compatibility;
     HMODULE module = nullptr;
@@ -15,6 +18,7 @@ struct FsrSession {
     uint64_t version = 0;
     char name[128]{};
 };
+/** Release a partially or fully created session. Caller drains GPU work before closing. */
 void sr_close(void* pointer)
 {
     auto* session = static_cast<FsrSession*>(pointer);
@@ -24,6 +28,10 @@ void sr_close(void* pointer)
     if (session->module) FreeLibrary(session->module);
     delete session;
 }
+/** Create the exact requested FSR family on the caller's DX12 device. Runtime/provider query,
+ * missing exports, unsupported family/version, and context creation return distinct errors.
+ * On success *out owns a session; every construction failure disposes its partial state.
+ */
 rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
 {
     auto result = rsf::validate_open(desc, out);
@@ -110,6 +118,9 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
     *out = session;
     return RSF_BACKEND_OK;
 }
+/** Query render pixels for the fixed output extent. FSR2 native mode bypasses its unsupported
+ * NativeAA query; other quality levels use the selected runtime provider's sizing rule.
+ */
 rsf_backend_result sr_plan(void* pointer, rsf_quality quality, uint32_t* width, uint32_t* height)
 {
     auto* session = static_cast<FsrSession*>(pointer);
@@ -130,6 +141,10 @@ rsf_backend_result sr_plan(void* pointer, rsf_quality quality, uint32_t* width, 
     return session->query(&session->context, &query.header) == FFX_API_RETURN_OK ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+/** Validate borrowed inputs and record FFX upscaling on the caller's command list.
+ * Jitter/motion scales are render pixels, frame time is milliseconds, FOV is radians, and
+ * view_space_to_meters converts camera distances. The caller submits and retires this work.
+ */
 rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame* frame)
 {
     auto result = rsf::validate_frame(frame);
@@ -158,6 +173,7 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     dispatch.preExposure = frame->pre_exposure;
     dispatch.reset = frame->reset != 0;
     dispatch.cameraNear = record.camera.near_plane;
+    // The common camera record uses zero for an infinite far plane; FFX receives a finite bound.
     dispatch.cameraFar = record.camera.far_plane > 0 ? record.camera.far_plane : FLT_MAX;
     dispatch.cameraFovAngleVertical = record.camera.vertical_fov_radians;
     dispatch.viewSpaceToMetersFactor = frame->view_space_to_meters;
@@ -169,6 +185,7 @@ rsf_backend_result sr_release(void* pointer)
     // No independent release operation in FFX API. Closing requires GPU completion by the owner.
     return pointer ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Return the opaque provider ID and session-owned version text, valid until sr_close. */
 rsf_backend_result sr_version(void* pointer, uint64_t* id, const char** name)
 {
     if (!pointer || !id || !name) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

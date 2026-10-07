@@ -18,6 +18,7 @@
 #define RSF_ENTROPY_WINDOW 65536u
 #define RSF_ENTROPY_SAMPLES 16u
 
+/* Copied module metadata; base remains a borrowed process address, not a retained HMODULE. */
 typedef struct rsf_module_entry {
     wchar_t path[MAX_PATH];
     const unsigned char* base;
@@ -26,6 +27,8 @@ typedef struct rsf_module_entry {
 
 #define RSF_MAX_MODULES 384
 
+/* Minimal PE64 signature check for a trusted mapped module. Header offsets themselves
+   are not bounds-checked, so callers must not pass arbitrary bytes or unloaded image addresses. */
 static const IMAGE_NT_HEADERS64* nt_headers(const void* base)
 {
     const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
@@ -41,9 +44,9 @@ static const IMAGE_NT_HEADERS64* nt_headers(const void* base)
     return headers;
 }
 
-/* Copy from another module's memory, tolerating pages that are not committed or not readable.
-   A section's virtual size routinely exceeds what was loaded from disk, and reading blindly
-   would fault. Unreadable bytes become zeroes, which is what those pages hold anyway. */
+/* Copy committed readable regions into an initially zeroed destination, skipping guard
+   and inaccessible pages. VirtualQuery is not synchronization: a concurrent protection change
+   can still race memcpy. Return copied bytes, excluding zero-filled skipped regions. */
 static size_t read_guarded(const unsigned char* source, unsigned char* destination, size_t size)
 {
     SYSTEM_INFO info;
@@ -86,6 +89,7 @@ static size_t read_guarded(const unsigned char* source, unsigned char* destinati
     return copied;
 }
 
+/* Round to a PE alignment, assumed to be a power of two; zero leaves the size unchanged. */
 static DWORD align_up(DWORD value, DWORD alignment)
 {
     if (alignment == 0) {
@@ -96,9 +100,8 @@ static DWORD align_up(DWORD value, DWORD alignment)
 
 static int compare_rva(const void* left, const void* right);
 
-/* Collect the address-table slot of every import, so code can be checked for references to them.
-   The shipped AC7 file contains no such reference anywhere, because its code is ciphertext. A
-   dump that contains them is decrypted; one that does not is not, whatever its entropy says. */
+/* Allocate and sort imported IAT-slot RVAs for heuristic code-reference scanning. Caller
+   frees the returned array; null covers absent imports or allocation failure. */
 static DWORD* collect_iat_slots(const unsigned char* base, const IMAGE_NT_HEADERS64* headers,
                                 size_t* count)
 {
@@ -201,9 +204,8 @@ rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy
         return RSF_DUMP_ERROR_NOT_A_PE;
     }
 
-    /* The section holding the entry point is the one that has to be readable for analysis to be
-       worth anything. On a protected build that is the packer stub, so also consider the largest
-       executable section, which is where the real code lives. */
+    /* Measure the largest executable section; a small protected entrypoint stub can retain
+       low entropy while the engine code remains encrypted. */
     const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(headers);
     const IMAGE_SECTION_HEADER* chosen = NULL;
     DWORD largest = 0;
@@ -232,6 +234,8 @@ rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy
     return RSF_DUMP_OK;
 }
 
+/* Copy up to capacity Toolhelp entries, closing the snapshot before returning. A failed
+   snapshot yields an empty list; the list does not keep modules loaded. */
 static void collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count)
 {
     *count = 0;
@@ -257,6 +261,7 @@ static void collect_modules(rsf_module_entry* entries, size_t capacity, size_t* 
     CloseHandle(snapshot);
 }
 
+/* Find the copied module range containing an address; returned entry borrows the snapshot. */
 static const rsf_module_entry* module_for(const rsf_module_entry* entries, size_t count,
                                           const unsigned char* address)
 {
@@ -268,8 +273,7 @@ static const rsf_module_entry* module_for(const rsf_module_entry* entries, size_
     return NULL;
 }
 
-/* Format a fixed-point number without going through the CRT's float formatting, which follows
-   the process locale. A German locale writes 7,9971, and that is not JSON. */
+/* Emit four decimal places with an invariant dot, independent of CRT/process locale. */
 static void write_json_number(FILE* stream, double value)
 {
     if (value < 0.0) {
@@ -280,6 +284,7 @@ static void write_json_number(FILE* stream, double value)
     fprintf(stream, "%lld.%04lld", scaled / 10000, scaled % 10000);
 }
 
+/* Escape Windows UTF-16 code units into JSON string content, without surrounding quotes. */
 static void write_json_wide(FILE* stream, const wchar_t* text)
 {
     for (const wchar_t* cursor = text; *cursor; ++cursor) {
@@ -293,6 +298,8 @@ static void write_json_wide(FILE* stream, const wchar_t* text)
     }
 }
 
+/* Emit bounded byte-string content with JSON escapes; non-ASCII bytes are escaped
+   individually rather than decoded as UTF-8. */
 static void write_json_ascii(FILE* stream, const char* text, size_t limit)
 {
     for (size_t index = 0; index < limit && text[index]; ++index) {
@@ -307,6 +314,8 @@ static void write_json_ascii(FILE* stream, const char* text, size_t limit)
     }
 }
 
+/* Describe original import names/ordinals and live resolved IAT addresses. It does not
+   rebuild imports; a borrowed Toolhelp snapshot optionally names the target module. */
 static void describe_imports(FILE* stream, const unsigned char* base,
                              const IMAGE_NT_HEADERS64* headers, const rsf_module_entry* modules,
                              size_t module_count, uint32_t* described)
@@ -364,6 +373,8 @@ static void describe_imports(FILE* stream, const unsigned char* base,
     }
 }
 
+/* Write JSON identity, entropy, section/import and module metadata after the image dump.
+   Fill imports_described and return WRITE_FAILED if the sidecar stream reports an error. */
 static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* base,
                                      const IMAGE_NT_HEADERS64* headers, const wchar_t* module_path,
                                      const rsf_module_entry* modules, size_t module_count,
@@ -426,6 +437,8 @@ static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* b
     return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
 }
 
+/* Validate call envelopes, measure readiness, relayout a header copy to RVA file offsets,
+   stream guarded sections, then write the metadata sidecar. Partial files can remain on failure. */
 rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options* options,
                                 rsf_dump_report* report)
 {
@@ -629,8 +642,7 @@ rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t coun
         if (expected_count != count) {
             return RSF_DUMP_ERROR_INVALID_ARGUMENT;
         }
-        /* Refusing on a mismatch is the whole point. A patch aimed at the wrong address is far
-           worse than no patch, and a build that shifted the code would land exactly there. */
+        /* A differing executable window must refuse before any protection or content change. */
         if (memcmp(target, expected, expected_count) != 0) {
             return RSF_DUMP_ERROR_INVALID_ARGUMENT;
         }
@@ -650,9 +662,8 @@ rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t coun
     return RSF_DUMP_OK;
 }
 
-/* Reach a console variable object the way the engine's own code does. The float path above
-   predates this and does the same thing inline; it is left alone rather than reworked, because it
-   is the one console path that has been confirmed in the running game. */
+/* Look up a borrowed engine cvar through researched singleton/vtable coordinates.
+   Layout validity and execution-thread safety are caller responsibilities. */
 static rsf_dump_result find_console_variable(const char* name_utf8, uint32_t singleton_rva,
                                              uint32_t find_slot, void** variable_out)
 {
@@ -697,9 +708,8 @@ rsf_dump_result rsf_console_set_int(const char* name_utf8, int32_t expected_curr
         return found;
     }
 
-    /* Both thread copies are checked before either is written. An offset that is wrong for this
-       build almost certainly fails the check, and a half-written pair would leave the game thread
-       and the render thread disagreeing about the value, which is worse than not setting it. */
+    /* Validate both integer thread slots before writing either; do not scan an integer
+       value because small integers also occur in flags, counters and unrelated object fields. */
     unsigned char* slots = (unsigned char*)variable + value_offset;
     int32_t current[2];
     memcpy(current, slots, sizeof(current));
@@ -733,9 +743,7 @@ rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_curr
 
     void* manager = *(void**)(base + singleton_rva);
     if (!manager) {
-        /* Nothing has asked the engine for a console variable yet, so the manager does not exist.
-           Creating it here would run engine code at a moment of our choosing, which is worse than
-           waiting for the game to do it. */
+        /* The manager is not initialized; do not construct engine services from this diagnostic helper. */
         return RSF_DUMP_ERROR_ABI_MISMATCH;
     }
 
@@ -754,11 +762,8 @@ rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_curr
         return RSF_DUMP_ERROR_NOT_A_PE;
     }
 
-    /* Search the object for the value rather than trusting an offset, and replace every copy.
-       Unreal keeps TConsoleVariableData<T>::Values[2], one read on the game thread and one on the
-       render thread, so setting only the first leaves the renderer using the old number. The
-       value sits well past the help string, flags and delegate that precede it, which is why the
-       window has to be generous. */
+    /* Replace every aligned matching float so both engine thread copies can be updated.
+       The scan assumes a readable researched object window and a distinctive expected value. */
     unsigned char* bytes = (unsigned char*)variable;
     uint32_t replaced = 0;
     for (uint32_t offset = 0; offset <= 0x100; offset += 4) {
@@ -828,6 +833,8 @@ rsf_dump_result rsf_console_probe(const char* name_utf8, uint32_t singleton_rva,
     return RSF_DUMP_OK;
 }
 
+/* Append a bounded Toolhelp module sample. Paths convert from UTF-8; snapshot failure
+   produces an empty sample, while allocation or stream failure returns WRITE_FAILED. */
 rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
 {
     if (!path_utf8) {

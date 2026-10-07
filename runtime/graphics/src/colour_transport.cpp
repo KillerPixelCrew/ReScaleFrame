@@ -61,6 +61,8 @@ struct Constants {
 };
 struct Highlights { ID3D11Texture2D* scene = nullptr; uint32_t width = 0, height = 0; float jitter[2]{}; };
 }
+// Own encoded and decode-scratch textures independently. Size changes invalidate borrowed output
+// pointers; scratch retains the target storage format so the final copy does not convert pixels.
 struct rsf_colour_transport {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11ComputeShader> encode, decode;
@@ -99,6 +101,8 @@ bool view_of(ID3D11Device* device, ID3D11Texture2D* texture, ComPtr<ID3D11Shader
     view.Format = typed(desc.Format);
     return SUCCEEDED(device->CreateShaderResourceView(texture, &view, &out));
 }
+// Shared encode/decode dispatch. Views/constants are temporary; full context state is restored
+// before return. Source view bounds may be smaller than storage, so sampling uses both extents.
 bool run(rsf_colour_transport& self, ID3D11DeviceContext* context, ID3D11ComputeShader* shader,
     ID3D11Texture2D* source, ID3D11Texture2D* exposure, ID3D11UnorderedAccessView* target, uint32_t width, uint32_t height,
     const Highlights& highlights = {})
@@ -201,6 +205,8 @@ extern "C" int rsf_colour_transport_decode(rsf_colour_transport* self, void* con
         {jitter ? jitter[0] : 0.0f, jitter ? jitter[1] : 0.0f}};
     if (!run(*self, context, self->decode.Get(), target, static_cast<ID3D11Texture2D*>(exposure),
             self->scratch_target.Get(), width, height, highlights)) return 0;
+    // Decode into separate storage: a texture cannot be the SRV and UAV of one dispatch. Copy
+    // only the valid rectangle back, preserving any padding outside the requested view extent.
     const D3D11_BOX box{0, 0, 0, width, height, 1};
     context->CopySubresourceRegion(target, 0, 0, 0, 0, self->scratch.Get(), 0, &box);
     return 1;

@@ -1,16 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Watch a process's D3D11 use without altering what it renders.
-
-   The observer patches two shared vtable entries: texture creation, so render targets can be
-   catalogued as they appear, and presentation, so there is a per-frame point to act on. Both
-   forward to the original implementation. Nothing here changes a resource, a binding, or a draw.
-
-   Texture creation is the right place to look for a target rather than binding, because it runs
-   rarely and carries the full descriptor. Binding runs a hundred times a frame and would put this
-   code on the hot path for no extra information.
-
-   Resource identifiers from a frame capture do not exist at runtime, so targets are matched by
-   signature: format, and size relative to the presented image. */
+/* Observe D3D11 resource creation through shared device-vtable hooks and source Present through
+   detours, with a vtable fallback for Present. Hooks forward the application's original calls.
+   Creation callbacks run synchronously under the observer mutex and must only record data: no
+   D3D11 calls or observer reentry. Present callbacks run without that mutex and must preserve
+   context state. Matching diagnostic textures are retained; retaining identity does not freeze
+   their contents. Resource signatures and validation limits are in the graphics README. */
 
 #ifndef RSF_D3D11_OBSERVER_H
 #define RSF_D3D11_OBSERVER_H
@@ -25,13 +19,8 @@ extern "C" {
 
 #define RSF_OBSERVER_ABI_VERSION 8u
 
-/* One element of a vertex declaration, reduced to what identifies it.
-
-   The semantic name is deliberately not carried. Unreal's D3D11 RHI writes "ATTRIBUTE" for every
-   element of every declaration in the engine and puts the element index in the semantic index, so
-   the name distinguishes nothing and only these five fields do. Neutral rather than a D3D11 type
-   because this header stays free of d3d11.h, and because what a declaration means is a game
-   question that gets answered in `games/<id>`, not here. */
+/* Reduced vertex-declaration facts; values are D3D11 enums/offsets without a D3D11 header
+   dependency. Semantic text is omitted; Unreal's ATTRIBUTE declarations use semantic_index. */
 typedef struct rsf_observer_layout_element {
     uint32_t semantic_index;
     uint32_t format;
@@ -58,11 +47,8 @@ typedef void (*rsf_observer_layout_fn)(void* user, void* layout,
 #define RSF_OBSERVER_STAGE_DOMAIN 4u
 #define RSF_OBSERVER_STAGE_COMPUTE 5u
 
-/* A shader was created. `bytecode` is the compiled blob the game passed, borrowed for the call.
-
-   The bytecode rather than a hash computed here, because what to do with it belongs to the caller:
-   an override table keyed by hash needs one hash function and this file should not be the thing
-   that decides which. */
+/* Successful shader creation. shader is borrowed; bytecode is caller-owned and valid only for
+   this callback. The consumer computes any hash and determines game-specific meaning. */
 typedef void (*rsf_observer_shader_fn)(void* user, void* shader, uint32_t stage,
                                        const void* bytecode, uint32_t bytes);
 
@@ -86,12 +72,8 @@ typedef void (*rsf_observer_buffer_fn)(void* user, void* buffer, const void* ini
 #define RSF_OBSERVER_BIND_DEPTH_STENCIL 0x40u
 #define RSF_OBSERVER_BIND_UNORDERED_ACCESS 0x80u
 
-/* Called on the game's render thread, immediately before its own Present.
-
-   That is the one place in a frame where the finished image exists and nothing has been shown yet,
-   which is what anything drawing over the game needs. `swapchain` is an `IDXGISwapChain*`, borrowed
-   for the duration of the call. Anything this does to the device context it must put back: the game
-   is between its own draws and did not ask for its state to change. */
+/* Before a non-test source D3D11 Present. swapchain is borrowed for this synchronous callback.
+   The observer mutex is not held. Run graphics work on this thread and restore affected state. */
 typedef void (*rsf_observer_present_fn)(void* user, void* swapchain);
 typedef struct rsf_observer_present_event {
     uint32_t struct_size;
@@ -150,15 +132,9 @@ typedef struct rsf_observer_options {
     /* Optional. Invoked before every Present, which is where an overlay draws. */
     rsf_observer_present_fn on_present;
     void* on_present_user;
-    /* Appended in ABI 5. What the game created, reported as it is created.
-
-       Creation is the right place to learn what a pipeline object is: it runs rarely, it carries
-       the full descriptor, and the answer is then a pointer comparison for the rest of the run.
-       Binding runs a hundred times a frame and carries less.
-
-       All four are optional and all four are called on whichever thread the game creates from,
-       inside its own creation call, with the observer's lock held. Nothing in a callback may call
-       back into D3D11: that re-enters this hook and deadlocks. Record and return. */
+    /* Optional creation callbacks on the creating thread, with the observer mutex held. Record
+       and return without D3D11 calls or observer reentry. Initial descriptors/blob data are borrowed
+       only for the call; retaining a created object requires the consumer's own COM reference. */
     rsf_observer_layout_fn on_layout;
     void* on_layout_user;
     rsf_observer_shader_fn on_shader;
@@ -197,32 +173,23 @@ rsf_observer_result rsf_observer_install(const rsf_observer_options* options);
    Returns NOT_READY while a Present callback/forwarding call is still in flight. */
 rsf_observer_result rsf_observer_uninstall(void);
 
-/* Hand out the device the observer found, and its immediate context.
-
-   Anything that wants to do graphics work inside this game needs a device, and creating one of its
-   own would be a second device: resources could not be shared with the game's, which is the whole
-   point. The observer already has the game's, because it watched it being used.
-
-   Both are AddRef'd and the caller releases them. Either pointer may be null if it is not wanted.
-   Returns RSF_OBSERVER_ERROR_NOT_READY before the game has created anything, which is most of
-   startup, so a caller has to be prepared to ask again rather than give up. */
+/* Acquire the selected ID3D11Device/immediate context with caller-owned references. At least one
+   output is required; release every nonnull result. Returns NOT_READY until a device is observed.
+   An early creation-hook device can be a helper device; the source presenter later overrides it.
+   Acquisition itself does not permit worker-thread context use concurrent with game rendering. */
 rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out);
 
+/* Fill a mutex-protected diagnostic snapshot; caller initializes status.struct_size. */
 rsf_observer_result rsf_observer_get_status(rsf_observer_status* status);
 /* Paired around an application-facing D3D11 facade's Present. Updates normal observer
-   device/output/counter/dump bookkeeping without invoking callbacks recursively. */
+   device/output/counter/dump bookkeeping without invoking callbacks recursively. The facade must
+   supply exactly one start followed by one completion, including failed or test presents. */
 rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event);
 
-/* Ask for a dump to be taken. The work happens inside the next present, on whichever thread the
-   game renders from.
-
-   A device context may not be used from two threads at once, so reading a resource from a worker
-   thread races the game's own rendering: it returns whatever the staging copy happened to hold
-   and can take the process down. Presenting is the one moment we are already on the right thread
-   at a defined point in the frame.
-
-   `view` is an rsf_dump_view from texture_dump.h. Returns immediately; poll
-   rsf_observer_get_status for `dumps_completed` to know when it is done. */
+/* Copy the UTF-8 prefix and queue diagnostic readback for the next non-test source Present on
+   the owning render thread. Last pending request wins; no queue is accumulated. view comes from
+   texture_dump.h. Poll dumps_completed; completion counts an attempted batch, not successful
+   writes. textures_written/constant_bytes_written describe the last batch. */
 rsf_observer_result rsf_observer_request_dump(const char* output_prefix_utf8, uint32_t view);
 
 /* Write the distinct constant buffer sizes seen, with how often each was created. This is how the

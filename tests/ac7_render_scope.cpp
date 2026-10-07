@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check queued AC7 render scopes without a graphics device.
+ * A synthetic native command list preserves the researched layout and defers marker
+ * execution until after the CPU frame advances. Cases cover nesting, bounded tickets,
+ * viewless Slate ownership and refusal to unload before commands/callbacks retire.
+ */
 #include <rescaleframe/ac7_render_scope.h>
 #include <cstddef>
 #include <cstdio>
@@ -21,6 +28,7 @@ struct Check {
     std::vector<uint64_t> observed;
     bool callback_unload_refused = true;
 };
+// Destruction from inside a callback must fail while the current ticket is executing.
 void notify(void* user, void*, const rsf_ac7_render_scope* scope, uint32_t)
 {
     auto& check = *static_cast<Check*>(user);
@@ -32,6 +40,7 @@ bool expect(bool ok, const char* message)
     if (!ok) std::fprintf(stderr, "%s\n", message);
     return ok;
 }
+// Save next before dispatch: executing a marker may retire its command storage.
 void run(NativeList& list)
 {
     list.executing = true;

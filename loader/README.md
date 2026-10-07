@@ -6,6 +6,31 @@ plugin preparation/start/quiesce/stop and renderer/CPU callbacks are implemented
 v0.1.0 AC7 ZIP is SR-only; FG/Reflex below describe current source/development deployments.
 See [current implementation and validation](../docs/current-status.md).
 
+## Source map and ownership
+
+| Source | Responsibility and boundary |
+| --- | --- |
+| [`src/bootstrap.cpp`](src/bootstrap.cpp) | Immutable version export; no loading handshake |
+| [`proxy/src/dinput8_proxy.c`](proxy/src/dinput8_proxy.c) | AC7 DirectInput forwarding, flat settings/defaults, decryption worker, guarded engine patches, persistence actions and crash diagnostics |
+| [`proxy/src/dlss_bridge.h`](proxy/src/dlss_bridge.h), [`dlss_bridge.c`](proxy/src/dlss_bridge.c) | Private carrier/runtime bridge: native plugin preparation, graph callbacks, compatibility discovery/reinsertion, frame-boundary actions and shutdown draining |
+| [`proxy/src/overlay_host.h`](proxy/src/overlay_host.h), [`overlay_host.cpp`](proxy/src/overlay_host.cpp) | Rust panel loading, window input, D3D11 drawing and scoped target references |
+| [`proxy/src/preferences.h`](proxy/src/preferences.h), [`preferences.c`](proxy/src/preferences.c) | Per-user `[Rendering]` enabled/preset profile, with synchronous Win32 reads/writes |
+| [`proxy/src/shim_loader.cpp`](proxy/src/shim_loader.cpp), [`version_forwarders.asm`](proxy/src/version_forwarders.asm) | Generic Windows version forwarding and worker startup, with preserved x64 argument ABI |
+| [`diagnostics/include/rescaleframe/module_dump.h`](diagnostics/include/rescaleframe/module_dump.h) | PE64 dumping, entropy polling and researched code/cvar writes; no renderer activation |
+| [`diagnostics/include/rescaleframe/frame_capture.h`](diagnostics/include/rescaleframe/frame_capture.h) | Optional process-global RenderDoc capture API; configured before device creation |
+
+AC7 attachment starts the preparation worker. The worker installs observer and cold-presentation
+hooks before waiting for stable decryption, applies guarded patches, prepares the game DLL and
+publishes readiness. Present starts SR after its device/extent exist. Native callbacks evaluate on
+the queued graphics execution stream; compatibility mode instead observes D3D bindings and builds
+a bounded tail plan. Window callbacks collect input; Present applies resource/settings changes.
+
+Native pass pointers are borrowed under the SDK leases. Compatibility snapshots retained beyond
+a callback take their own COM references and release/replace them when ownership ends. Retention
+keeps an allocation alive without proving its current engine role. Shutdown quiesces native
+producers and retries stop while queued work remains, keeping callback code/backend state alive
+until it drains. Loader-lock notifications do not perform that graphics teardown.
+
 ## Research setup
 
 Place the proxy beside `Ace7Game.exe`. Under Proton, select it with `WINEDLLOVERRIDES="dinput8=n,b"`. It forwards AC7's imported `DirectInput8Create` to the system DLL.
@@ -61,15 +86,17 @@ integration. See [the implementation and validation limits](../docs/research/ac7
 
 ## Settings
 
-Settings live in `ReScaleFrame.ini` beside the proxy, one `NAME=value` per line, `#` or `;` starting
-a comment, read once at attach. [`ReScaleFrame.ini.sample`](ReScaleFrame.ini.sample) is a starting
-point. The names are the ones below, unchanged, because they were environment variables first and an
-environment variable of the same name still wins over the file. That keeps an existing launch line
-working and makes a one-off override a launch option rather than an edit.
+AC7 settings live in `ReScaleFrame.ini` beside the proxy, one unquoted `NAME=value` per line.
+The first lookup caches at most 64 entries; keys are case-insensitive, the first duplicate wins,
+and `#` or `;` anywhere on a line starts a comment. Malformed/oversized entries are skipped.
+[`ReScaleFrame.ini.sample`](ReScaleFrame.ini.sample) is a starting point. A nonempty environment
+variable of the same name takes precedence. Saved enable/quality/provider choices then override
+their installation defaults. Paths resolve beside the DLL, independently of the working directory.
 
-Numbers accept hexadecimal with an `0x` prefix, and a setting present and zero is that value rather
-than an absence, so `RSF_DECODE_MOTION=0` disables decoding and quality `0` selects Native. Both
-were [review findings](../docs/review.md) against the old parser.
+Numbers use unsigned base-zero parsing, including decimal and `0x` hexadecimal. Explicit zero is
+preserved, so `RSF_DECODE_MOTION=0` disables decoding and quality `0` selects Native. Empty text
+or text without a numeric prefix uses the fallback. Trailing text and overflow are not separately
+validated by this diagnostic parser.
 
 The vendor runtime is found at `ReScaleFrame\streamline` beside the proxy, and `renderdoc.dll`
 beside the proxy, so neither path normally needs setting at all.
@@ -113,15 +140,19 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
 | `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
 | `RSF_TRANSLUCENCY_TARGET` | `100`; percent of output, independent of the scene preset. `0` explicitly matches the scene |
-| `RSF_TRANSLUCENCY_UNJITTER` | `1`; unjitter VS/PS and bypass layer DLSS. `0` retains the experimental 1:1 temporal route |
+| `RSF_TRANSLUCENCY_UNJITTER` | `1`; unjitter VS/PS/HS/DS/GS and bypass layer DLSS. `0` retains the experimental 1:1 temporal route |
 | `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding the target |
 | `RSF_REINSERT_DEPTH` | `0`; what reinsertion does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
 
-The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
+Additional implemented diagnostics include `RSF_UI_UNJITTER=1`, `RSF_JITTER_ALL_VIEWS=0`,
+`RSF_MOTION_CAPTURE=0` and optional `RSF_BRIEFING_CAPTURE_PREFIX`. The capture prefix enables
+bounded shader/constant/route output; it is a developer diagnostic and can stall rendering.
+Provider directories are listed under SR/FG switching below.
 
 Quality selection derives input dimensions from the selected SDK. Native mode sizes the renderer
 through engine-owned views; compatibility mode applies the planned percentage. `RSF_SCREEN_PERCENTAGE`
 is a legacy diagnostic override, not a second independent consumer quality setting.
+The [representation plan](../docs/representation-plan.md) retains the design history.
 
 ## Startup and diagnostics
 
@@ -134,6 +165,15 @@ Warnings, errors and state changes remain available in `rsf-dump.log`.
 The carriers implement current plugin lifecycle loading, while the general product bootstrap and
 installer remain incomplete. Recorded game acceptance and synthetic/device checks have separate
 scope; neither a build nor a successful deployment proves new game image quality.
+
+Crash diagnostics register a vectored handler that reports one fatal exception and continues the
+game's exception search. A separate worker performs the symbol walk/minidump; the handler waits
+at most 30 seconds. Its context/report are borrowed, and timeout does not cancel the worker, so
+this implementation does not guarantee safe worker completion after that wait expires.
+
+The compatibility UI-extraction path caches a backbuffer RTV. That view retains the texture and
+can block `ResizeBuffers`; releasing the temporary `GetBuffer` reference alone does not release
+the view dependency. The shared overlay host acquires/releases its draw targets within each call.
 
 ## SR backend switching
 
@@ -183,6 +223,12 @@ at development DLLs. `RSF_FG_DEBUG=1` records a bounded marker trace after tagge
 The Reflex sleep waits for the previous frame's Present and still precedes input.
 `RSF_REFLEX_ASYNC=1` restores the earlier sleep that overlaps the previous frame, for comparison.
 
+The saved FG provider in the per-user profile takes precedence over the INI fallback. In the
+current development source, presentation interception installs with runtime switching enabled,
+including a requested Off provider; `RSF_FG_ENABLE=0` therefore selects the fallback rather than
+guaranteeing interception is absent. The checked-in [sample](ReScaleFrame.ini.sample) lists startup
+mode/count/provider, development/debug and rendered-frame limiter keys with their defaults.
+
 The user accepts deployed DLSS-FG. FSR3/XeSS pass synthetic D3D11/D3D12 generation checks;
 their AC7 moving-scene quality, HUD and pacing have not been game-tested. Cuts, unmatched inputs
 and unsupported VSync suspend generation. Compatible native AC7 family
@@ -198,6 +244,14 @@ Its CPU callbacks bracket EarlyUpdate through PreLateUpdate. SR Off/FSR1 also su
 inputs. The user accepted XeSS/DLSS-G and the final FSR correction after the recorded runtime
 switch/input/pacing repairs. General scene/resize coverage, higher MFG and Claw remain unverified.
 [Shared implementation evidence](../docs/research/shared-fg-20261004.md).
+
+The generic version shim uses sectioned Win32 INI parsing, separate from AC7's flat parser.
+An existing `ReScaleFrame.ini` enables its worker unless `[UnitySR] AutoStart=0`. It loads
+`ReScaleFrame/ReScaleFrame.Runtime.dll` relative to itself, installs generation interception before
+waiting for Mono, and retries SR startup while the runtime reports not ready. System version API
+forwarding resolves independently from `System32/version.dll`; runtime/library references remain
+loaded for the process lifetime. AC7 names dispatch into the AC7 entry and Unity crash reporters
+receive forwarding only. The MASM forwarding surface is currently MSVC-only.
 
 Insert now exposes the frame-generation provider separately from the upscaler. Choose Off,
 DLSS-G, FSR3, FSR4 or XeSS in Unity. Requests replace the provider after a drained Present,

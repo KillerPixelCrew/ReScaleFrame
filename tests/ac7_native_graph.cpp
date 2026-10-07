@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Exercise the private adapter through an independent engine ABI caller and queued executor.
+/**
+ * @file
+ * Exercise the private AC7 graph adapter with a synthetic engine ABI and WARP.
+ * The fixture includes the adapter implementation to reach private graph helpers;
+ * independent vtables, pool references and a delayed command executor model engine
+ * ownership. It checks fallback pixels, retained frame identity, graph retirement,
+ * view-size restoration and primary-view jitter preparation without loading AC7.
+ */
 #define RSF_AC7_GRAPH_TEST 1
 #include "../games/ac7/src/native_renderer.cpp"
 #include "ac7_view_fixture.h"
@@ -10,6 +17,7 @@ using Microsoft::WRL::ComPtr;
 namespace harness {
 bool passed = true;
 void check(bool ok, const char* why) { if (!ok) { passed = false; std::fprintf(stderr, "%s\n", why); } }
+// Command/pool layouts model only the fields and vtable slots the adapter consumes.
 struct Command { Command* next = nullptr; void(*execute)(void*, Command*) = nullptr; };
 struct List { Command* root = nullptr; Command** tail = &root; uint32_t executing = 0, count = 0, uid = 1; } list;
 static_assert(offsetof(List, count) == 0x14);
@@ -41,6 +49,7 @@ Uniform original_uniform, generated_uniform;
 uint64_t observed_frame = 0; bool auxiliary_done = false;
 struct Clear : Command { float color[4]{}; };
 void clear(void*, Command* c) { auto* cmd = static_cast<Clear*>(c); immediate->ClearRenderTargetView(target_view.Get(), cmd->color); delete cmd; }
+// Queue a deterministic blue fallback; execution remains deferred after graph retirement.
 void spatial(void* raw_node, void* raw_context) {
     check(auxiliary_done, "native auxiliary graph branches finish before SR size transition");
     ++fallback_draws; auto* node = static_cast<SRNode*>(raw_node);
@@ -98,6 +107,7 @@ void visibility(void* raw, void*, uintptr_t third, void*) {
     read(storage, 0x13c0, first); read(storage + 0x27c0, 0x13c0, second);
     check(first == 2 && second == 1 && third == 77, "native jitter preparation selects main view and forwards engine arguments");
 }
+// Map researched RVAs to fixture callbacks. Unknown helpers fail rather than call game memory.
 void* resolve_engine(uint32_t rva) {
     switch (rva) {
     case 0x109dc70: return reinterpret_cast<void*>(&get_scene);
@@ -114,6 +124,7 @@ void* resolve_engine(uint32_t rva) {
     }
 }
 int config(void*, rsf_game_render_config* c) { c->enabled = 1; c->output_width = c->output_height = configured_output; c->render_width = configured_width; c->render_height = configured_height; return 1; }
+// Run at the queued SR boundary, when retained pools and original frame metadata are live.
 void notify(void*, void*, const rsf_ac7_render_scope* p, uint32_t begin) {
     if (!begin || p->role != RSF_AC7_ROLE_SR) return;
     ++sr_calls; observed_frame = p->native_frame;

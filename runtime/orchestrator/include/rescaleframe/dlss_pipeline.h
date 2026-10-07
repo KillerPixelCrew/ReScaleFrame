@@ -1,29 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The sequence that puts DLSS on a frame, and the resources that outlive one.
-
-   `rsf_dlss_load`, `rsf_motion_decode_run` and `rsf_assemble_dlss_frame` each do one part of the
-   job and none of them knows the order. That order is the thing this project keeps getting wrong,
-   because most of it is invisible until a rendered result exists: Streamline needs an identity
-   before NGX will start, a backend cannot read Unreal's motion storage so a decode has to run
-   first, and a reconstruction feature is built for one pair of sizes so a render scale change is
-   not free. So the order lives in one place, with the reasoning attached, rather than being
-   written out again by every caller.
-
-   What the pipeline owns is what has to survive between frames: the loaded interposer, the decode
-   pass built for the current render size, and the output texture DLSS evaluates into. Everything
-   about a single frame comes in as borrowed pointers and is not retained.
-
-   What it does not own, and will not invent: the camera. Matrices, jitter and the camera basis
-   come from whatever read the game's view buffer, and a wrong one of those produces a plausible
-   image of a camera that was never rendered. This fills in only the fields that are true because
-   this code ran, which is the decode's own product.
-
-   Honesty, since it is easy to lose here. A successful evaluate means Streamline accepted the
-   inputs, not that the image is right. The motion vector axis and sign convention has never been
-   checked against a rendered result, and neither has the assumption that the scene colour handed
-   in is the target temporal AA reads. Both are wrong in ways that read as softness or as a slight
-   smear rather than as a failure. `rsf_dlss_pipeline_request_dump` exists because looking is the
-   only way to settle either. */
+/* Process-wide D3D11 compatibility pipeline: Streamline initialization, motion decoding,
+   frame assembly, SR provider selection and output/history resources. Game plugins supply
+   camera conventions and exact scene inputs; these pipeline calls borrow per-frame textures.
+   Graphics operations run on one immediate-context owner. Status/dump requests and the two
+   color policy setters are thread-safe. SDK acceptance does not establish image quality.
+   Research: docs/research/orchestrator-sr-switching.md and ac7-frame-capture.md. */
 
 #ifndef RSF_DLSS_PIPELINE_H
 #define RSF_DLSS_PIPELINE_H
@@ -40,7 +21,7 @@
 extern "C" {
 #endif
 
-/* 2: a second feature for a layer at one to one, and its counts in the status. */
+/* ABI 4 adds optional translucency inputs; ABI 2 added the independent layer feature. */
 #define RSF_DLSS_PIPELINE_ABI_VERSION 4u
 
 typedef int32_t rsf_dlss_pipeline_result;
@@ -72,27 +53,18 @@ typedef int32_t rsf_dlss_pipeline_result;
 /* Everything was accepted and Streamline still failed the evaluate. */
 #define RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED ((rsf_dlss_pipeline_result)-10)
 
-/* Progress and diagnostics, one formatted line at a time. Same shape and same reason as every
-   other sink in this project: this runs inside a game's render thread, where a returned code often
-   never arrives, so each line is written before the step it names rather than after it.
-
-   Called only from the thread that drives the frame. `rsf_dlss_pipeline_request_dump` and
-   `rsf_dlss_pipeline_get_status` deliberately log nothing, so the sink never has to be reentrant
-   or thread safe. It is also never called at frame rate: a per-frame failure is written once and
-   again only when it changes, since a frame that fails usually fails the same way on the next one
-   and a sink that appends and closes per line cannot afford one write per frame.
-
-   The sink is not called after `rsf_dlss_pipeline_stop` returns, so `user` need not outlive it. */
+/* Render-owner diagnostic callback. Messages are transient, and repeated frame failures are
+   suppressed until the result/extent changes. user remains valid through stop; status/dump
+   request calls do not invoke this sink. A shared presentation host may also call the supplied
+   backend sink under that host's callback/threading contract. */
 typedef void (*rsf_dlss_pipeline_log_fn)(void* user, const char* message);
 
 typedef struct rsf_dlss_pipeline_setup {
     uint32_t struct_size;
     uint32_t abi_version;
 
-    /* Directory holding `sl.interposer.dll` and the plugins beside it, normally
-       `vendor/streamline/bin/x64`. The interposer path is built from this rather than asked for
-       separately, because Streamline needs both and they have never differed. A trailing separator
-       is accepted. */
+    /* Directory containing sl.interposer.dll and its plugins. Read during synchronous start;
+       a trailing separator is accepted. Alternate SDK directory strings below are copied. */
     const char* streamline_directory_utf8;
     /* Optional. Where Streamline writes its own log. Null disables that. */
     const char* streamline_log_directory_utf8;
@@ -101,22 +73,13 @@ typedef struct rsf_dlss_pipeline_setup {
        verify signatures refuses the load outright rather than claiming a check it never ran. */
     uint32_t require_signature;
 
-    /* Presented resolution. The render size is not given here; it is asked of DLSS, because DLSS
-       is entitled to decide what a quality level means and a size we picked instead is a rejected
-       evaluate at best. */
+    /* Output pixels. The selected backend plans its preferred render dimensions/range. */
     uint32_t output_width;
     uint32_t output_height;
     rsf_dlss_quality quality;
 
-    /* How this game stores its motion vectors. A property of the game, constant while it runs, so
-       it is settled once here rather than per frame. The caller fills `struct_size` inside it like
-       any other structure in this project.
-
-       `scale_x` and `scale_y` must be non-zero. There is no default worth guessing, and a zero
-       scale decodes every pixel to no motion at all, which looks like a perfectly stable image
-       rather than like a mistake. `output_scale_x` and `output_scale_y` are each taken as 1 when
-       left at zero, which is the documented "leave it alone" value for a buffer already in the
-       range Streamline wants. A flip is -1; zero is never meant. */
+    /* Game-owned encoding convention, copied at start. Initialize motion.struct_size;
+       scale_x/y must be nonzero. A zero output_scale on either axis defaults to one. */
     rsf_motion_decode_params motion;
 
     rsf_dlss_pipeline_log_fn log;
@@ -138,13 +101,8 @@ typedef struct rsf_dlss_pipeline_frame {
     uint32_t struct_size;
     uint32_t abi_version;
 
-    /* Pre-tonemap scene colour at render resolution.
-
-       Which texture this is cannot be settled from a descriptor. Ace Combat 7 allocates many full
-       resolution `R16G16B16A16_FLOAT` targets and the one temporal AA reads is distinguishable
-       only by what it is bound alongside, so `rsf_classify_texture` reports scene colour as a
-       candidate rather than picking one. The caller resolves that, today by taking slot 0 of the
-       bound set, and that assumption is unverified until a rendered result exists. */
+    /* Exact pre-tonemap temporal reconstruction input at render resolution. Texture formats
+       alone cannot establish which engine target owns this phase; the producer identifies it. */
     void* scene_color;
     void* depth;
     /* The game's own velocity target, still in its own encoding. The decode runs here; handing a
@@ -156,9 +114,8 @@ typedef struct rsf_dlss_pipeline_frame {
     uint32_t render_width;
     uint32_t render_height;
 
-    /* The camera, as whatever read the game's view buffer saw it. Everything in it is used as
-       given except the motion fields this pipeline is the one to know: see
-       `rsf_dlss_pipeline_on_frame`. */
+    /* Borrowed camera metadata. The pipeline copies it and supplies only decode/sentinel
+       metadata, default motion scales and reset causes introduced by feature recreation. */
     const rsf_pipeline_camera_frame* camera;
 
     /* Appended in ABI 4. Optional translucency hints, rect-local at render size like the inputs
@@ -189,10 +146,8 @@ typedef struct rsf_dlss_pipeline_status {
     uint32_t render_height;
     uint32_t output_width;
     uint32_t output_height;
-    /* Frames that reached a successful evaluate, and frames that did not for any reason. They sum
-       to the frames seen. The pair is the point: a pipeline that is running and has evaluated
-       nothing is the normal outcome of an unjittered projection, and it should be possible to say
-       so rather than to report that DLSS is active. */
+    /* Successful submissions and refused well-formed calls while running. Missing frame/short
+       frame or mismatched frame/camera ABI are excluded. Acceptance is not image validation. */
     uint64_t frames_evaluated;
     uint64_t frames_refused;
     rsf_dlss_pipeline_result last_result;
@@ -207,10 +162,8 @@ typedef struct rsf_dlss_pipeline_status {
     int32_t last_switch_result;
 } rsf_dlss_pipeline_status;
 
-/* A layer to integrate at one to one: the separate translucency layer, rendered at the size the
-   game asked for and never scaled, handed to a second DLSS feature in its anti-aliasing mode so
-   its stochastic materials are averaged over frames the way the game's own temporal pass would
-   have. The colour is `R16G16B16A16_FLOAT` premultiplied, and the alpha is carried through. */
+/* Independent DLSS viewport 1, native-size temporal integration of premultiplied RGBA16_FLOAT
+   translucency with alpha retained. The caller supplies layer depth and size-adjusted jitter. */
 typedef struct rsf_dlss_pipeline_layer {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -240,67 +193,51 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(
     void* d3d11_context, const rsf_dlss_pipeline_layer* layer);
 
+/* Borrowed viewport-1 ID3D11Texture2D, graphics owner only. Valid until a layer-size change or
+   stop, and current only after successful on_layer. Null before successful prepare_layer. */
 RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 
-/* Load Streamline, hand over the game's device, and find out whether DLSS can run on it.
-
-   `d3d11_device` is the `ID3D11Device*` the game renders with; it is retained until
-   `rsf_dlss_pipeline_stop`. The identity given to Streamline is Unreal 4.18, which is what Ace
-   Combat 7 is: without an identity the DLSS plugin loads and then refuses with a message that
-   reads exactly like unsupported hardware.
-
-   Refuses with `RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED` when the adapter cannot run DLSS, leaving
-   nothing loaded. Call on the thread that will drive the frames. */
+/* Load/share Streamline, retain the D3D11 device, probe DLSS and create its output.
+   Run on the graphics owner. Engine/project identity comes from setup, and must agree with the
+   integration. Failure unwinds partial ownership; start still requires DLSS support even if the
+   caller intends to select another provider later. Use direct sessions for independent startup. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start(
     void* d3d11_device, const rsf_dlss_pipeline_setup* setup);
 
-/* Run one frame: decode the motion, assemble the frame, evaluate.
-
-   `d3d11_context` is the `ID3D11DeviceContext*` the game renders with, and must be the immediate
-   context on the thread that owns it. Streamline does not restore pipeline state, so a caller that
-   cares about its own bindings saves and restores them around this.
-
-   The fields of `frame->camera` this fills in, and no others, because they are the ones that are
-   true because this code ran: `motion_decoded`, the sentinel pair from the decode parameters in
-   use, `motion_scale` when the caller left it at zero, and `reset` on the first frame a rebuilt
-   feature sees, which is a rebuild the caller has no way to observe. `reset` is only ever set,
-   never cleared, so the caller's own reasons for one still stand. */
+/* Decode motion, assemble camera/resources, evaluate the selected provider and optional color
+   passes. The immediate-context owner calls this with caller-managed binding save/restore.
+   reset is added for feature recreation/pending changes without clearing caller reset. Dense
+   camera motion may be resolved for unwritten pixels before evaluation and independent FG copy.
+   120 consecutive evaluate failures suspend attempts until restart, resize or accepted backend
+   selection (DLSS quality changes also resume). Output is usable only after an OK result in the
+   same context's GPU command order. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(
     void* d3d11_context, const rsf_dlss_pipeline_frame* frame);
 
-/* The texture DLSS evaluates into, as an `ID3D11Texture2D*` at output resolution. Owned by the
-   pipeline, valid until it stops, and not reference counted for the caller. Call it from the
-   thread that drives the frames, which is the only one that knows whether it still exists. */
+/* Borrowed output-resolution ID3D11Texture2D for the active provider. Graphics owner only;
+   valid until successful output resize or stop. No AddRef is transferred to the caller. */
 RSF_RUNTIME_API void* rsf_dlss_pipeline_output_texture(void);
 
-/* Ask for the next frame's output to be written out under this path prefix.
-
-   Safe from any thread, and the only entry point here that is. It records the request and returns;
-   the dump happens inside the next `rsf_dlss_pipeline_on_frame`. This split is not tidiness: the
-   caller is a key polling thread, an immediate context cannot be used from two threads at once,
-   and doing the copy from the polling thread reads whatever the staging resource happened to hold
-   and has taken this process down once already. */
+/* Queue a copied UTF-8 prefix from any thread. The next successful frame performs paired
+   input/output/motion/depth/exposure readbacks and writes exact assembled constants. A later
+   request replaces a pending prefix. Diagnostic write failure does not fail evaluation. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_request_dump(const char* prefix_utf8);
 
 /* Snapshot of what has actually happened. Safe from any thread. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
     rsf_dlss_pipeline_status* status);
 
-/* Change the quality level while running, without tearing Streamline down.
-
-   Asks DLSS for the render size this level wants at the current output, and on success the next
-   evaluate carries the new mode and accepts frames in the new range; Streamline recreates its
-   feature on the mode change itself. The render size is returned so the caller can move the game's
-   screen percentage to it, since a frame outside the new range is refused. Call it from the thread
-   that evaluates. */
 /* The DLSS-only colour correction after evaluation (colour_fidelity). It pulls the output toward
    the current jittered frame where depth is continuous, and measured hangar output oscillates
-   with it, so it is off unless enabled. Takes effect from the next frame. */
+   with it, so it is off unless enabled. Thread-safe; takes effect from the next frame. */
 RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_correction(uint32_t enabled);
 /* DLSS receives an invertible display-range encoding of the scene with HDR input off, and its output
    is decoded back to linear (colour_transport.h). On by default: DLSS 310's auto-exposing presets
-   band in AC7's dark linear HDR, independently of which preset a driver override selects. */
+   band in AC7's dark linear HDR, independently of which preset a driver override selects. Thread-safe. */
 RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled);
+/* Graphics owner between frames. Plan quality on the active provider and return optional
+   render dimensions on success. Refusal preserves prior quality; success resets history and
+   the DLSS failure suspension. The engine applies the new dimensions to its next view. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,
                                                                        uint32_t* render_width,
                                                                        uint32_t* render_height);
@@ -317,13 +254,13 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t backend,
     uint32_t* render_width, uint32_t* render_height);
 
-/* Model request for DLSS viewport0. Apply between frames; resets reconstruction history.
-   The getter reports our request, not a driver's effective model override. */
+/* These declared preset entry points have no exported implementation in this source tree.
+   The compatibility pipeline currently uses its internal AUTO request. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_select_preset(rsf_dlss_preset preset);
 RSF_RUNTIME_API rsf_dlss_preset rsf_dlss_pipeline_get_preset(void);
 
-/* Release everything in the reverse of the order it was acquired, and before the caller's device
-   goes. Safe to call when nothing is running. */
+/* Graphics owner after producers/borrowers stop. Release SR/native caches before the retained
+   device. Returns NOT_RUNNING if no pipeline is owned; otherwise unwinds resources and logging. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_stop(void);
 
 #ifdef __cplusplus

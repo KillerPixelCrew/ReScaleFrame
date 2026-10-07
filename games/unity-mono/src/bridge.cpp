@@ -16,13 +16,18 @@
 #include <IUnityGraphicsD3D12.h>
 #endif
 
+// Owns the native side of the Unity callback bridge: bounded packet storage, D3D12 command lists,
+// and resource leases that remain alive until their completion fence advances.
 namespace {
 using Microsoft::WRL::ComPtr;
+// Fixed event-data slots retain Unity resource refs from enqueue until the event consumes them.
 struct Pending {
     rsf_unity_packet packet{};
     std::array<ComPtr<ID3D12Resource>, 4> resources;
     bool used = false;
 };
+// Owned allocator/list plus resource leases. complete belongs to Unity's frame fence; zero after
+// a submission is treated as unknown ownership rather than an immediately reusable slot.
 struct Commands {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -51,6 +56,8 @@ void report_state(uint32_t stage) { managed_stage.store(stage); }
 #if RSF_HAVE_UNITY_NATIVE
 IUnityGraphics* graphics = nullptr;
 IUnityGraphicsD3D12v7* unity = nullptr;
+// Explicit-loading fallback: trust the private Unity interface lookup only for this player hash
+// and expected entry sequence. Native plugin registration supplies the public route when available.
 bool player_registry_matches(HMODULE player)
 {
     constexpr unsigned char bytes[] = {0x48,0x83,0xec,0x38,0x48,0x89,0x4c,0x24,0x20,0x48,0x8d,0x4c,0x24,0x20,0x48,0x89,0x54,0x24,0x28,0xe8,0x78,0xff,0xff,0xff};
@@ -71,6 +78,8 @@ bool player_registry_matches(HMODULE player)
     constexpr unsigned char expected[] = {0xbb,0xdf,0x3e,0x73,0x52,0x22,0x23,0xea,0x45,0xc3,0xa5,0x40,0x49,0xb7,0x16,0xf9,0xda,0x3e,0x63,0x29,0x94,0x63,0x67,0x34,0xc5,0xd5,0x33,0x26,0xaa,0x2c,0x36,0xd0};
     return ok && !std::memcmp(digest, expected, 32);
 }
+// Reserve separate SR/final-scene and window event IDs. Flush/join Unity recording before native
+// callbacks; only the window route requests direct graphics-queue access for presentation work.
 void configure_graphics()
 {
     if (!graphics || !unity || graphics->GetRenderer() != kUnityGfxRendererD3D12) { unity = nullptr; return; }
@@ -88,6 +97,7 @@ void log(const char* message)
 {
     if (services.log) services.log(services.user, message);
 }
+// Exact bridge ABI plus host-size agreement gates configuration while a policy change drains.
 int config(uint32_t width, uint32_t height, rsf_unity_config* output)
 {
     if (!output || output->struct_size != sizeof(*output) || output->abi_version != RSF_UNITY_BRIDGE_ABI_VERSION) return 0;
@@ -99,6 +109,8 @@ int config(uint32_t width, uint32_t height, rsf_unity_config* output)
     if (host.output_width != width || host.output_height != height) output->enabled = 0;
     return 1;
 }
+// Route-specific resource requirements and finite camera metadata reject malformed packets before
+// leasing. This checks pointer presence, not measured motion coverage or visual acceptance.
 bool valid(const rsf_unity_packet& packet)
 {
     const auto& c = packet.camera;
@@ -116,6 +128,8 @@ bool valid(const rsf_unity_packet& packet)
     for (float value : c.clip_to_previous_clip) if (!std::isfinite(value)) return false;
     return std::isfinite(c.jitter_pixels[0]) && std::isfinite(c.jitter_pixels[1]);
 }
+// Copy into a free bounded slot and AddRef all supplied D3D12 resources. Return its stable packet
+// address as opaque event data; a full queue refuses without taking ownership.
 void* enqueue(const rsf_unity_packet* packet)
 {
     if (!active.load() || !packet) return nullptr;
@@ -130,6 +144,8 @@ void* enqueue(const rsf_unity_packet* packet)
     }
     return nullptr;
 }
+// Convert native/managed metadata to the shared Game SDK. Unity motion is passed as UV displacement
+// with camera motion included; probe packets suppress SR camera validity unless they observe FG inputs.
 [[maybe_unused]] void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
 {
     pass = {}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
@@ -147,6 +163,9 @@ void* enqueue(const rsf_unity_packet* packet)
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1; pass.motion_camera_included = 1;
     std::memcpy(pass.previous_clip_to_clip, packet.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
 }
+// Unity render-thread entry: consume one exact event-data slot, then use its admitted route.
+// Commands/resources remain leased through Unity's returned completion identity. Every refusal
+// returns to the already-recorded spatial fallback; exceptions cannot cross the plugin event ABI.
 void __stdcall render(int id, void* address) noexcept try
 {
     if (id != event_id && id != event_id + 1) return;
@@ -185,6 +204,7 @@ void __stdcall render(int id, void* address) noexcept try
             if (previous.complete && fence->GetCompletedValue() < previous.complete) return;
         input_width = entry.packet.camera.render_width; input_height = entry.packet.camera.render_height;
     }
+    // A settings generation may replace dimensions/provider state only after both rings drain.
     const bool changing = policy_pending.load();
     if (changing) {
         for (const auto& previous : commands)
@@ -226,6 +246,7 @@ void __stdcall render(int id, void* address) noexcept try
         auto state = hudless ? D3D12_RESOURCE_STATE_RENDER_TARGET : i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         states[static_cast<size_t>(count++)] = {entry.resources[i].Get(), state, state};
     }
+    // Move resource ownership before submission so even an unknown completion retains GPU inputs.
     slot.leases = std::move(entry.resources);
     slot.complete = unity->ExecuteCommandList(slot.list.Get(), count, states.data());
     // A zero completion identity is an ownership failure, not permission to reuse the allocator.
@@ -241,6 +262,7 @@ catch (...) { if (++refusals <= 3) log("Unity render callback refused; spatial f
 }
 
 namespace {
+// Stamp managed player-loop source IDs in the same QPC clock used by native host observations.
 void cpu_event(uint32_t stage, uint64_t frame_id) {
     if (!active.load() || !frame_id || !services.cpu_event) return;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
@@ -279,6 +301,8 @@ void rsf_unity_bridge_release() noexcept
     managed_stage.store(0);
 }
 uint32_t rsf_unity_bridge_managed_state() noexcept { return managed_stage.load(); }
+// Resolve the public Unity registration or guarded private lookup, returning null on unsupported
+// player/device. Managed activation calls this on the main render loop before installing adapters.
 extern "C" __declspec(dllexport) void* rsf_unity_get_render_event() noexcept
 {
 #if RSF_HAVE_UNITY_NATIVE
@@ -300,7 +324,10 @@ extern "C" __declspec(dllexport) void* rsf_unity_get_render_event() noexcept
     return nullptr;
 #endif
 }
+// First reserved event ID; +1 is the window/overlay route. Query after render-event discovery.
 extern "C" __declspec(dllexport) int rsf_unity_get_event_id() noexcept { return event_id; }
+// Publish supported backend/quality selections and invalidate older queued configuration packets.
+// Acceptance here records policy only; host provider preparation can still refuse execution.
 extern "C" __declspec(dllexport) int rsf_unity_set_policy(uint32_t requested_backend, uint32_t requested_quality) noexcept
 {
     if (requested_backend > 6 || requested_quality > 5) return 0;

@@ -25,6 +25,7 @@ uint32_t pixel_bytes(DXGI_FORMAT format)
     default: return 0;
     }
 }
+// Scope guards balance Map/file ownership across early errors and the C ABI exception barrier.
 struct Mapping {
     ID3D11DeviceContext* context;
     ID3D11Texture2D* texture;
@@ -77,6 +78,8 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(
     const std::string prefix = options->output_prefix_utf8;
     File binary{std::fopen((prefix + ".bin").c_str(), "wb")};
     if (!binary.value) return RSF_TEXTURE_ERROR_WRITE_FAILED;
+    // Pack rows without driver padding. Metadata records both the stored stride and Map RowPitch
+    // so a reader can interpret the binary independently of the readback device.
     for (uint32_t row = 0; row < desc.Height; ++row) {
         const auto* source = static_cast<const unsigned char*>(data.pData) + size_t(row) * data.RowPitch;
         if (std::fwrite(source, 1, size_t(row_bytes), binary.value) != row_bytes)
@@ -92,4 +95,5 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(
         data.RowPitch, static_cast<unsigned long long>(row_bytes * desc.Height));
     return written > 0 && metadata.close() ? RSF_TEXTURE_OK : RSF_TEXTURE_ERROR_WRITE_FAILED;
 }
+// Allocation/string failures must not unwind through the C ABI; map them to diagnostic failure.
 catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }

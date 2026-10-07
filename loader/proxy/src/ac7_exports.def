@@ -1,2 +1,3 @@
+; AC7 DirectInput carrier ABI: preserve its single imported export and ordinal.
 EXPORTS
     DirectInput8Create @1

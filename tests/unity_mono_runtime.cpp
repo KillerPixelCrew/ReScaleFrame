@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Host an isolated Mono runtime to invoke the managed contract fixture's Run method.
+ * Arguments provide the Mono DLL, framework search directory and test assembly.
+ * Entry points are resolved dynamically; boxed integer results become the exit code.
+ * The process owns the loaded runtime after domain cleanup. This runner is manual.
+ */
 #include <windows.h>
 #include <cstdio>
 #include <string>

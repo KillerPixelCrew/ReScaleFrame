@@ -67,6 +67,8 @@ static void on_native_scope(void* user, void* list, const rsf_game_render_pass* 
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
 { (void)user; if (rsf_native_cpu_event(event)) rsf_native_fg_cpu(event); }
 
+/* Serialize executable probing and plugin preparation. Host callbacks/user remain valid
+   until quiesce/stop drains queued native work; repeated calls reuse the existing session result. */
 int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
                             rsf_bridge_log_fn log, void* log_user)
 {
@@ -96,47 +98,29 @@ int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_s
     return result == RSF_OK;
 }
 
-/* How long the frame's tail is looked at, in presents.
-
-   Bounded on purpose, and not only because this runs on the render thread. Watching the back
-   buffer means holding a reference on it, and a held back buffer reference makes `ResizeBuffers`
-   fail, which is a mode change or an alt-tab breaking. A few frames answers the question; keeping
-   the watch for the process's life would trade an answer for a fault that appears much later and
-   looks like something else entirely. The composite is an engine pooled target and carries no such
-   hazard, so it is watched for longer. */
+/* Compatibility tail observation budgets in Present intervals. Stop retaining swapchain
+   backbuffers promptly because outstanding references can block ResizeBuffers; engine pool
+   targets are retained until their plan/watch ownership ends. */
 #define RSF_TAIL_ARM_FRAMES 6ul
 #define RSF_TAIL_STOP_FRAMES 32ul
-/* Chain targets: the eight bit render resolution intermediates between the tonemap and the game's
-   own interface composite. A composite draw's inputs name the candidates, and a candidate is
-   confirmed by watching the draw that writes it and seeing it read the composite. Confirmation
-   gets a few draws, because the writer is one draw per frame; one candidate per spare watch slot. */
+/* Reserve two watch slots for backbuffer/composite discovery; remaining slots confirm
+   same-size post-tonemap intermediates from observed producer bindings. */
 #define RSF_CHAIN_CANDIDATES (RSF_FRAME_TAP_WATCH_SLOTS - 2u)
 #define RSF_CHAIN_CONFIRM_DRAWS 4u
-/* How often the composite is watched again after the tail walk, in presents, so a chain that
-   appears later is still found without describing the whole tail again: a tail found mid video
-   has a composite and no chain, and the relooks that used to repeat the walk for that case are
-   gone. Sixteen draws is a few frames of the composite's traffic. */
+/* Periodically revisit the composite for chains that appear after initial discovery. */
 #define RSF_CHAIN_RESCAN_FRAMES 300ul
 #define RSF_CHAIN_RESCAN_DRAWS 16u
-/* How many chain lines to write per look, which is the part that costs something. */
+/* Bound the diagnostic lines emitted by each chain scan. */
 #define RSF_CHAIN_SAID 24u
-/* How long an interface layer stays promoted after the classifier last saw a quad drawn into it.
-   The pool retires a layer on a screen change and hands the role to another allocation, and a
-   promoted layer nothing draws into holds a plan entry the live one needs. Two seconds at sixty. */
+/* Age unused retained UI targets out of the plan after 120 Present intervals. */
 #define RSF_UI_TARGET_STALE_FRAMES 120ul
-/* Draw budgets handed to the tap. The frame ends in one draw into the back buffer, so a handful
-   spans several frames. The composite takes the whole interface on top of the scene, so it takes
-   more, and the ordinal in each report says which draw of the pass it was. */
+/* Bound the backbuffer/composite draw reports independently of Present budgets. */
 #define RSF_TAIL_BACK_BUFFER_DRAWS 8u
 #define RSF_TAIL_COMPOSITE_DRAWS 64u
 
 
-/* Eight bit colour, in every spelling this game's tail uses.
-
-   Written as numbers because this file has no D3D headers. The typeless entries are not pedantry:
-   the composite arrives bound as `R8G8B8A8_TYPELESS`, 27, and a check for `R8G8B8A8_UNORM` alone
-   missed it in every run. A view's format is whatever the view was created with, and a pooled
-   target is commonly typeless. */
+/* DXGI format families used by post-tonemap targets, including typeless storage. View
+   format is tracked separately when replacements need a typed view. */
 static int is_eight_bit_colour(unsigned long format)
 {
     switch (format) {
@@ -161,8 +145,7 @@ static struct {
     rsf_bridge_log_fn log;
     void* log_user;
 
-    /* Counters, so a run that produced nothing can say which step it stopped at rather than just
-       failing quietly. Every one of these has been the answer at some point in this project. */
+    /* Stage-specific diagnostic counters. Evaluation success does not establish image quality. */
     unsigned long passes;
     unsigned long view_read_failures;
     unsigned long not_main_view;
@@ -176,37 +159,18 @@ static struct {
     unsigned long reported_passes;
     unsigned long reported_evaluated;
 
-    /* Showing the result on screen. The counters and a dumped frame cannot answer the questions
-       that matter most about an upscaler, because ghosting and a smear behind a moving object are
-       temporal and a still image has no time in it. */
+    /* Optional debug blit of ungraded reconstruction; excludes the game UI. */
     rsf_present_blit* blit;
     int show;
     unsigned long frames_shown;
     uint64_t application_presented_frames;
 
-    /* Which pass within the current frame, and how many frames have been described.
-       The set is recognised more than once per frame and the last one wins, because on_pass
-       replaces what it holds. That is not the same as choosing correctly: a briefing capture shows
-       three qualifying passes whose colour is the same partial layer, while the content that is
-       missing is rendered by a pass that never qualifies at all. Describing each qualifying pass
-       of a few frames says how many there are and what colour each carries. */
+    /* Bounded compatibility-pass tracing; multiple qualifying passes can occur per Present. */
     unsigned long pass_in_frame;
     unsigned long frames_described;
 
-    /* The frame's inputs, held from the pass that identifies them until Present.
 
-       The evaluate cannot happen where the set is recognised. That pass is the lighting, and a
-       capture replay puts twenty seven draws after it that add the sky, the clouds and the
-       translucency to the very colour target it binds, which is why the reconstruction came out
-       with a black sky. Those later passes do not bind velocity and depth, so they never qualify
-       and there is no later set to prefer.
-
-       What the replay also shows is that none of the three targets is written again once the
-       colour is finished: the post chain only reads them. So the contents at Present are the
-       finished frame, and Present is where this evaluates. */
-    /* The layer's depth: the scene's depth with the layer's own geometry drawn over it, at the
-       layer's size, replayed draw by draw as the game issues them. Built when the layer's size is
-       first seen and rebuilt when it moves. */
+    /* Owned replay of layer geometry over scene depth, rebuilt when the layer extent changes. */
     rsf_depth_replay* layer_replay;
     unsigned long layer_replay_width;
     unsigned long layer_replay_height;
@@ -243,11 +207,8 @@ static struct {
     unsigned long translucent_draws;
     unsigned long translucent_draws_last;
     unsigned long depth_handover_traced;
-    /* An owned reference to the separate translucency layer named by the last candidate draw.
-       The callback only lends it; capture and later integration require it to stay alive.
-       How many draws
-       reading the scene colour are still to be described after the layer first appeared on a
-       screen: the order between the translucency composite and the tonemap, read from the game. */
+    /* Owned layer reference retained beyond the borrowed geometry callback. Capture/integration
+       require a current-frame producer; order_trace bounds post-layer composition tracing. */
     void* translucency_layer;
     unsigned long translucency_layer_seen_at;
     unsigned long order_trace;
@@ -281,22 +242,15 @@ static struct {
     int recombine_off;
     unsigned long finishes;
     unsigned long layer_draws_twinned;
-    /* The last tail that made a working plan, so a rebuild that fails puts it back rather than
-       leaving the frame unpromoted, and the present a failed rebuild is next tried at. Measured
-       26 September 2026: a rebuild failing on every present for a run of frames showed as the
-       interface and the hologram blinking out. */
+    /* Previous successful tail and retry state. On rebuild refusal restore its plan when
+       possible and delay another rebuild to avoid repeated frame disruption. */
     rsf_promote_frame_tail last_tail;
     int last_tail_valid;
     unsigned long plan_retry_after;
     unsigned long plan_restores;
-    /* An ordered trace of gate events and presents for a few frames after a plan is installed and
-       after a dump is requested: which target opened which gate, in what order, per present. The
-       counters say the recombine gate is taken twice per counted present and the tonemap gate
-       every other one, which is not one render per frame, and only the order can say what is. */
+    /* Bounded per-Present gate trace after plan installation or capture requests. */
     unsigned long gate_trace_left;
-    /* A route dump: the pictures at the gates for a couple of consecutive frames, written from the
-       render thread as the frame passes them, with DLSS running. RenderDoc cannot do this here:
-       Streamline crashes inside RenderDoc's device wrapper the moment it is handed the device. */
+    /* Bounded raw/preview snapshots at render-thread route gates. Staging readback may stall. */
     char route_dump_prefix[520];
     unsigned long route_dump_frames;
     unsigned long route_dump_frame;
@@ -305,60 +259,35 @@ static struct {
     unsigned long briefing_capture_wait;
     unsigned long briefing_capture_draws;
     unsigned long briefing_shader_bytes;
-    /* Which recombine is the main view's. The briefing renders the scene more than once a frame
-       (three qualifying passes a frame against one on the menus), and every render binds a
-       recombined target; the pool hands them the same allocation, so the gate opens at the first.
-       The main view is the one whose tonemap writes the composite, and the pass right before that
-       is its temporal pass, so its camera is the reference: the recombine whose camera continues
-       it is the one to reconstruct at, and the others are declined and asked again. */
+    /* Compatibility main-view heuristic: compare the current recombine camera with the camera
+       observed before the composite tonemap gate. Shared pooled targets do not identify a view. */
     rsf_pipeline_camera_frame main_camera_ref;
     int main_camera_ref_valid;
     unsigned long gates_declined_camera;
     unsigned long gate_decisions_logged;
     unsigned long layer_draws_untwinned;
-    /* The recombine route's one correction to the game's own shading. The recombine (Unreal 4.18
-       PostProcessDOF.usf, MainRecombinePS) addresses scene colour and the separate translucency
-       layer from the pixel position times the inverse size it was given for its first input, so run
-       into a promoted target with a scaled viewport it draws the whole image into the top-left
-       quarter and clamps the rest into streaks. Seen on 26 September as smeared relief, vertical
-       stripes and a dark right half. While the recombined target is bound, every size constant that
-       names the render size is rewritten to the output size as the game uploads it. */
+    /* While the recombined target is promoted, rewrite matching render-size constants in
+       uploaded postprocess buffers to the output extent so pixel-to-UV math follows the viewport. */
     void* size_patch_target;
     unsigned long size_uploads_patched;
     unsigned long sizes_patched;
-    /* The main view's render size from the last qualifying pass, kept past the frame, for the
-       jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
+    /* Individually published dimensions for the carrier jitter gate. Each word is atomic;
+       the pair is not a synchronized settings snapshot. */
     volatile LONG view_width;
     volatile LONG view_height;
     int have_held;
 
-    /* Learning where the reconstruction goes back in.
-
-       The result is drawn over the finished frame today, which is why it is ungraded and has no
-       interface. Putting it back properly means replacing the scene before the game composites its
-       interface onto it, and at a reduced render scale that composite runs at render resolution:
-       ac7-frame-capture.md has the frame ending in one draw that reads a single 1024x576 composite
-       and writes the 2048x1152 back buffer.
-
-       Which draws write that composite, and which of them reads scene colour, is the one fact that
-       places the intervention and it is in no capture here. The exported action list records render
-       target bindings and not shader resource bindings, which that document states as a limitation
-       twice. So it is asked of the running game: watch the back buffer, and whatever its draw
-       reads is the composite; watch the composite, and its draws say which one is the tonemap.
-
-       Both are retained for as long as they are watched, because the tap compares by address and
-       does not hold a reference of its own. */
+    /* Compatibility discovery retains bounded watch targets: a final draw identifies a
+       composite candidate, then draws into it identify the tonemap/chain. Bindings are possible
+       reads, not shader access proof. The retained target addresses remain valid for plan matching. */
     void* back_buffer;
     void* composite;
     /* Kept separately from the pointer, which is dropped when the watch ends. What was learned
        outlives the reference that was needed to learn it. */
     int composite_found;
     unsigned long tail_frames;
-    /* Whether the tail is being looked for again because the plan went stale, and how many times
-       that has happened. The plan matches textures by address, and holding a reference keeps a
-       texture alive without keeping it in use: the engine's render target pool is free to give the
-       composite role to a different allocation, after which every substitution silently stops
-       matching and reinsertion does nothing while still reporting itself as on. */
+    /* Gate/stall counters detect pool-role changes: retaining a target preserves its address
+       but does not guarantee the engine continues using it as the composite. */
     unsigned long redirects_seen;
     unsigned long redirect_stall;
     /* Whether the installed plan's composite has opened a gate since it was installed, and the
@@ -404,9 +333,7 @@ static struct {
        meant when it was learned. */
     void* scene_color;
 
-    /* Promotion proper, still switched by the F6 "reinsert" toggle the panel and the notes name.
-       Off until asked for: it changes what the game draws, and a wrong substitution is a
-       corrupted frame or a dead process rather than a diagnostic nobody reads. */
+    /* Owned compatibility promotion resources and whether their substitution plan is armed. */
     rsf_promote* promote;
     int reinsert_on;
     /* The DLSS quality level in effect, for the panel, and whether the panel chose one before the
@@ -419,33 +346,22 @@ static struct {
     /* What the overlay can ask the carrier for. See dlss_bridge.h. */
     rsf_bridge_actions actions;
 
-    /* Interface identification. The registry holds what each pipeline object turned out to be, the
-       counts are what a run reports, and neither changes a pixel: M1 is the milestone that answers
-       which draws are the interface, and nothing acts on the answer yet. */
+    /* Owned pipeline-object registry and observational class counters; extraction is explicit. */
     rsf_ui_registry* ui;
     int ui_classify;
     unsigned long ui_class_counts[7];
     unsigned long ui_candidate_draws;
-    /* The extent the interface was rasterized at, and the extent it was drawn into. Two numbers
-       rather than a screen name, because which screen the game is on is M3's question and claiming
-       it now would be inventing it. */
+    /* Record widget raster and destination extents independently; their difference controls
+       promotion detail and does not identify a screen. */
     unsigned long ui_widget_extent[2];
     unsigned long ui_layer_extent[2];
     unsigned long ui_reported_counts[7];
     unsigned long ui_traced;
 
-    /* Extraction: the layer the interface is diverted into and the pass that puts it back. Off
-       until asked for, because it changes the picture and everything above it does not. */
-    /* The texture the frame ends in, refreshed every present.
-     *
-     * Distinct from `back_buffer`, which the tail walk owns and lets go of after thirty-two frames
-     * because holding a reference to it makes ResizeBuffers fail. Classification needs to know the
-     * frame's own target for the whole run, not for the first half second, and reading the tail
-     * walk's field instead is why the first extraction run classified zero Slate draws.
-     *
-     * Held without a reference on purpose: the swap chain owns it and this is only ever compared,
-     * never used. It is refreshed before anything reads it, so a stale value cannot outlive a
-     * resize by more than the present that discovers it. */
+
+    /* Borrowed address identity of the current swapchain target, refreshed each Present.
+     * Compared only; never dereferenced or retained here. Tail observation owns a separate
+     * temporary backbuffer reference. This field alone cannot establish resize synchronization. */
     void* present_target;
 
     rsf_ui_layer* layer;
@@ -455,8 +371,7 @@ static struct {
     unsigned long ui_composites;
 } bridge;
 
-/* Declared here because the resource creation hooks below are defined before it and have things
-   worth saying. */
+
 static void say(const char* format, ...);
 
 /* Publish the registry's sets to the tap, so its prefilter has something to match. Called after any
@@ -501,10 +416,8 @@ static void publish_ui_candidates(void)
     rsf_frame_tap_set_candidates(&candidates);
 }
 
-/* A vertex declaration was created. Name it if the game's own rule recognises it.
-
-   The address is forgotten first, always. D3D11 hands out a released address again immediately, and
-   an entry that outlived its object would make this confidently wrong about a live one. */
+/* Creation callback: forget reused addresses before classifying the complete copied layout.
+   Partial/truncated declarations remain unclassified. */
 static void on_layout_created(void* user, void* layout, const rsf_observer_layout_element* elements,
                               uint32_t copied, uint32_t count)
 {
@@ -540,9 +453,7 @@ static void on_layout_created(void* user, void* layout, const rsf_observer_layou
     }
 }
 
-/* Shader hashes a setting named, in either direction, resolved to pointers as the game creates
-   them. Small fixed arrays: naming more than a handful by hand is not a thing anyone does, and a
-   longer list would mean the rules are wrong in a way a list cannot fix. */
+/* Bounded force/skip hash lists resolved to live object addresses by creation callbacks. */
 #define RSF_UI_MAX_NAMED 16u
 static unsigned long ui_forced_hashes[RSF_UI_MAX_NAMED];
 static unsigned long ui_skipped_hashes[RSF_UI_MAX_NAMED];
@@ -550,12 +461,8 @@ static unsigned int ui_forced_count;
 static unsigned int ui_skipped_count;
 static unsigned long ui_hashes_seen;
 
-/* Shader pointer to hash, so a trace line can name the shader that made a draw.
- *
- * Without this the override lists are unusable: the hash is known only at creation, the draw report
- * carries only a pointer, and nobody can name in a settings file a number they were never shown. A
- * bounded open-addressed table, keyed by pointer, overwriting on collision because a stale entry is
- * a wrong name in a diagnostic and never a wrong picture. */
+/* Bounded pointer-to-hash diagnostic cache. Probe eight slots, then overwrite the initial
+ * slot; collisions affect trace names rather than draw classification. */
 #define RSF_UI_HASH_SLOTS 4096u
 static struct {
     void* shader;
@@ -621,12 +528,9 @@ static void ui_forget_hash(void* shader)
     }
 }
 
-/* Every shader the game creates, hashed once, and matched against what the settings named.
- *
- * The hash is the only stable name a shader has: its pointer is reused, its bytecode is borrowed
- * for the length of the creation call, and nothing else about it survives. Naming one is the escape
- * hatch for a run where the rules are wrong about a particular draw and a rebuild is too slow, which
- * is what SpecialK's HUD registry is for and why it is worth carrying. */
+/* Creation callback consumes borrowed bytecode synchronously, records bounded research
+ * output, and resolves force/skip hashes. Forget prior registry/hash identities at reused
+ * addresses. Forced membership wins when a hash appears in both lists. */
 static void on_shader_created(void* user, void* shader, uint32_t stage, const void* bytecode,
                               uint32_t bytes)
 {
@@ -688,12 +592,8 @@ static void on_shader_created(void* user, void* shader, uint32_t stage, const vo
     }
 }
 
-/* A texture was created, so whatever used to live at that address does not any more.
- *
- * This is the only thing the texture hook does now, and it is not a small thing: a converter target
- * recorded here and released later would otherwise leave the registry naming a live texture that
- * is something else entirely. Which textures are converter targets is settled at the draw, by
- * watching Slate write into one, for the reasons recorded there. */
+/* Forget registry membership at reused texture addresses. Converter identity is learned
+ * from Slate producer draws rather than texture dimensions alone. */
 static void on_texture_created(void* user, void* texture, uint32_t width, uint32_t height,
                                uint32_t format, uint32_t mip_levels, uint32_t array_size,
                                uint32_t sample_count, uint32_t bind_flags, uint32_t misc_flags)
@@ -713,6 +613,7 @@ static void on_texture_created(void* user, void* texture, uint32_t width, uint32
     rsf_ui_registry_forget(bridge.ui, texture);
 }
 
+/* Release every retained per-frame input reference and clear its availability flag. */
 static void release_held(void)
 {
     rsf_resource_release(bridge.held_color);
@@ -742,6 +643,9 @@ static void say(const char* format, ...)
 static void publish_native_settings(void)
 { rsf_native_sr_set_enabled(bridge.started && bridge.enabled_requested); }
 
+/* Route borrowed execution-stream passes by SDK role. Native modules copy identities or
+   retain resources within the documented leases; SR runs inline before its native spatial fallback.
+   CPU source identity and final window/Present ownership are checked by separate native modules. */
 static void on_native_pass(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
 {
     (void)user; (void)list;
@@ -826,10 +730,7 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
     }
 }
 
-/* Turn what the view buffer says into what a backend is told. Only the fields the reader actually
-   established: the pipeline fills the motion ones because it is the code that decodes them, and
-   inventing the rest here would be exactly the kind of plausible wrong value this project keeps
-   catching. */
+/* Copied SDK directories for alternate SR providers; no DLL loading occurs in this setter. */
 static char sdk_directories[4][1024];
 void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess)
 {
@@ -844,9 +745,7 @@ static void fill_camera(const rsf_ac7_view* view, rsf_pipeline_camera_frame* cam
     camera->struct_size = sizeof(*camera);
     camera->abi_version = RSF_FRAME_ASSEMBLY_ABI_VERSION;
 
-    /* The un-jittered projection, not the one the buffer holds. 4.18 applies the offset to the
-       projection itself and keeps no copy without it, and a backend given the jittered matrix
-       reconstructs for a camera that was never rendered. */
+    /* Backends receive matrices with temporal jitter removed; the engine upload itself is jittered. */
     memcpy(camera->view_to_clip, view->view_to_clip_no_jitter, sizeof(camera->view_to_clip));
     memcpy(camera->clip_to_view, view->clip_to_view_no_jitter, sizeof(camera->clip_to_view));
     memcpy(camera->clip_to_prev_clip, view->clip_to_prev_clip, sizeof(camera->clip_to_prev_clip));
@@ -868,16 +767,15 @@ static void fill_camera(const rsf_ac7_view* view, rsf_pipeline_camera_frame* cam
     camera->jitter_pixels[1] = view->jitter_pixels[1];
     camera->has_jitter = view->has_jitter;
 
-    /* Reversed Z, established from the projection's own form and agreed with independently by
-       InvDeviceZToWorldZTransform. Unreal writes object motion only, which is measured rather than
-       assumed: 83.6% of a camera-panning frame is exactly zero. */
+    /* AC7 projection is reversed Z. Sparse engine motion does not provide camera velocity
+       for all pixels; the pipeline reconstructs missing camera motion. */
     camera->depth_inverted = 1u;
     camera->camera_motion_included = 0u;
 }
 
-/* Called by the frame tap, on the game's render thread, inside the pass that binds the inputs. This
-   is the one moment those textures hold this frame's contents, so the work happens here rather than
-   being remembered for later. */
+/* Compatibility input discovery on the render thread. Copy camera metadata and retain
+   the selected textures; later draws still add sky/translucency. Evaluation occurs at the
+   matching reinsertion gate or Present, after scene colour is complete. */
 static void on_pass(void* user, const rsf_frame_tap_pass* pass)
 {
     unsigned char view_bytes[RSF_AC7_VIEW_BUFFER_BYTES];
@@ -906,33 +804,23 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         return;
     }
 
-    /* The engine renders several views into the same target. Handing a backend the camera of one
-       the player is not looking through produces a plausible, wrong image, which is worse than
-       producing none. */
+    /* Reject secondary-view camera metadata even when pooled render targets are shared. */
     if (!view.is_main_view) {
         ++bridge.not_main_view;
         return;
     }
-    /* The main view's size for the jitter stub, taken here, before the jitter check. Taken only
-       from evaluated passes it deadlocked: the first pass after F8 came before the render scale
-       applied, the stub learned 1600x900, refused the real 800x452 main view its jitter, and no
-       pass was ever evaluated again to correct it. */
+    /* Publish the render extent before checking jitter so a changed size can reopen its gate. */
     InterlockedExchange(&bridge.view_width, (LONG)pass->render_width);
     InterlockedExchange(&bridge.view_height, (LONG)pass->render_height);
     if (!view.has_jitter) {
-        /* Expected until the anti-aliasing gate is patched, and worth counting separately: a run
-           that reaches here and stops has found everything except the one thing RSF_ENABLE_JITTER
-           turns on. */
+        /* Track missing jitter separately from missing resources or a failed view read. */
         ++bridge.no_jitter;
         return;
     }
 
     ++bridge.pass_in_frame;
     if (bridge.frames_described < 4) {
-        /* The colour pointer as well as its format. The frame binds this set more than once and
-           the passes differ in what their colour holds, so which one is being taken is the
-           question: a capture replay puts the sky twenty seven draws after the lighting, and a
-           colour taken before those has no sky in it. */
+        /* Trace each qualifying pass while discovery is active; shared bindings can carry partial colour. */
         say("  pass %lu of this frame: colour %p format %lu at %ux%u, %s exposure, view %ux%u in "
             "%ux%u, camera at %.0f %.0f %.0f looking %.2f %.2f %.2f, jitter %.2f %.2f px",
             bridge.pass_in_frame, pass->scene_color, (unsigned long)pass->scene_color_format,
@@ -983,10 +871,7 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         rsf_frame_tap_watch_input(bridge.color_selection.source);
     }
 
-    /* The scene colour, kept past the frame this time. The reinsertion plan names it by address so
-       the tonemap's read of it can be turned into a read of the reconstruction, and it is the same
-       pooled target every frame. Replaced rather than ignored when it changes, which is what a
-       render scale change or a resolution change looks like from here. */
+    /* Retain scene identity for substitution matching and replace it when the pool/extent changes. */
     if (bridge.scene_color != pass->scene_color) {
         rsf_resource_release(bridge.scene_color);
         bridge.scene_color = pass->scene_color;
@@ -996,13 +881,11 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     (void)result;
 }
 
-/* How many geometry draws are described in full before the counters take over.
-
-   Enough to cover a frame's translucency and stop well short of a log nobody can open. Every
-   question about this path so far has been answered by one line that was not being written, and
-   each of those cost a run of the game, so this writes all of them at once. */
+/* Bound verbose depth-replay candidate tracing; summary counters continue after the budget. */
 #define RSF_GEOMETRY_TRACE_DRAWS 400u
 
+/* Observe compatibility translucency candidates, retain the current layer, count geometry,
+   and replay depth only for the optional jittered integration route. */
 static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
     if (InterlockedCompareExchange(&native_owner, 0, 0)) return;
@@ -1011,8 +894,7 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
     if (!bridge.started) {
         return;
     }
-    /* Counted before the game-specific filter as well as after, because "no candidates" and "the
-       filter rejected them all" are different answers and looked identical. */
+    /* Count hook traffic separately from accepted depth-replay candidates. */
     ++bridge.geometry_draws;
     if (!rsf_ac7_scene_depth_candidate(draw)) {
         if (bridge.geometry_traced < RSF_GEOMETRY_TRACE_DRAWS) {
@@ -1042,9 +924,7 @@ static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
     bridge.depth_candidate_width = draw->width;
     bridge.depth_candidate_height = draw->height;
     bridge.depth_candidate_samples = draw->samples;
-    /* What tells the briefing relief apart from a tracer, summed here because this is the only
-       place that sees every draw into the layer. Instances multiply it: a hundred instanced
-       billboards are a hundred billboards' worth of geometry however few draws they took. */
+    /* Count instanced geometry volume as well as draws for the carrier layer-scale policy. */
     ++bridge.translucent_draws;
     bridge.translucent_indices +=
         (unsigned long)draw->count * (draw->instances ? (unsigned long)draw->instances : 1ul);
@@ -1081,12 +961,8 @@ static void on_input_draw(void* user, const rsf_frame_tap_target_draw* draw)
     rsf_ac7_scene_color_draw(&bridge.color_selection, draw);
 }
 
-/* One reported draw's pixel shader inputs, one line each.
-
-   Slot numbers are kept rather than renumbered, so a gap says a slot held something that is not a
-   2D texture. The scene colour is marked where it appears, and that mark is the answer being looked
-   for: the draw into the composite that reads it is the tonemap, and the tonemap is where the
-   reconstructed scene has to go in. */
+/* Trace bound 2D resources with original slot indices and known route identities.
+   Non-texture gaps are preserved; a binding alone does not prove the shader reads it. */
 static void describe_inputs(const rsf_frame_tap_target_draw* draw)
 {
     uint32_t index;
@@ -1104,13 +980,8 @@ static void describe_inputs(const rsf_frame_tap_target_draw* draw)
     }
 }
 
-/* The interface layers and the chain, which is what promotion names beyond the composite.
-
-   Both are observations rather than rules. A layer is a target the classifier saw a widget quad
-   drawn into. A chain target is an eight bit render resolution input of a composite draw whose own
-   writer was watched and seen to read the composite. Every rule of the form "the one that matches"
-   tried on this frame matched something else as well, so nothing here is named from a format or a
-   size alone, and each set says in the log how it was filled. */
+/* Retained compatibility UI/chain identities come from producer observations, not
+   descriptor shape alone. Drawing hooks mark plans stale; Present rebuilds resources. */
 
 static void forget_chain_candidate(void* target);
 
@@ -1171,10 +1042,8 @@ static void note_ui_target(void* target)
     forget_chain_candidate(target);
 }
 
-/* Drop the layers nothing has drawn into for a while. The pool retires a layer on a screen change
-   and hands the role to another allocation, and a plan that still names the old one looks healthy
-   while the interface goes back to being magnified. That is what the title screen after the intro
-   looked like when the set was only cleared on a restake. */
+/* Release retired UI identities and compact the set after its inactivity budget.
+   Removing an entry marks the promotion plan stale. */
 static void age_ui_targets(void)
 {
     uint32_t index = 0;
@@ -1344,10 +1213,8 @@ static void confirm_chain_candidate(const rsf_frame_tap_target_draw* draw)
     describe_inputs(draw);
 }
 
-/* The end of a look. A candidate still waiting has had no draw into it while its watch was armed,
-   which is what a surface filled by a copy, or before the tail, looks like. Said, because a chain
-   target filled by CopyResource would need a hook this build does not have, and a run has to be
-   able to tell that case from a chain that was simply not there. */
+/* Release unconfirmed chain watches at the end of each scan. No observed draw means
+   the writer was not seen; copying or earlier production remain possible explanations. */
 static void settle_chain_candidates(void)
 {
     uint32_t slot;
@@ -1382,17 +1249,10 @@ static void chain_rescan_tick(void)
     rsf_frame_tap_watch_target(1, bridge.composite, RSF_CHAIN_RESCAN_DRAWS);
 }
 
-/* Every draw the tap's prefilter let through, classified and counted. Nothing else.
 
-   This is what M1 is for: a run says how many draws on each screen are the interface and by which
-   producer, and the number that matters most is how many came back UNKNOWN. An UNKNOWN is a draw
-   that looked like the interface and matched no rule, and diverting on a guess is exactly the
-   mistake this frame has made four times. */
-/* Translate a tap report into the game's own facts and ask its rule what the draw is.
- *
- * Shared by the report, which only counts, and the verdict, which decides whether the draw moves.
- * Sharing matters: a run that reports one classification and acts on another would be describing a
- * frame nobody rendered. */
+/* Build borrowed AC7 draw facts from the registry and tap report, then classify once
+ * through the same rules used by counting and diversion. Update recent converter/UI targets
+ * from observed producers. Unknown bindings remain conservative. */
 static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* draw)
 {
     rsf_ac7_draw_facts facts;
@@ -1422,12 +1282,7 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
     rules.force_shader_count = forced_count;
     rules.skip_shaders = rsf_ui_registry_view(bridge.ui, RSF_UI_SET_SKIP_SHADER, &skip_count);
     rules.skip_shader_count = skip_count;
-    /* The frame's own target: the back buffer, not the composite.
-     *
-     * The first run of this got that wrong and the log said so plainly. A draw with Slate's
-     * declaration, six indices and a stride of 40, writing into the 2048x1152 back buffer, came
-     * back UNKNOWN, because it was being compared against a 1024x576 composite. That draw is the
-     * interface at native resolution and is the least ambiguous thing in the frame. */
+    /* Classify Slate against the final backbuffer identity, not the reduced composite. */
     rules.back_buffer = bridge.present_target;
 
     memset(&facts, 0, sizeof(facts));
@@ -1479,26 +1334,9 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
         }
     }
 
-    /* Confirm a converter's target by watching Slate write into it, which is what the first run
-     * showed the descriptor cannot do.
-     *
-     * Asking for B8G8R8A8, one mip, no array, no multisampling, render target and shader resource,
-     * at 1920x1080 matched over a hundred and eighty textures in this game: thirty-two held and a
-     * hundred and fifty-one refused for want of room. A shape that common is not an identification,
-     * and this is the fifth time in this frame that a rule of the form "the one that matches" has
-     * matched something else as well.
-     *
-     * A Slate draw writing into a target is not a shape, it is the interface being made. It also
-     * removes the configured size list from the answer, which the same run showed to be wrong
-     * anyway: Slate draws into a 1920x3304 target, presumably something that scrolls, and no list
-     * of expected sizes was ever going to contain that.
-     *
-     * Ordering works out because the converter fills its texture before anything samples it, so by
-     * the time the quads are reached their input is already named. */
-    /* Every such draw, not only the first into a target: the set is a working set of the targets
-       in use now, and a draw into one is what keeps it there. The first Windows run filled a set
-       that only ever added with the menus' 32 targets and refused every one the briefing needed,
-       so the briefing's quads never classified and its interface stayed magnified. */
+    /* A Slate producer draw confirms converter membership before its output is sampled.
+     * Descriptor shape is insufficient because many unrelated pooled textures share it. */
+    /* Refresh recent membership on every producer draw so retired menu targets can be evicted. */
     if (draw->render_target && draw->render_target != rules.back_buffer &&
         rsf_ui_registry_contains(bridge.ui, RSF_UI_SET_SLATE_LAYOUT, draw->input_layout)) {
         if (rsf_ui_registry_note_recent(bridge.ui, RSF_UI_SET_WIDGET_TARGET,
@@ -1508,8 +1346,7 @@ static rsf_ac7_draw_class classify_candidate(const rsf_frame_tap_target_draw* dr
     }
 
     if (verdict == RSF_AC7_DRAW_UI_WIDGET_QUAD) {
-        /* Both extents, because the gap between them is the whole problem: the interface is
-           rasterized at one size and drawn into a target at another. */
+        /* Record both source raster and destination layer extents. */
         for (index = 0; index < used; ++index) {
             if (inputs[index].width != 0) {
                 bridge.ui_widget_extent[0] = inputs[index].width;
@@ -1546,11 +1383,8 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
 
     if (bridge.ui_traced < 24u && verdict != RSF_AC7_DRAW_SCENE) {
         ++bridge.ui_traced;
-        /* The hashes rather than the pointers, because a hash is what a settings file can name and
-           a pointer is meaningless the moment the process exits. */
-        /* The view format as well as the texture's. They differ whenever the texture is typeless,
-           which Unreal's are, and the view is the one that says whether this draw's colour is being
-           encoded on the way in. Format 29 is R8G8B8A8_UNORM_SRGB and 28 is plain UNORM. */
+        /* Use stable bytecode hashes for diagnostic overrides. */
+        /* Texture storage can be typeless; typed views determine this draw's colour conversion. */
         say("  ui draw: class %u, vs 0x%08lx, ps 0x%08lx, layout %p, %s %lu, stride %lu, "
             "target %p %lux%lu texture format %lu view format %lu, depth %lu, targets %lu, "
             "inputs %lu",
@@ -1561,12 +1395,8 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
             (unsigned long)draw->target_height, (unsigned long)draw->target_format,
             (unsigned long)draw->target_view_format, (unsigned long)draw->depth_bound,
             (unsigned long)draw->target_count, (unsigned long)draw->input_count);
-        /* Every input, not just the count. AC7's converter produces a widget texture and several
-           derived ones, a downsample, two blur stages and a version with glow already applied
-           (`UWidgetToTextureConverter` fields 0x48 through 0xD8). Whether the quad reads the plain
-           widget or the one with glow decides whether the glow travels with a diverted draw or is
-           added later by a pass we do not divert, and that is the difference between an extracted
-           interface that looks like the game's and one that looks flat. */
+        /* Trace widget/blur/glow inputs to distinguish effects carried by the classified quad
+           from effects produced by other passes. */
         for (index = 0; index < draw->input_count && index < 8; ++index) {
             say("    input slot %lu: %p %lux%lu format %lu",
                 (unsigned long)draw->inputs[index].slot, draw->inputs[index].texture,
@@ -1576,6 +1406,8 @@ static void on_candidate_draw(void* user, const rsf_frame_tap_target_draw* draw)
     }
 }
 
+/* Dispatch bounded watch reports to chain confirmation or composite discovery. Resource
+   identity is retained when learned; no backend evaluation occurs during these reports. */
 static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
     if (InterlockedCompareExchange(&native_owner, 0, 0)) return;
@@ -1590,9 +1422,7 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
     }
     ++bridge.tail_draws;
 
-    /* Described only while the tail is being walked, and only for the first few walks. A chain
-       rescan watches the composite again every few hundred frames, and a quick restake on a
-       loading screen walks the tail every second; both would otherwise write the same lines. */
+    /* Bound verbose tail logging across periodic rescans and repeated pool rediscovery. */
     if (bridge.tail_frames <= RSF_TAIL_STOP_FRAMES && bridge.tail_restakes <= 5) {
         say("%s draw %lu: target %p %lux%lu format %lu, viewport %lux%lu, %s %lu, %lu inputs",
             draw->watch_index == 0 ? "back buffer" : "composite", (unsigned long)draw->draw_index,
@@ -1614,27 +1444,13 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
         note_chain_candidates(draw);
     }
 
-    /* What the back buffer draw reads is the composite. At a reduced render scale it reads exactly
-       one resource, so anything else is a different tail than the one the capture describes, and
-       taking the first input regardless would name the wrong texture and describe the wrong pass.
-       Refusing here costs one game run and is the difference between an answer and a guess. */
+    /* Discover a composite only from watched backbuffer draws; an existing composite is retained. */
     if (draw->watch_index != 0 || bridge.composite) {
         return;
     }
-    /* Pick the composite out of what is bound, rather than expecting it to be alone.
-
-       The capture shows the frame ending in one draw that reads a single composite, and this used
-       to require exactly that. A running game does not oblige: D3D11 leaves shader resource slots
-       bound until something replaces them, so the same draw arrives here with seven inputs, of
-       which one is read. frame_tap.h says as much, that bindings establish possible reads and not
-       reads, and this is what that costs when ignored. The requirement matched nothing on the
-       briefing screen and the tail was never identified in any run.
-
-       What the composite is, among those seven: the picture that goes to the back buffer, so it is
-       eight bit colour because it is past the tonemap, and it is the size of a picture rather than
-       a bloom mip. The rest of that draw's bindings are the bloom chain at 256x144 and 128x72, a
-       63x63 dirt or lens texture, the pre-tonemap scene colour in half float, and the velocity
-       target. Size and format between them name it without guessing. */
+    /* Compatibility heuristic: select the first large eight-bit bound texture, excluding
+       backend output. Other slots may be stale because D3D11 retains unused SRVs. This is
+       binding/descriptor evidence rather than proof of shader read ownership. */
     const rsf_frame_tap_input* composite = NULL;
     {
         uint32_t index;
@@ -1673,34 +1489,23 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
         (unsigned long)composite->height, (unsigned long)composite->format);
 }
 
-/* Ask the frame about its own tail, for a bounded number of presents. */
-/* How many frames of redirecting nothing means the plan no longer describes the frame.
 
-   Generous for a plan that has worked, because a legitimately quiet stretch exists: a loading
-   screen can go a while without binding the composite. Quick for a plan that never has: the intro
-   images each change the pool, and a plan found at one that waited four seconds to be replaced was
-   always a screen behind, which left the title screen with a stale composite and a soft interface.
-   A plan that has not opened one gate in half a second is wrong, not paused. */
+/* Present-interval stall budgets: allow longer pauses for a plan with proven gate
+   activity and rediscover unproven plans sooner. */
 #define RSF_REINSERT_STALL_FRAMES 240ul
 #define RSF_REINSERT_UNPROVEN_STALL_FRAMES 30ul
 
-/* Defined below, next to the toggle it shares its work with. Declared here because a stalled plan
-   is noticed in the present hook, which runs long before that. */
+
 static int install_reinsert_plan(void);
 static void stop_reinsert(void);
 
-/* Notice that reinsertion has stopped doing anything, and go and find the tail again.
 
-   The plan matches textures by address. Holding a reference keeps a texture alive, which is not the
-   same as keeping it in use: the engine's render target pool is free to hand the composite role to
-   a different allocation on a screen change or a resize, and from that moment every substitution
-   stops matching. Nothing about that is visible from inside the game, and nothing about it is
-   visible in the counters either, because they do not fall, they simply stop rising. That is what
-   was happening when reinsertion reported itself on for 18,000 frames having opened 569 gates. */
 /* Frames without a recombine before the plan leaves the recombine route. Under the unproven stall
    patience, so a menu reached from the briefing switches routes rather than restaking. */
 #define RSF_RECOMBINE_ABSENT_FRAMES 20u
 
+/* Switch compatibility insertion between recombine and tonemap as current-frame producers
+   appear/disappear. Mark the plan stale; replacement resources are rebuilt later at Present. */
 static void follow_recombine(void)
 {
     rsf_promote_status status;
@@ -1740,6 +1545,8 @@ static void follow_recombine(void)
     }
 }
 
+/* Detect absent composite gate activity, disarm substitutions, release stale composite/chain
+   ownership, and restart bounded tail discovery while retaining recent UI identities. */
 static void watch_for_stalled_plan(void)
 {
     rsf_frame_tap_status tap;
@@ -1749,11 +1556,8 @@ static void watch_for_stalled_plan(void)
     if (rsf_frame_tap_get_status(&tap) != RSF_FRAME_TAP_OK) {
         return;
     }
-    /* Gates, not redirects. A gate opens only when the composite itself is bound, which is the
-       one thing a live plan cannot do without. Redirects count the interface layers too, and on
-       the first Windows run two layer redirects a frame kept a plan alive for 4,000 frames whose
-       composite was a surface the pool had already retired: zero gates, zero evaluations, and an
-       interface composited into the real, unpromoted composite, blurry. */
+    /* Only composite gate activity proves this plan's composite is still in use; unrelated
+       UI redirects must not keep a stale composite alive. */
     if (tap.gates_opened != bridge.redirects_seen) {
         /* The install recorded the count, so any movement is a gate under this plan. */
         bridge.plan_proven = 1;
@@ -1770,8 +1574,7 @@ static void watch_for_stalled_plan(void)
         ++bridge.tail_restakes;
         bridge.redirect_stall = 0;
         bridge.tail_restaking = 1;
-        /* Every restake of the first few and then one in twenty, because a loading screen restakes
-           a quick plan every second and the log is not the place to count them one by one. */
+        /* Limit repeated rediscovery logs on loading screens. */
         if (bridge.tail_restakes <= 5 || bridge.tail_restakes % 20 == 0) {
             say("reinsert: the composite has not been bound for %lu frames, so the plan no longer "
                 "names the frame's composite. Looking for the tail again, restake %lu",
@@ -1785,16 +1588,14 @@ static void watch_for_stalled_plan(void)
     rsf_resource_release(bridge.composite);
     bridge.composite = NULL;
     bridge.composite_view_format = 0;
-    /* And the chain, which belongs to the composite and goes stale with it. Keeping half of what
-       was found is worse than keeping none: a plan that is half stale still redirects and so never
-       looks stalled again, which is what a title screen after an intro looked like. The interface
-       layers are not cleared here, because the classifier refreshes them every frame and a
-       retired one ages out on its own. */
+    /* Clear the dependent chain together with its stale composite; UI targets age separately. */
     clear_chain();
     bridge.tail_frames = 0;
     bridge.tail_draws = 0;
 }
 
+/* Advance bounded backbuffer/composite watches. Acquire each flip-buffer identity afresh
+   and release backbuffer ownership after the short discovery budget. */
 static void watch_tail(void* swapchain)
 {
     void* buffer;
@@ -1815,14 +1616,8 @@ static void watch_tail(void* swapchain)
             (unsigned)bridge.chain_target_count, bridge.chain_target_count == 1 ? "" : "s",
             (unsigned)bridge.ui_target_count, bridge.ui_target_count == 1 ? "" : "s");
         bridge.chain_rescan_countdown = RSF_CHAIN_RESCAN_FRAMES;
-        /* Looking again is only ever asked for by a stalled plan, so a plan is what it owes.
-
-           A restake fires 240 frames after the plan went quiet, which during a screen change lands
-           in whatever is on screen at that moment, and one run caught it mid video: composite
-           found, nothing else. That plan used to be refused and the walk repeated, up to twelve
-           times. Now it is installed as it is, because the pieces it lacks arrive on their own: the
-           classifier names the interface layers every frame, and the chain rescan watches the
-           composite again every few hundred frames, and either one rebuilds the plan. */
+        /* Finish rediscovery with the currently observed tail. Later UI/chain arrivals mark
+           it stale and rebuild the plan, so incomplete loading/video tails need not loop here. */
         if (bridge.tail_restaking) {
             bridge.tail_restaking = 0;
             install_reinsert_plan();
@@ -1889,17 +1684,7 @@ static void evaluate_held(void* context)
     release_held();
 }
 
-/* Called by the frame tap when the game binds the composite, before that binding is forwarded.
 
-   This is where the reconstruction has to run once the result is being reinserted. The scene is
-   finished by now, the post chain has not read it yet, and the tonemap that follows within the same
-   pass is the draw whose scene colour is about to be substituted. Evaluating at Present instead,
-   which is what the debug view does, would put the reconstruction a whole frame behind the grade
-   and the interface drawn over it.
-
-   The price of being here rather than at Present is that the game is midway through its frame and
-   will not rebind what it believes is still bound. Streamline says it does not restore state, so
-   the whole pipeline is saved and put back around the evaluate. */
 /* Evaluate at the recombine: scene colour is finished and translucency is not in it yet.
 
    The qualifying pass comes later in the frame, so this takes the textures the last pass named and
@@ -1933,9 +1718,9 @@ static int evaluate_at_recombine(void* context)
     return 1;
 }
 
-/* Whether `candidate` is the main view's camera a frame on from `reference`: the same lens, looking
-   the same way to within a few degrees, from nearby. A camera turns a degree or two a frame at the
-   fastest and moves metres, not the tens of metres between a scene and a capture of it. */
+/* Compatibility continuity heuristic: FOV difference < 0.02 radians, forward-vector
+   dot > cos(5 degrees), and position difference < 2000 engine units. This does not establish
+   source-frame identity or handle arbitrary cuts. */
 static int camera_continues(const rsf_pipeline_camera_frame* candidate, const rsf_pipeline_camera_frame* reference)
 {
     float dot = 0.0f;
@@ -2058,6 +1843,9 @@ static void integrate_layer(void* context)
     }
 }
 
+/* Run compatibility reconstruction before downstream consumers and restore the immediate
+   context state. Return zero only to decline a secondary recombine camera and retry the gate;
+   evaluation refusal seeds the replacement with current game colour rather than stale output. */
 static int on_gate(void* user, void* context, void* texture)
 {
     rsf_d3d11_state state;
@@ -2147,13 +1935,9 @@ static int on_gate(void* user, void* context, void* texture)
     return 1;
 }
 
-/* Which transfer function the composite applies to the layer on its way onto the back buffer.
- *
- * The layer holds what AC7's own interface target held, which the trace shows is linear in a plain
- * UNORM view. The back buffer holds colour the game has already transformed for display. So the
- * composite has to transform, and which curve is right is not something the API records: sRGB is the
- * piecewise standard and 2.2 is the pure power curve many engines actually apply, and the difference
- * shows in the shadows. Settable so one run can tell them apart. */
+/* UI extraction transport: the layer is linear UNORM and the backbuffer is display
+ * encoded. Select no transform, sRGB or gamma 2.2 when compositing; API format alone does
+ * not establish the game's intended display curve. */
 static rsf_fullscreen_mode ui_composite_mode = RSF_FULLSCREEN_PREMULTIPLIED_SRGB;
 
 /* Modules that log take a sink and a user pointer; this bridge's log is a single global. */
@@ -2163,11 +1947,9 @@ static void bridge_layer_log(void* user, const char* message)
     say("%s", message);
 }
 
-/* A render target view onto the swap chain's current back buffer, cached.
- *
- * Created once per back buffer rather than per present, and dropped when the texture changes, which
- * is what a resize looks like from here. Holding the view rather than the buffer keeps the
- * reference this needs without the one that would make `ResizeBuffers` fail. */
+/* Cached owned RTV for UI extraction, recreated when GetBuffer returns a new identity.
+ * The RTV retains its resource and therefore can also block ResizeBuffers; releasing the
+ * temporary GetBuffer reference does not remove that dependency. */
 static void* back_buffer_view(void* swapchain)
 {
     static void* cached_for = NULL;
@@ -2178,17 +1960,8 @@ static void* back_buffer_view(void* swapchain)
     if (!swapchain || !bridge.device) {
         return NULL;
     }
-    /* Asked of the swap chain every present rather than taken from `bridge.back_buffer`.
-     *
-     * That field belongs to the frame tail walk, which holds it for thirty-two frames and then
-     * deliberately lets it go, because a held back buffer reference makes ResizeBuffers fail. The
-     * first extraction run read it anyway and got null on every frame, so 17702 draws were diverted
-     * out of the scene and none of them were ever composited back. The interface simply vanished,
-     * and nothing said why, because the null path was the silent one.
-     *
-     * The reference from GetBuffer is released as soon as the view exists. The view keeps the
-     * surface alive on its own, and it is the view rather than the buffer that has to survive to
-     * the draw. */
+    /* Acquire the current swapchain buffer rather than the bounded tail-watch pointer.
+     * Release its temporary reference after constructing the cached view. */
     buffer = rsf_swapchain_back_buffer(swapchain);
     if (!buffer) {
         if (!complained) {
@@ -2210,29 +1983,10 @@ static void* back_buffer_view(void* swapchain)
     return cached;
 }
 
-/* What the classifier's verdict means to the tap.
- *
- * Only two classes are moved. A Slate draw into the frame's own target is already at output
- * resolution, so moving it gains nothing and risks the one thing in the frame that is currently
- * right. A converter rasterizing its widget must stay where it is or the quads read an empty
- * texture. Modulate is counted and never moved, because it writes colour only and a transparent
- * layer keeps nothing of it. */
-/* Draw the interface with its view as it would be without our jitter.
 
-   The core of every interface shimmer measured on 26 September 2026. The jitter this project turns
-   on goes into a view's projection, and AC7 draws its interface panels with a view's projection
-   into a layer the reconstruction never sees, so a panel drawn with a jittered view wobbles and
-   nothing resolves it. Moving panels back by a jitter after the fact kept flipping between two
-   failures, because a panel binding a jittered view's buffer does not necessarily project with it:
-   the main menu's panels are world-space and do, the title screen's, hangar's, briefing's and HUD's
-   are screen-aligned and do not, and nothing in the bindings says which.
-
-   So the panels are drawn with a twin of their view's uniform buffer that has the jitter removed
-   from every field it went into (rsf_ac7_view_remove_jitter). A world-space panel is then projected
-   exactly as an unjittered engine would; a screen-aligned one reads the same values it always did.
-   Nothing is guessed about the shader. 4.18 fills every pooled uniform buffer with
-   Map(WRITE_DISCARD) on the render thread, so the frame tap hands each 4096-byte upload here before
-   its Unmap, and the twin is filled right then, before any draw can bind it. */
+/* Compatibility uniform-buffer twins remove jitter from every verified AC7 view field
+   before UI/layer draws. A mapped WRITE_DISCARD upload fills the twin before draw overrides
+   use it; pooled buffers refilled with non-view data lose their twin. */
 static rsf_constant_twins* view_twins;
 static unsigned long twins_written, twins_bound;
 static unsigned char twin_scratch[RSF_AC7_VIEW_BUFFER_BYTES];
@@ -2402,6 +2156,8 @@ static void capture_layer_constants(const rsf_frame_tap_target_draw* draw)
     }
 }
 
+/* Return flattened graphics-stage/slot overrides for twinned view buffers. UI uses VS;
+   unjittered translucency also replaces PS/GS/HS/DS slots. Returned buffers belong to view_twins. */
 static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* draw, uint32_t* slots,
                                 void** buffers)
 {
@@ -2461,6 +2217,8 @@ static int ui_constant_override(void* user, const rsf_frame_tap_target_draw* dra
     return count;
 }
 
+/* Divert classified widget quads only and request corrected alpha accumulation. Scene,
+   converter, final Slate, unknown and modulate draws retain their existing targets. */
 static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_draw* draw)
 {
     rsf_ac7_draw_class verdict;
@@ -2472,9 +2230,8 @@ static rsf_frame_tap_verdict ui_verdict(void* user, const rsf_frame_tap_target_d
     if (verdict != RSF_AC7_DRAW_UI_WIDGET_QUAD) {
         return RSF_FRAME_TAP_LEAVE;
     }
-    /* Recorded here rather than after the fact: the tap can refuse the divert for reasons this does
-       not see, and a layer marked written that nothing wrote would composite a stale frame. The
-       count of composites against the count of diverts is what shows the two agreeing. */
+    /* Mark the layer as potentially written before requesting diversion; tap status reports
+       actual diversion/refusal counts separately. */
     rsf_ui_layer_mark_written(bridge.layer);
     /* The quads are drawn with the base pass translucent blend, whose alpha factors leave a
        transparent layer at zero coverage however much colour lands on it. Measured under DXVK in
@@ -2499,15 +2256,8 @@ static int start_extraction(unsigned long width, unsigned long height)
     /* Shareable from the start: frame generation opens this on a D3D12 device later and the flag
        cannot be added without recreating the texture. */
     layer.shareable = 1;
-    /* Plain UNORM, matching the target these draws came from exactly.
-     *
-     * Measured rather than assumed now: the trace reports the widget quads writing into a view of
-     * format 28, R8G8B8A8_UNORM, so nothing encodes them on the way in and the layer must not
-     * either. The converter that fills the widget texture they read does use an sRGB view, format
-     * 91, which is why the quads receive decoded colour and store it linear.
-     *
-     * The transform therefore belongs at the composite, where the destination's encoding is known,
-     * and not here. Encoding here was the previous attempt and left the picture dark. */
+    /* Use linear UNORM to match widget-quad destination views; display encoding belongs
+     * to the final composite. Evidence is in the captured typed view formats. */
     layer.srgb = 0;
     layer.log = bridge_layer_log;
     if (rsf_ui_layer_create(bridge.device, &layer, &bridge.layer) != RSF_UI_LAYER_OK) {
@@ -2522,8 +2272,7 @@ static int start_extraction(unsigned long width, unsigned long height)
     pass.log = bridge_layer_log;
     if (rsf_fullscreen_pass_create(bridge.device, &pass, &bridge.composite_pass) !=
         RSF_FULLSCREEN_OK) {
-        /* A layer with no compositor is worse than no layer: the interface would be diverted out
-           of the frame and never put back. Refuse the whole thing rather than half of it. */
+        /* Roll back layer creation if composition resources fail, so diversion cannot hide the UI. */
         say("ui extract: the compositor could not be created; the interface stays in the scene");
         rsf_ui_layer_destroy(bridge.layer);
         bridge.layer = NULL;
@@ -2587,12 +2336,8 @@ static void composite_ui(void* swapchain)
     }
 }
 
-/* The debug view: draw the reconstruction over the finished frame.
-
-   It replaces a graded image that has an interface on it with an ungraded one that does not, so it
-   looks wrong in brightness and has no HUD even when the reconstruction is perfect. That is the
-   price of being able to see motion at all, and it is a debug view rather than a step towards how
-   this should work. */
+/* Diagnostic blit of linear/ungraded reconstruction over the completed frame. It omits
+   tonemapping and UI, so it is useful for temporal inspection rather than final-image comparison. */
 static void show_result(void* swapchain)
 {
     void* output;
@@ -2610,11 +2355,7 @@ static void show_result(void* swapchain)
     }
 }
 
-/* Everything the panel displays, gathered from where it actually lives.
 
-   It is filled every frame the panel is open rather than kept as state, because a number the panel
-   shows and a number the bridge holds disagreeing is the failure this is meant to catch, not to
-   introduce. */
 /* Refresh rate of the display the game is on, for the panel's VRR cap. Read only while the
    panel is open, and at most once a second. */
 static uint32_t display_refresh_mhz(void)
@@ -2637,6 +2378,8 @@ static uint32_t display_refresh_mhz(void)
     return cached;
 }
 
+/* Build one UI snapshot from current pipeline, tap, native FG and carrier state. Report
+   requested/effective provider state separately; SDK/DXGI totals do not measure scanout or latency. */
 static void fill_overlay_stats(rsf_overlay_stats* stats)
 {
     rsf_dlss_pipeline_status pipeline;
@@ -2664,9 +2407,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->backend_name = pipeline.backend == 2 ? "FSR2" : pipeline.backend == 3 ? "FSR3" :
         pipeline.backend == 4 ? "FSR4" : pipeline.backend == 5 ? "XeSS" : "DLSS";
 
-    /* Why nothing is happening, in the order the pipeline actually fails. A backend that is running
-       and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
-       the entire reason this field exists. */
+    /* Choose a user-facing refusal from the earliest unmet startup/evaluation stage. */
     if (!bridge.started) {
         stats->refusal_reason = bridge.startup_attempted ? "DLSS could not start; see the log" : "Waiting for the renderer";
     } else if (!stats->backend_supported) {
@@ -2747,8 +2488,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->reinsert_available = InterlockedCompareExchange(&native_owner, 0, 0) ? (uint32_t)bridge.started :
         (uint32_t)(bridge.started && bridge.composite_found && bridge.scene_color != NULL &&
                    bridge.evaluated > 0);
-    /* Said when it changes, because the panel can only say "not available" and a run where the
-       switch stayed grey had no way to tell which of the four facts was the missing one. */
+    /* Log reinsertion prerequisites only when their availability changes. */
     {
         static unsigned last_reason = 0xffu;
         const unsigned reason = InterlockedCompareExchange(&native_owner, 0, 0) ? 0u : bridge.started ? 0u : 1u | (bridge.composite_found ? 0u : 2u) |
@@ -2790,13 +2530,9 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     }
 }
 
-/* Lay the panel out and draw it, and report what was clicked without acting on it.
-
-   Nothing here applies an intent yet. The panel can already change quality and toggle
-   reconstruction in its own model, and wiring those to the bridge means a settings change crossing
-   from the message thread to the render thread at a defined point, which is the open review finding
-   about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
-   and leaves the hotkeys as the way to ask. */
+/* Apply a preset on the graphics owner thread. Query backend dimensions, apply the engine
+   render scale, roll back the preset on refusal, then wait for fresh evaluation before rebuilding
+   compatibility reinsertion. Accepted choices are persisted through carrier callbacks. */
 int rsf_bridge_select_quality(unsigned long quality)
 {
     uint32_t width = 0, height = 0;
@@ -2843,6 +2579,9 @@ int rsf_bridge_select_quality(unsigned long quality)
     return 1;
 }
 
+/* Apply requested enablement on the render thread. Compatibility disable must restore
+   native screen percentage before disarming; refusal preserves the working session. Backend
+   objects remain available for later reenable/preset selection. */
 void rsf_bridge_set_enabled(int enabled)
 {
     if (!enabled) {
@@ -2877,6 +2616,9 @@ void rsf_bridge_set_enabled(int enabled)
     }
 }
 
+/* Draw the shared panel and apply its intents on the graphics owner thread. Provider
+   switching requests drain through the presentation host; refused SR/scale changes restore the
+   prior backend when possible and expose a status reason. */
 static void overlay_tick(void* swapchain)
 {
     rsf_overlay_stats stats;
@@ -2913,10 +2655,8 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.performance_hud_changed) performance_hud_enabled = intent.performance_hud != 0;
-    /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
-       That is the boundary the review finding asks for: the panel records what was clicked and the
-       change happens where the rendering already is, rather than from the message thread while a
-       frame is in flight. */
+    /* Apply panel intents on the render thread after drawing the overlay; window callbacks
+       only collect input and must not create resources or call the immediate context. */
     if (intent.start_requested) {
         if (bridge.actions.start_backend) {
             bridge.actions.start_backend();
@@ -2977,10 +2717,8 @@ static void overlay_tick(void* swapchain)
     }
 }
 
-/* Build the layer's depth replay and its integration at the size the layer has, between frames,
-   where no draw is in flight. Measured 26 September 2026: the pool rounds the 450-row render
-   height to 452, so the layer at native is 1600x904, and a replay sized from the output refused
-   every one of its draws. So the size comes from the layer itself. */
+/* Rebuild optional jittered layer replay/integration between frames from the observed
+   layer extent, including engine pool padding. Old integrated views invalidate saved tails. */
 static void follow_layer_size(void)
 {
     const unsigned long width = bridge.depth_candidate_width;
@@ -3022,7 +2760,7 @@ static void follow_layer_size(void)
     bridge.plan_stale = 1;
 }
 
-/* Called before the game's own Present, from the observer. */
+
 /* Requests from the hotkey worker, run on this thread at the next present. */
 static volatile LONG pending_requests;
 
@@ -3076,6 +2814,8 @@ static void run_pending_requests(void* swapchain)
 
 void rsf_bridge_request_shutdown(void)
 { InterlockedExchange(&shutdown_requested, 1); }
+/* Retry native quiesce/stop at Present until queued callbacks drain. Keep backend and
+   callback storage alive on refusal; only then disarm the tap and stop the pipeline. */
 static int drain_shutdown(void)
 {
     if (!InterlockedCompareExchange(&shutdown_requested, 0, 0)) return 0;
@@ -3097,6 +2837,9 @@ static int drain_shutdown(void)
     return 1;
 }
 
+/* Graphics-owner frame boundary: drain shutdown, apply queued requests, start/resize SR,
+   maintain compatibility plans, perform bounded capture, finish frame bookkeeping, and draw UI.
+   Native ownership skips binding heuristics; native graph callbacks already evaluated the scene. */
 static void on_present(void* user, void* swapchain)
 {
     (void)user;
@@ -3146,9 +2889,7 @@ static void on_present(void* user, void* swapchain)
         bridge.actions.maintain_renderer();
     }
 
-    /* Before anything reads it. The classifier compares against this on every candidate draw of the
-       next frame, and a run where it is null classifies every Slate draw into the frame's own
-       target as unknown, which is what happened the first time. */
+    /* Refresh final-target identity for the following frame's classification callbacks. */
     {
         void* buffer = rsf_swapchain_back_buffer(swapchain);
         if (buffer) {
@@ -3166,9 +2907,7 @@ static void on_present(void* user, void* swapchain)
     }
     bridge.pass_in_frame = 0;
 
-    /* The interface goes back on before anything else looks at the frame, and independently of
-       whether a reconstruction is running: extraction is about where the interface is drawn, not
-       about super resolution, and it has to be judgeable on its own. */
+    /* Composite extracted UI independently of SR enablement before snapshots/debug output. */
     if (bridge.ui_extract) {
         composite_ui(swapchain);
     }
@@ -3231,10 +2970,8 @@ static void on_present(void* user, void* swapchain)
         publish_native_settings();
     }
 
-    /* Before the per-frame state is cleared. The count is only ever nonzero once the frame tap is
-       installed, which happens when the backend starts, so a briefing reached without starting one
-       reports zero and the layer keeps its ordinary scale. That is a real limit and not a
-       deliberate choice: nothing observes draws before the tap exists. */
+    /* Publish completed geometry counts before clearing per-frame state. Compatibility
+       observation starts with the frame tap; earlier engine draws are not represented. */
     bridge.translucent_indices_last = bridge.translucent_indices;
     bridge.translucent_draws_last = bridge.translucent_draws;
     if (bridge.briefing_capture_prefix[0] && bridge.reinsert_on && !bridge.recombine_off &&
@@ -3256,8 +2993,7 @@ static void on_present(void* user, void* swapchain)
     bridge.layer_camera_valid = 0;
     show_result(swapchain);
 
-    /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
-       It takes no part in the reconstruction and is never one of its inputs. */
+    /* Draw/apply overlay last, after game composition and optional debug output. */
     overlay_tick(swapchain);
 }
 
@@ -3285,6 +3021,8 @@ void rsf_bridge_toggle_display(void)
         bridge.show ? "on" : "off");
 }
 
+/* Forward actual Present completion and count successful application presents. Test
+   presents are excluded; generated-frame totals come from the vendor presentation status. */
 static void on_present_event(void* user, const rsf_observer_present_event* event)
 {
     (void)user;
@@ -3339,11 +3077,9 @@ int rsf_bridge_extract_ui(unsigned long width, unsigned long height)
     return 1;
 }
 
-/* Parse a comma or space separated list of hex hashes, as a settings file writes them.
- *
- * Tolerant on purpose: these are typed by hand off a log line, so an 0x prefix is optional and any
- * punctuation between numbers separates them. Anything unparseable is skipped and counted, because
- * silently ignoring a shader somebody meant to name is how an escape hatch stops being one. */
+/* Parse at most capacity hexadecimal values, skipping non-hex separators. Optional
+ * 0x prefixes follow strtoul semantics; this permissive diagnostic parser is not a strict
+ * token validator. rejected counts failed conversions rather than all stray text. */
 static unsigned int parse_hash_list(const char* text, unsigned long* out, unsigned int capacity,
                                     unsigned int* rejected)
 {
@@ -3456,8 +3192,7 @@ void rsf_bridge_toggle_reinsert(void)
         return;
     }
 
-    /* Every one of these is a thing the frame had to say for itself, and a missing one names which
-       run to do again rather than leaving a silent no-op. */
+    /* Require discovered inputs and a live reconstruction before creating replacements. */
     if (!bridge.composite) {
         say("reinsert: the composite has not been identified yet, so there is nowhere to put the "
             "result. It is learned from the draw into the back buffer in the first few frames");
@@ -3503,17 +3238,12 @@ void rsf_bridge_toggle_reinsert(void)
         return;
     }
     bridge.reinsert_on = 1;
-    /* Deliberately not "reinsertion works". The substitutions are in place and the game will draw
-       its own tail over the reconstruction; whether the result is right is a thing to look at. */
+    /* Installation success establishes armed substitutions; image correctness needs game evidence. */
     say("reinsert: on. The scene is reconstructed before the game's tonemap, and the grade and the "
         "interface are the game's own");
 }
 
-/* Build the substitutions for the tail as it currently stands and hand them to the tap.
 
-   Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
-   whether reinsertion should be on; it only makes the plan describe the frame that is actually
-   being drawn now. */
 /* Prepare the replacements for `tail` and hand the tap its plan. On any failure the tap is left
    with no plan, which is what the caller then repairs. */
 static int apply_tail(const rsf_promote_frame_tail* tail)
@@ -3542,10 +3272,8 @@ static int apply_tail(const rsf_promote_frame_tail* tail)
         return 0;
     }
     plan.on_gate = on_gate;
-    /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
-       whatever the game draws with depth into the composite is lost unless something gives. The
-       three answers are all wrong in different ways and the setting exists so all three can be
-       compared in one run rather than one per build. See `depth_policy`. */
+    /* Promoted colour may differ from the game's depth extent. Use the carrier mismatch
+       policy; none of these diagnostic policies supplies a new matching depth resource. */
     plan.depth_policy = bridge.actions.reinsert_depth_policy
                             ? (uint32_t)bridge.actions.reinsert_depth_policy()
                             : RSF_FRAME_TAP_DEPTH_DROP;
@@ -3559,6 +3287,8 @@ static int apply_tail(const rsf_promote_frame_tail* tail)
     return 1;
 }
 
+/* Build a tail from retained observed identities, install guarded substitutions, then reset
+   discovery/stall counters. Preserve the last working tail when rebuilding can restore it. */
 static int install_reinsert_plan(void)
 {
     rsf_promote_frame_tail tail;
@@ -3601,8 +3331,7 @@ static int install_reinsert_plan(void)
     tail.ui_target_view_format = bridge.ui_target_view_format;
     tail.chain_view_format = bridge.chain_view_format;
     if (!apply_tail(&tail)) {
-        /* The frame must not go unpromoted for a tail that failed to build. The last tail that
-           worked goes back, and the new one is tried again later rather than on every present. */
+        /* Attempt to restore the last successful plan after preparation refusal; retry later. */
         if (bridge.last_tail_valid && apply_tail(&bridge.last_tail)) {
             ++bridge.plan_restores;
             say("reinsert: the previous plan is back until the new tail can be built");
@@ -3638,6 +3367,9 @@ static int install_reinsert_plan(void)
     return 1;
 }
 
+/* Start SR against the observed game device, activate a prepared native plugin if accepted,
+   then install the frame tap and preset. Failures stop the pipeline/tap as handled here; native
+   ownership selects graph inputs instead of compatibility binding callbacks. */
 int rsf_bridge_start(const char* streamline_directory, unsigned long output_width,
                      unsigned long output_height, unsigned long quality, rsf_bridge_log_fn log,
                      void* log_user)
@@ -3657,8 +3389,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
         return 0;
     }
 
-    /* The game's own device, not one of ours. A second device could not share resources with the
-       game's, which is the entire point. */
+    /* Acquire retained game device/context references through the observer. */
     if (rsf_observer_acquire_device(&bridge.device, &bridge.context) != RSF_OBSERVER_OK) {
         say("dlss bridge: no device yet, the game has not created one");
         return 0;
@@ -3681,9 +3412,8 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     setup.motion.scale_y = RSF_UNREAL_MOTION_SCALE;
     setup.motion.bias_x = RSF_UNREAL_MOTION_BIAS;
     setup.motion.bias_y = RSF_UNREAL_MOTION_BIAS;
-    /* Left at one: decoded Unreal motion is already in the range a backend wants. Which sign and
-       which axis direction it actually needs is unverified, and this is where a flip goes when a
-       rendered result shows one is needed. */
+    /* Compatibility decode preserves axis scales here; frame assembly handles the backend
+       convention. Native input supplies its independently decoded motion_to_uv contract. */
     setup.motion.output_scale_x = 1.0f;
     setup.motion.output_scale_y = 1.0f;
     setup.motion.invalid_value = RSF_MOTION_SENTINEL;
@@ -3792,17 +3522,13 @@ void rsf_bridge_report(void)
                             counters.refused_full[RSF_UI_SET_CANVAS_LAYOUT] +
                             counters.refused_full[RSF_UI_SET_WIDGET_TARGET]),
             (unsigned long)counters.evicted[RSF_UI_SET_WIDGET_TARGET]);
-        /* Quiet when nothing has changed, like the rest of this report: a screen that is holding
-           still should stop writing rather than filling the log with the same line. */
+        /* Suppress repeated class summaries when their counters are unchanged. */
         for (index = 0; index < 7; ++index) {
             moved = moved || bridge.ui_class_counts[index] != bridge.ui_reported_counts[index];
             bridge.ui_reported_counts[index] = bridge.ui_class_counts[index];
         }
         if (moved) {
-            /* "scene" is the class named RSF_AC7_DRAW_SCENE: a draw that passed the prefilter and
-               turned out to be nothing of ours. The first run labelled this column
-               "canvas-into-frame", which is not a class at all, and made forty thousand scene
-               draws read as interface. */
+
             say("ui: %lu candidate draws: slate %lu, widget quad %lu, converter raster %lu, "
                 "modulate %lu, scene %lu, unknown %lu, skipped %lu",
                 bridge.ui_candidate_draws, bridge.ui_class_counts[RSF_AC7_DRAW_UI_SLATE],
@@ -3828,10 +3554,7 @@ void rsf_bridge_report(void)
                     (unsigned long)divert_status.divert_refused,
                     (unsigned long)divert_status.divert_last_refusal,
                     (unsigned long long)layer_status.frames_written, bridge.ui_composites);
-                /* The one combination that means the interface has been taken out of the frame and
-                   not put back, which is exactly what the first run did and what nothing said at
-                   the time. Worth its own sentence rather than being left as two numbers a reader
-                   has to compare. */
+                /* Report written layers without successful composites as an extraction failure. */
                 if (layer_status.frames_written > 0 && bridge.ui_composites == 0) {
                     say("ui extract: the interface is being diverted and never composited, so it "
                         "is missing from the picture entirely. The layer has no target.");
@@ -3866,9 +3589,7 @@ void rsf_bridge_report(void)
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     if (rsf_frame_tap_get_status(&tap) == RSF_FRAME_TAP_OK) {
-        /* Nothing has moved since the last report, so there is nothing to say. This is what makes
-           it safe to call on a timer: a report every few seconds is what turns one key press into
-           an answer, and repeating identical numbers would bury the run's real events. */
+        /* Suppress the remaining stage summary when evaluation/tap counters are unchanged. */
         if (tap.calls_seen == bridge.reported_calls && tap.passes_seen == bridge.reported_passes &&
             bridge.evaluated == bridge.reported_evaluated) {
             return;
@@ -3899,10 +3620,7 @@ void rsf_bridge_report(void)
         (unsigned)bridge.chain_target_count, bridge.chain_target_count == 1 ? "" : "s",
         (unsigned)bridge.ui_target_count, bridge.ui_target_count == 1 ? "" : "s");
 
-    /* What the substitution is actually doing, which the tap counts because it is the only thing
-       that sees every binding. Reinsertion on with nothing redirected means the plan names a
-       texture the frame never binds, and that is invisible in the picture: the game simply draws
-       what it always drew. */
+    /* Report actual tap activity, not only the requested reinsertion setting. */
     if (bridge.reinsert_on) {
         say("ui: %lu unjittered view twins written, %lu interface draws given one",
             twins_written, twins_bound);
@@ -3920,10 +3638,7 @@ void rsf_bridge_report(void)
             (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
             bridge.sizes_patched, (unsigned long)tap.updates_watched,
             bridge.gates_declined_camera, bridge.plan_restores);
-        /* The number that says whether geometry is being dropped. A promoted target bound with the
-           game's own depth is an invalid pair, so the pass draws nothing, and flat interface draws
-           carry no depth and are untouched. That is exactly the shape of an interface that looks
-           right over a scene that is missing. */
+        /* Expose incompatible promoted colour/depth pairs separately from draw classification. */
         say("reinsert: %lu depth mismatches, policy %lu (0 drop, 1 keep, 2 refuse), last pair "
             "target %lux%lu against depth %lux%lu format %lu",
             (unsigned long)tap.depth_mismatches,
@@ -3951,11 +3666,8 @@ void rsf_bridge_report(void)
             (unsigned long long)status.frames_evaluated,
             (unsigned long long)status.frames_refused);
 
-        /* Whether this is upscaling at all. The game puts its screen percentage back when a
-           mission loads, and a backend fed the presented size is doing antialiasing instead. That
-           is not visible in the result, which looks clean and sharp precisely because nothing was
-           reconstructed from less, so it has to be said rather than seen. A mission was watched
-           this way and read as a successful upscale. */
+        /* A render extent equal to output indicates native-resolution reconstruction; engine
+           settings resets can otherwise hide a lost reduction ratio. */
         if (tap.render_width != 0 && status.output_width != 0 &&
             tap.render_width >= status.output_width) {
             say("note: the game is rendering at the presented size, so this is antialiasing at "
@@ -3969,8 +3681,8 @@ void rsf_bridge_request_dump(const char* prefix)
     if (bridge.started) {
         /* A disabled-backend capture must not label a later enabled frame with this prefix. */
         if (bridge.enabled_requested) rsf_dlss_pipeline_request_dump(prefix);
-        /* And the route's own pictures, for two consecutive frames: whether the layer or the
-           reconstruction moves between them is what a shimmer complaint needs answered. */
+        /* Arm bounded gate snapshots under the same prefix; native mode spans eight Present
+           intervals and requests two matching composition snapshots. */
         snprintf(bridge.route_dump_prefix, sizeof(bridge.route_dump_prefix), "%s_route", prefix);
         bridge.route_dump_frame = 0;
         bridge.route_dump_serial = 0;
@@ -3986,6 +3698,8 @@ void rsf_bridge_set_briefing_capture(const char* prefix)
              prefix ? prefix : "");
 }
 
+/* Create verified AC7 view twins on demand and publish upload/draw override callbacks.
+   Keep the upload watch active for current-frame camera metadata even when overrides are off. */
 static void configure_view_overrides(void)
 {
     const int on = bridge.ui_unjitter || bridge.layer_unjitter;

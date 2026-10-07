@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Device-scoped FSR4 INT8 capability override for one fingerprinted SDK binary. Installation
+// is serialized; query callbacks use the shorter registration lock and forward without a lease.
 #include "fsr4_compat.h"
 #include <MinHook.h>
 #include <bcrypt.h>
@@ -23,6 +25,9 @@ Capability original = nullptr;
 constexpr unsigned char expected[]{0x48,0x83,0xec,0x48,0x48,0x8b,0xc2,0x48,0x85,0xd2,0x74,0x54,0x48,0x8d,0x54,0x24};
 constexpr unsigned char digest[]{0xd0,0xdc,0xcc,0xc7,0x4a,0x43,0xc4,0x4b,0xa4,0x35,0xb7,0xa3,0x69,0xb4,0x56,0xe0,
     0x97,0x0d,0x8a,0x44,0x64,0xe4,0xbd,0x68,0x31,0x19,0xb3,0x74,0xf2,0xc9,0xfb,0x46};
+/** Verify the loaded module's on-disk size and SHA-256 before interpreting the private RVA.
+ * Every file/hash handle is released on success or failure; an unreadable file refuses the hook.
+ */
 bool fingerprint(HMODULE module)
 {
     wchar_t path[32768]{};
@@ -49,12 +54,14 @@ bool fingerprint(HMODULE module)
     return ok;
 }
 }
+/** A shared lease holds the selected device alive and scopes the override to that exact pointer. */
 struct Fsr4Compatibility {
     HMODULE module = nullptr;
     ComPtr<ID3D12Device> device;
     ~Fsr4Compatibility();
 };
 namespace {
+/* Override only the registered device; all other SDK queries use the original predicate. */
 bool capability(void* api, ID3D12Device* device)
 {
     AcquireSRWLockShared(&registration);
@@ -63,6 +70,7 @@ bool capability(void* api, ID3D12Device* device)
     return allowed ? true : original(api,device);
 }
 }
+/* Revocation clears registration under the query lock; resident detours remain callable. */
 Fsr4Compatibility::~Fsr4Compatibility()
 {
     AcquireSRWLockExclusive(&registration);
@@ -74,6 +82,10 @@ Fsr4Compatibility::~Fsr4Compatibility()
     // The private hook and its trampoline remain resident and forward unchanged without a
     // device lease. Retiring them while an unrelated SDK query is in flight would be unsafe.
 }
+/** Return a shared lease only for NVIDIA/Intel devices with SM6.6 and WaveOps using the exact
+ * supported binary. An active different module/device or failed fingerprint refuses activation.
+ * Empty results leave native selection available. Exceptions become a diagnostic and empty lease.
+ */
 std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8(HMODULE module, ID3D12Device* device,
     rsf_backend_log_fn log, void* user) try
 {

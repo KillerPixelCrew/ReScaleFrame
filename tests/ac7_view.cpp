@@ -1,14 +1,11 @@
-// Read a view uniform buffer, and refuse the things that are not one.
-//
-// The buffer here is built rather than captured, because a captured one cannot be committed and a
-// test that needs game data does not run in CI. What it is built to satisfy are the same
-// relationships the reader checks, so the two agree by construction on a good buffer and the
-// interesting cases are the bad ones.
-//
-// Pass a directory as an argument and it additionally reads every `*_cb4096.bin` in it, which is
-// how the reader gets checked against buffers the game actually bound. That path is for running by
-// hand against an untracked capture directory; the registered test takes no argument.
-
+/**
+ * @file
+ * Check AC7 view-buffer parsing and jitter removal from synthetic data.
+ * Consistent row-vector camera/projection matrices provide independent expectations
+ * for inverse transforms, render-pixel jitter and pixel-to-world reconstruction.
+ * Malformed and orthographic buffers exercise refusal. An optional directory reads
+ * capture00_cb4096.bin through capture99_cb4096.bin from untracked game captures.
+ */
 #include <rescaleframe/ac7_view.h>
 #include "ac7_view_fixture.h"
 
@@ -75,7 +72,7 @@ void check_inverse(const rsf_ac7_view& view)
 
 int read_directory(const char* directory)
 {
-    // Deliberately simple: the capture directory holds one flat set of files.
+    // Capture naming is bounded to capture00..99; this manual path does not recurse.
     int found = 0, accepted = 0, main_views = 0;
     for (int index = 0; index < 100; ++index) {
         char path[1024];
@@ -235,8 +232,7 @@ int main(int argc, char* argv[])
     check(result == RSF_AC7_VIEW_OK, "A jittered view buffer must be accepted.");
     check(view.has_jitter == 1u, "A jittered projection must be reported as such.");
 
-    // Clip space divided by the view rect, not the buffer. Those differ once the render scale
-    // moves, and using the buffer would scale every offset without ever looking wrong.
+    // Convert clip jitter with the view rectangle, whose extent can differ from the allocation.
     check_near(view.jitter_pixels[0], clip_x * 2048.0f * 0.5f, 1e-4f,
                "The horizontal jitter comes back in pixels.");
     check_near(view.jitter_pixels[1], clip_y * 1152.0f * -0.5f, 1e-4f,
@@ -255,17 +251,14 @@ int main(int argc, char* argv[])
     check_near(view.view_to_clip_no_jitter[0], view.view_to_clip[0], 1e-6f,
                "Removing the jitter must leave the rest of the projection alone.");
 
-    // A view that does not fill its target is one of the smaller ones the engine also renders, and
-    // its camera describes something the player is not looking through.
+    // A smaller scene view must parse successfully while remaining ineligible as the main view.
     const Buffer secondary = make_view(1.63185f, 2.90107f, 1.0f, 1016, 1016, 2048, 1152);
     view = read(secondary, &result);
     check(result == RSF_AC7_VIEW_OK, "A secondary view is still a view buffer.");
     check(view.is_main_view == 0u, "A view smaller than its target is not the main view.");
 
-    // The interface renders through an orthographic view, which has no perspective divide. Built
-    // as a consistent projection and its true inverse, taken from a captured interface view:
-    // zeroing one element of a perspective matrix would fail the inverse check first and be
-    // refused as not a view buffer at all, which is a different answer.
+    // Use a consistent orthographic projection/inverse to reach NOT_PERSPECTIVE.
+    // Corrupting a perspective matrix instead would test NOT_A_VIEW_BUFFER.
     Buffer orthographic = good;
     orthographic.put(kViewToClip, {1.0f / 1024.0f, 0.0f, 0.0f, 0.0f,
                                    0.0f, -1.0f / 576.0f, 0.0f, 0.0f,
@@ -304,8 +297,7 @@ int main(int argc, char* argv[])
                             &target) == RSF_AC7_VIEW_ERROR_NOT_A_VIEW_BUFFER,
           "A constant buffer that is not the view buffer must be refused.");
 
-    // One field wrong is enough. This is the case that matters: a buffer that looks right except
-    // for the part being relied on.
+    // Mutate one relationship at a time so each rejection exercises the intended guard.
     Buffer broken = good;
     broken.put(kViewUp, {0.5f, 0.5f, 0.5f, 0.0f});
     check(rsf_ac7_view_read(broken.bytes(), RSF_AC7_VIEW_BUFFER_BYTES, RSF_AC7_VIEW_ABI_VERSION,

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check object/camera motion resolution on WARP with synthetic depth and vectors.
+ * Readback separates valid zero, written motion and unwritten camera reprojection.
+ * A nearer translucent-depth layer affects reprojection only for unwritten motion;
+ * known NDC translations provide expected render-pixel displacements.
+ */
 #include <rescaleframe/motion_resolve.h>
 #include <d3d11.h>
 #include <DirectXPackedVector.h>

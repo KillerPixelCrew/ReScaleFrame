@@ -25,7 +25,8 @@ Current source supplies independent DLSS-G, FSR3/4 and XeSS FG with live provide
 SDK-limited multiplier controls and provider-owned Reflex/XeLL pacing. Unity's SDR pre-UI colour
 and normalized depth/motion are captured separately; SR Off/FSR1 also supply FG inputs. Recorded
 user acceptance covers XeSS/DLSS-G and the final FSR correction, without establishing higher MFG
-counts, all scene/resize paths or Claw operation. See
+counts, all scene/resize paths or Claw operation. Queried DLSS/XeSS limits determine multipliers;
+the pinned AMD API provides 2x. FSR4 generation needs separate hardware evidence. See
 [shared FG corrections and acceptance](../../docs/research/shared-fg-20261004.md).
 
 ```powershell
@@ -52,3 +53,48 @@ settings over `[UnitySR]` defaults. [Current status](../../docs/current-status.m
 [Plugin design](../../docs/research/unity-mono-plugin.md) records the inspected methods, proposed
 bootstrap, semantic patch guards, native execution and lifecycle requirements.
 [First game evidence](../drag-n-wash/engine.json) keeps build identity separate from capability.
+
+## Source and lifecycle
+
+| Files | Responsibility |
+| --- | --- |
+| [src/plugin.cpp](src/plugin.cpp) | Exact game identity and serialized native lifecycle |
+| [src/mono_runtime.cpp](src/mono_runtime.cpp), [src/mono_runtime.h](src/mono_runtime.h) | Existing-player Mono export/domain discovery and owned worker attachment |
+| [src/bridge.cpp](src/bridge.cpp), [src/bridge.h](src/bridge.h) | Bounded packet queue, D3D12 command/resource leases, event IDs and completion drainage |
+| [unity_bridge.h](include/rescaleframe/unity_bridge.h), [managed/Native.cs](managed/Native.cs) | Matching x64 native/managed sizes, versions, resource pointers and rooted callbacks |
+| [managed/Bootstrap.cs](managed/Bootstrap.cs) | Main-thread activation, producer admission and owned Harmony cleanup |
+| [managed/UrpAdapter.cs](managed/UrpAdapter.cs) | Twelve-method metadata preflight, exact camera dimensions, temporal inputs, pre-postprocessing SR and completed SDR/UI boundaries |
+| [managed/CpuBoundaries.cs](managed/CpuBoundaries.cs) | Removable player-loop input/simulation markers using the same frame IDs as render packets |
+| [managed/AssemblyInfo.cs](managed/AssemblyInfo.cs) | Internal access for the managed contract fixture |
+| [CMakeLists.txt](CMakeLists.txt), [managed project](managed/ReScaleFrame.Unity.Managed.csproj), [build properties](managed/Directory.Build.props), [package lock](managed/packages.lock.json) | Native/managed build inputs, external player references and locked Harmony dependency |
+
+Preparation copies host services and loads the adjacent managed helper and `0Harmony.dll` into
+the player's identified script domain. A fresh native worker owns its Mono attachment and
+detachment. Bootstrap copies the native API, patches the render-loop boundary and defers Unity
+object access until the main thread runs a supported URP/D3D12 loop. Native start enables packet
+admission; active status additionally requires managed installed state. Quiesce disables new native
+packets. Stop waits for pending events, native callbacks and GPU completion before removing managed
+producers and releasing host services. Busy cleanup retains the plugin for retry.
+
+Each successful enqueue copies a packet and retains its native textures in one of 32 slots.
+Its opaque address must be delivered once with the reserved plugin event. Execution transfers
+leases into separate three-slot SR and completed-scene command rings. Unity's returned frame-fence
+identity guards allocator/resource reuse. An unknown submission completion retains ownership and
+refuses teardown. Device changes require a drained restart.
+
+The adapter admits a full-window perspective `Camera.main` base view without stereo, camera
+stack, a target texture or hardware dynamic resolution. Per-camera history resets on frame gaps
+and policy-generation changes. Jitter is measured after GPU projection conversion in render pixels;
+FOV is radians and delta time is seconds. Resource handles resolve during graph execution. SR
+records a complete spatial fallback before the native event; missing inputs or unsupported execution
+retain that result. Completed-scene observation currently uses the SDR path before screen-space UI.
+
+Shared frame generation and latency live in the runtime, using source CPU tokens and submitted
+depth/motion/HUD-less copies. Reflex controls reach the selected DLSS provider; active DLSS-G
+requires an effective mode of at least On.
+
+The managed project requires `UnityManagedDirectory` (or `RSF_UNITY_MANAGED_DIRECTORY`) pointing
+to the examined player's `Managed` directory. Unity reference assemblies stay external and are
+not copied into the mod. Harmony resolves through the checked-in lock file. CMake's
+`RSF_UNITY_NATIVE_INCLUDE` selects untracked Unity native headers; absent D3D12 headers leave the
+native lifecycle buildable while graphics discovery refuses.

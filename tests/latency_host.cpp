@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check a manual Streamline Reflex/PCL service lifecycle with synthetic frames.
+ * The fixture samples input, renders a changing clear colour and emits ordered
+ * markers using frame IDs above 32 bits. API call counts and queue retirement are
+ * checked; counters do not establish ETW or physical input-to-display latency.
+ */
 #include <rescaleframe/streamline_host.h>
 #include <windows.h>
 #include <d3d12.h>

@@ -1,4 +1,5 @@
 <Project>
+  <!-- Keep compiler outputs out of the game-reference directory and shared repository source tree. -->
   <PropertyGroup>
     <BaseOutputPath>$(MSBuildThisFileDirectory)../../../build/managed/unity/bin/</BaseOutputPath>
     <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../../build/managed/unity/obj/</BaseIntermediateOutputPath>

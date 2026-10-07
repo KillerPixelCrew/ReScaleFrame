@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Research proxy: loads with the game, forwards DirectInput8Create to the real dinput8, and
-   dumps the main module once its code section stops looking like ciphertext.
-
-   dinput8 is the carrier because AC7 imports exactly one function from it and nothing else in the
-   process does, so the forwarding surface is one export and DXVK is left alone. */
+/* AC7 carrier: forwards DirectInput8Create, installs observation/presentation hooks,
+   waits for decrypted executable code, and prepares reconstruction on the render thread.
+   Worker readiness is published through startup_ready; device/context work runs at Present.
+   Executable dumps and RenderDoc are optional diagnostics. Patch evidence and build fingerprints
+   are recorded in docs/research/ue418-hook-map.md. */
 
 #include <stdlib.h>
 #include <rescaleframe/module_dump.h>
@@ -43,6 +43,8 @@ static wchar_t preference_path[MAX_PATH * 2];
 static uint32_t preferred_enabled = 1;
 static uint32_t preferred_quality = 3;
 
+/* Hash the on-disk executable into 64 lowercase hexadecimal digits plus terminator.
+   Returns zero on file/CNG failure; all local handles are released before returning. */
 static int executable_sha256(char output[65])
 {
     wchar_t path[MAX_PATH];
@@ -72,6 +74,7 @@ done:
     return ok;
 }
 
+/* Best-effort append-only logging; missing paths or write failures are intentionally silent. */
 static void note(const char* format, ...)
 {
     if (log_path[0] == L'\0') {
@@ -112,6 +115,8 @@ static HMODULE load_real_dinput8(void)
 
 typedef HRESULT(WINAPI* direct_input8_create_fn)(HINSTANCE, DWORD, const IID*, void**, void*);
 
+/* Preserve the system DirectInput ABI and return its HRESULT. Failed or recursive
+   resolution returns E_FAIL without running renderer startup. */
 __declspec(dllexport) HRESULT WINAPI DirectInput8Create(HINSTANCE instance, DWORD version,
                                                         const IID* interface_id, void** out,
                                                         void* outer)
@@ -128,9 +133,8 @@ __declspec(dllexport) HRESULT WINAPI DirectInput8Create(HINSTANCE instance, DWOR
     return original(instance, version, interface_id, out, outer);
 }
 
-/* A file sitting beside this DLL, which is beside the game executable. Written out rather than
-   assumed from the working directory, because a game's working directory is not reliably its
-   install folder. */
+/* Resolve a path relative to this DLL, independent of the process working directory.
+   Writes a terminated path into out and returns zero on lookup or capacity failure. */
 static int beside_this_module(const char* name, char* out, size_t count)
 {
     HMODULE self = NULL;
@@ -158,15 +162,10 @@ static int beside_this_module(const char* name, char* out, size_t count)
     return 1;
 }
 
-/* Settings, from a file beside the proxy rather than from the launch line.
-
-   Every knob here started as an environment variable, which meant a Steam launch option long
-   enough to lose a quote in, edited through a dialog, for values that change between runs. The file
-   is the same names, one per line, `NAME=value`, with `#` or `;` starting a comment. It is read
-   once, at attach.
-
-   An environment variable still wins where it is set, so an existing launch line keeps working and
-   a one-off override does not mean editing the file. */
+/* Installation settings use NAME=value lines in ReScaleFrame.ini beside the carrier.
+   The first lookup caches at most 64 entries; # and ; begin comments anywhere on a line.
+   Environment values take precedence; file keys are compared case-insensitively and the first
+   duplicate wins. Saved enable/quality preferences are applied after these defaults. */
 #define RSF_CONFIG_MAX_ENTRIES 64
 #define RSF_CONFIG_KEY_BYTES 64
 #define RSF_CONFIG_VALUE_BYTES 512
@@ -193,6 +192,7 @@ static char* trim(char* text)
     return text;
 }
 
+/* Load installation defaults once. Ignore malformed/oversized lines; cap retained entries. */
 static void load_config(void)
 {
     FILE* file;
@@ -255,13 +255,9 @@ static const char* setting(const char* name, char* out, size_t count)
     return NULL;
 }
 
-/* A numeric setting.
-
-   Base zero, so the hexadecimal addresses this file documents can be written the way it documents
-   them. Absent and zero are different: a setting present and zero is that value, which is what
-   makes `RSF_DECODE_MOTION=0` disable decoding and quality zero select Native. Both were review
-   findings, and both were consequences of the old parse rejecting anything not strictly positive.
-   Text that is not a number at all falls back, because a typo should not read as zero. */
+/* Parse an unsigned setting with strtoul base zero, preserving explicit zero.
+   Empty text or a missing numeric prefix uses fallback. Trailing text and range overflow are
+   not separately rejected; this is the legacy diagnostic parser, not a strict INI validator. */
 static DWORD read_number(const char* name, DWORD fallback)
 {
     char text[64];
@@ -284,28 +280,16 @@ static int read_text(const char* name, char* out, size_t count)
 }
 
 #if RSF_HAVE_FRAME_CAPTURE
-/* RenderDoc has to be loaded before the graphics device exists, so this runs on the carrier's own
-   attach rather than on the worker thread. It only loads a library and reads two variables.
-
-   The DLL is looked for beside this one before any variable is consulted, because that is where it
-   ends up when the proxy is deployed and requiring a path to a file already in the folder is a way
-   to press F11 seven times and get nothing. An explicit `RSF_RENDERDOC_DLL` still wins, for a build
-   kept somewhere else. */
+/* Opt-in capture initialization at process attach, before any graphics device is created.
+   RSF_RENDERDOC_DLL overrides renderdoc.dll beside the carrier; RSF_CAPTURE_PREFIX is optional. */
 static void start_capture_support(void)
 {
     char library[MAX_PATH];
     char prefix[MAX_PATH];
     rsf_capture_result result;
 
-    /* Off unless asked for, and this is not a convenience default worth having.
-
-       RenderDoc wraps the device, and two things follow that cost a whole session each. NGX refuses
-       to create the DLSS feature on a wrapped device, `NGX create feature failed 0xbad00002` once
-       per frame forever, which slows the game down until it stops. And RenderDoc makes a device of
-       its own, which is how the observer came to hold the wrong one.
-
-       Loading it beside the proxy was meant to save setting a path. It cost more than it saved, so
-       the path is still found automatically, but only when capture is actually wanted. */
+    /* Keep capture opt-in: the observed RenderDoc wrapper caused NGX feature creation
+       refusal and could make the observer select a helper device. See loader/README.md. */
     if (read_number("RSF_RENDERDOC", 0) == 0 &&
         !read_text("RSF_RENDERDOC_DLL", library, sizeof(library))) {
         return;
@@ -320,8 +304,7 @@ static void start_capture_support(void)
         prefix[0] = '\0';
     }
     result = rsf_capture_initialise(library, prefix[0] ? prefix : NULL);
-    /* Announced either way. A capture key that silently does nothing is what this is fixing, and a
-       load that failed here is the only place that can say why. */
+
     note("capture support: %s, result %d", library, (int)result);
 }
 
@@ -329,22 +312,19 @@ static void start_capture_support(void)
 
 static char observe_directory[MAX_PATH];
 
-/* The observer's progress lines go to the same log as everything else. note() opens, writes and
-   closes per line, which is what makes the last line before a crash survive it. */
+/* Adapt module logs to the carrier sink. Each note opens and closes the file so completed
+   lines survive most crashes. */
 static void observer_note(void* user, const char* message)
 {
     (void)user;
     note("%s", message);
 }
 
-/* Installed before the module dump rather than after it. The creation hook only sees textures
-   made after it is in place, and the target we are after is allocated during engine startup. */
-/* Defined below, next to the actions themselves. Declared here because they are registered when
-   the observer is installed, which is before anything can call them. */
+
+
 static void register_overlay_actions(void);
 
-/* Defined next to the other console variable work, and called from the render scale paths above
-   it, which run whenever the scale is applied or restored. */
+
 static void set_separate_translucency_scale(void);
 static void apply_separate_translucency_patch(void);
 static int apply_translucency_depth_patches(void);
@@ -352,6 +332,8 @@ static int apply_translucency_depth_patches(void);
    above 1.0 depends on. Settled at patch time, read whenever the scale is chosen. */
 static int translucency_depth_conformed;
 
+/* Install creation and Present hooks before engine resources appear. Register UI rules,
+   capture configuration and carrier actions before callbacks can execute. */
 static void start_observer(void)
 {
     if (read_number("RSF_OBSERVE", 1) == 0) {
@@ -365,14 +347,10 @@ static void start_observer(void)
     options.abi_version = RSF_OBSERVER_ABI_VERSION;
     /* 35 is DXGI_FORMAT_R16G16_UNORM, the format Unreal uses for scene velocity. */
     options.format = read_number("RSF_OBSERVE_FORMAT", 35);
-    /* 512 rather than 1024: at half screen percentage the velocity target lands at exactly 1024
-       wide, sitting on the old boundary, and a target that is filtered out looks identical to one
-       that was never allocated. */
+    /* Include velocity targets at reduced render resolution. */
     options.minimum_width = read_number("RSF_OBSERVE_MIN_WIDTH", 512);
     options.capacity = read_number("RSF_OBSERVE_CAPACITY", 8);
-    /* A range rather than the stock size: AC7 runs a vendor branch, and the first run showed no
-       buffer of the stock 2640 bytes at all. Everything in range is retained per distinct size,
-       and every size seen is counted, which is what identifies the right one. */
+    /* AC7 uses a vendor view-buffer layout; retain/count sizes across this diagnostic range. */
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
     options.log = observer_note;
@@ -387,13 +365,10 @@ static void start_observer(void)
     options.motion_scale = 1.0f / (0.499f * 0.5f);
     options.motion_bias = 32767.0f / 65535.0f;
     options.motion_invalid_value = -1000.0f;
-    /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
-       observer's options are written once, and harmless until something turns the display on. */
+    /* Register callbacks before the first Present; observer options are immutable after install. */
     options.on_present = rsf_bridge_present_hook();
     options.on_present_event = rsf_bridge_present_event_hook();
-    /* Same reason, and it has to happen before the first present rather than at F8: the overlay
-       starts as soon as the game has a device, and the bridge would otherwise have nowhere to
-       speak until the backend was started. */
+    /* Publish logging/actions before the first overlay frame. */
     rsf_bridge_set_log(observer_note, NULL);
     {
         char prefix[MAX_PATH * 2];
@@ -403,10 +378,8 @@ static void start_observer(void)
     }
     register_overlay_actions();
 
-    /* Naming the game's pipeline objects, so a run can say which draws are the interface. On by
-       default because it changes nothing and the answer is what the next milestone needs; the
-       hooks are only patched when something asks for them, so turning it off costs the game
-       nothing at all. */
+    /* Classify object creation without diverting draws. Hooks must exist before creation
+       to associate borrowed object addresses with layouts and shader hashes. */
     if (read_number("RSF_UI_CLASSIFY", 1) != 0) {
         char forced[512];
         char skipped[512];
@@ -439,31 +412,10 @@ static void start_observer(void)
          (unsigned long)options.constant_buffer_max_bytes);
 }
 
-/* Revive Unreal's temporal jitter without turning temporal AA on.
-
-   PreVisibilityFrameSetup clears TemporalJitterPixels, then computes a jitter only when the view
-   asks for temporal AA:
-
-       cmp  dword ptr [rsi+0x13c0], 2      ; View.AntiAliasingMethod == AAM_TemporalAA
-       jne  <skip>                         ; the six bytes replaced below
-       test rdi, rdi                       ; && ViewState
-
-   Stepping over that jump lets the jitter run whatever the anti-aliasing setting says, while the
-   ViewState check just after it is left alone because a null view state genuinely cannot proceed.
-   Unreal then applies the offset to the projection itself, so every matrix derived from it stays
-   consistent, which is the reason to do it here rather than editing matrices afterwards.
-
-   The expected bytes are checked before writing. If the game updates and the code moves, this
-   refuses rather than corrupting an instruction.
-
-   The patch goes on and off at runtime rather than once at attach. Jitter that nothing resolves is
-   visible as a shimmer, and the front end is where it shows: the main menu holds still, so an
-   offset that changes every frame has nothing to hide behind. Luma's Unreal path never has this
-   problem because it never manufactures jitter, running only where the engine already ran temporal
-   AA (`main.cpp:829`) and treating a frame without it as a camera cut (`:1135`). We have to
-   manufacture it, because AC7 runs no temporal AA at all and a reconstruction needs the samples.
-   What we can copy is the discipline: the jitter exists while something of ours resolves it and at
-   no other time. */
+/* Verified AA-gate patch state for PreVisibilityFrameSetup. The patch preserves ViewState
+   validation and applies engine-generated jitter through the normal projection path. Mode 1
+   follows reconstruction; mode 2 opens at startup. A main-view stub avoids jittering secondary
+   views that reconstruction never consumes. See docs/research/ue418-hook-map.md. */
 static struct {
     int mode;
     int enabled;
@@ -481,41 +433,12 @@ static struct {
     volatile LONG* stub_last_denied;
 } jitter_patch;
 
-/* Open the gate for the main view only.
-
-   Measured 26 September 2026: with the gate open for every view, the briefing's holographic
-   terrain and its aircraft symbols, and the main menu, shimmered at a reduced render scale while
-   the scene around them held still. They are scene-in-scene: views the game renders into a texture
-   and shows inside the main one. They take the same jitter, and nothing resolves it, because the
-   reconstruction only sees the main view; the upscale then magnifies the wobble.
-
-   The jitter code reads the view's rectangle right before the gate (`ViewRect` at view+0x70..0x7C,
-   the view in rsi) to scale the sample. So instead of stepping over the anti-aliasing check, the
-   gate jumps to this stub, which keeps the game's own answer for a view that really runs temporal
-   AA, and otherwise lets the jitter through only for a view whose rectangle is the main view's
-   render size, as the reconstruction's last pass carried it. Anything rendered at another size is
-   left unjittered. Before the first pass the size is zero and every view passes, which is the
-   previous behaviour. rax is saved around the test; both exits start by overwriting the flags.
-
-     je   continue             ; flags from cmp [rsi+0x13c0], 2: temporal AA, the game's own path
-     push rax
-     mov  eax, [width]
-     test eax, eax
-     je   allow                ; no size yet: every view, as before
-     mov  eax, [rsi+0x78]
-     sub  eax, [rsi+0x70]
-     cmp  eax, [width]
-     jne  deny
-     mov  eax, [rsi+0x7c]
-     sub  eax, [rsi+0x74]
-     cmp  eax, [height]
-     jne  deny
-   allow: mov [view], rsi       ; the main view, for this frame's jitter sample
-     pop rax
-     jmp  continue             ; the jitter code, gate + 6
-   deny:  pop rax
-     jmp  skip                 ; where the stock jne went
-*/
+/* Allocate a process-lifetime executable stub within rel32 reach of the verified gate.
+   rsi names the view; ViewRect is at +0x70..+0x7c. Stock temporal-AA views continue normally;
+   other views pass only when their rectangle matches the last observed main-view render size.
+   A zero width permits all views during discovery. The stub preserves rax and branches back to
+   gate+6 or the stock skip target; its counters and dimensions occupy the trailing data area.
+   Restricted to the researched RVA because its register and branch assumptions are site-specific. */
 static int build_jitter_stub(DWORD rva)
 {
     unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
@@ -601,8 +524,7 @@ static void update_jitter_main_view(void)
         return;
     }
     rsf_bridge_view_size(&width, &height);
-    /* Every second, what the stub decided since the last time, so a run can say which views were
-       jittered and which were not, and at what size the ones turned away came. */
+    /* Log decision deltas every 20 maintenance calls. */
     {
         static int ticks = 0;
         static LONG last_allowed = 0;
@@ -631,8 +553,8 @@ static void update_jitter_main_view(void)
     }
 }
 
-/* Write the gate open or closed. Idempotent, and announced on every transition: a jitter that
-   silently stopped and a jitter that was never on look identical in the image. */
+/* Idempotently write the expected open/closed gate bytes and report each transition.
+   State changes only after the guarded patch succeeds. */
 static void set_jitter_enabled(int enabled)
 {
     if (jitter_patch.mode == 0 || !jitter_patch.site_verified) {
@@ -670,9 +592,7 @@ static void set_jitter_enabled(int enabled)
     }
 }
 
-/* Called by the bridge when a reconstruction starts resolving frames, and by the panel. A start
-   only opens the gate in mode 1; mode 2 has it open already and an explicit click is obeyed in
-   either, which is what makes the switch usable as an experiment. */
+/* Render-thread action for automatic reconstruction startup and explicit jitter overrides. */
 static void action_set_jitter(unsigned long open)
 {
     set_jitter_enabled(open != 0);
@@ -688,12 +608,8 @@ static unsigned long action_jitter_available(void)
     return (unsigned long)(jitter_patch.mode != 0 && jitter_patch.site_verified);
 }
 
-/* Record the site and check it, without deciding yet whether the gate is open.
-
-   Mode 2 is the old behaviour, on from attach and never off, kept so a run can compare against
-   every result taken before this. Mode 1 follows the reconstruction. Both verify the expected
-   bytes here, by opening the gate and closing it again, so a game update is reported at startup
-   rather than at the first transition, when whoever is looking is looking at something else. */
+/* Verify the site by opening the gate once; mode 1 closes it until reconstruction starts.
+   Use the main-view stub only for the researched RVA, otherwise retain the all-view experiment. */
 static void apply_jitter_patch(void)
 {
     jitter_patch.mode = (int)read_number("RSF_ENABLE_JITTER", 1);
@@ -728,33 +644,10 @@ static void apply_jitter_patch(void)
     }
 }
 
-/* Let translucent geometry into the velocity pass, so a reconstruction has vectors for it.
-
-   Separate translucency carries no motion vectors in stock 4.18, which is why the briefing map's
-   relief and the vehicle symbols in mission replay have none. The layer is drawn with scene depth
-   bound read only, so it writes no depth either, and depth based camera motion cannot serve it.
-   Velocity excludes it by blend mode in FVelocityDrawingPolicyFactory::DrawDynamicMesh:
-
-       call qword ptr [rax+0x198]          ; Material->GetBlendMode()
-       cmp  eax, 1                         ; BLEND_Opaque or BLEND_Masked
-       ja   <return false>                 ; the six bytes replaced below
-       call qword ptr [rax+0x20]           ; GetMaterialDomain, left alone
-
-   Only the blend mode rejection is removed. The material domain check just after it stays, because
-   excluding UI domain materials is wanted, and so do the movable test and SupportsVelocity further
-   in. A material whose cook produced no usable velocity permutation therefore still refuses rather
-   than drawing wrongly, which is what makes this safe to try.
-
-   4.18 compiles velocity shaders for the special engine material, and both draw paths substitute
-   that default proxy for a material that writes every pixel, is not two sided and does not move its
-   mesh. Sprite like icons should fall into that; two sided sheets should not, and are expected to
-   go on refusing. The engine supplies PreviousLocalToWorld itself once a draw reaches the pass,
-   which is the whole reason to do this here rather than reconstructing motion outside the game.
-
-   This is the dynamic mesh path. The static equivalent in AddVelocityStaticMesh has not been
-   located, so a primitive that renders from the static draw list is unaffected.
-
-   Untested against the game. See docs/research/ue418-hook-map.md. */
+/* Opt-in dynamic-mesh velocity experiment: remove only the blend-mode rejection in
+   FVelocityDrawingPolicyFactory::DrawDynamicMesh. Material-domain, movable and shader-support
+   checks remain. Static draw-list geometry is unaffected; this patch alone does not establish
+   usable vectors. Untested against the game; see docs/research/ue418-hook-map.md. */
 static void apply_translucent_velocity_patch(void)
 {
     if (read_number("RSF_TRANSLUCENT_VELOCITY", 0) == 0) {
@@ -784,6 +677,8 @@ static void apply_translucent_velocity_patch(void)
     }
 }
 
+/* Request paired diagnostics and wait up to five seconds for observer completion. The
+   wait is a diagnostic cost; this function can also be invoked from a render-thread action. */
 static void report_and_dump(void)
 {
     rsf_observer_status status;
@@ -797,16 +692,13 @@ static void report_and_dump(void)
          status.frames_presented, status.textures_created, status.textures_matched,
          status.constant_buffers_matched, status.present_width, status.present_height);
 
-    /* Each press writes its own set. Comparing a menu, a briefing and a mission is how fields
-       that the stock layout does not predict get identified: what changes between them says what
-       a field is far better than any single snapshot does. */
+    /* Give each requested snapshot a distinct prefix for cross-scene comparison. */
     static unsigned capture_index = 0;
     const unsigned index = capture_index++;
 
     char prefix[MAX_PATH * 2];
     snprintf(prefix, sizeof(prefix), "%s\\capture%02u", observe_directory, index);
-    /* The work happens inside the next present. Reading a resource from this thread would race
-       the game's own rendering, which is what took the process down the first time. */
+    /* Queue GPU readback for the next Present instead of accessing the context here. */
     const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY);
 
     char sizes[MAX_PATH * 2];
@@ -816,9 +708,7 @@ static void report_and_dump(void)
     note("capture %u requested (result %d), %u distinct constant buffer sizes seen", index,
          (int)requested, status.distinct_buffer_sizes);
 
-    /* If DLSS is up, ask for its output too. Comparing it against the game's own inputs from the
-       same key press is the only way to tell an evaluate that ran from one that produced a
-       picture, and those are different things. */
+    /* Pair reconstruction output and observer inputs under the same capture index. */
     if (rsf_bridge_running()) {
         char dlss_prefix[MAX_PATH * 2];
         snprintf(dlss_prefix, sizeof(dlss_prefix), "%s\\capture%02u_dlss", observe_directory,
@@ -843,6 +733,8 @@ static void report_and_dump(void)
     note("dump did not complete within five seconds");
 }
 
+/* Resolve the sibling AC7 plugin and provide the executable fingerprint for guarded
+   native preparation. Preparation does not activate its hooks. */
 static int prepare_native_game(void)
 {
     wchar_t path[MAX_PATH]; char sha256[65];
@@ -865,6 +757,9 @@ static int accept_ac7_window(void* user, void* window)
 }
 static void fg_latency_event(void* user, const rsf_observer_present_event* event)
 { (void)user; rsf_native_fg_present(event); }
+/* Configure the cold presentation host before the first game swapchain. Saved provider
+   choice overrides the INI fallback; native game preparation validates accepted AC7 windows.
+   Unsupported installation preserves the original D3D11 presentation path. */
 static void start_generation(void)
 {
     char directory[MAX_PATH * 2];
@@ -921,6 +816,9 @@ static void start_generation(void)
         "Reflex ordering: sleep may precede the previous Present (RSF_REFLEX_ASYNC=1)" :
         "Reflex ordering: previous Present, then one sleep, then input; submit end before PresentStart");
 }
+/* Worker sequence: create logging, install observation/cold presentation, await two stable
+   entropy samples, apply guarded patches, prepare native hooks, then publish startup_ready.
+   Executable dumping adds bounded late module sampling and an automatic snapshot. */
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -935,17 +833,13 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
         CreateDirectoryA(directory, NULL);
         strcat(directory, "\\AC7");
     }
-    /* Create it rather than failing silently when it is missing. A run of the game is expensive
-       enough that losing one to a typo in a path is not acceptable. */
+    /* Create the selected output leaf; custom parent directories must already exist. */
     CreateDirectoryA(directory, NULL);
 
     MultiByteToWideChar(CP_ACP, 0, directory, -1, log_path, MAX_PATH);
     wcscat(log_path, L"\\rsf-dump.log");
 
-    /* Said up front, because the first Windows run died of it: Steam's overlay hooks Present by
-       inline-patching dxgi and by rewriting the swap chain's table, and takes whatever it displaces
-       as its original, so a vtable hook on Present and the overlay chase each other. Until the
-       observer hooks by detour, the overlay has to be off for this game. */
+    /* The observer detours Present while preserving the Steam overlay hook chain. */
     if (GetModuleHandleW(L"gameoverlayrenderer64.dll")) {
         note("steam overlay: gameoverlayrenderer64.dll is loaded; the observer detours Present "
              "over its hook and keeps it in the chain, so both run");
@@ -997,8 +891,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
         note("startup: executable did not become ready, result %d; DLSS remains inactive", (int)result);
         return 0;
     }
-    /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
-       write into bytes about to be overwritten. */
+    /* Patch only after stable decryption readiness; earlier writes can be overwritten by unpacking. */
     apply_jitter_patch();
     apply_translucent_velocity_patch();
     /* Before the scale patch, because the scale it settles on depends on whether these applied. */
@@ -1020,8 +913,8 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
          report.sections_written, report.imports_described, report.iat_references,
          (unsigned long long)report.bytes_written);
 
-    /* Which renderer the game actually chose is only visible once it has initialised one, which
-       is long after the code has decrypted. Sample the module list on a schedule instead. */
+    /* Sample late module loads at bounded marks after decryption; startup imports do not
+       establish which renderer the game uses. */
     char modules_path[MAX_PATH * 2];
     snprintf(modules_path, sizeof(modules_path), "%s\\rsf-modules.log", directory);
     static const DWORD marks[] = {5000, 15000, 30000, 60000, 120000};
@@ -1035,24 +928,14 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     }
     note("module sampling finished");
 
-    /* One automatic report once the game is certainly rendering, so a run that never reaches a
-       key press still produces something. F10 repeats it on demand. */
+    /* Request a late automatic snapshot when executable dumping was explicitly enabled. */
     report_and_dump();
     return 0;
 }
 
-/* Lengthen the jitter sequence to match the render scale.
-
-   A reconstruction wants each output pixel covered by about the same number of distinct samples
-   however many render pixels sit behind it, so the sequence has to grow with the area ratio: eight
-   at full scale, thirty two at half. Unreal 4.18 will not do that by itself. It takes the count
-   from r.TemporalAASamples and that value does not move with screen percentage, so halving the
-   scale without this leaves the sequence a quarter as long as it should be.
-
-   The offset comes from the float variable that was just set, because TConsoleVariableData keeps
-   its two thread copies at the same place for every variable of the same element size. Searching
-   for the value the way the float path does would not work here: an integer 8 occurs all over the
-   object, and replacing every match would corrupt it. */
+/* Compatibility renderer: use round(8 * (100 / screen_percentage)^2) temporal samples,
+   with a minimum of eight. Reuse the validated value offset from the float cvar; verify both
+   integer thread copies before writing. Native ownership manages its own sampling. */
 static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
 {
     if (rsf_bridge_native_owned()) return;
@@ -1080,22 +963,18 @@ static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
         note("jitter sequence length set to %d at object offset 0x%lx", (int)samples,
              (unsigned long)value_offset);
     } else {
-        /* Refusing is the designed outcome when the object does not hold 8 in both slots, which
-           covers a different default, a different layout, and the wrong object. */
+        /* A differing default or layout must fail the expected-value check. */
         note("jitter sequence length NOT set (result %d), offset 0x%lx did not hold 8 twice",
              (int)result, (unsigned long)value_offset);
     }
 }
 
-/* Halve the render resolution, the way the engine's own screen percentage does.
-
-   In 4.18 that one cvar is the whole mechanism: it shrinks the scene buffers, makes ViewRect
-   differ from UnscaledViewRect so the upscale pass appears, and the jitter formula divides by
-   ViewRect so the offset rescales to render resolution by itself. Resizing render targets behind
-   the engine's back would instead leave BufferSizeAndInvSize and ScreenPositionScaleBias
-   describing a buffer that no longer exists, and every shader does its UV maths with those. */
+/* Last successfully applied engine screen percentage. Change the engine cvar so buffer
+   allocation, view rectangles, shader sizes and jitter scaling remain consistent. */
 static unsigned long requested_scale_percent;
 
+/* Change the expected previous/reset cvar value, then update jitter and layer scale.
+   Return zero on refusal and log a read-only object probe for diagnosis. */
 static int set_screen_percentage(float value)
 {
     uint32_t offset = 0;
@@ -1118,8 +997,7 @@ static int set_screen_percentage(float value)
         return 1;
     }
 
-    /* Say what actually went wrong rather than leaving one code to mean several things, and show
-       the object, because guessing a layout for a vendor branch is what failed the first time. */
+    /* Probe on refusal to record the manager, variable and leading values for layout research. */
     uint64_t manager = 0, variable = 0;
     float floats[32];
     memset(floats, 0, sizeof(floats));
@@ -1159,9 +1037,7 @@ static void start_dlss(void)
         return;
     }
 
-    /* The presented size, from the observer, so this does not have to be told what the game is
-       rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
-       size is a refusal instead. */
+    /* Use the observed presented extent; refuse startup before it is known. */
     {
         rsf_observer_status status;
         memset(&status, 0, sizeof(status));
@@ -1194,26 +1070,16 @@ static void start_dlss(void)
     rsf_bridge_report();
 }
 
-/* Put the render scale back when the game takes it away.
-
-   Loading a mission re-applies the game's own graphics settings, which sets the screen percentage
-   back to 100 and leaves a backend reconstructing from the presented size. That is antialiasing
-   rather than upscaling and it does not look like a fault: the picture is clean and sharp precisely
-   because nothing was reconstructed from less. A mission was watched that way and read as a
-   successful upscale, which is why this is not a key press.
-
-   Nothing here has to detect anything. `rsf_console_set_float` writes only where it finds the value
-   it was told to expect, so asking it to replace 100 with our scale does exactly nothing while the
-   scale is already ours, and restores it the moment the game puts 100 back. Silent in the ordinary
-   case, and it says so on the rare occasion it acts. */
+/* Restore the requested compatibility scale only when the engine resets its cvar to 100.
+   Mission loading can reapply graphics settings; an expected-value write leaves other values
+   untouched. Called by render-thread maintenance. */
 static void keep_render_scale(void)
 {
     uint32_t offset = 0;
     if (!requested_scale_percent) {
         return;
     }
-    /* What was last asked for, from the panel or a DLSS preset, over the settings file, so a
-       mission load puts back the scale that was chosen rather than the one the run started with. */
+    /* Preserve the last user/preset choice across engine settings resets. */
     const float value = requested_scale_percent
                             ? (float)requested_scale_percent
                             : (float)read_number("RSF_SCREEN_PERCENTAGE", 50);
@@ -1229,48 +1095,24 @@ static void keep_render_scale(void)
     }
 }
 
-/* What the overlay panel can ask this file for.
-
-   These are the actions that used to be function keys. They run on the render thread, called from
-   the present hook where the panel was drawn, which is the boundary the review finding wants and
-   is why the panel can drive them safely when a hotkey worker cannot.
-
-   The scale one remembers what was asked so the panel can show what is in effect. Without it the
-   only answer available is the environment default, which stops being true the moment anything
-   changes it. */
+/* Overlay actions run from the bridge Present callback on the graphics owner thread.
+   They apply settings, queue diagnostics and expose the last successfully applied scale. */
 
 static void action_start_backend(void)
 {
     start_dlss();
 }
 
-/* The separate translucency scale, as the patch below leaves it: a four byte immediate inside the
-   instruction stream, which is why it can be changed while the game runs.
-
-   Null until the patch goes in. Nothing else may write it, and a write is a single aligned store,
-   so a render thread reading the instruction either sees the old scale or the new one. Both are
-   valid floats and neither can be half of the other's bits. */
+/* Address of the aligned float immediate installed by the scale patch, null until verified.
+   Update with one aligned 32-bit store after changing page protection and flush the instruction
+   cache. The graphics owner supplies subsequent scale changes. */
 static volatile uint32_t* translucency_scale_slot;
 static float translucency_scale_now;
 
-/* Choose the separate translucency scale for the render scale that is now in effect.
-
-   The scale is a multiplier on the scene buffer, so what it is worth depends entirely on how large
-   that buffer is. At a 50% render scale a scale of 1.0 puts the layer at half of native, and 2.0
-   puts it at native. That relationship is the whole reason this cannot be a constant: DLSS, XeSS
-   and FSR each pick their own render scale per quality level, and a fixed multiplier would mean a
-   different translucency resolution for every one of them.
-
-   So the settings are percentages of the presented resolution, and the multiplier is derived:
-
-     RSF_TRANSLUCENCY_TARGET        percent of native, default 100; 0 means "match the scene"
-     RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding it when nonzero
-
-   Render the briefing at full output resolution across quality changes. Applying the
-   vanilla 0.5 multiplier to an already reduced scene would halve its detail again. This changes
-   the engine's allocation, viewport and depth setup together, before the layer is rasterized.
-   The unjittered route composites it after scene SR; changing its scale cannot itself remove jitter.
-   Pooled allocation padding still follows the engine's alignment rules. */
+/* Derive layer size from output-relative RSF_TRANSLUCENCY_TARGET (default 100%; zero
+   matches the scene). RSF_TRANSLUCENCY_SCALE overrides it with a scene-relative multiplier
+   expressed as percent. Clamp to 0.25..4 and to at most 1 unless all depth/view patches succeeded.
+   Allocation padding follows engine alignment; unjittering is a separate control. */
 static void set_separate_translucency_scale(void)
 {
     union {
@@ -1305,17 +1147,9 @@ static void set_separate_translucency_scale(void)
     if (scale.value < 0.25f) {
         scale.value = 0.25f;
     }
-    /* Above the scene's resolution only once the engine can build a depth to match.
-
-       Stock 4.18 borrows the scene's depth for any scale at or above 1.0, which pairs a large
-       colour target with a small depth. Game-tested on 7 September: at 2.0 the briefing relief
-       disappeared, and the log said why in one line, `last candidate 2048x1152 ... depth view ...
-       its texture 1024x576`. `apply_translucency_depth_patches` narrows that borrow to exactly 1.0,
-       after which the engine allocates, fills, view-transforms and resolves the layer's own depth
-       at whatever size it is.
-
-       So the ceiling follows those patches rather than a setting. If a game update moves them they
-       refuse, this stays at the scene's resolution, and the briefing is soft rather than missing. */
+    /* Stock UE4.18 borrows scene depth at scale >= 1, producing an invalid colour/depth
+       pair above 1. Permit enlargement only after allocation, bind, resolve and view consumers
+       all use the corrected scale gates. A refusal leaves a lower-resolution visible layer. */
     if (scale.value > 1.0f && !translucency_depth_conformed) {
         if (target != 0 && !ceiling_reported) {
             ceiling_reported = 1;
@@ -1348,61 +1182,11 @@ static void set_separate_translucency_scale(void)
          (int)(scale.value * (float)render_percent));
 }
 
-/* Render separate translucency at the scene's resolution, by taking the halving out.
-
-   The briefing map's relief is separate translucency and arrives at 512x288 while the scene is
-   1024x576. Nothing downstream recovers that: by the time anything sees the composite the layer is
-   already a doubling of a quarter resolution image. It was never a motion problem.
-
-   `FSceneRenderTargets::SetSeparateTranslucencyBufferSize` computes one scale and uses it three
-   times, for the width, the height and the stored scale:
-
-     movss  xmm1, [0.5]                  ; the halving, at 1410be330
-     ...
-     mulss  xmm0, xmm1                   ; scaled width
-     mulss  xmm0, xmm1                   ; scaled height
-     movss  [rbx+0x220], xmm1            ; SeparateTranslucencyScale
-
-   The scale arrives at 0.5 two ways: the console variable can say 50, or it can say 100 and the
-   automatic downsampling takes over, which is the branch pair just above that load. Setting the
-   variable only addresses the second, and this game's value is evidently not the 100 that a write
-   guarded on the expected value would accept, because that write never happened.
-
-   So the branch pair and the load are replaced together. Fifteen bytes:
-
-     73 0D                     jnc  +0x0D          ; skip when the scale is not ~1.0
-     40 84 FF                  test dil, dil       ; and when nothing asked to downsample
-     74 08                     jz   +8
-     F3 0F 10 0D 58 61 4B 01   movss xmm1, [0.5]
-
-   The first version of this loaded the 1.0 that sits four bytes after the 0.5 in the same pool,
-   which fixed the briefing relief and the cannon tracers at once but fixed the scale at exactly the
-   scene's resolution. That is not enough, because the right scale depends on the render scale and
-   the render scale moves with the quality level. The pool has no 1.5 and no 2.0 next to the 0.5,
-   and hunting one elsewhere would only trade one constant for another.
-
-   Carrying the value in the instruction instead answers both. The disassembly settles the one
-   question that needs settling, which is whether a register is free:
-
-     1410be338  movd  xmm0, dword ptr [rbx+0x208]     ; does not read eax
-     1410be346  mov   rax, qword ptr [rbx+0x208]      ; overwrites rax outright
-
-   Every path out of the patched window reaches those, so eax is dead across it and can carry the
-   float. Fifteen bytes become:
-
-     66 0F 1F 44 00 00         nop  word ptr [rax+rax*1]
-     B8 xx xx xx xx            mov  eax, <scale bits>
-     66 0F 6E C8               movd xmm1, eax
-
-   The six byte nop leads so the immediate lands at rva+7, which is 0x10be330 and four byte
-   aligned. That alignment is the point: `set_separate_translucency_scale` above changes the scale
-   by storing one aligned word into it while the game runs, and an aligned store cannot be seen
-   half done. Everything after still reads xmm1, so the width, the height and the stored
-   SeparateTranslucencyScale all follow it.
-
-   The expected bytes are checked before writing. If the game updates and this moves, it refuses
-   rather than corrupting an instruction. An overridden RVA that would leave the immediate
-   unaligned is patched but not registered, so it keeps its startup scale and never changes. */
+/* Replace the verified 15-byte scale-selection window in SetSeparateTranslucencyBufferSize
+   with nop; mov eax,<float bits>; movd xmm1,eax. rax is dead across this window; downstream code
+   uses xmm1 for width, height and stored scale. The six-byte leading nop aligns the immediate
+   at RVA+7 for later atomic stores. A nondefault RVA skips the default expected-byte check;
+   an unaligned immediate is left at the startup scale. Evidence: docs/research/ue418-hook-map.md. */
 static void apply_separate_translucency_patch(void)
 {
     if (read_number("RSF_FULL_TRANSLUCENCY", 1) == 0) {
@@ -1445,43 +1229,10 @@ static void apply_separate_translucency_patch(void)
     set_separate_translucency_scale();
 }
 
-/* Let the engine allocate, bind and sample depth and the matching view for a separate
-   translucency layer larger than the scene.
-
-   4.18 decides four times whether the layer has its own depth or borrows the scene's, and every one
-   of them asks `Scale < 1.f`. Below 1.0 that is the downsampling case and the engine allocates a
-   depth at the layer's size, fills it, builds a view uniform buffer for the scaled rect and
-   resolves it. At exactly 1.0 the layer is the scene's size and the scene's depth fits. Above 1.0
-   all four take the borrow branch, which pairs a large colour target with a small depth. D3D11 does
-   not allow that pair, and game-testing it on 7 September made the briefing relief disappear
-   entirely while its HUD stayed.
-
-   Asking `Scale == 1.f` instead is the whole fix, because the borrow is correct only at exactly
-   1.0. Everything else the engine already does correctly at any scale: `DownsampleDepthSurface`
-   takes the factor as a parameter and sets its viewport and rectangle from it, so at 2.0 it simply
-   upsamples, and `SetupDownsampledTranslucencyViewUniformBuffer` rebuilds the view from
-   `ScaledSize` and `ViewRect * scale`. Nothing here adds a shader, a hook or a resource.
-
-   The four sites, against 4.18.3 source:
-
-     TranslucentRendering.cpp:1258   0x1168f6f  76 0E  jbe   skips the depth allocation and fill
-     SceneRenderTargets.cpp:1373     0x1097a0c  76 17  jbe   binds scene depth instead
-     SceneRenderTargets.cpp:1400     0x109d03a  cmova        picks scene depth to resolve
-     SceneRenderTargets.cpp:1405     0x109d061  76 17  jbe   the same, on the other branch
-
-   `jbe` becomes `je` and `cmova` becomes `cmovne`, one byte each. With `comiss 1.0, scale` the two
-   are the same instruction for every scale the engine can produce on its own: at 1.0 both act on
-   ZF, and below 1.0 neither fires. They differ only above 1.0, which is a state only our own scale
-   patch can reach. So this changes nothing about stock rendering, and it is what the scale above
-   1.0 is allowed to depend on.
-
-   The 29 September capture exposed the remaining consumers: DrawMesh still chose the main view
-   at Scale > 1, and six FSceneTextureShaderParameters::Set specializations still sampled scene
-   depth. The layer drew at 1600x904 with 800x452 VS/PS view constants. Those seven gates must use
-   Scale != 1 as well. See docs/research/ac7-consumer-session.md for source and byte evidence.
-
-   Preflight every expected window before changing any gate. If a write fails, roll back the gates
-   already changed; any failure keeps the scale at or below the scene's resolution. */
+/* Make separate translucency borrow scene depth/view only at scale == 1. The eleven
+   verified sites cover allocation, binding, resolves, mesh view selection and shader depth
+   consumers. Preflight every window, apply together, and attempt rollback on write failure.
+   Only complete success permits scale > 1. Evidence: docs/research/ac7-consumer-session.md. */
 static int apply_translucency_depth_patches(void)
 {
     static const struct {
@@ -1587,12 +1338,8 @@ static unsigned long action_capture_count(void)
 #endif
 }
 
-/* What reinsertion does when a promoted target meets the game's render resolution depth.
-
-   0 drops the depth, so the pass draws without its depth test. 1 forwards both, which is an invalid
-   pair and draws nothing. 2 leaves the target alone, so the pass draws into a texture nothing reads.
-   All three are wrong; dropping is the only one that keeps the pixels, so it is the default. A
-   setting rather than a constant so all three can be compared in one run. */
+/* Compatibility depth mismatch policy: 0 drops depth testing, 1 forwards the incompatible
+   pair, 2 refuses target promotion. This diagnostic choice does not provide a matching depth. */
 static unsigned long action_reinsert_depth_policy(void)
 {
     return read_number("RSF_REINSERT_DEPTH", 0);
@@ -1603,6 +1350,7 @@ static unsigned long action_startup_ready(void)
     return (unsigned long)InterlockedCompareExchange(&startup_ready, 0, 0);
 }
 
+/* Persist the accepted enable/preset pair; failed persistence leaves session state active. */
 static void save_preferences(void)
 {
     if (!rsf_preferences_write(preference_path, preferred_enabled, preferred_quality)) {
@@ -1624,6 +1372,8 @@ static void action_save_enabled(unsigned long enabled)
     save_preferences();
 }
 
+/* Compatibility maintenance at Present: refresh main-view dimensions and repair engine
+   screen-percentage resets at most twice per second. */
 static void action_maintain_renderer(void)
 {
     static ULONGLONG last_check;
@@ -1636,6 +1386,8 @@ static void action_maintain_renderer(void)
     }
 }
 
+/* Copy the callback table into the bridge, then apply INI/environment defaults and saved
+   per-user enable/quality preferences. Missing profile storage leaves the defaults usable. */
 static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
@@ -1678,18 +1430,8 @@ static void register_overlay_actions(void)
     rsf_bridge_set_enabled((int)preferred_enabled);
 }
 
-/* Crash reporting, because a machine with Windows Error Reporting switched off leaves nothing to
-   read when the game dies, and the first Windows run of this proxy did exactly that.
-
-   A vectored handler rather than the top-level filter, so a game that installs its own filter
-   cannot silence it, and first in line so nothing consumes the exception before it is described.
-   Only the fatal codes are looked at; C++ exceptions and guard page probes pass through untouched.
-   It logs the code, the faulting address as module plus offset, the access kind for an access
-   violation, and a walk of the faulting thread's stack with whatever symbols dbghelp finds beside
-   the modules, then writes a minidump beside the log. Once, because a second fatal exception in a
-   dying process is noise. It always returns EXCEPTION_CONTINUE_SEARCH, so whatever the game would
-   have done still happens. dbghelp is loaded here rather than linked, since nothing else needs it
-   and a process that never crashes never pays for it. */
+/* One fatal-exception report per process. The vectored handler leaves exception handling
+   to the game (EXCEPTION_CONTINUE_SEARCH); dbghelp and minidump support load on demand. */
 static volatile LONG crash_reported;
 
 static void describe_address(const void* address, char* out, size_t size)
@@ -1722,18 +1464,16 @@ typedef BOOL(WINAPI* stack_walk_fn)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64, PVOID
 typedef PVOID(WINAPI* function_table_access_fn)(HANDLE, DWORD64);
 typedef DWORD64(WINAPI* module_base_fn)(HANDLE, DWORD64);
 
-/* The description and the dump, on a thread of their own.
-
-   The faulting thread is the wrong place for this work: a stack overflow leaves it one page to
-   run on, which the first run of this reporter used up between the first line and the walk, and
-   the walk itself has to read that thread's registers from the exception record anyway. So the
-   handler hands the exception pointers to a fresh thread and waits for it. The pointers stay valid
-   because the faulting thread is blocked in the wait, one frame above the fault. */
+/* Borrowed crash context passed to a reporting worker so stack-overflow diagnostics use
+   a fresh stack. The handler waits at most 30 seconds; callers must not treat this as an owned
+   copy or as a guarantee that the worker has completed after timeout. */
 struct crash_report {
     EXCEPTION_POINTERS* info;
     DWORD thread;
 };
 
+/* Best-effort symbol walk and minidump using the borrowed exception context. The report
+   remains diagnostic: the handler continues the original exception search. */
 static DWORD WINAPI crash_report_worker(LPVOID parameter)
 {
     const struct crash_report* report = (const struct crash_report*)parameter;
@@ -1782,8 +1522,7 @@ static DWORD WINAPI crash_report_worker(LPVOID parameter)
             frame.AddrFrame.Mode = AddrModeFlat;
             frame.AddrStack.Offset = context.Rsp;
             frame.AddrStack.Mode = AddrModeFlat;
-            /* Sixty-four frames, because a stack overflow is a recursion and the interesting
-               part of one is the cycle, which the top few frames only show once. */
+            /* Bound the walk while retaining enough depth to expose common recursion cycles. */
             for (depth = 0; depth < 64; ++depth) {
                 union {
                     SYMBOL_INFO info;
@@ -1855,6 +1594,8 @@ static DWORD WINAPI crash_report_worker(LPVOID parameter)
     return 0;
 }
 
+/* Filter fatal codes, claim the single report atomically, and wait for its worker for
+   at most 30 seconds. A timed-out worker is not cancelled and still holds borrowed pointers. */
 static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
 {
     const DWORD code = info->ExceptionRecord->ExceptionCode;
@@ -1876,9 +1617,7 @@ static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
         WaitForSingleObject(worker, 30000);
         CloseHandle(worker);
     } else {
-        /* No thread can be made while the process is shutting down, which is where two of the
-           first day's reports landed. Described on the faulting thread instead, which is fine for
-           anything but a stack overflow. */
+        /* If worker creation fails, report inline except on the exhausted stack-overflow stack. */
         note("crash: exception 0x%08lx on thread %lu, no thread could be made, describing inline",
              code, report.thread);
         if (code != EXCEPTION_STACK_OVERFLOW) {
@@ -1888,6 +1627,9 @@ static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* AC7 process-attach entry used directly as DllMain or dispatched by the generic shim.
+   Installs the crash handler, optional pre-device capture, and a detached preparation worker.
+   Process-lifetime hooks are not torn down from loader-lock notifications. */
 BOOL WINAPI rsf_ac7_proxy_process_event(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
@@ -1896,11 +1638,10 @@ BOOL WINAPI rsf_ac7_proxy_process_event(HINSTANCE instance, DWORD reason, LPVOID
         /* First, before anything that could fault. */
         AddVectoredExceptionHandler(1, on_fatal_exception);
 #if RSF_HAVE_FRAME_CAPTURE
-        /* Loading a library is allowed here and the timing requirement leaves no alternative:
-           RenderDoc must be in before the game creates its device. */
+        /* Capture opt-in must load before device creation; ordinary renderer work stays on workers. */
         start_capture_support();
 #endif
-        /* Everything else happens on workers. DllMain only starts them. */
+        /* The worker owns decryption polling and preparation; Present owns graphics activation. */
         HANDLE thread = CreateThread(NULL, 0, dump_worker, NULL, 0, NULL);
         if (thread) {
             CloseHandle(thread);

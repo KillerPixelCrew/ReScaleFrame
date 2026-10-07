@@ -1,3 +1,5 @@
+# Windows native fixtures and Rust format/lint gate. Optional local SDKs and game acceptance
+# are outside this workflow; dependency configuration is documented in docs/dependencies.md.
 name: Verify
 
 on:

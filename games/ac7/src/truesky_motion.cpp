@@ -43,8 +43,11 @@ cbuffer Params : register(b1) {
     }
     CloudDepth[id.xy] = isfinite(depth) ? depth : 0;
 })";
+// Matches Params b1: scene pixel extent, native cloud-grid divisor/extent, distance in km,
+// and minimum opacity fraction. HdrConstants b0 remains borrowed from the live native pass.
 struct Params { uint32_t size[2], divisor[2], grid[2]; float minimum_km, minimum_opacity; };
 
+// Accept only the measured single-sample RGBA16F cloud inputs and retain their resource locally.
 bool texture_of(ID3D11ShaderResourceView* view, ComPtr<ID3D11Texture2D>& texture, D3D11_TEXTURE2D_DESC& desc)
 {
     if (!view) return false;
@@ -55,6 +58,8 @@ bool texture_of(ID3D11ShaderResourceView* view, ComPtr<ID3D11Texture2D>& texture
     texture->GetDesc(&desc);
     return desc.SampleDesc.Count == 1 && desc.ArraySize == 1;
 }
+// Rebuild owned resources on device/viewport change. Shader preparation failure stays refused
+// on this device; switching device or explicit release clears that refusal for another attempt.
 bool prepare(rsf_ac7_cloud_depth& state, ID3D11Device* device, uint32_t width, uint32_t height)
 {
     if (state.device != device) { rsf_ac7_cloud_depth_release(state); state.device = device; device->AddRef(); }

@@ -9,6 +9,8 @@ extern "C" {
 
 #define RSF_RENDER_LINK_ABI_VERSION 1u
 typedef struct rsf_render_links rsf_render_links;
+/* Copied ticket. submission_id increases per bind within a session; producer_key is an opaque
+   engine identity and never dereferenced. Initialize size/version before bind or lookup. */
 typedef struct rsf_render_link {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -26,8 +28,12 @@ typedef struct rsf_render_link {
    All metadata is copied; engine objects and GPU resources are never retained here. */
 RSF_RUNTIME_API rsf_backend_result rsf_render_links_create(uint64_t session_id, uint32_t capacity,
     rsf_render_links** out);
+/* capacity is 1..64. Operations on live handles use an internal mutex; callers must prevent
+   new calls while destroy succeeds. Bind refuses duplicate keys or a full table. */
 RSF_RUNTIME_API rsf_backend_result rsf_render_links_bind(rsf_render_links*, uint64_t producer_key,
     uint64_t source_frame_id, uint64_t resource_generation, rsf_render_link* out);
+/* A known key from a different resource generation is STALE_RESOURCES; absent keys are NOT_READY.
+   On a valid output header, failures clear all ticket identities in out. */
 RSF_RUNTIME_API rsf_backend_result rsf_render_links_lookup(rsf_render_links*, uint64_t producer_key,
     uint64_t resource_generation, rsf_render_link* out);
 /* The copied ticket prevents a late release from removing a newly bound, reused key. */

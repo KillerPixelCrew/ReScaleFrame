@@ -19,6 +19,7 @@ from java.io import File
 
 
 def parse_arguments(raw):
+    """Require the output path and optionally restrict root types by category-path prefix."""
     parser = argparse.ArgumentParser(prog="export-types")
     parser.add_argument("--output", required=True, help="destination .gdt path")
     parser.add_argument("--prefix", default=None,
@@ -27,6 +28,12 @@ def parse_arguments(raw):
 
 
 def main():
+    """Replace an archive using currentProgram's language/compiler layout and copy its data types.
+
+    The selected program is read-only here. REPLACE_HANDLER resolves archive type conflicts;
+    dependency types may be pulled in even when their own categories are outside --prefix.
+    Archive edits use one committed transaction, then save/close. The destination must be writable.
+    """
     args = parse_arguments(getScriptArgs())
     monitor = ConsoleTaskMonitor()
     source = currentProgram.getDataTypeManager()

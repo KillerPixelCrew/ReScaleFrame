@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Loader diagnostics: read the running main module and write it out for offline analysis.
-
-   This exists because a protected executable can be unreadable on disk while being perfectly
-   readable in memory. It is diagnostics only. It performs no interception, touches no graphics
-   object, and says nothing about rendering support. */
+/* In-process PE64 diagnostics, guarded code writes and researched Unreal cvar access.
+   Module pointers must name trusted loaded images with valid headers; this is not a parser for
+   arbitrary untrusted bytes. Caller-owned strings/buffers are borrowed for each synchronous call.
+   Dumping/entropy alone does not establish renderer readiness or verified hook ownership. */
 
 #ifndef RSF_MODULE_DUMP_H
 #define RSF_MODULE_DUMP_H
@@ -25,14 +24,13 @@ typedef int32_t rsf_dump_result;
 #define RSF_DUMP_ERROR_WRITE_FAILED ((rsf_dump_result)-4)
 #define RSF_DUMP_ERROR_STILL_ENCRYPTED ((rsf_dump_result)-5)
 
-/* Shannon entropy of a byte range, 0.0 to 8.0. Pure, and the same measurement used to establish
-   that the shipped file is encrypted. */
+/* Shannon entropy in bits per byte, 0..8. Null/empty input returns zero; otherwise data
+   must address size readable bytes. No platform state or allocation is used. */
 double rsf_shannon_entropy(const void* data, size_t size);
 
-/* Mean entropy of evenly spaced windows across a range. Sampling keeps the cost bounded on a
-   large section; a whole-section pass over tens of megabytes is not worth its cost when the
-   answer is "ciphertext or not". Falls back to a single whole-range measurement when the range
-   is smaller than one window. */
+/* Mean entropy of samples evenly spaced across the range, including both ends when
+   samples > 1. Null/zero arguments return zero; a range no larger than window is measured whole.
+   Overlapping windows are allowed. Caller supplies a readable size-byte range. */
 double rsf_sampled_entropy(const void* data, size_t size, size_t window, size_t samples);
 
 typedef struct rsf_dump_options {
@@ -54,91 +52,72 @@ typedef struct rsf_dump_report {
     uint32_t sections_written;
     uint32_t imports_described;
     uint32_t modules_listed;
-    /* Rip-relative calls and jumps through the import table found in executable sections. The
-       shipped AC7 file contains none, because its code is ciphertext, so a non-zero count is
-       direct evidence that the captured image is decrypted. */
+    /* Heuristic byte-scan count of RIP-relative indirect calls/jumps targeting exact IAT
+       slots in executable sections. It supplements entropy but is not disassembly or a general
+       proof that an entire protected image is decrypted. */
     uint32_t iat_references;
-    /* Entropy of the section holding the entry point, measured at dump time. */
+    /* Sampled entropy of the largest executable section at dump time. */
     double code_entropy;
     uint64_t load_base;
     uint64_t preferred_base;
     uint64_t bytes_written;
 } rsf_dump_report;
 
-/* Dump the module containing this process's main image. `module_base` may be null, in which case
-   the process's own main module is used. Both output parameters may be null. */
+/* Write <name>.dump and <name>.dump.json from a trusted loaded PE64 image. Null
+   module_base selects the main image; options is required and report is optional. Caller initializes
+   options size/version and report size. Existing files are overwritten; output directory must exist.
+   Raw offsets equal RVAs for offline analysis; imports/entrypoint are not repaired for execution.
+   A sidecar failure can leave the dump file written. Error paths do not always populate report. */
 rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options* options,
                                 rsf_dump_report* report);
 
-/* Measure the entropy of the code section of a loaded module without writing anything. */
+/* Measure the largest executable section without writing. Null module_base selects the
+   main image; entropy is required. Unreadable regions are measured as zero-filled bytes. */
 rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy);
 
-/* Write bytes over code in the main module, at an offset from its load base.
-
-   For a protected executable this can only run after the code has been decrypted, which is what
-   the entropy measurement above establishes. Patching earlier writes into ciphertext that is
-   about to be overwritten.
-
-   `expected` and `expected_count`, when given, must match the bytes already there. A patch whose
-   surroundings have changed is a patch aimed at the wrong place, and refusing is much better than
-   corrupting an instruction stream. Returns the previous bytes in `previous` when asked, so a
-   caller can put them back. */
+/* Patch count bytes at main-image RVA after the caller establishes decryption/readiness
+   and a safe execution boundary. This helper does not poll entropy or suspend other threads.
+   Optional expected bytes must match count and the existing contents; mismatch returns
+   INVALID_ARGUMENT before writing. Optional previous receives count bytes only after protection
+   change succeeds. Restore page protection and flush instruction cache after the write. */
 rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t count,
                                const uint8_t* expected, uint32_t expected_count,
                                uint8_t* previous);
 
-/* Set a float console variable in a running Unreal game.
-
-   Reaches the console manager the way the engine's own code does: read the singleton pointer,
-   call FindConsoleVariable through its vtable, and work on the object that comes back.
-
-   The value is not written at an assumed struct offset. The object is searched for a float
-   matching `expected_current` and only that one is replaced, so a layout that differs from what
-   was expected fails to find anything rather than corrupting a neighbouring field. Passing the
-   value the variable is known to hold is what makes that check meaningful.
-
-   `singleton_rva` and `find_slot` locate the manager. `found_offset` returns where the value was,
-   which is worth logging. */
+/* Research-only Unreal cvar write using a verified console-manager singleton RVA and
+   vtable byte offset. Scan 4-byte slots through object+0x100 for floats within 0.0001 of
+   expected_current and replace every match; a distinctive expected value is required. This is
+   not structural proof of the object layout. found_offset optionally receives the first match.
+   Null manager returns ABI_MISMATCH, absent variable NOT_A_PE, no replacement STILL_ENCRYPTED;
+   these diagnostic result names are reused outside literal PE/decryption failures. */
 rsf_dump_result rsf_console_set_float(const char* name_utf8, float expected_current,
                                       float new_value, uint32_t singleton_rva, uint32_t find_slot,
                                       uint32_t* found_offset);
 
-/* Set an integer console variable in a running Unreal game.
-
-   Deliberately not the float function with a different type. Searching the object for a matching
-   value works for a float because 100.0 appears once in it; an integer of 8 appears in flags,
-   counters and string lengths, and replacing every match would corrupt the object rather than set
-   the variable.
-
-   So this writes at a known offset instead, and earns the right to do so by checking first.
-   TConsoleVariableData<T> keeps Values[2], one for the game thread and one for the render thread,
-   and the layout is the same for every variable of a given element size, so the offset the float
-   path reports is the offset to use here. Both slots must already hold `expected_current` or
-   nothing is written: that check is what distinguishes the right object from a wrong offset.
-
-   Returns RSF_DUMP_ERROR_STILL_ENCRYPTED when the check fails, the same way the float path
-   reports finding nothing to replace. */
+/* Set the two Unreal cvar thread copies at a researched value_offset. Both must equal
+   expected_current before either is written; mismatch returns STILL_ENCRYPTED and protection
+   failure WRITE_FAILED. Singleton RVA, lookup slot and object offset must match this executable.
+   Checking values is a refusal guard, not synchronization with concurrent engine writers. */
 rsf_dump_result rsf_console_set_int(const char* name_utf8, int32_t expected_current,
                                     int32_t new_value, uint32_t value_offset,
                                     uint32_t singleton_rva, uint32_t find_slot);
 
-/* Look up a console variable and report what the object actually contains, without writing.
-
-   Guessing a struct offset for a vendor branch does not work, and the first attempt failed with
-   nothing to say about why. This reports whether the manager existed, whether the lookup
-   succeeded, and the leading floats of the object, so the value can be recognised rather than
-   assumed. `floats` receives up to `float_count` values read from the object. */
+/* Read-only researched cvar lookup. Optional manager_out/variable_out receive copied
+   addresses; floats receives float_count leading values when non-null. Caller must establish that
+   the engine object is readable for that range and the lookup/vtable layout matches this build. */
 rsf_dump_result rsf_console_probe(const char* name_utf8, uint32_t singleton_rva,
                                   uint32_t find_slot, uint64_t* manager_out,
                                   uint64_t* variable_out, float* floats, uint32_t float_count);
 
-/* Append the currently loaded modules to a text file. Which graphics runtime a game selects is
-   only visible well after startup, so this has to be sampled late and repeatedly. Modules loaded
-   before the dump prove nothing: static imports are mapped whichever renderer is later chosen. */
+/* Append a bounded loaded-module snapshot to path_utf8. Null label uses "sample".
+   Late loads are diagnostic evidence; module presence does not identify the active renderer. */
 rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label);
 
-/* Poll until the code section falls below the threshold, then dump. Intended for a worker thread,
-   never for DllMain. Returns RSF_DUMP_ERROR_STILL_ENCRYPTED if the timeout expires first. */
+/* Worker-only polling: after stable_samples consecutive entropy readings below threshold,
+   dump the main image. poll_interval_ms and stable_samples must be nonzero; timeout_ms == 0
+   waits indefinitely. Timeout returns STILL_ENCRYPTED and optionally the last measured entropy.
+   options must contain the same valid size/version/path fields required by rsf_dump_module.
+   No loader-lock, render-thread or engine-state synchronization is provided. */
 rsf_dump_result rsf_dump_when_decrypted(const rsf_dump_options* options, uint32_t poll_interval_ms,
                                         uint32_t timeout_ms, uint32_t stable_samples,
                                         rsf_dump_report* report);

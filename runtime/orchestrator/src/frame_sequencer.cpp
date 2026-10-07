@@ -2,6 +2,7 @@
 #include <rescaleframe/frame_sequencer.h>
 #include <mutex>
 #include <new>
+// CPU-only ring. A live modulo slot is never overwritten, even by a newer frame ID.
 struct rsf_frame_sequencer {
     std::mutex guard;
     uint32_t capacity = 0;
@@ -9,6 +10,7 @@ struct rsf_frame_sequencer {
     rsf_sequence_state slots[64]{};
 };
 namespace {
+// INPUT_SAMPLE has a separate enum value but precedes simulation in the ledger's seven stages.
 uint32_t ordinal(rsf_latency_marker marker)
 {
     return marker == RSF_LATENCY_INPUT_SAMPLE ? 0 : marker <= RSF_LATENCY_PRESENT_END ? marker + 1 : 7;
@@ -40,6 +42,7 @@ extern "C" rsf_backend_result rsf_frame_sequencer_marker(rsf_frame_sequencer* le
     std::lock_guard<std::mutex> lock(ledger->guard);
     auto& slot = ledger->slots[id % ledger->capacity];
     if (slot.frame_id != id || slot.failed) return RSF_BACKEND_ERROR_NOT_READY;
+    // A contiguous prefix enforces exactly one marker per stage, with no skips or reordering.
     const uint32_t expected = (1u << index) - 1;
     if (slot.marker_mask != expected || (index && timestamp < slot.timestamps[index - 1])) {
         slot.failed = 1;
@@ -65,6 +68,7 @@ extern "C" rsf_backend_result rsf_frame_sequencer_finish(rsf_frame_sequencer* le
     std::lock_guard<std::mutex> lock(ledger->guard);
     auto& slot = ledger->slots[id % ledger->capacity];
     if (slot.frame_id != id) return RSF_BACKEND_ERROR_NOT_READY;
+    // Finishing is also cancellation: free the slot even when its marker sequence is incomplete.
     const bool complete = slot.marker_mask == 127 && !slot.failed;
     slot = {};
     return complete ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;

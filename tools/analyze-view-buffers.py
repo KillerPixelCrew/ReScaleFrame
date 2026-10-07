@@ -1,12 +1,9 @@
-"""Identify view uniform buffer fields by how they behave across captures.
+"""Find view-buffer candidates by comparing little-endian float32 capture sequences.
 
-The stock 4.18 layout stops predicting AC7's buffer partway through, so offsets cannot simply be
-read off engine source. What can be done instead is watch the same buffer in different states,
-menu, briefing, flight, and let fields declare themselves: a jitter changes every frame and stays
-sub-pixel, a projection matrix holds its aspect ratio, a previous-frame matrix sits near identity
-while the camera is still and departs from it when it moves.
-
-Takes the constant buffers a run of the loader wrote, and reports what each region does.
+Reports stable projection ratios, near-identity blocks and varying subpixel pairs. These are
+heuristics for AC7's vendor layout, not recovered semantic types. Capture files must contain
+whole float32 values; comparison is restricted to the shortest buffer. Inputs remain unchanged;
+--output writes a JSON report. Confirm candidates with verify-view-layout.py and engine evidence.
 """
 
 import argparse
@@ -16,6 +13,7 @@ from pathlib import Path
 
 
 def load(path):
+    """Read tightly packed little-endian float32 values; a nonmultiple-of-four file is rejected."""
     data = path.read_bytes()
     return list(struct.unpack("<%df" % (len(data) // 4), data))
 
@@ -25,7 +23,10 @@ def finite(value):
 
 
 def classify_slots(buffers):
-    """Per float slot: does it hold still, and how far does it move."""
+    """Summarize valid values per shared slot, counting distinctions rounded to six decimals.
+
+    NaNs and magnitudes >= 1e30 are omitted. Slots with no valid samples have distinct=0.
+    """
     width = min(len(buffer) for buffer in buffers)
     slots = []
     for index in range(width):
@@ -44,7 +45,10 @@ def classify_slots(buffers):
 
 
 def find_projection(buffers, slots):
-    """A projection matrix keeps a constant ratio between its first two diagonal entries."""
+    """Find 16-byte-aligned blocks with a stable diagonal ratio and zero xy off-diagonals.
+
+    This checks projection shape only, not matrix invertibility or the complete projection form.
+    """
     found = []
     width = len(slots)
     for index in range(0, width - 16, 4):
@@ -66,7 +70,11 @@ def find_projection(buffers, slots):
 
 
 def find_near_identity(buffers, slots):
-    """A current-to-previous transform sits at identity whenever nothing moved."""
+    """Find aligned blocks whose leading xy basis resembles identity in enough captures.
+
+    Finite blocks are counted until the first invalid sample; an already qualifying prefix can
+    still be reported. Full identity and current-to-previous semantics are unproven.
+    """
     found = []
     width = len(slots)
     for index in range(0, width - 16, 4):
@@ -89,7 +97,10 @@ def find_near_identity(buffers, slots):
 
 
 def find_jitter(buffers, slots):
-    """Temporal jitter is sub-pixel, changes constantly, and is centred on zero."""
+    """Find adjacent varying float pairs spanning zero within [-1,1], with spread >= 1e-4.
+
+    Does not distinguish clip-space from pixel-space jitter or unrelated small changing fields.
+    """
     candidates = []
     for index in range(0, len(slots) - 1):
         pair = [slots[index], slots[index + 1]]

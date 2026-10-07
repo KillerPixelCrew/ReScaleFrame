@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check SR controller replacement and history policy with deterministic providers.
+ * The executable links the controller directly and substitutes FSR/XeSS entry points.
+ * Owned SDK-path copies, failed replacement cleanup, generation/ID validation and
+ * history resets are checked without touching the opaque device/resource tokens.
+ */
 #include <rescaleframe/sr_session.h>
 #include <cstdio>
 #include <cstring>
@@ -10,6 +17,7 @@ bool passed = true;
 uint32_t closes = 0;
 uint32_t reset_seen = 0;
 bool fail_open = false, fail_plan = false, fail_frame = false;
+// Each provider context owns one allocation, allowing close counts to detect replacement leaks.
 struct Fake { uint32_t family; };
 void check(bool ok, const char* text) { if (!ok) { std::fprintf(stderr, "FAIL: %s\n", text); passed = false; } }
 rsf_backend_result probe(const rsf_backend_probe_desc*, rsf_backend_caps*) { return RSF_BACKEND_OK; }
@@ -40,6 +48,7 @@ rsf_backend_result version(void* pointer, uint64_t* id, const char** name)
 }
 const rsf_sr_provider provider{sizeof(provider), probe, open, plan, evaluate, release, close, version};
 }
+// Link-time substitutes keep controller failure/history tests independent of vendor DLLs.
 extern "C" const rsf_sr_provider* rsf_fsr_sr_provider() { return &provider; }
 extern "C" const rsf_sr_provider* rsf_xess_sr_provider() { return &provider; }
 int main()
@@ -53,6 +62,7 @@ int main()
     setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = setup.xess_directory_utf8 = path;
     rsf_sr_session* session = nullptr;
     check(rsf_sr_session_create(&setup, &session) == RSF_BACKEND_OK, "create");
+    // Poison caller storage after creation; every later provider open must see the owned copy.
     path[0] = 'X';
     check(rsf_sr_session_select(session, RSF_SR_FSR2, RSF_QUALITY_QUALITY, 0) == 0, "select FSR2");
     fail_open = true;

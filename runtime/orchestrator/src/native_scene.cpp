@@ -6,7 +6,10 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 namespace {
+// Numeric metadata is private to one execution thread. Borrowed surface identities are usable
+// for comparisons only while the plugin keeps its corresponding pass/window leases alive.
 thread_local std::array<rsf_native_scene_identity, 64> records{};
+// Canonical IUnknown identity handles interface aliases without retaining the resource itself.
 uint64_t resource_identity(void* resource)
 {
     Microsoft::WRL::ComPtr<IUnknown> identity;

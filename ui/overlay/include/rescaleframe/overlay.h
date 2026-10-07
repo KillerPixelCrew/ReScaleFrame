@@ -1,18 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The in-game overlay: what it draws, what it was told, and what the user asked for.
-
-   The split follows the same line as the rest of the project. egui owns the interface itself, in
-   Rust, where widget state and layout are pleasant to write and testable without a GPU. D3D11 owns
-   the drawing, in C++, inside the game's own frame. Between them is this header: triangles, a
-   texture atlas, and the two small structures that carry state in and intent out.
-
-   That boundary is not just taste. An overlay drawn inside somebody else's frame has to leave the
-   pipeline exactly as it found it, and that is C++ work against a device the game owns. Deciding
-   what a quality dropdown does is not.
-
-   Nothing here allocates for the caller. The vertex, index and draw call arrays returned by
-   `rsf_overlay_frame` are owned by the overlay and stay valid until the next call to it, which is
-   the only lifetime a per frame interface needs. */
+/* GPU-independent panel and HUD ABI. Native renderers consume meshes and texture patches and
+   apply settings intents. All calls on one handle require exclusive access on its owning thread.
+   Set struct_size on frame input, stats, draw-data and intent structures. Append fields without
+   reordering; this build requires its complete known prefix and ignores later fields in larger structures.
+   Returned meshes and pixels are borrowed until the next frame call or handle destruction. */
 
 #ifndef RSF_OVERLAY_H
 #define RSF_OVERLAY_H
@@ -23,25 +14,19 @@
 extern "C" {
 #endif
 
-/* 2: the panel drives the session rather than reporting on it, so intent gained start, debug view,
-   reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
-   were extended by appending, which is the only way they are allowed to change. */
-/* 5: input gains a host-timed, noninteractive startup hint opacity. */
+/* Creation requires this exact version; structure sizes are checked separately on each frame. */
 #define RSF_OVERLAY_ABI_VERSION 9u
+/* Bit 31 of fg_backend_choices: the presentation owner supports provider changes during play. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
 #define RSF_OVERLAY_OK ((rsf_overlay_result)0)
 #define RSF_OVERLAY_ERROR_INVALID_ARGUMENT ((rsf_overlay_result)-1)
 #define RSF_OVERLAY_ERROR_ABI_MISMATCH ((rsf_overlay_result)-2)
-/* The Rust side panicked and was caught at the boundary. The overlay is left in a state where it
-   can be destroyed, and nothing else should be called on it. A panic must never unwind into a
-   game's render thread, so it becomes this instead. */
+/* An unwinding panic was caught. Destroy the poisoned handle; aborting panics cannot be caught. */
 #define RSF_OVERLAY_ERROR_PANICKED ((rsf_overlay_result)-3)
 
-/* Quality levels, in the same order as the Rust model's `Quality` and the DLSS backend's
-   `rsf_dlss_quality`, because a value that means different things in three places is a bug waiting
-   for someone to add a level. */
+/* Quality IDs shared with the Rust model and reconstruction contract. */
 typedef uint32_t rsf_overlay_quality;
 #define RSF_OVERLAY_QUALITY_NATIVE ((rsf_overlay_quality)0)
 #define RSF_OVERLAY_QUALITY_QUALITY ((rsf_overlay_quality)1)
@@ -49,44 +34,39 @@ typedef uint32_t rsf_overlay_quality;
 #define RSF_OVERLAY_QUALITY_PERFORMANCE ((rsf_overlay_quality)3)
 #define RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE ((rsf_overlay_quality)4)
 
-/* What the overlay is told about the session, once per frame.
-
-   Every field here is something the project can actually answer. There is deliberately no frames
-   per second gain, no latency figure and no quality score: a presentation counter is not a latency
-   measurement, and this project does not get to imply otherwise on its own status panel. */
+/* Runtime snapshot for one frame. Nonzero uint32_t flags are true. Rates derive from observed
+   counters and QPC; provider requests alone do not establish activity, latency or image quality. */
 typedef struct rsf_overlay_stats {
     uint32_t struct_size;
 
     /* Whether a backend is loaded at all, and whether the driver said yes to it. */
     uint32_t backend_loaded;
     uint32_t backend_supported;
-    /* Vendor name and the reason a backend is unusable, when there is one. Borrowed for the
-       duration of the call. Null is allowed and means "nothing to say". */
+    /* UTF-8 strings borrowed for the call. Null is allowed. The Rust scan stops at 512 bytes. */
     const char* backend_name;
     const char* refusal_reason;
 
+    /* Physical pixel extents; zero when unknown. */
     uint32_t render_width;
     uint32_t render_height;
     uint32_t output_width;
     uint32_t output_height;
 
-    /* Counters rather than rates. The overlay turns them into rates itself if it wants to, and a
-       counter cannot be wrong in a way a rate can. */
+    /* Legacy session counters, distinct from the 64-bit rate inputs below. */
     uint32_t frames_presented;
     uint32_t frames_evaluated;
     uint32_t frames_refused;
     /* The backend's own last result code, so a refusal can be named rather than counted. */
     int32_t last_result;
 
-    /* The inputs, as found this frame. These are what a support question actually comes down to,
-       and each was at some point assumed rather than checked in this project. */
+    /* Observed input availability and decode/jitter state for this frame. */
     uint32_t have_scene_color;
     uint32_t have_depth;
     uint32_t have_motion;
     uint32_t have_exposure;
     uint32_t motion_decoded;
     uint32_t jitter_active;
-    float jitter_pixels[2];
+    float jitter_pixels[2]; /* Render-pixel offset, x then y. */
 
     /* Current quality, so the interface can show what is in effect rather than what was last
        clicked. Those differ whenever a change has been requested and not yet applied. */
@@ -99,24 +79,26 @@ typedef struct rsf_overlay_stats {
     uint32_t reinsert_available;
     uint32_t render_scale_percent;
     uint32_t captures_written;
-    /* Appended in ABI 3. Whether the engine's temporal jitter gate is open right now, and whether
-       there is a gate to open at all: the patch verifies its site at startup and a game update
-       that moved the code leaves `jitter_available` zero, which the panel must show rather than
-       offering a switch that does nothing. */
+    /* ABI 3: gate state and verified patch availability, separate from observed jitter_active. */
     uint32_t jitter_on;
     uint32_t jitter_available;
-    /* 1 DLSS, 2 FSR2, 3 FSR3, 4 FSR4, 5 XeSS. */
+    /* SR provider IDs: 0 Off, 1 DLSS, 2 FSR2, 3 FSR3, 4 FSR4, 5 XeSS, 6 FSR1, 7 Auto. */
     uint32_t backend;
     uint32_t requested_backend;
     int32_t last_switch_result;
-    /* ABI 6: requested, effective and SDK-observed presentation are separate. */
+    /* ABI 6: modes 0 Off, 1 Fixed, 2 Auto, 3 Dynamic; current panel requests Off/Fixed only.
+       Counts exclude the rendered source frame.
+       Effective settings follow suspension policy; active requires SDK-confirmed generation. */
     uint32_t fg_available, fg_requested_mode, fg_requested_generated;
     uint32_t fg_effective_mode, fg_effective_generated, fg_active, fg_max_generated;
+    /* Reflex modes: 0 Off, 1 On, 2 On+Boost. Provider requirements can change the effective mode. */
     uint32_t reflex_available, reflex_requested_mode, reflex_effective_mode;
+    /* Suspension reason and last provider result; see the orchestrator's fg_session.h. */
     uint32_t fg_reason;
     int32_t fg_last_result;
-    uint64_t fg_total_presented;
-    /* ABI 7: real application Present and SDK aggregate counters, sampled against QPC. */
+    uint64_t fg_total_presented; /* SDK aggregate source plus generated presents. */
+    /* ABI 7: QPC ticks and ticks/second; zero clock values disable FPS estimation.
+       fg_present_count_valid selects the SDK aggregate; otherwise both rates use application presents. */
     uint64_t application_presented_frames, sample_qpc, qpc_frequency;
     uint32_t show_performance_hud, fg_present_count_valid;
     /* ABI 8: requested minimum interval between rendered frames, before generation, in
@@ -124,8 +106,9 @@ typedef struct rsf_overlay_stats {
        millihertz (zero when unknown). */
     uint32_t frame_limit_us;
     uint32_t display_refresh_mhz;
-    /* ABI 9: active provider, saved provider, implemented provider IDs as bits.
-       Zero is Off. GPU compatibility is checked at startup. */
+    /* ABI 9: effective provider, saved/requested provider and implemented ID bits.
+       FG IDs: 0 Off, 1 DLSS-G, 3 FSR3, 4 FSR4, 5 XeSS. Bit 31 advertises runtime switching.
+       A choice bit records implementation availability, not GPU compatibility. */
     uint32_t fg_backend, fg_requested_backend, fg_backend_choices;
     int32_t fg_selection_result;
 } rsf_overlay_stats;
@@ -138,15 +121,10 @@ typedef struct rsf_overlay_intent {
     rsf_overlay_quality quality;
     uint32_t enabled_changed;
     uint32_t enabled;
-    /* The user asked for the current frame's inputs to be written out, which is how a picture gets
-       checked rather than assumed. */
+    /* Request a diagnostic dump of this frame's inputs. */
     uint32_t dump_requested;
-    /* Appended in ABI 2, when the panel took over from the hotkeys.
-
-       Each is a request made once, on the frame the user clicked, and none of them is a statement
-       about what happened: the host decides, and says so through the stats and its refusal line.
-       Start is separate from `enabled` because bringing a backend up and choosing to reconstruct
-       are different acts, and the first can fail in ways the second cannot. */
+    /* ABI 2: legacy diagnostic/control requests retained for layout compatibility. A request
+       does not confirm execution; the host reports the result through the next stats snapshot. */
     uint32_t start_requested;
     uint32_t debug_view_changed;
     uint32_t debug_view;
@@ -161,6 +139,7 @@ typedef struct rsf_overlay_intent {
     uint32_t jitter;
     uint32_t backend_changed;
     uint32_t backend;
+    /* Setting groups use the corresponding changed flag; counts exclude the source frame. */
     uint32_t fg_changed, fg_mode, fg_generated;
     uint32_t reflex_changed, reflex_mode;
     uint32_t performance_hud_changed, performance_hud;
@@ -180,12 +159,12 @@ typedef struct rsf_overlay_input {
     float mouse_x;
     float mouse_y;
     uint32_t mouse_buttons;
-    float scroll_delta;
+    float scroll_delta; /* Vertical wheel delta in egui points. */
     uint32_t display_width;
     uint32_t display_height;
     /* Seconds since the previous frame. egui uses it for animation, and a zero is survivable. */
     float delta_seconds;
-    /* When zero, only the optional startup hint is drawn. Widget state survives. */
+    /* Zero hides interactive settings; optional hint and HUD may still draw. State survives. */
     uint32_t visible;
     /* Appended in ABI 5. Zero hides the hint; 0..1 controls its fade. No input is captured. */
     float startup_hint_alpha;
@@ -202,6 +181,7 @@ typedef struct rsf_overlay_vertex {
 } rsf_overlay_vertex;
 
 typedef struct rsf_overlay_draw_call {
+    /* Index slice in draw_data. Indices are mesh-local; add vertex_offset as BaseVertexLocation. */
     uint32_t index_offset;
     uint32_t index_count;
     uint32_t vertex_offset;
@@ -216,6 +196,7 @@ typedef struct rsf_overlay_draw_call {
 } rsf_overlay_draw_call;
 
 typedef struct rsf_overlay_draw_data {
+    /* Set before the call. Arrays are borrowed; empty arrays use null with zero counts. */
     uint32_t struct_size;
     const rsf_overlay_vertex* vertices;
     uint32_t vertex_count;
@@ -225,9 +206,7 @@ typedef struct rsf_overlay_draw_data {
     uint32_t call_count;
 } rsf_overlay_draw_data;
 
-/* A change to the overlay's texture atlas. The font atlas arrives as a full update on the first
-   frame and as partial ones afterwards, so a renderer that only handles full updates will look
-   correct until the moment a glyph is first used. */
+/* Atlas upload or partial patch. Upload all patches before drawing the frame that emitted them. */
 typedef struct rsf_overlay_texture_update {
     uint64_t id;
     /* Where the patch goes in the destination texture, and how big it is. A full update has
@@ -245,15 +224,19 @@ typedef struct rsf_overlay_texture_update {
 
 typedef struct rsf_overlay rsf_overlay;
 
-/* Create the overlay. Returns null on an ABI mismatch or an allocation failure. */
+/* Create an owning handle. Null means version mismatch or a caught construction panic.
+   Standard allocator aborts are not converted to null. */
 rsf_overlay* rsf_overlay_create(uint32_t abi_version);
+/* Release the handle, including a poisoned one. Null is a no-op; never destroy twice. */
 void rsf_overlay_destroy(rsf_overlay* overlay);
 
 /* Lay out one frame.
 
    `draw_data` and `intent` are filled in. Both may be null if the caller wants only the other. The
-   arrays in `draw_data` belong to the overlay and are valid until the next call to this function,
-   so a renderer must consume them before the next frame rather than remember them. */
+   arrays in `draw_data` belong to the overlay and are valid until the next frame call or destruction.
+   Only consume outputs after OK. Invalid arguments do not advance the frame or clear outputs.
+   Foreign pointers must be readable/writable, aligned and nonoverlapping; null/size checks do
+   not validate arbitrary addresses. A panic can leave old outputs, and poisons the handle. */
 rsf_overlay_result rsf_overlay_frame(rsf_overlay* overlay, const rsf_overlay_input* input,
                                      const rsf_overlay_stats* stats,
                                      rsf_overlay_draw_data* draw_data,
@@ -262,10 +245,12 @@ rsf_overlay_result rsf_overlay_frame(rsf_overlay* overlay, const rsf_overlay_inp
 /* Collect texture atlas changes produced by the last `rsf_overlay_frame`, and the ids of textures
    the overlay has finished with.
 
-   Writes up to `max_updates` entries and returns how many were written. Call it after every frame:
-   egui grows its atlas as glyphs are first used, so updates arrive long after startup. */
+   Writes up to the supplied capacity and drains each entry once. Repeat until zero. Zero also
+   covers invalid arguments or a poisoned handle. Pixel memory remains borrowed until the next
+   frame or destruction; undrained work is discarded by the next frame. */
 uint32_t rsf_overlay_texture_updates(rsf_overlay* overlay, rsf_overlay_texture_update* updates,
                                      uint32_t max_updates);
+/* Drain texture IDs to release after drawing this frame, never before its meshes use them. */
 uint32_t rsf_overlay_textures_to_free(rsf_overlay* overlay, uint64_t* ids, uint32_t max_ids);
 
 #ifdef __cplusplus

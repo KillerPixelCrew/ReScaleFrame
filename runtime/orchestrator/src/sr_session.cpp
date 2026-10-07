@@ -4,6 +4,8 @@
 #include <cstring>
 #include <new>
 
+// Graphics-owner state. Provider contexts and copied SDK paths are owned; device/log callbacks
+// remain borrowed. last_* tracks submitted SR identity, independently of CPU/presentation IDs.
 struct rsf_sr_session {
     rsf_sr_open_desc open{};
     char directories[4][1024]{};
@@ -49,6 +51,8 @@ extern "C" rsf_backend_result rsf_sr_session_create(const rsf_sr_session_setup* 
     return RSF_BACKEND_OK;
 }
 
+// Open/plan the replacement before closing the old context. force also rebuilds unchanged
+// selections when exposure creation flags change; failures preserve the active provider.
 static rsf_backend_result select_session(rsf_sr_session* session,
     rsf_sr_backend backend, rsf_quality quality, uint64_t version_id, bool force)
 {
@@ -146,6 +150,8 @@ extern "C" rsf_backend_result rsf_sr_session_evaluate(rsf_sr_session* session,
                    record.frame_id <= session->last_frame) {
             result = RSF_BACKEND_ERROR_INVALID_ARGUMENT;
         } else {
+            // Gaps, refusals and identity/resource changes reset history. Advance last_* after
+            // a provider attempt even on refusal, so the same frame cannot be submitted twice.
             rsf_sr_frame submitted = *frame;
             submitted.reset |= session->reset || (record.flags & RSF_FRAME_FLAG_RESET) ||
                 record.session_id != session->last_session || record.view_id != session->last_view ||

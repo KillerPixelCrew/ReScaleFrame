@@ -4,6 +4,8 @@
 #include <mutex>
 #include <new>
 
+// Fixed storage avoids eviction/allocation while handing a CPU ticket to queued render work.
+// The mutex protects numeric tickets only; engine/resource lifetime stays with the producer.
 struct rsf_render_links {
     std::mutex guard;
     uint64_t session_id = 0;
@@ -44,6 +46,7 @@ extern "C" rsf_backend_result rsf_render_links_bind(rsf_render_links* links, uin
     if (!links || !key || !frame || !generation) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(links->guard);
     rsf_render_link* available = nullptr;
+    // Search the whole active table before committing, so a free slot cannot hide a live key.
     for (uint32_t i = 0; i < links->capacity; ++i) {
         auto& slot = links->slots[i];
         if (slot.producer_key == key) return RSF_BACKEND_ERROR_NOT_READY;

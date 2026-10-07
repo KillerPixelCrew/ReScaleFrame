@@ -7,6 +7,8 @@ renderdoccmd under Wine, because only the Windows build can parse D3D11 chunks.
 This reports what the frame allocated and how it was bound. It does not read pixels, so it can
 say a target is a two channel float at render resolution, but not what convention its contents
 follow. That still needs looking at the image.
+Timeline/read lists are heuristics: inherited SRVs, compute-only bindings and deferred contexts
+are not reconstructed completely. Inputs remain unchanged; --output writes a JSON report.
 """
 
 import argparse
@@ -58,11 +60,11 @@ def resource_id(node, name):
 
 
 def build_timeline(root, textures):
-    """Reconstruct the frame's passes from render target bindings and the draws between them.
+    """Group recorded work between OMSetRenderTargets calls, resolving views to texture IDs.
 
-    The shipping build emits no debug markers, so a pass is defined here as a run of draws
-    sharing one output binding. That is enough to separate the scene pass from the post chain
-    and to find the point where the swap chain back buffer is first drawn into.
+    Returns candidate passes with draw/dispatch counts and explicit SRV reads seen in that group.
+    Bindings before the group and deferred/compute state are incomplete; a group is not proof of
+    an engine pass or pixel ownership. The textures mapping supplies descriptor metadata.
     """
     views = {}
     for chunk in root.iter("chunk"):
@@ -119,6 +121,11 @@ def build_timeline(root, textures):
 
 
 def parse(path):
+    """Return XML thumbnail, created-texture descriptors, RTV bindings and chunk-name counts.
+
+    Descriptor numbers remain XML strings; only recorded CreateTexture2D chunks are indexed.
+    Parses structured data without replaying a capture or reading texture pixels.
+    """
     tree = ElementTree.parse(path)
     root = tree.getroot()
     header = root.find("header")

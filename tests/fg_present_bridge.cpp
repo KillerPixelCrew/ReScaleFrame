@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Exercise the shared presentation bridge with synthetic SR/FG frame packets.
+ * The manual hardware fixture supports D3D11, D3D12 and D3D12 provider switching,
+ * including input refusal, aborted tokens and resource generations. Cleared textures
+ * supply deterministic inputs; success establishes this fixture's bridge contracts,
+ * not game rendering quality or physical latency.
+ */
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>

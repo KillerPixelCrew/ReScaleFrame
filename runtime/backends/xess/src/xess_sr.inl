@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Included in xess_backend.cpp's private namespace after SDK headers.
+/** Owns the XeSS runtime/context and fallback responsive mask. open copies scalar configuration;
+ * its device and diagnostic user data remain borrowed from the caller.
+ */
 struct XessSession {
     HMODULE module = nullptr;
     xess_context_handle_t context = nullptr;
@@ -16,6 +20,7 @@ struct XessSession {
     // this zeroed output-size texture, which leaves history weights unchanged.
     ID3D12Resource* no_response = nullptr;
 };
+/** Translate the shared quality levels, including XeSS AA and UltraQuality modes. */
 xess_quality_settings_t xess_quality(rsf_quality quality)
 {
     switch (quality) {
@@ -27,6 +32,7 @@ xess_quality_settings_t xess_quality(rsf_quality quality)
     default: return XESS_QUALITY_SETTING_ULTRA_QUALITY;
     }
 }
+/** Dispose partial initialization or an idle live session; the caller first retires GPU work. */
 void sr_close(void* pointer)
 {
     auto* session = static_cast<XessSession*>(pointer);
@@ -36,6 +42,10 @@ void sr_close(void* pointer)
     if (session->module) FreeLibrary(session->module);
     delete session;
 }
+/** Load libxess.dll, resolve every required export, verify an optional exact version, and create
+ * a DX12 context. Returned session owns a zero-filled responsive mask for frames without a mask.
+ * Creation failures clean up and distinguish load/export/support/init errors.
+ */
 rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
 {
     auto result = rsf::validate_open(desc, out);
@@ -94,6 +104,7 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
     *out = session;
     return RSF_BACKEND_OK;
 }
+/** Ask the runtime for input pixels at the session's output extent and requested quality. */
 rsf_backend_result sr_plan(void* pointer, rsf_quality quality, uint32_t* width, uint32_t* height)
 {
     auto* session = static_cast<XessSession*>(pointer);
@@ -104,6 +115,10 @@ rsf_backend_result sr_plan(void* pointer, rsf_quality quality, uint32_t* width, 
     *width = input.x; *height = input.y;
     return RSF_BACKEND_OK;
 }
+/** Record XeSS execution after common texture/state/generation checks. Explicit exposure is
+ * required when auto exposure was disabled at open. Velocity scale and jitter use render pixels.
+ * The caller owns command-list submission, state restoration, and GPU resource retirement.
+ */
 rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame* frame)
 {
     auto result = rsf::validate_frame(frame);
@@ -127,15 +142,18 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     params.inputHeight = frame->record->render_height;
     params.jitterOffsetX = frame->jitter_x;
     params.jitterOffsetY = frame->jitter_y;
+    // Undo the engine's pre-exposure before XeSS applies its exposure convention.
     params.exposureScale = 1.0f / frame->pre_exposure;
     params.resetHistory = frame->reset;
     const auto code = session->execute(session->context, static_cast<ID3D12GraphicsCommandList*>(context), &params);
     return code == XESS_RESULT_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+/** XeSS retains its context allocations until close; this callback validates the live handle. */
 rsf_backend_result sr_release(void* pointer)
 {
     return pointer ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Return the packed runtime version and borrowed session text, valid until sr_close. */
 rsf_backend_result sr_version(void* pointer, uint64_t* id, const char** name)
 {
     if (!pointer || !id || !name) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

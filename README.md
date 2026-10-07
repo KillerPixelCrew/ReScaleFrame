@@ -29,11 +29,11 @@ See [current implementation and validation](docs/current-status.md) for evidence
 
 For downloads, supported builds, installation and controls, see the relevant game's README:
 
-| Game | Availability | Guide |
+| Game | Availability and validation | Guide |
 | --- | --- | --- |
-| Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
+| Ace Combat 7 | Published ZIP: DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay. Current source adds accepted DLSS-FG; new FSR/XeSS FG live acceptance remains open | [AC7 README](games/ac7/README.md) |
 | Project Wingman | Scaffold and static UE4.27.2 research; rendering unsupported | [Project Wingman README](games/project-wingman/README.md) |
-| Drag'n Wash | Unity Mono DX12 SR, shared overlay and runtime FG switching in source/local test builds; Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
+| Drag'n Wash | Unity Mono DX12 SR/FG and overlay in source/local test builds, with recorded provider-switching acceptance; no published release and Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
 
 [Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
 · [Implementation tracker](docs/implementation.md)
@@ -47,11 +47,11 @@ to the shared runtime. Loading that runtime is separate from activating a render
 
 | Component | Responsibility |
 | --- | --- |
-| Bootstrap | Load the runtime into the game process |
+| Bootstrap | Version-only scaffold for intended runtime loading |
 | Orchestrator | Select and prepare the game integration; own settings, vendor SDKs and shared graphics services |
 | Game integration | Detect the game, prepare the renderer, collect frame data and reinsert the result |
 | Game SDK | Keep the plugin/runtime boundary versioned and explicit through a C ABI |
-| Frontends | Configure sessions and show status through bounded IPC |
+| Frontends | Planned session configuration and bounded status IPC |
 
 The AC7 DirectInput carrier prepares the game plugin and links shared runtime objects into its
 proxy. The Unity version shim loads the runtime DLL and shared Mono plugin. Bootstrap and launcher
@@ -70,13 +70,15 @@ See the [design](docs/design.md), [architecture research](docs/research/architec
 
 ## Repository
 
-All first-party components live in this monorepo and share one release version.
+All first-party components live in this monorepo and share one release version. The
+[code reference](docs/code-reference.md) follows the implemented paths from loading to presentation,
+with module, API, build and tool maps.
 
 | Directory | Contents |
 | --- | --- |
 | [`loader/`](loader/) | Bootstrap, AC7 proxy and loading diagnostics |
 | [`runtime/orchestrator/`](runtime/orchestrator/) | Shared lifecycle and frame-processing coordination |
-| [`runtime/backends/`](runtime/backends/) | Vendor adapters and upscaling contracts |
+| [`runtime/contract/`](runtime/contract/), [`runtime/backends/`](runtime/backends/) | Shared SR/FG contracts, negotiation and vendor adapters |
 | [`runtime/graphics/`](runtime/graphics/) | Resource handling, observation, state restoration and composition |
 | [`runtime/presentation/`](runtime/presentation/) | Shared surfaces, synchronization and presentation work |
 | [`games/`](games/) | Game-specific integrations and their evidence |

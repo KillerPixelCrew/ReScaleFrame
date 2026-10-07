@@ -1,27 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Draw the overlay's triangles with D3D11, inside a frame the game owns.
-
-   `rescaleframe/overlay.h` is the whole description of what to draw: vertices in physical pixels
-   with premultiplied colour, indices, per draw call scissor rectangles, and a texture atlas that
-   arrives in patches. This is the other half, the part that has to happen on the game's device
-   context between two of its own draws.
-
-   Everything difficult here is a consequence of that placement. The context arrives configured for
-   whatever the game was doing, so every piece of state this pass sets is read back first and put
-   back afterwards. Anything missed does not break the overlay, it breaks the game's rendering after
-   the overlay returns, which is a bug that reads as the game being broken.
-
-   The renderer never creates a render target and never rebinds one. It draws into whatever is bound
-   when it is called, because the caller knows which image the overlay belongs on and this does not.
-   Rebinding would mean calling OMSetRenderTargets, which also unbinds every unordered access view
-   the output merger holds, and those cannot be put back exactly.
-
-   Colour is written through unchanged: egui produces premultiplied sRGB encoded bytes, and a game's
-   back buffer is normally a UNORM format holding sRGB encoded values, so a pass through is a match.
-   That is a choice, not a measurement. Against an _SRGB render target view the hardware would
-   encode a second time and the overlay would look washed out; the draw notices that case and says
-   so through the log sink once, rather than applying a conversion nobody has been able to look
-   at. */
+/* Render borrowed overlay meshes and atlas patches into the currently bound D3D11 target.
+   Vertices use physical pixels and premultiplied encoded colour. UNORM target views match that
+   encoding; an sRGB target view encodes it again and is reported once. No conversion is inferred.
+   The renderer owns device, shaders, geometry buffers, and uploaded textures. Serialize upload,
+   draw, free, and destroy on the device's immediate-context thread. It restores affected bindings
+   and never rebinds render targets or OM UAVs. Callers retain responsibility for other inherited
+   pipeline effects such as predication and stream output. */
 
 #ifndef RSF_OVERLAY_RENDERER_H
 #define RSF_OVERLAY_RENDERER_H
@@ -45,8 +29,7 @@ typedef int32_t rsf_overlay_renderer_result;
 /* A device resource could not be created, mapped or updated. */
 #define RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED ((rsf_overlay_renderer_result)-4)
 
-/* Progress and diagnostics, the same shape and the same reason as the rest of this directory: this
-   runs on a game's render thread, where a returned code often reaches nobody. */
+/* Optional synchronous diagnostic sink; message storage lasts only for the call. */
 typedef void (*rsf_overlay_renderer_log_fn)(void* user, const char* message);
 
 typedef struct rsf_overlay_renderer_setup {
@@ -58,27 +41,15 @@ typedef struct rsf_overlay_renderer_setup {
 
 typedef struct rsf_overlay_renderer rsf_overlay_renderer;
 
-/* Build the renderer against one device. `d3d11_device` is an `ID3D11Device*`, kept referenced
-   until the renderer is destroyed.
-
-   Shaders are compiled here, at load, rather than shipped as bytecode. The cross build has no
-   shader compiler, so a pass built from bytecode would exist only in the MSVC build and could not
-   be built or looked at anywhere else. */
+/* Retain ID3D11Device and compile shaders at creation using the system d3dcompiler_47.dll.
+   Successful creation transfers an owned renderer through out; release with destroy. */
 rsf_overlay_renderer_result rsf_overlay_renderer_create(void* d3d11_device,
                                                         const rsf_overlay_renderer_setup* setup,
                                                         rsf_overlay_renderer** out);
 
-/* Apply one atlas change from `rsf_overlay_texture_updates`. `context` is an
-   `ID3D11DeviceContext*`.
-
-   A whole texture update creates or recreates the destination at that size. A patch writes a
-   sub-rectangle of a texture that already exists, and one for an unknown id or outside the
-   destination is rejected rather than guessed at. Both cases have to work: egui sends the font
-   atlas whole once and then patches it every time a glyph is used for the first time, so a
-   renderer that only handles whole updates looks correct until it suddenly does not.
-
-   Expects an immediate context. Patches go through `UpdateSubresource` with a destination box,
-   which D3D11 documents as behaving wrongly on a deferred context. */
+/* Borrow and upload one RGBA8 atlas update. Whole updates create/replace an id atomically after
+   resource creation succeeds; patches require an existing id and bounds within its texture.
+   context is the same-device immediate context; pixel storage lasts for this call only. */
 rsf_overlay_renderer_result rsf_overlay_renderer_upload_texture(
     rsf_overlay_renderer* renderer, void* context, const rsf_overlay_texture_update* update);
 
@@ -105,6 +76,7 @@ rsf_overlay_renderer_result rsf_overlay_renderer_draw(rsf_overlay_renderer* rend
                                                       uint32_t target_width,
                                                       uint32_t target_height);
 
+/* Release device, pipeline, geometry, and all remaining atlas entries; null is accepted. */
 void rsf_overlay_renderer_destroy(rsf_overlay_renderer* renderer);
 
 #ifdef __cplusplus

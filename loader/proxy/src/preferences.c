@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <stdio.h>
 
+/* Sentinel defaults sit outside each valid range so absent keys leave caller defaults intact. */
 void rsf_preferences_read(const wchar_t* path, uint32_t* enabled, uint32_t* quality)
 {
     if (!path || !path[0] || !enabled || !quality) {

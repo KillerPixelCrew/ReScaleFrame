@@ -1,19 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* DLSS super resolution, reached through Streamline.
-
-   Streamline is the DLSS SDK. There has been no separate one since DLSS 2, so "integrating DLSS"
-   means loading `sl.interposer.dll`, tagging four or five resources, providing per frame camera
-   constants, and asking it to evaluate.
-
-   This header is the whole contract. Everything behind it compiles against NVIDIA's C++ headers,
-   whose structures are versioned, GUID tagged, and in one case abstract with a virtual operator.
-   Transcribing those layouts by hand into another language is a silent corruption waiting to
-   happen, so the vendor side stays where the vendor's own headers define it, and this narrow C
-   surface is what the rest of the project sees.
-
-   The Streamline SDK is not in this repository. Fetch it into `vendor/streamline/` per
-   docs/dependencies.md. Without it these entry points still exist and report
-   RSF_DLSS_ERROR_NOT_COMPILED, so a checkout that does not have it still builds and tests. */
+/** @file DLSS SR C ABI adapter using official Streamline C++ types internally.
+ * Serialize lifecycle/evaluation calls on the graphics owner. A process uses either this adapter's
+ * D3D11 Streamline registration or a borrowed D3D12 host, never two registrations. The supplied
+ * device, shared host, and diagnostic sink outlive adapter use. SDK headers are optional at build
+ * time; unavailable implementations preserve symbols and return NOT_COMPILED.
+ */
 
 #ifndef RSF_DLSS_H
 #define RSF_DLSS_H
@@ -24,13 +15,10 @@
 extern "C" {
 #endif
 
-/* 3: a frame names its viewport, may ask for alpha to be carried, and may pin its frame index so
-   two viewports evaluated in one frame share it. */
+/* ABI 4 adds optional translucency hints, motion depth, and encoded-color metadata to ABI 3. */
 #define RSF_DLSS_ABI_VERSION 4u
 
-/* Which engine the host is. Streamline wants an identity before it will start NGX, and NGX is what
-   DLSS runs on, so this is not optional decoration: with none of it supplied the DLSS plugin loads
-   and then refuses with "Missing NGX context". */
+/** Engine identity for NGX initialization, used with engine version/project ID. */
 typedef uint32_t rsf_dlss_engine;
 #define RSF_DLSS_ENGINE_CUSTOM ((rsf_dlss_engine)0)
 #define RSF_DLSS_ENGINE_UNREAL ((rsf_dlss_engine)1)
@@ -40,8 +28,7 @@ typedef int32_t rsf_dlss_result;
 #define RSF_DLSS_OK ((rsf_dlss_result)0)
 #define RSF_DLSS_ERROR_INVALID_ARGUMENT ((rsf_dlss_result)-1)
 #define RSF_DLSS_ERROR_ABI_MISMATCH ((rsf_dlss_result)-2)
-/* Built without the Streamline headers present. Not a runtime failure: this build never had the
-   code in it. */
+/* Built without the Streamline implementation. */
 #define RSF_DLSS_ERROR_NOT_COMPILED ((rsf_dlss_result)-3)
 /* `sl.interposer.dll` could not be loaded from the path given, or failed signature verification. */
 #define RSF_DLSS_ERROR_LOAD_FAILED ((rsf_dlss_result)-4)
@@ -55,11 +42,14 @@ typedef int32_t rsf_dlss_result;
 /* Streamline returned a failure. The log line carries its result code. */
 #define RSF_DLSS_ERROR_FEATURE_FAILED ((rsf_dlss_result)-9)
 
-/* Progress and diagnostics, one formatted line at a time. Same shape as the texture dump sink and
-   for the same reason: this runs inside a game's render thread, where a returned code often never
-   arrives. */
+/** Optional UTF-8 diagnostic callback. message is borrowed for the call only. SDK log forwarding
+ * can occur on vendor threads; the sink must be thread safe and must not reenter the adapter.
+ */
 typedef void (*rsf_dlss_log_fn)(void* user, const char* message);
 
+/** Load configuration. Initialize struct_size and RSF_DLSS_ABI_VERSION. Paths and identity are
+ * UTF-8; preserve engine-version/project-ID storage through shutdown because it reaches SDK init.
+ */
 typedef struct rsf_dlss_setup {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -72,30 +62,29 @@ typedef struct rsf_dlss_setup {
     const char* plugin_directory_utf8;
     /* Optional. Where Streamline writes its own log. Null disables that. */
     const char* log_directory_utf8;
-    /* Application id issued by NVIDIA, when there is one. Zero means identify by engine instead,
-       which is the route an injected integration has: the id belongs to the game's publisher, not
-       to us. */
+    /* NVIDIA application ID, or zero to identify by engine/project metadata instead. */
     uint32_t application_id;
-    /* Engine identity, used when `application_id` is zero. Streamline needs one or the other
-       before NGX will start, and for a UE4 title `RSF_DLSS_ENGINE_UNREAL` is simply true. */
+    /* Engine identity used when application_id is zero. */
     rsf_dlss_engine engine;
     /* Engine version, e.g. "4.18". Required alongside the engine type. */
     const char* engine_version_utf8;
     /* GUID identifying this project, e.g. "a3ed1f08-3542-4698-b85c-e1a9908e861a". */
     const char* project_id_utf8;
-    /* Refuse to load an interposer without a valid embedded signature. Recommended: this code
-       loads a DLL into a game process, and the path comes from configuration. */
+    /* Require a valid embedded signature; builds without signature checking refuse this request. */
     uint32_t require_signature;
     rsf_dlss_log_fn log;
     void* log_user;
 } rsf_dlss_setup;
 
-/* Load and initialise Streamline. Manual hooking is used, which is what allows the device to
-   already exist: the orchestrator attaches to a running game and never creates one. */
+/** Load and initialize a D3D11 Streamline registration with manual hooking/frame-based tags.
+ * An already initialized adapter returns OK; an independently loaded interposer refuses creation.
+ * Loading, missing exports, signature verification, and initialization have distinct error codes.
+ */
 rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup);
 
-/* Hand over the game's `ID3D11Device*`. D3D11 has no device proxy in Streamline, so this is the
-   native device and stays the one the game uses. */
+/** Register the game's native ID3D11Device and retain a COM reference until shutdown.
+ * Call after load and before support queries/evaluation; resolve feature functions on this device.
+ */
 rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
 /* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
 rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
@@ -110,8 +99,10 @@ typedef uint32_t rsf_dlss_preset;
 #define RSF_DLSS_PRESET_K ((rsf_dlss_preset)11)
 #define RSF_DLSS_PRESET_L ((rsf_dlss_preset)12)
 #define RSF_DLSS_PRESET_M ((rsf_dlss_preset)13)
+/** Validate and remember a model preset for subsequent viewport-zero evaluations. */
 rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset);
 
+/** Support-query output; initialize struct_size and clear optional driver fields before querying. */
 typedef struct rsf_dlss_support {
     uint32_t struct_size;
     uint32_t supported;
@@ -154,17 +145,16 @@ typedef struct rsf_dlss_plan {
     uint32_t render_height_max;
 } rsf_dlss_plan;
 
-/* Ask DLSS what render size a quality level means at this output size.
-   The answer comes from the SDK rather than from a ratio computed here, because DLSS is entitled
-   to change it and a mismatch between the size we render and the size it expects is a rejected
-   evaluate at best. */
+/** Query SDK render size and accepted dynamic-resolution bounds for the supplied output pixels.
+ * Requires initialized feature functions; caller initializes plan.struct_size and input fields.
+ */
 rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan);
 
-/* Everything one frame needs. Textures are `ID3D11Texture2D*`.
-
-   Units are the ones the Rust model produces: jitter in pixels, and a motion scale that takes the
-   game's stored motion into the [-1,1] range Streamline requires. Matrices are row major and must
-   carry no jitter, which is why jitter is a separate field rather than folded into them. */
+/** One SR evaluation's borrowed textures and camera data. Textures are ID3D11Texture2D on the
+ * native path or ID3D12Resource on the shared-host path. Initialize size/version. Dimensions and
+ * jitter use pixels; motion scales convert stored values to normalized screen displacement.
+ * Matrices are row major without jitter. Texture leases last through submitted GPU completion.
+ */
 typedef struct rsf_dlss_frame {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -214,8 +204,8 @@ typedef struct rsf_dlss_frame {
     float motion_invalid_value;
     /* Depth closer to the camera holds the larger value. Unreal's reversed-Z does. */
     uint32_t depth_inverted;
-    /* Whether camera movement is already folded into the motion buffer. Unreal writes object
-       motion only, so this is normally false and Streamline reconstructs the rest from depth. */
+    /* Non-zero when supplied vectors include camera movement. Otherwise Streamline can
+       reconstruct unwritten motion using depth and clip_to_prev_clip. */
     uint32_t camera_motion_included;
     /* No usable history: a cut, a teleport, or the first frame after a resolution change. */
     uint32_t reset;
@@ -264,18 +254,20 @@ rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* fra
 rsf_dlss_result rsf_dlss_evaluate_shared(void* d3d12_list, const rsf_dlss_frame* frame,
                                        uint64_t source_frame_id);
 
-/* Release DLSS resources for the viewport while leaving Streamline loaded. Worth doing when the
-   render size changes, since the feature is built for a specific pair of sizes. */
+/** Release viewport-zero feature allocations while retaining the registration. The shared-host
+ * path drains its queue first; native D3D11 callers ensure prior evaluations have completed.
+ */
 rsf_dlss_result rsf_dlss_release_resources(void);
 
-/* The same for one viewport by number. */
+/** Release one viewport's feature history/allocations; invalid indices currently map to zero. */
 rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport);
 
-/* Shut Streamline down and unload the interposer. Must happen before the game's device goes. */
+/** Release adapter references after GPU completion. Owned D3D11 mode shuts down/unloads the SDK;
+ * shared mode detaches while leaving host shutdown to its owner. The device/host must remain live.
+ */
 rsf_dlss_result rsf_dlss_shutdown(void);
 
-/* Whether this build has the Streamline headers compiled in at all. Reported rather than assumed,
-   so a caller can say "not built with DLSS support" instead of "DLSS failed". */
+/** Return build capability only, without loading a runtime or checking adapter support. */
 uint32_t rsf_dlss_available(void);
 
 #ifdef __cplusplus

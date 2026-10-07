@@ -5,6 +5,9 @@ using UnityEngine;
 
 namespace ReScaleFrame.Unity
 {
+    // Sequential x64 mirrors of unity_bridge.h and game_frame.h. Unity Matrix4x4 storage is copied
+    // directly across the ABI; Snapshot composes transforms using Unity's matrix conventions.
+    /// <summary>Camera transforms and dimensions; jitter uses render pixels, FOV radians and delta time seconds.</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct CameraFrame
     {
@@ -17,6 +20,8 @@ namespace ReScaleFrame.Unity
         internal float DeltaTime;
     }
 
+    /// <summary>Copied graph-execution packet; IntPtr fields name borrowed native D3D12 resources.</summary>
+    /// <remarks>Flags are defined in unity_bridge.h. Enqueue takes resource leases and returns opaque event data.</remarks>
     [StructLayout(LayoutKind.Sequential)]
     internal struct Packet
     {
@@ -28,6 +33,7 @@ namespace ReScaleFrame.Unity
         internal Matrix4x4 PreviousToClip;
     }
 
+    /// <summary>Native policy snapshot, with exact input and output pixel dimensions.</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct Configuration
     {
@@ -35,6 +41,7 @@ namespace ReScaleFrame.Unity
         internal uint RenderWidth, RenderHeight, OutputWidth, OutputHeight;
     }
 
+    /// <summary>Borrowed native function table retained through producer and GPU drainage.</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct Api
     {
@@ -43,6 +50,7 @@ namespace ReScaleFrame.Unity
         internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent;
     }
 
+    /// <summary>Roots marshalled delegates and queries the active native session.</summary>
     internal static class Native
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void LogDelegate([MarshalAs(UnmanagedType.LPStr)] string message);
@@ -63,6 +71,8 @@ namespace ReScaleFrame.Unity
         [DllImport("ReScaleFrame.Game.UnityMono.dll", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int rsf_unity_get_event_id();
 
+        /// <summary>Copy and validate the native table, then root delegates for the managed adapter lifetime.</summary>
+        /// <exception cref="InvalidOperationException">Native size, version, session or required callbacks differ.</exception>
         internal static void Initialize(IntPtr address)
         {
             Api = Marshal.PtrToStructure<Api>(address);
@@ -76,6 +86,7 @@ namespace ReScaleFrame.Unity
             ReportCpu = Api.CpuEvent == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<CpuDelegate>(Api.CpuEvent);
         }
 
+        /// <summary>Query policy for this camera's output size; refusal yields an inactive configuration.</summary>
         internal static Configuration Configuration(Camera camera)
         {
             var config = new Configuration { Size = (uint)Marshal.SizeOf<Configuration>(), Version = 1 };

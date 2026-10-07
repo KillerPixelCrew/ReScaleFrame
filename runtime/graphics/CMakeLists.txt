@@ -1,3 +1,5 @@
+# Shared D3D11 mechanics; public headers expose C contracts to native/runtime consumers.
+# Shader source compiles at helper creation, so no build-time HLSL compiler target is required.
 add_library(rsf_graphics STATIC
     src/texture_dump_raw.cpp
     src/texture_dump.cpp
@@ -20,15 +22,13 @@ add_library(rsf_graphics STATIC
     src/ui_identify.cpp
     src/constant_twin.cpp
     src/d3d11_observer.cpp)
-# The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side
-# the contract exists to constrain. The renderer and the input capture only consume it.
+# Overlay ABI headers come from the Rust overlay implementation; graphics only consumes them.
 target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/include")
 target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
 target_link_libraries(rsf_graphics PUBLIC d3d11 dxgi)
 target_link_libraries(rsf_graphics PRIVATE minhook)
-# MinHook's length disassembler, for building a trampoline over a function's bytes as the file has
-# them rather than as memory has them. It is compiled into the library but not exported by its
-# public header.
+# Private MinHook instruction decoder builds Present trampolines from original module-file bytes.
+# It is compiled into MinHook but absent from its public header.
 target_include_directories(rsf_graphics PRIVATE "${minhook_SOURCE_DIR}/src/hde")
 add_library(ReScaleFrame::Graphics ALIAS rsf_graphics)

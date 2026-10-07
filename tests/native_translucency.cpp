@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Translucency hints and cloud depth on WARP: an opaque snapshot at the first scene-colour pass,
-// masks from what that pass and the offscreen layer changed, and identity-keyed handover.
+/**
+ * @file
+ * Check native translucency hints and cloud-depth handover with WARP readback.
+ * Synthetic scene/layer changes exercise rect-local masks, opaque snapshots and
+ * reactive coverage. Frame/view identity prevents stale hints or cloud depth from
+ * crossing into another SR pass.
+ */
 #include <rescaleframe/native_translucency.h>
 #include <d3d11.h>
 #include <DirectXPackedVector.h>

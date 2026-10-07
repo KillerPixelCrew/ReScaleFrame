@@ -1,3 +1,19 @@
+<#
+.SYNOPSIS
+Build Unity Mono research artifacts against a specific game's managed assemblies.
+.DESCRIPTION
+Restores locked Harmony dependencies, builds the managed adapter and selected native targets,
+then builds the Release overlay and copies DLLs/notices into build/windows-x64/bin/Configuration.
+Requires Unity native headers under vendor/unity-native. Does not launch or deploy to a game.
+.PARAMETER UnityManagedDirectory
+Directory containing the researched game's Unity managed reference assemblies.
+.PARAMETER Configuration
+Native and managed configuration. The overlay is built in Release for either selection.
+.PARAMETER VS2026
+Use the Visual Studio 2026 generator presets instead of the default VS 2022 presets.
+.OUTPUTS
+Artifact directory on stdout; a failed external command throws.
+#>
 param(
     [Parameter(Mandatory)][string]$UnityManagedDirectory,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
@@ -8,6 +24,7 @@ Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskManaged = (Resolve-Path -LiteralPath $UnityManagedDirectory).Path
 $taskSuffix = if ($VS2026) { '-vs18' } else { '' }
+# PowerShell's error preference does not convert native exit codes into exceptions.
 function Invoke-UnityChecked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }

@@ -1,16 +1,12 @@
-"""Compute the byte offsets of Unreal's view uniform buffer members.
+"""Derive stock Unreal view-buffer offset candidates from SceneView.h macro declarations.
 
-The plugin needs matrices, jitter and camera parameters every frame, and none of it is visible in
-a frame capture. It lives in one constant buffer whose layout is fixed by the member table in
-SceneView.h, so the offsets can be derived from source and then checked against the buffer the
-running game actually binds.
+Offsets model Unreal/HLSL constant-buffer packing: scalar/vector members cannot straddle a
+sixteen-byte register, while matrices, four-component vectors and multi-element arrays align
+to sixteen-byte boundaries.
 
-Offsets follow Unreal's uniform buffer rules, which are the HLSL constant buffer rules: every
-member is aligned to its natural size, nothing straddles a sixteen byte boundary, and matrices and
-four component vectors are sixteen byte aligned.
-
-These offsets describe stock 4.18.3. AC7 is a vendor branch, so treat them as a hypothesis to
-confirm against a dumped buffer rather than as ground truth. `--verify` does that comparison.
+These offsets describe stock 4.18.3, not AC7's vendor branch. --verify inspects value plausibility;
+it does not validate field semantics. Unknown types have no size and invalidate subsequent
+derived offsets. Inputs remain unchanged; --output writes layout JSON.
 """
 
 import argparse
@@ -35,6 +31,11 @@ TYPES = {
 
 
 def parse_members(header_text):
+    """Read MEMBER/EX/ARRAY macros in textual order, retaining unknown types explicitly.
+
+    This is a narrow regex parser. Array count text is reduced to decimal digits, defaulting to
+    one if none remain; symbolic constants and nested expressions are not evaluated.
+    """
     members = []
     for match in MEMBER.finditer(header_text):
         arguments = [part.strip() for part in match.group("args").split(",")]
@@ -59,6 +60,12 @@ def parse_members(header_text):
 
 
 def compute_offsets(members):
+    """Return members with byte offsets and a 16-byte-rounded total using HLSL packing rules.
+
+    Unknown types emit offset=None without advancing the cursor; later offsets are provisional.
+    Counts greater than one use element strides rounded up to multiples of 16 bytes; count one
+    uses the type's ordinary size/alignment. Scalar/vector members cannot cross a 16-byte boundary.
+    """
     offset = 0
     laid_out = []
     for member in members:
@@ -90,6 +97,7 @@ def looks_like_matrix(values):
 
 
 def verify(laid_out, dump_path, wanted):
+    """Report values and bounds for named candidates; matrices get only a finite/nonzero check."""
     data = Path(dump_path).read_bytes()
     findings = []
     for member in laid_out:

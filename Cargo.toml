@@ -1,3 +1,4 @@
+# Rust workspace built independently of CMake; VERSION must match workspace.package.version.
 [workspace]
 members = ["ui/overlay", "runtime/backends/rsf-upscaler"]
 resolver = "3"

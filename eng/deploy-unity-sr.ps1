@@ -1,3 +1,29 @@
+<#
+.SYNOPSIS
+Deploy the researched Drag'n Wash adapter and vendor runtimes beside the game.
+.DESCRIPTION
+Requires the pinned executable hash and a stopped game. Copies existing build/SDK artifacts;
+does not build or download them. Only replaces files owned by the previous deployment whose
+hashes still match. Saves replaced files, writes UTF-16 settings and verifies the original-file
+baseline before recording deployment.json. A failure after copying can leave a partial update;
+the backups are recovery material, not an automatic rollback transaction.
+.PARAMETER GameDirectory
+Installation directory containing the pinned DragNWash.exe.
+.PARAMETER Backend
+Requested SR provider written to ReScaleFrame.ini; Auto delegates to GPU selection policy.
+.PARAMETER Quality
+ABI quality ID (0 through 5), passed to the runtime without validating provider support here.
+.PARAMETER FrameGeneration
+Requested FG provider, independent of the SR provider. Availability is checked by the runtime.
+.PARAMETER GeneratedFrames
+Requested generated frames per source frame, subject to the provider's supported maximum.
+.PARAMETER GraphicsDebug
+Enable the Unity graphics diagnostic setting.
+.PARAMETER Configuration
+Configuration of existing native/managed build artifacts to copy.
+.OUTPUTS
+Deployment summary on stdout; file hashes and the original baseline in ReScaleFrame/deployment.json.
+#>
 param(
     [Parameter(Mandatory)][string]$GameDirectory,
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
@@ -29,6 +55,7 @@ $taskOriginal = if ($taskOld) { @($taskOld.original_files) } else {
     })
 }
 $taskCopies = [Collections.Generic.List[object]]::new()
+# Queue validated sources before the first write to the installation.
 function Add-UnityCopy([string]$Source, [string]$Relative) {
     if (!(Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Required artifact missing: $Source" }
     $taskCopies.Add(@{ source=$Source; path=$Relative })
@@ -52,6 +79,7 @@ Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess.dll" 'ReScaleFrame/xess/libxess
 Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess_fg.dll" 'ReScaleFrame/xess/libxess_fg.dll'
 Add-UnityCopy "$taskRoot/vendor/xess/bin/libxell.dll" 'ReScaleFrame/xess/libxell.dll'
 foreach ($taskLeaf in @('LICENSE.txt','third-party-programs.txt')) { Add-UnityCopy "$taskRoot/vendor/xess/$taskLeaf" "ReScaleFrame/xess/$taskLeaf" }
+# A null source denotes the generated settings file, still subject to the ownership check.
 $taskCopies.Add(@{ source=$null; path='ReScaleFrame.ini' })
 foreach ($taskCopy in $taskCopies) {
     $taskDestination = Join-Path $taskGame $taskCopy.path

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Frozen-input precision experiment. This is not ordered game-frame replay.
+// Standalone Windows/NVIDIA frozen-input DLSS precision experiment, built as rsf_exposure_probe
+// and run manually. Reads tightly packed colour plus optional float32 depth, supplies synthetic
+// zero motion/camera data and repeats the same input 60 times into a fixed 1600x900 output.
+// Writes texture dump files and optionally a RenderDoc capture. This is not ordered frame replay
+// or evidence of moving-scene quality. CLI formats/extents are validated before device creation.
+// Environment options: RSF_PROBE_DEPTH_FILE, RSF_PROBE_TRANSPORT, RSF_PROBE_COLOUR_FIDELITY;
+// optional build gates add RSF_PROBE_RENDERDOC and NGX pre-exposure/scale/LDR overrides below.
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/colour_fidelity.h>
@@ -77,6 +83,8 @@ uint32_t trace_create(void* context, uintptr_t second, const void* third, void* 
                  (unsigned(flags) & 64u) != 0, (unsigned(flags) & 8u) != 0);
     return original_create(context, second, third, fourth);
 }
+// Process-local hooks for this probe only. Missing component exports leave tracing unavailable;
+// final cleanup disables all MinHook hooks before SDK shutdown.
 void install_trace()
 {
     auto module = GetModuleHandleW(L"nvngx_dlss.dll");
@@ -139,6 +147,7 @@ int main(int argc, char** argv)
 #ifdef RSF_PROBE_NGX_PARAMS
     install_trace();
 #endif
+    // COM owners survive every evaluation/readback. Frame pointers borrow these textures.
     ComPtr<ID3D11Texture2D> color, output, depth, motion, exposure;
     D3D11_TEXTURE2D_DESC desc{}; desc.Width = render_width; desc.Height = render_height;
     desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1; desc.Format = input_format;
@@ -189,6 +198,7 @@ int main(int argc, char** argv)
         frame.color_in = encoded; frame.color_encoded = 1; frame.exposure = nullptr;
         std::fprintf(stderr, "colour transport: encoded input, DLSS HDR input off\n");
     }
+    // Reset history only on the first identical input; capture the final settled submission.
     for (uint32_t i = 0; ok && i < 60; ++i) {
 #ifdef RSF_PROBE_RENDERDOC
         if (capture && i == 59) capture->StartFrameCapture(device.Get(), nullptr);

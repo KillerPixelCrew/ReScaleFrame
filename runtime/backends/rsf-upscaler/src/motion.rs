@@ -1,9 +1,4 @@
-//! How a game's motion vectors are actually stored, and what a backend needs them to be.
-//!
-//! This exists because the two are rarely the same. Ace Combat 7 writes object motion only,
-//! biased into a sixteen bit unsigned target, and reserves zero to mean "nothing wrote here".
-//! Handing that to a backend unchanged gives every static pixel a zero vector while the camera
-//! moves, which is the input that produces smeared reconstruction.
+//! Motion-vector encoding, clear-value meaning, and the conversion required by a backend.
 
 /// What a value of zero in the motion vector target means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,10 +30,7 @@ impl Encoding {
 
     /// Unreal's biased encoding for a sixteen bit unsigned target.
     ///
-    /// From `Common.ush`: `In * (0.499 * 0.5) + 32767/65535`. Taken from engine source rather
-    /// than fitted to captured data, because in a frame where nothing moves much the samples
-    /// cannot determine the scale and a fitted value is wrong by four times while looking
-    /// entirely reasonable.
+    /// UE4.18 `Common.ush` encoding: `In * (0.499 * 0.5) + 32767/65535`.
     pub const UNREAL_G16R16: Self = Self {
         scale: 1.0 / (0.499 * 0.5),
         bias: 32767.0 / 65535.0,
@@ -68,7 +60,8 @@ pub struct MotionVectors {
 }
 
 impl MotionVectors {
-    /// The convention Unreal 4.18 writes, and Ace Combat 7 with it.
+    /// Model the UE4.18 biased object-motion convention used by the AC7 integration.
+    /// Camera-inclusion assumptions still need validation for each captured pass/view.
     #[must_use]
     pub fn unreal_object_only() -> Self {
         Self {
@@ -78,10 +71,8 @@ impl MotionVectors {
         }
     }
 
-    /// The same convention once a pass has decoded it into plain screen space values.
-    ///
-    /// Camera motion is untouched by that pass, so it stays absent, and the sentinel has to change:
-    /// a decoded zero is a real zero motion, where a stored zero could not be.
+    /// Return this convention after decoding biased storage into screen-space values.
+    /// Decoded zero is a valid zero-motion vector; source zero marked an unwritten pixel.
     #[must_use]
     pub fn decoded(self) -> Self {
         Self {
@@ -99,11 +90,7 @@ impl MotionVectors {
         !self.camera_motion_included && !backend_reconstructs_camera_motion
     }
 
-    /// Whether a pass has to decode these before any backend can read them.
-    ///
-    /// Backends take a scale factor and nothing else, so an encoding that is a pure scale can be
-    /// folded into that factor and one carrying a bias cannot. Unreal's carries a bias, and a
-    /// backend handed the raw target reads a large constant motion across a still image.
+    /// Whether the bias requires decoding before a backend can consume these vectors.
     #[must_use]
     pub fn needs_decode(self) -> bool {
         self.encoding.bias != 0.0
@@ -125,8 +112,7 @@ mod tests {
 
     #[test]
     fn unreal_bias_matches_the_engine_constant() {
-        // 32767 rather than 32768. The measured mean of written pixels in the game agreed with
-        // this to seven decimal places, so an off-by-one here would be visible.
+        // UE's 32767/65535 bias differs from the adjacent 32768/65535 quantization level.
         assert!((Encoding::UNREAL_G16R16.bias - 0.499_992_37).abs() < 1e-7);
     }
 

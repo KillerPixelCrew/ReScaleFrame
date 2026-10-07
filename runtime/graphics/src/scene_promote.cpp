@@ -12,20 +12,15 @@
 #include <cstring>
 #include <new>
 
-// The plan has to hold every promoted surface at once: the composite, the scene colour, and both
-// sets. A plan that describes the frame correctly and is refused for being one entry too long is
-// the worst kind of failure, because it reports itself on, and it has happened once.
+// Reserve capacity for every possible composite, scene/recombine/scratch gate, layer and set entry.
 static_assert(5u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
                   RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
               "the frame tap's plan cannot hold everything promotion may name");
 
 namespace {
 
-// One texture promoted to output resolution, with the views the substitution binds in its place.
-//
-// Both views exist even where only one is used. A render target view and a shader resource view on
-// the same texture cost nothing to hold, the composite genuinely needs both, and a replacement that
-// could only be written or only be read would fail the first time the frame did the other.
+// Owned output-size texture and typed views; original is a borrowed identity key. Both views
+// support post-process targets that are alternately read and written during the frame.
 struct Replacement {
     // The game's texture this stands in for, held by address only. Comparing is all this does with
     // it, and retaining a pooled engine target would change when the engine may reuse it.
@@ -112,10 +107,7 @@ void say(const rsf_promote* promote, const char* format, ...)
     promote->log(promote->log_user, message);
 }
 
-// The format a view on a texture takes: the one the game binds with, where the tail says, and
-// otherwise the texture's own format with a typeless family resolved to its plain UNORM member,
-// because a view on a typeless texture has to name one.
-// The typeless family a format belongs to, or the format itself when it has none.
+// Resolve texture families independently of a view hint; typed_view_format validates that hint.
 DXGI_FORMAT typeless_family(DXGI_FORMAT format)
 {
     switch (format) {
@@ -152,9 +144,7 @@ DXGI_FORMAT typeless_family(DXGI_FORMAT format)
 
 DXGI_FORMAT typed_view_format(DXGI_FORMAT texture_format, uint32_t hint)
 {
-    // A hint from another surface's family is no hint: the chain's hint was measured on one
-    // candidate and applied to a later one of a different family, and the view failed to create
-    // on every rebuild. The family is the texture's; the hint only settles sRGB or not within it.
+    // A hint is usable only within the original texture's format family, including sRGB choice.
     if (hint != 0 &&
         typeless_family(static_cast<DXGI_FORMAT>(hint)) == typeless_family(texture_format)) {
         return static_cast<DXGI_FORMAT>(hint);
@@ -176,13 +166,8 @@ DXGI_FORMAT typed_view_format(DXGI_FORMAT texture_format, uint32_t hint)
     }
 }
 
-// Build an output resolution stand-in for one of the game's render resolution targets.
-//
-// The format is copied from the original rather than chosen. What goes into these targets is the
-// game's own tonemapped output and its own interface, drawn by the game's own shaders, so the
-// target they write has to be the one they expect in everything except its size. The views are
-// typed, see `typed_view_format`: the first Windows run refused every promotion because a view on
-// a typeless texture cannot be created without a format.
+// Preserve the original storage format while changing extent and bindings. Explicit typed views
+// are required for typeless storage; any failed allocation/view leaves this replacement empty.
 bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacement& out,
                        const char* what, uint32_t view_format_hint)
 {
@@ -463,16 +448,11 @@ extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_fr
     add_promoted(plan, promote->ui_targets, promote->ui_target_count);
     add_promoted(plan, promote->chain_targets, promote->chain_target_count, promote->composite.original);
 
-    // Scene colour last and gated on the composite, because the scene passes read scene colour
-    // while they are still writing it. An ungated substitution here hands a lighting pass a
-    // reconstruction of the frame it has not finished, which is a feedback loop rather than an
-    // upscale, and it would look like a smear that gets worse the longer the camera holds still.
+    // Scene reads stay native until downstream post-processing opens their gate. On the recombine
+    // route, reads use the seeded scene stand-in while native TAA writes are discarded in scratch.
     if (promote->composed.original && promote->scene.original) {
-        // The recombine route. The recombined target is promoted from the start of the frame, like
-        // the composite. Scene colour becomes its stand-in once the recombined target is bound: the
-        // gate is where the reconstruction runs and is drawn into that stand-in, so the recombine
-        // reads it, the game's copy of the recombined result back into scene colour lands in it,
-        // and the tonemap reads output resolution colour with full-size translucency on top.
+        // Promote recombine from frame start, and gate scene substitution on its first binding.
+        // The gate owner evaluates/seeds before the game reads reconstructed scene colour.
         rsf_frame_tap_substitution& composed = plan->items[plan->count++];
         composed.texture = promote->composed.original;
         composed.shader_view = promote->composed.shader_view;
@@ -588,9 +568,7 @@ extern "C" void rsf_promote_destroy(rsf_promote* promote)
     if (!promote) {
         return;
     }
-    // The caller clears the tap's plan before this, which the header says. Nothing here can check
-    // it: the views are the tap's to stop using, and releasing them while a plan still names them
-    // would take the game down inside a binding call rather than here.
+    // The owner must clear/quiesce the tap plan first; borrowed plan views cannot survive release.
     release_everything(promote);
     rsf_fullscreen_pass_destroy(promote->seed_pass);
     if (promote->device) {

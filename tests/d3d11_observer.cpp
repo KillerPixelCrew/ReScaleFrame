@@ -1,6 +1,11 @@
-// Install the observer, then behave like a game: create a device, allocate targets, present.
-// The observer must notice the matching target, ignore the others, and leave rendering working.
-
+/**
+ * @file
+ * Exercise D3D11 observation through a synthetic application and swap chain.
+ * Creation callbacks must preserve texture, shader and layout facts independently
+ * of dump filtering. Present-triggered texture/constant dumps, progress logging and
+ * motion decode are checked before uninstall restores the original Present entry.
+ * This fixture patches runtime vtables; stage logs help locate a stalled operation.
+ */
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/texture_dump.h>
 
@@ -26,21 +31,17 @@ void check(bool condition, const char* message)
     }
 }
 
-// This test drives a graphics runtime and patches vtables, so a hang is a realistic failure.
-// Announcing each stage means a stall says where it stalled instead of nothing at all.
+// Flush stage labels before runtime calls so a hang can be located in captured output.
 void stage(const char* what)
 {
     std::fprintf(stderr, "[stage] %s\n", what);
     std::fflush(stderr);
 }
 
-// The dump runs inside a present, where a failure is a crashed game and nothing else. Its progress
-// lines are the only account of how far it got, so the sink is part of what this test covers.
+// Preserve dump progress messages emitted from inside Present for the logging assertions.
 std::vector<std::string> log_lines;
 
-// What the creation callbacks saw. The observer reports pipeline objects as the game builds them,
-// which is what turns a pointer into a name for the rest of the run; these record that the
-// translation out of D3D11's descriptors is faithful, since everything downstream trusts it.
+// Copy callback facts into fixture-owned records to check descriptor translation.
 struct SeenLayout {
     void* layout;
     uint32_t copied;
@@ -102,8 +103,7 @@ void on_texture(void* user, void* texture, uint32_t width, uint32_t height, uint
 using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
                                     LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
-// Loaded rather than linked, as elsewhere in this tree, so nothing here needs the compiler import
-// library to build.
+// Resolve the compiler dynamically so this target needs no compiler import library.
 compile_fn load_compiler()
 {
     const HMODULE module =
@@ -115,9 +115,7 @@ compile_fn load_compiler()
         reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
 }
 
-// A vertex shader whose input signature is Slate's, so a real input layout can be created against
-// it. D3D11 validates a layout against a shader signature, which is why this has to compile rather
-// than being a made up blob. The semantics do not matter; the declaration does.
+// A compiled Slate-shaped signature lets D3D11 validate the fixture input layout.
 const char* const layout_probe_source =
     "struct VSIn {\n"
     "  float4 texcoords : ATTRIBUTE0;\n"
@@ -266,10 +264,8 @@ int main(int argc, char* argv[])
 
     stage("creation callbacks");
     {
-        // Every texture, not only the ones the dump filter keeps. The filter serves dumping; what a
-        // texture is for is a question the caller answers, and it cannot answer it about a texture
-        // it was never told about. `too_small` and `wrong_format` are both filtered out above and
-        // both must still have been reported.
+        // Creation callbacks include textures excluded from dump retention, allowing the
+        // caller to classify all allocations independently of the dump filter.
         auto find_texture = [](void* texture) -> const SeenTexture* {
             for (const SeenTexture& seen : seen_textures) {
                 if (seen.texture == texture) {
@@ -323,9 +319,7 @@ int main(int argc, char* argv[])
             check(SUCCEEDED(compiled) && pixel_code, "The probe pixel shader must compile.");
 
             if (vertex_code && pixel_code) {
-                // Slate's declaration, from 4.18.3. The point is not that the observer knows what
-                // Slate is, which it must not, but that the five fields that identify a
-                // declaration survive the trip out of D3D11 intact.
+                // UE4.18.3 Slate elements provide known values for all five reported fields.
                 const D3D11_INPUT_ELEMENT_DESC slate[] = {
                     {"ATTRIBUTE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,
                      D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -387,16 +381,9 @@ int main(int argc, char* argv[])
                     check(found, "Creating a pixel shader must reach the callback.");
                 }
 
-                // Created here rather than assumed to happen during device setup: whether a
-                // runtime builds shaders of its own is the runtime's business, and an assertion
-                // about it tests the driver instead of this code.
-                //
-                // The pixel shader above is deliberately still alive. Releasing it first made this
-                // run fail, because the runtime handed the vertex shader the address the pixel
-                // shader had just vacated and the lookup below found the stale record. That is not
-                // a quirk of the test: it is the reason nothing downstream may key a registry on a
-                // pointer without evicting on reuse, and it happened within a few lines of one
-                // another rather than over a long session.
+                // Create the shader explicitly rather than relying on driver-internal setup.
+                // Keep the pixel shader alive so address reuse cannot confuse this linear
+                // record lookup; registry eviction is covered separately in ui_identify.
                 ID3D11VertexShader* vertex = nullptr;
                 device->CreateVertexShader(vertex_code->GetBufferPointer(),
                                            vertex_code->GetBufferSize(), nullptr, &vertex);
@@ -479,7 +466,6 @@ int main(int argc, char* argv[])
     check(status.frames_presented >= 2u, "Both presents must be counted.");
     check(status.have_device == 1u, "A device must have been acquired.");
     check(status.textures_created >= 4u, "Every created texture must be counted.");
-    // The filter is the point: one of the four qualifies.
     check(status.textures_matched == 1u, "Exactly the matching target must be retained.");
     check(status.present_width == 256u && status.present_height == 128u,
           "The presented size must be recorded from the swap chain.");
@@ -499,16 +485,14 @@ int main(int argc, char* argv[])
     check(after.textures_written == 1u, "The one retained target must be written.");
     check(after.constant_bytes_written == 2640u, "The retained constant buffer must be written.");
 
-    // What the loader's log has to contain for a crashed dump to be diagnosable at all: the count
-    // it started with, the resource it was on, and the step it had reached.
+    // Progress must identify the retained resource and operation before the dump touches it.
     check(logged("dump begin: 1 textures"), "The dump must announce what it is about to do.");
     check(logged("texture 1 of 1"), "Each texture must be named before it is touched.");
     check(logged("256x128"), "The descriptor must be logged before the copy.");
     check(logged("constant buffer of 2640 bytes"), "Each constant buffer must be named.");
     check(logged("dump end: 1 textures"), "Completion must be distinguishable from a crash.");
 
-    // The decode has to reach the game's own targets, not only a test's made up values, so the
-    // dump path runs it and writes the result beside the raw one.
+    // The observer dump must route retained targets through decode and write both outputs.
     char decoded_path[1024];
     std::snprintf(decoded_path, sizeof(decoded_path), "%s\\observed_0_decoded.tga", argv[1]);
     if (std::FILE* stream = std::fopen(decoded_path, "rb")) {

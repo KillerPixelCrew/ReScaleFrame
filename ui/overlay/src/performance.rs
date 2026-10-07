@@ -1,11 +1,13 @@
 //! Rates derived from real application and SDK present counters on the host QPC clock.
 use crate::model::Stats;
 
+/// Frames per second over the latest completed sampling window; `None` before a valid window.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Rates {
     pub rendered: Option<f64>,
     pub presented: Option<f64>,
 }
+/// Counters from one QPC sample, including which presentation counter supplied the total.
 #[derive(Clone, Copy)]
 struct Sample {
     tick: u64,
@@ -14,12 +16,16 @@ struct Sample {
     presented: u64,
     sdk: bool,
 }
+/// Rate estimator that resets on invalid/changed clocks, counter rollback or a change between
+/// SDK and application-counter sampling. Provider IDs are not inspected.
 #[derive(Default)]
 pub(crate) struct Meter {
     baseline: Option<Sample>,
     rates: Rates,
 }
 impl Meter {
+    /// Update at most every half second. Without an SDK total, both rates use application presents.
+    /// A reset requires a fresh baseline and window before either rate is available again.
     pub fn sample(&mut self, stats: &Stats<'_>) -> Rates {
         let sample = Sample {
             tick: stats.counter_clock[0],

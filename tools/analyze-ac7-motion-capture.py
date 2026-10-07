@@ -1,7 +1,8 @@
-"""Summarize an AC7 F9 capture without modifying its inputs.
+"""Summarize an AC7 F9 capture and write derived reports beside its source files.
 
 Engine eligibility, sampled D3D11 draws and paired backend images have separate timelines.
 The report counts actual recorded evidence and missing files, not presumed rendering support.
+Writes/overwrites analysis.json and fNNN_written.pgm masks; recorded capture inputs are retained.
 """
 import argparse
 import collections
@@ -11,12 +12,18 @@ from pathlib import Path
 
 
 def records(path):
+    """Read nonempty JSONL rows, treating an absent optional timeline as empty."""
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
 def main():
+    """Analyze sampled intervals 0/30/59, respecting row pitch for R16G16_UNORM motion.
+
+    Nonzero encoded components mark written pixels; (32767,32767) marks encoded zero motion.
+    This occupancy mask does not validate displacement or deferred-command coverage.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path)
     args = parser.parse_args()

@@ -5,15 +5,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* An invertible bounded encoding of linear HDR scene colour for a reconstruction that handles
-   display-range input better than the engine's linear range. Per channel,
-   y = (x*E / (x*E + 4))^(1/2.2), with E the engine's exposure for the frame, so the encoding follows
-   scene brightness. The knee of 4 exposed units was chosen on the frozen AC7 hangar repro: knees
-   0.18 to 8 all remove DLSS's dark banding, and 4 keeps a half-float encoded value within about 1.5%
-   up to 50 exposed units. Decode is the exact inverse. This is a
-   transport, not a tone map: decoded colour returns to the engine's own linear grading.
-   The finite precision of the reconstruction's output near 1 bounds the largest recoverable
-   highlight; see the AC7 research note. */
+/* Bounded linear-HDR transport: y = (x*E / (x*E + 4))^(1/2.2), with exposure E from the current
+   frame. Decode applies its inverse before engine grading. The knee of 4 and finite half-float
+   highlight limit are recorded in docs/research/ac7-motion-depth-20261004.md.
+   The pass retains its device and owns encoded/scratch targets. Use one immediate-context thread;
+   all inputs must be live D3D11 textures on that device. Integer results are 1 for success, 0 for
+   invalid arguments, compilation, allocation, view creation, or state-save failure. */
 typedef struct rsf_colour_transport rsf_colour_transport;
 int rsf_colour_transport_create(void* d3d11_device, rsf_colour_transport** out);
 /* Encode `source` (float RGBA, origin-zero width x height) into an owned RGBA16F texture returned

@@ -45,3 +45,12 @@ remain research data rather than executable hook code.
 
 [Current status](../../docs/current-status.md) compares this scaffold with the implemented AC7
 and Unity paths; no new Project Wingman game/device validation was performed in the documentation audit.
+
+## Source
+
+[src/plugin.cpp](src/plugin.cpp) contains the complete scaffold: size/version guards, exact-build
+detection, inactive lifecycle callbacks and the exported C API table. Metadata/reason strings are
+plugin-owned until unload; probe strings are borrowed only for detection. No engine pointer, host
+callback or GPU resource is retained. [CMakeLists.txt](CMakeLists.txt) builds the DLL using only the
+Game SDK and shared compiler options. [engine.json](engine.json) records candidate layouts/RVAs
+as static research with explicit runtime-validation limits.

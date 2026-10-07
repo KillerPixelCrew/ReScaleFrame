@@ -10,10 +10,13 @@ namespace ReScaleFrame.Unity
     // Insert around existing player-loop phases without replacing any engine or mod delegate.
     // This covers input plus simulation before render submission; it does not claim individual
     // keyboard/controller device timing or an OS input-to-display latency measurement.
+    /// <summary>Owns removable input/simulation markers in the existing Unity player loop.</summary>
     internal static class CpuBoundaries
     {
         private struct BeforeInput { }
         private struct AfterSimulation { }
+        /// <summary>Insert markers before EarlyUpdate and after PreLateUpdate; require both phases.</summary>
+        /// <remarks>Existing engine/mod delegates are preserved. No native CPU callback means no markers.</remarks>
         internal static void Install()
         {
             if (Native.ReportCpu == null) return;
@@ -35,6 +38,7 @@ namespace ReScaleFrame.Unity
             if (!input || !simulation) throw new NotSupportedException("Unity input/simulation player-loop phases unavailable.");
             loop.subSystemList = nodes.ToArray(); PlayerLoop.SetPlayerLoop(loop);
         }
+        /// <summary>Reserve Time.frameCount+1 and report pacing, input sample and simulation begin.</summary>
         private static void Begin()
         {
             using (var producer = Bootstrap.EnterProducer()) {
@@ -46,12 +50,14 @@ namespace ReScaleFrame.Unity
                 Native.ReportCpu(2, frame);
             }
         }
+        /// <summary>Report simulation end using the same source ID later placed in render packets.</summary>
         private static void End()
         {
             using (var producer = Bootstrap.EnterProducer()) {
                 if (producer.Valid) Native.ReportCpu(3, (ulong)(uint)Time.frameCount + 1);
             }
         }
+        /// <summary>Remove only this adapter's marker types from the currently installed player loop.</summary>
         internal static void Clear()
         {
             var loop = PlayerLoop.GetCurrentPlayerLoop();

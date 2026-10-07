@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check persisted frame-generation selection in a temporary INI file.
+ * Cases cover reload, Off, renderer capability masks, corrupt saved choices and a
+ * failed save preserving the effective choice. No provider or device is initialized.
+ */
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
 #include <string>

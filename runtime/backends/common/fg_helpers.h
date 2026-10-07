@@ -3,7 +3,11 @@
 #include <rescaleframe/frame_generation.h>
 #include "sr_helpers.h"
 #include <dxgi1_4.h>
+/** @file Shared FG validation and DXGI descriptor translation; no SDK calls or retained inputs. */
 namespace rsf {
+/** Clear non-null outputs, then check setup/chain sizes and both ABI versions.
+ * Stub providers use this subset to return precise malformed-call errors without a vendor SDK.
+ */
 inline rsf_backend_result fg_setup_header(const rsf_generation_setup* setup, void** out, void** chain)
 {
     if (out) *out = nullptr;
@@ -14,6 +18,9 @@ inline rsf_backend_result fg_setup_header(const rsf_generation_setup* setup, voi
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     return RSF_BACKEND_OK;
 }
+/** Validate a DX12 FG setup, including direct-queue ownership, dimensions, reservation, UI mode,
+ * and world-unit scale. A null hwnd is allowed for capability-only context creation.
+ */
 inline rsf_backend_result fg_setup(const rsf_generation_setup* setup, void** out, void** chain)
 {
     const auto result = fg_setup_header(setup, out, chain); if (result != 0) return result;
@@ -31,6 +38,7 @@ inline rsf_backend_result fg_setup(const rsf_generation_setup* setup, void** out
     const bool same = owner == setup->chain.d3d12_device; owner->Release();
     return same ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Load an FG runtime using the SR loader's absolute-path policy and chain diagnostic sink. */
 inline HMODULE fg_library(const rsf_generation_setup& setup, const wchar_t* name)
 {
     rsf_sr_open_desc desc{};
@@ -38,18 +46,21 @@ inline HMODULE fg_library(const rsf_generation_setup& setup, const wchar_t* name
     desc.log = setup.chain.log; desc.log_user = setup.chain.log_user;
     return load_runtime(desc, name);
 }
+/** Check shared option ranges; individual providers additionally validate supported modes. */
 inline bool fg_options(const rsf_fg_options* options)
 {
     return options && options->struct_size >= sizeof(*options) && options->abi_version == RSF_FG_ABI_VERSION &&
         options->mode <= RSF_FG_DYNAMIC && options->reflex_mode <= RSF_REFLEX_BOOST &&
         std::isfinite(options->dynamic_target_fps) && options->dynamic_target_fps >= 0;
 }
+/** Distinguish malformed options from an ABI mismatch before checking policy ranges. */
 inline rsf_backend_result fg_options_result(const rsf_fg_options* options)
 {
     if (!options || options->struct_size < sizeof(*options)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (options->abi_version != RSF_FG_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     return fg_options(options) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Translate pixel dimensions/format into a single-sample flip-discard render-target chain. */
 inline DXGI_SWAP_CHAIN_DESC1 chain_description(const rsf_fg_swapchain_desc& desc)
 {
     DXGI_SWAP_CHAIN_DESC1 chain{};
@@ -59,6 +70,7 @@ inline DXGI_SWAP_CHAIN_DESC1 chain_description(const rsf_fg_swapchain_desc& desc
     chain.Flags = desc.allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
     return chain;
 }
+/** Require a direct graphics command list from the session's native device. */
 inline rsf_backend_result fg_command(void* command, void* device)
 {
     if (!command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -69,6 +81,11 @@ inline rsf_backend_result fg_command(void* command, void* device)
     const bool same = owner == device; owner->Release();
     return same ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Validate source-frame identity and, when interpolation is requested, completed UI phase,
+ * supported scene classification, camera finiteness, current-generation native textures, and
+ * in-bounds rectangles. A non-interpolated frame only requires valid basic frame metadata.
+ * Provider-specific state, lifetime, UI requirements, and temporal ordering are checked later.
+ */
 inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
 {
     if (!frame || frame->struct_size < sizeof(*frame) || !frame->record ||

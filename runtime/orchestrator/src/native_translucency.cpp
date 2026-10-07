@@ -64,6 +64,8 @@ DXGI_FORMAT typed(DXGI_FORMAT format)
     default: return format;
     }
 }
+// Hints are valid only for one native family/view/frame rectangle. The mutex protects cached
+// metadata, while the public contract still restricts texture access to the graphics owner.
 struct Key {
     uint64_t family = 0, view = 0, frame = 0;
     int32_t rect[4]{};
@@ -100,6 +102,8 @@ struct State {
 };
 State& state() { static State instance; return instance; }
 
+// Cache compiler/allocation refusal until device release; compiling on every frame would stall
+// rendering. Release ID3DBlob objects before unloading the compiler that owns their vtables.
 bool prepare_device(State& self, ID3D11Device* device)
 {
     if (self.device.Get() != device) { self.release(); self.device = device; }
@@ -159,6 +163,8 @@ bool view(ID3D11Device* device, ID3D11Texture2D* texture, ComPtr<ID3D11ShaderRes
     srv.Format = typed(desc.Format); srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; srv.Texture2D.MipLevels = 1;
     return SUCCEEDED(device->CreateShaderResourceView(texture, &srv, &out));
 }
+// Mode zero initializes all masks; mode one merges a later premultiplied/transmittance layer.
+// Save predication and bindings so the diagnostic compute pass cannot alter engine draws.
 bool dispatch(State& self, ID3D11DeviceContext* context, ID3D11Texture2D* scene, ID3D11Texture2D* layer, uint32_t mode)
 {
     D3D11_TEXTURE2D_DESC scene_desc{}; scene->GetDesc(&scene_desc);

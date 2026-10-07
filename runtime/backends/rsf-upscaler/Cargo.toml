@@ -1,4 +1,5 @@
 [package]
+# Pure capability/unit model; GPU SDK calls live in the sibling native provider targets.
 name = "rsf-upscaler"
 version.workspace = true
 edition.workspace = true
@@ -8,4 +9,5 @@ publish.workspace = true
 description = "Vendor-neutral model of what a super resolution backend needs and can do"
 
 [lints]
+# Share the workspace's warning and unsafe-code policy.
 workspace = true

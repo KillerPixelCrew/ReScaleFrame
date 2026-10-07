@@ -1,8 +1,7 @@
 """Parse a dumped Unreal reflection SDK into a machine-readable index.
 
-An SDK dump is generated from the game's own reflection data at runtime, so its class layouts,
-field offsets and function name lists describe the shipped build exactly, which engine source
-cannot. This tool turns the generated headers into JSON so other tools can consume them.
+The index preserves the dumper's recorded layouts, field offsets and reflected function lists.
+It does not independently validate those records or recover unreflected renderer types.
 
 It reads three kinds of file per module:
 
@@ -72,7 +71,11 @@ def parse_flag_list(text):
 
 
 def parse_layout_file(path, records, enums):
-    """Read one _classes.h or _structs.h into records keyed by C++ name."""
+    """Append layouts from dumper comments and enum declarations, keyed by C++ name.
+
+    Sizes/offsets come from comments, not C++ layout inference. MISSED OFFSET fields are marked
+    as padding. Duplicate names replace earlier dictionary entries; unmatched syntax is skipped.
+    """
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     pending = None       # the `// Class Package.Name` header waiting for its declaration
     pending_size = None
@@ -164,7 +167,11 @@ def parse_layout_file(path, records, enums):
 
 
 def parse_functions_file(path, functions):
-    """Read one _functions.cpp into a list of reflected function records."""
+    """Append function comments/flags and optional emitted C++ owners in source order.
+
+    A comment without a definition remains a record; main may infer its owner from reflection.
+    Function bodies are not parsed or resolved to native addresses.
+    """
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     pending = None
     for line in lines:

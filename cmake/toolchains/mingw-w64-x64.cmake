@@ -1,7 +1,6 @@
 # Cross-compile the Windows x64 targets from Linux with mingw-w64.
 #
-# This is a development convenience for iterating on the loader diagnostics without a Windows
-# machine. MSVC on Windows remains the reference build and the only configuration CI runs.
+# Development cross-build path; Windows/MSVC remains the reference CI configuration.
 
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
@@ -13,6 +12,7 @@ set(CMAKE_CXX_COMPILER "${RSF_MINGW_PREFIX}-g++")
 set(CMAKE_RC_COMPILER "${RSF_MINGW_PREFIX}-windres")
 
 set(CMAKE_FIND_ROOT_PATH "/usr/${RSF_MINGW_PREFIX}")
+# Build tools run on the host; headers/libraries/packages must resolve in the target sysroot.
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)

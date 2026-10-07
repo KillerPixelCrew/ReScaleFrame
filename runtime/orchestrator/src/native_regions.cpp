@@ -21,6 +21,8 @@ cbuffer Region : register(b0) { uint2 Origin; uint2 Size; };
 [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
     if (all(id.xy < Size)) Target[id.xy] = float4(Source.Load(int3(Origin + id.xy, 0)), 1);
 })";
+// Shared execution-owner crop cache. Conversion avoids incompatible whole-resource copies:
+// color/depth use typed shader reads, while motion preserves the engine's packed format.
 struct Resources {
     ComPtr<ID3D11Device> device;
     std::array<ComPtr<ID3D11Texture2D>,3> textures;
@@ -33,6 +35,7 @@ struct Resources {
     DXGI_FORMAT color = DXGI_FORMAT_UNKNOWN, motion = DXGI_FORMAT_UNKNOWN;
 };
 Resources& resources() { static Resources value; return value; }
+// Depth-stencil/typeless storage needs a depth-only SRV to extract device-Z without stencil.
 DXGI_FORMAT depth_format(DXGI_FORMAT format) {
     switch (format) {
     case DXGI_FORMAT_R24G8_TYPELESS: case DXGI_FORMAT_D24_UNORM_S8_UINT: return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -60,6 +63,7 @@ bool build_shader(Resources& r) {
     D3D11_BUFFER_DESC b{}; b.ByteWidth = 16; b.Usage = D3D11_USAGE_DEFAULT; b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     return SUCCEEDED(r.device->CreateBuffer(&b, nullptr, &r.constants));
 }
+// Build all replacement images/views before publishing a new cache shape.
 bool allocate(Resources& r, uint32_t width, uint32_t height, DXGI_FORMAT color, DXGI_FORMAT motion) {
     std::array<ComPtr<ID3D11Texture2D>,3> next;
     const DXGI_FORMAT formats[]{DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R32_FLOAT,motion};
@@ -99,6 +103,8 @@ bool rsf_native_regions_prepare(ID3D11DeviceContext* context, ID3D11Texture2D* c
     if (FAILED(device->CreateShaderResourceView(depth,&view,&source))) return false;
     ComPtr<ID3D11ShaderResourceView> color_source;
     if (FAILED(device->CreateShaderResourceView(color,nullptr,&color_source))) return false;
+    // Unbind engine render targets before reading inputs. The containing native SR scope owns
+    // the full binding save/restore; this helper unbinds only its compute views after dispatch.
     context->OMSetRenderTargets(0,nullptr,nullptr);
     const D3D11_BOX box{uint32_t(rect[0]),uint32_t(rect[1]),0,uint32_t(rect[2]),uint32_t(rect[3]),1};
     context->CopySubresourceRegion(r.textures[2].Get(),0,0,0,0,motion,0,&box);

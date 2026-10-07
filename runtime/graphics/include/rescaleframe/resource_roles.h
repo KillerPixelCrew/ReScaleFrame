@@ -1,21 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Work out what a texture is for, from the descriptor it was created with.
-
-   A backend needs four specific targets out of the several hundred a frame allocates. Frame capture
-   resource identifiers do not exist at runtime, so the only thing available when a texture appears
-   is its descriptor: format, size, and what it may be bound as.
-
-   That is enough for three of the four, and honestly not enough for the fourth. Velocity, depth and
-   the exposure target each have a shape nothing else in the frame shares. Scene colour does not:
-   Ace Combat 7 allocates many full resolution `R16G16B16A16_FLOAT` render targets, and which one a
-   reconstruction wants is decided by what it is bound alongside, which a descriptor cannot say. So
-   scene colour comes back marked as a candidate rather than picked, and the caller disambiguates
-   from the bound set. Being right by accident on the frame someone happened to test is the failure
-   this distinction exists to prevent.
-
-   The counterpart to that honesty is where the certainty comes from. `docs/research/ac7-frame-
-   capture.md` establishes the formats and sizes from a replayed capture, not from what stock Unreal
-   would do, which is a different engine branch and was wrong about other things. */
+/* Descriptor-based D3D11 texture classification. Rules originate in the AC7 capture documented
+   in docs/research/ac7-frame-capture.md. They identify candidate roles, not verified frame/view
+   identity: scene colour requires binding-based disambiguation, and other games may share these
+   descriptors for unrelated resources. This pure helper owns no GPU state or resources. */
 
 #ifndef RSF_RESOURCE_ROLES_H
 #define RSF_RESOURCE_ROLES_H
@@ -26,10 +13,7 @@
 extern "C" {
 #endif
 
-/* No ABI version here, deliberately. Classification is a pure function over a descriptor with no
-   state and no handle, so the only compatibility question is the shape of the structures, which
-   their `struct_size` fields already answer. Declaring a version nothing checks would be worse than
-   declaring none. */
+/* Call structures are checked by struct_size; classification has no versioned runtime state. */
 
 typedef uint32_t rsf_resource_role;
 #define RSF_ROLE_UNKNOWN ((rsf_resource_role)0)
@@ -43,7 +27,7 @@ typedef uint32_t rsf_resource_role;
 
 /* How much the descriptor alone settles. */
 typedef uint32_t rsf_role_confidence;
-/* Nothing else in the frame has this shape. */
+/* Descriptor matches a unique role under these capture-derived rules; not game verification. */
 #define RSF_ROLE_CONFIDENT ((rsf_role_confidence)0)
 /* The shape fits, and so does that of other textures. Needs disambiguating by what it is bound
    with, which a descriptor cannot tell you. */
@@ -86,7 +70,8 @@ typedef struct rsf_role_verdict {
     rsf_role_confidence confidence;
 } rsf_role_verdict;
 
-/* Classify one texture. Returns zero and leaves `verdict` at unknown if the arguments are short. */
+/* Return 1 for a valid classification (including unknown), 0 for null/short structures.
+   Invalid arguments leave verdict unchanged. Caller initializes every struct_size. */
 uint32_t rsf_classify_texture(const rsf_texture_facts* facts, const rsf_frame_shape* shape,
                               rsf_role_verdict* verdict);
 

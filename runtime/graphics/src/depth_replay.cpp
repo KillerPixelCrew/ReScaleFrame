@@ -4,6 +4,8 @@
 #include <d3d11.h>
 #include <new>
 
+// Own the replay depth texture/view/state for the session; retain source and layer only until
+// end_frame. Any sticky refusal invalidates the entire candidate, including prior replayed draws.
 struct rsf_depth_replay {
     ID3D11Texture2D* texture = nullptr;
     ID3D11DepthStencilView* view = nullptr;
@@ -13,13 +15,9 @@ struct rsf_depth_replay {
     void* context = nullptr;
     uint32_t width = 0, height = 0, draws = 0;
     bool refused = false;
-    /* Why the last draw was not replayed. Reported rather than inferred: this refused three
-       hundred and forty thousand candidates in a run without saying which test did it, and five
-       tests can each do it. See `rsf_depth_replay_last_reject`. */
+    /* Last rejected predicate, retained after later successful draws for diagnostics. */
     uint32_t last_reject = 0;
-    /* What the last candidate's depth view and its resource actually were. Recorded so a refusal
-       can be read rather than guessed at: every one of these has been a wrong assumption at some
-       point, and each wrong guess costs a run of the game. */
+    /* Last inspected descriptor fields; stages not reached retain their previous values. */
     rsf_depth_replay_detail detail{};
 };
 
@@ -189,17 +187,13 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
     if (r->refused) {
         return 0;
     }
-    /* Sticky, and only for what cannot change: a depth view this cannot write through is a
-       property of the device and the frame, so retrying it every draw forever buys nothing. */
+    /* Descriptor/pipeline inconsistencies invalidate this candidate for the rest of the frame. */
     auto refuse = [r](uint32_t why) {
         r->refused = true;
         r->last_reject = why;
         return 0u;
     };
-    /* Not sticky, because these are properties of one draw and the next draw is a different one.
-       This used to refuse for good on the first line or point primitive it saw, which in a frame
-       with a few hundred thousand candidate draws means the first one, and every translucent draw
-       after it was silently skipped for the life of the process. */
+    /* Unsupported primitive/draw shape skips only this draw; a later triangle remains eligible. */
     if (g->kind > 3 || !g->vertex_shader || !g->count || !g->instances ||
         (g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST &&
          g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP)) {
@@ -266,6 +260,8 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
         return refuse(9);
     }
 
+    // Copy opaque depth once, then replay the live geometry immediately with no pixel shader.
+    // Bound material/vertex contents must still be current; no deferred draw record is retained.
     rsf_d3d11_state saved;
     rsf_d3d11_depth_state_save(c, &saved);
     c->OMSetRenderTargets(0, nullptr, nullptr);

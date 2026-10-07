@@ -1,18 +1,12 @@
-"""Check the view uniform buffer layout against the buffers the game actually bound.
-
-The offsets below were not read off engine source, which is not available here, and not guessed
-from a single buffer, which is how a plausible wrong answer gets written down. They come from
-relationships that must hold between fields, checked across every captured buffer:
+"""Check AC7 view-buffer candidates using captured matrix, camera, size and jitter identities.
 
   ClipToPrevClip == ClipToTranslatedWorld * T(PrevPreViewTranslation - PreViewTranslation)
                                           * PrevTranslatedWorldToClip
 
-That identity ties five offsets together at once. It holds to a millionth across captures where the
-camera moved as much as 43 units, and a wrong offset for any one of them breaks it. The camera
-basis is confirmed the same way, by having to equal the rows of ViewToTranslatedWorld.
-
-Stock 4.18 order predicts all of this except one thing: `ViewToClipNoAA` does not exist in 4.18, so
-everything after `ViewToClip` sits 0x40 earlier than a later engine would put it.
+Uses row-major 4x4 matrices and row-vector translation. Offsets describe the researched AC7 build;
+stock 4.18 has no ViewToClipNoAA, shifting later fields by 0x40 versus newer layouts. Layout and
+jitter provenance are in docs/research/ac7-frame-capture.md; later reprojection evidence is in
+docs/research/ac7-motion-vectors.md. Inputs remain unchanged.
 
 Usage: python3 tools/verify-view-layout.py <directory of *_cb4096.bin>
 """
@@ -62,10 +56,8 @@ LAYOUT = {
     "PrevInvViewProj": 0x660,
     "PrevScreenToTranslatedWorld": 0x6A0,
     "ClipToPrevClip": 0x6E0,
-    # Current x, current y, previous x, previous y, in clip space. Located by differencing a run
-    # with the anti-aliasing gate patched against one without it: it is the only region that was
-    # zero throughout the earlier run and small but non-zero in the later one, and it holds the
-    # same values the engine writes into ViewToClip.
+    # Current xy then previous xy in clip space. Located by jitter-gate capture differencing and
+    # equality with ViewToClip offsets; see ac7-frame-capture.md for build-specific evidence.
     "TemporalAAJitter": 0x720,
     "ViewRectMin": 0x7E0,
     "ViewSizeAndInvSize": 0x7F0,
@@ -76,6 +68,7 @@ VIEW_BUFFER_BYTES = 4096
 
 
 def floats(path):
+    """Read the first 4096 bytes as little-endian float32; return None for a short capture."""
     data = path.read_bytes()[:VIEW_BUFFER_BYTES]
     if len(data) < VIEW_BUFFER_BYTES:
         return None
@@ -83,6 +76,7 @@ def floats(path):
 
 
 def matrix(values, offset):
+    """Read a row-major 4x4 matrix at a byte offset in an already bounded float array."""
     base = offset // 4
     return [[values[base + row * 4 + column] for column in range(4)] for row in range(4)]
 
@@ -98,6 +92,7 @@ def multiply(left, right):
 
 
 def translation(delta):
+    """Build a row-vector translation matrix with displacement in its final row."""
     result = [[1.0 if row == column else 0.0 for column in range(4)] for row in range(4)]
     result[3][0], result[3][1], result[3][2] = delta
     return result
@@ -109,7 +104,7 @@ def worst_difference(left, right):
 
 
 def is_perspective_view(values):
-    """A 3D view rather than the orthographic one the interface renders through."""
+    """Select researched perspective shape plus rotated basis; aligned-camera views may be skipped."""
     view_to_clip = matrix(values, LAYOUT["ViewToClip"])
     rotated = any(abs(matrix(values, LAYOUT["TranslatedWorldToView"])[row][row] - 1.0) > 1e-3
                   for row in range(3))
@@ -117,7 +112,11 @@ def is_perspective_view(values):
 
 
 def check(values):
-    """Every relationship that has to hold if the offsets are right. Returns failures."""
+    """Return failed relationships using per-contract tolerances; this is not a full layout proof.
+
+    Requires a complete view-buffer float array at the pinned offsets. Jitter converts clip xy
+    to pixels with (width/2,-height/2); no GPU data or engine code is modified.
+    """
     failures = []
 
     # The one that ties the previous-frame block to the current one.
@@ -180,6 +179,7 @@ def check(values):
 
 
 def describe(values):
+    """Format extents, perspective FOV in degrees and current clip-space jitter in render pixels."""
     view_to_clip = matrix(values, LAYOUT["ViewToClip"])
     import math
     vertical_fov = 2.0 * math.atan(1.0 / view_to_clip[1][1]) if view_to_clip[1][1] else 0.0
@@ -199,6 +199,7 @@ def describe(values):
 
 
 def main():
+    """Check selected captures: exit 0 on success, 1 on failed identities, 2 with no usable view."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--pattern", default="*_cb4096.bin")

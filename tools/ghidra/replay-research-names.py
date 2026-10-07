@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Check binary evidence before replaying researched names through Ghidra MCP."""
+"""Preflight a schema-1 research manifest against an explicitly selected Ghidra MCP program.
+
+Check language, rebased RVA evidence hashes, function entry addresses, and conflicting names before
+any mutation. Default mode reports verified records only. --apply waits for analysis, rechecks names,
+renames eligible functions, verifies each rename, and saves the program. HTTP/validation/save errors
+abort the run; already completed renames are not rolled back. File hashes in the manifest are provenance,
+while this replay validates current imported memory ranges rather than the executable on disk.
+"""
 
 import argparse
 import hashlib
@@ -11,6 +18,11 @@ import urllib.request
 
 
 def main():
+    """Parse CLI options and run preflight followed by the explicitly requested mutation phase.
+
+    --program is required for every MCP request. --analysis-timeout is seconds for waiting on
+    auto-analysis; individual HTTP requests use a separate 30-second transport timeout.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--url", default="http://127.0.0.1:8089")
@@ -24,6 +36,10 @@ def main():
         raise ValueError("Unsupported research manifest schema")
 
     def request(endpoint, body=None, **params):
+        """Issue a JSON GET or body-bearing request scoped to the selected program.
+
+        Raise for HTTP/JSON failures or a server error object; return the decoded response unchanged.
+        """
         params["program"] = args.program
         url = args.url.rstrip("/") + endpoint + "?" + urllib.parse.urlencode(params)
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -74,8 +90,7 @@ def main():
             continue
         if not existing.startswith("FUN_"):
             raise ValueError(f"Preserving name changed during analysis: {existing}")
-        # Preserve the researched engine names rather than applying the MCP's
-        # general verb-first naming convention to C++ engine symbols.
+        # strict_mode off preserves researched C++ engine symbol spelling in the MCP rename API.
         request("/rename_function", {"old_name": hex(address), "new_name": name,
                                      "strict_mode": "off"})
         actual = request("/get_function_by_address", address=hex(address))

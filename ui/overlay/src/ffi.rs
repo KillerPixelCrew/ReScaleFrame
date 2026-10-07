@@ -1,19 +1,9 @@
-//! The C entry points of `overlay.h`, and nothing else.
+//! C exports for `overlay.h`, with size checks, borrowed output and unwind containment.
 //!
-//! Every function here checks its pointers, converts, calls into the safe core, and copies the
-//! answer back out. The rules it follows:
-//!
-//! * A panic never leaves this file. Unwinding into a game's render thread is undefined behaviour,
-//!   so each entry point catches and reports `RSF_OVERLAY_ERROR_PANICKED` instead. Once that has
-//!   happened the handle is marked and refuses everything but destruction, because a panic out of
-//!   the middle of egui leaves its context locked and calling it again would deadlock the render
-//!   thread rather than crash it.
-//! * `catch_unwind` only works while panics unwind. A profile built with `panic = "abort"` would
-//!   abort the game instead, and nothing in this file can prevent that.
-//! * Every struct is checked against the size this build compiled, and a shorter one is refused.
-//!   That includes the two output structs, so a caller has to fill in `struct_size` on those too.
-//! * Nothing is allocated for the caller. The pointers handed back point into buffers the handle
-//!   owns and refills on the next frame call.
+//! All calls on a handle require exclusive access. Null and short structures are rejected;
+//! checks cannot validate arbitrary foreign addresses. Outputs borrow handle-owned buffers
+//! until the next frame or destruction. A caught panic poisons the handle, which must then be
+//! destroyed because egui may retain a lock. Aborting panics and allocator aborts are not caught.
 
 use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -27,11 +17,7 @@ use crate::abi::{
 use crate::model::{FrameInput, Quality, Stats};
 use crate::overlay::Overlay;
 
-/// Longest borrowed string the overlay will read.
-///
-/// The header says these are NUL terminated and borrowed for the call. A missing terminator is the
-/// caller's bug, but scanning without a bound turns it into a walk across the game's address
-/// space, so the scan stops here and takes what it has.
+/// Maximum borrowed UTF-8 string scan. The caller must still supply readable memory.
 const MAX_BORROWED_STRING: usize = 512;
 
 /// The handle behind `rsf_overlay*`.
@@ -45,7 +31,7 @@ pub struct RsfOverlay {
 
 /// Create the overlay.
 ///
-/// Returns null on an ABI mismatch, or if construction panicked or could not allocate.
+/// Returns null on an ABI mismatch or a caught construction panic. Allocator aborts are not caught.
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_overlay_create(abi_version: u32) -> *mut RsfOverlay {
     if abi_version != RSF_OVERLAY_ABI_VERSION {
@@ -68,13 +54,13 @@ pub extern "C" fn rsf_overlay_create(abi_version: u32) -> *mut RsfOverlay {
 ///
 /// # Safety
 /// `overlay` must be null, or a handle from [`rsf_overlay_create`] that has not been destroyed.
+/// Destruction requires exclusive access and invalidates every borrowed output from the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_overlay_destroy(overlay: *mut RsfOverlay) {
     if overlay.is_null() {
         return;
     }
-    // Dropping egui's context runs other people's code, and this function cannot report anything,
-    // so a panic here has to stop at the boundary the same as anywhere else.
+    // Destruction has no result channel; contain unwinding panics during the drop.
     let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(overlay) })));
 }
 
@@ -82,8 +68,10 @@ pub unsafe extern "C" fn rsf_overlay_destroy(overlay: *mut RsfOverlay) {
 ///
 /// # Safety
 /// `overlay` must be a live handle. `input` and `stats` must point at structs whose `struct_size`
-/// says how large they are, and their strings must be NUL terminated. `draw_data` and `intent` may
-/// each be null; a non-null one must be writable and carry its own `struct_size`.
+/// says how large they are. Each pointer must address aligned, readable storage of that size;
+/// strings must be readable through their NUL or the 512-byte scan limit. `draw_data` and `intent`
+/// may each be null; non-null outputs must be aligned, writable and carry their own `struct_size`.
+/// Inputs, outputs and the handle must not alias. No concurrent calls on this handle are allowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_overlay_frame(
     overlay: *mut RsfOverlay,
@@ -115,9 +103,12 @@ pub unsafe extern "C" fn rsf_overlay_frame(
 ///
 /// Writes up to `max_updates` entries and returns how many were written. Entries are handed out
 /// once, so a caller with a small array calls again until it gets zero back.
+/// Pixels remain borrowed until the next frame or destruction. Zero also covers invalid arguments
+/// and a poisoned handle; this export has no separate error result.
 ///
 /// # Safety
-/// `overlay` must be a live handle, and `updates` must point at room for `max_updates` entries.
+/// `overlay` must be a live handle with exclusive access. A non-null `updates` must address aligned,
+/// writable room for `max_updates` entries and must not alias the handle or its buffers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_overlay_texture_updates(
     overlay: *mut RsfOverlay,
@@ -158,9 +149,11 @@ pub unsafe extern "C" fn rsf_overlay_texture_updates(
 
 /// Collect the ids of textures the overlay has finished with. Drains like
 /// [`rsf_overlay_texture_updates`].
+/// Free them after drawing the frame that emitted them. Zero also covers an invalid or poisoned call.
 ///
 /// # Safety
-/// `overlay` must be a live handle, and `ids` must point at room for `max_ids` entries.
+/// `overlay` must be a live handle with exclusive access. A non-null `ids` must address aligned,
+/// writable room for `max_ids` entries and must not alias the handle or its buffers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_overlay_textures_to_free(
     overlay: *mut RsfOverlay,
@@ -190,6 +183,9 @@ pub unsafe extern "C" fn rsf_overlay_textures_to_free(
     }
 }
 
+/// Validate the complete input/output prefix before forming references or advancing overlay state.
+/// Outputs are populated only after a successful safe-core frame.
+///
 /// # Safety
 /// As [`rsf_overlay_frame`].
 unsafe fn frame_inner(
@@ -202,9 +198,7 @@ unsafe fn frame_inner(
     if input.is_null() || stats.is_null() {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
-    // Size first, reference second. A caller with a shorter struct has fewer bytes than this build
-    // expects, and a reference to the whole thing would already be invalid by the time anything
-    // got to look at the size that says so.
+    // Read the size before forming a reference to the complete structure.
     if unsafe { !fits(input) || !fits(stats) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
@@ -288,8 +282,8 @@ unsafe fn frame_inner(
 /// appended, so everything this build knows about is still where it expects it.
 ///
 /// # Safety
-/// `pointer` must be non-null and point at a struct that begins with its own `uint32_t
-/// struct_size`, which every struct in `overlay.h` does. Only those four bytes are read.
+/// `pointer` must be non-null and point at a frame input, stats, draw-data or intent envelope
+/// beginning with `uint32_t struct_size`. Only those four bytes are read by this helper.
 unsafe fn fits<T>(pointer: *const T) -> bool {
     let declared = unsafe { pointer.cast::<u32>().read_unaligned() };
     declared as usize >= size_of::<T>()
@@ -303,8 +297,11 @@ fn slice_ptr<T>(slice: &[T]) -> *const T {
     }
 }
 
+/// Borrow runtime strings and copy scalars without retaining host memory beyond the frame call.
+///
 /// # Safety
-/// `stats` must be a valid struct with NUL terminated strings, borrowed for this call.
+/// `stats` must be a valid struct. Non-null strings must remain readable through their NUL or
+/// the 512-byte scan limit, borrowed for this call.
 unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
@@ -365,6 +362,9 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     }
 }
 
+/// Read a bounded UTF-8 string; invalid UTF-8 becomes a diagnostic label and null becomes `None`.
+/// The returned lifetime is chosen by the caller and must not outlive the host allocation.
+///
 /// # Safety
 /// `pointer` must be null, or point at bytes that are readable until a NUL or
 /// [`MAX_BORROWED_STRING`] bytes, whichever comes first.
@@ -377,17 +377,11 @@ unsafe fn borrow_str<'a>(pointer: *const c_char) -> Option<&'a str> {
         length += 1;
     }
     let bytes = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) };
-    // A vendor name with a stray byte in it is still worth showing, and refusing the whole frame
-    // over one would be a strange way to report it.
     Some(std::str::from_utf8(bytes).unwrap_or("(not valid utf-8)"))
 }
 
-/// Smoke tests for the boundary itself.
-///
-/// The panel's behaviour is tested through the safe core, which needs none of this. What is left
-/// to check here is the boundary's own rules: the version gate, the pointer checks, the struct size
-/// checks, and that a frame actually reaches the buffers a renderer would read. It is still Rust
-/// calling Rust, so it says nothing about whether a C compiler agrees with these layouts.
+/// Rust-side version, pointer, size and output fixtures. Native C layout agreement and deliberate
+/// panic recovery require separate validation.
 #[cfg(test)]
 mod tests {
     use super::*;

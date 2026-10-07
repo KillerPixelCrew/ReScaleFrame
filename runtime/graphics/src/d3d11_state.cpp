@@ -18,6 +18,8 @@ constexpr UINT saved_vertex_buffers = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT;
 constexpr UINT saved_uavs = D3D11_1_UAV_SLOT_COUNT;
 constexpr UINT saved_viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
+// Each Get operation returns owned references. A stage snapshot also records D3D11.1 constant
+// ranges and shader class instances so restoration does not widen a buffer binding or drop linkage.
 struct Stage {
     ID3D11ShaderResourceView* resources[saved_resources];
     ID3D11SamplerState* samplers[saved_samplers];
@@ -79,6 +81,8 @@ struct State {
     UINT stencil_reference;
 };
 
+// Public opaque storage owns only this pointer; the complete six-stage snapshot is heap allocated.
+// Save/restore must remain paired; copying this storage would duplicate ownership of one snapshot.
 struct Storage {
     State* snapshot;
 };
@@ -235,6 +239,8 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
     context->OMSetDepthStencilState(state.depth_state, state.stencil_reference);
 
     context->CSSetUnorderedAccessViews(0, state.uav_count, state.compute_uavs, keep_counts);
+    // UINT(-1) resumes the existing stream-output cursor. Likewise keep_counts preserves UAV
+    // counters; binding restoration cannot undo append/consume data modified by wrapped work.
     UINT stream_offsets[D3D11_SO_BUFFER_SLOT_COUNT];
     for (auto& offset : stream_offsets) offset = UINT(-1);
     context->SOSetTargets(D3D11_SO_BUFFER_SLOT_COUNT, state.stream_targets, stream_offsets);
@@ -291,6 +297,8 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
 }
 
 namespace {
+// Narrow synchronous replay scope. Inline storage differs from the full snapshot representation;
+// only the matching depth restore may consume it. The caller has already rejected OM UAVs.
 struct DepthState {
     ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
     ID3D11DepthStencilView* depth;

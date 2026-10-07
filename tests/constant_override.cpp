@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check per-draw constant-buffer overrides on a real WARP pipeline.
+ * The callback substitutes VS/PS/GS/HS/DS slots and deliberately repeats a slot to
+ * exercise restoration bookkeeping. Pixel readback verifies later-stage overrides;
+ * inherited bindings, ClearState and stale buffer-size identities are also covered.
+ */
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/constant_twin.h>
 #include <windows.h>

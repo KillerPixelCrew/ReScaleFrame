@@ -1,13 +1,9 @@
-"""Attribute code in a dumped module to engine source files.
+"""Map candidate code references to Unreal's embedded check/ensure source paths.
 
-Unreal's check and ensure macros embed __FILE__, so a shipped binary keeps the source path of
-every file containing one, and the code referencing that path is the code from that file. This
-turns an unnamed function list into a map of which engine source file each region came from,
-without an engine build or any symbol matching.
-
-A reference proves the path string is used near that address. It does not prove the function was
-compiled from that file: inlining moves checks across file boundaries. Treat it as attribution,
-not as ground truth.
+Requires an x64 ReScaleFrame module dump with raw offsets equal to RVAs. Displacements are scanned
+at every byte without instruction decoding; reported instruction starts assume a three-byte prefix.
+Confirm candidates in a disassembler. Even a confirmed path reference does not prove compilation
+origin because checks can be inlined across source boundaries. Writes a JSON map, never the dump.
 """
 
 import argparse
@@ -19,6 +15,7 @@ from pathlib import Path
 
 
 def read_sections(data):
+    """Return preferred image base and section metadata from valid PE32+ dump headers."""
     pe = struct.unpack_from("<I", data, 0x3C)[0]
     count = struct.unpack_from("<H", data, pe + 6)[0]
     optional_size = struct.unpack_from("<H", data, pe + 20)[0]
@@ -35,7 +32,10 @@ def read_sections(data):
 
 
 def find_source_paths(data, pattern):
-    """Locate every embedded source path and the RVA it lives at."""
+    """Map C-string start offsets to paths matching an ASCII regex; require a NUL terminator.
+
+    Offsets serve as RVAs only under this tool's module-dump layout precondition.
+    """
     expression = re.compile(pattern.encode("ascii"))
     paths = {}
     for match in expression.finditer(data):
@@ -70,8 +70,7 @@ def main():
     if not code:
         raise SystemExit("no .text section")
 
-    # One pass over the code: at every offset, read a displacement and see whether it lands on a
-    # known path string. Doing it per string instead would mean one pass per file.
+    # One shared pass over candidate displacements; instruction decoding remains a separate step.
     references = defaultdict(list)
     for section in code:
         size = max(section["raw_size"], section["virtual_size"])

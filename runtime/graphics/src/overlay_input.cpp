@@ -21,19 +21,8 @@ namespace {
 // held table directly and the game's ordinary input path needs no lookup.
 constexpr uint32_t held_table_size = 256;
 
-// A cursor the user can see is not solved here, and this is the wrong module to solve it in.
-//
-// A game that plays with a mouse hides the system cursor once and keeps it hidden, usually with
-// ShowCursor and often with ClipCursor holding it inside the client area, and some re-apply both
-// every frame from their own input tick. Calling ShowCursor(TRUE) from here would fight that loop
-// and lose, and the ShowCursor counter is process wide, so getting the count wrong leaves the game
-// with a permanently visible cursor after the overlay closes.
-//
-// What would solve it, in rough order of how invasive each is: draw the pointer as part of the
-// overlay from the position collected here, which needs a cursor in the egui side and no Win32
-// calls at all; answer WM_SETCURSOR while the overlay is visible so the game's own handler never
-// runs; hook ShowCursor, SetCursor and ClipCursor for the duration. The first is the one that does
-// not depend on how the game manages its cursor, and it is the one to try first.
+// User32 cursor detours provide visible free movement while the panel is open. If installation
+// fails, raw/window deltas below remain the fallback; they cannot override every game input path.
 
 struct State {
     // Written once during install, read from the window procedure with no lock. A message can
@@ -70,18 +59,9 @@ struct State {
     float display_width = 0.0f;
     float display_height = 0.0f;
 
-    /* The user32 detours that make the real cursor usable while the panel is open.
-
-       This is what SpecialK, ReShade and OptiScaler do, and it is why their panels take a mouse in
-       a game that locks it (ReShade `input_windows.cpp`, SpecialK `input/cursor.cpp` and
-       `input/raw_input.cpp`, read 26 September 2026). A game like AC7 warps the pointer to the
-       centre every frame with SetCursorPos, keeps it inside the window with ClipCursor, hides it
-       with ShowCursor and SetCursor, and steers from raw input. Following raw deltas around all of
-       that, which this module did first, was chunky at best and unusable under a DPI scale. So
-       while the panel is open: the warps are swallowed, the clip is lifted, the cursor is shown,
-       the game is handed the position the cursor had when the panel opened, and the mouse fields of
-       the raw input it reads are zeroed. The real cursor then moves freely and visibly, and the
-       panel reads its absolute position each frame. Everything is put back on close. */
+    /* While visible, suppress warps/hides, lift clipping, freeze queried game position and zero
+       raw mouse fields. Close balances our ShowCursor calls and restores the latest clip request.
+       MinHook trampolines call genuine user32 functions to bypass our own detours. */
     struct CursorHooks {
         bool installed = false;
         BOOL(WINAPI* set_cursor_pos)(int, int) = nullptr;
@@ -135,9 +115,8 @@ State& state()
     return instance;
 }
 
-// Both callers hold `lifecycle` across this, so a log sink that calls back into install or
-// uninstall deadlocks on a non-recursive mutex. Nothing in the runtime does, and the other sinks in
-// this directory log the same way, but it is a real constraint on what a sink may do.
+// Synchronous log sink; it must not reenter lifecycle/visibility functions that may hold locks.
+// Visibility changes also log from the message thread, so keep sink work bounded.
 void say(const State& self, const char* format, ...)
 {
     if (!self.log) {
@@ -195,20 +174,9 @@ uint32_t overlay_button_bit(uint32_t virtual_key)
     }
 }
 
-/* Move the pointer by a raw mouse movement.
-
-   This is the good path, and the one an overlay wants in a game that locks the mouse. A game that
-   warps the pointer every frame is steering from raw input, so `WM_INPUT` is already being
-   delivered to this window and arrives here through the subclass without registering anything of
-   our own. Registering would be worse than useless: raw input registration is per process and per
-   device class, so ours would replace the game's and take its steering with it.
-
-   Raw movement is what the mouse reported, before the pointer was clipped, warped or coalesced.
-   Window moves are coalesced, which is why following them looked chunky: with the game warping
-   every frame, the real movement and the warp back often arrive as one message and cancel.
-
-   The caller stops the message after this, which it already did before the overlay read anything
-   from it: while the panel is open, raw movement must not also steer the aircraft. */
+/* Fallback raw-delta pointer when cursor detours are unavailable. Consume the game's existing
+   WM_INPUT stream without registering another device class, which would replace its registration.
+   Absolute devices are left to window messages. */
 void record_raw_mouse(State& self, HWND window, LPARAM lparam)
 {
     // With the cursor freed by the detours, the panel reads the real pointer each frame and raw
@@ -257,25 +225,12 @@ void record_raw_mouse(State& self, HWND window, LPARAM lparam)
     }
 }
 
-/* Follow the pointer by how far it moved, not by where it is.
-
-   Ace Combat 7 is played with a pad and steers with a locked mouse: it warps the pointer back to
-   the middle of the window every frame, so its absolute position is the centre no matter how the
-   mouse is moved, and a panel that trusted that position had a cursor pinned there.
-
-   What survives the warp is the distance between two reports, so the overlay keeps a pointer of its
-   own and moves it by that distance. The warp itself is the one report that must not count: it is
-   the game putting the pointer back, not the user moving it, and adding it would cancel the motion
-   that preceded it exactly. It is recognised by landing on the centre, which is where a warp goes
-   and where a hand almost never lands on the exact pixel. Losing one report when it does costs a
-   pixel of travel.
-
-   A game that does not warp never produces that report and the same arithmetic follows the pointer
-   normally, so this costs nothing where it is not needed. */
+/* Fallback window-delta pointer: ignore exact centre reports as presumed game warps. Once raw
+   movement is observed, stop this path to avoid counting both streams. Client coordinates scale
+   to the latest collect display extent; letterboxed back-buffer offsets are not represented. */
 void record_mouse_position(State& self, HWND window, LPARAM lparam)
 {
-    // Client pixels, which is the coordinate space the overlay works in. See the assumption note in
-    // rsf_overlay_input_collect: this module does not scale them.
+    // WM_MOUSEMOVE supplies client pixels; the latest display/client ratio below converts deltas.
     const float x = static_cast<float>(GET_X_LPARAM(lparam));
     const float y = static_cast<float>(GET_Y_LPARAM(lparam));
 
@@ -607,16 +562,8 @@ void set_cursor_capture(State& self, bool on)
 
 void apply_visibility(State& self, bool visible)
 {
-    /* One press, one change.
-
-       The toggle key reaches this from two directions: the window procedure, which sees the key as
-       a message and can swallow it, and a hotkey worker polling the key state, which exists because
-       a run turned up where no message ever arrived. Both fire on the same press. The procedure
-       opens the panel and the poll, asking for the opposite of what it now sees, closes it again,
-       which looks exactly like the panel flashing for one frame and vanishing.
-
-       Ignoring a change that lands within a few frames of the last one costs nothing a hand can
-       notice and makes either path work alone or together. */
+    /* Debounce changes for 250 ms so window-message and key-poll routes do not toggle twice
+       for the same physical press. Even explicit opposite requests within this window are skipped. */
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG previous_change = self.last_visibility_change.load(std::memory_order_acquire);
     if (previous_change != 0 && now - previous_change < 250) {
@@ -1058,10 +1005,8 @@ extern "C" uint32_t rsf_overlay_input_take_function_keys(uint32_t* sources)
 
 extern "C" void rsf_overlay_input_set_visible(uint32_t visible)
 {
-    // Allowed before install so a caller can set the flag in whatever order suits it. It does not
-    // make the overlay draw on its own: rsf_overlay_input_collect reports a hidden idle state until
-    // a window is subclassed, so a renderer testing its own drawing installs first or fills
-    // rsf_overlay_input itself.
+    // Visibility may be requested before install, but collect returns hidden idle input until
+    // a window is subclassed. apply_visibility also applies the shared 250 ms debounce.
     apply_visibility(state(), visible != 0);
 }
 
@@ -1094,13 +1039,8 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
 
     out->visible = self.visible.load(std::memory_order_acquire);
     {
-        // The pointer is kept in the pixels of the presented image, which is why the display size
-        // comes from the caller: this module has no view of the swap chain and would otherwise be
-        // guessing at the same number the renderer already knows. Window messages arrive in client
-        // pixels and are scaled by the ratio of the two on the way in, which is what a DPI scale
-        // the process did not opt into needs (AC7 on a 150 percent desktop: a 1067x600 client area
-        // presenting 1600x900). A game that letterboxes inside its client area would still need the
-        // rectangle the back buffer occupies, which nothing here knows.
+        // Store presented pixels for rendering and client/display scaling for message handlers.
+        // Letterboxed offsets would require an additional output rectangle in the contract.
         std::lock_guard<std::mutex> lock(self.guard);
         // Remembered for the message handlers, which scale client pixels to this. The pointer is
         // already in presented pixels, so it passes through.

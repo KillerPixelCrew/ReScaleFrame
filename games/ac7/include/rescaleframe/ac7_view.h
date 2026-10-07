@@ -1,27 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Read Ace Combat 7's view uniform buffer.
-
-   The camera data a reconstruction backend cannot do without is not in a frame capture and not
-   derivable from one. It lives in a 4096 byte constant buffer the engine binds every frame, and
-   this turns those bytes into the values a backend asks for.
-
-   Reading it is only half the job. At runtime nothing labels a constant buffer, so whatever finds
-   one has to be able to say whether it really is the view buffer, and which view it describes. The
-   engine renders several per frame, and three of eleven captured here describe viewports of
-   1016x1016 and 128x93 inside the same 2048x1152 target. Handing a backend the camera of a view
-   the player is not looking through would produce a plausible, wrong image.
-
-   So `rsf_ac7_view_read` refuses rather than guesses. It checks relationships that hold in a view
-   buffer and essentially nowhere else: sizes paired with their reciprocals, a camera basis that is
-   orthonormal and matches the rows of ViewToTranslatedWorld, a projection and its inverse that
-   multiply to the identity, and a translation that is the negated camera position. A buffer that
-   is not one fails several of them at once.
-
-   The layout is stock Unreal 4.18 with a single difference: `ViewToClipNoAA` does not exist in
-   4.18, so every field after `ViewToClip` sits 0x40 earlier than a later engine puts it. That one
-   shift is why reading the stock layout stops working partway through. The offsets, and the
-   identity that establishes them, are in docs/research/ac7-frame-capture.md and re-checked against
-   captured buffers by tools/verify-view-layout.py. */
+/* Parse AC7's captured 4096-byte UE4.18 view-buffer allocation without GPU calls.
+   Recognition checks size/reciprocal pairs, camera basis, projection inverse and camera-origin
+   translation. Callers must also select the intended view; a valid auxiliary view is not the
+   player camera. UE4.18 lacks ViewToClipNoAA, shifting later fields by 0x40 relative to newer UE.
+   Layout evidence: docs/research/ac7-frame-capture.md and tools/verify-view-layout.py. */
 
 #ifndef RSF_AC7_VIEW_H
 #define RSF_AC7_VIEW_H
@@ -34,8 +16,7 @@ extern "C" {
 
 #define RSF_AC7_VIEW_ABI_VERSION 3u
 
-/* The engine binds the view uniform data at exactly this size. A buffer of any other size is not
-   one, which is the cheapest test available and the first one applied. */
+/* Captured allocation size, not proof that the underlying engine structure occupies 4096 bytes. */
 #define RSF_AC7_VIEW_BUFFER_BYTES 4096u
 
 typedef int32_t rsf_ac7_view_result;
@@ -50,28 +31,19 @@ typedef int32_t rsf_ac7_view_result;
 typedef struct rsf_ac7_view {
     uint32_t struct_size;
 
-    /* Row major, the convention both Unreal and Streamline use, so these are copies rather than
-       transposes.
-
-       `view_to_clip` carries the projection jitter when it is enabled, because 4.18 applies the
-       offset to the projection itself and keeps no un-jittered copy: `ViewToClipNoAA` arrived in a
-       later engine version. Backends require the matrix without it, so `view_to_clip_no_jitter` is
-       the same matrix with the two elements the engine wrote taken back out. */
+    /* Row-major engine matrices. view_to_clip includes current projection jitter;
+       view_to_clip_no_jitter removes its two clip-space offsets for backend camera input. */
     float view_to_clip[16];
     float view_to_clip_no_jitter[16];
     float clip_to_view[16];
-    /* The inverse of `view_to_clip_no_jitter`. The buffer's own `ClipToView` inverts the jittered
-       projection, which is not what a backend asks for, and inverting here keeps the matrix work
-       in one place rather than in every caller. */
+    /* Inverse of the corrected projection; clip_to_view above retains engine jitter. */
     float clip_to_view_no_jitter[16];
-    /* Read from the buffer rather than composed: the engine computes exactly the matrix a backend
-       asks for. */
+    /* Copied engine transform from current clip coordinates to previous clip coordinates. */
     float clip_to_prev_clip[16];
-    /* Inverted here, because the engine keeps no such field. `clip_to_prev_clip` is close to the
-       identity, so inverting it is well conditioned, which composing world space matrices with
-       coordinates in the hundreds of thousands is not. */
+    /* Inverted directly to avoid composing matrices with large world-space translations. */
     float prev_clip_to_clip[16];
 
+    /* Position and near_plane use engine world units; basis vectors are dimensionless. */
     float camera_position[3];
     float camera_forward[3];
     float camera_up[3];
@@ -79,10 +51,11 @@ typedef struct rsf_ac7_view {
 
     /* Reversed Z with an infinite far plane, so there is a near value and no far value. */
     float near_plane;
-    /* Radians. Per frame rather than constant: 38.0, 58.7 and 33.4 degrees all appear. */
+    /* Vertical field of view in radians, derived from this view's projection. */
     float vertical_fov;
     float aspect_ratio;
 
+    /* Active view rectangle and allocation dimensions in pixels; the allocation may be padded. */
     uint32_t view_width;
     uint32_t view_height;
     uint32_t view_rect_x;
@@ -90,54 +63,41 @@ typedef struct rsf_ac7_view {
     uint32_t buffer_width;
     uint32_t buffer_height;
 
-    /* Whether this is the view the player is looking through, rather than one of the smaller ones
-       the engine renders into the same target. */
+    /* Geometric heuristic: rectangle starts at (0,0) and fills the allocation. */
     uint32_t is_main_view;
 
-    /* Sub-pixel projection offset, in pixels at the view's own resolution, which is the convention
-       every backend takes it in. The engine stores it in clip space and divides by the view rect
-       rather than by the buffer, so this is that construction run backwards.
-
-       Zero unless the anti-aliasing gate has been patched: 4.18 computes a jitter only for a view
-       asking for temporal AA, and Ace Combat 7 never asks. See loader/README.md.
-
-       The previous frame's offset sits beside the current one in the buffer, and a backend that
-       wants it does not have to remember the last frame. */
+    /* Render-pixel offsets: clip x * width/2, clip y * -height/2. Uses the active view size.
+       Values come from TemporalAAJitter.xy/zw, not caller-maintained history. Engine temporal
+       preparation must be selected to produce jitter; see loader/README.md. */
     float jitter_pixels[2];
     float previous_jitter_pixels[2];
-    /* Whether the projection carries a jitter at all this frame. A backend handed an unjittered
-       projection can sharpen but cannot recover detail, so this is worth reporting rather than
-       leaving a caller to compare two floats against zero. */
+    /* Nonzero when either current clip-space jitter component is nonzero. */
     uint32_t has_jitter;
 } rsf_ac7_view;
 
-/* Read `bytes` of constant buffer into `out`, or refuse.
-
-   `abi_version` is passed rather than stored in the struct because the caller is the one who has
-   to be compiled against a matching header. */
+/* Parse borrowed, float-aligned buffer bytes into caller-owned out. Set out->struct_size first;
+   bytes must equal RSF_AC7_VIEW_BUFFER_BYTES and abi_version must match this header. Returns the
+   specific argument/ABI/layout/perspective error. Treat out as unusable after any error because
+   a later matrix/perspective rejection may leave partial output. No input pointer is retained. */
 rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t bytes, uint32_t abi_version,
                                       rsf_ac7_view* out);
 
-/* Write `in` to `out` with the projection jitter taken out of every field it went into, as if the
-   engine had never added it. Returns 1 when a jitter was removed, 0 when there was none or the
-   projection is not a perspective one; `out` is a plain copy then. `bytes` covers the view buffer.
+/* Copy bytes from in to a separate, non-overlapping out buffer and remove current projection
+   jitter for UI/translucency rendered outside temporal reconstruction. Both buffers must be
+   float-aligned and cover at least 0x800 bytes. Invalid arguments leave out untouched; a valid
+   copy returns 0 for zero jitter or unsupported perspective form, and 1 after correction.
+   This helper does not perform the reader's complete view-buffer recognition.
 
-   The interface is drawn with a view's projection into a layer the reconstruction never sees, so
-   a jittered view's panels wobble by the jitter and nothing resolves it. Drawing them with this
-   buffer instead is what an unjittered engine would have done, whatever their shader reads.
-
-   4.18 adds the clip-space jitter (TemporalAAJitter.xy) to ViewToClip[2][0] and [2][1] and derives
-   every other matrix from the result (SceneView.h:402, SceneView.cpp:2259). For a perspective
-   projection, whose column 3 is (0,0,1,0), that is ViewToClip' = ViewToClip * J with J the identity
-   plus (jx, jy) in row 3. Taken back out:
+   UE4.18 adds TemporalAAJitter.xy to ViewToClip[2][0/1] and derives all current matrices from it
+   (SceneView.h:402, SceneView.cpp:2259). For column 3 = (0,0,1,0), ViewToClip' = ViewToClip * J,
+   where J has (jx,jy) in row 3. Corrections are:
      into clip (TranslatedWorldToClip, WorldToClip, ViewToClip): column 0 -= jx * column 3,
        column 1 -= jy * column 3;
      out of clip (ClipToView, ClipToTranslatedWorld): row 3 += jx * row 0 + jy * row 1;
      screen to world (ScreenToWorld, ScreenToTranslatedWorld): row 2 += jx * row 0 + jy * row 1;
      SVPositionToTranslatedWorld: row 3 += jx * ClipToTranslatedWorld row 0 + jy * row 1;
      TemporalAAJitter.xy = 0.
-   The previous frame's matrices are left: they carry the previous jitter, which is what the
-   engine's own velocity uses. */
+   Previous matrices and TemporalAAJitter.zw retain the history used by engine velocity. */
 uint32_t rsf_ac7_view_remove_jitter(const void* in, void* out, uint32_t bytes);
 
 #ifdef __cplusplus

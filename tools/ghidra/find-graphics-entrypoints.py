@@ -9,6 +9,8 @@
 #
 # The search runs in three widening steps: the functions that call the DX11/DXGI creation imports,
 # the functions that reference the objects those calls store, then optional caller/callee levels.
+# Fixed eight-byte slot spacing targets Windows x64. --limit bounds expansion, not the initial
+# import/storage seed set. --apply adds IID labels and replaces resolved-site EOL comments.
 # A resolved vtable slot is a lead about which method an offset belongs to, not proof that the
 # path executes or that a hook there is viable.
 # @category ReScaleFrame
@@ -55,6 +57,11 @@ MONITOR = ConsoleTaskMonitor()
 
 
 def parse_arguments(raw):
+    """Parse report/table paths, expansion depth/budget and optional selected-program mutations.
+
+    Defaults can come from RSF_VTABLES/RSF_OUTPUT. A report is always written; writes to program
+    labels/comments require --apply, with persistence owned by the enclosing Ghidra session.
+    """
     parser = argparse.ArgumentParser(prog="find-graphics-entrypoints")
     parser.add_argument("--vtables", default=os.environ.get("RSF_VTABLES", "directx-vtables.json"),
                         help="directx-vtables.json from build-directx-types.py")
@@ -91,7 +98,14 @@ def method_at(interfaces, name, offset):
 
 
 class Analysis:
+    """Borrow one Ghidra program and own a decompiler/cache for the bounded static search.
+
+    Targets retain every discovery reason; failed decompilation is cached and included in the report.
+    The main workflow disposes the decompiler after call-site analysis.
+    """
+
     def __init__(self, program, tables, limit):
+        """Open a program decompiler and initialize import/storage/call evidence collections."""
         self.program = program
         self.slots, self.interfaces, self.iids = tables
         self.limit = limit
@@ -106,6 +120,7 @@ class Analysis:
         self.targets = {}
 
     def address(self, value):
+        """Interpret an integer in the program's default address space."""
         return self.program.getAddressFactory().getDefaultAddressSpace().getAddress(value)
 
     def note(self, function, reason):
@@ -118,6 +133,7 @@ class Analysis:
             entry["reasons"].append(reason)
 
     def high_function(self, function):
+        """Decompile once with a 180-second timeout and cache HighFunction or a reported failure."""
         key = str(function.getEntryPoint())
         if key not in self.cache:
             results = self.decompiler.decompileFunction(function, 180, MONITOR)
@@ -129,11 +145,10 @@ class Analysis:
         return self.cache[key]
 
     def import_addresses(self, name):
-        """Every address a call to this import can name.
+        """Resolve equivalent external symbols, import-table pointers, and thunk entries.
 
-        Depending on how the program was imported and analysed, the target can be an external
-        function, a bare label in the EXTERNAL block, the import address table slot that points
-        at it, or a thunk in the code. All of them have to count as the same import.
+        Walk references through non-function storage/thunks with cycle suppression so every target
+        representation can seed the same import call analysis.
         """
         table = self.program.getSymbolTable()
         # Import symbols sit in a library namespace, so a global-only lookup does not see them.
@@ -262,6 +277,11 @@ class Analysis:
         return objects
 
     def vtable_calls(self, function, known_objects):
+        """Report CALLIND offsets and exact known-storage methods or all shared-offset candidates.
+
+        resolved means at least one candidate exists; it does not guarantee unique object identity.
+        Eight-byte slot division assumes the same Windows x64 layout as the generated tables.
+        """
         high = self.high_function(function)
         if high is None:
             return []
@@ -288,9 +308,10 @@ class Analysis:
         return calls
 
     def find_iid_constants(self):
-        """Locate every known interface ID that appears verbatim in the program's data.
+        """Search initialized non-executable blocks for packed 16-byte GUID patterns.
 
-        A 16 byte GUID match is an exact identification of the interface, unlike a string lead.
+        GUID identity establishes the constant's interface, not the runtime object using it. Each
+        whole memory block is read into a temporary byte array; repeated occurrences are reported.
         """
         import jpype
 
@@ -312,7 +333,10 @@ class Analysis:
         return found
 
     def expand(self, levels):
-        """Add callers and callees so a create call and its users end up in the same report."""
+        """Expand caller/callee frontiers by levels, stopping additions once limit is reached.
+
+        Initial import/storage seeds can already exceed limit; they are not discarded here.
+        """
         frontier = list(self.targets)
         for level in range(levels):
             discovered = []
@@ -333,6 +357,12 @@ class Analysis:
 
 
 def main():
+    """Collect GUID/import/storage evidence, expand functions, decode COM calls, and emit JSON.
+
+    Default mode reads the program. --apply labels GUIDs and replaces EOL comments at candidate
+    call sites; save/rollback belongs to the Ghidra session. The report distinguishes exact methods,
+    candidate sets, discovery reasons, and decompile failures without claiming runtime hook viability.
+    """
     args = parse_arguments(getScriptArgs())
     program = currentProgram
     analysis = Analysis(program, load_tables(args.vtables), args.limit)

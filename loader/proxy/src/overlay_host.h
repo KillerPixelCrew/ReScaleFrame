@@ -1,18 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Put the egui overlay on the screen inside the game, and give what it decides back to the bridge.
-
-   The three pieces this joins already existed and had never been connected to anything: the panel
-   itself is a Rust DLL behind `rescaleframe/overlay.h`, the D3D11 pass that draws its triangles is
-   `overlay_renderer`, and the window subclass that feeds it a mouse and a keyboard is
-   `overlay_input`. What was missing was a caller inside a game process, which is this.
-
-   It lives in the research proxy for the same reason the rest of the bridge does: this is what can
-   be loaded into Ace Combat 7 today. Presentation belongs to the orchestrator by the ownership
-   split in AGENTS.md, and moving it there is its own change.
-
-   The point of it is not the settings. Counters can say a reconstruction ran, and a dumped frame
-   can say its geometry is right, but whether the picture is actually correct is a question that
-   has to be looked at while the game moves. That is what this is for. */
+/* Private shared host for the Rust panel DLL, D3D11 renderer and window input hook.
+   Start/draw/stop on a serialized graphics owner thread. Present drawings have an internal
+   skip-if-busy guard; the supplied-target path relies on caller serialization. The host retains
+   its selected device and panel module; targets/stats are borrowed per draw. */
 
 #ifndef RSF_PROXY_OVERLAY_HOST_H
 #define RSF_PROXY_OVERLAY_HOST_H
@@ -23,22 +13,20 @@
 extern "C" {
 #endif
 
-/* Announced rather than returned, for the same reason as the rest of this directory: a code
-   returned on a game's render thread often reaches nobody. */
+/* Optional synchronous log sink. message is borrowed for the call; user/code must outlive
+   the active host and input callbacks. */
 typedef void (*rsf_overlay_host_log_fn)(void* user, const char* message);
 
-/* Load the panel, build its renderer against the game's device, and subclass the window the swap
-   chain was created against.
-
-   `swapchain` is an `IDXGISwapChain*`; its device owns all overlay resources. Returns non-zero when the
-   overlay is ready to be drawn. Safe to call again once it has succeeded, which does nothing.
-
-   The panel DLL is found through `RSF_OVERLAY_DLL` when that names a file, and otherwise beside
-   this module. Failing to find it is a reported refusal and not a crash, because a research build
-   without the Rust half is a normal thing to be running. */
+/* Start against the presenting IDXGISwapChain's D3D11 device and window.
+   Non-zero means ready; repeated successful calls are idempotent. RSF_OVERLAY_DLL overrides
+   the sibling rescaleframe_overlay.dll. A missing/incompatible DLL is reported and returns zero;
+   persistent startup failures in this path suppress repeated attempts. */
 int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn log,
                            void* log_user);
-/* Shared UI host endpoints for renderers which already own a device, window and target. */
+/* Start using a caller-supplied ID3D11Device and HWND, retaining the device. draw_target
+   borrows an immediate context/RTV and pixel extents belonging to that device; serialize calls
+   and provide a point where binding targets is safe. A zero result means hidden, unavailable or
+   draw refusal. intent may be null; inspect the result before acting on returned intent. */
 int rsf_overlay_host_start_device(void* d3d11_device, void* hwnd, rsf_overlay_host_log_fn log, void* user);
 int rsf_overlay_host_draw_target(void* d3d11_context, void* render_target_view, uint32_t width,
     uint32_t height, const rsf_overlay_stats*, rsf_overlay_intent*);
@@ -46,25 +34,20 @@ int rsf_overlay_host_draw_target(void* d3d11_context, void* render_target_view, 
 /* Whether the panel is currently open. */
 unsigned int rsf_overlay_host_visible(void);
 
-/* Open or close it from a hotkey, rather than from the key the input module watches for. */
+/* Toggle the input module's panel visibility after startup. */
 void rsf_overlay_host_toggle(void);
 
-/* Lay out and draw one frame, from inside the Present hook and on the render thread.
-
-   The immediate context is acquired from the presenting chain's device. `stats` is what the panel
-   displays, filled by the caller because the numbers live in the bridge. `intent` is what the
-   panel wants changed, written when this returns non-zero; it is a description of what the user
-   clicked and nothing here acts on it.
-
-   Returns zero when both panel and startup hint are hidden, has not started, or could not draw. Drawing binds the
-   back buffer, because the renderer deliberately never rebinds a render target, and puts back the
-   targets that were bound the way `present_blit` does at the same point in the frame. */
+/* Draw during the selected swapchain's Present callback. A temporary backbuffer/RTV is
+   acquired and released within the call, preserving ResizeBuffers lifetime. Different-device
+   presents and overlapping draws are skipped. stats is borrowed; intent is written on success.
+   Return zero when hidden, unstarted or refused. Render targets/depth are restored, but binding
+   the overlay target can unbind OM UAVs; callers must use an end-of-frame boundary. */
 int rsf_overlay_host_present(void* swapchain, const rsf_overlay_stats* stats,
                              rsf_overlay_intent* intent);
 
-/* Give up the window subclass, the renderer and the panel. Uninstalling a window procedure cannot
-   make a message already inside it finish first, so this carries the same race every hook in this
-   tree does and is meant for a point where the message thread is known to be elsewhere. */
+/* Stop at a boundary where drawing and window callbacks have drained. Uninstalling the
+   subclass does not wait for an already executing message callback. Release panel/renderer/device
+   state; retain the panel DLL for process lifetime so callback code cannot unload underneath it. */
 void rsf_overlay_host_stop(void);
 
 #ifdef __cplusplus

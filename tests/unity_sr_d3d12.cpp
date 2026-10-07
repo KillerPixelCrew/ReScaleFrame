@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check the Unity/native D3D12 SR contract and optional hardware evaluation.
+ * The routine path checks packet layout and null/short setup refusal. Runtime paths
+ * and optional adapter/shared-host arguments enable synthetic texture evaluation,
+ * resource-state restoration and distinct SR/FG constants on one Streamline token.
+ * No Unity render loop is executed.
+ */
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/streamline_host.h>
 #if RSF_HAVE_STREAMLINE

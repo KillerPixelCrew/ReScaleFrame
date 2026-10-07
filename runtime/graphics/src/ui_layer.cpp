@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <new>
 
+/* Each slot owns its texture and both views. The logical ring carries no GPU completion fence;
+   the presentation owner must complete external reads before advancing back to a consumed slot. */
 struct rsf_ui_layer {
     ID3D11Device* device = nullptr;
     struct Slot {
@@ -80,11 +82,8 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
     description.Height = setup->height;
     description.MipLevels = 1;
     description.ArraySize = 1;
-    /* Not the back buffer's R10G10B10A2. Two bits of alpha cannot express partial coverage, and
-       partial coverage is the entire content of this surface. Non-sRGB on both sides, so the
-       composite happens in the back buffer's own encoding and no conversion creeps in. */
-    /* Typeless when sRGB is wanted, so the render target view can encode and the shader resource
-       view can decode over the same memory. A plain UNORM texture cannot carry an sRGB view. */
+    /* Eight-bit alpha preserves partial UI coverage. Plain UNORM storage keeps encoded values. */
+    /* Typeless storage permits an sRGB RTV alongside the plain UNORM SRV. */
     description.Format = setup->srgb ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_R8G8B8A8_UNORM;
     description.SampleDesc.Count = 1;
     description.Usage = D3D11_USAGE_DEFAULT;
@@ -102,9 +101,7 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
         rsf_ui_layer::Slot& slot = layer->slots[index];
         if (FAILED(device->CreateTexture2D(&description, nullptr, &slot.texture)) ||
             !slot.texture) {
-            /* A sharing flag a driver will not honour is worth one retry without it: a layer that
-               composites but cannot be handed to a D3D12 vendor is far better than no layer, and
-               the alternative is a run that produces no interface at all. */
+            /* Fall back to local compositing if shared texture creation is unavailable. */
             if (layer->shareable) {
                 say(layer, "ui layer: shared creation refused, retrying without sharing");
                 description.MiscFlags = 0;
@@ -119,14 +116,8 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
                 return RSF_UI_LAYER_ERROR_RESOURCE_FAILED;
             }
         }
-        /* Explicit view descriptors when the texture is typeless, because a null one means "the
-           texture's own format" and a typeless texture has none to give.
-         *
-         * The two views deliberately disagree. The render target view encodes, so a diverted draw
-         * stores exactly what it stored in the target it came from. The shader resource view does
-         * not decode, so the composite reads those stored bits and blends them onto a back buffer
-         * that also holds encoded colour. Decoding here would put linear values on top of encoded
-         * ones, which is the mismatch this whole option exists to remove. */
+        /* Typeless storage needs explicit formats. The sRGB RTV encodes on write; the plain
+           UNORM SRV preserves those encoded bytes for compositing onto an encoded back buffer. */
         D3D11_RENDER_TARGET_VIEW_DESC target_view{};
         D3D11_SHADER_RESOURCE_VIEW_DESC source_view{};
         const D3D11_RENDER_TARGET_VIEW_DESC* target_desc = nullptr;

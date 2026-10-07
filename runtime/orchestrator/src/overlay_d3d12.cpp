@@ -11,6 +11,8 @@ ComPtr<ID3D11Device> device11;
 ComPtr<ID3D11DeviceContext> context11;
 ComPtr<ID3D11On12Device> interop;
 ComPtr<ID3D12Device> owner;
+// One attached device/window. Queue synchronization is the presentation caller's responsibility;
+// these references persist until explicit stop after overlay work has retired.
 bool ready = false;
 }
 int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain, const rsf_overlay_stats* stats,
@@ -41,6 +43,8 @@ int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain
         D3D12_RESOURCE_STATE_RENDER_TARGET, IID_PPV_ARGS(&wrapped)))) return 0;
     ComPtr<ID3D11RenderTargetView> target;
     if (FAILED(device11->CreateRenderTargetView(wrapped.Get(), nullptr, &target))) return 0;
+    // Acquire/Release transfers this current backbuffer through D3D11On12. Flush submits those
+    // wrapped-resource transitions/draws to the supplied D3D12 queue in presentation order.
     ID3D11Resource* acquired[] = {wrapped.Get()}; interop->AcquireWrappedResources(acquired, 1);
     const auto desc = back->GetDesc();
     const int drawn = rsf_overlay_host_draw_target(context11.Get(), target.Get(), static_cast<uint32_t>(desc.Width), desc.Height, stats, intent);

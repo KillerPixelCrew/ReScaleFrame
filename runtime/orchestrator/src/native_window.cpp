@@ -7,6 +7,8 @@
 #include <wrl/client.h>
 #include <array>
 namespace {
+// WINDOW nesting follows actual queued execution, not CPU scheduling. Overflow is counted so
+// an inner untracked scope cannot accidentally match Present to a tracked outer window.
 thread_local std::array<rsf_game_render_pass, 32> scopes{};
 thread_local uint32_t count = 0, untracked = 0;
 thread_local rsf_native_present_record last_present{};
@@ -50,6 +52,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_window_present(const rsf_observer_pres
     if (event->flags & DXGI_PRESENT_TEST) return 0;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_render_pass window{}; window.struct_size = sizeof(window);
+    // Begin and end independently resolve live ownership; a source change invalidates the pair.
     const bool matched = rsf_native_window_match(event->swapchain, &window) != 0;
     if (!event->completed) {
         last_present = {}; last_present.struct_size = sizeof(last_present);

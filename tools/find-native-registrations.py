@@ -86,6 +86,7 @@ class Image:
                             for s in sections if not s["executable"]]
 
     def offset_of(self, va):
+        """Map a preferred virtual address to file-backed bytes; return None for virtual padding."""
         rva = va - self.image_base
         if rva < 0:
             return None
@@ -142,7 +143,7 @@ def classify_section(image, section):
 
 
 def alternating_spans(kinds, minimum_words):
-    """Yield maximal spans whose words alternate between a name and a code pointer."""
+    """Return (start,length) word ranges alternating NAME/CODE, filtered by minimum length."""
     spans = []
     index = 0
     total = len(kinds)
@@ -198,6 +199,8 @@ def attribute(entries, sets, shape):
     together and one class's set will not account for the whole span. Each array is contiguous and
     holds a single class, so taking the class that explains the longest run from the current
     position recovers the boundary the ordering hid.
+    Equal-length candidates favor the smaller declared set. This greedy attribution can remain
+    ambiguous; a full name-count match is reported separately and does not resolve thunk bodies.
     """
     catalogue = sets["native"] if shape == NATIVE_TABLE else sets["all"]
     arrays = []
@@ -225,6 +228,11 @@ def attribute(entries, sets, shape):
 
 
 def main():
+    """Join SDK function sets to pointer-table candidates and write names plus rejected leads.
+
+    Preferred image addresses must match the dump's pointer values. Identical-code folded targets
+    retain aliases; the input dump/index are unchanged. Does not execute or disassemble game code.
+    """
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("dump", type=Path, help="decrypted module dump")

@@ -8,10 +8,8 @@
 
 namespace {
 
-// Every rule below comes from docs/research/ac7-frame-capture.md, which reads formats, sizes and
-// bind flags off a replayed capture of the running game. Stock UE4.18 was wrong about enough here
-// already, including which target the half resolution R16G16_UNORM actually is, that a rule with no
-// capture behind it does not belong in this file.
+// Capture-derived heuristics: docs/research/ac7-frame-capture.md records observed descriptors.
+// Match confidence describes these rules, not verified resource identity in an arbitrary game.
 
 // The depth formats a D3D11 depth buffer is created with, typeless and fully typed alike. AC7 uses
 // R32G8X24_TYPELESS for scene depth; the rest are here because a depth target created any of these
@@ -37,35 +35,15 @@ bool has_flags(const rsf_texture_facts& facts, uint32_t wanted)
     return (facts.bind_flags & wanted) == wanted;
 }
 
-// None of the four targets is multisampled, mip chained or an array. A texture that is any of those
-// is refused before the format is even looked at, which is what keeps a cube face or a mip chained
-// scene texture of the right format and size out of the scene colour candidates.
-//
-// Zero is accepted for the counts because a caller filling the struct by hand leaves them zero more
-// often than it means an empty resource, while a D3D11 descriptor never carries zero for a real
-// single surface. Mip levels are the exception: zero there means "allocate the full chain", so it
-// is a chain and is refused.
+// Reject MSAA, arrays and mip chains. sample_count/array_size zero are accepted for manually
+// filled facts; mip_levels zero means a full chain in D3D11 and is therefore rejected.
 bool single_plain_surface(const rsf_texture_facts& facts)
 {
     return facts.sample_count <= 1 && facts.mip_levels == 1 && facts.array_size <= 1;
 }
 
-// Render resolution, judged against the frame rather than against a fixed number, since the whole
-// point of this project is to make render and output resolution differ.
-//
-// With no render size yet, the accepted band runs from half the output size up to it and both axes
-// have to be scaled by about the same factor. Half is the bottom because this project drives
-// r.ScreenPercentage down to 50 and the capture at that setting shows scene colour, depth and
-// velocity all following the render size.
-//
-// The aspect test is not decoration. Chunks 2278 to 2413 render 1024x1024 shadow cascades, and a
-// square 1024 sits inside the size band of a 2048x1152 frame on both axes, so size alone reports
-// one as scene depth with full confidence. Only the aspect separates it from the 1024x576 the
-// scene pipeline actually uses at half scale.
-//
-// Both the half floor and the aspect slack are chosen, not measured. The band still accepts a post
-// process stage that happens to land in it at the frame's aspect, which is why the scene colour
-// verdict below is a candidate.
+// With a known render extent require an exact match. Otherwise use the chosen half-to-full
+// output band and aspect tolerance to exclude square shadow maps of otherwise matching size.
 bool at_render_resolution(const rsf_texture_facts& facts, const rsf_frame_shape& shape)
 {
     if (shape.render_width != 0 && shape.render_height != 0) {
@@ -81,10 +59,8 @@ bool at_render_resolution(const rsf_texture_facts& facts, const rsf_frame_shape&
         return false;
     }
 
-    // Aspect compared by cross multiplication, so no float rounding enters a verdict. The 1/64
-    // slack absorbs a render size rounded to a whole pixel or to a multiple of eight. It is a
-    // chosen figure: wide enough for the roundings UE4 applies to a screen percentage, and far
-    // narrower than the gap between 16:9 and the square cascade it exists to reject.
+    // Cross multiplication avoids floating rounding; 1/64 slack permits rounded scaled extents.
+    // The tolerance is a policy choice, not a measured guarantee of resource identity.
     const uint64_t width_cross = uint64_t(facts.width) * shape.output_height;
     const uint64_t height_cross = uint64_t(facts.height) * shape.output_width;
     const uint64_t difference =
@@ -103,8 +79,7 @@ extern "C" uint32_t rsf_classify_texture(const rsf_texture_facts* facts,
         return 0;
     }
 
-    // Unknown is a settled verdict about a descriptor rather than a hedge, so it carries the
-    // confident confidence. Only scene colour ever reports otherwise.
+    // Valid unrecognized descriptors return UNKNOWN. Only a scene-colour match is CANDIDATE.
     verdict->role = RSF_ROLE_UNKNOWN;
     verdict->confidence = RSF_ROLE_CONFIDENT;
 
@@ -142,11 +117,8 @@ extern "C" uint32_t rsf_classify_texture(const rsf_texture_facts* facts,
         return 1;
     }
 
-    // Scene colour, and the reason the confidence field exists. The temporal AA pass reads a full
-    // resolution R16G16B16A16_FLOAT, but the frame allocates many render targets of exactly that
-    // shape, and the one that matters is identifiable only by what it is bound alongside. Reporting
-    // a candidate is the whole verdict a descriptor supports; picking one would be right by
-    // accident on whichever frame it was tried against.
+    // RGBA16F scene candidates share descriptors with other engine targets. Binding/frame/view
+    // evidence must settle which candidate is the reconstruction input.
     if (render_sized && facts->format == static_cast<uint32_t>(DXGI_FORMAT_R16G16B16A16_FLOAT) &&
         has_flags(*facts, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)) {
         verdict->role = RSF_ROLE_SCENE_COLOR;

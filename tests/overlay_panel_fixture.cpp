@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// A deterministic panel for the native host test. The real egui DLL can also run that test.
+/**
+ * @file
+ * Provide a deterministic overlay-panel DLL for the native overlay-host fixture.
+ * Static vertex/index/texture data draws a green triangle through the host renderer.
+ * The panel owns only its upload flag; returned arrays stay valid for DLL lifetime.
+ */
 #include <rescaleframe/overlay.h>
 
 struct rsf_overlay {
@@ -16,6 +21,7 @@ extern "C" void rsf_overlay_destroy(rsf_overlay* panel)
     delete panel;
 }
 
+/** Return borrowed immutable draw arrays; the host must not free them. */
 extern "C" rsf_overlay_result rsf_overlay_frame(
     rsf_overlay*, const rsf_overlay_input*, const rsf_overlay_stats*, rsf_overlay_draw_data* data,
     rsf_overlay_intent*)
@@ -30,6 +36,7 @@ extern "C" rsf_overlay_result rsf_overlay_frame(
     return RSF_OVERLAY_OK;
 }
 
+/** Publish the one-pixel white texture once, after the caller supplies capacity. */
 extern "C" uint32_t rsf_overlay_texture_updates(
     rsf_overlay* panel, rsf_overlay_texture_update* updates, uint32_t capacity)
 {

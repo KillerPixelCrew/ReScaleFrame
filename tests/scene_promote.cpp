@@ -1,14 +1,10 @@
-// Hand the promotion a frame's tail and check the plan it builds.
-//
-// The textures here stand in for the game's: a render resolution composite, two render resolution
-// interface layers, one chain intermediate, the scene colour, and an output resolution
-// reconstruction. What is checked is the plan, because the plan is the whole of what crosses into
-// the frame tap and every mistake in it is a mistake in what the game draws.
-//
-// What cannot be checked here is whether the substitution produces a correct picture. That needs
-// the game's own shaders reading the game's own constants, and it is stated as unverified in
-// scene_promote.h rather than implied by a passing test.
-
+/**
+ * @file
+ * Check scene-promotion plans using synthetic D3D11 tail allocations.
+ * The plan must create typed read/write views for output-sized promoted surfaces,
+ * handle alternating UI layers and phase-gate aliased allocations. This fixture
+ * checks the plan contract; correct game postprocessing needs game-frame evidence.
+ */
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/scene_promote.h>
 
@@ -74,8 +70,7 @@ ID3D11Texture2D* make_target(ID3D11Device* device, UINT width, UINT height, DXGI
     return texture;
 }
 
-// The plan entry naming a texture, or null. The order entries land in is an implementation detail
-// and searching by texture is what a reader of the plan would do.
+// Match by texture identity so plan ordering remains free to change.
 const rsf_frame_tap_substitution* entry_for(const rsf_frame_tap_plan& plan, void* texture)
 {
     for (uint32_t index = 0; index < plan.count; ++index) {
@@ -139,12 +134,8 @@ int main()
           "Creating must succeed.");
 
     stage("creating a frame's tail");
-    // Half the output in each direction, which is the render scale the loader sets. Two interface
-    // layers because AC7 alternates between two allocations from frame to frame.
-    // Typeless, as Unreal allocates them, because that is what the game hands over and what the
-    // first Windows run failed on: a view on a typeless texture has to be told its format. The
-    // composite is given the format the game binds with; the layers and the chain leave it to be
-    // derived.
+    // Half-output targets model the scene and alternating UI allocations. Typeless
+    // resources need typed views: the composite supplies a hint, other entries derive it.
     ID3D11Texture2D* composite = make_target(device, 256, 144, DXGI_FORMAT_B8G8R8A8_TYPELESS);
     ID3D11Texture2D* layer_a = make_target(device, 256, 144, DXGI_FORMAT_R8G8B8A8_TYPELESS);
     ID3D11Texture2D* layer_b = make_target(device, 256, 144, DXGI_FORMAT_R8G8B8A8_UNORM);

@@ -26,14 +26,10 @@
 
 namespace {
 
-/* How many evaluates may fail in a row before the pipeline stops asking. Generous enough that a
-   resource rebuild or a mission load is never mistaken for a wall, small enough that a wall costs
-   a fraction of a second rather than the session. */
+// Bound repeated feature-creation failures; successful evaluation/configuration resets the run.
 constexpr uint32_t kEvaluateFailureLimit = 120;
 
-// One pipeline per process, because the entry points carry no handle: there is one game, one
-// device and one Streamline. State is a function-local static rather than a namespace-scope object
-// so that nothing here runs before the DLL's first call into it.
+// Handle-free API: one lazily initialized device/backend/resource owner per process.
 struct Pipeline {
     // Owned by the thread that drives frames. start, on_frame and stop are not safe to call
     // concurrently with each other and are not meant to be: they all use the device.
@@ -52,17 +48,10 @@ struct Pipeline {
     rsf_motion_decode_params motion{};
     uint32_t decode_width = 0;
     uint32_t decode_height = 0;
-    // The render size the decode pass last failed to build for. Building it is an HLSL compile and
-    // two device allocations; the reasons it fails are a missing shader compiler or a device that
-    // would not allocate, and neither is fixed by the next frame. Without this the failure path
-    // compiles a shader inside the render thread every frame for as long as the game runs.
+    // Cache allocation/compile refusal per extent to avoid repeated render-thread work.
     uint32_t decode_failed_width = 0;
     uint32_t decode_failed_height = 0;
-    // The last failure that reached the log and the render size it named. A frame that fails
-    // usually fails the same way on the next one, and a game whose projection carries no jitter
-    // fails every frame it will ever render, so without this the expected case costs a file open,
-    // write and close per frame on the render thread: the sink appends and closes per line by
-    // design and cannot keep up at frame rate.
+    // Suppress repeated identical result/extent diagnostics between successful frames.
     rsf_dlss_pipeline_result reported = RSF_DLSS_PIPELINE_OK;
     uint32_t reported_width = 0;
     uint32_t reported_height = 0;
@@ -77,24 +66,16 @@ struct Pipeline {
     float units_to_meters = 1;
 
 
-    /* Consecutive evaluate failures, and whether evaluating has been given up on.
-
-       A failing evaluate is not free. NGX tries to create its feature on each one, and when that
-       cannot succeed the attempts cost time and memory that are never returned: the game slows down
-       frame by frame until it stops responding and dies. That is a worse outcome than not
-       upscaling, and it hides the actual error behind a hang.
-
-       So a run of failures with nothing in between stops it. A single success resets the count,
-       because an evaluate that fails while resources are being rebuilt is ordinary. */
+    // Failed SDK feature creation can consume resources each attempt. Suspend after the
+    // limit rather than growing cost indefinitely; a success clears the consecutive count.
     uint32_t consecutive_evaluate_failures = 0;
     bool evaluate_given_up = false;
     bool reset_pending = false;
     rsf_dlss_pipeline_log_fn log = nullptr;
     void* log_user = nullptr;
 
-    // Read from other threads, so written only under `guard`. Nothing below is a resource, and no
-    // D3D or Streamline call is ever made while the lock is held: this project has deadlocked
-    // twice by re-entering a lock from a callback made inside such a call.
+    // Cross-thread status/intent metadata uses guard. Do not hold it across graphics/SDK/log
+    // callbacks: they can re-enter runtime status and require the same lock.
     std::mutex guard;
     bool running = false;
     bool supported = false;
@@ -163,10 +144,7 @@ void say(Pipeline& self, const char* format, ...)
     self.log(self.log_user, message);
 }
 
-// Streamline and the decode pass each take their own sink. Both are forwarded to ours with a
-// prefix rather than being given to the caller separately, so that one log carries the whole
-// sequence in the order it happened. The message goes through as an argument, never as the format,
-// because a vendor's line may contain a percent sign.
+// Forward diagnostics with a stage prefix; vendor text is an argument, never a format string.
 void from_dlss(void* user, const char* message)
 {
     (void)user;
@@ -185,9 +163,7 @@ void from_dump(void* user, const char* message)
     say(pipeline(), "dump: %s", message ? message : "");
 }
 
-// Whether this failure is worth a line, which it is the first time and again whenever the failure
-// or the render size it concerns changes. Called only from the thread that drives frames, which is
-// the only one that touches the fields it reads.
+// Graphics owner deduplicates consecutive failures by result and render extent.
 bool worth_saying(Pipeline& self, rsf_dlss_pipeline_result result, uint32_t width, uint32_t height)
 {
     if (self.reported == result && self.reported_width == width &&
@@ -242,10 +218,8 @@ void tear_down(Pipeline& self)
         self.device = nullptr;
     }
 
-    // Dropped after the last line above, and dropped at all because the DLSS backend keeps
-    // `from_dlss` as its own sink for the life of the process and that forwards to here. Leaving
-    // these set would hand a later vendor line a `log_user` the caller stopped owning when it
-    // stopped the pipeline.
+    // Backend forwarding callbacks may survive shutdown; clear caller user state after the
+    // last teardown message so later backend lines cannot use a retired logger.
     self.log = nullptr;
     self.log_user = nullptr;
     self.reported = RSF_DLSS_PIPELINE_OK;
@@ -289,10 +263,7 @@ bool layer_worth_saying(Pipeline& self, rsf_dlss_pipeline_result result)
     return true;
 }
 
-// Record the outcome of a frame and hand it back. Every frame that did not reach a successful
-// evaluate counts as refused, whether this code refused it or DLSS did, so that the two counters
-// sum to the well formed frames offered while running and a caller cannot report activity that did
-// not happen. A call that carried no frame at all, or the wrong ABI, is counted as neither.
+// Count well-formed frame outcomes. Top-level absent/short frames and ABI mismatch bypass this.
 rsf_dlss_pipeline_result finish(Pipeline& self, rsf_dlss_pipeline_result result)
 {
     if (result == RSF_DLSS_PIPELINE_OK) {
@@ -332,9 +303,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
         return RSF_DLSS_PIPELINE_ERROR_ALREADY_RUNNING;
     }
 
-    // A zero decode scale multiplies every stored vector to nothing, which produces a motion field
-    // of exact zeros: a perfectly stable image rather than a visible failure. There is no default
-    // worth guessing for a game's encoding, so this is refused instead.
+    // Require the producer's explicit encoding scale; zero would erase all motion.
     if (setup->motion.scale_x == 0.0f || setup->motion.scale_y == 0.0f) {
         return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
     }
@@ -348,9 +317,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
     self.units_to_meters = setup->view_space_to_meters;
 
     self.motion.struct_size = uint32_t(sizeof(rsf_motion_decode_params));
-    // Per axis, not as a pair. A zero on one axis alone decodes that axis to no motion at all,
-    // which is the same silent failure the non-zero test above exists to catch, and there is no
-    // reading of an output scale of zero that anyone means: a flip is -1, not 0.
+    // An omitted post-decode multiplier defaults independently to one on each axis.
     if (self.motion.output_scale_x == 0.0f) {
         self.motion.output_scale_x = 1.0f;
     }
@@ -418,9 +385,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
                    : RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
     }
 
-    // The render size comes from DLSS rather than from a ratio computed here. DLSS is entitled to
-    // decide what a quality level means, and a size chosen on this side that does not match is a
-    // rejected evaluate at best.
+    // Use vendor planning for this quality/output pair before allocating resources.
     say(self, "asking DLSS what quality level %u renders at for %ux%u", setup->quality,
         setup->output_width, setup->output_height);
     rsf_dlss_plan plan{};
@@ -441,15 +406,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
     description.Height = setup->output_height;
     description.MipLevels = 1;
     description.ArraySize = 1;
-    // The format Ace Combat 7's own full resolution colour targets are in, established from a
-    // replayed capture in docs/research/ac7-frame-capture.md. Matching it means the result can go
-    // back where the input came from without a conversion, and it is wide enough for pre-tonemap
-    // values.
+    // AC7 replayed targets use linear RGBA16_FLOAT (docs/research/ac7-frame-capture.md).
     description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     description.SampleDesc.Count = 1;
     description.Usage = D3D11_USAGE_DEFAULT;
-    // All three binds: DLSS writes it, whatever reinserts it reads it, and a compute pass may yet
-    // need to touch it. None of them can be added later without recreating the texture.
+    // Allow SDK writes, reinsertion reads and compute processing without recreation.
     description.BindFlags =
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
     if (FAILED(device->CreateTexture2D(&description, nullptr, &self.output)) || !self.output) {
@@ -458,11 +419,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
     }
 
-    // Cleared once, because a fresh texture holds whatever was in that memory and there is no
-    // promise that a reconstruction writes every pixel of it. It does not: a frame whose render
-    // size differs from the one the feature was built for left a corner of this target untouched,
-    // and the previous tenant of that memory showed through as blocks. Black there is honest,
-    // where blocks read as an artifact of the reconstruction rather than as an absence of one.
+    // Clear undefined contents once; a mismatched SDK extent can leave pixels unwritten.
     {
         ID3D11DeviceContext* context = nullptr;
         ID3D11RenderTargetView* target = nullptr;
@@ -522,9 +479,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     if (!self.device || !self.output || !self.streamline_loaded) {
         return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
     }
-    /* Given up on, and said so once already. Returning here rather than at the evaluate skips the
-       decode and the frame assembly as well, so a run that cannot upscale costs the game nothing
-       instead of costing it more every frame. */
+    // Suspension bypasses decode/assembly as well as the costly SDK attempt.
     if (self.evaluate_given_up) {
         return finish(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
     }
@@ -536,16 +491,12 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     if (frame->camera->struct_size < sizeof(rsf_pipeline_camera_frame)) {
         return finish(self, RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT);
     }
-    // Checked here rather than left to assembly, which would report a camera from a mismatched
-    // build as a refused frame. That code reads as "no jitter", and chasing an anti-aliasing gate
-    // that is not the problem is the expensive way to find a rebuild was needed. Uncounted, like
-    // the frame ABI above: this is not a frame that was offered and turned down.
+    // Camera ABI errors are excluded from frame counters, like the top-level frame ABI.
     if (frame->camera->abi_version != RSF_FRAME_ASSEMBLY_ABI_VERSION) {
         return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
     }
 
-    // One line per frame would drown the sink, which appends and closes per line by design, so the
-    // sequence is announced once. Failures and size changes still speak every time.
+    // Snapshot dimensions/status under guard; GPU and diagnostics run after releasing it.
     bool first = false;
     uint32_t width_min = 0;
     uint32_t height_min = 0;
@@ -578,8 +529,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         return finish(self, RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT);
     }
 
-    // A decode pass is built for one size, and so is the DLSS feature behind it. A render scale
-    // change therefore costs both, which is why it is worth noticing rather than absorbing.
+    // Decode and DLSS histories are extent-dependent; release them on render-size change.
     if (self.decode &&
         (self.decode_width != frame->render_width || self.decode_height != frame->render_height)) {
         say(self, "render size moved from %ux%u to %ux%u, rebuilding", self.decode_width,
@@ -590,10 +540,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         self.decode_height = 0;
         rsf_dlss_release_resources();
     }
-    // Set when this frame is the first one a freshly built feature sees, either because nothing had
-    // been built yet or because the size change above threw the old one away. DLSS has no history
-    // it can use across that, and reusing what it has produces a smear that decays over several
-    // frames rather than an error. The caller cannot know this: it does not see the rebuild.
+    // A new decode/feature has no usable temporal history.
     const bool rebuilt = self.decode == nullptr;
     if (!self.decode) {
         // Not retried per frame, for the reason recorded on the fields themselves.
@@ -635,9 +582,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         say(self, "first frame: decoding motion, assembling, evaluating");
     }
 
-    // Mandatory, not an optimisation. Every backend offers a scale factor for motion and nothing to
-    // subtract a bias with, and Unreal's storage is biased, so the game's own target reads as a
-    // large constant motion across a still image.
+    // Vendor scale factors cannot remove the bias in the engine's packed velocity encoding.
     const rsf_motion_decode_result decoded =
         rsf_motion_decode_run(self.decode, context_pointer, frame->game_motion, &self.motion);
     if (decoded != RSF_MOTION_DECODE_OK) {
@@ -648,10 +593,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         return finish(self, RSF_DLSS_PIPELINE_ERROR_MOTION_DECODE_FAILED);
     }
 
-    // Only the fields this pipeline is the one to know. The matrices, the jitter and the camera
-    // basis come from whatever read the game's view buffer and are used exactly as given: a value
-    // invented here would produce a plausible image of a camera that was never rendered, which
-    // reads as softness rather than as a bug.
+    // Preserve producer camera conventions; supply only facts established by runtime decoding.
     rsf_pipeline_camera_frame camera = *frame->camera;
     camera.struct_size = uint32_t(sizeof(rsf_pipeline_camera_frame));
     camera.motion_decoded = 1u;
@@ -660,10 +602,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     // encoding reserved a clear value in the first place.
     camera.has_motion_sentinel = self.motion.zero_means_unwritten ? 1u : 0u;
     camera.motion_sentinel = self.motion.invalid_value;
-    // Decoded Unreal motion already spans the [-1,1] range Streamline wants, so 1 and 1 leave it
-    // alone. The axis directions and the sign of the difference are unverified: they can only be
-    // settled against a rendered result, and a flip belongs in the decode's output scale rather
-    // than here when one turns out to be needed.
+    // Preserve explicit producer multipliers; default both only when the whole pair is absent.
     if (camera.motion_scale[0] == 0.0f && camera.motion_scale[1] == 0.0f) {
         camera.motion_scale[0] = 1.0f;
         camera.motion_scale[1] = 1.0f;
@@ -676,9 +615,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
 
     rsf_frame_resources resources{};
     resources.struct_size = uint32_t(sizeof(resources));
-    // Slot 0 of the bound set, as the caller found it. Nothing in a descriptor distinguishes the
-    // scene colour temporal AA reads from the other full resolution float targets in the frame, so
-    // this is an assumption and stays one until a rendered result confirms it.
+    // The producer identifies the temporal scene input; descriptors cannot establish its phase.
     resources.color_in = frame->scene_color;
     resources.color_out = self.output;
     resources.depth = frame->depth;
@@ -695,9 +632,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     const rsf_frame_assembly_result assembled =
         rsf_assemble_dlss_frame(&camera, &resources, &dlss_frame);
     if (assembled != RSF_FRAME_ASSEMBLY_OK) {
-        // Worth naming once, and only once: a frame refused for want of jitter is the expected
-        // state of Ace Combat 7 until the anti-aliasing gate is patched, so it is not a
-        // malfunction and it repeats for as long as the game runs.
+        // Report a stable eligibility refusal once per result/extent change.
         if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED, frame->render_width,
                          frame->render_height)) {
             say(self, "the frame was refused before DLSS saw it (result %d)", int(assembled));
@@ -818,9 +753,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
                   "is right.");
     }
 
-    // Taken here rather than in request_dump. The requesting thread is a key poller, and using an
-    // immediate context from two threads at once reads whatever the staging copy happened to hold
-    // and has taken this process down once already.
+    // Consume the diagnostic request only on the immediate-context owner after successful SR.
     std::string prefix;
     {
         std::lock_guard<std::mutex> lock(self.guard);
@@ -847,16 +780,10 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
     }
     if (!prefix.empty()) {
-        // Both sides of the comparison, from the same frame. An upscaled image on its own says
-        // nothing: the question is whether it is this scene, sharper, and that needs the input it
-        // was made from rather than a different frame's.
+        // Capture paired inputs/output from this evaluation for reproducible image comparison.
         const std::string input_prefix = prefix + "_input";
         const std::string output_prefix = prefix + "_output";
-        /* The velocity the backend was actually handed, rather than one that merely looks like
-           velocity. The observer retains several `R16G16_UNORM` targets and the key dump writes the
-           first of them, which is not necessarily the one the pass binds: a flight capture read
-           entirely unwritten while the tap was recognising motion in every frame. These two come
-           from this frame's own inputs, so what they show is what the backend saw. */
+        // Capture actual bound/submitted motion, not a descriptor-classified candidate.
         const std::string motion_prefix = prefix + "_motion";
         const std::string decoded_prefix = prefix + "_motion_decoded";
         const std::string depth_prefix = prefix + "_depth";
@@ -918,7 +845,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // A failed dump is diagnostic only and does not change the frame's outcome.
     }
 
-    // One good frame means the run of failures was a rebuild rather than a wall.
+    // Report accepted provider/extent transitions without logging every successful frame.
     if (self.last_evaluated_backend != self.backend || self.last_evaluated_width != frame->render_width ||
         self.last_evaluated_height != frame->render_height) {
         say(self,"SR submitted successfully: backend %u, input %ux%u, output %ux%u; reconstruction output ready in GPU command order",

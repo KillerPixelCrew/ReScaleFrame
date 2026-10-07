@@ -45,6 +45,9 @@ struct ExposureResources {
     }
 };
 ExposureResources& exposure_resources() { static ExposureResources instance; return instance; }
+// Vendors consume a scalar 1x1 exposure. Reuse R32_FLOAT directly; otherwise shader-copy the
+// red channel from an allowed float vector format into owned R32_FLOAT storage. Cache two
+// retained sources because engines often alternate exposure textures between frames.
 ID3D11Texture2D* scalar_exposure(ID3D11DeviceContext* context, ID3D11Texture2D* source)
 {
     if (!source) return nullptr;
@@ -88,6 +91,8 @@ ID3D11Texture2D* scalar_exposure(ID3D11DeviceContext* context, ID3D11Texture2D* 
     return rsf_fullscreen_pass_draw(resources.blit, context, resources.target.Get(), selected->view.Get(), &draw) ==
         RSF_FULLSCREEN_OK ? resources.scalar.Get() : nullptr;
 }
+// Exception-safe restore around crop/exposure/vendor work; the engine's queued fallback has
+// already run, so every early refusal must preserve the next engine pass's bindings.
 struct Bindings {
     void* context;
     rsf_d3d11_state saved{};
@@ -136,6 +141,8 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         // producer's canonical UV convention here; new native plugins never learn vendor units.
         camera.motion_scale[0] *= 2.0f; camera.motion_scale[1] *= -2.0f;
     }
+    // Match engine history ownership, native frame continuity and both rectangles. Cropping or
+    // output movement changes sampling even when the textures retain the same dimensions.
     camera.reset = (pass->flags & RSF_GAME_RENDER_RESET) || history.session != pass->session_id ||
         history.owner != pass->history_key || pass->native_frame != uint32_t(history.frame + 1) ||
         history.width != source.render_width || history.height != source.render_height ||
@@ -183,6 +190,8 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     auto* output = static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
     auto* target = static_cast<ID3D11Texture2D*>(pass->color_output);
     auto* readable = static_cast<ID3D11Texture2D*>(pass->color_output_readable);
+    // Validate both engine destinations before writing either. Failure leaves the previously
+    // queued spatial fallback intact and discards SR history for the next accepted frame.
     auto fits = [&](ID3D11Texture2D* destination) {
         if (!output || !destination) return false;
         D3D11_TEXTURE2D_DESC src{}, dst{}; output->GetDesc(&src); destination->GetDesc(&dst);

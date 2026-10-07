@@ -1,3 +1,10 @@
+/**
+ * @file
+ * Compile the public Game SDK and inline frame policy as C.
+ * This OBJECT target has no executable entry point. The corresponding C++ runtime
+ * eligibility checks live in plugin_contract.cpp; both languages must accept the
+ * self-contained public headers.
+ */
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/game_frame.h>
 
@@ -13,9 +20,7 @@ int rsf_sdk_c_header_check(void)
     return api.detect == 0;
 }
 
-/* The eligibility rules are inline in the header, so they are compiled here as C as well as being
-   exercised as C++ in the contract test. A rule that only builds in one language is a rule a plugin
-   cannot use, and plugins are the reason this SDK is MIT and header-only. */
+/* Compile inline eligibility helpers as C; plugin_contract exercises them at runtime in C++. */
 int rsf_sdk_c_frame_check(void)
 {
     rsf_frame_record record = {0};

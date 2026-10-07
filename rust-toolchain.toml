@@ -1,3 +1,4 @@
+# Reproducible Cargo/rustfmt/Clippy toolchain selected by rustup; see docs/tooling.md.
 [toolchain]
 channel = "1.94.1"
 profile = "minimal"

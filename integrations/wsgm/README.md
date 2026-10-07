@@ -3,3 +3,7 @@
 Planned. WSGM will select a per-game profile, arrange early loading, and exchange settings/status with the same runtime used by the standalone launcher.
 
 Use WSGM's canonical application ID and one persistence authority per session. Preserve both launch paths, Steam Input lifetime, limiter settings, and rendered-frame AutoTDP inputs. Integration points are recorded in [architecture](../../docs/research/architecture.md).
+
+This directory currently contains design documentation only. It defines no executable adapter,
+IPC transport or settings ownership implementation. Future integration must keep per-frame GPU
+work inside the in-process runtime; WSGM exchanges configuration and bounded status only.

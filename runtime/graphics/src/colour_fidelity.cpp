@@ -72,6 +72,8 @@ float surfaceConfidence(float lower, float upper) {
 })";
 struct Constants { uint32_t render[2], output[2]; float jitter[2]; uint32_t depth_inverted, padding; };
 }
+// Per-device scratch cache. Residual lives at render size; correction ping-pongs at output size.
+// All ComPtr fields own their references. Extent/format changes replace the whole scratch set.
 struct rsf_colour_fidelity {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11ComputeShader> project, apply;
@@ -110,6 +112,7 @@ extern "C" int rsf_colour_fidelity_create(void* device, rsf_colour_fidelity** ou
     *out=pass; return 1;
 }
 namespace {
+// Build a complete replacement set before publishing it, keeping the prior cache on failure.
 bool allocate(rsf_colour_fidelity& pass, const D3D11_TEXTURE2D_DESC& low, const D3D11_TEXTURE2D_DESC& high) {
     ComPtr<ID3D11Texture2D> textures[3]; ComPtr<ID3D11ShaderResourceView> views[3];
     ComPtr<ID3D11UnorderedAccessView> targets[3];
@@ -174,6 +177,9 @@ extern "C" int rsf_colour_fidelity_run(rsf_colour_fidelity* pass, void* raw_cont
     c->CSSetConstantBuffers(0,1,&cb); c->CSSetSamplers(0,1,&sampler);
     ID3D11ShaderResourceView* current=output_view.Get();
     ID3D11ShaderResourceView* no_views[4]{}; ID3D11UnorderedAccessView* no_target=nullptr;
+    // Three spatial residual corrections: project current output into jittered source pixels,
+    // apply that residual at output size, then feed the corrected image into the next iteration.
+    // Two outputs prevent reading and writing one texture during a dispatch; iteration 3 ends in 0.
     for (uint32_t i=0;i<3;++i) {
         c->CSSetUnorderedAccessViews(0,1,&no_target,nullptr);
         c->CSSetShaderResources(0,4,no_views);

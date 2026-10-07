@@ -11,9 +11,8 @@
 # Without --apply the script only reports what it would do. Names are placed in a namespace per
 # class, so `AActor::execWasRecentlyRendered` becomes `execWasRecentlyRendered` inside `AActor`.
 #
-# The names come from the module's own registration arrays, so an applied name is as good as the
-# match that produced it. An exec thunk is a generated argument unpacker: naming it does not name
-# the engine function it calls.
+# Input addresses are absolute and are not rebased or byte-verified here. Use matching program/dump
+# evidence. Exec thunks are argument unpackers; naming one does not identify the engine callee.
 # @category ReScaleFrame
 
 import argparse
@@ -26,6 +25,10 @@ SOURCE = SourceType.ANALYSIS
 
 
 def parse_arguments(raw):
+    """Parse shape/exactness filters and opt-in writes from Ghidra script arguments.
+
+    --namespace currently defaults true and has no disabling flag. Default mode only counts actions.
+    """
     parser = argparse.ArgumentParser(prog="apply-native-names")
     parser.add_argument("--names", default=os.environ.get("RSF_NATIVE_NAMES",
                                                           "ac7-native-names.json"),
@@ -42,7 +45,7 @@ def parse_arguments(raw):
 
 
 def resolve_namespace(program, cache, name):
-    """Return the namespace for a class, creating it once per run."""
+    """Reuse or create a global child namespace for a class and cache it for this apply run."""
     if name in cache:
         return cache[name]
     manager = program.getSymbolTable()
@@ -54,6 +57,13 @@ def resolve_namespace(program, cache, name):
 
 
 def main():
+    """Apply recovered names only at existing function entries, or report the same decisions.
+
+    Preserve conflicting USER_DEFINED names; other non-default names can be replaced. Missing
+    functions are counted rather than created. Per-function rename failures are reported and the
+    pass continues, so --apply can produce a partial result. Folded aliases replace the function
+    comment after a successful rename. Saving is the enclosing GUI/headless session's responsibility.
+    """
     arguments = parse_arguments(getScriptArgs())
     with open(arguments.names) as handle:
         recovered = json.load(handle)
@@ -89,8 +99,7 @@ def main():
         if not bare:
             owner, bare = None, record["symbol"]
 
-        # A name that analysis did not invent is evidence someone already identified this
-        # function. Do not overwrite it.
+        # Only USER_DEFINED conflicts are held; analysis/imported names remain eligible for rename.
         existing = function.getName()
         if not existing.startswith("FUN_") and existing != bare:
             if function.getSymbol().getSource() == SourceType.USER_DEFINED:

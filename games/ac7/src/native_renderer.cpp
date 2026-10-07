@@ -21,8 +21,13 @@
 #include <intrin.h>
 #endif
 
+// Installs AC7 renderer hooks only after validating each target against its expected bytes. It
+// copies engine scope data into queued RHI markers and reports those scopes through the Game SDK;
+// backend loading and reconstruction remain owned by the runtime.
 namespace {
 using Process = void(*)(void*, void*);
+// Build-specific function entry guard and MinHook state. sites and hooks below share index order;
+// helper/layout evidence is recorded in docs/research/ue418-hook-map.md.
 struct Site {
     uint32_t rva, role;
     const char* expected;
@@ -91,6 +96,8 @@ Site sites[] = {
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
 std::atomic<uint32_t> entry_calls{0};
 std::atomic<uint32_t> outer_calls{0};
+// OuterGuard spans native forwarding and post-call drains. EntryGuard counts code that can
+// produce/access controller records, allowing stop to reject unloading during either interval.
 struct OuterGuard {
     OuterGuard() { ++outer_calls; }
     ~OuterGuard() { --outer_calls; }
@@ -99,6 +106,7 @@ struct EntryGuard {
     EntryGuard() { entry_calls.fetch_add(1); }
     ~EntryGuard() { entry_calls.fetch_sub(1); }
 };
+// Read live engine memory defensively. Failure leaves the enclosing hook on its native path.
 bool copy(void* output, const void* input, size_t size)
 {
     if (!output || !input) return false;
@@ -117,6 +125,8 @@ template<class T> bool read(uint64_t input, size_t offset, T& output)
 { return input && copy(&output, reinterpret_cast<const void*>(uintptr_t(input) + offset), sizeof(T)); }
 }
 namespace { struct PassLease; }
+// CPU submission identity is captured before renderer ownership crosses to render/RHI threads.
+// Object addresses are registry keys; packets copy numeric identity before address retirement.
 struct RendererIdentity {
     uint64_t renderer = 0, source = 0, submission = 0, viewport = 0;
     bool after_simulation = false;
@@ -124,14 +134,20 @@ struct RendererIdentity {
     uint32_t reset = 0;
 };
 namespace { void log(rsf_ac7_native_renderer&, const char*); }
+// Associates a Slate recording task with the exact game viewport/window/source frame.
 struct WindowSource {
     uint64_t task = 0, source = 0, viewport = 0, window = 0;
     uint64_t renderer = 0, info = 0, elements = 0;
     bool after_simulation = false;
 };
+// Final-surface lookup is source/viewport-specific; multiple producers mark the entry ambiguous.
 struct FinalSurfaceSource { uint64_t source = 0, viewport = 0, surface = 0; bool ambiguous = false; };
+// Generated native uniform lifetime follows the original renderer, not temporary graph-plan scope.
 struct UniformOwner { uint64_t renderer = 0, view = 0, uniform = 0; };
+// Bounded PS diagnostics retain identities only, without extending engine resource lifetime.
 struct PixelUniformBinding { uint64_t sequence = 0, context = 0, shader = 0, uniform = 0, command = 0; uint32_t slot = 0; };
+// One installed controller. Engine identities are guarded, RHI retirements use an atomic list,
+// and native pool/uniform releases are performed only by the observed render owner.
 struct rsf_ac7_native_renderer {
     rsf_ac7_native_renderer_options options{};
     rsf_ac7_render_scopes* scopes = nullptr;
@@ -190,6 +206,7 @@ thread_local bool inside_simulation = false, after_simulation = false;
 thread_local bool simulation_closed = false, simulation_started = false, input_sampled = false;
 thread_local uint64_t input_source_frame = 0, reserved_source_frame = 0;
 thread_local uint32_t source_render_expected = 0;
+// Check the reflected inheritance chain using the researched UClass cache, including bounds.
 bool object_has_class(uint64_t object, uint32_t cache_rva)
 {
     uint64_t expected = 0, actual = 0, bases = 0, entry = 0;
@@ -255,6 +272,7 @@ uint32_t render_screen(uint32_t& reset, uint32_t& why, uint64_t& view_target)
     return RSF_SCREEN_FLIGHT;
 }
 thread_local uint64_t submitting_viewport = 0;
+// QPC timestamps describe CPU boundaries; the source ID joins later copied submission packets.
 void cpu_event(rsf_ac7_native_renderer* self, uint64_t source, uint32_t stage, uint32_t kind = 0, uint32_t message = 0)
 {
     if (!self || !source || !self->options.cpu_event) return;
@@ -265,6 +283,7 @@ void cpu_event(rsf_ac7_native_renderer* self, uint64_t source, uint32_t stage, u
     self->options.cpu_event(self->options.user, &event);
 }
 thread_local std::array<uint64_t, 2> shared_repaint_targets{};
+// Observe removed game-thread input messages without consuming/changing the Windows hook chain.
 LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
 {
     OuterGuard lifetime;
@@ -284,6 +303,7 @@ LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
     }
     return CallNextHookEx(nullptr, code, removed, argument);
 }
+// Admit one uncaptured primary view whose unconstrained rectangle matches host output dimensions.
 bool source_primary_renderer(rsf_ac7_native_renderer& self, void* renderer)
 {
     rsf_game_render_config config{}; config.struct_size = sizeof(config);
@@ -294,6 +314,7 @@ bool source_primary_renderer(rsf_ac7_native_renderer& self, void* renderer)
         read(views, 0xc42, capture) && !capture[0] && !capture[1] && !capture[2] &&
         !rect[0] && !rect[1] && rect[2] == int32_t(config.output_width) && rect[3] == int32_t(config.output_height);
 }
+// Reserve an identity until native renderer retirement. Capacity refusal never evicts live work.
 void bind_renderer(rsf_ac7_native_renderer& self, void* object)
 {
     if (!input_source_frame || !inside_engine_tick) return;
@@ -331,6 +352,7 @@ void bind_renderer(rsf_ac7_native_renderer& self, void* object)
         "AC7 renderer identity refused: live renderer capacity reached; no association evicted");
     if (screen_text[0] && self.options.log) self.options.log(self.options.user, screen_text);
 }
+// Recover the renderer key from family+0x10 and copy the CPU association into a queued packet.
 void renderer_identity(rsf_ac7_native_renderer& self, rsf_game_render_pass& pass)
 {
     if (pass.family_key < 0x10) return;
@@ -344,6 +366,7 @@ void renderer_identity(rsf_ac7_native_renderer& self, rsf_game_render_pass& pass
         return;
     }
 }
+// Reserve one source identity around the native outer loop and restore TLS across nested ticks.
 void hooked_engine_tick(void* loop)
 {
     OuterGuard entry;
@@ -379,6 +402,8 @@ bool current_game_engine(void* object)
     return copy(&current, reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x3cbbc28, 8) &&
         current == uint64_t(uintptr_t(object));
 }
+// Only the current game engine opens simulation. Completion is observed later at frame sync,
+// after native recording/handoff, rather than at this function's return.
 template<uint32_t Index> void hooked_simulation(void* object, float delta, uint8_t idle)
 {
     OuterGuard entry;
@@ -405,6 +430,8 @@ void hooked_redraw(void* object, uint8_t present)
     }
     reinterpret_cast<void(*)(void*, uint8_t)>(sites[26].original)(object, present);
 }
+// Associate submissions only while drawing the current engine's main viewport; nested auxiliary
+// viewport draws restore the previous TLS identity when their native call returns.
 void hooked_viewport_draw(void* viewport, uint8_t should_present)
 {
     OuterGuard lifetime;
@@ -419,6 +446,8 @@ void hooked_viewport_draw(void* viewport, uint8_t should_present)
     reinterpret_cast<void(*)(void*, uint8_t)>(sites[27].original)(viewport, should_present);
     submitting_viewport = saved;
 }
+// Report one input sample and the native controller-poll interval for this tick. Modal Slate loops
+// are excluded from controller events because they do not own the same game input boundary.
 void hooked_poll_input(void* slate)
 {
     EntryGuard entry;
@@ -433,6 +462,8 @@ void hooked_poll_input(void* slate)
         cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_INPUT_CONTROLLER);
     reinterpret_cast<void(*)(void*)>(sites[21].original)(slate);
 }
+// Windows message sampling can precede device polling; whichever native boundary arrives first
+// stamps the source's input sample exactly once.
 void hooked_pump_messages(uint8_t main_loop)
 {
     OuterGuard lifetime;
@@ -442,6 +473,7 @@ void hooked_pump_messages(uint8_t main_loop)
     }
     reinterpret_cast<void(*)(uint8_t)>(sites[54].original)(main_loop);
 }
+// Match the engine's actual sync instance so unrelated task waits cannot close CPU simulation.
 void hooked_frame_sync(void* sync, uint8_t one_frame_lag)
 {
     OuterGuard lifetime;
@@ -463,6 +495,8 @@ void hooked_engine_pacing(void* object)
 }
 struct NativeShaderCode { const uint8_t* data; int32_t count, capacity; };
 static_assert(sizeof(NativeShaderCode) == 16 && offsetof(NativeShaderCode, count) == 8);
+// Transform only the fingerprinted contact-shadow DXBC inside the native resource-table wrapper.
+// Temporary replacement bytes survive the synchronous native factory call; its result owns the shader.
 void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode* code)
 {
     OuterGuard lifetime;
@@ -519,6 +553,7 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
 }
 thread_local uint64_t frame_task_source = 0;
 thread_local rsf_ac7_render_ticket* full_frame_ticket = nullptr;
+// Transfer the tick source into a native BeginFrame task, then consume it at task execution.
 void* hooked_frame_task_construct(void* task, void* completion, int32_t prerequisites)
 {
     OuterGuard lifetime;
@@ -548,6 +583,7 @@ void hooked_frame_task_execute(void* task, void* scratch, uint32_t thread)
     reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[50].original)(task, scratch, thread);
     frame_task_source = saved;
 }
+// Pair outer RHI markers with copied BeginFrame identity. Overlap deactivates admission.
 void hooked_rhi_frame_begin(void* list)
 {
     OuterGuard lifetime;
@@ -562,6 +598,8 @@ void hooked_rhi_frame_begin(void* list)
     }
     reinterpret_cast<void(*)(void*)>(sites[51].original)(list);
 }
+// Append the matching outer end before native EndFrame. Failed queue closure disables producers
+// and retains scope/module ownership rather than claiming a completed RHI interval.
 void hooked_rhi_frame_end(void* list)
 {
     OuterGuard lifetime;
@@ -574,6 +612,8 @@ void hooked_rhi_frame_end(void* list)
     }
     reinterpret_cast<void(*)(void*)>(sites[52].original)(list);
 }
+// Remove CPU identity before native address reuse, then queue generated-uniform retirement after
+// native task joins. Inactive execution still drains render-owner releases during shutdown.
 void hooked_renderer_retire(void* list, void* renderer)
 {
     OuterGuard lifetime;
@@ -600,6 +640,7 @@ void hooked_renderer_retire(void* list, void* renderer)
         if (self) retire_renderer_uniforms(*self, renderer, list);
     }
 }
+// Queue a primary-view submission interval for CPU/GPU joins; family identity alone is insufficient.
 void hooked_render_family(void* list, void* renderer)
 {
     OuterGuard lifetime;
@@ -630,6 +671,8 @@ void hooked_render_family(void* list, void* renderer)
     }
 }
 
+// Engine pooled targets are retained on the render owner, COM surfaces through RHI execution.
+// End execution releases COM refs and queues the engine refs/uniforms for render-owner retirement.
 struct PassLease {
     rsf_ac7_native_renderer* owner = nullptr;
     PassLease* next = nullptr;
@@ -642,6 +685,7 @@ struct PassLease {
 };
 using GetPointer = void*(*)(void*, uint32_t);
 using Ref = uint32_t(*)(void*);
+// Query the reviewed postprocess output slot and its pooled-target reference, still on CPU recording.
 uint64_t output_pool(uint64_t node, uint32_t index)
 {
     uint64_t table = 0, method = 0;
@@ -649,12 +693,14 @@ uint64_t output_pool(uint64_t node, uint32_t index)
     auto* output = reinterpret_cast<GetPointer>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(node)), index);
     uint64_t pool = 0; read(uint64_t(uintptr_t(output)), 0x50, pool); return pool;
 }
+// Native pool virtuals: +0x28 retains, +0x30 releases. Call only under engine-owner lifetime rules.
 void pool_ref(uint64_t pool, uint32_t offset)
 {
     uint64_t table = 0, method = 0;
     if (read(pool, 0, table) && read(table, offset, method) && method)
         reinterpret_cast<Ref>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(pool)));
 }
+// Resolve targetable (+8) or readable (+16) RHI texture to its borrowed D3D11 resource.
 void* pool_texture(uint64_t pool, bool target)
 {
     uint64_t texture = 0, table = 0, method = 0;
@@ -663,6 +709,7 @@ void* pool_texture(uint64_t pool, bool target)
     using GetNative = void*(*)(void*);
     return reinterpret_cast<GetNative>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(texture)));
 }
+// RHI execution refreshes output allocation, which may not exist when begin was recorded.
 void resolve_pass(void* object, rsf_ac7_render_scope* scope)
 {
     auto& lease = *static_cast<PassLease*>(object);
@@ -673,6 +720,7 @@ void resolve_pass(void* object, rsf_ac7_render_scope* scope)
     scope->exposure = pool_texture(lease.exposure_pool, false);
     scope->ui_input = lease.ui; scope->scene_surface = lease.scene_surface;
 }
+// RHI-safe COM release; defer engine pool/uniform destruction to its observed render thread.
 void release_pass(void* object)
 {
     auto* lease = static_cast<PassLease*>(object);
@@ -683,6 +731,8 @@ void release_pass(void* object)
     auto* head = retired.load();
     do { lease->next = head; } while (!retired.compare_exchange_weak(head, lease));
 }
+// Detach the entire atomic retire list only on the native render owner. Inactive observers keep
+// calling this during quiescence, so an asynchronous end marker can eventually release its lease.
 void drain_retired(rsf_ac7_native_renderer& self)
 {
     if (self.render_thread.load() != GetCurrentThreadId()) return;
@@ -701,6 +751,7 @@ void drain_retired(rsf_ac7_native_renderer& self)
 void log(rsf_ac7_native_renderer& self, const char* message)
 { if (self.options.log) self.options.log(self.options.user, message); }
 
+// Reviewed UE4.18 graph reference/output layouts; raw descriptor bytes preserve the native ABI.
 struct NativeRef { uint64_t node = 0; uint32_t index = 0, padding = 0; };
 struct NativeOutput { alignas(8) unsigned char descriptor[0x50]{}; uint64_t pool = 0; uint32_t dependencies = 0, padding = 0; };
 static_assert(sizeof(NativeRef) == 0x10 && sizeof(NativeOutput) == 0x60);
@@ -751,6 +802,7 @@ template<class Fn> Fn engine(uint32_t rva)
 #endif
     return reinterpret_cast<Fn>(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + rva);
 }
+// Retain generated uniform data until the owning renderer's queued commands have executed.
 bool retain_generated_uniform(rsf_ac7_native_renderer& self, uint64_t view, uint64_t uniform)
 {
     uint64_t family = 0;
@@ -763,6 +815,8 @@ bool retain_generated_uniform(rsf_ac7_native_renderer& self, uint64_t view, uint
     *slot = {family - 0x10, view, uniform}; ++self.pending_uniforms;
     return true;
 }
+// Transfer this renderer's retained uniforms into one end-marker lease. Failed admission/closure
+// deactivates new work and leaves the references owned until safe cleanup becomes possible.
 void retire_renderer_uniforms(rsf_ac7_native_renderer& self, void* renderer, void* list) try
 {
     const uint64_t key = uint64_t(uintptr_t(renderer));
@@ -802,6 +856,8 @@ catch (...) {
 using OneArg = void(*)(void*);
 using GetScene = void*(*)();
 struct GraphPlan;
+// Private native graph node, registered for engine-owned Release. The virtual-table order and
+// descriptor offsets mirror the researched upscale node; plan is borrowed only during processing.
 struct SRNode {
     void** table = nullptr;
     unsigned char flags[8]{};
@@ -818,6 +874,8 @@ struct SRNode {
     uint64_t preceding_exposure_pool = 0;
 };
 static_assert(offsetof(SRNode, output) == 0x30 && offsetof(SRNode, quality) == 0xb8);
+// Render-thread transaction for inserting SR and temporarily resizing reviewed downstream passes.
+// Saved engine bytes/uniform refs restore before the CPU call returns. RHI packets never borrow plan.
 struct GraphPlan {
     rsf_ac7_native_renderer* owner = nullptr;
     rsf_ac7_render_scope packet{};
@@ -836,6 +894,8 @@ struct GraphPlan {
 };
 thread_local GraphPlan* graph_plan = nullptr;
 thread_local uint64_t postprocess_view = 0, postprocess_velocity = 0;
+// Minimal native graph virtuals: two indexed scene inputs, one output and bounded auxiliary
+// dependencies. Unused name/fence/setter slots return the native ABI's empty representation.
 void node_release(SRNode* node)
 { pool_ref(node->output.pool, 0x30); delete node; }
 void* node_destruct(SRNode* node, uint32_t flags)
@@ -853,6 +913,7 @@ void* node_none(SRNode*, uint32_t) { return nullptr; }
 void* node_string(SRNode*, uint32_t) { static uint64_t empty[2]{}; return empty; }
 void node_set_string(SRNode*, uint32_t, const void*) {}
 void* node_fence(SRNode*) { return nullptr; }
+// Preserve the source descriptor except output extent, FP16 format, samples and target flags.
 void* node_descriptor(SRNode* node, void* result, uint32_t)
 {
     const auto* source = node_output(node->inputs[0].node, node->inputs[0].index);
@@ -881,6 +942,7 @@ uint64_t retain_view_uniform(unsigned char* view, size_t offset)
     if (uniform) InterlockedIncrement(reinterpret_cast<volatile LONG*>(uintptr_t(uniform) + 8));
     return uniform;
 }
+// Rebuild complete native shader parameters after sizing changes and publish an owned uniform.
 void build_postprocess_uniform(GraphPlan& plan, unsigned char* view)
 {
     alignas(16) unsigned char bounds[0x40]{};
@@ -903,6 +965,7 @@ void build_postprocess_uniform(GraphPlan& plan, unsigned char* view)
     plan.saved_uniform = retain_view_uniform(view, 0x10);
     engine<MoveUniform>(0xde5cf0)(view + 0x10, &uniform);
 }
+// Join native CPU recording tasks before mutating the shared view/scene and its derived matrices.
 void resize_consumers(GraphPlan& plan)
 {
     wait_for_view_recorders();
@@ -957,6 +1020,8 @@ void* sr_table[] = {
     reinterpret_cast<void*>(&node_release), reinterpret_cast<void*>(&node_fence)
 };
 bool primary_view(uint64_t, const rsf_game_render_config&);
+// Bounded dependency search for the unique named SceneColorHalfRes consumer of this scene.
+// Ambiguity, cycles exceeding bounds or incomplete accessors refuse rewiring.
 NativeRef* bloom_scene_input(uint64_t bloom, const NativeRef& scene)
 {
     std::vector<uint64_t> pending{bloom}, seen;
@@ -987,6 +1052,8 @@ NativeRef* bloom_scene_input(uint64_t bloom, const NativeRef& scene)
     }
     return pending.empty() ? result : nullptr;
 }
+// Validate primary camera, jitter, resources and every downstream pass before graph insertion.
+// Once registered, the engine owns the new node; only copied packet data outlives this CPU plan.
 bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPlan& plan) try
 {
     rsf_game_render_config config{}; config.struct_size = sizeof(config);
@@ -1064,6 +1131,8 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     }
     plan.node = node; p.pass_key = uint64_t(uintptr_t(node)); p.native_frame = frame;
     read(p.view_key, 8, p.history_key);
+    // UE ordinary written NDC motion converts to UV by half extents and a Y flip. The packet's
+    // camera-included flag remains zero because unwritten pixels need depth-derived camera motion.
     p.motion_to_uv[0] = 0.5f; p.motion_to_uv[1] = -0.5f; p.motion_camera_included = 0;
     p.camera_valid = 1; p.camera.struct_size = sizeof(p.camera); p.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     p.camera.render_width = view.view_width; p.camera.render_height = view.view_height;
@@ -1088,6 +1157,8 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     return true;
 }
 catch (...) { return false; }
+// Execute one admitted graph transaction under TLS, then join workers and restore every borrowed
+// view/scene field. The engine retires its registered node independently of this stack-local plan.
 void hooked_context(void* context, void* root)
 {
     const EntryGuard guard; auto* self = installed.load(); GraphPlan plan;
@@ -1107,6 +1178,8 @@ void hooked_context(void* context, void* root)
     }
     // GraphPlan is CPU-only. Queued packets contain copies and pool leases, never this pointer.
 }
+// Temporary output-size view/depth selection for AC7's UnmodifiedTranslucency UI producer.
+// Both uniform selectors and all saved view/scene fields must be restored before leaving its scope.
 struct UIProducerState {
     GraphPlan plan;
     uint64_t depth = 0, scaled_depth = 0;
@@ -1116,6 +1189,8 @@ struct UIProducerState {
 };
 thread_local UIProducerState ui_producer;
 thread_local void* translucency_renderer = nullptr;
+// Join native workers before restoring both uniform selectors, view matrices/parameters and
+// scene depth/extent. Release only the temporary pool refs retained by prepare_ui_producer.
 void restore_ui_producer()
 {
     auto& state = ui_producer;
@@ -1137,6 +1212,7 @@ void restore_ui_producer()
     pool_ref(state.depth, 0x30); pool_ref(state.scaled_depth, 0x30);
     state.depth = state.scaled_depth = 0; state.active = false; plan.resized = false;
 }
+// Populate enlarged native depth first, then borrow it while rebuilding the output-size UI view.
 bool prepare_ui_producer(rsf_ac7_native_renderer& self, void* scene, void* list, void* view)
 {
     rsf_game_render_config config{}; config.struct_size = sizeof(config);
@@ -1188,6 +1264,8 @@ bool prepare_ui_producer(rsf_ac7_native_renderer& self, void* scene, void* list,
     if (reports++ < 6) log(self, "native UnmodifiedTranslucency: output-size allocation, depth and unjittered view before rasterization");
     return true;
 }
+// Begin the native UI producer under an output-size view/depth transaction; an unsuccessful native
+// begin restores immediately, while successful work restores at resolve or enclosing pass exit.
 uint64_t hooked_unmodified_begin(void* scene, void* list, void* view, uint8_t clear, uint8_t glow, uint8_t extra)
 {
     EntryGuard entry; auto* self = installed.load();
@@ -1215,9 +1293,6 @@ uint64_t scene_colour_pool(void* scene)
     const size_t offset = path == 0 ? 0x30 : path == 1 ? (alpha || format == 10 ? 0x40 : 0x38) : 0;
     return offset && read(targets, offset, pool) ? pool : 0;
 }
-// Passes 0 (standard), 1 (after DOF, the separate layer at scene+0x1b0, allocator RVA 0x109f4d0)
-// and 2 (all) of the single primary view. Pass 4 is AC7's interface layer and stays outside.
-// Scene colour is leased through the pass so the runtime can snapshot it at begin and compare at end.
 // Identity of the single primary view of a renderer that SR reconstructs, or false.
 bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role, rsf_ac7_render_scope& scope)
 {
@@ -1233,6 +1308,8 @@ bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role,
     scope.view_key = storage; scope.native_frame = frame;
     return true;
 }
+// Bracket passes 0 (standard), 1 (after-DOF layer +0x1b0, allocator 0x109f4d0), and 2 (all).
+// Pass 4 is AC7's UI layer and stays outside. Lease scene colour for host before/after comparison.
 rsf_ac7_render_ticket* open_translucency(rsf_ac7_native_renderer& self, void* renderer, void* list,
     uint32_t pass, void* scene, PassLease*& out)
 {
@@ -1267,6 +1344,8 @@ uint8_t hooked_base_pass(void* renderer, void* list, uint32_t access)
     if (ticket && !rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 base pass scope could not close");
     return result;
 }
+// Populate any missing native scaled-view selector, bracket eligible scene translucency, then
+// publish an on-demand layer before end. Restore a UI transaction even when native Resolve is skipped.
 void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
 {
     OuterGuard lifetime;
@@ -1314,6 +1393,7 @@ void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
     if (ui_producer.active) restore_ui_producer();
     translucency_renderer = previous;
 }
+// Diagnostic observation of null View uniform producers; preserve native enqueue arguments.
 void hooked_pixel_view_uniform(void* shader, void* list, void* rhi_shader, void* uniform)
 {
     EntryGuard entry;
@@ -1338,6 +1418,7 @@ void hooked_pixel_view_uniform(void* shader, void* list, void* rhi_shader, void*
     }
     reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[37].original)(shader, list, rhi_shader, uniform);
 }
+// Remember recent binding identities without retaining/dereferencing them on a future callback.
 void hooked_rhi_pixel_uniform(void* context, void* shader, uint32_t slot, void* uniform)
 {
     EntryGuard entry; auto* self = installed.load();
@@ -1352,6 +1433,7 @@ void hooked_rhi_pixel_uniform(void* context, void* shader, uint32_t slot, void* 
     }
     reinterpret_cast<void(*)(void*, void*, uint32_t, void*)>(sites[38].original)(context, shader, slot, uniform);
 }
+// Bounded evidence for required dirty PS uniform slots. Observations never repair native state.
 void hooked_rhi_pixel_tables(void* context, void* shader)
 {
     EntryGuard entry; auto* self = installed.load();
@@ -1396,6 +1478,8 @@ void hooked_rhi_pixel_tables(void* context, void* shader)
     // Evidence only: preserve the native failure rather than hiding an incomplete material draw.
     reinterpret_cast<void(*)(void*, void*)>(sites[39].original)(context, shader);
 }
+// Decode the reviewed enqueue variants only to diagnose PS slot-one null ownership. Variant 43
+// exposes its uniform in the appended command, so observe it after the original enqueue.
 template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, void* parameter, void* input)
 {
     EntryGuard entry; auto* self = installed.load();
@@ -1433,6 +1517,8 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
     }
     if (Index != 43) original(list, shader, parameter, input);
 }
+// Keep CPU postprocess view/velocity TLS and lease the concrete primary family output. Later Slate
+// sampling validates this exact source/viewport/surface association instead of selecting by size.
 void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
 {
     const EntryGuard guard; auto* self = installed.load();
@@ -1484,6 +1570,7 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
     }
     postprocess_view = old_view; postprocess_velocity = old_velocity;
 }
+// Exclude captures/stereo auxiliaries using native capture flags and the unconstrained output rect.
 bool primary_view(uint64_t view, const rsf_game_render_config& config)
 {
     int32_t unconstrained[4]{}; unsigned char capture[3]{};
@@ -1491,6 +1578,7 @@ bool primary_view(uint64_t view, const rsf_game_render_config& config)
         !capture[0] && !capture[1] && !capture[2] && unconstrained[0] == 0 && unconstrained[1] == 0 &&
         unconstrained[2] == int32_t(config.output_width) && unconstrained[3] == int32_t(config.output_height);
 }
+// Commit exact backend dimensions to owned primary view rectangles before engine allocation.
 void prepare_owned_views(void* renderer, const rsf_game_render_config& config)
 {
     uint64_t storage = 0; int32_t count = 0; bool changed = false;
@@ -1530,6 +1618,7 @@ void* hooked_construct(void* renderer, void* family, void* hit_proxy)
     }
     return result;
 }
+// Current visibility-call temporal states; byte-sized native sample fields limit phases to 255.
 struct TemporalSampleOwner { uint64_t state = 0; uint32_t frame = 0, phases = 8; };
 thread_local std::array<TemporalSampleOwner, 16> temporal_sample_owners;
 uint32_t hooked_temporal_sample_index(void* state)
@@ -1547,6 +1636,8 @@ uint32_t hooked_temporal_sample_index(void* state)
     }
     return reinterpret_cast<uint32_t(*)(void*)>(sites[46].original)(state);
 }
+// Borrow temporal AA mode only for native visibility/jitter preparation. Restore mode afterward
+// so later native pass selection is unchanged; refuse mismatched/padded allocations during resize.
 void hooked_visibility(void* renderer, void* list, uintptr_t third, void* fourth)
 {
     const EntryGuard guard; auto* self = installed.load();
@@ -1607,6 +1698,7 @@ void hooked_visibility(void* renderer, void* list, uintptr_t third, void* fourth
         std::memcpy(reinterpret_cast<void*>(uintptr_t(views[i] + 0x13c0)), &modes[i], 4);
     temporal_sample_owners = previous_samples;
 }
+// Override allocation extent only for explicitly reviewed consumers in the current CPU graph plan.
 void* descriptor(uint32_t index, void* node, void* out, uint32_t output)
 {
     const EntryGuard guard;
@@ -1619,6 +1711,8 @@ void* descriptor(uint32_t index, void* node, void* out, uint32_t output)
 }
 template<uint32_t I> void* hooked_descriptor(void* node, void* out, uint32_t output)
 { return descriptor(I, node, out, output); }
+// Bracket reviewed native postprocess work in queued scopes and publish its output before close.
+// For the rewired AA node, forward its input pool instead of applying a second reconstruction.
 void process(uint32_t index, void* node, void* context)
 {
     const EntryGuard guard;
@@ -1703,6 +1797,7 @@ thread_local uint64_t initializing_game_instance = 0;
 thread_local WidgetQueue widget_queue;
 using WidgetPrepare = void(*)(void*);
 using WidgetDraw = void(*)(void*, void*, void*, void*, float, uint64_t, float, uint8_t);
+// Integer raster density covers output using a 1920x1080 logical canvas; cap to safe texture sizes.
 uint32_t widget_density(rsf_ac7_native_renderer* self)
 {
     rsf_game_render_config config{}; config.struct_size = sizeof(config);
@@ -1723,6 +1818,8 @@ bool resize_widget_target(uint64_t target, int32_t width, int32_t height)
     engine<void(*)(void*, uint8_t)>(0x1ab7dc0)(object, 0);
     return true;
 }
+// Verify the converter's world/game-instance inheritance before resolving its borrowed shared
+// HUD or stereo canvas. An unrelated borrowed target never enters the resize/repaint route.
 bool shared_widget_target(uint64_t converter, uint64_t& target)
 {
     const auto get_world = method(converter, 0x138);
@@ -1748,6 +1845,7 @@ void hooked_game_instance_init(void* instance)
     reinterpret_cast<void(*)(void*)>(sites[22].original)(instance);
     initializing_game_instance = previous;
 }
+// Promote only the identified game-instance HUD/stereo canvas during its native initialization.
 void hooked_target_init(void* target, int32_t width, int32_t height, uint8_t format, uint8_t linear)
 {
     EntryGuard entry;
@@ -1761,6 +1859,8 @@ void hooked_target_init(void* target, int32_t width, int32_t height, uint8_t for
     using Init = void(*)(void*, int32_t, int32_t, uint8_t, uint8_t);
     reinterpret_cast<Init>(sites[23].original)(target, width, height, format, linear);
 }
+// Scope converter ownership to this queue call. Resized shared canvases require every contributor
+// in this input frame to repaint before native RefreshFPS policy resumes.
 void hooked_widget_queue(void* converter, float delta)
 {
     EntryGuard entry;
@@ -1790,6 +1890,8 @@ void hooked_widget_queue(void* converter, float delta)
     reinterpret_cast<Queue>(sites[16].original)(converter, delta);
     widget_queue = saved;
 }
+// Borrow physical DrawSize for target allocation while preserving the game's logical UI layout.
+// Resize glow siblings too, because the native producer creates them only on initial allocation.
 void hooked_widget_targets(void* converter)
 {
     EntryGuard entry;
@@ -1834,6 +1936,8 @@ void hooked_widget_targets(void* converter)
         reinterpret_cast<Update>(base + 0x1ab7dc0)(object, 0);
     }
 }
+// Scale physical raster size and draw scale together only when the owned target matches density;
+// logical widget coordinates remain unchanged outside the native draw.
 void hooked_widget_draw(void* renderer, void* target, void* hit_grid, void* window,
     float scale, uint64_t packed_size, float delta, uint8_t defer)
 {
@@ -1853,6 +1957,7 @@ void hooked_widget_draw(void* renderer, void* target, void* hit_grid, void* wind
     reinterpret_cast<WidgetDraw>(sites[18].original)(renderer, target, hit_grid, window,
         scale, packed_size, delta, defer);
 }
+// Slate identity follows CPU producer -> queued task -> render execution -> sampled surface.
 thread_local WindowSource slate_producer_source{}, slate_execution_source{}, slate_binding_source{};
 void hooked_slate_private(void* renderer, void* buffer)
 {
@@ -1872,6 +1977,8 @@ void hooked_slate_private(void* renderer, void* buffer)
     reinterpret_cast<void(*)(void*, void*)>(sites[28].original)(renderer, buffer);
     slate_producer_source = saved;
 }
+// Bind the allocated task until its execution consumes the entry. Duplicate address/full-table
+// refusal preserves occupied records without associating future work with a stale source.
 void* hooked_slate_allocate(void* result, uint64_t prerequisite, uint32_t priority)
 {
     EntryGuard producer;
@@ -1918,6 +2025,7 @@ void hooked_slate_task(void* task)
     reinterpret_cast<void(*)(void*)>(sites[30].original)(task);
     slate_execution_source = saved;
 }
+// Retain concrete swap-chain identity through queued Slate-window execution, not a texture alias.
 struct WindowLease { IDXGISwapChain* swapchain = nullptr; };
 void resolve_window(void* object, rsf_ac7_render_scope* scope)
 { scope->swapchain = static_cast<WindowLease*>(object)->swapchain; }
@@ -1927,6 +2035,8 @@ void release_window(void* object)
     if (lease->swapchain) lease->swapchain->Release();
     delete lease;
 }
+// Accept the exact task/window/elements association, including the synchronous producer path,
+// then retain its concrete swap chain through queued native window work.
 void hooked_slate_window(void* renderer, void* list, void* info, void* elements, uint8_t vsync, uint8_t clear)
 {
     OuterGuard lifetime;
@@ -1979,6 +2089,7 @@ void hooked_slate_window(void* renderer, void* list, void* info, void* elements,
         self->active.store(false); log(*self, "AC7 window source deactivated: native RHI scope could not close");
     }
 }
+// Exact final-scene surface sampled by the admitted window, retained through binding execution.
 struct TextureBindingLease { ID3D11Resource* texture = nullptr; };
 void resolve_texture_binding(void* object, rsf_ac7_render_scope* scope)
 { scope->sampled_texture = static_cast<TextureBindingLease*>(object)->texture; }
@@ -1988,6 +2099,8 @@ void release_texture_binding(void* object)
     if (lease->texture) lease->texture->Release();
     delete lease;
 }
+// Emit a validation scope only for this source's unambiguous final scene surface. Ordinary fonts
+// and icons forward directly and acquire no diagnostic binding lease.
 void hooked_slate_texture(void* shader, void* list, void* rhi_texture, void* sampler_ref)
 {
     EntryGuard producer;
@@ -2040,6 +2153,8 @@ constexpr unsigned char native_cloud_depth_format[]{0x16,0x00,0x00,0x00};
 constexpr unsigned char precise_cloud_depth_format[]{0x05,0x00,0x00,0x00};
 constexpr unsigned char native_scene_format[]{0x48,0x8b,0x05,0x29,0x33,0xbc,0x02,0x48,0x8b,0xcb,0x8b,0x40,0x04};
 constexpr unsigned char precise_scene_format[]{0xb8,0x04,0x00,0x00,0x00,0x90,0x90,0x48,0x8b,0xcb,0x90,0x90,0x90};
+// Compare exact current bytes before either patching or restoring code, then flush the instruction
+// cache. A foreign patch/build mismatch refuses and leaves controller ownership with the caller.
 bool write_render_code(unsigned char* site, const unsigned char* expected, const unsigned char* replacement, size_t size)
 {
     unsigned char actual[16]{};
@@ -2051,6 +2166,8 @@ bool write_render_code(unsigned char* site, const unsigned char* expected, const
     DWORD ignored = 0; VirtualProtect(site, size, protection, &ignored);
     return true;
 }
+// Replace only the guarded native depth dispatch after actual b11/t1/u0 format/extent validation.
+// Binding changes revoke full-grid readiness; shader/device ownership survives until safe stop.
 void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)
 {
     OuterGuard outer; EntryGuard entry;
@@ -2151,6 +2268,7 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
     // Restore the exact pass shader before TrueSky's own Unapply, keeping its cached state valid.
     if (full) context->CSSetShader(original.Get(),nullptr,0);
 }
+// Allocate nearby indirection storage within signed rel32 reach of a guarded native call site.
 void* allocate_depth_relay(unsigned char* call)
 {
     SYSTEM_INFO info{}; GetSystemInfo(&info);
@@ -2168,6 +2286,7 @@ void* allocate_depth_relay(unsigned char* call)
     }
     return nullptr;
 }
+// Pair executable bytes with the shipped TrueSky effect size/CRC before replacing its depth route.
 bool depth_effect_fingerprint()
 {
     wchar_t file[32768]{};
@@ -2190,6 +2309,8 @@ bool depth_effect_fingerprint()
     const bool read_ok = std::feof(input) && !std::ferror(input); std::fclose(input);
     return read_ok && size == 45263 && ~crc == 0x78881ef3;
 }
+// Install a reversible native-call relay and matching depth-format/branch patches. Full cloud
+// resolution stays disabled until the actual GPU pass verifies shader compilation and bindings.
 bool install_depth_dispatch(rsf_ac7_native_renderer& self, unsigned char* module)
 {
     if (self.cloud_depth_call) return self.cloud_depth_format_site != nullptr;
@@ -2278,6 +2399,8 @@ void install_cloud_motion(rsf_ac7_native_renderer& self, unsigned char* module)
     self.cloud_motion_call = call; self.cloud_motion_relay = relay;
     log(self, "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b");
 }
+// Select scene allocation precision at the original policy producer so the native cache rebuilds
+// matching engine-owned resources, rather than widening already-quantized rendered values.
 bool apply_scene_precision_patch(rsf_ac7_native_renderer& self)
 {
     if (self.scene_precision_site) return true;
@@ -2295,6 +2418,8 @@ bool apply_scene_precision_patch(rsf_ac7_native_renderer& self)
     log(self, "native scene precision: allocation format policy 4 at RVA 0x1095620; engine owns FP16 resource rebuild");
     return true;
 }
+// Called before native sky rendering, serialized with GPU shader preparation. Activate the full
+// grid only after both code/effect fingerprinting and actual-device binding checks establish readiness.
 void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
 {
     std::lock_guard<std::mutex> lock(self.cloud_resolution_guard);

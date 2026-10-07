@@ -1,79 +1,74 @@
 # Graphics helpers
 
-D3D11 utilities shared by the carriers and runtime. Game-specific view interpretation lives in `games/ac7`; vendor evaluation lives in `runtime/backends`.
+Shared D3D11 helpers for the carriers and runtime. Game-specific resource identity and conventions belong in `games/<id>`; vendor evaluation belongs in `runtime/backends`; cross-API presentation belongs in `runtime/presentation`.
 
-| Module | Purpose |
+## Source map
+
+Public C headers live in `include/rescaleframe/`; implementations live in `src/`. Each module name below names both its header and implementation unless noted.
+
+| Module | Responsibility |
 | --- | --- |
-| `d3d11_observer` | Track selected allocations and invoke a Present callback |
-| `resource_roles`, `frame_tap` | Classify resources, find candidate colour/depth/motion bindings, and describe the draws into a named target |
-| `resource_ref` | Retain and release COM resources across the C ABI |
-| `constant_buffer_read` | Stage and read a buffer with type/device checks |
-| `motion_decode`, `motion_resolve` | Decode biased sparse velocity and resolve dense camera/object motion with validity/depth conventions |
-| `scene_promote` | Put a reconstructed scene back into the game's frame by promoting its composite, the interface layers the classifier names, and the chain between the tonemap and the interface composite, all to output resolution |
-| `depth_replay` | Replay the separate translucency layer's draws depth-only into an output-resolution copy of scene depth, for the backend's camera-motion resolve |
-| `d3d11_state` | Save everything the device context has bound, and put it back |
-| `texture_dump` | Read supported texture formats into diagnostic TGA/JSON files |
-| `present_blit` | Show reconstructed scene colour over the back buffer. Superseded by `fullscreen_pass` and kept only until the debug view moves across |
-| `fullscreen_pass` | Fullscreen copy, tonemap, premultiplied composite and coverage modes; composite formula `ui.rgb + (1 - ui.a) * dst` does not by itself validate a game UI guide |
-| `ui_layer` | A double-buffered `R8G8B8A8_UNORM` surface at back-buffer extent, cleared to zero and never bound with a depth view, for interface draws to be diverted into |
-| `ui_identify` | Membership sets of pipeline objects held by address, with eviction before an address is reused, and Castagnoli hashes for naming a shader in a settings file |
-| `overlay_renderer`, `overlay_input` | Render egui meshes and collect window input |
+| `d3d11_observer` | Observe resource creation, source Present events, and queued diagnostic dumps |
+| `frame_tap` | Shadow one immediate context, report selected draws, substitute resources, and watch constant uploads |
+| `resource_roles` | Classify descriptor-based candidates using AC7 capture-derived heuristics |
+| `resource_ref` | COM retain/release and caller-owned back-buffer/RTV references for C callers |
+| `constant_buffer_read` | Synchronous staging readback with resource type/device checks |
+| `constant_twin` | Fixed-capacity replacement-buffer cache keyed by borrowed original identity |
+| `motion_decode` | Remove plugin-defined stored bias/scale and preserve unwritten pixels as a sentinel |
+| `motion_resolve` | Fill sentinel pixels with camera reprojection and emit dense pixel motion/device depth |
+| `colour_transport` | Encode bounded HDR input and decode it before engine grading |
+| `colour_fidelity` | Apply same-frame spatial colour residual correction with depth-edge suppression |
+| `scene_promote` | Build output-resolution substitutions for caller-identified scene/composite/UI targets |
+| `depth_replay` | Immediately replay selected live geometry into a scene-depth copy |
+| `d3d11_state` | Paired full-context or narrow depth-binding snapshots with owned getter references |
+| `texture_dump` | Blocking diagnostic TGA/JSON readback; `texture_dump_raw.cpp` writes exact subresource-zero bytes |
+| `present_blit` | Legacy reconstructed-scene debug view before Present |
+| `fullscreen_pass` | Fullscreen copy, diagnostic tonemap, alpha view, and premultiplied composites; the blend formula alone does not validate a game FG UI guide |
+| `ui_layer` | Two-slot transparent RGBA8 layer ring at output extent |
+| `ui_identify` | Bounded pointer-membership sets and CRC32C shader names |
+| `overlay_renderer` | Upload overlay atlas/meshes and draw into the caller's current target |
+| `overlay_input` | Capture window input and provide optional cursor/raw-mouse detours |
 
-The frame tap is retained compatibility/diagnostic machinery using format and binding heuristics.
-The default AC7 native plugin uses engine-owned views, graph roles and queued identity instead. A retained texture can still be overwritten by the game; choose the consumption or copy point explicitly.
+The frame tap is retained compatibility/diagnostic machinery using format and binding heuristics. The default AC7 native plugin uses engine-owned views, graph roles and queued identity. Current implementation and acceptance limits are recorded in [current status](../../docs/current-status.md).
 
-`rsf_frame_tap_watch_target` asks where the reconstruction goes back in. It names a render target and describes the next few draws into it: extent, the viewport actually in effect, the ordinal within the pass, indexed or not, and every pixel shader input with its slot. Pointed at the back buffer, the single texture that draw reads is the composite; pointed at that composite, the draw that reads scene colour is the tonemap. Neither fact is available from the captures here, because the exported action list records render-target bindings and not shader resource bindings. Each watch carries a draw budget: watching the back buffer holds a reference on it, which makes `ResizeBuffers` fail, so a permanent watch trades an answer for a later mode change that breaks.
+## Ownership and call order
+
+Initialize each size-checked C structure's `struct_size` and any declared `abi_version`. A returned result reports CPU validation/setup/submission, not GPU completion or a verified picture. Logging callbacks are synchronous and borrow their message text.
+
+Use the owning render thread for immediate-context work and serialize setup/destruction with callbacks. Texture/view accessors are borrowed unless the header explicitly transfers a COM reference. Retaining a texture preserves its allocation, not its contents; consume or copy it at a defined point in its source frame. Release back-buffer references/views before resizing.
+
+The observer's creation callbacks hold its mutex and only record facts. Present callbacks run outside it. The frame tap suppresses nested injected work so it cannot enter the game-state shadows. Plan/candidate/divert storage requires render-thread coordination: publication flags do not retire a reader already inside a hook. Keep callbacks and named resources alive until those readers finish.
+
+Wrap injected backend work in a paired `d3d11_state` save/restore when it can change arbitrary bindings. The small fullscreen/debug helpers have narrower snapshots; their headers name the inherited effects and unsupported binding state. Snapshots preserve bindings, not resource contents or query execution.
 
 ## Historical compatibility mechanisms
 
-The extraction/promotion sections below describe the earlier D3D11 route and its limitations.
-The accepted native AC7 integration sizes engine UI targets and routes bloom/exposure through its
-SR graph; it does not rely on these heuristics as its default renderer. A widget target is not
-inherently a premultiplied vendor FG UI guide. See [current status](../../docs/current-status.md)
-and [the native refactor](../../docs/research/ac7-native-renderer-refactor-20261001.md).
+The observation, extraction and promotion mechanisms below describe the earlier D3D11 route and its limitations. The accepted native AC7 integration sizes engine UI targets and routes bloom/exposure through its SR graph; these heuristics are not its default renderer. A widget target is not inherently a premultiplied vendor FG UI guide. See [the native refactor](../../docs/research/ac7-native-renderer-refactor-20261001.md) and the current status above.
 
-## Interface extraction, and why it is not the route it looked like
+### Resource observation and substitution
 
-The frame tap can divert a classified draw: retarget it to the UI layer through the original vtable
-entries, scale its viewport by the fraction of its own target it covered, patch its blend's alpha
-operations, forward it, and put everything back. `rsf_frame_tap_set_divert` arms it and a game-side
-callback decides each draw, because which draws are the interface is a game fact and lives in
-`games/ac7`.
+Frame-tap reconstruction inputs use format, size, and binding heuristics. They do not establish a verified AC7 shader/view/frame identity. Motion, depth, and selected floating scene colour qualify the input set; exposure is optional. A qualifying callback sequence counts passes, not presented frames.
 
-It works, and against AC7 it produces the wrong picture. Measured on 7 September 2026: the interface
-does reach the screen at native resolution, which is what the whole route existed for, and the frame
-comes out flat and discoloured. The diverted quads read the scene and its blur and glow chain as
-inputs, so they are composites rather than overlays, and on the title screen the widget texture is
-the entire visible image. Diverting them takes content out of the frame that AC7 is still going to
-process, and compositing it back at present skips that processing.
+`rsf_frame_tap_watch_target` reports bounded draws into a caller-named target, including effective viewport and pixel inputs. A watch borrows texture identity; an owner retaining the back buffer for the watch must clear it and release that reference before `ResizeBuffers`.
 
-So the mechanism stays and the insertion point changes: promote AC7's own interface layers and let
-the game composite them, which keeps the colour and the glow, and take the frame generation layer
-from a promoted layer later, only after its alpha/effects conventions have been validated for that use. See
-[the extraction note](../../docs/research/ac7-ui-extraction.md) for the measurements and for the
-argument this reverses.
+A promotion plan opens scene reads at the first single-target composite/recombine binding, after scene rendering. Earlier reads retain native scene colour to avoid feeding unfinished lighting with a reconstruction. The tap redirects selected shader/target/clear/copy bindings and scales requested viewports/scissors while promoted targets are active. The owner supplies target identities, depth policy, and the gate callback after `rsf_promote_fill_plan`, which resets the other plan fields.
 
-## Scene promotion
+On the recombine route, the gate seeds output-size scene colour; the game's recombine composites translucency; later native TAA writes go to scratch; a second gate copies the recombined result to the tonemap input. Clear/quiesce the old plan before rebuilding replacements.
 
-The debug view draws the reconstruction over the finished frame, so the image is ungraded and everything the game composited after it, the interface included, is gone. `scene_promote` builds the substitution instead: it promotes the composite, the interface layers and the chain to output resolution, points scene colour at the reconstruction, and hands the tap a plan. `rsf_frame_tap_set_plan` swaps those bindings before forwarding them, in the output merger, in the pixel stage, and in `ClearRenderTargetView`, and scales viewports and scissor rectangles while a promoted target is bound. The game then grades the reconstruction with its own shaders, rasterizes its widget quads at output resolution into its own layers, composites them itself, and its final upscale into the back buffer becomes a copy. Nothing is removed from the frame.
+This compatibility promotion preserves the game's grading/compositing passes. Bloom and unpatched texel-size constants can still describe render-resolution inputs on this route, and dropping mismatched depth removes scene occlusion. Correct output requires rendered evidence with the game's shaders/constants. Route measurements and remaining limitations are in [AC7 UI composition](../../docs/research/ac7-ui-composition.md) and [UI extraction](../../docs/research/ac7-ui-extraction.md).
 
-Four parts of that plan are decisions rather than mechanics:
+Direct draw diversion remains available, but the AC7 measurement on 7 September 2026 showed those quads also composite scene/blur/glow content. Diverting and recompositing at Present skipped engine processing and produced flat/discoloured output. The compatibility correction promotes the engine's interface layers and keeps its own composite. Reusing a promoted layer as an FG guide still requires validation of its alpha/effects conventions; the extraction note records that correction.
 
-- Scene colour is gated on the composite being bound. The scene passes read scene colour while they are still writing it, so an ungated substitution hands a lighting pass a reconstruction of a frame it has not finished, which is a feedback loop rather than an upscale.
-- The gate is also where the reconstruction runs. It is the last point before anything reads scene colour and the first where the scene is whole; evaluating at Present would leave the scene a frame behind the grade and interface drawn over it. The price is a mid-frame evaluate, where the game will not rebind what it believes is still bound, which is what `d3d11_state` is for.
-- The interface layers are named by the draw classifier in `games/ac7`, as the targets it sees widget quads drawn into, and by nothing else. Every rule of the form "the surface with this format" or "the one read by a draw of this shape" picked something else as well at least once; the classifier's answer is a draw the game actually made. The loader keeps each layer for as long as quads keep landing in it and drops it after two seconds without, because the engine's pool retires a layer on a screen change and a plan naming a retired one looks healthy while the interface goes back to being magnified.
-- The chain, the eight-bit intermediate between the tonemap and the interface composite, is named by a composite draw's inputs and confirmed by watching the draw that writes it read the composite. Without it the promoted composite is downsampled back to render resolution on its way to the interface composite, which is what made the first promotion runs cleaner but not sharper.
+## Hook coexistence
 
-Not fixed by any of it: bloom is still computed from the render-resolution scene, so the glow composited over the reconstruction is low resolution, and the quads read that scene-sized blur chain alongside their widget texture, so the glow around the interface is low resolution too. Post-process shaders addressing texels rather than sampling normalized will address the wrong ones, because their constants still describe the buffer the engine believes it has. The quads bind the scene's depth, and the tap's default policy drops it at a promoted binding, so a panel is never occluded by scene geometry in front of it. All of it is visible only in a rendered result and none of it has been looked at with this plan.
+Present uses a MinHook detour on the first module-owned function reached through the existing entry jump chain. A separate trampoline built from original module-file bytes supplies the nested-call escape route. This avoids entry patches that Steam/RTSS reassert; see [Windows Present coexistence](../../docs/research/windows-present-hook-coexistence.md).
 
-## Present is hooked by detour, beside the other hooks
+The stock Windows D3D11 runtime rewrites its immediate-context submission vtable around flush/work calls. Hooks check a Draw sentinel and reapply the family, adopting the current runtime functions as originals. Work calls refresh after forwarding; the Present owner calls `rsf_frame_tap_refresh`. DXVK's table is static. `vtable_refreshes` counts recovery; see [the measurement](../../docs/research/d3d11-runtime-vtable-rewrite.md).
 
-Steam's overlay and RivaTuner Statistics Server both patch the entry of dxgi's Present and re-check it on their first present, one taking what it displaced as its original and the other dropping it. A vtable patch there recursed until the stack overflowed on the first Windows launch. The observer now follows the jump chain from the entry to the first function inside a module, the outermost hook's own function or dxgi's Present when nothing is patched, and detours that with MinHook; nobody re-asserts its own function's prologue. A trampoline over the file's bytes for the entry reaches the genuine body for a re-entered call. `overlay_input` uses the same library to detour the user32 cursor functions while the panel is open, which is how the panel takes a mouse in a game that warps and hides it. [The note](../../docs/research/windows-present-hook-coexistence.md) has the measurements.
+Install/rollback/teardown must account for producers already inside callbacks. Current gaps are recorded in [the review](../../docs/review.md).
 
-## The Windows runtime rewrites its vtable
+## Recorded validation
 
-The stock D3D11 runtime keeps the immediate context's vtable on the heap and rewrites the whole work-submission family of entries, draws, dispatches, copies and clears, whenever a flush-class call runs and again on the next piece of work, flipping between two implementations. Each rewrite discards patched hooks. DXVK's table is static, which is why every Wine run of the tap's test passed and why no Windows run of this project could have observed a draw after the first read-back. Every hook now checks a sentinel slot on entry and re-applies the table when it is gone, the work-submission hooks check again on the way out, the flush-class calls are hooked as pass-throughs for that check, and `rsf_frame_tap_refresh` covers the flush inside Present. `vtable_refreshes` in the status counts it. [The measurement](../../docs/research/d3d11-runtime-vtable-rewrite.md) has the slot table.
+Earlier compatibility records cover synthetic decode/texture checks, observer and DLSS debug game runs, and cross-build/Wine/DXVK tests of the render-target watch, substitution plan, state restoration and former `scene_reinsert` plan. Those tests queried actual bindings; they did not establish image quality for the heuristic substitution route. Input recognition and picture correctness require evidence from the game's shaders, constants and frame.
 
-Run context work on the owning render thread. Save and restore all affected graphics state around injected work. Hook installation, rollback, and teardown must account for callbacks already in flight. Current gaps are in [the review](../../docs/review.md).
-
-The decode and texture helpers have synthetic tests. The observer and DLSS debug path have recorded game runs. The render-target watch, the substitution plan, the state save and restore, and the plan `scene_reinsert` builds are cross-built and tested under Wine on DXVK against a real device, each checked by asking the context what actually got bound. The reconstruction input set is deliberately not tested synthetically, because it is recognized from a combination only a real engine frame produces. Whether the substitution produces a correct picture is not tested at all; that needs the game's own shaders reading the game's own constants. The egui renderer/input components compile but are not yet connected to the live runtime. See [the tracker](../../docs/implementation.md).
+The live runtime now connects the overlay, and the native AC7 renderer has acceptance for specific deployed SR/UI/cloud and DLSS-G paths. Earlier tracker entries describing unconnected overlay pieces or pending compatibility rendering apply to their dated increments. Current limits are in [current status](../../docs/current-status.md); the dated work remains in [the tracker](../../docs/implementation.md). This documentation reconciliation adds no new runtime validation.

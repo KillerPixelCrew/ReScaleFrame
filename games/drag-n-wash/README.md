@@ -14,14 +14,15 @@ scene-transition and MSI Claw hardware acceptance are still pending. These are s
 builds; no Unity release is listed on GitHub as of the documentation audit on 7 October 2026.
 
 Extract the test ZIP beside `DragNWash.exe`, preserving every original game file. Start normally
-through Steam on DX12 and press Insert. The Claw package defaults to Auto Quality: NVIDIA
+through Steam on DX12 and press Insert. The Claw packager defaults to Auto/Quality: NVIDIA
 selects DLSS, Intel selects XeSS, and AMD selects FSR3 using the game's actual adapter. Unsupported
 providers report refusal and retain spatial fallback. DLSS needs supported NVIDIA hardware;
 the experimental FSR4 INT8 compatibility route is device-tested separately from the Claw.
 Current source also implements independent DLSS-G, FSR3/4 and XeSS FG selection and live switches.
 The user accepted XeSS/DLSS-G and the final FSR correction in the recorded 4 October session.
-Reflex follows DLSS-G (effective mode at least On while active); XeSS uses XeLL. The pinned FSR
-path is 2x. Higher DLSS/Intel MFG counts, FSR4 FG hardware, general scene/resize coverage and
+Reflex follows DLSS-G (effective mode at least On while active); XeSS uses XeLL. DLSS/XeSS
+multipliers follow SDK queries; the pinned FSR path is 2x. Higher DLSS/Intel MFG counts,
+FSR4 FG hardware, general scene/resize coverage and
 Claw operation are not established by that acceptance.
 
 Select FG separately in Insert. Unity stores the provider choice in `ReScaleFrame/preferences.ini`.
@@ -39,3 +40,7 @@ source review, synthetic/device fixtures, live execution and user visual observa
 [Renderer research](../../docs/research/drag-n-wash-renderer.md) records the file/source findings,
 temporal/UI boundaries and parser failures from the initial static investigation. Its earlier
 unimplemented/pending statements describe that investigation, before the subsequent runtime work.
+The shared plugin's current implementation is mapped in
+[Unity Mono's source guide](../unity-mono/README.md#source-and-lifecycle). `engine.json` retains
+dated evidence and unknown coverage measurements; its current validation summary links later
+acceptance without implying every scene, resize or device was exercised.

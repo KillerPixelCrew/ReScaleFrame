@@ -1,22 +1,11 @@
-// The DLSS contract, checked without an NVIDIA GPU in the loop.
-//
-// What is testable here is the part that decides whether DLSS runs at all: argument and ABI
-// rejection, the ordering rules, and that a missing or unloadable interposer is reported as such
-// rather than crashing a game process. Everything past slInit needs a driver and a real device.
-//
-// Set RSF_STREAMLINE_BIN to the directory holding sl.interposer.dll and this test additionally
-// performs a real load and asks the driver whether DLSS is supported. That path is skipped, not
-// failed, when the variable is unset or the load does not succeed, since a machine without the
-// SDK deployed is not a broken one.
-//
-// Under Wine that run needs DXVK, vkd3d-proton and DXVK-NVAPI selected together:
-//
-//   WINEDLLOVERRIDES="d3d11,d3d12,d3d12core,dxgi,nvapi,nvapi64,nvofapi64,nvngx,_nvngx=n"
-//
-// d3d12 belongs in that list even though nothing here wants D3D12: Streamline runs its own compute
-// through a DX11-on-12 device, and without it DLSS reports unsupported for a reason that looks
-// nothing like the cause. See runtime/backends/README.md.
-
+/**
+ * @file
+ * Check DLSS ABI, argument and lifecycle refusals before hardware evaluation.
+ * Compiled-out support and an unloadable interposer must report distinct outcomes.
+ * RSF_STREAMLINE_BIN optionally enables runtime loading and driver capability/size
+ * queries; absence of that path does not establish device support. Wine runtime
+ * requirements are documented in runtime/backends/README.md.
+ */
 #include <rescaleframe/dlss.h>
 
 #include <windows.h>
@@ -56,9 +45,7 @@ rsf_dlss_setup make_setup(const char* interposer)
     setup.struct_size = sizeof(setup);
     setup.abi_version = RSF_DLSS_ABI_VERSION;
     setup.interposer_path_utf8 = interposer;
-    // Ace Combat 7 is a UE4.18 title and this is the identity NGX is given for it. Without an
-    // identity the DLSS plugin loads and then refuses, which is a failure that looks like
-    // unsupported hardware and is not.
+    // NGX requires a project/engine identity independently of driver capability.
     setup.engine = RSF_DLSS_ENGINE_UNREAL;
     setup.engine_version_utf8 = "4.18";
     setup.project_id_utf8 = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
@@ -70,8 +57,7 @@ rsf_dlss_setup make_setup(const char* interposer)
 
 int main()
 {
-    // Whether the SDK was compiled in is reported, not guessed. A build without it must say so
-    // instead of returning a failure that reads as "DLSS did not work here".
+    // Distinguish compiled-out support from runtime or device refusal.
     const bool compiled_in = rsf_dlss_available() != 0u;
     std::fprintf(stderr, "streamline headers compiled in: %s\n", compiled_in ? "yes" : "no");
 
@@ -92,8 +78,7 @@ int main()
     check(rsf_dlss_set_device(nullptr) == RSF_DLSS_ERROR_INVALID_ARGUMENT,
           "A missing device must be rejected.");
 
-    // Nothing is loaded yet, so everything downstream must refuse rather than reach for a null
-    // function pointer. This is the ordering the orchestrator has to follow.
+    // Before load, downstream operations must refuse without calling absent entry points.
     rsf_dlss_support support{};
     support.struct_size = sizeof(support);
     const rsf_dlss_result before_load = rsf_dlss_query_support(&support);
@@ -120,9 +105,7 @@ int main()
         check(rsf_dlss_load(&setup) == RSF_DLSS_ERROR_LOAD_FAILED,
               "An interposer that is not there must be reported as a load failure.");
 
-        // Asked to verify a signature in a build that cannot verify one, the answer is no.
-        // Refusing is the only honest outcome: reporting success would claim a check that never
-        // ran, and loading anyway would defeat the request.
+        // A required signature check must refuse when verification support is absent.
         rsf_dlss_setup signed_only = make_setup(setup.interposer_path_utf8);
         signed_only.require_signature = 1;
         check(rsf_dlss_load(&signed_only) == RSF_DLSS_ERROR_LOAD_FAILED,

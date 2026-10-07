@@ -4,6 +4,8 @@
 #include <string>
 #include <thread>
 
+// Resolve embedding functions from the player's loaded Mono runtime. No second runtime/domain is
+// created, and no Unity object is touched on these workers. Bootstrap defers adapter work to its loop.
 namespace {
 struct Domain;
 struct Assembly;
@@ -12,6 +14,8 @@ struct Class;
 struct Method;
 struct Object;
 struct Thread;
+// Process-local embedding table and borrowed domain/method identities. Lifecycle calls serialize
+// start/stop; Unity owns the runtime, scripting domain and loaded managed assemblies.
 struct Mono {
     void (*domains)(void (*)(Domain*, void*), void*) = nullptr;
     const char* (*domain_name)(Domain*) = nullptr;
@@ -35,6 +39,7 @@ template<typename T> bool resolve(HMODULE module, const char* name, T& target)
     target = reinterpret_cast<T>(reinterpret_cast<void*>(GetProcAddress(module, name)));
     return target != nullptr;
 }
+// Mono's assembly loader expects UTF-8; include the terminator for the borrowed c_str call.
 bool utf8(const wchar_t* text, std::string& output)
 {
     const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1, nullptr, 0, nullptr, nullptr);
@@ -53,6 +58,8 @@ void domain_candidate(Domain* domain, void*)
 }
 }
 
+// Attach to root for discovery, then select the explicit Unity domain before managed invocation.
+// Detach on every exit; managed Start copies api and returns zero only after bootstrap patching.
 static bool start_attached(const wchar_t* helper, rsf_unity_native_api* api, const char** reason) noexcept try
 {
     if (!helper || !api || !reason || mono.stop) return false;
@@ -100,6 +107,7 @@ static bool start_attached(const wchar_t* helper, rsf_unity_native_api* api, con
 }
 catch (...) { if (reason) *reason = "Mono bootstrap allocation or conversion failed."; return false; }
 
+// Retain the cached Stop method on attachment/invocation/refusal failure so cleanup can be retried.
 static bool stop_attached() noexcept
 {
     if (!mono.stop) return true;

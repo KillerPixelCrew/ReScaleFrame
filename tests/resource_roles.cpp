@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//
-// Classify descriptors that were actually seen in an AC7 frame, and check the verdicts.
-//
-// No device and no GPU: classification reads a descriptor and nothing else, so the facts are built
-// by hand here. The numbers come from docs/research/ac7-frame-capture.md, which read them off a
-// replayed capture of the running game, and each case says which resource it stands for. The point
-// of writing them out rather than referring to the capture generally is that a rule changed on a
-// hunch then disagrees with a recorded observation instead of quietly moving with the code.
-
+/**
+ * @file
+ * Check descriptor-based roles against recorded AC7 texture shapes.
+ * Synthetic facts are transcribed from docs/research/ac7-frame-capture.md. Cases pin
+ * motion/depth/exposure confidence, aspect/size tolerances and ambiguous scene-colour
+ * candidates; a descriptor verdict does not prove when an engine resource is usable.
+ */
 #include <rescaleframe/resource_roles.h>
 
 #include <windows.h>
@@ -279,8 +277,7 @@ int main()
               "A null verdict must be rejected.");
     }
 
-    // A struct longer than this build knows about is a newer caller, not an error. Only the fields
-    // named here are read, which is what appending to these structs is supposed to allow.
+    // Appended fields from a newer caller are allowed; inspect only the known struct prefix.
     {
         rsf_texture_facts extended = velocity;
         extended.struct_size = sizeof(rsf_texture_facts) + 8;

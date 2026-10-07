@@ -15,6 +15,8 @@
 #include <algorithm>
 
 using Microsoft::WRL::ComPtr;
+// Native normalization and optional SR resources on the caller's D3D12 device/queue. Per-slot
+// heaps/readbacks can be reused only after the caller joins that slot's previous completion.
 struct rsf_sr12 {
     ComPtr<ID3D12Device> device;
     rsf_sr_session* alternate = nullptr;
@@ -36,6 +38,8 @@ struct rsf_sr12 {
 };
 namespace {
 void transition(ID3D12GraphicsCommandList*, ID3D12Resource*, D3D12_RESOURCE_STATES, D3D12_RESOURCE_STATES);
+// Read a retired slot's earlier sample before recording its next copy. Four 8x8 R16G16_FLOAT
+// tiles use 256-byte row pitch and 2048-byte offsets; values are render-pixel displacements.
 void motion_diagnostic(rsf_sr12& self, ID3D12GraphicsCommandList* list, uint32_t slot)
 {
     if (!self.diagnostic_log) return;
@@ -78,6 +82,8 @@ void motion_diagnostic(rsf_sr12& self, ID3D12GraphicsCommandList* list, uint32_t
     transition(list, self.normalized[2].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     self.motion_pending[slot] = true; ++self.diagnostic_frames;
 }
+// Preserve scene/depth values; convert producer current-minus-previous UV motion to canonical
+// previous-minus-current render pixels through toPixels. inputsOnly skips the color write.
 constexpr char normalize_shader[] = R"(
 Texture2D<float4> scene : register(t0);
 Texture2D<float> depth : register(t1);
@@ -135,6 +141,8 @@ bool prepare_shader(rsf_sr12& self)
     }
     return true;
 }
+// Validate declared camera extents and actual same-device descriptors before recording work.
+// The plugin remains responsible for origin-zero sampling, input states and frame identity.
 bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
 {
     if (!pass.camera_valid || pass.camera.struct_size != sizeof(rsf_camera_frame) ||
@@ -267,6 +275,8 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     record.render_width = self->width; record.render_height = self->height;
     record.output_width = self->output_width; record.output_height = self->output_height;
     record.frame_time_ms = pass->camera.frame_time_seconds * 1000;
+    // Native frame IDs drive SR continuity and the automatic FG capture record here. The plugin
+    // must align that ID with CPU/window source identity for FG. Preserve history discontinuities.
     const bool reset = (pass->flags & RSF_GAME_RENDER_RESET) || self->last_frame + 1 != pass->native_frame ||
         self->last_view != pass->history_key || self->last_session != pass->session_id || self->last_generation != pass->resource_generation;
     record.flags = reset ? RSF_FRAME_FLAG_RESET : 0;

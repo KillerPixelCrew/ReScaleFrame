@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check bounded CPU-to-render identity tickets without a graphics device.
+ * Delayed lookup preserves 64-bit source IDs; session/generation and unique submission
+ * tickets reject stale reuse. A two-producer race checks that one live engine key
+ * cannot be replaced until its current submission is released.
+ */
 #include <rescaleframe/render_links.h>
 #include <atomic>
 #include <cstdio>

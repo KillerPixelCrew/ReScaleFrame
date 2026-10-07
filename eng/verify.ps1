@@ -1,6 +1,17 @@
-# -VS2026 selects the Visual Studio 2026 generator presets for a machine that has no 2022. CI's
-# windows-2022 runner uses the default presets, so the two stay separate rather than one preset
-# silently picking whichever studio is installed.
+<#
+.SYNOPSIS
+Run the Windows native build/CTest gate and Rust formatting/lint checks.
+.DESCRIPTION
+Checks VERSION against the Cargo workspace version, configures and builds the selected CMake
+preset, runs its registered CTest fixtures, then checks Cargo formatting and Clippy with locked
+dependencies. This script does not run cargo test, deploy files or establish game acceptance.
+.PARAMETER Configuration
+Debug or Release build/test preset; CI selects Release.
+.PARAMETER VS2026
+Select explicit Visual Studio 2026 presets. Default presets target VS 2022/windows-2022 CI.
+.OUTPUTS
+Build/check output; throws on the first failed external command or version mismatch.
+#>
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [switch]$VS2026
@@ -9,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+# Convert native command failures to exceptions so the gate stops immediately.
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) {

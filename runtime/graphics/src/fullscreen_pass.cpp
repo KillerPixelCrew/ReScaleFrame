@@ -111,6 +111,8 @@ compile_fn load_compiler()
 
 } // namespace
 
+/* Own immutable pipeline objects and one dynamic constant buffer. Draw uses caller-owned views;
+   no target texture is allocated or retained between calls. Serialize calls on the render thread. */
 struct rsf_fullscreen_pass {
     ID3D11Device* device = nullptr;
     ID3D11VertexShader* vertex_shader = nullptr;
@@ -162,9 +164,8 @@ bool compile_one(rsf_fullscreen_pass* pass, compile_fn compile, const char* entr
     return true;
 }
 
-/* Everything this draw disturbs. Restored in full, scissor rectangles included: the blit this was
-   generalised from saved viewports and not scissors, and a scissor left from a pass that used one
-   would clip the game's next draw to a rectangle nobody set. */
+/* Narrow binding snapshot for this draw. Get calls own references until restore. OM UAVs and
+   shader linkage are outside this snapshot; the owner supplies a compatible fullscreen scope. */
 struct SavedState {
     ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     ID3D11DepthStencilView* depth_view = nullptr;

@@ -1,4 +1,5 @@
 <Project>
+  <!-- Keep both target frameworks' generated files outside the fixture source tree. -->
   <PropertyGroup>
     <BaseOutputPath>$(MSBuildThisFileDirectory)../../build/managed/unity-tests/bin/</BaseOutputPath>
     <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../build/managed/unity-tests/obj/</BaseIntermediateOutputPath>

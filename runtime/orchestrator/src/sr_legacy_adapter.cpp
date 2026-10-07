@@ -10,6 +10,8 @@
 #include <new>
 #include <atomic>
 namespace { std::atomic<uint64_t> next_session_id{1}; }
+// Synthetic evaluation identity is private to SR continuity. It cannot authorize latency or FG;
+// those paths require the native renderer's simulation/input-to-window association.
 struct rsf_sr_legacy_adapter {
     rsf_sr_bridge* bridge = nullptr;
     rsf_motion_resolve* resolve = nullptr;
@@ -82,6 +84,7 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     resolve.depth_layer = input->motion_depth_layer;
     if (!rsf_motion_resolve_run(adapter->resolve, context, input->motion, input->depth, &resolve))
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    // This interval measures calls to the compatibility adapter, not a game simulation delta.
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     rsf_frame_record record{};
     record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;

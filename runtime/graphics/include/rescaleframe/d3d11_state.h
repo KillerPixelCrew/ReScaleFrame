@@ -28,7 +28,8 @@ typedef struct rsf_d3d11_state {
 /* Read the whole pipeline into `state`. `context` is an `ID3D11DeviceContext*`.
 
    Every interface pointer taken here carries a reference, so a save must be matched by exactly one
-   restore or the game's resources outlive their pool. Returns non-zero when the state was taken;
+   restore. Use fresh storage and restore on the same context/thread before reuse. Returns non-zero
+   when the state was taken;
    zero means invalid arguments, a deferred context, or allocation failure. Nothing was saved. */
 uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* state);
 
@@ -40,7 +41,8 @@ void rsf_d3d11_state_restore(void* context, rsf_d3d11_state* state);
 
 /* Narrow scope for immediate depth replay. Saves only OM targets/depth state and the pixel
    shader (including linkage). Caller must refuse OM UAVs before entering this scope. No input,
-   rasterizer, predicate, or stream-output binding is touched. */
+   rasterizer, predicate, or stream-output binding is touched. Use fresh storage and pair with the
+   matching depth restore on the same context; do not mix full/depth snapshot entry points. */
 uint32_t rsf_d3d11_depth_state_save(void* context, rsf_d3d11_state* state);
 void rsf_d3d11_depth_state_restore(void* context, rsf_d3d11_state* state);
 

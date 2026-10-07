@@ -9,8 +9,7 @@ license.workspace = true
 description = "In-game overlay panel: egui layout in Rust behind the C ABI in include/rescaleframe/overlay.h"
 
 [lib]
-# "lib" so the safe core can be unit tested and linked by other Rust code, "cdylib" because the
-# orchestrator loads this into a game process and calls it through overlay.h.
+# Rust consumers use the library; native hosts load the cdylib through overlay.h.
 crate-type = ["lib", "cdylib"]
 
 [dependencies]

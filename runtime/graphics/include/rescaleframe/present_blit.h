@@ -1,22 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Put a texture on the screen, over whatever the game was about to present.
-
-   This exists because a reconstruction that only writes into a texture cannot be judged. Counters
-   say it ran and a dumped frame says the geometry is right, but the faults that matter most in an
-   upscaler are temporal: ghosting, smearing behind a moving object, a motion vector whose sign is
-   inverted. None of those are visible in a still image, and all of them are obvious in a second of
-   movement. So the result has to reach the screen.
-
-   It is a debug view and says so. The image handed over here is scene colour from partway through
-   the frame: linear, not tonemapped, and with no interface composited onto it. Drawing it over the
-   finished frame therefore replaces a graded image with an ungraded one, which will look wrong in
-   brightness and lack a HUD even when the reconstruction itself is perfect. An optional rough
-   tonemap makes it viewable. Neither the blit nor that tonemap is a step towards how this should
-   eventually work: the real path reinserts the reconstructed scene before the game's own
-   composite, and this is a way to look at the result in the meantime.
-
-   A copy would be simpler and does not work. The result is `R16G16B16A16_FLOAT` and a swap chain
-   here is `R10G10B10A2_UNORM`, and `CopyResource` requires matching formats, so this is a draw. */
+/* Diagnostic fullscreen draw over the finished D3D11 back buffer, before forwarding Present.
+   Optional Reinhard/gamma conversion makes linear scene colour visible; it does not reproduce
+   the game's grading or HUD. Drawing supports differing source/back-buffer formats that
+   CopyResource cannot convert. Use scene promotion for reinsertion into the game's pipeline. */
 
 #ifndef RSF_PRESENT_BLIT_H
 #define RSF_PRESENT_BLIT_H
@@ -62,11 +48,14 @@ rsf_present_blit_result rsf_present_blit_create(void* d3d11_device,
    `tonemap` applies a rough Reinhard curve and a gamma, which is what makes linear scene colour
    look like a picture rather than a dark one. It is for looking at, not for output.
 
-   Every piece of pipeline state this touches is saved and restored. The game is between its own
-   draws and did not ask for its bindings to change. */
+   Saves/restores OM targets/blend/depth, VS/PS, IA layout/topology, rasterizer/viewports, and PS
+   resource/sampler/constant slot 0. It omits shader linkage and OM UAVs and inherits GS/HS/DS,
+   predication, and stream output; the owner supplies a compatible scope and same-device resources.
+   Calls and destruction must be serialized with render work. */
 rsf_present_blit_result rsf_present_blit_draw(rsf_present_blit* blit, void* context,
                                               void* swapchain, void* source, uint32_t tonemap);
 
+/* Release owned device/pipeline objects; null is accepted. */
 void rsf_present_blit_destroy(rsf_present_blit* blit);
 
 #ifdef __cplusplus

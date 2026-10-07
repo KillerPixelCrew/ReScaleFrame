@@ -1,13 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check managed/native packet layout and shipped URP method metadata.
+ * A replaced enqueue delegate exercises imported-backbuffer forwarding without a
+ * Unity render context. CoreCLR runs metadata/forwarding checks; the isolated Mono
+ * runner additionally exercises the deployed Harmony patch and its cleanup.
+ */
 using System;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using ReScaleFrame.Unity;
 
+/// <summary>Entry points shared by the CoreCLR executable and isolated Mono host.</summary>
 internal static class Program
 {
+    /// <summary>Return an exit code that the native Mono runner can unbox.</summary>
     public static int Run() => Main();
+    // Keep a distinct call target so Harmony is tested even when the JIT could otherwise inline it.
     [MethodImpl(MethodImplOptions.NoInlining)] private static int Original(int value) => value + 1;
     private static void Result(ref int __result) => __result *= 2;
     private static int Main()
@@ -26,6 +36,7 @@ internal static class Program
             var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
             var bootstrapState = typeof(Bootstrap).GetField("state", flags);
             int previousState = (int)bootstrapState.GetValue(null);
+            // Global substitutions are restored in finally, including when reflection/forwarding fails.
             var previousEnqueue = Native.Enqueue;
             int importedPackets = 0;
             try {

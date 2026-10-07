@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check manual FSR/XeSS SR evaluation through the D3D11-to-D3D12 bridge.
+ * Deterministic colour/depth/motion inputs exercise provider/quality replacement,
+ * command-slot reuse and exposure-context rebuilds while work is queued. A center
+ * pixel readback checks constant-colour output; this is synthetic hardware evidence.
+ */
 #include <rescaleframe/sr_bridge.h>
 #include <d3d11.h>
 #include <wrl/client.h>

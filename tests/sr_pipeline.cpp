@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check manual multi-provider SR pipeline evaluation on NVIDIA hardware.
+ * Synthetic camera/colour/depth/motion inputs exercise DLSS, FSR and XeSS switching
+ * while preserving the fixture's D3D11 state. The fixture checks evaluation results
+ * and teardown, without a game scene or output-quality comparison.
+ */
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/d3d11_state.h>
 #include <d3d11.h>

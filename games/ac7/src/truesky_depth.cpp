@@ -3,6 +3,8 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+// One-source-pixel depth-bounds kernel for the guarded TrueSky route. register layout mirrors
+// the measured native effect; the native caller validates resources and restores its own shader.
 namespace {
 constexpr char source[] = R"(
 Texture2D<float> SourceDepth : register(t1);
@@ -33,6 +35,8 @@ cbuffer MixedResolution : register(b11) {
     DepthBounds[pixel.xy] = float2(normalized,normalized);
 })";
 }
+// Compile/create on the supplied device. System compiler and temporary blobs are released before
+// return; the successful output owns one COM reference and no compiler module dependency.
 bool rsf_ac7_create_truesky_depth_shader(ID3D11Device* device, ID3D11ComputeShader** shader)
 {
     if (!device || !shader) return false;

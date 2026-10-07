@@ -1,8 +1,4 @@
-//! The overlay's state across frames, and the triangles it produces.
-//!
-//! Safe Rust throughout. It owns the egui context, turns the host's per frame snapshot of the
-//! mouse into the events egui expects, and flattens egui's output into the flat buffers the C
-//! header describes. The FFI layer above it does nothing but check pointers and copy.
+//! Persistent egui state, mouse snapshot translation and owned output buffers for the C renderer.
 
 use egui::{Event, PointerButton, Pos2, RawInput, ViewportId, epaint};
 
@@ -13,45 +9,33 @@ use crate::abi::{
 use crate::model::{FrameInput, Intent, Stats, TextureUpdate};
 use crate::panel::{self, Controls, Selection};
 
-/// Largest texture side the overlay will ask egui for.
-///
-/// Chosen, not measured. The overlay never sees the device, so it cannot ask what the real limit
-/// is; 2048 is egui's own default and is below the guaranteed minimum of every D3D11 feature level
-/// the project targets. What this buys is one thing only: no texture handed to the renderer is
-/// ever larger than this on either side. Beyond it egui does not shrink anything, it starts reusing
-/// atlas space and rebuilds the atlas, which costs a whole-texture update and, briefly, wrong
-/// glyphs. Read out of epaint's `TextureAtlas`, not observed here.
+/// Fixed atlas cap, chosen without querying a GPU. egui may rebuild atlas space at this limit.
 const MAX_TEXTURE_SIDE: usize = 2048;
 
 /// Reference display height for the scale heuristic below.
 const REFERENCE_HEIGHT: f32 = 1080.0;
 
-/// The overlay, across frames.
+/// Persistent panel state and buffers. Consume frame output and texture work before the next frame.
 pub struct Overlay {
     context: egui::Context,
     selection: Selection,
     controls: Controls,
     performance: crate::performance::Meter,
 
-    /// Monotonic seconds handed to egui for animation. Advanced by the host's delta, because the
-    /// overlay has no business reading a clock on a render thread.
+    /// Animation time in seconds, advanced from host deltas without reading a platform clock.
     time: f64,
     last_mouse: Option<[f32; 2]>,
     last_buttons: u32,
-    /// Buttons egui has been told are down, which is not the same as the buttons the host reports
-    /// while the panel is hidden and egui is not being run. See [`Overlay::raw_input`].
+    /// egui's button history, kept separate from the host's history across hidden frames.
     told_egui_buttons: u32,
     was_visible: bool,
 
-    /// Rebuilt every frame. The C side is handed pointers into these and the header promises they
-    /// stay valid until the next frame call, which is exactly as long as they live here.
+    /// Owned mesh buffers; C borrows them until the next frame or destruction.
     vertices: Vec<RsfOverlayVertex>,
     indices: Vec<u32>,
     calls: Vec<RsfOverlayDrawCall>,
 
-    /// Texture work from the last frame, drained by the two collection entry points. The pixels
-    /// stay owned here until the next frame clears them, so a caller that reads them after the
-    /// draw call it belongs to still reads live memory.
+    /// Drainable texture work. Pixel allocations remain live until the next frame or destruction.
     texture_updates: Vec<TextureUpdate>,
     texture_updates_taken: usize,
     textures_to_free: Vec<u64>,
@@ -70,11 +54,7 @@ impl Overlay {
     pub fn new() -> Self {
         let context = egui::Context::default();
 
-        // One layout pass per frame, always. egui otherwise runs a second pass over the same input
-        // whenever something asks it to discard the first, which a Grid does the first time it is
-        // shown. This runs on a game's render thread, where a predictable single layout is worth
-        // more than a grid whose column widths are right one frame earlier, and it means the same
-        // click is never presented to the widgets twice.
+        // One pass bounds render-thread work and prevents replaying the same click during layout.
         context.options_mut(|options| {
             options.max_passes = std::num::NonZeroUsize::new(1).expect("1 is not zero");
         });
@@ -101,9 +81,9 @@ impl Overlay {
 
     /// Lay out one frame and report what the user asked for.
     ///
-    /// Hiding the overlay skips the layout entirely but keeps reconciling the selection against
-    /// the stats, so a change applied while it was hidden is not still shown as pending when it
-    /// comes back.
+    /// Hidden frames still reconcile requested settings and sample rates. They may draw the
+    /// noninteractive startup hint or HUD, but produce no control rectangles or mouse intents.
+    /// Each call replaces all mesh buffers and undrained texture work from the previous frame.
     pub fn frame(&mut self, input: &FrameInput, stats: &Stats<'_>) -> Intent {
         self.vertices.clear();
         self.indices.clear();
@@ -184,9 +164,7 @@ impl Overlay {
             paint_cursor(ui.ctx(), pointer);
         });
 
-        // Applied after the layout rather than during it, so every widget in the frame reads the
-        // same selection: the one the frame started with. A checkbox that wrote back into that
-        // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
+        // Commit after layout so all widgets read the same starting selection.
         self.selection.apply(&intent);
         intent.quality = self.selection.quality();
         intent.enabled = self.selection.enabled();
@@ -263,10 +241,7 @@ impl Overlay {
         if self.last_mouse != Some(mouse) || !self.was_visible {
             events.push(Event::PointerMoved(position));
         }
-        // Transitions are recovered against two histories, because they answer two questions. The
-        // host's previous mask says whether the user pressed just now; what egui was last told says
-        // whether egui is still holding something. They only differ across a spell of being hidden,
-        // when the host keeps reporting and egui is not being run.
+        // Host history detects new presses; egui history detects releases missed while hidden.
         let mut told = self.told_egui_buttons;
         for (mask, button) in [
             (RSF_OVERLAY_MOUSE_LEFT, PointerButton::Primary),
@@ -279,12 +254,7 @@ impl Overlay {
             // Press on an edge the panel was there to see. A button already down when the panel
             // reappears is not a press: the user was not aiming at a panel that was not drawn.
             let pressed = is_down && !was_down && !egui_holds_it;
-            // Release whenever egui is holding a button the host says is up, which is what a
-            // release that happened while the panel was hidden looks like from here. Without this
-            // egui keeps the button down for good: widgets stay in their pressed state and a press
-            // that landed on the window drags it as soon as the panel comes back. A late release
-            // lands wherever the pointer is now, after the move event above, so it finishes the
-            // click only if the pointer never moved while the panel was away.
+            // Release stale egui holds at the current pointer position after the move event.
             let released = !is_down && egui_holds_it;
             if pressed || released {
                 events.push(Event::PointerButton {
@@ -317,10 +287,7 @@ impl Overlay {
         self.last_mouse = Some(mouse);
         self.last_buttons = input.mouse_buttons;
 
-        // The header says a zero delta is survivable, and it is, but not for free: egui drives its
-        // fade in from elapsed time, so a clock that never advances leaves the panel permanently
-        // part way through appearing. A host that cannot tell us gets an assumed 60Hz rather than
-        // a frozen one.
+        // Advance animations by an assumed 60 Hz when the host provides no valid positive delta.
         let delta = sanitise(input.delta_seconds, 0.0).clamp(0.0, 1.0);
         let advance = if delta > 0.0 { delta } else { 1.0 / 60.0 };
         self.time += f64::from(advance);
@@ -343,14 +310,12 @@ impl Overlay {
         raw
     }
 
+    /// Copy atlas pixels into owned RGBA patches and preserve egui's upload/free ordering.
     fn collect_textures(&mut self, delta: epaint::textures::TexturesDelta) {
         for (id, patch) in delta.set {
             let epaint::ImageData::Color(image) = &patch.image;
             let [width, height] = image.size;
-            // A patch whose pixel count does not match its size would have the renderer walk off
-            // the end of the buffer, and an empty one would hand it a dangling pointer, since an
-            // empty Vec has no allocation to point at. egui produces neither, so this only fires if
-            // egui changes shape under us, and dropping a patch beats a bad memcpy inside a game.
+            // Reject malformed patches before a native renderer can copy beyond the allocation.
             if width == 0 || height == 0 || width * height != image.pixels.len() {
                 continue;
             }
@@ -374,6 +339,8 @@ impl Overlay {
         }
     }
 
+    /// Flatten meshes in paint order, converting points to physical pixels and retaining local
+    /// indices. Skip unsupported callbacks and clipped meshes; stop before u32 offsets overflow.
     fn collect_primitives(
         &mut self,
         primitives: &[epaint::ClippedPrimitive],
@@ -382,9 +349,7 @@ impl Overlay {
     ) {
         for primitive in primitives {
             let epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
-                // The overlay never registers a paint callback, so this arm is unreachable in
-                // practice. It is a skip rather than a panic because being wrong about that on a
-                // render thread should cost a missing quad, not the game.
+                // The native ABI has no paint callback representation.
                 continue;
             };
             if mesh.indices.is_empty() || mesh.vertices.is_empty() {
@@ -393,8 +358,6 @@ impl Overlay {
             let Some(clip) = scissor(primitive.clip_rect, pixels_per_point, display) else {
                 continue;
             };
-            // Overflowing a u32 index would need a quarter of a billion vertices from a debug
-            // panel. Stopping is still better than wrapping the offsets.
             if self.vertices.len() + mesh.vertices.len() > u32::MAX as usize
                 || self.indices.len() + mesh.indices.len() > u32::MAX as usize
             {
@@ -427,11 +390,7 @@ impl Overlay {
     }
 }
 
-/// How large the panel should be drawn.
-///
-/// Chosen rather than measured, and the one number here that is pure taste: a panel laid out at
-/// one point per pixel is unreadable on a 4K display, so it scales with the display height and
-/// stops at 3x. There is no way to ask the host for a preferred scale in ABI version 1.
+/// Paint the host-timed startup hint without interactive widgets.
 fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -462,8 +421,7 @@ fn paint_cursor(ctx: &egui::Context, position: Pos2) {
         egui::Order::Foreground,
         egui::Id::new("rsf_overlay_cursor"),
     ));
-    // A convex triangle rather than the classic notched arrow: egui tessellates concave paths
-    // poorly, and a shape that renders wrongly is worse than a plain one that renders.
+    // Keep the cursor convex for egui's polygon tessellator.
     let points = vec![
         position,
         position + egui::vec2(0.0, 17.0),
@@ -476,15 +434,12 @@ fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     ));
 }
 
+/// Scale from display height: 1x through 1080 pixels, capped at 3x. No host DPI is supplied.
 fn pixels_per_point(display_height: f32) -> f32 {
     (display_height / REFERENCE_HEIGHT).clamp(1.0, 3.0)
 }
 
-/// egui's texture ids as one number.
-///
-/// The overlay only ever produces managed ids, so the high bit is never actually set today. It is
-/// still spelled out, because collapsing the two kinds onto the same numbers would make a user
-/// texture silently alias the font atlas the day one appears.
+/// Reserve bit 63 for user textures so their IDs cannot alias managed atlas IDs.
 fn texture_id_to_u64(id: epaint::TextureId) -> u64 {
     match id {
         epaint::TextureId::Managed(value) => value & !USER_TEXTURE_BIT,
@@ -513,10 +468,7 @@ fn scissor(clip: egui::Rect, pixels_per_point: f32, display: [u32; 2]) -> Option
     Some([min_x, min_y, max_x - min_x, max_y - min_y])
 }
 
-/// Replace a value the host could not produce with one the overlay can lay out from.
-///
-/// A NaN mouse position propagates into egui's layout and comes back as NaN vertices, which is a
-/// renderer's problem several thousand triangles later.
+/// Replace nonfinite host values before they reach layout or vertex output.
 fn sanitise(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
 }

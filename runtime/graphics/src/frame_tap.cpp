@@ -55,14 +55,8 @@ using clear_render_target_view_fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext
                                                              ID3D11RenderTargetView*,
                                                              const FLOAT[4]);
 
-// Every slot D3D11 allows a stage, rather than a guess at how many are used.
-//
-// This was 16, which was reasoning from what the set needs rather than from what the engine does.
-// Unreal binds its scene textures structure, depth and the GBuffer among them, alongside the post
-// process inputs, and that alone can reach past slot 16, so a window of 16 can watch a pass read
-// depth and never see it. The cost of the full range is a larger shadow and a longer scan, both of
-// which are cheap: only a slot that actually changed pays for a resource query, and a scan is a
-// pointer test per slot.
+// Shadow the full D3D11 pixel SRV range. Engine scene-texture bindings can extend beyond the
+// low post-process slots; unchanged bindings cost pointer comparisons rather than resource queries.
 constexpr UINT max_examined_views = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
 
 // What a watch budget holds when the caller asked for no limit. See consider_target_draw.
@@ -135,16 +129,9 @@ struct Tap {
     // survives being unbound before a callback reads it.
     ID3D11Buffer* view_constants = nullptr;
 
-    // What the pixel stage currently has bound, as far as this module has seen it.
-    //
-    // The set does not arrive in one call. Unreal's D3D11 backend binds shader resources a slot at
-    // a time, so every call carries one view and a rule expecting four in one call never fires. The
-    // resources are still bound together at the draw, they just got there separately, so the state
-    // has to be shadowed across calls and the signature looked for in the shadow.
-    //
-    // Nothing here is retained. A view the runtime has bound is kept alive by the runtime, and this
-    // mirrors exactly what is bound, so an entry is live for as long as it is in the table. Slots
-    // are cleared when unbound, which is what keeps that true.
+    // Shadow requested pixel bindings across individual slot updates. Each resolved Texture2D
+    // owns a reference until replacement/invalidation/uninstall; view identity itself is borrowed.
+    // Classification is deferred until draw, when independently bound inputs form a complete set.
     struct Slot {
         ID3D11ShaderResourceView* view = nullptr;
         ID3D11Texture2D* texture = nullptr;
@@ -156,13 +143,8 @@ struct Tap {
     // draw rather than at the binding, so this is what keeps a run of draws with unchanged state
     // from rescanning the slots each time.
     bool shadow_dirty = false;
-    // Edge trigger on the set becoming complete.
-    //
-    // Keying it on the identity of the textures instead fired exactly once for a whole session: the
-    // game binds the same targets every frame, so the identity never changes and the edge never
-    // comes back. Completeness does come back, because the pass unbinds its inputs and the frame's
-    // other passes bind their own, so the set goes incomplete between frames and this fires once
-    // per frame, which is what a backend wants.
+    // Report the transition from incomplete to complete, not a changed texture address: pooled
+    // allocations recur each frame. A qualifying sequence number is not a presented-frame count.
     bool signature_complete = false;
     // How many near misses have been described. Bounded so this diagnostic cannot become the
     // reason the game runs badly.
@@ -197,10 +179,9 @@ struct Tap {
     ID3D11BlendState* blend_state = nullptr;
     ID3D11DepthStencilState* depth_stencil_state = nullptr;
 
-    // The candidate sets, copied so the caller may rebuild its own storage. Counts are atomic and
-    // published after the entries are written, so the render thread either sees an old set or a
-    // complete new one. A newly created layout being missed for a few draws is the worst case, and
-    // it corrects itself on the next draw; the alternative is a lock on every draw in the frame.
+    // Copied pointer sets; atomics publish counts/arming. Arrays remain plain storage, so owners
+    // serialize replacement with the observed render thread or quiesce readers while rewriting.
+    // Objects are borrowed identities and must be invalidated when an address is reused.
     static constexpr uint32_t max_candidates = 64;
     void* candidate_layouts[max_candidates]{};
     void* candidate_widget_targets[max_candidates]{};
@@ -257,12 +238,8 @@ struct Tap {
     std::atomic<uint64_t> divert_refused{0};
     std::atomic<uint32_t> divert_last_refusal{0};
 
-    // Blend states with their alpha operations patched, keyed by the state the game bound.
-    //
-    // Keyed by pointer, which is only safe because a blend state that is released takes its entry
-    // with it: `forget_blend` is called from the release path. The alternative, rebuilding the
-    // patched state per draw, would create a device object inside a draw hook, which is the one
-    // place it must not happen.
+    // Owned alpha-patched states keyed by borrowed original addresses. This cache has no release
+    // interception or eviction before uninstall; original-key reuse is an owner lifetime constraint.
     struct PatchedBlend {
         ID3D11BlendState* original;
         ID3D11BlendState* patched;
@@ -297,9 +274,9 @@ struct Tap {
     std::atomic<uint32_t> watch_budget[RSF_FRAME_TAP_WATCH_SLOTS] = {};
     std::atomic<uint32_t> target_draws_reported{0};
 
-    // The substitution plan. Written under the lock by whoever sets it and read on the render
-    // thread without one, which `plan_active` is what makes safe: it is only ever set to true after
-    // the plan is fully written, and cleared before the plan is touched again.
+    // Plain plan/gate storage read on the render thread. guard serializes API writers and the
+    // active flag disables new work, but does not retire a reader already using the old plan.
+    // Replace/clear with the observed render thread quiescent and keep its borrowed views alive.
     rsf_frame_tap_plan plan{};
     std::atomic<bool> plan_active{false};
     // Which of the plan's gates have opened in the current frame.
@@ -350,23 +327,9 @@ Tap& tap()
     return instance;
 }
 
-// The callback binds resources of its own, which comes straight back through these hooks. Without
-// this the recognition would run on the callback's own bindings and could recurse without end.
-// A depth rather than a flag.
-//
-// Most hooks check this and return before constructing a guard, so a nested call that bails out
-// leaves it alone and a flag survives. The substitution paths are the exception: their guard is
-// constructed before that check, because the swap has to happen whether or not the call is
-// recognised. So a callback that binds something while a plan is active constructs and destroys a
-// guard inside an outer one, and with a flag the destructor clears it, leaving the rest of the
-// outer hook recognising bindings that belong to the callback rather than to the game.
-//
-// Nothing has gone wrong from it yet, because the callbacks that run today bind nothing. That
-// stops being true as soon as a hook issues context calls of its own, which is exactly what
-// diverting a draw is. Counting costs the same and does not depend on which of two orderings a
-// given hook happens to use.
-// It reads as a flag at every use, which is why it keeps the name: zero is outside, anything else
-// is inside, and every existing `if (inside_hook || ...)` means what it did before.
+// Count nested hook scopes so injected/callback D3D work is forwarded without contaminating
+// game-state shadows or recursively invoking callbacks. A boolean fails when an inner scope
+// exits before its outer scope; depth preserves the outer suppression until its own return.
 thread_local uint32_t inside_hook = 0;
 
 struct ReentryGuard {
@@ -406,25 +369,10 @@ bool patch_slot(void** vtable, size_t index, void* replacement, void** previous)
     return true;
 }
 
-// The runtime rewrites its own vtable, and the hooks have to survive that.
-//
-// Measured on Windows 11 with the stock d3d11.dll on 26 September 2026, with a scratch probe that
-// snapshotted the table after every call: the immediate context's vtable lives on the heap, and the
-// runtime rewrites the whole work-submission family of entries, slots 12, 13, 20, 21, 38 to 42,
-// 46 to 54, 57, 115 and 116, whenever a flush-class call runs (a Map for reading, Flush) and again
-// on the next draw, dispatch, copy or clear, flipping between two sets of implementations. Each
-// rewrite discards whatever was patched into those slots. DXVK's table is static and never
-// rewritten, which is why every Wine run of this module passed and no Windows run observed a draw
-// after the first Map.
-//
-// So every hook checks one sentinel entry on the way in and re-applies the whole table when it is
-// gone, recording what the runtime had written as the new original. That is the right thing to
-// forward to: whatever variant is in the slot is the one for the runtime's current state, and the
-// runtime rewrites the slot again, removing the hook, before that state changes. The flush-class
-// calls and every member of the family are hooked as well, as pass-throughs where nothing needed
-// to observe them, so the flip that happens inside a call is noticed by that call's own epilogue
-// rather than by the next binding. The one flip nothing here sees is the one Present causes, and
-// `rsf_frame_tap_refresh` exists for the present hook to call.
+// Stock Windows D3D11 rewrites work-submission vtable entries around flush/work calls. Check
+// Draw as sentinel, reapply all patches, and adopt each rewritten runtime variant as forwarding
+// original. Work hooks refresh on exit; the owner refreshes after Present. DXVK tables are static.
+// Measured slot families: docs/research/d3d11-runtime-vtable-rewrite.md.
 void refresh_hooks_slow(Tap& self)
 {
     uint32_t rewritten = 0;
@@ -584,16 +532,8 @@ void open_gates_for(Tap& self, ID3D11DeviceContext* context, void* texture)
     }
 }
 
-// Put the viewport and the scissor rectangles where the currently bound target needs them.
-//
-// The game asks for the resolution it believes it is drawing at. When the target under it has been
-// replaced by an output resolution one, that request covers a corner of it, so it is scaled; when
-// the next pass binds a target that was not replaced, the game's own numbers go back, because the
-// engine sets a viewport per pass and not per target and would otherwise inherit the scaled ones.
-//
-// The originals are called rather than the context's own methods. Going through the context would
-// come straight back into the viewport hook, which would then have to decide whether a call is the
-// game's request or this putting it into effect, and that is a distinction better not to need.
+// Apply scaled requested viewport/scissors on promoted targets and native values elsewhere.
+// Call original entries to avoid treating this policy application as new game intent.
 void apply_viewport_policy(Tap& self, ID3D11DeviceContext* context)
 {
     const float scale_x = self.target_substituted ? self.plan.viewport_scale_x : 1.0f;
@@ -647,11 +587,7 @@ void shadow_render_target(Tap& self, ID3D11RenderTargetView* view)
     if (self.target_texture) {
         self.target_texture->GetDesc(&self.target_description);
     }
-    /* The view's format as well as the texture's, because for a typeless texture they differ and it
-       is the view that decides what a shader's output means on the way in. Unreal allocates its
-       targets typeless and picks sRGB or not per view, so the texture format cannot answer whether
-       a draw's colour is being encoded, and a layer that does not encode where the original did
-       stores linear values that later read as too dark. */
+    /* View format determines typed/sRGB interpretation of typeless target storage. */
     self.target_view_format = 0;
     if (view) {
         D3D11_RENDER_TARGET_VIEW_DESC view_description{};
@@ -676,16 +612,8 @@ void unbind_target_reads(Tap& self)
     }
 }
 
-// If this draw writes a watched target and that watch still has budget, describe it.
-//
-// Called from the draw hooks after the game's draw has been forwarded, so the description is of a
-// draw that has already happened. Everything it reads is the shadow, which is why it costs a
-// pointer compare on the draws that do not match, which is all but a handful in a frame.
-/* Is this draw one of the handful in the frame worth a second look?
- *
- * Pointer comparisons over state already shadowed, guarded by a load that rejects everything until
- * something has been named. This is what the rest of the frame pays, so it touches no memory the
- * draw path had not already touched and calls nothing. */
+// Candidate filtering uses requested-state pointer identities before detailed reports or diversion.
+/* Reject noncandidates without device calls or allocation; membership is game-provided. */
 bool candidate_passes(const Tap& self)
 {
     if (self.candidates_armed.load(std::memory_order_relaxed) == 0) {
@@ -774,14 +702,9 @@ void refuse_divert(Tap& self, uint32_t reason)
     self.divert_last_refusal.store(reason, std::memory_order_relaxed);
 }
 
-/* The game's blend with its alpha operations replaced, created once and cached.
- *
- * Colour factors are copied unchanged. Only `SrcBlendAlpha`, `DestBlendAlpha` and `BlendOpAlpha`
- * move, to `One / InvSrcAlpha / Add`, which is the over operator on coverage: a1 + a2(1 - a1).
- * Everything else about the draw, including which channels it writes, is the game's.
- *
- * Returns null when the state cannot be built, and the caller then refuses the divert rather than
- * moving a draw whose coverage would be lost. */
+/* Cache a blend clone with alpha writes enabled. Enabled targets use One/InvSrcAlpha/Add for
+   coverage accumulation: a1 + a2(1-a1). Colour factors remain unchanged; disabled blending stays
+   disabled. Null means allocation/cache exhaustion and the caller leaves the draw undiverted. */
 ID3D11BlendState* patched_blend_for(Tap& self, ID3D11DeviceContext* context,
                                     ID3D11BlendState* original)
 {
@@ -807,14 +730,8 @@ ID3D11BlendState* patched_blend_for(Tap& self, ID3D11DeviceContext* context,
     const UINT targets = description.IndependentBlendEnable ? 8u : 1u;
     for (UINT index = 0; index < targets; ++index) {
         D3D11_RENDER_TARGET_BLEND_DESC& target = description.RenderTarget[index];
-        // The alpha channel has to be writable before any of the operations below mean anything.
-        //
-        // A blend that writes colour only is ordinary for an interface drawn into a target whose
-        // alpha nobody reads, and AC7's is exactly that. Patching the alpha operations of such a
-        // state changes nothing at all: the channel is masked off, so the layer accumulates colour
-        // and no coverage, and a premultiplied composite of colour with zero coverage contributes
-        // nothing. Which is a black intro image, and a menu that is dark and washed out in
-        // proportion to how much coverage it was missing.
+        // Alpha operations only contribute coverage if alpha writes are enabled. Preserve the
+        // original colour factors, but include alpha in the write mask for the extracted layer.
         target.RenderTargetWriteMask |= D3D11_COLOR_WRITE_ENABLE_ALPHA;
         if (!target.BlendEnable) {
             // An opaque draw already writes alpha 1 where it covers, which is the coverage a layer
@@ -964,13 +881,8 @@ bool begin_divert(Tap& self, ID3D11DeviceContext* context,
     return true;
 }
 
-/* The whole pre-draw path: is this worth looking at, what is it, and does it move.
- *
- * Called with the re-entry guard already held, because everything below issues context calls that
- * would otherwise be recognised as the game's own and written into the shadow. That is the case a
- * flag rather than a depth could not survive, and it is now reachable. */
-// Bind a stand-in vertex constant buffer for a candidate draw, if the override callback asks.
-// See `rsf_frame_tap_set_constant_override`. Called after try_divert declined, with the guard held.
+/* Injected pre-draw calls run under the reentry guard and must restore all temporary bindings. */
+// Seed borrowed IA/VS/PS identities before an override needs a complete live draw description.
 void seed_geometry(Tap& self, ID3D11DeviceContext* context);
 
 // Query the less common stages only on an offered draw. The context owns these bindings;
@@ -1223,9 +1135,8 @@ void consider_target_draw(Tap& self, ID3D11DeviceContext* context, bool indexed,
     report.vertex_stride = self.geometry.strides[0];
     report.topology = static_cast<uint32_t>(self.geometry.topology);
 
-    // The viewport, asked for only on a draw that is being reported. It is the one thing here that
-    // the shadow cannot supply, because nothing hooks RSSetViewports, and a call per reported draw
-    // is affordable where a call per draw would not be.
+    // Query the effective viewport only for reported draws. Requested viewport shadows may be
+    // unscaled or absent, while this reflects the actual draw scope after substitution/restoration.
     D3D11_VIEWPORT viewport{};
     UINT viewport_count = 1;
     context->RSGetViewports(&viewport_count, &viewport);
@@ -1634,13 +1545,8 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
     refresh_hooks(self);
 }
 
-// Look at what is bound now and, if it is the set, hand it to the caller.
-//
-// Called from the draw hooks rather than from the binding hooks. Evaluating at the binding was the
-// second thing that made this recognise nothing: Unreal binds a slot at a time, so the set is
-// incomplete at every individual binding and complete only once the pass is ready to draw. Both
-// halves of the earlier assumption were wrong in the same direction, that the state can be judged
-// at the moment it is written rather than at the moment it is used.
+// Inspect dirty pixel-binding shadows at draw, after the engine has assembled independent slots.
+// This capture-derived heuristic remains separate from native graph-input ownership.
 void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
 {
     if (!self.options.on_pass) return; // Native owners use graph inputs; keep shadows for captures.
@@ -1649,11 +1555,8 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
     }
     self.shadow_dirty = false;
 
-    // Judged against the presented size the caller supplied, with the render size left unknown so
-    // the classifier accepts anything from half of it upwards that keeps the frame's aspect. The
-    // first version took the largest bound texture as the render size, which makes it an exact
-    // requirement: one full resolution texture bound alongside the half resolution scene targets
-    // then rejects every one of them, and nothing ever matched.
+    // Keep render size unknown while classifying so mixed-size auxiliary bindings do not force
+    // an incorrect exact extent. The supplied output size defines the candidate aspect/size band.
     rsf_frame_shape shape{};
     shape.struct_size = sizeof(shape);
     shape.output_width = self.options.output_width;
@@ -1696,17 +1599,9 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
-    // Scene colour is chosen by what it is and by matching the motion target's size, in a second
-    // pass because the render resolution is not known until the motion target has been found.
-    //
-    // It used to be taken as slot 0, on Unreal's post process input convention. The game says
-    // otherwise: in the set it actually binds, slot 0 holds R10G10B10A2, which is the GBuffer's
-    // normals, and the colour is a floating point target further along. Taking slot 0 would have
-    // handed a backend the normal buffer, and produced an image that was wrong rather than absent.
-    //
-    // So: a floating point colour format, rendered into, at exactly the motion target's size.
-    // R11G11B10 is what this frame uses and RGBA16F is what the full resolution captures showed,
-    // so both are accepted. R10G10B10A2 deliberately is not, because that is the normals.
+    // Select the first unclassified floating colour target matching motion extent and RT binding.
+    // R11G11B10/RGBA16F are allowed; packed R10G10B10A2 normals are excluded. Descriptor
+    // matches alone do not prove scene/view/frame identity; callers qualify the reported pass.
     if (motion) {
         for (UINT index = 0; index < max_examined_views; ++index) {
             const Tap::Slot& entry = self.slots[index];
@@ -1726,17 +1621,8 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
-    // Velocity, a 1x1 target and depth bound at the same time is the signature. Format rules for
-    // each live in resource_roles.cpp so that this module and the classifier cannot drift apart.
-    //
-    // Edge triggered: the set stays bound across the draws that use it, and firing on every call
-    // while it does would run a backend several times over one frame.
-    // Three roles are each recognised tens of thousands of times and never together, so the
-    // question is no longer whether the rules work but what the pass that uses them looks like.
-    // A near miss, two of the three, is the most informative thing available: it says which
-    // combinations do occur, and describing the whole bound set at that moment says what is in the
-    // slots instead of the third. Bounded, because this writes a line per slot on the render
-    // thread and its job is to answer one question, not to run forever.
+    // Log at most 12 near misses where two of motion/depth/scene are present. This bounds
+    // per-slot formatting on the render thread while explaining why the heuristic did not qualify.
     const uint32_t present = (motion ? 1u : 0u) + (depth ? 1u : 0u) + (scene_color ? 1u : 0u);
     if (present == 2 && self.described < 12) {
         ++self.described;
@@ -1756,11 +1642,8 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
-    // Exposure is not part of the signature, because the game does not bind it here. The set this
-    // frame actually presents is colour, depth and motion at render resolution, with the 1x1
-    // exposure target bound somewhere else, presumably the tonemapper. Requiring it meant waiting
-    // for a set that never arrives, and it was never a requirement in the first place: a backend
-    // handed no exposure derives its own, at some cost to quality and none to running at all.
+    // Qualify on motion, depth and selected scene colour. Exposure is optional because observed
+    // input sets may not bind it at this point; backends may derive exposure separately.
     const bool qualifies = motion && depth && scene_color;
     const bool was_complete = self.signature_complete;
     self.signature_complete = qualifies;
@@ -1812,8 +1695,7 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
                 constants ? "with" : "no");
         }
 
-        // No lock is held here. The callback calls back into D3D, and holding a lock across that
-        // is how this project deadlocked twice.
+        // Run outside guard so callback D3D calls can reenter the hooks under suppression.
         //
         // `live` was read under the lock and can be stale by now: uninstall can return between
         // that read and this call, and the header says an in-flight hook cannot be made to finish
@@ -1827,10 +1709,8 @@ void consider_bound_set(Tap& self, ID3D11DeviceContext* context)
         }
     }
 
-    // Nothing is released here. The shadow owns one reference per occupied slot, taken when the
-    // slot changed and dropped when it changes again or when the tap is uninstalled. Releasing per
-    // call was right while the set had to arrive in one call, and would be a use after free now
-    // that the entries have to survive until the slot is rebound.
+    // Occupied shadows keep their Texture2D references until rebinding or invalidation; callback
+    // return does not release them or freeze future contents of pooled textures.
 }
 
 // Seed inherited state on the owning render thread, also after ClearState/ExecuteCommandList.
@@ -1879,6 +1759,8 @@ void seed_geometry(Tap& self, ID3D11DeviceContext* context)
     self.geometry_valid = true;
 }
 
+// Geometry replay runs immediately after the source draw, before its buffer contents can change.
+// Substituted targets are withheld because their depth/colour pairing differs from native state.
 void report_geometry(Tap& self, ID3D11DeviceContext* context, UINT kind, UINT count, UINT start,
                      INT base, UINT instances = 1, UINT first_instance = 0)
 {
@@ -2157,12 +2039,9 @@ void STDMETHODCALLTYPE hooked_auto(ID3D11DeviceContext* c)
 constexpr size_t extra_slots[] = {18, 19, 17, 24, 11, 7,  20, 21,
                                   110, 58, 39, 40, 38, 9, 35, 36};
 
-// Pass-through hooks for the flush-class calls and for the rest of the work-submission family.
-//
-// None of these is observed. Each exists so the vtable rewrite a call of its kind causes is noticed
-// on the way out, by `refresh_hooks`, rather than by whatever hooked call the game happens to make
-// next, which for a draw right after a clear may be nothing. Indices are positions in
-// `pass_originals`, in the order `pass_hooks` lists them at install.
+// Work/flush hooks refresh the runtime table after forwarding. Map/Unmap and UpdateSubresource
+// also expose selected constant uploads; dispatch hooks can notify research observers. Indices
+// name pass_originals in the order recorded by pass_hooks at installation.
 HRESULT STDMETHODCALLTYPE hooked_map(ID3D11DeviceContext* c, ID3D11Resource* resource,
                                      UINT subresource, D3D11_MAP kind, UINT flags,
                                      D3D11_MAPPED_SUBRESOURCE* mapped)
@@ -2471,6 +2350,8 @@ const PassHook pass_hooks[] = {
     {116, reinterpret_cast<void*>(&hooked_update_subresource1), 15, true},
 };
 
+// Direct draw ordering: apply temporary divert/constants, report pre-phase, refresh/forward once,
+// restore overrides, then report geometry/pass/post-phase. Guarded replay bypasses this sequence.
 void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT index_count,
                                            UINT start_index, INT base_vertex)
 {
@@ -2674,10 +2555,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
     // game object for no benefit.
     self.vtable = *reinterpret_cast<void***>(device_context);
 
-    // Every slot at once, undone as a unit. The bindings and the draws only mean anything together:
-    // hooked bindings with an unhooked draw is a tap that runs and recognises nothing, and a
-    // hooked draw with an unhooked output merger reports draws into a target it cannot name. So a
-    // partial patch is not a degraded tap, it is a confusing one, and it is rolled back.
+    // Install the binding/draw/work family as one unit; roll back every applied patch if any
+    // required slot fails. Partial observation would leave stale shadows or miss gate boundaries.
     const struct {
         size_t index;
         void* replacement;
@@ -2869,9 +2748,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_uninstall(void)
     }
     self.patched_blend_count = 0;
 
-    // The shadow holds one reference per occupied slot. Released after the vtable is restored, so a
-    // hook still in flight cannot find a slot emptied underneath it, which narrows the same window
-    // uninstall already has rather than opening a new one.
+    // After the owner quiesces graphics producers and restores the table, release shadow-owned
+    // texture references. Restoring slots alone cannot retire readers already inside a hook.
     for (Tap::Slot& slot : self.slots) {
         if (slot.texture) {
             slot.texture->Release();
@@ -2923,7 +2801,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan*
         return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
     }
     if (!plan) {
-        // Cleared first, so the render thread stops reading the plan before it is overwritten.
+        // Disable new substitutions, then clear. The owner also retires existing readers before
+        // changing this plain plan storage or releasing resources named by the previous plan.
         self.plan_active.store(false, std::memory_order_relaxed);
         self.plan = rsf_frame_tap_plan{};
         for (bool& gate : self.gate_open) {
@@ -3050,8 +2929,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_divert(
 {
     Tap& self = tap();
     if (!setup || !setup->layer_target || !setup->verdict) {
-        // Disarmed before the layer is dropped, so a draw in flight cannot find a target that is
-        // about to go away.
+        // Disarm future attempts; the owner still keeps layer/callback storage alive until any
+        // already-entered draw finishes, and serializes these plain fields with render work.
         self.divert_armed.store(0, std::memory_order_release);
         self.layer_target = nullptr;
         self.layer_texture = nullptr;
@@ -3129,8 +3008,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_set_candidates(
 
     uint32_t total = 0;
     for (const Copy& copy : copies) {
-        // Shrink first, then write, then publish. A reader between the two sees fewer entries than
-        // there are, never an entry that is being overwritten.
+        // Publish zero during replacement, then the complete count. This does not cancel readers
+        // that already loaded the old count; owner serialization protects the plain array copy.
         copy.published->store(0, std::memory_order_release);
         if (copy.source && copy.count) {
             std::memcpy(copy.destination, copy.source, copy.count * sizeof(void*));
@@ -3155,8 +3034,8 @@ extern "C" rsf_frame_tap_result rsf_frame_tap_watch_target(uint32_t index, void*
     if (!self.installed) {
         return RSF_FRAME_TAP_ERROR_NOT_INSTALLED;
     }
-    // The budget first. Setting the texture first would let the render thread spend a budget that
-    // belongs to the previous watch on the first draw after the store.
+    // Publish budget before identity so a newly matching target can receive its new budget.
+    // These separate atomics are not one transactional watch snapshot across racing callers.
     self.watch_budget[index].store(
         texture ? (limit == 0 ? unlimited_budget : limit) : 0u, std::memory_order_relaxed);
     self.watch[index].store(texture, std::memory_order_relaxed);

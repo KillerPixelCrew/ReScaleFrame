@@ -1,4 +1,22 @@
-# Explicit local SDK deployment. This is never called by verify.ps1.
+<#
+.SYNOPSIS
+Deploy local FidelityFX/XeSS runtime DLLs and notices for AC7.
+.DESCRIPTION
+Validates all source files and Authenticode signatures before writing. Requires AC7 stopped,
+backs up destinations, and restores written files on copy/hash failure. Uses only supplied or
+vendor SDK directories; no SDK discovery/download occurs. Successful copies do not establish
+provider switching or image correctness in a game. Never called by verify.ps1.
+.PARAMETER GameDirectory
+Installation directory containing Ace7Game.exe.
+.PARAMETER FidelityFxRoot
+FidelityFX SDK root; defaults to vendor/fidelityfx.
+.PARAMETER XeSSRoot
+XeSS SDK root; defaults to vendor/xess.
+.PARAMETER ValidateOnly
+Check sources/signatures and print hashes without writing or requiring the game to be stopped.
+.OUTPUTS
+Validation/deployment summary; backup and deployment manifest under .local/deploy-backups.
+#>
 param(
     [Parameter(Mandatory = $true)][string]$GameDirectory,
     [string]$FidelityFxRoot = '',

@@ -1,28 +1,17 @@
-//! The panel itself: what it shows, and what a click on it means.
-//!
-//! This is the half worth testing. It needs an egui context and nothing else, so every widget here
-//! can be laid out, clicked and asserted on without a device, a swap chain or a game.
-//!
-//! Counter-derived FPS is shown separately from generation activity. Latency, quality and
-//! unmeasured speed improvements are not inferred from a requested mode.
+//! Settings layout and click intents, with requested choices kept distinct from runtime state.
+//! The noninteractive HUD displays observed rates and SDK-reported generation activity.
 
 use egui::{Color32, Context, Rect, RichText, Ui, Window};
 
 use crate::model::{Intent, Quality, Stats};
 
-/// Present but not in the state it needs to be in, and anything the user should read before
-/// believing the rest of the panel.
+/// Pending or refused configuration.
 const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3a);
-/// Detail that is true but not load bearing.
+/// Secondary status text.
 const MUTED: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
 
-/// What the panel currently shows as chosen, and what it is waiting to see take effect.
-///
-/// The header points out that the quality last clicked and the quality in effect differ whenever a
-/// change has been requested and not yet applied. That gap is this struct: `requested` holds the
-/// user's ask until the runtime reports it back through the stats, and until then the panel shows
-/// the ask and says that it has not landed. Without this the selection would visibly snap back to
-/// the old level for however many frames the runtime takes to apply it.
+/// Optimistic quality/enable selection. Pending choices persist until stats acknowledge them;
+/// failed or unapplied requests remain visible as pending rather than being silently cleared.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Selection {
     quality: Quality,
@@ -77,9 +66,7 @@ impl Selection {
 
 /// Where the panel's interactive controls ended up, in egui points.
 ///
-/// The C boundary does not pass these on. They exist because the unit tests click the controls,
-/// and clicking a hard coded coordinate would mean every layout change silently stops testing
-/// anything: a click that lands on nothing asserts nothing.
+/// Used by safe-core tests to click the actual layout; these rectangles are not part of the C ABI.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Controls {
     /// One rectangle per quality level, in [`Quality::ALL`] order. `None` when the panel was not
@@ -87,7 +74,7 @@ pub struct Controls {
     pub quality: [Option<Rect>; 5],
     /// The enable toggle.
     pub enabled: Option<Rect>,
-    /// One control per SR backend.
+    /// DLSS, FSR2, FSR3, FSR4 and XeSS rectangles. FSR1 is not recorded in this array.
     pub backend: [Option<Rect>; 5],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
     pub fg_backend: [Option<Rect>; 5],
@@ -133,6 +120,8 @@ fn body(
     ui.label(RichText::new("Insert to close").small().color(MUTED));
 }
 
+/// Emit one-shot setting changes. SR shows the effective provider; FG shows the saved request
+/// and gates mode controls until the presentation owner confirms the selected provider.
 fn controls_section(
     ui: &mut Ui,
     selection: &Selection,
@@ -478,10 +467,7 @@ fn controls_section(
         (None, Some(_)) => {}
     }
 
-    // The same gap as above, for the toggle. Without this the box stays ticked while the runtime
-    // reports reconstruction off, which is the panel claiming a state that is not in effect, and it
-    // stays that way for as long as the runtime never applies it. Reconcile has already cleared the
-    // request by the time the two agree, so a request still here is one that has not landed.
+    // Reconciliation clears the request only when runtime state acknowledges it.
     if let Some(requested) = selection.requested_enabled {
         ui.label(
             RichText::new(format!(
@@ -504,6 +490,7 @@ fn fg_backend_name(backend: u32) -> &'static str {
     }
 }
 
+/// Paint observed FPS independently of settings visibility. Missing sampling windows show `--`.
 pub(crate) fn performance_hud(ctx: &Context, rates: crate::performance::Rates, stats: &Stats<'_>) {
     let format_rate =
         |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));

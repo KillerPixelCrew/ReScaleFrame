@@ -9,6 +9,8 @@
 #include <cstring>
 #include <new>
 
+// Own the device and replacement buffers; originals are address-only keys. written is a logical
+// recency clock, not a GPU fence, and every slot has the same fixed buffer width.
 struct rsf_constant_twins {
     ID3D11Device* device = nullptr;
     uint32_t bytes = 0;
@@ -67,6 +69,8 @@ extern "C" void* rsf_constant_twins_write(rsf_constant_twins* twins, void* conte
             oldest = &entry;
         }
     }
+    // Unused/forgotten slots have timestamp zero and are chosen before occupied recent slots.
+    // Eviction changes the key and contents, invalidating any prior borrowed twin association.
     if (!slot) {
         // A twin already made is reused for the new original; only its owner changes.
         slot = oldest;

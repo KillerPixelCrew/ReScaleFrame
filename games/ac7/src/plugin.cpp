@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <mutex>
 
+// Implements the Game SDK lifecycle for AC7. Preparation validates the researched renderer sites;
+// start enables producers, quiesce stops new work, and stop releases the renderer after it drains.
 namespace {
 constexpr char known_sha256[] =
     "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f";
@@ -13,11 +15,14 @@ rsf_ac7_native_renderer* renderer = nullptr;
 bool transitioning = false, active = false;
 const char* reason = "Native renderer has not been prepared.";
 
+// Size/version guard for every native call structure. Validation never retains caller storage.
 template<class T> rsf_result validate(const T* value)
 {
     if (!value || value->struct_size < sizeof(T)) return RSF_ERROR_INVALID_ARGUMENT;
     return value->abi_version == RSF_GAME_ABI_VERSION ? RSF_OK : RSF_ERROR_ABI_MISMATCH;
 }
+// Serialize lifecycle admission, then prepare outside the mutex because native/log callbacks can
+// reenter status. Retain a controller even on failed partial activation if native calls still own it.
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -35,6 +40,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
         options.cpu_event = args->host->cpu_event;
         options.on_state = args->host->scope_state;
         rsf_ac7_native_renderer* created = nullptr;
+        // Expected-byte refusal yields no controller; partial activation can yield a retained one.
         const bool prepared = rsf_ac7_native_renderer_prepare(&options, &created) != 0;
         { std::lock_guard<std::mutex> lock(lifecycle_guard);
           transitioning = false; renderer = created;
@@ -46,6 +52,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
         return RSF_ERROR_NOT_READY;
     }
 }
+// Activate a prepared controller after host graphics services are established.
 rsf_result start(const rsf_game_start_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -69,6 +76,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept
         std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
     }
 }
+// Stop new native production while preserving callbacks/module ownership for queued work.
 rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -89,6 +97,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
         std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
     }
 }
+// Retire only after quiescence; a busy/refused stop leaves the handle available for another attempt.
 rsf_result stop(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -99,6 +108,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept
             if (transitioning || active) return RSF_ERROR_BUSY;
             transitioning = true; current = renderer;
         }
+        // A failed drain keeps the renderer handle valid so the host can retry without unloading it.
         const bool stopped = !current || rsf_ac7_native_renderer_stop(current) != 0;
         {
             std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false;
@@ -110,6 +120,8 @@ rsf_result stop(const rsf_game_control_args* args) noexcept
         std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
     }
 }
+// Report live native deactivation separately from the lifecycle's requested active state.
+// The ABI readiness flag remains zero independently of release/session evidence in the README.
 rsf_result status(rsf_game_renderer_status* output) noexcept
 {
     const auto valid = validate(output); if (valid != RSF_OK) return valid;
@@ -144,6 +156,7 @@ bool equal_ascii(const char* value, const char* expected) noexcept
     }
 }
 
+// Exact researched x64 executable identity. Recognition does not establish decrypted hook readiness.
 rsf_detection detect(const rsf_game_probe* probe) noexcept
 {
     if (!probe || probe->struct_size < sizeof(rsf_game_probe) || probe->pe_machine != 0x8664) {
@@ -156,6 +169,7 @@ rsf_detection detect(const rsf_game_probe* probe) noexcept
 }
 }
 
+// Publish plugin-owned static metadata and C callbacks after size/requested-version validation.
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api) noexcept
 {

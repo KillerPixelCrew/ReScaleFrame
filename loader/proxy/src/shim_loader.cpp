@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Generic version.dll carrier. Windows exports resolve lazily and independently of mod startup.
+// DllMain selects the AC7 carrier or starts a Unity worker; DLL loading and Mono waits occur in
+// that worker. The system version module and loaded runtime remain for the process lifetime.
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -17,6 +20,8 @@ constexpr const char* names[] = {
     "GetFileVersionInfoSizeA", "GetFileVersionInfoSizeExA", "GetFileVersionInfoSizeExW", "GetFileVersionInfoSizeW",
     "GetFileVersionInfoW", "VerFindFileA", "VerFindFileW", "VerInstallFileA", "VerInstallFileW",
     "VerLanguageNameA", "VerLanguageNameW", "VerQueryValueA", "VerQueryValueW"};
+// Indexed by version_forwarders.asm, not shim_exports.def ordinals. InitOnce serializes lazy
+// loading from System32 so a version.dll proxy cannot recursively load itself by basename.
 BOOL CALLBACK initialize(PINIT_ONCE, void*, void**)
 {
     wchar_t directory[MAX_PATH]{};
@@ -28,6 +33,10 @@ BOOL CALLBACK initialize(PINIT_ONCE, void*, void**)
     for (size_t i = 0; i < 17; ++i) exports[i] = GetProcAddress(system_version, names[i]);
     return TRUE;
 }
+// An existing ReScaleFrame.ini enables mod startup; [UnitySR] AutoStart defaults to 1.
+// Install generation interception before the first chain, then wait up to 90 seconds for Mono
+// and retry SR startup while its entry returns 10 (not ready). Returned status is diagnostic;
+// Windows API forwarding remains usable even when this worker refuses or catches an exception.
 DWORD WINAPI startup(void*) noexcept try
 {
     wchar_t file[32768]{};
@@ -83,6 +92,8 @@ DWORD WINAPI startup(void*) noexcept try
 catch (...) { return 1; }
 }
 
+// Called by assembly forwarding stubs. The resolver deliberately raises a noncontinuable
+// exception for an unavailable export because generic wrappers cannot synthesize its return ABI.
 extern "C" FARPROC rsf_version_resolve(uint32_t index)
 {
     if (index >= 17 || !InitOnceExecuteOnce(&initialized, initialize, nullptr, nullptr) || !exports[index]) {
@@ -92,6 +103,8 @@ extern "C" FARPROC rsf_version_resolve(uint32_t index)
     }
     return exports[index];
 }
+// Dispatch AC7 process attachment by executable name; crash reporters need forwarding only.
+// Other processes receive a detached Unity worker. No renderer teardown runs under loader lock.
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
 {
     if (reason == DLL_PROCESS_ATTACH) {

@@ -1,7 +1,9 @@
-"""Count rip-relative references from code to given strings in a dumped module.
+"""Find candidate RIP-relative string references in an x64 ReScaleFrame module dump.
 
-Answers whether the code that would use a string is still present. Raw offsets equal virtual
-addresses in a ReScaleFrame module dump, so a file offset is an RVA.
+Requires a dump whose raw file offsets equal RVAs, not an ordinary packed PE file. Scans signed
+displacements at every code byte without decoding instructions; candidates can be false positives.
+Reported addresses assume the displacement follows a three-byte instruction prefix and must be
+confirmed in a disassembler. The search appends a two-byte NUL, matching the default UTF-16 input.
 """
 
 import argparse
@@ -10,6 +12,7 @@ from pathlib import Path
 
 
 def sections(data):
+    """Read preferred image base and PE32+ section extents; input must be a valid x64 dump."""
     pe = struct.unpack_from("<I", data, 0x3C)[0]
     count = struct.unpack_from("<H", data, pe + 6)[0]
     optional_size = struct.unpack_from("<H", data, pe + 20)[0]
@@ -25,6 +28,7 @@ def sections(data):
 
 
 def occurrences(data, needle):
+    """Return all byte offsets, including overlapping matches."""
     found = []
     position = data.find(needle)
     while position >= 0:
@@ -34,6 +38,7 @@ def occurrences(data, needle):
 
 
 def main():
+    """Print candidate counts/addresses only; the module dump is never written or loaded."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dump", type=Path)
     parser.add_argument("strings", nargs="+")

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check D3D12 resource leases with WARP and independently signalled fences.
+ * A one-slot lease must retain a resource after the caller drops its reference and
+ * wait for both submission and vendor completion. Stale IDs, cancellation and busy
+ * destruction are covered; CPU fence signals isolate lifetime rules from GPU work.
+ */
 #include <rescaleframe/fg_leases.h>
 #include <windows.h>
 #include <d3d12.h>

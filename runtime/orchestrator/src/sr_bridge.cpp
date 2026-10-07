@@ -9,6 +9,8 @@
 #include <new>
 using Microsoft::WRL::ComPtr;
 
+// Same-adapter D3D11 input/output transfers around a private D3D12 SR queue. Three command
+// allocators rotate; shared surfaces stay ordered by one cross-API monotonically increasing fence.
 struct rsf_sr_bridge {
     ComPtr<ID3D11Device> device11;
     ComPtr<ID3D11DeviceContext4> context11;
@@ -36,11 +38,14 @@ struct rsf_sr_bridge {
     uint32_t auto_exposure = 0;
 };
 namespace {
+// Once queue ordering/completion is uncertain, refuse further reuse of shared resources.
 rsf_backend_result gpu_failure(rsf_sr_bridge* bridge)
 {
     bridge->faulted = true;
     return RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+// CPU join for allocator/SDK/storage retirement, bounded to ten seconds. GPU transfer waits
+// elsewhere remain queued waits, so ordinary evaluation does not wait for its own completion.
 rsf_backend_result wait_value(rsf_sr_bridge* bridge, uint64_t value)
 {
     if (!value) return RSF_BACKEND_OK;
@@ -68,6 +73,8 @@ void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
     barrier.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after};
     list->ResourceBarrier(1, &barrier);
 }
+// Reallocate only after previous D3D11 consumers and D3D12 readers have retired. The session's
+// fixed output extent is validated during evaluate; render extent/color/motion format drive reuse.
 rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame)
 {
     const auto& record = *frame.record;

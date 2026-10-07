@@ -1,21 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Sets of pipeline objects, kept by address, with the one rule that makes that safe.
-
-   Identifying a draw cheaply means settling what each object is once, when the game creates it, and
-   then comparing pointers at the draw. The comparison is the easy half. The hard half is that a
-   pointer only means something while the object behind it is alive: D3D11 hands out a released
-   address again immediately, and this project has watched a freshly created vertex shader land on
-   the address a pixel shader vacated two lines earlier. A set that remembered the old answer would
-   then be confidently wrong about a live object, which is worse than knowing nothing.
-
-   So every creation forgets the address first, across every set, and only then records what the new
-   object is. That is the whole design, and it is why this is a module rather than a few arrays: the
-   forgetting has to be impossible to skip.
-
-   What an object *is* does not live here. Whether a declaration is Slate's, or a texture is a
-   widget target, is a game question answered in `games/<id>`; this holds the answer and nothing
-   more. Bounded, so a misfiring rule cannot grow without limit, and allocation free after creation,
-   because the caller is inside the game's own creation path. */
+/* Bounded pointer-membership registries for game-defined draw classification. Objects are not
+   retained: call forget on every newly created object before adding its classification, so a
+   recycled COM address cannot inherit an old role. The caller supplies all game-specific rules
+   and serializes reads and mutations. Registry views borrow internal storage. */
 
 #ifndef RSF_UI_IDENTIFY_H
 #define RSF_UI_IDENTIFY_H
@@ -26,13 +13,10 @@
 extern "C" {
 #endif
 
-/* 2: `rsf_ui_registry_note_recent` and the eviction counter, for the widget-target set, which the
-   first Windows run filled with the menus' targets and then refused the briefing's 777,752 times. */
+/* ABI 2 adds recent-membership eviction and its counters. */
 #define RSF_UI_IDENTIFY_ABI_VERSION 2u
 
-/* Which set an object belongs to. An object is in at most one: they are answers to the same
-   question, and a thing that is both Slate's declaration and the canvas's is a bug in the rule that
-   said so, not a state to represent. */
+/* Game-defined roles. add does not enforce exclusive membership; caller rules must do so. */
 typedef uint32_t rsf_ui_set;
 #define RSF_UI_SET_SLATE_LAYOUT ((rsf_ui_set)0)
 #define RSF_UI_SET_CANVAS_LAYOUT ((rsf_ui_set)1)
@@ -45,9 +29,7 @@ typedef int32_t rsf_ui_result;
 #define RSF_UI_OK ((rsf_ui_result)0)
 #define RSF_UI_ERROR_INVALID_ARGUMENT ((rsf_ui_result)-1)
 #define RSF_UI_ERROR_ABI_MISMATCH ((rsf_ui_result)-2)
-/* The set is full. Reported rather than silently dropped: a set that quietly stopped recording is
-   indistinguishable from a rule that stopped matching, and this project has spent runs on that
-   distinction. */
+/* Fixed membership set capacity exhausted. note_recent instead evicts the oldest entry. */
 #define RSF_UI_ERROR_FULL ((rsf_ui_result)-3)
 
 /* Upper bounds. A frame has a handful of interface declarations, a few dozen converter targets,
@@ -60,8 +42,9 @@ typedef int32_t rsf_ui_result;
 
 typedef struct rsf_ui_registry rsf_ui_registry;
 
-/* Create an empty registry. Returns null only when out of memory. */
+/* Create an empty registry; null for ABI mismatch or allocation failure. */
 rsf_ui_registry* rsf_ui_registry_create(uint32_t abi_version);
+/* Free the registry's identity arrays; no GPU object is released. Null is accepted. */
 void rsf_ui_registry_destroy(rsf_ui_registry* registry);
 
 /* Record that `object` belongs to `set`.
@@ -75,11 +58,9 @@ rsf_ui_result rsf_ui_registry_add(rsf_ui_registry* registry, rsf_ui_set set, voi
 
    For a set whose membership is re-observed continuously rather than fixed at creation, which is
    the widget targets: a converter target is confirmed every frame a Slate draw fills it. Entries
-   are kept in the order they were last seen; seeing one again moves it to the back, and adding one
-   to a full set evicts the one seen longest ago, counted in `evicted`. Measured why on 26 September
-   2026: the menus used 32 converter targets, the set held 32, and every one the briefing needed was
-   refused, so its widget quads never classified and its interface stayed magnified. An evicted
-   target that is still in use comes back the next frame its converter draws into it.
+   are ordered by most recent observation; repeated observation moves an entry to the back.
+   Adding to a full set evicts its front entry and increments evicted. forget uses unordered
+   removal, so after invalidation that ordering is rebuilt by subsequent observations.
 
    Returns 1 when the membership changed, a new entry with or without an eviction, and 0 when the
    object was already there, so a caller republishing the set does it only when it has to. */
@@ -89,19 +70,17 @@ int rsf_ui_registry_note_recent(rsf_ui_registry* registry, rsf_ui_set set, void*
    the new one is, whether or not the address was ever recorded. Cheap when it was not. */
 void rsf_ui_registry_forget(rsf_ui_registry* registry, void* object);
 
+/* Nonzero for membership; zero for absent objects or invalid registry/set arguments. */
 int rsf_ui_registry_contains(const rsf_ui_registry* registry, rsf_ui_set set, const void* object);
 
-/* The set as a contiguous array, for handing to a game's own rule.
-
-   Valid until the next add or forget, which is the same thread and the same call stack in practice:
-   the sets change on the game's creation path and are read on its draw path. */
+/* Borrow the contiguous membership array, optionally returning its count. Null for invalid input.
+   Mutations (add/note_recent/forget) can change its entries/order; destruction ends its lifetime.
+   Serialize consumption with mutation or copy the identities before publishing to another thread. */
 void* const* rsf_ui_registry_view(const rsf_ui_registry* registry, rsf_ui_set set,
                                   uint32_t* count_out);
 
-/* How many adds were refused because a set was full, and how many recorded objects were dropped
-   because their address was handed out again. Both are worth reporting: the first says a rule is
-   matching more than it should, the second says how often the hazard this module exists for
-   actually occurs in a real frame, which nobody has measured. */
+/* Cumulative rejected adds, invalidated memberships, successful insertions, and evictions.
+   recorded counts insertions, including reinsertions, rather than current set size. */
 typedef struct rsf_ui_registry_counters {
     uint32_t struct_size;
     uint32_t refused_full[RSF_UI_SET_COUNT];
@@ -111,6 +90,7 @@ typedef struct rsf_ui_registry_counters {
     uint32_t evicted[RSF_UI_SET_COUNT];
 } rsf_ui_registry_counters;
 
+/* Copy diagnostic totals into a caller structure initialized with struct_size. */
 rsf_ui_result rsf_ui_registry_get_counters(const rsf_ui_registry* registry,
                                            rsf_ui_registry_counters* counters);
 

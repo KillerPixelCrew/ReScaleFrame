@@ -1,28 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The surface the game's interface is drawn into instead of into the scene.
-
-   This is the thing that makes the interface sharp. AC7 rasterizes its front end at a fixed
-   1920x1080 and then draws it as world space quads into a render-resolution layer of its own, which
-   the game upscales along with everything else. Promotion cannot fix that: there is no target whose
-   promotion sharpens geometry that was rasterized into the scene. Moving those draws into a layer
-   at output resolution can, and this is the layer.
-
-   What it has to be is decided by the vendors rather than by us, because the same surface is handed
-   to frame generation later and all three SDKs ask for the same thing:
-
-     - `R8G8B8A8_UNORM`, never the back buffer's `R10G10B10A2`. Two bits of alpha cannot express
-       partial coverage, and coverage is the whole content of this surface.
-     - Premultiplied: colour already scaled by its own alpha, so the composite is an add.
-     - Alpha zero where there is no interface, which means cleared to zero and not to black.
-     - The back buffer's extent, because that is what it is composited against.
-
-   Never bound with a depth stencil view. The draws being moved here bind the scene's depth, and
-   keeping that would mean depth testing the interface against a scene it is no longer part of, as
-   well as requiring the two extents to match. Depth decides what a divert does, not what the layer
-   is.
-
-   Double buffered. A frame generation vendor may hold the layer until the next present rather than
-   consuming it during the call, so the frame being drawn cannot be the frame being read. */
+/* Two-slot D3D11 UI-layer ring at output resolution, with eight-bit RGBA coverage and transparent
+   clears. Draw premultiplied colour without a depth view; composite as ui.rgb + (1-ui.a)*scene.
+   Views/textures are layer-owned and borrowed by callers. The ring preserves the previous slot
+   while the current one is drawn, but provides no fence: the caller must finish consumption before
+   a slot is reused. Serialize creation, begin_frame, access, and destruction with render work. */
 
 #ifndef RSF_UI_LAYER_H
 #define RSF_UI_LAYER_H
@@ -41,8 +22,7 @@ typedef int32_t rsf_ui_layer_result;
 #define RSF_UI_LAYER_ERROR_ABI_MISMATCH ((rsf_ui_layer_result)-2)
 #define RSF_UI_LAYER_ERROR_RESOURCE_FAILED ((rsf_ui_layer_result)-3)
 
-/* How many frames the ring holds. Two is enough for a vendor that reads the previous frame's layer
-   while this one is being drawn, and more would only delay the memory being reused. */
+/* Two slots; external GPU consumers must finish before a slot cycles back. */
 #define RSF_UI_LAYER_RING 2u
 
 typedef void (*rsf_ui_layer_log_fn)(void* user, const char* message);
@@ -57,14 +37,9 @@ typedef struct rsf_ui_layer_setup {
        presentation bridge. Costs nothing when unused and cannot be added later without recreating,
        which is why it is asked for at creation. */
     uint32_t shareable;
-    /* Write through an sRGB view, so a shader's linear output is encoded on the way in exactly as
-       it was in the target the draws were taken from.
-     *
-     * This is not cosmetic. Unreal allocates its targets typeless and chooses per view; a draw that
-       was being encoded and now is not stores linear values where encoded ones are expected, and
-       the whole layer comes out dark and desaturated while every count says it worked. The texture
-       is created typeless so both views can exist over it, and the composite reads back through a
-       matching sRGB view so the decode undoes the encode exactly. */
+    /* Use a typeless texture with an sRGB RTV to encode linear shader output on write. The SRV
+       remains plain UNORM, so a composite onto an encoded back buffer reads stored encoded colour
+       without decoding it. Zero uses UNORM for both views. */
     uint32_t srgb;
     rsf_ui_layer_log_fn log;
     void* log_user;
@@ -94,11 +69,7 @@ void* rsf_ui_layer_source(rsf_ui_layer* layer);
    opening it on another device. */
 void* rsf_ui_layer_texture(rsf_ui_layer* layer);
 
-/* Record that something was drawn into the layer this frame.
-
-   The composite is skipped when nothing was, which matters more than it sounds: a compositing draw
-   over every frame that has no interface on it is pure cost, and a run that reports zero drawn and
-   still composites is describing a bug. */
+/* Mark current slot written; the owner uses the flag to skip an empty-layer composite. */
 void rsf_ui_layer_mark_written(rsf_ui_layer* layer);
 
 typedef struct rsf_ui_layer_status {

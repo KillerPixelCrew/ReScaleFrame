@@ -9,20 +9,26 @@ using UnityEngine.Rendering.Universal;
 
 namespace ReScaleFrame.Unity
 {
+    /// <summary>Loads the managed adapter on Unity's main thread and owns its producer lifecycle.</summary>
     public static class Bootstrap
     {
         internal const string Owner = "org.killerpixelcrew.rescaleframe.unity-mono";
         internal static readonly Harmony Harmony = new Harmony(Owner);
+        // 0 inert, 1 waiting for main loop, 2 installed, 3 refused, 4 stopping.
+        // producerGate serializes admission with Stop; reports use the native bridge's matching stages.
         private static int state;
         private static int mainThread;
         private static string failure;
         private static readonly object producerGate = new object();
         private static int producers;
+        /// <summary>One admitted callback; disposal releases its producer count exactly once.</summary>
         internal sealed class Producer : IDisposable
         {
             internal bool Valid;
+            // Pair every admitted callback with a decrement so Stop can wait for producers to drain.
             public void Dispose() { if (Valid) { lock (producerGate) --producers; Valid = false; } }
         }
+        /// <summary>Admit work only in the installed state while synchronizing with Stop.</summary>
         internal static Producer EnterProducer()
         {
             lock (producerGate)
@@ -33,7 +39,10 @@ namespace ReScaleFrame.Unity
             }
         }
 
-        // Called on an attached Mono thread. Unity objects are accessed only after its render loop.
+        /// <summary>Initialize callbacks and patch the managed loop from an owned Mono-attached thread.</summary>
+        /// <param name="nativeApi">Borrowed native API address; its contents are copied before return.</param>
+        /// <returns>Zero after bootstrap installation, -1 on duplicate admission or failure.</returns>
+        /// <remarks>Unity object access is deferred to RenderLoop on the player's main thread.</remarks>
         public static int Start(IntPtr nativeApi)
         {
             if (Interlocked.CompareExchange(ref state, 1, 0) != 0) return -1;
@@ -59,6 +68,8 @@ namespace ReScaleFrame.Unity
             }
         }
 
+        /// <summary>Activate supported URP/D3D12 adapters on the first eligible main-thread loop.</summary>
+        /// <remarks>A pipeline/version/device refusal removes this owner's Harmony patches and reports stage 3.</remarks>
         private static void RenderLoop()
         {
             lock (producerGate) { if (state != 1) return; ++producers; }
@@ -89,7 +100,11 @@ namespace ReScaleFrame.Unity
             finally { lock (producerGate) --producers; }
         }
 
+        /// <summary>Whether this callback may access eligible camera state on the installed main thread.</summary>
         internal static bool OnMainThread => Volatile.Read(ref state) == 2 && Thread.CurrentThread.ManagedThreadId == mainThread;
+        /// <summary>Close admission, unpatch owned producers and clear managed adapter state.</summary>
+        /// <returns>Zero after cleanup, -1 while an admitted producer still needs to leave.</returns>
+        /// <remarks>Retry a busy stop while keeping native callbacks loaded; native GPU drainage is separate.</remarks>
         public static int Stop()
         {
             lock (producerGate) { state = 4; if (producers != 0) return -1; }

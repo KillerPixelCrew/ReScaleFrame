@@ -1,6 +1,10 @@
-/* Dump this test's own main module and verify the result, which exercises the whole reader,
-   writer and import walker without a game and without any protected binary involved. */
-
+/**
+ * @file
+ * Check live-module dumping and import walking using this fixture's executable.
+ * The output directory is supplied by CTest. Header mappings, entry-point/section
+ * bytes, entropy and a known import are compared with the loaded module; no game or
+ * protected binary is needed. Files are disposable test artifacts.
+ */
 #include <rescaleframe/module_dump.h>
 
 #include <windows.h>

@@ -1,9 +1,10 @@
-// Assemble a backend's frame from what a plugin knows, and refuse the pairings that cannot work.
-//
-// Every check here corresponds to something this project got wrong at least once: sending the
-// jittered projection, handing over motion still in the game's storage, or accepting a view with no
-// jitter at all, which produces an integration that works and is quietly soft.
-
+/**
+ * @file
+ * Check backend-frame assembly from synthetic camera and resource metadata.
+ * Distinct opaque texture identities and matrix markers detect field swaps. Cases
+ * cover pixel jitter, decoded-motion sentinels, reversed infinite-Z conversion,
+ * optional exposure and refusal of unusable or incompatible frame records.
+ */
 #include <rescaleframe/frame_assembly.h>
 
 #include <cmath>
@@ -114,9 +115,7 @@ int main()
     check(frame.render_width == 1024 && frame.output_width == 2048, "The sizes must carry over.");
     check(frame.quality == RSF_DLSS_QUALITY_PERFORMANCE, "The quality level must carry over.");
 
-    // The matrix that matters. A projection still carrying the jitter makes the reconstruction
-    // correct for a camera that was never rendered, which reads as softness rather than as a bug,
-    // so the marker values exist to catch exactly this.
+    // Distinct markers pin the plugin-supplied projection and both reprojection directions.
     check(std::fabs(frame.camera_view_to_clip[3] - 1.5f) < 1e-6f,
           "cameraViewToClip must come from the projection the plugin supplied.");
     check(std::fabs(frame.clip_to_camera_view[3] - 2.5f) < 1e-6f,
@@ -137,8 +136,7 @@ int main()
     check(frame.far_plane > 1.0e6f,
           "An infinite far plane must become a number a backend can use.");
 
-    // Refusals. Each of these is a frame that would assemble into something that renders and is
-    // wrong, which is worse than one that refuses.
+    // Invalid frame metadata must refuse before reaching the vendor.
     rsf_pipeline_camera_frame broken = camera;
     broken.has_jitter = 0;
     check(rsf_assemble_dlss_frame(&broken, &resources, &frame) ==

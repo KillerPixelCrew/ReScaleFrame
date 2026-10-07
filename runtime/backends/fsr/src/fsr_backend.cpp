@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* FSR2, FSR3 and FSR4 reconstruction through the official versioned DX12 API.
-   Frame generation remains a refusing provider; it is never advertised as implemented. */
+   The legacy FG table refuses work; fsr_generation.cpp implements the separate generation API. */
 
 #include <rescaleframe/backend.h>
 #include <rescaleframe/fsr_backend.h>
@@ -18,6 +18,7 @@
 
 namespace {
 
+/* Probe diagnostics borrow the message only for the sink call. */
 void say(const rsf_backend_probe_desc* desc, const char* message)
 {
     if (desc && desc->log) {
@@ -25,6 +26,9 @@ void say(const rsf_backend_probe_desc* desc, const char* message)
     }
 }
 
+/** Describe compiled SR capability without loading DLLs or creating contexts. Live runtime,
+ * hardware, and requested-family validation belongs to sr_open. Clears caps while preserving size.
+ */
 rsf_backend_result probe(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps)
 {
     if (!desc || !caps || desc->struct_size < sizeof(rsf_backend_probe_desc) ||
@@ -67,6 +71,7 @@ rsf_backend_result probe(const rsf_backend_probe_desc* desc, rsf_backend_caps* c
 
 #if !defined(RSF_HAVE_FFX)
 
+/* ABI-preserving stubs distinguish absent SDK headers from a live feature refusal. */
 rsf_backend_result sr_open(const rsf_sr_open_desc*, void**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 rsf_backend_result sr_plan(void*, rsf_quality, uint32_t*, uint32_t*)
 {
@@ -108,6 +113,7 @@ void fg_destroy(void*) {}
 
 #include "fsr_sr.inl"
 
+/* The legacy FG interface is unsupported even when SR is compiled. */
 rsf_backend_result fg_create(const rsf_fg_swapchain_desc*, rsf_fg_swapchain_result*, void**)
 {
     return RSF_BACKEND_ERROR_NOT_READY;
@@ -132,6 +138,7 @@ void fg_destroy(void*) {}
 
 #endif
 
+/* Immutable dispatch tables; opaque sessions are created and closed by these callbacks. */
 const rsf_sr_provider sr_provider = {
     sizeof(rsf_sr_provider), probe, sr_open, sr_plan, sr_evaluate, sr_release, sr_close,
 #if defined(RSF_HAVE_FFX)

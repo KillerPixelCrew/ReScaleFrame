@@ -1,11 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* FidelityFX, behind the contract every vendor implements.
- *
- * There is nothing vendor-specific in this header on purpose. Everything a caller needs is in
- * `backend.h`, and the only thing this adds is the two getters, which exist whether or not the SDK
- * was available at build time. A caller therefore asks the same question of all three vendors and
- * gets an answer from each, rather than a link error from the ones that are not there.
- */
+/** @file FidelityFX provider accessors for the common backend contract. */
 
 #ifndef RSF_FSR_BACKEND_H
 #define RSF_FSR_BACKEND_H
@@ -16,9 +10,11 @@
 extern "C" {
 #endif
 
-/* Declared in backend.h alongside the other vendors' and defined here. Repeated in this header so
-   that including it is enough, which is what a caller linking only this backend expects. */
+/** Return an immutable module-owned SR table. Probe reports compile capability; open checks
+ * the DX12 device/runtime and requested FSR2/3/4 family. The caller never frees this table.
+ */
 const rsf_sr_provider* rsf_fsr_sr_provider(void);
+/** Legacy FG table that refuses work. Live FG uses rsf_generation_fsr() in frame_generation.h. */
 const rsf_fg_provider* rsf_fsr_fg_provider(void);
 
 #ifdef __cplusplus

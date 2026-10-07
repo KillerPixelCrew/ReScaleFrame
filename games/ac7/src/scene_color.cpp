@@ -4,11 +4,9 @@
 
 #include <dxgiformat.h>
 
-// The layers the recombine reads. The depth of field layers are half size; separate translucency is
-// whatever size it is told to render at, which is the presented size when it stays out of the
-// reconstruction, so anything from half to four times the scene's size with its aspect counts.
-// Native translucency exceeds twice the scene at Ultra Performance; the scale patch caps at four.
-// The pool rounds rows up to a multiple of four, hence the tolerance on the aspect.
+// Render-thread scene selection from the captured recombine shape; see
+// docs/research/ac7-composed-scene-color.md. Candidate layers span half to four times scene size,
+// allowing output-size translucency at low presets and pooled row-alignment/aspect tolerance.
 static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_width,
                             uint32_t scene_height)
 {

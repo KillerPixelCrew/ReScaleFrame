@@ -1,9 +1,5 @@
-//! The structures and constants of `include/rescaleframe/overlay.h`, mirrored field for field.
-//!
-//! Nothing here has behaviour. It exists so the C header has exactly one Rust counterpart, and so
-//! a change to the header shows up as a diff in one file rather than as a silently wrong offset in
-//! the middle of a game's frame. The layout test in this module pins the offsets the header
-//! implies on a 64-bit target.
+//! Field-for-field C layouts from `overlay.h`. Rust fixtures pin sizes/offsets on 64-bit targets;
+//! native C agreement is checked separately by the overlay host fixtures.
 
 use core::ffi::c_char;
 
@@ -17,7 +13,7 @@ pub type RsfOverlayResult = i32;
 pub const RSF_OVERLAY_OK: RsfOverlayResult = 0;
 /// A null pointer, or a struct that is shorter than this build's version of it.
 pub const RSF_OVERLAY_ERROR_INVALID_ARGUMENT: RsfOverlayResult = -1;
-/// The caller compiled against a different `RSF_OVERLAY_ABI_VERSION`.
+/// Reserved version-mismatch result; the current creation export reports mismatch with null.
 pub const RSF_OVERLAY_ERROR_ABI_MISMATCH: RsfOverlayResult = -2;
 /// A panic was caught at the boundary. The handle is only good for destruction afterwards.
 pub const RSF_OVERLAY_ERROR_PANICKED: RsfOverlayResult = -3;
@@ -65,7 +61,7 @@ pub struct RsfOverlayStats {
     pub output_width: u32,
     /// Height the result is presented at.
     pub output_height: u32,
-    /// Frames presented since the overlay was created.
+    /// Legacy session presentation counter supplied by the host.
     pub frames_presented: u32,
     /// Frames the backend actually evaluated.
     pub frames_evaluated: u32,
@@ -103,8 +99,7 @@ pub struct RsfOverlayStats {
     pub captures_written: u32,
     /// Appended in ABI 3. Non-zero while the engine's temporal jitter gate is open.
     pub jitter_on: u32,
-    /// Non-zero when the jitter patch verified its site, so there is a gate to open. Zero after a
-    /// game update moved the code, and the panel shows that rather than offering a dead switch.
+    /// Non-zero when the jitter patch verified its site and the gate can be controlled.
     pub jitter_available: u32,
     /// Effective SR backend, in the C header order.
     pub backend: u32,
@@ -155,11 +150,11 @@ pub struct RsfOverlayStats {
     pub display_refresh_mhz: u32,
     /// ABI 9. Active generation provider (zero is Off).
     pub fg_backend: u32,
-    /// Saved provider for next startup.
+    /// Saved/requested provider for startup or the next supported runtime switch.
     pub fg_requested_backend: u32,
-    /// Implemented provider IDs as bits; hardware compatibility is checked at startup.
+    /// Implemented provider ID bits; bit 31 advertises runtime switching, not GPU support.
     pub fg_backend_choices: u32,
-    /// Last provider-selection persistence result.
+    /// Last provider persistence or runtime selection result.
     pub fg_selection_result: i32,
 }
 
@@ -221,7 +216,7 @@ pub struct RsfOverlayIntent {
     pub frame_limit_changed: u32,
     /// Requested minimum interval between rendered frames in microseconds. Zero is unlimited.
     pub frame_limit_us: u32,
-    /// Save a new provider for next startup.
+    /// Save/select a provider, applied according to the presentation owner's capabilities.
     pub fg_backend_changed: u32,
     /// Provider ID; zero selects Off.
     pub fg_backend: u32,
@@ -283,7 +278,7 @@ pub struct RsfOverlayInput {
     pub display_height: u32,
     /// Seconds since the previous frame.
     pub delta_seconds: f32,
-    /// Zero draws only the optional startup hint, without discarding widget state.
+    /// Zero hides interactive settings; optional hint/HUD may draw and widget state survives.
     pub visible: u32,
     /// Host-timed startup hint opacity, clamped to 0..1. Appended in ABI 5.
     pub startup_hint_alpha: f32,

@@ -155,7 +155,8 @@ Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 - Current game ABI is 13. `game_renderer.h` defines leased rendering passes, CPU events and host
   services; `game_frame.h` defines frame/camera ABI 1. The older ABI 2 sketches in the representation
   plan are historical design, not the current contract. Native resource pointers cross under explicit
-  callback leases; frame identity alone does not establish final Present ownership.
+  callback leases; frame identity alone does not establish final Present ownership. Follow the
+  headers' borrow, retain, retire and thread rules and the corresponding lifecycle tests.
 
 The honesty rule is testable here: all current plugins keep `rsf_game_info.rendering_ready` and
 renderer status readiness at `0`, and contract tests assert it. AC7 and Unity implement lifecycle

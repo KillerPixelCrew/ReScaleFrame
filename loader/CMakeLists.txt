@@ -1,3 +1,4 @@
+# Diagnostics/proxy are the active carriers; the named bootstrap currently exposes version only.
 add_subdirectory(diagnostics)
 add_subdirectory(proxy)
 

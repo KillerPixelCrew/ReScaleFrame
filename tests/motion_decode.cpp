@@ -1,13 +1,10 @@
-// Encode motion the way Unreal does, decode it on the GPU, and check the numbers that come back.
-//
-// This is the pass every backend needs, so its arithmetic has to be right rather than plausible.
-// The values here are computed from the engine's own constants and compared against what the
-// shader produced, including the two cases that are easy to get wrong: the clear value, which must
-// come back as the sentinel rather than as a large negative motion, and a decoded zero, which must
-// stay a real zero motion and not be mistaken for the clear value.
-//
-// Under Wine this runs on DXVK, which is the same D3D11 the game sees on this machine.
-
+/**
+ * @file
+ * Check Unreal packed-motion decode against independently written engine constants.
+ * GPU readback covers clear-value sentinels, valid zero motion, quantised positive/
+ * negative motion and output scaling. Hardware or WARP supplies the D3D11 device;
+ * this fixture does not discover the game's velocity texture.
+ */
 #include <rescaleframe/motion_decode.h>
 
 #include <windows.h>

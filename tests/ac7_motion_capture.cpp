@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check the diagnostic reason selected from synthetic AC7 velocity facts.
+ * Cases pin rejection precedence, the exact size boundary, missing transform history,
+ * camera cuts and nonfinite inputs. No engine memory, detours or device are used.
+ */
 #include <rescaleframe/ac7_motion_capture.h>
 #include <cstdio>
 #include <cstring>

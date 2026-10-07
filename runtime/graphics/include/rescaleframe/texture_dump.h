@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Copy a D3D11 texture off the GPU and write it somewhere it can be looked at.
-
-   Frame captures answer what a target is. This answers what it currently holds, from inside the
-   running game and without a capture tool, which is what makes an encoding claim checkable.
-
-   Every entry point takes opaque pointers so the header stays a C ABI contract and callers do not
-   need the D3D11 headers. */
+/* Synchronous diagnostic D3D11 readback with optional visualisation. Entry points borrow all
+   device/context/resource pointers and leave bindings and source contents unchanged. Run on the
+   owning immediate-context thread with one device; staging Map can stall the GPU and file writes
+   run synchronously. TGA output clips colour and drops source alpha; raw output preserves bytes. */
 
 #ifndef RSF_TEXTURE_DUMP_H
 #define RSF_TEXTURE_DUMP_H
@@ -31,12 +28,8 @@ typedef int32_t rsf_dump_texture_result;
    accident. */
 #define RSF_TEXTURE_ERROR_FOREIGN_DEVICE ((rsf_dump_texture_result)-7)
 
-/* Where progress lines go while a dump runs.
-
-   A dump that takes the process down says nothing about where it was, and a returned result code
-   never arrives. The sink is called before each step rather than after it, so the last line on
-   disk names the step that did not survive. A sink that appends and closes per line is what makes
-   that true; buffering it defeats the purpose. Optional, a null sink logs nothing. */
+/* Optional synchronous progress sink called before each readback/write stage. Message storage
+   lasts only for the call. Flush the sink if logs must identify a crash's last started stage. */
 typedef void (*rsf_dump_log_fn)(void* user, const char* message);
 
 /* How to turn stored values into something visible. */
@@ -50,8 +43,8 @@ typedef uint32_t rsf_dump_view;
    be compared side by side, but without decoding again, and marking the sentinel rather than a
    stored zero: after a decode, zero is a real motion of zero and cannot serve as the marker. */
 #define RSF_DUMP_VIEW_DECODED_MOTION ((rsf_dump_view)2)
-/* Anything at or below this is the sentinel a decode pass wrote, not motion. Real screen space
-   motion is a fraction of the [-1,1] range, so the gap is several orders of magnitude wide. */
+/* Decoded-motion diagnostics treat X at/below this as a sentinel. Choose decoded
+   units/scales whose real vectors stay outside that marker range. */
 #define RSF_DUMP_DECODED_SENTINEL_THRESHOLD (-100.0f)
 
 typedef struct rsf_texture_dump_options {
@@ -83,8 +76,9 @@ typedef struct rsf_texture_dump_report {
 } rsf_texture_dump_report;
 
 /* `device`, `context` and `texture` are ID3D11Device*, ID3D11DeviceContext* and
-   ID3D11Texture2D*. The texture is copied through a staging resource, so the caller's binding
-   state and the texture itself are left alone. */
+   ID3D11Texture2D*. The caller supplies the immediate context on device. Reads subresource zero;
+   supported MSAA input takes the resolve path. options/report require their documented sizes;
+   a null or short report is ignored. Success means the TGA was written; JSON is best effort. */
 rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* texture,
                                          const rsf_texture_dump_options* options,
                                          rsf_texture_dump_report* report);

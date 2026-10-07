@@ -1,40 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Mouse and keyboard for the overlay, taken from the game's own window.
+/* Capture overlay mouse input by subclassing the caller's game window. Hidden state forwards
+   messages; visible state consumes gameplay input while forwarding system keys and releases for
+   presses the game already saw. Mouse position is reported in presented-image pixels and wheel
+   motion in notches. Keyboard/text input is consumed but has no field in the current overlay ABI.
 
-   The research carrier polls `GetAsyncKeyState` on a worker thread, and `loader/README.md` says
-   why: a polled key state cannot disturb the message loop or the order in which the game sees its
-   own input. That is the right tool for a hotkey and the wrong one for an interface. Polling has no
-   mouse position, no wheel, no notion of which window had focus, and above all no way to consume an
-   event, so a click on a quality dropdown would also be a click in the game.
-
-   Consuming input means being in the message path, which means replacing the window procedure with
-   `SetWindowLongPtrW` and `GWLP_WNDPROC`. That is a heavier intervention than polling, so the rules
-   below exist to keep it from becoming the game's problem:
-
-   - While the overlay is hidden this passes every message through unchanged, including the toggle
-     key's own press. The game sees exactly the input stream it would have seen with nothing
-     installed.
-   - While the overlay is visible the mouse and keyboard messages it consumes stop here. Two
-     exceptions, both to keep the game from being left holding a key it can never release. A press
-     the game already saw forwards its matching release. System keys, `WM_SYSKEYDOWN` and
-     `WM_SYSKEYUP` other than the toggle, forward in both directions: they are window management
-     rather than gameplay, and swallowing them would take Alt+F4 with them.
-   - Uninstall restores the original procedure only if the window still holds ours. Another tool
-     that subclassed after us owns the chain now, and writing our saved pointer back would delete
-     its hook.
-
-   What this does not do:
-
-   - Keyboard state is swallowed but not delivered. `rsf_overlay_input` in `overlay.h` carries mouse
-     state only, so there is nowhere to put a key. Adding text entry to the overlay means adding
-     fields there first, and filling them here.
-   - Input that never reaches the window procedure cannot be intercepted. DirectInput device polling
-     and XInput read the device directly, so a gamepad still flies the aircraft while the overlay is
-     open. Raw input is intercepted only in its `WM_INPUT` form.
-   - Nothing here makes a cursor visible. See the note in `overlay_input.cpp`.
-
-   None of this has been exercised in a game yet. It is written against the documented behaviour of
-   the message path, not against an observed AC7 session. */
+   Optional user32 detours suppress cursor warps/hides, lift clipping, freeze the position returned
+   to the game, and neutralize raw mouse records while visible. Failed cursor-hook setup falls back
+   to message capture. DirectInput/XInput polling remains outside this module. The owner coordinates
+   uninstall with active message/user32 calls and keeps callbacks/module code alive until quiescent. */
 
 #ifndef RSF_OVERLAY_INPUT_H
 #define RSF_OVERLAY_INPUT_H
@@ -62,8 +35,8 @@ typedef int32_t rsf_overlay_input_result;
    message arrives. */
 #define RSF_OVERLAY_INPUT_ERROR_FOREIGN_SUBCLASS ((rsf_overlay_input_result)-6)
 
-/* Same shape and same reason as the other sinks in this directory: a step is announced before it is
-   taken, because a returned code from inside a game process often never arrives. */
+/* Synchronous diagnostic callback. Message storage is borrowed; do not reenter install,
+   uninstall or visibility changes because lifecycle/cursor locks may be held. */
 typedef void (*rsf_overlay_input_log_fn)(void* user, const char* message);
 
 typedef struct rsf_overlay_input_options {
@@ -108,20 +81,15 @@ rsf_overlay_input_result rsf_overlay_input_uninstall(void);
    frame. */
 uint32_t rsf_overlay_input_visible(void);
 
-/* Function keys pressed since the last call, as bits: bit n is F(n+1), so F1 is bit 0 and F12 is
-   bit 11. Taken, not read, so each press is reported once. `sources` receives, for the same bits,
-   which delivered it: bit 16 set means the window procedure saw a key message, bit 17 means raw
-   keyboard input, both may be set; it may be null.
-
-   This is a second route for a caller's hotkeys beside polling GetAsyncKeyState, which the first
-   Windows run showed does not always see a press the window does. A caller polling both has to
-   ignore a second trigger of the same key within a short time; the input module does not know
-   which the caller acted on. The toggle key is excluded, because this module acts on it itself. */
+/* Consume accumulated F1..F12 press bits (bit n means F(n+1)); toggle key is excluded. sources,
+   if nonnull, gets route flags for the batch: bit 16 window messages, bit 17 raw keyboard input.
+   These flags are not mapped separately per key. Callers also polling key state deduplicate their
+   own hotkey triggers. Safe to consume atomically from a worker thread. */
 uint32_t rsf_overlay_input_take_function_keys(uint32_t* sources);
 
-/* Open or close the overlay from code rather than from the toggle key. A transition either way
-   drops the accumulated buttons and wheel, so a click held while the overlay opens is not delivered
-   as a click on whatever appeared under the cursor. */
+/* Request visibility, dropping accumulated buttons/wheel on a transition. Changes within 250 ms
+   of the previous transition are ignored to deduplicate message/poll toggles; this includes explicit
+   requests. Before install, collect still returns hidden idle state. Coordinate with lifecycle. */
 void rsf_overlay_input_set_visible(uint32_t visible);
 
 /* Fill one frame's input for `rsf_overlay_frame`.

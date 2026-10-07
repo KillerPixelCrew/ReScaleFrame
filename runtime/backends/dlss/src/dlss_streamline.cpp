@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Process-wide SR adapter state for either an owned D3D11 registration or a borrowed DX12 host.
+// Lifecycle/evaluation is serialized by the graphics caller; SDK callbacks may emit diagnostics.
 
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/streamline_host.h>
@@ -16,9 +18,8 @@
 #include <sl_consts.h>
 #include <sl_dlss.h>
 
-// sl_security.h includes <Softpub.h>, which mingw-w64 ships as <softpub.h>. Windows filesystems do
-// not care and the reference MSVC build gets the real check; the cross build compiles without it
-// and refuses to load rather than pretending it verified anything.
+// sl_security.h uses <Softpub.h>; case-sensitive MinGW installations may only provide <softpub.h>.
+// Such builds reject signature-required loads instead of reporting an unperformed verification.
 #if __has_include(<Softpub.h>)
 #include <sl_security.h>
 #define RSF_HAVE_SIGNATURE_CHECK 1
@@ -44,9 +45,7 @@ bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
 
 namespace {
 
-// Everything Streamline exports that this integration uses. Resolved by name from the interposer
-// rather than linked, because the game process must keep working when the SDK is not deployed,
-// and because a missing entry point is then a reported failure instead of a load-time abort.
+// Runtime exports are resolved dynamically so missing SDK deployment/exports have distinct errors.
 struct Entries {
     PFun_slInit* init = nullptr;
     PFun_slShutdown* shutdown = nullptr;
@@ -62,6 +61,9 @@ struct Entries {
     PFun_slFreeResources* free_resources = nullptr;
 };
 
+/** Single adapter registration. Device references are owned; shared_host is borrowed. Strings
+ * whose addresses reach SDK initialization stay in this state until SDK shutdown.
+ */
 struct State {
     HMODULE interposer = nullptr;
     Entries sl{};
@@ -86,12 +88,14 @@ struct State {
     void* log_user = nullptr;
 };
 
+/* Function-local storage avoids registration work during static initialization/DLL loading. */
 State& state()
 {
     static State instance;
     return instance;
 }
 
+/* Bound formatted diagnostics and borrow the resulting line only during the sink callback. */
 void say(const char* format, ...)
 {
     State& self = state();
@@ -106,11 +110,10 @@ void say(const char* format, ...)
     self.log(self.log_user, message);
 }
 
-// Streamline's own log messages, forwarded to the same sink rather than to a console nobody sees.
+// Forward vendor warning/error messages to the adapter's sink.
 void streamline_message(sl::LogType type, const char* message)
 {
-    // NGX's per-resource info messages grew the research log by hundreds of MB per session.
-    // Keep actionable vendor diagnostics; our own state transitions already describe startup.
+    // Per-resource info traffic is suppressed to keep render-thread logging bounded in volume.
     if (type != sl::LogType::eError && type != sl::LogType::eWarn) {
         return;
     }
@@ -120,6 +123,7 @@ void streamline_message(sl::LogType type, const char* message)
     say("streamline %s: %s", label, message ? message : "");
 }
 
+/* Convert optional UTF-8 setup strings for Windows/Streamline path parameters. */
 bool widen(const char* utf8, std::wstring& out)
 {
     if (!utf8 || !*utf8) {
@@ -136,6 +140,7 @@ bool widen(const char* utf8, std::wstring& out)
     return true;
 }
 
+/* Missing core exports leave null pointers and produce a diagnostic for the failed symbol. */
 template <typename T>
 bool resolve(HMODULE module, const char* name, T*& target)
 {
@@ -149,9 +154,7 @@ bool resolve(HMODULE module, const char* name, T*& target)
 
 sl::float4x4 to_matrix(const float source[16])
 {
-    // Row major on both sides, so this is a copy rather than a transpose. Streamline states row
-    // major in sl_consts.h and Unreal's matrices are row major too, which is the one piece of luck
-    // in this conversion.
+    // Game and Streamline matrices are row major; preserve order without transposing.
     sl::float4x4 matrix{};
     for (int row = 0; row < 4; ++row) {
         matrix.row[row].x = source[row * 4 + 0];
@@ -162,11 +165,13 @@ sl::float4x4 to_matrix(const float source[16])
     return matrix;
 }
 
+/* C ABI booleans accept any nonzero value; normalize them to the SDK Boolean constants. */
 sl::Boolean flag(uint32_t value)
 {
     return value ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 }
 
+/* Unknown quality values map to Off and are then interpreted by the SDK. */
 sl::DLSSMode mode_for(rsf_dlss_quality quality)
 {
     switch (quality) {
@@ -230,8 +235,7 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     }
 
-    // This loads a signed NVIDIA module into a game process from a configured path. Verifying the
-    // signature is the difference between that and loading whatever is at that path.
+    // Enforce the caller's signature policy before loading executable code.
     if (setup->require_signature) {
 #if RSF_HAVE_SIGNATURE_CHECK
         if (!sl::security::verifyEmbeddedSignature(interposer.c_str())) {
@@ -244,8 +248,7 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
 #endif
     }
 
-    // By absolute path, never by name: the search path must not get to decide which module answers
-    // for the SDK inside somebody else's process.
+    // Use the configured interposer path. Callers supply an absolute path by contract.
     self.interposer = LoadLibraryW(interposer.c_str());
     if (!self.interposer) {
         say("could not load %s (error %lu)", setup->interposer_path_utf8, GetLastError());
@@ -279,14 +282,9 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     }
 
     sl::Preferences preferences{};
-    // Manual hooking is what makes this integration possible at all. The regular mode expects to
-    // be in place before the swap chain exists; we attach to a game that is already rendering, and
-    // in manual hooking the D3D device may be created before slInit.
+    // Manual hooking allows attachment to the game's already-created native D3D11 device.
     preferences.flags |= sl::PreferenceFlags::eUseManualHooking;
-    // Required by slSetTagForFrame, which is what this integration uses: tagging resources against
-    // a frame token is what lets Streamline know a tag belongs to the frame being evaluated rather
-    // than to whatever was last set. Without the flag the call is refused outright, and the
-    // evaluate that follows fails with nothing wrong in the frame itself.
+    // slSetTagForFrame requires explicit frame-based tagging to associate resources with tokens.
     preferences.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     preferences.renderAPI = sl::RenderAPI::eD3D11;
     preferences.logLevel = sl::LogLevel::eDefault;
@@ -305,10 +303,7 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     if (widen(setup->log_directory_utf8, self.log_directory)) {
         preferences.pathToLogsAndData = self.log_directory.c_str();
     }
-    // NGX will not start without an identity, and DLSS is an NGX feature, so getting this wrong
-    // costs the whole thing: the plugin loads and then reports "Missing NGX context". An injected
-    // integration has no application id of its own, since that belongs to the game's publisher, so
-    // the engine route is the one available. For a UE4 title it is also just true.
+    // NGX requires an application ID or engine/version/project identity before DLSS can evaluate.
     preferences.applicationId = setup->application_id;
     switch (setup->engine) {
     case RSF_DLSS_ENGINE_UNREAL:
@@ -381,9 +376,7 @@ extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
         return RSF_DLSS_ERROR_NOT_READY;
     }
 
-    // The adapter comes from the game's own device. Enumerating adapters instead would answer for
-    // a GPU the game is not rendering on, which on a laptop is the usual case rather than a rare
-    // one.
+    // Query the device's adapter LUID, preserving the actual rendering GPU on multi-adapter hosts.
     DXGI_ADAPTER_DESC description{};
     if (self.shared_device) {
         description.AdapterLuid = self.shared_device->GetAdapterLuid();
@@ -467,6 +460,10 @@ extern "C" rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
     return RSF_DLSS_OK;
 }
 
+/** Translate one borrowed frame into SDK constants, options, resource tags, then evaluation.
+ * Shared mode requires the host's live source token; native mode mints/reuses a 32-bit frame index.
+ * This function records work and does not restore the game's pipeline or retire GPU resources.
+ */
 static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame, uint64_t source_id)
 {
     if (!d3d11_context || !frame || frame->struct_size < sizeof(rsf_dlss_frame)) {
@@ -503,8 +500,7 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     constants.clipToPrevClip = to_matrix(frame->clip_to_prev_clip);
     constants.prevClipToClip = to_matrix(frame->prev_clip_to_clip);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
-    // Zero rather than left alone. Streamline warns that an invalid pinhole offset is a mistake,
-    // and the game uses a plain pinhole camera, so zero is the true value rather than a placeholder.
+    // This integration uses a centered pinhole camera; SDK defaults may otherwise be invalid.
     constants.cameraPinholeOffset = {0.0f, 0.0f};
     constants.mvecScale = {frame->motion_scale_x, frame->motion_scale_y};
     constants.cameraPos = {frame->camera_position[0], frame->camera_position[1],
@@ -522,9 +518,8 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     constants.cameraMotionIncluded = flag(frame->camera_motion_included);
     constants.motionVectors3D = sl::Boolean::eFalse;
     constants.reset = flag(frame->reset);
-    // The pair that makes an object-only motion buffer usable: Streamline builds camera motion from
-    // depth and clipToPrevClip, and this value tells it which pixels nothing wrote. Unreal reserves
-    // a raw zero for exactly that, which is why AC7 needs no composition pass for DLSS.
+    // With cameraMotionIncluded false, invalid pixels use depth/clipToPrevClip camera reconstruction.
+    // The caller supplies the sentinel after any required source-motion decoding.
     constants.motionVectorsInvalidValue = frame->motion_invalid_value;
 
     const bool common = self.shared_host ? rsf_streamline_common_set(self.shared_host, source_id, frame->viewport, constants) :
@@ -539,8 +534,7 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     options.outputWidth = frame->output_width;
     options.outputHeight = frame->output_height;
     options.colorBuffersHDR = frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
-    // Auto exposure only when the game does not hand us its own. AC7 keeps one in a 1x1 target and
-    // it is bound at the same pass as everything else here, so normally it does.
+    // Encoded color bypasses exposure handling; linear input without exposure uses SDK auto exposure.
     options.useAutoExposure = frame->exposure || frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     options.alphaUpscalingEnabled = flag(frame->alpha);
     if (frame->viewport == 0) {
@@ -580,9 +574,7 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
         color_out.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     }
 
-    // Everything is tagged as valid only now. These are engine scene targets that the game reuses
-    // later in the same frame, and claiming otherwise would hand DLSS a buffer holding something
-    // else by the time it reads it.
+    // Scene targets are tagged only for this evaluation; caller GPU ordering governs later reuse.
     sl::ResourceTag tags[9] = {
         sl::ResourceTag{&color_in, sl::kBufferTypeScalingInputColor,
                         sl::ResourceLifecycle::eOnlyValidNow, &render_extent},
@@ -719,8 +711,7 @@ extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
     (void)preset; return RSF_DLSS_ERROR_NOT_COMPILED;
 }
 
-// Built without the SDK. The contract still exists so callers compile and can say honestly that
-// this build has no DLSS in it, rather than reporting a runtime failure that never happened.
+// ABI-preserving stubs report absent SDK build capability separately from runtime failure.
 
 extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport)
 {

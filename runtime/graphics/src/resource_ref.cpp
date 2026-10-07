@@ -22,6 +22,7 @@ extern "C" void rsf_resource_release(void* resource)
     }
 }
 
+// Successful creation transfers the new COM reference to the C caller; no cache retains it.
 extern "C" void* rsf_create_render_target_view(void* device, void* texture)
 {
     if (!device || !texture) {
@@ -37,6 +38,7 @@ extern "C" void* rsf_create_render_target_view(void* device, void* texture)
     return view;
 }
 
+// GetBuffer returns an owned reference. Holding it (or a view of it) prevents ordinary resize.
 extern "C" void* rsf_swapchain_back_buffer(void* swapchain)
 {
     if (!swapchain) {

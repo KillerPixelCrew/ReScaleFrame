@@ -5,6 +5,8 @@
 #include <d3d12.h>
 #include <mutex>
 #include <new>
+// Presentation owner stores borrowed provider callbacks and host user state. guard serializes
+// frame/marker bookkeeping; transition closes admission while host quiescence runs unlocked.
 struct rsf_fg_session {
     std::mutex guard;
     rsf_fg_host host{};
@@ -22,6 +24,7 @@ bool valid_provider(const rsf_generation_provider* p)
     return p && p->struct_size >= sizeof(*p) && p->create && p->configure && p->begin_frame &&
         p->marker && p->prepare && p->after_present && p->status && p->retirement && p->destroy && p->abort_frame;
 }
+// Nonblocking vendor retirement check. NOT_READY keeps the SDK context and old chain intact.
 rsf_backend_result retire(rsf_fg_session& self)
 {
     if (!self.provider) return RSF_BACKEND_OK;
@@ -34,6 +37,7 @@ rsf_backend_result retire(rsf_fg_session& self)
     // Keep the context and leases alive when the SDK has not yet finished reading them.
     return fence->GetCompletedValue() >= retirement.value ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
 }
+// Release host buffer/view references before destroying the provider-owned physical chain.
 rsf_backend_result detach(rsf_fg_session& self)
 {
     auto result = retire(self); if (result != 0) return result;
@@ -99,6 +103,8 @@ extern "C" rsf_backend_result rsf_fg_session_select(rsf_fg_session* self,
             self->transition = false; return result;
         }
     }
+    // Physical swapchains cannot overlap. After detach, creation/adoption failures can only
+    // restore plain presentation; the earlier capability probe is the rollback-safe phase.
     result = detach(*self);
     if (result != 0) {
         self->host.resume(self->host.user); self->state.last_switch = result;
@@ -166,6 +172,7 @@ extern "C" rsf_backend_result rsf_fg_session_prepare(rsf_fg_session* self, void*
         (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY &&
          record.screen != RSF_SCREEN_HANGAR && record.screen != RSF_SCREEN_BRIEFING))
         prepared_frame.interpolate = 0;
+    // The timestamp must come from this frame's real input marker, never a recent CPU sample.
     if (prepared_frame.interpolate && record.input_qpc != sequence.timestamps[0])
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self->provider) result = self->provider->prepare(self->context, command, &prepared_frame);

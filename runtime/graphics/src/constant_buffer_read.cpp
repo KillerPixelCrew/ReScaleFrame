@@ -21,25 +21,16 @@ extern "C" rsf_constant_buffer_result rsf_read_constant_buffer(void* device_poin
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
     auto* buffer = static_cast<ID3D11Buffer*>(buffer_pointer);
 
-    // GetDesc below is reached through the vtable of whatever was really passed, and every D3D11
-    // resource type has one at that slot writing a differently sized descriptor. A texture arriving
-    // here would write a D3D11_TEXTURE2D_DESC across a D3D11_BUFFER_DESC on this stack and take the
-    // process down with no message. GetType is inherited from ID3D11Resource and so is identical
-    // for every resource type, which makes it the one call that is safe to make first.
+    // Validate through ID3D11Resource before invoking the buffer-specific GetDesc slot.
+    // Other resource types write different descriptor sizes through their own GetDesc method.
     D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     buffer->GetType(&dimension);
     if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
         return RSF_CONSTANT_BUFFER_ERROR_INVALID_ARGUMENT;
     }
 
-    // Same rule as the texture dump and the motion decode: a resource from another device takes the
-    // process down rather than failing the copy, and this project has already hit it. The observer
-    // creates a throwaway device to reach the vtables, and any overlay in the process may add one.
-    //
-    // The context is checked as well as the buffer. The staging copy is created on `device` but the
-    // copy is issued on `context`, so a context belonging to a second device is the same fault by
-    // another route, and it is the easier of the two mistakes to make: device and context arrive as
-    // separate arguments and a hook usually picks them up from different places.
+    // Both the copied buffer and the context must belong to the staging device. D3D11 copies
+    // return no HRESULT, so reject cross-device work before issuing the command.
     ID3D11Device* buffer_owner = nullptr;
     buffer->GetDevice(&buffer_owner);
     ID3D11Device* context_owner = nullptr;
@@ -77,6 +68,7 @@ extern "C" rsf_constant_buffer_result rsf_read_constant_buffer(void* device_poin
         return RSF_CONSTANT_BUFFER_ERROR_STAGING_FAILED;
     }
 
+    // Map(READ) synchronizes with the queued copy. No bindings or source bytes are changed.
     context->CopyResource(readable, buffer);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};

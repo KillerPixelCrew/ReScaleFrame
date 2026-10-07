@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The caller the overlay never had. See overlay_host.h for why it lives here.
-
-   C++ rather than C, unlike the rest of the proxy, because this is the one part of the bridge that
-   has to talk to COM directly: the swap chain is asked for the window it was created against and
-   for its back buffer, and neither is worth a C vtable dance when the graphics modules next door
-   are already C++. */
+/* Shared overlay host with a process-global panel/renderer/device. Public lifetime and
+   thread requirements are in overlay_host.h; all COM target leases are scoped to each draw. */
 
 #include <windows.h>
 
@@ -25,8 +21,7 @@
 
 namespace {
 
-/* The key that opens the panel. F6 through F11 are already claimed by the bridge, and the input
-   module's own default is F7, which is the debug display. */
+/* Keep Insert distinct from compatibility diagnostic bindings. */
 constexpr unsigned int kToggleKey = VK_INSERT;
 
 /* Atlas changes are drained in batches rather than one at a time. egui sends the font atlas whole
@@ -42,6 +37,8 @@ using frame_fn = rsf_overlay_result (*)(rsf_overlay*, const rsf_overlay_input*,
 using texture_updates_fn = uint32_t (*)(rsf_overlay*, rsf_overlay_texture_update*, uint32_t);
 using textures_to_free_fn = uint32_t (*)(rsf_overlay*, uint64_t*, uint32_t);
 
+/* Owned overlay resources plus borrowed logging endpoints. Permanent failure state avoids
+   repeated startup work; no swapchain texture/view is retained here between Present calls. */
 struct Host {
     HMODULE panel_module = nullptr;
     create_fn create = nullptr;
@@ -59,22 +56,11 @@ struct Host {
        left closed rather than reporting the same line sixty times a second. */
     bool stopped_after_failure = false;
 
-    /* How many drawn frames still announce each step before taking it.
-
-       The first frame of this path does several things no test reaches: it lays out egui for the
-       first time, uploads a whole font atlas, and issues draws into a game's frame. A crash in any
-       of them looks identical from outside, and note() writes and closes per line, so the last line
-       in the log is the step that did not survive. Only the first few frames, because after that
-       the same lines would bury the run. */
+    /* Trace the first four visible draws through layout, atlas upload and D3D11 submission. */
     unsigned int trace_frames = 4;
 
-    /* Held while a frame is being drawn.
-
-       A game may present from more than one thread, and this path creates D3D11 resources and
-       issues draws against one device. Two of them at once is not something the panel should ever
-       do, whatever the device's threading mode allows. The second thread skips its frame rather
-       than waiting, because waiting on a render thread to draw a diagnostic is a worse trade than
-       missing one frame of it. */
+    /* Skip overlapping Present draws without blocking the game's render threads.
+       This guard does not serialize startup, teardown or the supplied-target path. */
     std::atomic<bool> drawing{false};
 
     LARGE_INTEGER frequency{};
@@ -115,8 +101,7 @@ void log_from_module(void* user, const char* message)
     say("%s", message);
 }
 
-/* Where the panel DLL is. An explicit path wins, because a research build is often assembled by
-   hand; otherwise it is looked for beside this module, which is where a packaged one would sit. */
+/* Resolve the explicit RSF_OVERLAY_DLL path or the sibling panel DLL, with capacity checks. */
 bool panel_path(wchar_t* out, size_t count)
 {
     const DWORD explicit_length = GetEnvironmentVariableW(L"RSF_OVERLAY_DLL", out,
@@ -147,6 +132,8 @@ bool panel_path(wchar_t* out, size_t count)
     return true;
 }
 
+/* Load and resolve all five required C exports before exposing the panel. A missing export
+   releases the newly loaded module; ABI acceptance is checked by create at startup. */
 bool load_panel()
 {
     Host& self = host();
@@ -185,8 +172,7 @@ bool load_panel()
     return true;
 }
 
-/* The window the swap chain presents to. Asked for rather than searched for: a game process has
-   several windows and only the swap chain knows which one its frames land in. */
+/* Use the swapchain's output HWND rather than an unrelated process window. */
 HWND window_of(IDXGISwapChain* chain)
 {
     DXGI_SWAP_CHAIN_DESC description{};
@@ -196,6 +182,7 @@ HWND window_of(IDXGISwapChain* chain)
     return description.OutputWindow;
 }
 
+/* QPC delta in seconds for UI animation; first/invalid/stalled samples use 1/60 second. */
 float seconds_since_last_frame()
 {
     Host& self = host();
@@ -265,6 +252,7 @@ template <typename T> struct LocalRef {
     }
 };
 
+/* Compare COM IUnknown identity, releasing temporary identity references on every return. */
 bool same_device(ID3D11Device* a, ID3D11Device* b)
 {
     if (!a || !b) {
@@ -279,22 +267,21 @@ bool same_device(ID3D11Device* a, ID3D11Device* b)
            first.value && first.value == second.value;
 }
 
-/* Saved around the draw, because binding a target displaces whatever the game had.
-
-   OMSetRenderTargets also unbinds every unordered access view the output merger holds and those
-   cannot be put back exactly. At Present the game's last draw has already happened, which is the
-   same trade `present_blit` makes at the same point in the frame. */
+/* Retained OM targets/depth restored after drawing. OMSetRenderTargets can also unbind
+   unordered access views; this helper does not preserve that UAV state. */
 struct SavedTargets {
     ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     ID3D11DepthStencilView* depth = nullptr;
 };
 
+/* Acquire OM target/depth references for a matching restore_targets call. */
 void save_targets(ID3D11DeviceContext* context, SavedTargets& saved)
 {
     context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets,
                                 &saved.depth);
 }
 
+/* Restore saved OM bindings and release each reference acquired by save_targets. */
 void restore_targets(ID3D11DeviceContext* context, SavedTargets& saved)
 {
     context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, saved.targets, saved.depth);
@@ -597,8 +584,7 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
     }
     const rsf_overlay_result laid_out = self.frame(self.panel, &input, stats, &draw_data, &decided);
     if (laid_out != RSF_OVERLAY_OK) {
-        /* A panicked panel is poisoned for good and every later frame returns the same thing, so
-           it is closed here rather than reported once per frame forever. */
+        /* A Rust panic poisons its panel instance; hide it after a layout refusal. */
         say("overlay: the panel failed to lay out a frame, result %d. Closing it", int(laid_out));
         rsf_overlay_input_set_visible(0u);
         return 0;

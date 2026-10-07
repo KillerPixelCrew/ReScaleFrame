@@ -25,9 +25,7 @@ void say(rsf_shared_log_fn log, void* user, const char* format, ...)
     log(user, message);
 }
 
-/* Typeless formats are refused rather than resolved. A shared surface is opened by a runtime that
-   cannot ask what was intended, and picking an interpretation on its behalf is how a colour buffer
-   quietly becomes a depth buffer. */
+/* Refuse typeless shared storage; cross-API consumers need one explicit format interpretation. */
 bool format_is_typeless(uint32_t format)
 {
     switch (format) {
@@ -56,6 +54,8 @@ bool format_is_typeless(uint32_t format)
 
 } // namespace
 
+/* Partial construction is owned here from its first successful allocation. The common destroy
+   path releases whichever API views/resources/handle were created before a failure. */
 struct rsf_shared_surface {
     ID3D11Texture2D* texture = nullptr;
     ID3D11RenderTargetView* target = nullptr;
@@ -152,9 +152,8 @@ extern "C" rsf_shared_result rsf_shared_surface_create(void* d3d11_device_pointe
         made = device12->OpenSharedHandle(surface->handle, __uuidof(ID3D12Resource),
                                           reinterpret_cast<void**>(&surface->opened));
         if (FAILED(made) || !surface->opened) {
-            /* The interesting failure. The handle exists, so the D3D11 side is willing; the D3D12
-               side will not take it. On Windows that is a bug, and under Proton it is a statement
-               about whether DXVK and vkd3d-proton agree about memory. */
+            /* Preserve the open stage separately from export: translation runtimes may not
+               agree on handle-backed memory even when D3D11 export succeeds. */
             say(setup->log, setup->log_user,
                 "shared surface: D3D12 would not open the handle, hr 0x%08lx", (unsigned long)made);
             rsf_shared_surface_destroy(surface);
@@ -180,8 +179,7 @@ extern "C" void rsf_shared_surface_destroy(rsf_shared_surface* surface)
     if (surface->texture) {
         surface->texture->Release();
     }
-    /* The handle is closed after the resources that were opened from it. Closing it first is legal
-       and makes a leak look like a driver problem, which is a bad half hour. */
+    /* Release API objects then close the owned NT handle. The owner retires GPU access first. */
     if (surface->handle) {
         CloseHandle(surface->handle);
     }

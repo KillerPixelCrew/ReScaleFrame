@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Live FidelityFX FG provider. The SDK proxy owns interpolation/presentation callbacks;
+// the caller owns the source queue, frame-resource leases, and lifecycle thread.
 #include "../../common/fg_helpers.h"
 #include <wrl/client.h>
 #include <atomic>
@@ -9,6 +11,9 @@
 #include <dx12/ffx_api_framegeneration_dx12.h>
 using Microsoft::WRL::ComPtr;
 namespace {
+/** Owns generation and proxy-chain contexts plus the loaded runtime. Callback counters are atomic
+ * because SDK dispatch/finalization can run independently of the presentation-owner thread.
+ */
 struct FfxSession {
     HMODULE module = nullptr;
     ffxContext generation = nullptr, swapchain = nullptr;
@@ -32,6 +37,7 @@ struct FfxSession {
     std::atomic<uint32_t> dispatch_logs{0};
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
+    // SDK configure/prepare IDs are separate from engine source IDs and advance on configuration.
     uint64_t sequence = 0;
     uint64_t last_prepare = 0, observed_generated = 0;
     uint32_t counter_reports = 0;
@@ -39,6 +45,7 @@ struct FfxSession {
     float view_space_to_meters = 1;
     bool history_valid = false, prepared_enabled = false;
 };
+/** Translate SDK state bits for callback copies, refusing unknown bits instead of guessing. */
 bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
 {
     out = D3D12_RESOURCE_STATE_COMMON;
@@ -58,6 +65,7 @@ bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
     if (state & FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT) out |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
     return true;
 }
+/* Record an all-subresource transition only when the states differ. */
 void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
                 D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 {
@@ -67,6 +75,9 @@ void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
     barrier.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after};
     list->ResourceBarrier(1, &barrier);
 }
+/** SDK interpolation callback. Dispatch against the generation context and retain its raw result;
+ * dispatched counts generated outputs requested by successful dispatch, not confirmed Presents.
+ */
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer);
@@ -81,6 +92,9 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
     }
     return result;
 }
+/** SDK image-finalization callback for NONE UI mode. Copy only when buffers differ and restore
+ * their incoming states. Callback counts record finalized images, not DXGI Present completion.
+ */
 ffxReturnCode_t present(ffxCallbackDescFrameGenerationPresent* desc, void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer);
@@ -102,6 +116,7 @@ ffxReturnCode_t present(ffxCallbackDescFrameGenerationPresent* desc, void* point
     if (desc->isGeneratedFrame) ++self->generated;
     return FFX_API_RETURN_OK;
 }
+/** Join proxy presentation work before context reconfiguration/destruction. No-op without a proxy. */
 rsf_backend_result wait(FfxSession& self)
 {
     if (!self.swapchain) return RSF_BACKEND_OK;
@@ -109,6 +124,10 @@ rsf_backend_result wait(FfxSession& self)
     desc.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;
     return self.dispatch(&self.swapchain, &desc.header) == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+/** Detach SDK callbacks, wait for proxy work, then destroy contexts before unloading the DLL.
+ * If disabling/draining/destruction fails, retain the session because callbacks may still use it.
+ * The caller must already have retired its own GPU work and stopped concurrent provider calls.
+ */
 void destroy(void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer); if (!self) return;
@@ -127,6 +146,10 @@ void destroy(void* pointer)
     if (self->module) FreeLibrary(self->module);
     delete self;
 }
+/** Select the requested FG3/FG4 runtime provider and optionally create its HWND proxy chain.
+ * Require the exact selected provider after creation; unsupported UI modes/versions refuse work.
+ * Null hwnd permits context/support inspection but leaves configure/prepare unavailable.
+ */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
@@ -155,6 +178,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
     versions.device = self->device.Get(); versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
     if (self->query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
+    // Version IDs are opaque; choose the newest exposed minor/patch of the requested family.
     unsigned best_minor = 0, best_patch = 0;
     for (uint64_t i = 0; i < count; ++i) {
         unsigned major = 0, minor = 0, patch = 0;
@@ -206,6 +230,9 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     }
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
 }
+/** Accept OFF/FIXED policy only; this provider has no Reflex, frame limiter, or adaptive count.
+ * Policy changes disable interpolation until the next prepared frame and discard temporal history.
+ */
 rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -232,14 +259,21 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     self.history_valid = false; self.state.active = 0;
     return RSF_BACKEND_OK;
 }
+/* FFX has no CPU pacing or marker API here; retain common identity validation. */
 rsf_backend_result begin(void* pointer, uint64_t id)
 {
     return pointer && id ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/* No vendor marker is emitted; a live session and nonzero source ID are still required. */
 rsf_backend_result marker(void* pointer, rsf_latency_marker, uint64_t id, uint32_t)
 {
     return pointer && id ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
+/** Configure one source frame and record prepare work, requiring increasing source IDs.
+ * Disabled/unsuitable frames break history; gaps reset the next interpolation pair. A drained
+ * chain resize recreates the fixed-size generation context before consuming current textures.
+ * Jitter/motion are pixel units, frame time milliseconds, FOV radians, distances world units.
+ */
 rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* frame)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -332,6 +366,9 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     }
     self.history_valid = true; self.last_prepare = record.frame_id; return RSF_BACKEND_OK;
 }
+/** Snapshot callback activity after the caller's Present and separately accumulate DXGI counts.
+ * Dispatch/finalization activity does not establish a confirmed generated-present statistic.
+ */
 rsf_backend_result after(void* pointer)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -345,6 +382,7 @@ rsf_backend_result after(void* pointer)
     UINT count = 0;
     const auto counter_result = self.chain->GetLastPresentCount(&count);
     if (SUCCEEDED(counter_result)) {
+        // Unsigned subtraction handles wrap; a lower non-wrap counter starts a fresh epoch.
         const UINT delta = count >= self.last_dxgi_present || self.last_dxgi_present > 0xf0000000u ?
             count - self.last_dxgi_present : count;
         self.state.total_presented += delta; self.last_dxgi_present = count;
@@ -357,6 +395,7 @@ rsf_backend_result after(void* pointer)
     }
     return RSF_BACKEND_OK;
 }
+/** Copy the cached presentation-owner snapshot into a caller-sized status record. */
 rsf_backend_result status(void* pointer, rsf_fg_status* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -370,6 +409,7 @@ rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
     // Waiting for every display Present here serializes subsequent rendering.
     out->fence = nullptr; out->value = 0; return RSF_BACKEND_OK;
 }
+/** Break temporal continuity when the source frame's presentation path is abandoned. */
 rsf_backend_result abort_frame(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -382,6 +422,7 @@ const rsf_generation_provider provider{sizeof(provider), create, configure, begi
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
 #else
 namespace {
+/* Header-only builds preserve the table and malformed-setup diagnostics, then report NOT_COMPILED. */
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     const auto result = rsf::fg_setup_header(setup, out, chain);

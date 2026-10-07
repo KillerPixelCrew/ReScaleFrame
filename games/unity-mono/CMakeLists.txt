@@ -1,3 +1,5 @@
+# Native Game SDK/Mono bridge builds with or without the optional licensed Unity headers.
+# Without D3D12 plugin headers, runtime rendering discovery refuses rather than fabricating support.
 set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
     "Unity native-plugin headers; untracked, see docs/dependencies.md")
 add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/mono_runtime.cpp)

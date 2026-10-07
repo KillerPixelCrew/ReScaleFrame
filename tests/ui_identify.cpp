@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Membership sets kept by address, and the eviction that makes that safe.
- *
- * No device. The module exists to hold answers that were decided elsewhere, so everything it does
- * can be driven from stand-in pointers, and the case that matters most is the one a real frame
- * produces without asking: an address handed out again for a different kind of object.
+/**
+ * @file
+ * Check bounded UI membership registries with opaque pointer identities.
+ * Address reuse must evict an old role; capacity, recency and shader-CRC overrides
+ * are pinned without dereferencing objects or creating a graphics device.
  */
 #include <rescaleframe/ui_identify.h>
 
@@ -68,9 +68,7 @@ int main()
 
     stage("an address handed out again is forgotten first");
     {
-        // The hazard, exactly as a frame produces it: something is released and the next creation
-        // lands on its address. The registry must not still believe the old answer, because the new
-        // object is live and would be diverted on the strength of what its predecessor was.
+        // Reusing an address must evict the predecessor's role before classifying the new object.
         check(rsf_ui_registry_contains(registry, RSF_UI_SET_SLATE_LAYOUT, &slate_a) == 1,
               "Precondition: the address is recorded.");
         rsf_ui_registry_forget(registry, &slate_a);

@@ -1,15 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Can a D3D11 texture be opened by a D3D12 device here?
- *
- * The whole presentation bridge rests on yes. Every frame generation SDK this project targets is
- * D3D12 only and the game is D3D11, so the frame has to cross devices, and it crosses through a
- * shared NT handle or it does not cross.
- *
- * On Windows the answer is yes and this is a regression test. Under Wine it is a question: DXVK and
- * vkd3d-proton are separate translations of separate APIs onto Vulkan, with no obligation to agree
- * about memory. So a refusal here exits 77 with the HRESULT printed rather than failing, because it
- * is a fact about the environment rather than a defect in the code. What must never happen is this
- * quietly passing while the bridge cannot work, so every step says what it got.
+/**
+ * @file
+ * Check D3D11/D3D12 shared textures and fence ordering on the same adapter.
+ * Adapter LUID matching, NT-handle export/import and a D3D11-to-D3D12 fence round trip
+ * pin bridge prerequisites. Unsupported runtime interoperability exits 77 with the
+ * HRESULT; a skip establishes no device-sharing support.
  */
 #include <rescaleframe/shared_surface.h>
 
@@ -98,9 +93,7 @@ int main()
 
     stage("the D3D11 side alone");
     {
-        // Without a D3D12 device: does this runtime produce an NT handle at all? Separating the two
-        // means a failure names which half refused, which is the difference between "DXVK cannot
-        // export" and "vkd3d cannot import".
+        // Check handle export independently of D3D12 import to identify the refusing API.
         rsf_shared_surface_setup setup{};
         setup.struct_size = sizeof(setup);
         setup.abi_version = RSF_SHARED_SURFACE_ABI_VERSION;
@@ -196,9 +189,7 @@ int main()
         check(rsf_shared_fence_d3d11(fence) != nullptr && rsf_shared_fence_d3d12(fence) != nullptr,
               "Both views of the fence must exist.");
 
-        // The round trip that the per-present protocol depends on: D3D11 signals, D3D12 sees it.
-        // Without this the surfaces are shared memory with no ordering, which is worse than no
-        // sharing because it fails intermittently rather than at once.
+        // Shared memory needs cross-API ordering: D3D12 must observe the D3D11 fence signal.
         auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(fence));
         auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(fence));
         ID3D11DeviceContext4* context4 = nullptr;

@@ -52,6 +52,9 @@ using create_pixel_shader_fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const 
                                                            ID3D11ClassLinkage*,
                                                            ID3D11PixelShader**);
 
+// Process singleton: guard protects catalogues, device selection and dump requests. options and
+// forwarding routes are immutable while hooks are live. Creation callbacks hold guard; graphics
+// work/Present callbacks run outside it. Owners quiesce producers before teardown or reinstall.
 struct Observer {
     std::mutex guard;
     bool installed = false;
@@ -79,8 +82,8 @@ struct Observer {
     // whatever it forwards to, and the genuine body at the end. Where this hook forwards.
     present_fn present_chain = nullptr;
     // A trampoline of this module's own over the bytes the file has for the entry, reaching the
-    // genuine body without passing any hook. Where this forwards once another hook has re-patched
-    // the entry over it, and the way out of a loop. Freed on uninstall.
+    // genuine body without passing any hook. Nested calls use this to break hook recursion.
+    // Its executable allocation is retained for process lifetime after uninstall.
     present_fn present_genuine = nullptr;
     void* present_genuine_block = nullptr;
     // The hook this displaced at the entry, for the log.
@@ -175,8 +178,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
                                 desc->MiscFlags);
     }
     if (self.matches.size() < self.options.capacity && interesting(*desc, self.options)) {
-        // Hold a reference so the target stays alive to be dumped later. Only a handful match,
-        // so this does not meaningfully change the game's memory behaviour.
+        // Retain for later readback. This changes allocation lifetime but does not preserve bytes;
+        // a pooled texture may be rewritten before the requested dump reaches Present.
         (*out)->AddRef();
         self.matches.push_back(*out);
         if (!self.device) {
@@ -391,11 +394,8 @@ void say(const Observer& self, const char* format, ...)
     self.options.log(self.options.log_user, message);
 }
 
-// Decode one target the way a backend needs it, and write the result beside the raw dump.
-//
-// The pass is built and thrown away per texture rather than kept. This runs on a key press a few
-// times a session, so the cost does not matter, and a cached pass would have to be invalidated
-// whenever the render size changed, which is exactly what this project makes happen.
+// Build a temporary decode pass for this diagnostic target, then destroy it after readback.
+// Requests are infrequent and extent changes require no persistent cache invalidation.
 void decode_and_dump(Observer& self, ID3D11Device* device, ID3D11DeviceContext* context,
                      ID3D11Texture2D* source, const char* prefix)
 {
@@ -481,6 +481,8 @@ void perform_pending_dump(Observer& self)
         }
     }
 
+    // Take independent references under guard, then perform blocking GPU/file work without it.
+    // Creation callbacks may extend the catalogues while this request consumes its snapshot.
     if (!context) {
         device->GetImmediateContext(&context);
         if (context) {
@@ -595,11 +597,8 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
     // Recorded under the lock and reported outside it, because everything in this file is.
     void* replaced_device = nullptr;
     void* presenting_device = nullptr;
-    // The presented size, from the swap chain on every present rather than once. AC7 creates its
-    // window at the desktop's DPI-scaled size, 1707x1067 on a 2560x1600 desktop at 150 percent,
-    // presents a few frames, and only then resizes the chain to the 1600x900 its settings say. A
-    // size taken once at the first present was the wrong one for the whole run: DLSS was created
-    // for an output that did not exist and every scene target failed the size judgement against it.
+    // Refresh extent every Present: startup and later ResizeBuffers can change the target size
+    // after the first frame. Classifiers/passes need the current presented extent.
     {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (SUCCEEDED(swapchain->GetDesc(&desc)) && desc.BufferDesc.Width != 0 &&
@@ -626,22 +625,8 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
 
         std::lock_guard<std::mutex> lock(self.guard);
         if (device) {
-            /* The presenting device wins, always, even over one already chosen.
-
-               A process can hold more than one D3D11 device. RenderDoc makes one, and so do some
-               layers and middleware. `hooked_create_buffer` takes the first device that creates a
-               constant buffer, which can easily be one of those rather than the game's, and until
-               this ran only if nothing had been chosen yet, so a helper device chosen early was
-               kept for the life of the process.
-
-               Everything downstream then had the wrong device. It looked like it worked, because a
-               device will happily compile shaders and allocate buffers of its own. It failed at
-               exactly the point where one device has to touch another's resource: staging a copy of
-               the game's view constant buffer refused every time, which read as a hundred thousand
-               view read failures and no evaluations, and creating a view on the game's back buffer
-               took the process down.
-
-               The device that presents the frame is by definition the device that drew it. */
+            /* Prefer the source swap chain's device over an earlier creation-hook candidate.
+               Helper tools may create resources on separate devices that cannot access game inputs. */
             if (self.device && self.device != device) {
                 replaced_device = self.device;
                 self.device->Release();
@@ -718,9 +703,8 @@ template<class Forward> HRESULT observe_present(IDXGISwapChain* swapchain, UINT 
 
     update_presenter(self, swapchain);
 
-    // Before the game's own Present, which is the one moment the finished frame exists and nothing
-    // has been shown yet. No lock is held: this calls into D3D and back into the caller, and
-    // holding one across that is how this project deadlocked twice.
+    // Invoke graphics before forwarding source Present, outside guard so D3D calls may reenter
+    // creation hooks. The callback must restore affected application bindings.
     if (self.options.on_present) {
         self.options.on_present(self.options.on_present_user, swapchain);
     }
@@ -755,18 +739,9 @@ HRESULT STDMETHODCALLTYPE hooked_present1(IDXGISwapChain1* swapchain, UINT inter
     });
 }
 
-// The function a module's own image has in a vtable slot, for a slot another hook has patched.
-//
-// Never forward to another hook. Measured on 26 September 2026, first Windows run: Steam's overlay
-// (`gameoverlayrenderer64.dll`) hooks `IDXGISwapChain::Present` in the same table, notices when its
-// entry is displaced, and re-hooks, taking whatever it displaced as its original. With this
-// module's hook in the slot that made the two forward to each other, and every Present recursed
-// until the stack ran out, sixty-four frames deep in the crash report. The genuine function is not
-// in the table any more by then, but it is in the module on disk: the table is read-only data in
-// `dxgi.dll`, so the slot's unrelocated value can be read from the file at the same RVA and
-// relocated to the loaded base. `current` is what the slot held before this module patched it;
-// it is returned as-is when it already lies inside the owning module.
-// A module's file, read whole, with the module's loaded base and image size beside it.
+// Read PE sections from the owning module's file to recover original vtable pointers/prologue
+// bytes when loaded memory is patched. These bytes support a recursion escape route below.
+// Coexistence evidence: docs/research/windows-present-hook-coexistence.md.
 struct ModuleImage {
     HMODULE module = nullptr;
     const unsigned char* base = nullptr;
@@ -1015,28 +990,10 @@ HMODULE module_of(const void* address, wchar_t* name, size_t count)
     return module;
 }
 
-// Hook Present by detour, in a way that coexists with whatever else has hooked it.
-//
-// Measured on 26 September 2026, on a machine that turned out to have three hooks on dxgi's
-// Present in a game: Steam's overlay, RivaTuner Statistics Server, and this. Each of the two others
-// patches the function's entry with a jump and, on its first present, checks the entry and writes
-// its own bytes back if something displaced them. Steam takes whatever it displaced as its
-// original, which with a table patch of ours made the two forward to each other until the stack
-// ran out; RivaTuner restores what it saved at its own install, which drops anything patched over
-// it out of the chain entirely. Nothing patched at that entry can be trusted to stay.
-//
-// So this never owns the entry. It follows the jump chain from the entry to the first function
-// that lives inside a module, which is the outermost hook's own function, or dxgi's Present itself
-// when nothing is patched, and detours that. A hook re-asserts its target's entry; none re-asserts
-// its own function's prologue. Steam and RivaTuner then run first, exactly as they would without
-// this, and reach this hook through their own chains, which end in the genuine body.
-//
-// Two more pieces cover the rest: the chain is never entered twice by one present, because a
-// re-entered call goes to a trampoline of this module's own over the bytes the file has for the
-// entry, which reaches the body without passing any hook; and everything is put back on uninstall.
-//
-// Returns false with a reason when no target could be established; the caller then falls back to
-// the table patch, with the re-entry guard as the only protection.
+// Detour the first module-owned function reached through the entry jump chain, avoiding overlay
+// entry patches that Steam/RTSS reassert. Keep ordinary forwarding through MinHook's trampoline
+// and nested forwarding through an original-file prologue clone. Present has a vtable fallback;
+// Present1 remains unavailable if its detour cannot be established. Report the failure reason.
 template<class Fn> bool install_present_route(Observer& self, void* genuine, void* hook,
     std::atomic<bool>& detoured, void*& installed_entry, Fn& forwarding, Fn& genuine_fn,
     void*& genuine_block, void*& displaced, const char* label, char* message, size_t size)
@@ -1262,9 +1219,8 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
                    reinterpret_cast<void*>(self.original_create), nullptr);
         return RSF_OBSERVER_ERROR_PATCH_FAILED;
     }
-    // Present by detour on the genuine function, which the table names directly or, when another
-    // hook has rewritten the table, the module on disk still does. The table patch is the fallback
-    // and has only the re-entry guard between it and the recursion the first Windows run died of.
+    // Prefer a detour with a genuine-body recursion route. Present alone falls back to a vtable
+    // hook; a nested call without a genuine route is skipped with S_OK to terminate recursion.
     {
         char why[512] = {};
         void* current = self.swapchain_vtable[slot_present];
@@ -1290,10 +1246,8 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
         }
     }
 
-    // Only patched when something asked to be told. These run on the game's creation path for every
-    // pipeline object it builds, and a hook that reports to nobody is pure cost. Each is
-    // independent: a failure to patch one leaves the others in place and is reported by the
-    // corresponding original staying null, because none of the three is worth failing install over.
+    // Optional creation hooks are best effort and installed only for requested observers.
+    // Failed optional slot patches leave their original pointer null; install may still succeed.
     if (self.options.on_layout) {
         patch_slot(self.device_vtable, slot_create_input_layout,
                    reinterpret_cast<void*>(&hooked_create_input_layout),
@@ -1383,8 +1337,8 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
         self.present_chain = nullptr;
         self.present_genuine = nullptr;
         self.present_displaced = nullptr;
-        // Not freed. A Present already inside the trampoline when the hook came off would return
-        // into released memory, and sixty-four bytes for the life of the process are nothing.
+        // Retain the executable clone for process lifetime so an in-flight trampoline return
+        // cannot reach freed memory; uninstall cannot cancel a producer entering concurrently.
         self.present_genuine_block = nullptr;
     } else if (self.original_present) {
         patch_slot(self.swapchain_vtable, slot_present,
@@ -1479,6 +1433,8 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
     status->constant_bytes_written = self.constant_bytes_written;
     return RSF_OBSERVER_OK;
 }
+// The facade balances start/completion exactly once. It bypasses observer callbacks to avoid
+// reporting its physical D3D12/generated frames recursively; present_calls covers this lifetime.
 extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event)
 {
     if (!event || event->struct_size < sizeof(*event) || !event->swapchain || event->completed > 1)

@@ -1,14 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Choosing between three vendors, on a machine that has none of them.
- *
- * This is the point of negotiation being a pure function. The combinations that matter are the ones
- * nobody has the hardware to try: an NVIDIA card asked for FSR upscaling and DLSS generation, an
- * Intel card where XeSS reconstructs natively and nothing else does, a machine where the bridge
- * failed to come up and every D3D12 vendor has to be refused rather than chosen and then found
- * impossible. All of them are decided from capability structures, so all of them are testable here.
- *
- * What is being pinned is not the choice so much as the reasons. A user who asks for two vendors and
- * gets one needs to know which constraint took the other away.
+/**
+ * @file
+ * Check SR/FG negotiation from synthetic vendor capability structures.
+ * No vendor runtime or device is needed. Cases pin API bridging constraints, shared
+ * Streamline session requirements, fallback choices and reasons returned to callers.
  */
 #include <rescaleframe/backend_registry.h>
 

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Exercise capture callbacks and file output through a synthetic D3D11 frame.
+ * The observer forwards all six shader stages and initial constant-buffer bytes into
+ * AC7 capture storage. Draw/dispatch JSON and colour/depth exports are checked in a
+ * temporary directory; engine detours must refuse this non-game executable.
+ */
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/frame_tap.h>
@@ -17,6 +24,7 @@
 using Microsoft::WRL::ComPtr;
 namespace {
 uint32_t stages = 0;
+// Consume callback-borrowed bytecode immediately and record all six stage identities.
 void shader_seen(void*, void* shader, uint32_t stage, const void* bytes, uint32_t size)
 {
     stages |= 1u << stage;
@@ -105,12 +113,14 @@ int main()
     float values[4] = {.25f,.5f,.75f,1};
     D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = values;
     ComPtr<ID3D11Buffer> cb;
+    // Initial data tests the creation observer independently of later upload hooks.
     check(SUCCEEDED(device->CreateBuffer(&cb_desc, &initial, &cb)), "Create initial CB.");
     rsf_frame_tap_options tap{}; tap.struct_size = sizeof(tap); tap.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     check(rsf_frame_tap_install(context.Get(), &tap) == RSF_FRAME_TAP_OK, "Install draw/compute tap.");
     rsf_frame_tap_set_constant_watch(0, upload, nullptr);
     rsf_ac7_motion_capture_request();
     std::string capture_directory;
+    // Advance the bounded capture session through its finalization boundary.
     for (uint32_t interval = 0; interval <= 60; ++interval) {
         char prefix[640]{};
         if (rsf_ac7_motion_capture_present(chain.Get(), prefix, sizeof(prefix)) && capture_directory.empty())

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check FG session switching and CPU frame sequencing with deterministic providers.
+ * A counted synthetic chain enforces one presentation owner and quiescent replacement.
+ * Injected probe, creation and retirement failures exercise preservation/fallback.
+ * No graphics device or vendor runtime is used; pointer identities are opaque tokens.
+ */
 #include <rescaleframe/fg_session.h>
 #include <rescaleframe/frame_sequencer.h>
 #include <cstdio>
@@ -7,7 +14,9 @@
 namespace {
 void check(bool ok, int line) { if (!ok) { std::fprintf(stderr, "FG contract failed at %d\n", line); std::exit(1); } }
 #define CHECK(x) check((x), __LINE__)
+// Probe contexts have no chain; physical contexts count the sole live presentation owner.
 struct Context { bool physical; };
+// Inject failures at distinct replacement phases to distinguish preservation from fallback.
 bool fail_probe = false, fail_chain = false, fail_retire = false, quiescent = false;
 uint32_t physical = 0, destroyed = 0, restored = 0;
 rsf_fg_session* live_session = nullptr;

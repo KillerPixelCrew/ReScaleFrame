@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check default SR backend policy from synthetic PCI vendor/software flags.
+ * No adapter discovery occurs; hardware capability negotiation remains separate.
+ */
 #include <rescaleframe/gpu_policy.h>
 #include <cstdio>
 int main()

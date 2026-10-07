@@ -1,3 +1,5 @@
+; Generic carrier surface combines DirectInput and version API forwarding. These ordinals belong
+; to this carrier; assembly resolver indices start at zero and follow shim_loader.cpp names[].
 EXPORTS
     DirectInput8Create @1
     GetFileVersionInfoA @2

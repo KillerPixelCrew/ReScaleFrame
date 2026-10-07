@@ -1,4 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/**
+ * @file
+ * Compile frame-generation controller headers as C, without a runtime test.
+ * Static assertions pin the ABI version and generated-frame field width. Keeping an
+ * OBJECT target catches accidental C++ dependencies without requiring an entry point.
+ */
 #include <rescaleframe/fg_session.h>
 #include <rescaleframe/fg_leases.h>
 #include <rescaleframe/frame_sequencer.h>

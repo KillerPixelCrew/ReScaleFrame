@@ -1,11 +1,10 @@
-// Set a pipeline up, save it, take it apart, and check that restoring puts every piece back.
-//
-// This exists because of where it is used. The reconstruction runs partway through the game's own
-// frame now, and the engine will not rebind what it believes is still bound, so anything this
-// misses is a pass that draws with the wrong state and no error anywhere. Each stage is checked
-// separately rather than as one "did it work", because the failure that matters is one stage of
-// several being forgotten.
-
+/**
+ * @file
+ * Check D3D11 pipeline capture and restoration after deliberate state changes.
+ * The fixture binds distinct read/write resources, saves state, clears it and compares
+ * each restored stage. Getter-acquired COM references are released immediately so
+ * teardown checks the saved state's ownership rather than extra fixture references.
+ */
 #include <rescaleframe/d3d11_state.h>
 
 #include <windows.h>
@@ -32,8 +31,7 @@ void stage(const char* what)
     std::fflush(stderr);
 }
 
-// Each of these takes a reference and drops it. Addresses are all that is compared, and holding on
-// would change the lifetimes the test is checking.
+// Release references returned by D3D11 getters before comparing object identities.
 template <typename T> T* dropped(T* value)
 {
     if (value) {
@@ -80,10 +78,7 @@ int main()
     check(rsf_d3d11_state_save(context, nullptr) == 0, "Saving without a state must be refused.");
 
     stage("creating resources");
-    // Three textures, not two, and the render target is one nothing reads. A texture bound as an
-    // input and as an output at the same time is unbound by the runtime with no error a shipping
-    // game would see, so a test that did that would be checking the restore against a state D3D11
-    // had already taken apart on its own.
+    // Separate input and output textures avoid D3D11 hazard unbinding before state capture.
     ID3D11Texture2D* first = make_target(device, 64, 64);
     ID3D11Texture2D* second = make_target(device, 32, 32);
     ID3D11Texture2D* drawn_into = make_target(device, 64, 64);
@@ -165,8 +160,7 @@ int main()
     context->RSSetViewports(1, &other_viewport);
     context->RSSetScissorRects(1, &other_scissor);
 
-    // The point of the test is that this is not what comes back, so it is worth checking that the
-    // state really was disturbed. A save that silently did nothing would otherwise pass.
+    // Verify ClearState disturbed the binding before testing restoration.
     ID3D11ShaderResourceView* cleared = nullptr;
     context->PSGetShaderResources(3, 1, &cleared);
     check(cleared == nullptr, "The state must actually be disturbed before it is restored.");
@@ -225,8 +219,7 @@ int main()
           "The scissor rectangle must come back.");
 
     stage("releasing");
-    // Unbound first, so the references the context holds are gone before the test drops its own and
-    // a leak here is a leak in the restore rather than in the teardown.
+    // Drop context-held references before releasing fixture ownership.
     context->ClearState();
     raster->Release();
     constants->Release();

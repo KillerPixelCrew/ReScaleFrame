@@ -5,6 +5,8 @@
 #include <new>
 #include <memory>
 
+// Own the loaded module until plugin producers and queued work have quiesced and stopped.
+// readers pins status callbacks against transitions; guard is released before invoking hooks.
 struct rsf_plugin_session {
     HMODULE module = nullptr;
     rsf_game_plugin_api api{};
@@ -15,12 +17,15 @@ struct rsf_plugin_session {
     ~rsf_plugin_session() { if (module) FreeLibrary(module); }
 };
 namespace {
+// Refuse ambient DLL lookup: accept drive-rooted and UNC paths only.
 bool absolute_path(const wchar_t* path)
 {
     if (!path || !path[0]) return false;
     return (path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) ||
            (path[0] == L'\\' && path[1] == L'\\');
 }
+// prepare can fail after installing work. Treat unconfirmed retirement as BUSY so the caller
+// retains this owner and its callback storage instead of unloading a partially active plugin.
 rsf_result retire_failed_prepare(rsf_plugin_session& self) noexcept
 {
     try {
@@ -30,6 +35,7 @@ rsf_result retire_failed_prepare(rsf_plugin_session& self) noexcept
         return self.quiesced ? self.api.hooks.stop(&args) : RSF_ERROR_BUSY;
     } catch (...) { return RSF_ERROR_BUSY; }
 }
+// Exception-safe reader pin for status; plugin exceptions cannot strand the transition guard.
 struct Reader {
     rsf_plugin_session& self;
     explicit Reader(rsf_plugin_session& s) : self(s) {}

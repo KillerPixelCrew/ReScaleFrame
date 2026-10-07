@@ -10,7 +10,8 @@
 extern "C" {
 #endif
 
-/* Scaffold metadata only; no runtime initialization occurs. */
+/* Return immutable runtime-owned version text, valid until this DLL unloads.
+   Callable without initialization; this entry point performs no graphics or plugin work. */
 RSF_RUNTIME_API const char* rsf_get_runtime_version(void);
 
 #ifdef __cplusplus

@@ -1,18 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Turn what a game plugin knows about a frame into what a backend asks for.
-
-   This is the orchestrator's job by the ownership split: a plugin knows where its engine keeps
-   camera data and how its velocity is stored, a backend knows what a vendor SDK wants, and neither
-   should know the other. So a plugin fills `rsf_pipeline_camera_frame`, which names nothing vendor specific,
-   and this turns it into a backend's own structure.
-
-   The conversion is small and every part of it is a decision that has been got wrong at least once
-   somewhere in this project: which projection to send, what units the jitter is in, whether the
-   depth is reversed, which value marks a pixel nothing wrote. Putting them in one place with the
-   reasoning attached is the point of this file.
-
-   `rsf_pipeline_camera_frame` will move into the game SDK once frame callbacks land there. It lives here
-   while the shape is still settling, so that changing it costs nothing outside this repository. */
+/* Compatibility conversion from decoded camera data and D3D11 textures to a DLSS frame.
+   This legacy camera type is distinct from the SDK's rsf_camera_frame. Assembly copies metadata
+   and resource pointers; it issues no GPU work and retains no references. */
 
 #ifndef RSF_FRAME_ASSEMBLY_H
 #define RSF_FRAME_ASSEMBLY_H
@@ -44,9 +33,7 @@ typedef struct rsf_pipeline_camera_frame {
     uint32_t struct_size;
     uint32_t abi_version;
 
-    /* Row major, and without the temporal jitter. A projection that still carries it makes the
-       reconstruction correct for a camera that was never rendered, which looks like softness
-       rather than like a bug. */
+    /* Row-major matrices with temporal jitter removed from the projection. */
     float view_to_clip[16];
     float clip_to_view[16];
     float clip_to_prev_clip[16];
@@ -57,6 +44,7 @@ typedef struct rsf_pipeline_camera_frame {
     float camera_up[3];
     float camera_right[3];
 
+    /* Near/far distances and camera_position use the integration's view-space units. */
     float near_plane;
     /* Zero means an infinite far plane, which reversed-Z projections normally have. A backend
        wants a number, so one is chosen; see `rsf_assemble_dlss_frame`. */
@@ -81,16 +69,16 @@ typedef struct rsf_pipeline_camera_frame {
     /* What a decoded pixel holds where nothing wrote motion. Meaningless unless decoded. */
     uint32_t has_motion_sentinel;
     float motion_sentinel;
-    /* Multiplied into the decoded motion to reach the [-1,1] range backends require. Decoded
-       Unreal motion is already there, so 1 and 1, with a sign or axis flip belonging here when a
-       rendered result shows one is needed. */
+    /* Per-axis conversion from decoded values to the DLSS motion convention. The producer
+       supplies the direction and basis; assembly copies these multipliers unchanged. */
     float motion_scale[2];
 
     /* No usable history: a cut, a teleport, or the first frame at a new resolution. */
     uint32_t reset;
 } rsf_pipeline_camera_frame;
 
-/* The textures for one frame, and the sizes they are. All `ID3D11Texture2D*`. */
+/* Borrowed ID3D11Texture2D inputs/output. Assembly checks pointer presence and declared extents,
+   not texture descriptors, device ownership or resource contents. */
 typedef struct rsf_frame_resources {
     uint32_t struct_size;
     void* color_in;
@@ -107,8 +95,10 @@ typedef struct rsf_frame_resources {
     rsf_dlss_quality quality;
 } rsf_frame_resources;
 
-/* Fill a DLSS frame from a camera frame and its resources.
-   Refuses a pairing that cannot work rather than assembling something that will look wrong. */
+/* Fill caller storage of at least sizeof(rsf_dlss_frame), preserving a nonzero out->struct_size.
+   Refuses missing required resources, absent jitter, undecoded motion and output smaller than
+   render size. A nonpositive far plane uses the legacy 1e7 view-unit fallback. Failure leaves
+   out untouched; success does not establish image quality or resource lifetime. */
 RSF_RUNTIME_API rsf_frame_assembly_result rsf_assemble_dlss_frame(
     const rsf_pipeline_camera_frame* camera, const rsf_frame_resources* resources, rsf_dlss_frame* out);
 

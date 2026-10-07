@@ -18,6 +18,9 @@
 #include <cstdio>
 
 namespace {
+// Lifecycle owns this callback user storage until plugin quiesce/stop confirms managed, native
+// and GPU retirement. state serializes render/config snapshots; logging has its own mutex so
+// vendor diagnostics can run while a render callback holds state.
 struct Host {
     std::mutex state, logging;
     HANDLE log_file = INVALID_HANDLE_VALUE;
@@ -42,6 +45,7 @@ struct Host {
 };
 std::mutex lifecycle;
 std::unique_ptr<Host> host;
+// Resolve [UnitySR] paths beside the supplied INI; never against the game's changing cwd.
 std::wstring setting(const wchar_t* path, const wchar_t* name)
 {
     wchar_t text[32768]{};
@@ -73,6 +77,8 @@ void log(void* owner, const char* message)
     WriteFile(self.log_file, message, static_cast<DWORD>(std::strlen(message)), &bytes, nullptr);
     WriteFile(self.log_file, "\r\n", 2, &bytes, nullptr);
 }
+// The engine reads a copied plan. A dirty UI request disables temporal reinsertion until the
+// submission adapter supplies its drained graphics boundary and a replacement is prepared.
 int configuration(void* owner, rsf_game_render_config* output)
 {
     auto& self = *static_cast<Host*>(owner);
@@ -80,6 +86,8 @@ int configuration(void* owner, rsf_game_render_config* output)
     std::lock_guard<std::mutex> lock(self.state);
     *output = self.plan; output->struct_size = sizeof(*output); return 1;
 }
+// SHA-256 of the executable on disk for plugin detection. Recognition alone does not authorize
+// hooks; the plugin's later lifecycle preparation validates its own engine integration.
 bool fingerprint(const wchar_t* path, std::string& digest)
 {
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -107,6 +115,9 @@ bool fingerprint(const wchar_t* path, std::string& digest)
     for (auto value : bytes) { digest += hex[value >> 4]; digest += hex[value & 15]; }
     return true;
 }
+// Engine-owned callback: SR/FG_INPUTS supply a graphics list, WINDOW supplies the owning queue.
+// End callbacks confirm the captured list was submitted; FINAL_SCENE supplies HUD-less color.
+// Device/provider initialization waits for an actual rendering callback rather than DllMain.
 void render(void* owner, void* command_list, const rsf_game_render_pass* pass, uint32_t begin)
 {
     if (!command_list || !pass || pass->struct_size < sizeof(*pass)) return;
@@ -200,6 +211,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
     }
     if (pass->role != RSF_GAME_RENDER_SR && pass->role != RSF_GAME_RENDER_FG_INPUTS) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(command_list);
+    // The private high flag is the Unity adapter's completed frame-fence boundary. Only then
+    // may a queued quality/provider request destroy storage that earlier lists referenced.
     if ((self.dirty && (pass->flags & 0x80000000u)) || self.width != pass->camera.output_width || self.height != pass->camera.output_height) {
         // The Unity submission adapter joins its previous frame-fence values before this resize.
         rsf_sr12_destroy(self.sr); self.sr = nullptr;
@@ -209,6 +222,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         self.backend = self.requested_backend; self.quality = self.requested_quality;
         self.dirty = false; self.accepted = self.refused = 0; self.last_result = 0;
     }
+    // Prepare once per output/configuration generation. A refusal leaves the published plan
+    // disabled and relies on the engine's spatial fallback until a fresh request/resize.
     if (!self.attempted) {
         self.attempted = true;
         self.plan = {sizeof(self.plan), 0, self.width, self.height, 0, 0};
@@ -267,6 +282,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         log(&self, text);
         }
     }
+    // FG normalization runs independently when SR is Off or handled by the engine's FSR1 path.
+    // Its render extent follows actual inputs rather than the temporal provider's preferred plan.
     if (pass->role == RSF_GAME_RENDER_FG_INPUTS && pass->camera_valid) {
         if (!self.inputs || self.input_width != pass->camera.render_width || self.input_height != pass->camera.render_height) {
             rsf_sr12_destroy(self.inputs); self.inputs = nullptr;
@@ -286,6 +303,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         return;
     }
     if (!self.sr || !pass->camera_valid) return;
+    // Descriptor/readback heaps map to the adapter's three recurring command lists. A fourth
+    // unseen list refuses evaluation rather than reusing descriptors under queued GPU work.
     uint32_t slot = 3;
     for (uint32_t i = 0; i < 3; ++i) if (self.command_lists[i] == command_list) { slot = i; break; }
     if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!self.command_lists[i]) { self.command_lists[i] = command_list; slot = i; break; }
@@ -345,6 +364,8 @@ extern "C" uint32_t __stdcall rsf_unity_sr_start(const wchar_t* path) try
     const auto executable_name = utf8(std::wstring(executable).substr(std::wstring(executable).find_last_of(L"/\\") + 1));
     std::string hash;
     if (!fingerprint(executable, hash)) return 6;
+    // Probe strings live through synchronous prepare. The plugin session retains the module
+    // and copied host services; all callback user data remains in next/host until retirement.
     rsf_game_probe probe{sizeof(probe), 0x8664, 0, executable_name.c_str(), hash.c_str()};
     HMODULE policy_module = LoadLibraryExW(plugin_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!policy_module) return 7;

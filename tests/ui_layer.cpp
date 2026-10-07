@@ -1,15 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The layer the interface is diverted into, and the alpha question that decides whether it works.
- *
- * The layer itself is simple. What is not simple, and what this test exists for, is that a
- * transparent surface only accumulates coverage if the draws landing on it write alpha. Unreal's
- * Slate blend does. Unreal's base pass translucent blend does not: its alpha factors are
- * `Zero / InvSrcAlpha`, so alpha stays at whatever the clear left, and a layer cleared to zero
- * stays at zero no matter how much colour is drawn onto it. A layer like that composites to
- * nothing and looks exactly like a broken divert.
- *
- * So the divert has to patch the alpha operations of the blends it moves, and this is where that
- * arithmetic is pinned.
+/**
+ * @file
+ * Check UI-layer allocation and alpha accumulation through D3D11 readback.
+ * Slate and base-pass translucent blends exercise premultiplied coverage. Patching
+ * alpha factors and the alpha write mask must preserve colour factors and accumulate
+ * multiple draws; cleared transparent targets expose missing coverage writes.
  */
 #include <rescaleframe/ui_layer.h>
 
@@ -79,8 +74,7 @@ bool near_enough(float actual, float expected, float budget)
     return std::fabs(actual - expected) <= budget;
 }
 
-/* A shader that emits a constant colour and alpha, which is all these cases need: what is being
-   tested is the blend, not the pixel. */
+/* Constant colour/alpha isolates blend arithmetic from shader sampling. */
 const char* const source = R"(
 cbuffer Params : register(b0) { float4 Colour; };
 float4 vertex_main(uint id : SV_VertexID) : SV_Position
@@ -263,10 +257,8 @@ int main()
                 D3D11_BLEND_DESC patched = translucent;
                 patched.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
 
-                // And a write mask without its alpha bit, which is what AC7's interface blend
-                // actually has and what the first three extraction runs tripped over. A target
-                // whose alpha nobody reads is ordinarily drawn this way, so it is not a strange
-                // case; it just makes every alpha operation above it decorative.
+                // AC7 UI blends can disable alpha writes. Patching alpha factors alone
+                // cannot accumulate coverage unless the write mask enables alpha too.
                 D3D11_BLEND_DESC masked = patched;
                 masked.RenderTarget[0].RenderTargetWriteMask =
                     D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN |

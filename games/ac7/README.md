@@ -82,7 +82,8 @@ counts and measured latency reductions are unproven; FSR4 SR compatibility does 
 
 Use [the current-source loader guide](../../loader/README.md#ac7-frame-generation) for configuration
 and runtime files. The v0.1.0 installation steps above do not install FG/Reflex. See
-[current status](../../docs/current-status.md) and
+[current status](../../docs/current-status.md),
+[DLSS-G/Reflex evidence](../../docs/research/ac7-dlss-fg-20261003.md) and
 [shared FG evidence](../../docs/research/shared-fg-20261004.md) for validation limits.
 
 ## Integration notes
@@ -102,6 +103,43 @@ uses matching view/depth selections and unjittered constants across VS, PS, HS, 
 - [Hook sites and expected bytes](../../docs/research/ue418-hook-map.md)
 - [Capture research](../../docs/research/ac7-frame-capture.md)
 - [Framework implementation tracker](../../docs/implementation.md)
+
+## Source and ownership
+
+| Files | Responsibility |
+| --- | --- |
+| [src/plugin.cpp](src/plugin.cpp), [ac7_native_renderer.h](include/rescaleframe/ac7_native_renderer.h) | Game SDK identity and serialized prepare/start/quiesce/stop/status calls |
+| [src/native_renderer.cpp](src/native_renderer.cpp) | Expected-byte guarded engine hooks, primary view sizing, SR graph insertion, native UI/cloud producers and render-owner retirement |
+| [src/render_scope.cpp](src/render_scope.cpp), [ac7_render_scope.h](include/rescaleframe/ac7_render_scope.h) | Copied render identity and leased resources bracketed by queued RHI begin/end markers |
+| [src/view_uniforms.cpp](src/view_uniforms.cpp), [ac7_view.h](include/rescaleframe/ac7_view.h) | Captured view layout recognition, camera units, projection/history inverses and current-jitter removal |
+| [src/ui_rules.cpp](src/ui_rules.cpp), [ac7_ui_rules.h](include/rescaleframe/ac7_ui_rules.h) | Allocation-free Slate/canvas/widget classification from caller-owned shadow registries |
+| [src/scene_color.cpp](src/scene_color.cpp), [ac7_scene_color.h](include/rescaleframe/ac7_scene_color.h) | Captured recombine selection and exact candidate layer identities |
+| [src/contact_shadow.cpp](src/contact_shadow.cpp), [src/contact_shadow.h](src/contact_shadow.h) | Exact-fingerprint DXBC noise-phase and depth-quantization correction at shader creation |
+| [src/truesky_depth.cpp](src/truesky_depth.cpp), [src/truesky_depth.h](src/truesky_depth.h) | One-to-one normalized depth-bounds shader for guarded native TrueSky bindings |
+| [src/truesky_motion.cpp](src/truesky_motion.cpp), [src/truesky_motion.h](src/truesky_motion.h) | Cloud distance in kilometres converted to device depth for camera reprojection |
+| [src/motion_capture.cpp](src/motion_capture.cpp), [ac7_motion_capture.h](include/rescaleframe/ac7_motion_capture.h) | Bounded optional F9 observations and CPU/RHI/resource diagnostics |
+| [CMakeLists.txt](CMakeLists.txt), [engine.json](engine.json) | Native targets and dated build/render evidence |
+
+Prepare runs after executable decryption and validates researched function/helper bytes before
+installing inactive hooks. Start opens production after host graphics activation. Quiesce closes
+admission; stop can report busy until CPU tasks, queued RHI markers, pool/uniform references and
+native callback bodies retire. A refused restoration also retains the module and host callbacks.
+Callers must retry cleanup without releasing that ownership.
+
+Render scopes copy session, source, submission, family and view identity before engine objects
+retire. Native family counters do not substitute for input/simulation source IDs. Engine pooled
+targets and generated uniforms release on the render owner; COM resources survive through RHI
+end markers. Vendor processing and presentation remain in the shared runtime.
+
+The view API uses row-major engine matrices, render-pixel jitter, radians for field of view and
+engine world units for camera distances. Ordinary written UE motion requires the documented
+encoding/axis conversion; raw zero identifies unwritten pixels that need depth-derived camera
+motion. The exact encoding and coverage limits remain in `engine.json` and the motion research.
+
+F9 capture records 60 Present intervals and samples GPU bindings at 0, 30 and 59. It writes
+`engine.jsonl`, `native.jsonl`, `draws.jsonl`, deduplicated `cb_<id>.bin` blobs, shader bytecode and
+`session.json` loss/timing metadata under the configured capture directory. Pointer/thunk command
+matches and CPU TLS scopes are diagnostic associations, not proof of GPU completion or presentation.
 
 ReScaleFrame is GPL-3.0-only except for its MIT Game SDK. NVIDIA, AMD and Intel runtime files
 retain their separate included terms and notices.

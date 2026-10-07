@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* XeSS-SR through the official DX12 API. Native D3D11 and frame generation are unavailable
-   in this implementation. Build capability is separate from runtime and adapter support. */
+/* XeSS-SR through the official DX12 API. Native D3D11 and legacy FG are unavailable here;
+   xess_generation.cpp implements the separate live-generation API. */
 
 #include <rescaleframe/backend.h>
 #include <rescaleframe/xess_backend.h>
@@ -12,6 +12,7 @@
 
 namespace {
 
+/* Forward a borrowed diagnostic only when a sink was supplied. */
 void say(const rsf_backend_probe_desc* desc, const char* message)
 {
     if (desc && desc->log) {
@@ -19,6 +20,9 @@ void say(const rsf_backend_probe_desc* desc, const char* message)
     }
 }
 
+/** Report compiled DX12 SR capability without loading runtimes or querying a device.
+ * sr_open establishes actual runtime/adapter support. Output preserves the caller's struct_size.
+ */
 rsf_backend_result probe(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps)
 {
     if (!desc || !caps || desc->struct_size < sizeof(rsf_backend_probe_desc) ||
@@ -35,6 +39,7 @@ rsf_backend_result probe(const rsf_backend_probe_desc* desc, rsf_backend_caps* c
     caps->vendor = RSF_VENDOR_INTEL;
     caps->name = "XeSS";
 
+/* Legacy feature stubs distinguish an absent SDK implementation from an unsupported interface. */
 #if !defined(RSF_HAVE_XESS)
     caps->available = 0;
     caps->refusal_utf8 = "built without the XeSS headers";
@@ -73,6 +78,7 @@ rsf_backend_result sr_release(void*) { return absent; }
 void sr_close(void*) {}
 #endif
 
+/* All legacy FG operations refuse work; use rsf_generation_xess for XeFG/XeLL. */
 rsf_backend_result fg_create(const rsf_fg_swapchain_desc*, rsf_fg_swapchain_result*, void**)
 {
     return absent;
@@ -86,6 +92,7 @@ rsf_backend_result fg_sleep(void*) { return absent; }
 rsf_backend_result fg_generated(void*, uint64_t*) { return absent; }
 void fg_destroy(void*) {}
 
+/* Module-owned immutable tables. Returned pointers require no caller deallocation. */
 const rsf_sr_provider sr_provider = {
     sizeof(rsf_sr_provider), probe, sr_open, sr_plan, sr_evaluate, sr_release, sr_close,
 #if defined(RSF_HAVE_XESS)

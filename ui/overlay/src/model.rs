@@ -1,15 +1,10 @@
-//! The overlay's data, in ordinary Rust types.
-//!
-//! Nothing in here holds a pointer or knows that a C boundary exists. The FFI layer converts into
-//! and out of these types, which is why the panel and its tests can run without any of that.
+//! Safe frame inputs, runtime snapshots and one-shot settings intents converted by the FFI layer.
 
 use crate::abi;
 
 /// How aggressively to reconstruct.
 ///
-/// The order matches `rsf_overlay_quality` in the header and `rsf_upscaler::Quality`. A value that
-/// means different things in three places is a bug waiting for someone to add a level, so
-/// [`Quality::to_abi`] and [`Quality::from_abi`] are the only places the numbers appear.
+/// Values match `rsf_overlay_quality` and `rsf_upscaler::Quality`; conversion is centralized here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Quality {
     /// Render at output resolution. Antialiasing without upscaling.
@@ -48,10 +43,6 @@ impl Quality {
     }
 
     /// The level a C value names, or `None` when the caller sent one this build does not know.
-    ///
-    /// An unknown level is shown as unknown rather than rounded to the nearest one. Silently
-    /// displaying Native when the runtime is doing something else is the kind of small lie this
-    /// panel exists to avoid.
     #[must_use]
     pub fn from_abi(value: abi::RsfOverlayQuality) -> Option<Self> {
         match value {
@@ -82,11 +73,11 @@ impl Quality {
 pub struct GenerationStats {
     /// Active presentation provider.
     pub backend: u32,
-    /// Saved provider for next startup.
+    /// Saved/requested provider, awaiting startup or a runtime switch according to host capability.
     pub requested_backend: u32,
-    /// Implemented choices as provider ID bits.
+    /// Implemented choices as provider ID bits; bit 31 advertises runtime switching.
     pub backend_choices: u32,
-    /// Last persistence result.
+    /// Last provider persistence or runtime selection result.
     pub selection_result: i32,
     /// A cold presentation host exists.
     pub available: bool,
@@ -176,9 +167,7 @@ pub struct Stats<'a> {
     pub render_scale_percent: u32,
     /// Frame captures written this session.
     pub captures_written: u32,
-    /// Whether the patched jitter gate is open. Distinct from `jitter_active`, which says the view
-    /// data arrived carrying an offset: the gate is the cause and that is the effect, and a run
-    /// where they disagree is telling us something.
+    /// Whether the patched jitter gate is open; `jitter_active` separately reports observed view data.
     pub jitter_gate_on: bool,
     /// Whether the gate was found in this build, so the panel can refuse before offering a switch.
     pub jitter_gate_available: bool,
@@ -192,7 +181,7 @@ pub struct Stats<'a> {
     pub generation: GenerationStats,
     /// Real application Present counter.
     pub application_presented_frames: u64,
-    /// Monotonic QPC sample and its frequency.
+    /// QPC tick and frequency in ticks per second; zero disables rate estimation.
     pub counter_clock: [u64; 2],
     /// Show the compact performance overlay.
     pub show_performance_hud: bool,
@@ -201,8 +190,7 @@ pub struct Stats<'a> {
 }
 
 impl Default for Stats<'_> {
-    /// Nothing loaded, nothing found, nothing counted. The state the runtime is actually in before
-    /// it has established anything, which makes it the right starting point for a test as well.
+    /// Empty runtime snapshot with Native quality and the default DLSS provider selection.
     fn default() -> Self {
         Self {
             backend_loaded: false,
@@ -253,9 +241,7 @@ impl Stats<'_> {
 
     /// Render size as a fraction of output size, per axis.
     ///
-    /// `None` when either output axis is zero, which is what a size the runtime has not yet
-    /// established looks like. This is the number a quality level actually means, so it is derived
-    /// from the two sizes rather than from the selected level.
+    /// `None` when either output axis is zero. Uses observed extents, independent of quality preset.
     #[must_use]
     pub fn render_scale(&self) -> Option<[f32; 2]> {
         if self.output[0] == 0 || self.output[1] == 0 {
@@ -269,8 +255,7 @@ impl Stats<'_> {
 
     /// Evaluated frames as a fraction of presented frames.
     ///
-    /// `None` when nothing has been presented yet. A rate is a convenience here and never a
-    /// replacement for the counters: the panel shows both.
+    /// `None` when nothing has been presented yet; this ratio is not an FPS measurement.
     #[must_use]
     pub fn evaluated_fraction(&self) -> Option<f32> {
         if self.frames_presented == 0 {
@@ -282,9 +267,9 @@ impl Stats<'_> {
 
 /// What the user asked for in one frame.
 ///
-/// The `*_changed` flags are true only in the frame the widget changed, so a caller acts once
-/// instead of every frame after a click. The values are reported either way, so a caller that
-/// missed a frame can still see what the panel is showing.
+/// Act on each `*_changed` flag once. Quality and enabled are reported every frame; other values
+/// are meaningful only with their request flag. Legacy diagnostic fields remain ABI-compatible
+/// even where the current panel does not expose a widget for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Intent {
     /// The quality the panel shows as chosen.
@@ -374,13 +359,13 @@ pub struct FrameInput {
     pub mouse: [f32; 2],
     /// Held mouse buttons, as `RSF_OVERLAY_MOUSE_*` bits.
     pub mouse_buttons: u32,
-    /// Wheel movement since the previous frame.
+    /// Vertical wheel movement in egui points since the previous frame.
     pub scroll_delta: f32,
     /// Size of the presented image.
     pub display: [u32; 2],
     /// Seconds since the previous frame.
     pub delta_seconds: f32,
-    /// When false, only the optional startup hint is drawn. Widget state survives.
+    /// When false, settings are hidden; optional hint/HUD may draw and widget state survives.
     pub visible: bool,
     /// Noninteractive startup hint opacity. Zero produces no hint.
     pub startup_hint_alpha: f32,

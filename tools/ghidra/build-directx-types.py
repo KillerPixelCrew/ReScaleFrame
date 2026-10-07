@@ -1,8 +1,9 @@
 """Build DirectX type information for Ghidra from mingw-w64 headers.
 
-Produces a flattened header, a COM vtable slot table, and optionally a Ghidra .gdt archive.
-Nothing here touches a game binary. The headers are read from the local mingw-w64 sysroot and
-are not vendored into this repository.
+Reads local mingw-w64 headers for the fixed x86-64 Windows layout and writes directx.h,
+directx-vtables.json, directx-slots.h, and optionally directx.gdt under the output directory.
+Existing outputs are replaced. --gdt may bootstrap an offline private PyGhidra virtual environment
+from the configured Ghidra installation. No Ghidra program or game binary is modified.
 """
 
 import argparse
@@ -48,7 +49,11 @@ UUID_PATTERN = re.compile(r"__CRT_UUID_DECL\(\s*(\w+)\s*,([^)]*)\)")
 
 
 def find_compiler(explicit):
-    """Return a command prefix that preprocesses Windows headers for x86-64."""
+    """Choose a Windows x64 preprocessor, adding a target flag only for generic clang.
+
+    An explicit argument is a single executable, not a shell command with embedded arguments.
+    Raise SystemExit when no supported compiler is discoverable on PATH.
+    """
     if explicit:
         return [explicit]
     for name in ("x86_64-w64-mingw32-gcc", "x86_64-w64-mingw32-clang", "x86_64-w64-mingw32-cpp"):
@@ -60,7 +65,11 @@ def find_compiler(explicit):
 
 
 def strip_extensions(text):
-    """Remove GCC attribute syntax, keeping the balanced parentheses accounting correct."""
+    """Strip known extension spellings and balanced attribute groups from preprocessed C.
+
+    Return declaration text; an unclosed attribute group raises ValueError rather than truncating it.
+    This is a targeted sanitizer for the selected headers, not a general C/C++ parser.
+    """
     for keyword in DROP_KEYWORDS:
         text = re.sub(rf"\b{re.escape(keyword)}\b", "", text)
     for keyword in DROP_ATTRIBUTES:
@@ -86,7 +95,11 @@ def strip_extensions(text):
 
 
 def strip_function_bodies(text):
-    """Reduce inline definitions to declarations. Ghidra's parser cannot read bodies or asm."""
+    """Replace brace groups following ')' with ';', preserving other declarations and literals.
+
+    Track nested braces and escaped quoted strings while skipping inline function bodies/assembly.
+    This heuristic expects preprocessed C declarations, not arbitrary C++ source.
+    """
     out = []
     depth = 0
     index = 0
@@ -121,7 +134,11 @@ def strip_function_bodies(text):
 
 
 def preprocess(compiler, sysroot, headers, output):
-    """Flatten the selected headers into one translation unit Ghidra can parse."""
+    """Write an umbrella input, preprocess it, sanitize declarations, and replace output.
+
+    Fail before writing the flattened header when the compiler exits nonzero. Return the command,
+    line count, and warning count as provenance for the generated JSON report.
+    """
     umbrella = output.parent / "directx-umbrella.c"
     umbrella.write_text("".join(f"#include <{name}>\n" for name in headers), encoding="utf-8")
     command = compiler + ["-E", "-P", f"-I{sysroot}"]
@@ -136,7 +153,11 @@ def preprocess(compiler, sysroot, headers, output):
 
 
 def extract_vtables(text):
-    """Map each COM interface to its flattened vtable slots, in declaration order."""
+    """Return interface -> ordered method records from C COM vtable declarations.
+
+    Only top-level member function pointers count; callback parameters do not create extra slots.
+    Byte offsets are slot_index * 8 because this tool targets the Windows x64 pointer layout.
+    """
     interfaces = {}
     for match in VTABLE_PATTERN.finditer(text):
         name, body = match.group(1), match.group(2)
@@ -159,10 +180,10 @@ def extract_vtables(text):
 
 
 def extract_iids(sysroot):
-    """Collect interface IDs as they appear in memory, so they can be matched inside a binary.
+    """Collect UUID macros from original top-level headers before C preprocessing removes them.
 
-    The declarations sit in the C++ half of the mingw headers, so they survive only in the
-    original text and have to be read before preprocessing.
+    Keys are the 16 GUID bytes in Windows memory order: little-endian Data1/2/3, then Data4 bytes.
+    Malformed/unreadable declarations are skipped; records retain interface/header provenance.
     """
     iids = {}
     for path in sorted(sysroot.glob("*.h")):
@@ -190,10 +211,10 @@ def extract_iids(sysroot):
 
 
 def write_slots_header(path, interfaces, iids):
-    """Emit vtable slot indices and interface IDs for in-process code to use directly.
+    """Replace a C macro header for selected shim interfaces and return its interface count.
 
-    A hook needs the same numbers this tooling derives, so generate them once instead of
-    repeating literal indices in the runtime.
+    Slot macros are indices, not byte offsets; IID macros contain the same packed bytes as JSON.
+    Interfaces missing from the flattened declaration set are omitted.
     """
     lines = ["/* Generated by tools/ghidra/build-directx-types.py. Do not edit. */",
              "#ifndef RSF_DIRECTX_SLOTS_H", "#define RSF_DIRECTX_SLOTS_H", "",
@@ -216,7 +237,11 @@ def write_slots_header(path, interfaces, iids):
 
 
 def build_gdt(header, output, ghidra_home, interfaces):
-    """Parse the flattened header into a .gdt archive using Ghidra's own C parser."""
+    """Replace the x64 Windows .gdt, verify parsed vtable lengths, then save and close it.
+
+    Report absent/mismatched layouts alongside verified counts rather than failing the entire archive.
+    Starting PyGhidra loads the JVM; this function does not import or analyze any target program.
+    """
     import pyghidra
 
     pyghidra.start(install_dir=ghidra_home)
@@ -248,7 +273,11 @@ def build_gdt(header, output, ghidra_home, interfaces):
 
 
 def bootstrap_pyghidra(ghidra_home, venv_dir):
-    """Install Ghidra's bundled pyghidra wheels into a private venv and return its interpreter."""
+    """Reuse/create a private venv and install bundled PyGhidra wheels without network access.
+
+    An existing interpreter is reused without reinstalling. Missing bundled wheels or failed pip
+    installation aborts; the caller re-execs the script with --no-bootstrap to avoid recursion.
+    """
     scripts = "Scripts" if os.name == "nt" else "bin"
     suffix = ".exe" if os.name == "nt" else ""
     interpreter = venv_dir / scripts / f"python{suffix}"
@@ -264,6 +293,11 @@ def bootstrap_pyghidra(ghidra_home, venv_dir):
 
 
 def main():
+    """Validate headers, generate local artifacts, and optionally re-exec under private PyGhidra.
+
+    Header/JSON outputs are produced before optional archive creation, so a later .gdt failure can
+    leave those usable artifacts. The final stdout JSON reports provenance and layout checks.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="output directory, keep it untracked")
     parser.add_argument("--sysroot", type=Path, default=DEFAULT_SYSROOT,

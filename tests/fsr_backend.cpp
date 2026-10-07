@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* A vendor that is not here still has to answer.
- *
- * The whole point of the contract is that the orchestrator asks all three vendors the same question
- * and gets an answer from each, including the ones that were not compiled in and the ones whose
- * runtime is missing. Those are different answers and a user chasing a missing feature needs to know
- * which: one is a fact about how this was built, the other about the machine it is running on.
- *
- * So this test runs in both configurations and asserts the part that must hold in both. Whichever
- * way this checkout was built, one of the two branches is being exercised here, and CI builds it
- * both ways for that reason.
+/**
+ * @file
+ * Check FSR/XeSS capability and refusal contracts across SDK build configurations.
+ * Synthetic probes distinguish compiled-out support from missing runtime support;
+ * ABI, argument and unavailable-feature paths must remain callable in either build.
+ * No vendor evaluation or device capability is established here.
  */
 #include <rescaleframe/fsr_backend.h>
 

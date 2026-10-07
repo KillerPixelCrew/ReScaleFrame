@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- CoreCLR runs metadata/packet checks; the netstandard assembly is invoked by
+         tests/unity_mono_runtime.cpp to exercise the deployed Mono/Harmony path. -->
     <OutputType Condition="'$(TargetFramework)' == 'net10.0'">Exe</OutputType>
     <OutputType Condition="'$(TargetFramework)' == 'netstandard2.1'">Library</OutputType>
     <TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks>
@@ -7,6 +9,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Resolve the deployed net472 Harmony assembly rather than the CoreCLR facade.
+         UnityManagedDirectory must point at the game's matching managed assemblies;
+         these references validate shipped URP signatures without a Unity render loop. -->
     <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
     <Reference Include="0Harmony"><HintPath>$(PkgLib_Harmony)/lib/net472/0Harmony.dll</HintPath><Private>true</Private></Reference>
     <ProjectReference Include="../../games/unity-mono/managed/ReScaleFrame.Unity.Managed.csproj" />

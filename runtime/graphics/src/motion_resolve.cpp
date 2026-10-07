@@ -44,6 +44,8 @@ struct Constants {
     uint32_t size[2]; uint32_t has_layer; uint32_t padding;
 };
 }
+// Fixed-size same-frame resolve; outputs are owned and overwritten on each successful dispatch.
+// Constants carry row-major current-clip to previous-clip transform, with jitter removed upstream.
 struct rsf_motion_resolve {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11ComputeShader> shader;
@@ -76,9 +78,8 @@ extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t
     for (uint32_t i = 0; i < 2; ++i) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-        // R16G16_FLOAT, not R32G32_FLOAT: this output crosses to D3D12 for DLSS-G, FSR and XeSS,
-        // and R32G32_FLOAT is not a D3D11 shareable format (CreateTexture2D E_INVALIDARG on the
-        // RTX 4070 Laptop, 4 October). The R32G32 decode upstream keeps the NDC precision.
+        // R16G16_FLOAT supports the D3D11/D3D12 sharing path; R32G32_FLOAT creation was refused
+        // on the RTX 4070 Laptop (4 October). Upstream decoding retains NDC precision in RG32F.
         desc.Format = i == 0 ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R32_FLOAT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
         if (FAILED(pass->device->CreateTexture2D(&desc, nullptr, &pass->textures[i])) ||
@@ -124,6 +125,8 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
             desc.Height >= pass->height && desc.SampleDesc.Count == 1 && desc.ArraySize == 1)
             pass->device->CreateShaderResourceView(layer, nullptr, &layer_view);
     }
+    // Written motion already includes object motion and replaces camera reprojection. The shader
+    // only reconstructs camera motion where both decoded channels equal the supplied sentinel.
     Constants constants{};
     constants.has_layer = layer_view ? 1u : 0u;
     std::memcpy(constants.matrix, params->clip_to_previous, sizeof(constants.matrix));

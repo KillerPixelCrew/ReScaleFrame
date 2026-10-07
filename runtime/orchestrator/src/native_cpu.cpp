@@ -3,6 +3,8 @@
 #include <array>
 #include <mutex>
 namespace {
+// CPU records are copied under guard; no engine pointers or GPU resources enter this cache.
+// A sink may block for vendor pacing, so invoke it after releasing the cache lock.
 std::mutex guard;
 std::array<rsf_native_cpu_frame, 128> frames{};
 uint64_t current_session = 0, last_begin = 0;
@@ -32,6 +34,8 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* ev
                 return 0;
             }
         }
+        // Pacing occurs once after FRAME_BEGIN and before input sampling. Input-message events
+        // are additional evidence and do not advance the five-stage simulation ledger.
         if (event->stage == RSF_GAME_CPU_PACING) {
             if (frame.stage_mask != 1u || frame.pacing_qpc || frame.qpc_frequency != event->qpc_frequency ||
                 event->timestamp_qpc < frame.timestamps_qpc[0]) return 0;

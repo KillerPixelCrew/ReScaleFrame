@@ -19,6 +19,13 @@ ANCHORS = [
 
 
 def inspect(path):
+    """Return a SHA256, PE32+ sections/imports and exact ASCII/UTF-16 anchor locations.
+
+    Reads the file without loading it. RVAs map through file-backed section bytes, not ASLR
+    addresses. Enumerates ordinary imports only; invalid accessed headers/names/RVA mappings
+    raise errors. This is not a complete PE validity check.
+    Anchor counts and up to eight locations per encoding are static leads, not hook validation.
+    """
     with path.open("rb") as stream:
         digest = hashlib.sha256()
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -46,12 +53,14 @@ def inspect(path):
                                      raw_offset=raw_offset, raw_size=raw_size))
 
             def rva_offset(rva):
+                """Translate an RVA backed by raw section bytes; reject virtual-only regions."""
                 for section in sections:
                     if section["rva"] <= rva < section["rva"] + section["raw_size"]:
                         return section["raw_offset"] + rva - section["rva"]
                 raise ValueError(f"Unmapped file RVA: {rva:#x}")
 
             def file_location(offset):
+                """Report a file offset and its section-relative RVA, or no RVA outside sections."""
                 for section in sections:
                     if section["raw_offset"] <= offset < section["raw_offset"] + section["raw_size"]:
                         return {"file_offset": hex(offset), "section": section["name"],

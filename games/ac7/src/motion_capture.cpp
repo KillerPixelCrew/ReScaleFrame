@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Collects bounded F9 diagnostics for motion eligibility, sampled GPU work, and paired frame
+// resources. Capture records keep engine, CPU, and GPU identities separate so observations are
+// not mistaken for a validated frame-generation contract.
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/frame_tap.h>
@@ -25,6 +28,7 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Explain the first observed native rejection; missing observations never imply a precise cause.
 extern "C" const char* rsf_ac7_velocity_reason(const rsf_ac7_velocity_facts* f)
 {
     if (!f || !f->fields_valid) return "unreadable";
@@ -47,6 +51,8 @@ extern "C" const char* rsf_ac7_velocity_reason(const rsf_ac7_velocity_facts* f)
 }
 
 namespace {
+// All collections/readbacks are bounded. Dropped counters distinguish missing evidence from
+// absence of engine work; collection failure stops diagnostics and preserves native decisions.
 constexpr uint32_t max_engine = 16384;
 constexpr uint32_t max_roots = 2048;
 constexpr uint32_t max_commands = 16384;
@@ -59,12 +65,15 @@ constexpr uint32_t cloud_composite_shader = 0x83524e47u;
 constexpr uint32_t contact_light_shader = 3619939816u;
 constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
+// Copied CPU eligibility facts. Pointer values label observations and are never future read handles.
 struct EngineRecord {
     rsf_ac7_velocity_facts facts{};
     uint64_t qpc = 0, primitive = 0, proxy = 0, view = 0;
     uint32_t interval = 0, thread = 0, component = 0, index = 0, history_called = 0;
     float camera[3]{}, origin[3]{}, current[16]{}, previous[16]{};
 };
+// CPU producer or queued RHI observation, labeled explicitly by kind/interval/thread.
+// Blob IDs are one-based; zero means no captured bytes. Native frame is separate from Present age.
 struct RootRecord {
     const char* kind = nullptr;
     uint64_t id = 0, parent = 0, qpc = 0, owner = 0, command_list = 0, view = 0;
@@ -80,15 +89,19 @@ struct RootRecord {
     char output_name[64]{};
     int32_t draw_size[2]{};
 };
+// Latest bounded CPU upload bytes; serial orders observations within this diagnostic process.
 struct Bytes { std::vector<unsigned char> data; uint64_t serial = 0; };
 struct Shader {
     void* pointer = nullptr; uint32_t stage = 0, hash = 0, constant_mask = 0x3fffu;
     std::vector<unsigned char> data;
 };
+// Candidate association includes list generation and execute thunk to reject address reuse.
 struct QueuedScope {
     uint64_t scope = 0, view = 0, family = 0, command_list = 0, execute = 0;
     uint32_t native_frame = 0, queue_uid = 0;
 };
+// Shared collection state. Native callbacks serialize registries/records under guard; atomics
+// gate capture sessions. Present-owner readback quotas and file output remain diagnostic work.
 struct Capture {
     std::mutex guard;
     bool configured = false, key_down = false;
@@ -180,6 +193,7 @@ bool copy_memory(void* out, const void* in, size_t bytes)
 template<class T> bool read(void* p, size_t offset, T& out)
 { return p && copy_memory(&out, static_cast<unsigned char*>(p) + offset, sizeof(T)); }
 
+// Nested velocity queries annotate only the TLS record for the same primitive.
 bool hooked_history(void* cache, void* primitive, float* previous)
 {
     const bool result = original_history(cache, primitive, previous);
@@ -201,6 +215,8 @@ bool hooked_has(void* view, void* primitive)
     }
     return result;
 }
+// Copy build-specific eligibility inputs, call native selection unchanged, then commit the record
+// only if the capture session is still current. No pointer escapes as an owned engine object.
 bool hooked_should(void* primitive, void* view, bool check_visibility)
 {
     auto& s = state();
@@ -250,6 +266,7 @@ bool hooked_should(void* primitive, void* view, bool check_visibility)
     return f.accepted != 0;
 }
 
+// JSON cannot represent NaN/infinity; keep invalid observations visible as null fields.
 template<size_t N> void floats(std::ostream& out, const float (&values)[N])
 {
     out << '[';
@@ -259,6 +276,7 @@ template<size_t N> void floats(std::ostream& out, const float (&values)[N])
     }
     out << ']';
 }
+// Deduplicate copied bytes within the current capture and enforce its memory budget.
 uint32_t save_blob(std::vector<unsigned char> bytes)
 {
     auto& s = state();
@@ -271,6 +289,7 @@ uint32_t save_blob(std::vector<unsigned char> bytes)
     s.blob_bytes += bytes.size(); s.blobs.push_back(std::move(bytes));
     return uint32_t(s.blobs.size());
 }
+// Stamp a producer record with its current TLS parent and capture session for later admission.
 RootRecord root_record(const char* kind, void* owner)
 {
     auto& s = state();
@@ -280,6 +299,7 @@ RootRecord root_record(const char* kind, void* owner)
     r.session = s.session.load(); r.interval = s.interval.load();
     return r;
 }
+// Late callbacks from an older session cannot append to the new session's native timeline.
 void record_root(const RootRecord& r) noexcept
 {
     try {
@@ -401,6 +421,8 @@ void graph_output(RootRecord& r) noexcept
         r.output_name[i] = (c >= 32 && c < 127 && c != '"' && c != '\\') ? char(c) : '?';
     }
 }
+// Walk only newly appended commands from the same list generation. This is a bounded recording
+// association; it does not establish GPU completion, Present ownership or source simulation ID.
 void associate_commands(RootRecord& r, uint64_t first_link) noexcept
 {
     try {
@@ -433,6 +455,7 @@ void associate_commands(RootRecord& r, uint64_t first_link) noexcept
         }
     } catch (...) { capture_failed(); }
 }
+// Sample graph allocation/recording at 0/30/59, preserving native arguments and nested parents.
 void hooked_graph_process(void* graph, void* output_reference, void* context)
 {
     auto& s = state(); const auto interval = s.interval.load();
@@ -458,6 +481,8 @@ void hooked_graph_process(void* graph, void* output_reference, void* context)
     if (r.fields_valid && r.output_node) { graph_output(r); associate_commands(r, first_link); }
     record_root(r);
 }
+// Prefer native-controller execution identity when supplied; otherwise report only the candidate
+// command/thunk match. Both are serialized beside CPU TLS identity rather than replacing it.
 void queued_scope(std::ostream& out)
 {
     uint64_t command = 0, execute = 0;
@@ -477,6 +502,8 @@ void queued_scope(std::ostream& out)
         << ",\"queued_native_family\":" << scope.family << ",\"queued_native_frame\":" << scope.native_frame
         << ",\"queued_list\":" << scope.command_list << ",\"queued_uid\":" << scope.queue_uid;
 }
+// Guard the entire optional observation set before activation; do not hook a producer already
+// owned by the native renderer. A refused root set does not claim renderer ownership evidence.
 void install_roots(unsigned char* base)
 {
     auto& s = state(); if (s.roots_installed) return;
@@ -531,6 +558,8 @@ void install_roots(unsigned char* base)
     for (uint32_t i = first; i < made; ++i) { MH_DisableHook(root_targets[i]); MH_RemoveHook(root_targets[i]); }
     say("renderer root capture failed and was rolled back");
 }
+// Use observed CPU uploads where available; bounded synchronous GPU readback fills gaps.
+// Live lighting constants bypass CPU snapshots because their exact execution-time values matter.
 void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
                uint32_t mask = 0x3fffu, bool lighting = false)
 {
@@ -576,6 +605,7 @@ void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buf
     }
     out << ']';
 }
+// Resolve shader identity by pointer and stage without retaining a native shader allocation.
 uint32_t shader_hash(void* pointer, uint32_t stage)
 {
     auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
@@ -590,6 +620,8 @@ uint32_t shader_constants(void* pointer, uint32_t stage)
         if (shader.pointer == pointer && shader.stage == stage) return shader.constant_mask;
     return 0x3fffu;
 }
+// Decode consumed CB slots from DXBC declarations. Compiler/disassembly failure conservatively
+// requests all slots instead of treating an unknown shader as reading no constants.
 uint32_t declared_constants(const void* bytes, uint32_t size)
 {
     // UE strips reflection data. DXBC declarations still name the actual CB slots consumed.
@@ -645,6 +677,7 @@ const char* colour_stage(uint32_t hash)
     default: return nullptr;
     }
 }
+// Persist a bounded diagnostic texture readback. The resource is borrowed only during this call.
 void colour_snapshot(std::ostream& out, ID3D11DeviceContext* context, ID3D11Resource* resource,
                      const char* role, bool lighting = false)
 {
@@ -664,6 +697,7 @@ void colour_snapshot(std::ostream& out, ID3D11DeviceContext* context, ID3D11Reso
     if (result != RSF_TEXTURE_OK) ++s.colour_readback_failed;
     out << ",\"snapshot\":\"" << name << "\",\"snapshot_result\":" << result;
 }
+// Capture one verified lighting producer per sampled interval, including inputs before mutation.
 void lighting_before(ID3D11DeviceContext* context, const rsf_frame_tap_target_draw& draw, uint32_t hash)
 {
     auto& s = state();
@@ -749,6 +783,8 @@ void before_draw_capture(void*, const rsf_frame_tap_target_draw* d) try
     out << "]}"; record_draw(out.str());
 }
 catch (...) { capture_failed(); }
+// Shadow facts describe the game's requested draw; queried bindings describe live post-draw state.
+// Every Get* reference is released after serialization. Exceptions stop capture, never native work.
 void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
 {
     auto& s = state();
@@ -828,6 +864,7 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
     record_draw(out.str());
 }
 catch (...) { capture_failed(); }
+// Record dispatched compute bindings and indirect identity without decomposing deferred lists.
 void compute_capture(void*, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) try
 {
     auto& s = state(); if (!s.active.load()) return;
@@ -875,6 +912,7 @@ bool write_file(const std::string& name, const void* data, size_t bytes)
     const bool ok = std::fwrite(data, 1, bytes, f) == bytes;
     return std::fclose(f) == 0 && ok;
 }
+// Serialize copied records only; no engine object is consulted while writing files.
 std::string roots_json(const std::vector<RootRecord>& records)
 {
     std::ostringstream roots;
@@ -904,6 +942,7 @@ std::string roots_json(const std::vector<RootRecord>& records)
     }
     return roots.str();
 }
+// Copy under lock, then write a partial native timeline so an interrupted capture retains evidence.
 void checkpoint_native() noexcept
 {
     try {
@@ -925,6 +964,7 @@ void checkpoint_native() noexcept
         if (!ok) say("motion capture: native checkpoint could not be fully written");
     } catch (...) { capture_failed(); }
 }
+// Close callback admission before publishing timelines/blobs/shaders and explicit loss metadata.
 void finish()
 {
     auto& s = state();

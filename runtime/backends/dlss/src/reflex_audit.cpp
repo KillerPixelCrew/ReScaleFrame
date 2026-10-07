@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Optional bounded NVAPI observation. Each detour calls its original first and returns that
+// exact result; counters identify caller/device/policy changes without retaining device ownership.
 #include "reflex_audit.h"
 #if RSF_HAVE_NVAPI_DIAGNOSTICS
 #include <d3d12.h>
@@ -24,6 +26,7 @@ decltype(&NvAPI_D3D_SetLatencyMarker) original_marker = nullptr;
 decltype(&NvAPI_D3D_SetReflexSync) original_sync = nullptr;
 decltype(&NvAPI_D3D12_SetAsyncFrameMarker) original_async = nullptr;
 bool installed = false;
+/* Device/caller pointers are diagnostic identities only; never dereferenced or AddRef'd. */
 struct Entry {
     void* caller = nullptr;
     IUnknown* device = nullptr;
@@ -39,6 +42,7 @@ struct SyncState {
     bool enabled = false;
     int result = 0;
 } sync_state;
+/* Remember up to 64 source/kind pairs and log only changed settings while the budget permits. */
 bool changed(const Entry& next)
 {
     for (auto& entry : sources) if (entry.caller == next.caller && entry.device == next.device && entry.kind == next.kind) {
@@ -48,6 +52,7 @@ bool changed(const Entry& next)
     for (auto& entry : sources) if (!entry.caller) { entry = next; return true; }
     return false;
 }
+/* Resolve caller address to module leaf and RVA without taking a module reference. */
 void provenance(void* caller, wchar_t (&name)[MAX_PATH], uintptr_t& offset)
 {
     HMODULE module = nullptr;
@@ -59,6 +64,7 @@ void provenance(void* caller, wchar_t (&name)[MAX_PATH], uintptr_t& offset)
     std::swprintf(name, MAX_PATH, L"%ls", leaf ? leaf + 1 : path[0] ? path : L"unknown");
     offset = uintptr_t(caller) - uintptr_t(module);
 }
+/* Record validated mode flags and the minimum interval in microseconds. */
 NvAPI_Status __cdecl observe_mode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
@@ -79,6 +85,7 @@ NvAPI_Status __cdecl observe_mode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* pa
     }
     return result;
 }
+/* Compare upper frame-ID bits so ordinary per-frame marker traffic stays bounded. */
 NvAPI_Status __cdecl observe_marker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
@@ -97,6 +104,7 @@ NvAPI_Status __cdecl observe_marker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* 
     }
     return result;
 }
+/* Cache the most recent sync request; enabled state changes only after successful SDK results. */
 NvAPI_Status __cdecl observe_sync(IUnknown* device, NV_SET_REFLEX_SYNC_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
@@ -111,6 +119,7 @@ NvAPI_Status __cdecl observe_sync(IUnknown* device, NV_SET_REFLEX_SYNC_PARAMS* p
     }
     return result;
 }
+/* Record async marker provenance/vendor changes while preserving the original call's result. */
 NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
@@ -129,6 +138,9 @@ NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MAR
     return result;
 }
 }
+/** Resolve hooks only from an already loaded NVAPI module. Install all four observers or remove
+ * the partial installation; pin both code owners so future external hook chains remain callable.
+ */
 void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
 {
     std::lock_guard<std::mutex> lock(guard);
@@ -184,6 +196,7 @@ void rsf_reflex_audit_report()
     listener(listener_user, text);
 }
 #else
+// Audit calls remain available as no-ops when optional NVAPI headers were absent at build time.
 void rsf_reflex_audit_start(rsf_backend_log_fn, void*) {}
 void rsf_reflex_audit_stop() {}
 void rsf_reflex_audit_report() {}

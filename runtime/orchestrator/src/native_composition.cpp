@@ -9,6 +9,8 @@ using Microsoft::WRL::ComPtr;
 struct Image {
     ComPtr<ID3D11Texture2D> texture;
     D3D11_TEXTURE2D_DESC descriptor{};
+    // Own a same-format immutable snapshot for this scope. Generation changes only when storage
+    // changes; CopyResource completion is ordered by the caller's immediate context.
     bool capture(ID3D11DeviceContext* context, void* source, uint32_t& generation)
     {
         if (!source) return false;
@@ -32,6 +34,8 @@ struct Image {
         return true;
     }
 };
+// One graphics owner, one pending UI-composite pair. A new requested begin invalidates the
+// previously complete metadata before copying any inputs, so failures cannot expose stale data.
 struct Composition {
     Image scene, ui, composed;
     rsf_native_composition_frame frame{};

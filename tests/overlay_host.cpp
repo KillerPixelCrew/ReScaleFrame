@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Regression: an observer can select a helper device before the game's device exists.
-// Render in the real Present callback with no backend, then read pixels and resize the chain.
+/**
+ * @file
+ * Check overlay rendering through observed Present, pixel readback and resize.
+ * A helper device precedes the presenting device to exercise adoption and ensure the
+ * host derives its own device from the chain. CTest uses a deterministic panel DLL;
+ * a supplied egui DLL and RSF_TEST_RENDERDOC_DLL enable additional manual checks.
+ */
 #include "../loader/proxy/src/overlay_host.h"
 #include <rescaleframe/d3d11_observer.h>
 
@@ -37,14 +42,8 @@ void present(void*, void* pointer)
         void* observed = nullptr;
         require(rsf_observer_acquire_device(&observed, nullptr) == RSF_OBSERVER_OK,
                 "observer must have selected a device");
-        /* The helper device creates a constant buffer before the game's device presents, so the
-           observer used to keep the helper for the life of the process and hand it to everything.
-           It now adopts the presenting device instead, which is the device that drew the frame.
-
-           This asserted the opposite until the observer was fixed, because the mismatch was the
-           bug being reproduced. Asserting the correction here keeps the two halves honest: the
-           observer must hand out the presenting device, and the host below must not depend on it
-           doing so, since it takes its own device from the chain. */
+        // Earlier helper allocations must not pin the observer to the helper device.
+        // The overlay also resolves its own device from the presenting chain.
         require(observed == device, "the observer must adopt the presenting device, not a helper");
         static_cast<ID3D11Device*>(observed)->Release();
         require(rsf_overlay_host_start(chain, log_line, nullptr) != 0, "host starts without DLSS");

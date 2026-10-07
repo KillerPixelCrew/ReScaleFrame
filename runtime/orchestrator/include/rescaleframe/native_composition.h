@@ -32,7 +32,10 @@ RSF_RUNTIME_API void rsf_native_composition_request(uint32_t scopes);
 /* Every consumer must match session/view/native frame; snapshots do not establish input identity. */
 RSF_RUNTIME_API int rsf_native_composition_capture(void* context,
     const rsf_game_render_pass* pass, uint32_t begin);
+/* Copy the last complete pair into size-initialized output. Captures are same-device, single
+   sample, single mip/layer D3D11 textures; copies are queued, without a CPU completion wait. */
 RSF_RUNTIME_API int rsf_native_composition_read(rsf_native_composition_frame* frame);
+/* Discard snapshots and requests on the graphics owner after consumers have stopped. */
 RSF_RUNTIME_API void rsf_native_composition_release(void);
 #ifdef __cplusplus
 }

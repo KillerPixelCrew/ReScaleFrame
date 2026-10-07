@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check manual FSR3 -> XeFG -> FSR3 -> plain swap-chain ownership on hardware.
+ * The host drains its queue before replacing a provider-owned borrowed chain.
+ * Present runs with FG disabled, so the fixture covers replacement and teardown
+ * without establishing enabled interpolation or source-frame latency markers.
+ */
 #include <rescaleframe/fg_session.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -13,6 +20,7 @@ struct Host {
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12Fence> fence;
     ComPtr<IDXGISwapChain1> plain;
+    // The provider owns this chain; release clears the alias before session teardown.
     IDXGISwapChain4* borrowed = nullptr;
     HWND window = nullptr;
     uint64_t sequence = 0;

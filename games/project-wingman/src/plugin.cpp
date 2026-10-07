@@ -4,12 +4,15 @@
 
 #include <cstddef>
 
+// This SDK implementation recognizes the inspected build but deliberately installs no renderer
+// hooks; lifecycle status remains not-ready until a supported render path exists.
 namespace {
 constexpr char known_sha256[] =
     "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a";
 constexpr char renderer_status[] =
     "Project Wingman renderer hooks are not implemented; static research only.";
 
+// All lifecycle entry points reject short or mismatched-version call structures consistently.
 template<class T> rsf_result validate(const T* value) noexcept
 {
     if (!value || value->struct_size < sizeof(T)) {
@@ -18,6 +21,7 @@ template<class T> rsf_result validate(const T* value) noexcept
     return value->abi_version == RSF_GAME_ABI_VERSION ? RSF_OK : RSF_ERROR_ABI_MISMATCH;
 }
 
+// Validate host/session but retain no services, hooks or resources in this detection scaffold.
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept
 {
     const auto valid = validate(args);
@@ -35,12 +39,14 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
     return RSF_ERROR_NOT_READY;
 }
 
+// A recognized build still has no activatable rendering implementation.
 rsf_result start(const rsf_game_start_args* args) noexcept
 {
     const auto valid = validate(args);
     return valid == RSF_OK ? RSF_ERROR_NOT_READY : valid;
 }
 
+// Cleanup calls are idempotent validation-only operations because the scaffold owns no work.
 rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     return validate(args);
@@ -51,6 +57,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept
     return validate(args);
 }
 
+// Static inactive status; immutable reason storage is owned by the loaded plugin.
 rsf_result status(rsf_game_renderer_status* output) noexcept
 {
     const auto valid = validate(output);
@@ -84,6 +91,7 @@ bool equal_ascii(const char* value, const char* expected) noexcept
     }
 }
 
+// Match exact researched x64 name/hash with ASCII case folding, never an engine-family heuristic.
 rsf_detection detect(const rsf_game_probe* probe) noexcept
 {
     if (!probe || probe->struct_size < sizeof(rsf_game_probe) || probe->pe_machine != 0x8664) {
@@ -96,6 +104,7 @@ rsf_detection detect(const rsf_game_probe* probe) noexcept
 }
 }
 
+// Publish static metadata and native callbacks only after output-size/requested-ABI validation.
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api) noexcept
 {

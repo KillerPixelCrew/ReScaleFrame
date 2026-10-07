@@ -5,6 +5,7 @@
 
 #include <math.h>
 
+/* Sum -p*log2(p) over the byte histogram; empty/null ranges use the documented zero result. */
 double rsf_shannon_entropy(const void* data, size_t size)
 {
     if (!data || size == 0) {
@@ -29,6 +30,8 @@ double rsf_shannon_entropy(const void* data, size_t size)
     return entropy;
 }
 
+/* Average equal-weight windows rather than weighting by byte coverage; overlapping samples
+   are valid and a one-sample request starts at the beginning of the range. */
 double rsf_sampled_entropy(const void* data, size_t size, size_t window, size_t samples)
 {
     if (!data || size == 0 || window == 0 || samples == 0) {

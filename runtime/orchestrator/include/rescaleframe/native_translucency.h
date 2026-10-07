@@ -26,11 +26,15 @@ typedef struct rsf_native_translucency_masks {
     void* motion_depth;
 } rsf_native_translucency_masks;
 
-/* Called on the D3D11 execution owner for RSF_GAME_RENDER_TRANSLUCENCY and CLOUD_DEPTH passes. */
+/* Called on the D3D11 execution owner for TRANSLUCENCY, CLOUD_DEPTH and MATERIALS passes.
+   MATERIALS/translucency scopes enable sampler mip bias and restore zero at end. The first
+   direct translucency pair establishes the opaque snapshot and masks; layer passes merge
+   their transmittance coverage. Failure drops hints rather than authorizing stale textures. */
 RSF_RUNTIME_API void rsf_native_translucency_pass(void* d3d11_context, const rsf_game_render_pass* pass,
     uint32_t begin);
 /* Masks only for the same view, native frame and render rectangle, after the first pass ended. */
 RSF_RUNTIME_API int rsf_native_translucency_take(const rsf_game_render_pass* sr_pass, rsf_native_translucency_masks* out);
+/* Release cached textures on the graphics owner after all borrowers finish. */
 RSF_RUNTIME_API void rsf_native_translucency_release(void);
 #ifdef __cplusplus
 }

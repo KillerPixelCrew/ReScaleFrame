@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Exercise the AC7 D3D11 presentation bridge with synthetic queued render work.
+ * The manual hardware path checks shared Streamline ownership, source-frame tokens,
+ * SR/FG resource transitions, window handover and bounded pacing joins. Inputs are
+ * synthetic and do not measure game latency. A separate --proxy-smoke path checks
+ * carrier startup in routine CTest; process exit owns carrier-hook teardown.
+ */
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_cpu.h>

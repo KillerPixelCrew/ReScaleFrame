@@ -1,21 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Choosing who reconstructs and who generates, and saying why when the answer is nobody.
- *
- * With one vendor this was a question nobody had to ask. With three it is the question, because the
- * choices are not independent:
- *
- *   - Streamline allows one graphics API per process. If DLSS-G generates on D3D12, DLSS-SR cannot
- *     reconstruct on D3D11 in the same process, so the reconstruction moves across the bridge and
- *     pays a round trip it would not otherwise pay.
- *   - FidelityFX ships its upscaler for D3D12 only, so choosing it for reconstruction means the
- *     bridge exists even with generation off.
- *   - XeSS reconstructs on D3D11, but only on Intel hardware. Everywhere else it needs the bridge
- *     too.
- *
- * A user picking "FSR upscaling" and "DLSS frame generation" on an NVIDIA card is asking for
- * something with a specific cost, and the honest thing is to say what it is rather than to refuse or
- * to silently substitute. So this returns a choice with reasons attached, and the reasons are what
- * the overlay shows.
+/** @file
+ * Pure selection of SR and FG providers from caller-supplied capabilities. FG session ownership
+ * can force SR onto D3D12; the result identifies that route and every fallback or refusal reason.
+ * This contract currently models a D3D11 game with an optional D3D12 presentation bridge.
  */
 
 #ifndef RSF_BACKEND_REGISTRY_H
@@ -30,12 +17,10 @@ extern "C" {
 #endif
 
 #define RSF_BACKEND_REGISTRY_ABI_VERSION 1u
-/* DLSS, FSR, XeSS. Fixed because the set is the set: a fourth vendor is a code change, not a
-   configuration. */
+/* Number of provider families represented by the built-in registry. */
 #define RSF_BACKEND_COUNT 3u
 
-/* Why the answer is what it is. A bitmask, because several apply at once and a caller showing only
-   the first would be telling half a story. */
+/** Bitmask of selection constraints and fallback reasons; multiple bits may be set. */
 typedef uint32_t rsf_negotiate_reason;
 #define RSF_REASON_NONE 0x0u
 /* The vendor the user asked for is not available here; its own refusal says why. */
@@ -43,8 +28,7 @@ typedef uint32_t rsf_negotiate_reason;
 /* Generation needs the presentation bridge, because every vendor generates on D3D12 and the game
    renders on D3D11. */
 #define RSF_REASON_FG_NEEDS_BRIDGE 0x2u
-/* Reconstruction moved to D3D12 because the chosen generator shares its session, and that session
-   can only be one API. This is the Streamline case and the one with a measurable cost. */
+/* SR vendor or route is constrained by the generator's shared session. */
 #define RSF_REASON_SR_FG_SESSION_CONFLICT 0x4u
 /* Reconstruction is on D3D12 because this vendor offers it nowhere else here. */
 #define RSF_REASON_SR_API_UNAVAILABLE 0x8u
@@ -57,7 +41,9 @@ typedef uint32_t rsf_negotiate_reason;
 /* Generation was asked for and no vendor here can do it. */
 #define RSF_REASON_NO_FG_AVAILABLE 0x80u
 
-/* What the user asked for. Zero for a vendor means no preference, which is the common case. */
+/** Selection preferences. Initialize struct_size and RSF_BACKEND_REGISTRY_ABI_VERSION.
+ * RSF_VENDOR_NONE means no preference; want_sr/want_fg independently request each feature.
+ */
 typedef struct rsf_negotiate_request {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -71,11 +57,14 @@ typedef struct rsf_negotiate_request {
     rsf_latency_mode latency;
     /* The API the game renders with, which constrains everything below it. */
     rsf_gfx_api game_api;
-    /* Non-zero when the presentation bridge is available. Without it, anything needing D3D12 is
-       refused rather than chosen and then found impossible. */
+    /* Non-zero when the caller can provide a D3D12 presentation bridge. */
     uint32_t bridge_available;
 } rsf_negotiate_request;
 
+/** Selected vendors and effective policy. Initialize struct_size before negotiation.
+ * A NONE vendor/route denotes an unselected feature. generated_frames counts inserted frames,
+ * excluding the source frame. reasons describes changes from the requested policy.
+ */
 typedef struct rsf_backend_choice {
     uint32_t struct_size;
     rsf_vendor sr_vendor;
@@ -88,12 +77,14 @@ typedef struct rsf_backend_choice {
     rsf_negotiate_reason reasons;
 } rsf_backend_choice;
 
-/* Decide, from what each vendor said it could do.
- *
- * Pure: no devices, no loading, no state. `caps` is what `probe` filled for each vendor, indexed
- * however the caller likes; the choice names vendors rather than indices so the ordering carries no
- * meaning. Being pure is what lets the awkward combinations be tested without hardware, which
- * matters because the awkward combinations are the ones nobody has the hardware to try. */
+/** Choose providers without loading libraries, creating devices, or retaining arguments.
+ * caps may be null only when caps_count is zero. The caller supplies initialized capability
+ * records and orders them by fallback preference: the first available capable record wins when
+ * no explicit vendor is selected. FG is chosen first because a shared session constrains SR.
+ * On success choice is cleared and filled, preserving its struct_size. A valid request returns
+ * OK even when no feature is selected; inspect choice.reasons and vendor fields for that outcome.
+ * Invalid pointers/sizes return INVALID_ARGUMENT; a request version mismatch returns ABI_MISMATCH.
+ */
 rsf_backend_result rsf_negotiate(const rsf_negotiate_request* request,
                                  const rsf_backend_caps* caps, uint32_t caps_count,
                                  rsf_backend_choice* choice);

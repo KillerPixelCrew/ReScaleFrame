@@ -1,3 +1,4 @@
+# In-process PE/entropy diagnostics are always available; RenderDoc capture is optional.
 set(RSF_RENDERDOC_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/renderdoc" CACHE PATH
     "Directory holding RenderDoc's renderdoc_app.h")
 
@@ -16,7 +17,6 @@ else()
     message(STATUS "renderdoc_app.h not found in ${RSF_RENDERDOC_INCLUDE}; capture disabled")
 endif()
 target_link_libraries(rsf_loader_diagnostics PRIVATE rsf_build_options)
-# The dump writer uses the historical CRT names deliberately; the _s variants are not portable to
-# the mingw cross build that this code is developed against.
+# Keep common CRT names for MSVC/mingw portability.
 target_compile_definitions(rsf_loader_diagnostics PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_library(ReScaleFrame::LoaderDiagnostics ALIAS rsf_loader_diagnostics)

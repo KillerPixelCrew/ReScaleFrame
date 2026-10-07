@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check the shared dinput8 carrier's exported and forwarded entry points.
+ * CTest supplies the built DLL path. The loaded carrier remains process-owned because
+ * its startup worker may still execute; this fixture does not inject a game.
+ */
 #include <windows.h>
 #include <cstdio>
 #include <vector>

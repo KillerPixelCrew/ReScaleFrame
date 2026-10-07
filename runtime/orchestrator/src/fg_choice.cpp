@@ -8,6 +8,7 @@ std::mutex guard;
 std::wstring file;
 rsf_fg_choice choice{};
 bool allowed(uint32_t backend, uint32_t choices) {
+    // A menu bit advertises an implemented provider, not device support for that provider.
     return (backend == 0 || backend == RSF_FG_BACKEND_DLSS || backend == RSF_FG_BACKEND_FSR3 ||
         backend == RSF_FG_BACKEND_FSR4 || backend == RSF_FG_BACKEND_XESS) && (choices & (1u << backend)) != 0;
 }
@@ -15,7 +16,7 @@ bool allowed(uint32_t backend, uint32_t choices) {
 extern "C" RSF_RUNTIME_API uint32_t rsf_fg_choice_start(const wchar_t* path, uint32_t fallback, uint32_t choices) try {
     std::lock_guard<std::mutex> lock(guard);
     file = path ? path : L"";
-    choices |= 1u;
+    choices |= 1u; // Off is always selectable, including when no provider can be requested.
     const auto saved = file.empty() ? fallback : GetPrivateProfileIntW(L"Rendering", L"FrameGeneration", fallback, file.c_str());
     choice = {allowed(saved, choices) ? saved : allowed(fallback, choices) ? fallback : 0u, choices, 0};
     return choice.backend;

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+/**
+ * @file
+ * Check AC7 translucency scaling and persisted rendering preferences.
+ * Repeated scene-quality changes must derive layer size from the output extent.
+ * Synthetic draw facts identify the first separate-translucency draw, while a
+ * temporary INI exercises defaults, valid presets and invalid saved values.
+ */
 #include <rescaleframe/ac7_scene_color.h>
 #include "../loader/proxy/src/preferences.h"
 #include <windows.h>

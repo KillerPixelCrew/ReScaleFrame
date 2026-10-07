@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstring>
 
+// Device-independent view decoding and current-jitter removal. Public contracts/units are in
+// ac7_view.h; all byte offsets below are build-specific evidence, not generic Unreal layouts.
 namespace {
 
 // Byte offsets into the view uniform buffer. Established by relationships that have to hold between
@@ -51,8 +53,8 @@ bool finite(float value)
     return value == value && std::fabs(value) < 1e30f;
 }
 
-// Gauss-Jordan with partial pivoting. Used only on ClipToPrevClip, which sits close to the
-// identity, so there is no conditioning problem to worry about here.
+// Gauss-Jordan with partial pivoting in double precision. Used for clip history and corrected
+// projection; a near-zero pivot refuses instead of publishing a singular inverse.
 bool invert(const float* source, float* out)
 {
     double work[4][8];
@@ -130,9 +132,7 @@ bool is_view_buffer(const float* values)
         return false;
     }
 
-    // The camera basis has to be orthonormal and has to be the rows of ViewToTranslatedWorld.
-    // Reading the basis out of the projection instead gives a different vector that looks equally
-    // plausible, which is why this agreement is what settles it.
+    // Require unit basis vectors matching ViewToTranslatedWorld's rows.
     const uint32_t basis[3] = {offset_view_right, offset_view_up, offset_view_forward};
     for (uint32_t index = 0; index < 3; ++index) {
         float vector[3];
@@ -216,8 +216,7 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
     read_vector(values, offset_view_up, out->camera_up);
     read_vector(values, offset_view_right, out->camera_right);
 
-    // An orthographic view has no perspective divide, and the interface renders through one, so it
-    // is a real thing to encounter rather than a malformed buffer.
+    // Orthographic UI views are valid engine buffers but unsupported camera input here.
     const float perspective = element(out->view_to_clip, 2, 3);
     if (std::fabs(perspective - 1.0f) > 1e-3f) {
         return RSF_AC7_VIEW_ERROR_NOT_PERSPECTIVE;
@@ -242,9 +241,7 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
     out->view_rect_x = static_cast<uint32_t>(at(values, offset_view_rect_min, 0) + 0.5f);
     out->view_rect_y = static_cast<uint32_t>(at(values, offset_view_rect_min, 1) + 0.5f);
 
-    // Clip space to pixels, dividing by the view rect rather than the buffer. Those differ once
-    // the render scale moves, and using the buffer would scale every offset by the render scale
-    // without ever looking wrong.
+    // Convert clip-space offsets to active render pixels, including the D3D Y-axis flip.
     const float clip_x = at(values, offset_temporal_aa_jitter, 0);
     const float clip_y = at(values, offset_temporal_aa_jitter, 1);
     const float previous_clip_x = at(values, offset_temporal_aa_jitter, 2);
@@ -257,8 +254,7 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
     out->previous_jitter_pixels[1] = previous_clip_y * -half_height;
     out->has_jitter = (clip_x != 0.0f || clip_y != 0.0f) ? 1u : 0u;
 
-    // The engine adds the jitter to these two elements of the projection and keeps no copy without
-    // it, so taking it back out is how a backend gets the matrix it requires.
+    // UE4.18 stores no unjittered projection copy; remove its two applied offsets.
     std::memcpy(out->view_to_clip_no_jitter, out->view_to_clip, sizeof(out->view_to_clip));
     out->view_to_clip_no_jitter[2 * 4 + 0] -= clip_x;
     out->view_to_clip_no_jitter[2 * 4 + 1] -= clip_y;
@@ -266,8 +262,7 @@ extern "C" rsf_ac7_view_result rsf_ac7_view_read(const void* buffer, uint32_t by
         return RSF_AC7_VIEW_ERROR_NOT_A_VIEW_BUFFER;
     }
 
-    // The main view fills its target. The smaller ones the engine renders into the same target do
-    // not, and their camera describes something the player is not looking through.
+    // Geometric full-allocation heuristic; native primary-view ownership is checked separately.
     out->is_main_view = (out->view_width == out->buffer_width &&
                          out->view_height == out->buffer_height && out->view_rect_x == 0 &&
                          out->view_rect_y == 0)

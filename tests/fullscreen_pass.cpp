@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The composite, checked against arithmetic rather than against a screenshot.
- *
- * `final = ui.rgb + (1 - ui.a) * scene.rgb` is what all three frame generation SDKs ask for, so it
- * is the one piece of this runtime where being a little bit wrong would be invisible in motion and
- * wrong in every frame. Nothing covered the blit this pass was generalised from, which is how it
- * kept an unnoticed hardcoded alpha for as long as it did.
+/**
+ * @file
+ * Check fullscreen blit/composite arithmetic and D3D11 state restoration.
+ * Texture readback compares premultiplied ui.rgb + (1 - ui.a) * scene.rgb, conversion
+ * of linear values to sRGB/gamma and alpha preservation. Per-format quantisation sets the
+ * numeric tolerance; viewport and scissor state must survive the pass.
  */
 #include <rescaleframe/fullscreen_pass.h>
 
@@ -38,7 +38,7 @@ struct Pixel {
     float r, g, b, a;
 };
 
-/* Read one pixel back through a staging copy. Small and slow and exactly what a test wants. */
+/** Copy to CPU-readable staging storage and decode one texel for arithmetic assertions. */
 bool read_pixel(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* texture,
                 Pixel& out)
 {
@@ -189,14 +189,8 @@ int main()
 
         Pixel out{};
         check(read_pixel(device, context, scene, out), "The composite must be readable.");
-        // ui.rgb + (1 - ui.a) * scene.rgb
-        //
-        // One step of each format, not one step of the destination. The layer is eight bit and 0.5
-        // lands exactly on a boundary there, so a runtime that rounds 127.5 down and one that
-        // rounds it up disagree by a whole step before the blend even starts, and that step is
-        // worth about two thousandths in the result. DXVK rounds down and WineD3D rounds up, which
-        // is how a budget of two parts in 1023 passed on one and failed on the other while the
-        // arithmetic was right on both.
+        // Account for quantisation in both the 8-bit layer and 10-bit destination.
+        // Half coverage may round to either adjacent 8-bit value across runtimes.
         const float budget = 1.0f / 255.0f + 2.0f / 1023.0f;
         const bool correct = near_enough(out.r, 0.5f + 0.5f * 0.4f, budget) &&
                              near_enough(out.g, 0.5f + 0.5f * 0.2f, budget) &&
@@ -251,9 +245,7 @@ int main()
 
     stage("the composite can apply the destination's transfer function");
     {
-        // The case this exists for: a layer holding linear values going onto a target that holds
-        // transformed ones. Without the transform the interface arrives dark, which is exactly what
-        // the first two extraction runs showed.
+        // A linear layer requires transfer-function encoding before compositing into this target.
         const float ui[4] = {0.5f, 0.5f, 0.5f, 1.0f};
         const float background[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         context->ClearRenderTargetView(layer_target, ui);
@@ -332,8 +324,7 @@ int main()
 
     stage("state is put back, scissors included");
     {
-        // A scissor the pass must not leave behind. The blit this was generalised from saved
-        // viewports and not scissors, so a rectangle set here survived into the game's next draw.
+        // Scissor state must restore alongside viewports before the next application draw.
         const D3D11_RECT scissor = {1, 2, 3, 4};
         context->RSSetScissorRects(1, &scissor);
         D3D11_VIEWPORT viewport{};

@@ -24,6 +24,8 @@ std::string runtime_directory;
 std::string fsr3_directory, fsr4_directory, xess_directory;
 std::string streamline_directory;
 std::mutex creation_guard;
+// CPU pacing/marker calls take shared lifetime locks; provider replacement takes exclusive
+// ownership at a drained source Present boundary. Render-owned raw accessors borrow that lifetime.
 std::shared_mutex provider_guard;
 std::atomic<uint32_t> active_backend{RSF_FG_BACKEND_DLSS}, requested_backend{UINT32_MAX};
 std::atomic<int32_t> switch_result{0};
@@ -60,6 +62,10 @@ void barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
     list->ResourceBarrier(1, &value);
 }
 
+// Application-facing COM facade. Engine-visible buffers/device differ from the physical provider
+// chain: D3D11 exposes one shared target; switching D3D12 exposes stable engine render buffers.
+// Graphics mutation belongs to the source Present thread; physical_guard protects query forwarding
+// while provider replacement temporarily removes the physical chain.
 class Bridge final : public IDXGISwapChain4 {
     std::atomic<ULONG> references{1};
     ComPtr<ID3D11Device> device;
@@ -91,6 +97,8 @@ class Bridge final : public IDXGISwapChain4 {
     rsf_shared_surface* surface = nullptr;
     rsf_shared_fence* shared_fence = nullptr;
     ComPtr<ID3D12Fence> complete;
+    // Triple command ring: allocator/list reuse waits for this slot's completion fence. serial
+    // counts all queue synchronization points and is intentionally separate from next_slot.
     struct Slot {
         ComPtr<ID3D12CommandAllocator> allocator;
         ComPtr<ID3D12GraphicsCommandList> list;
@@ -158,6 +166,8 @@ class Bridge final : public IDXGISwapChain4 {
             }
         }
     }
+    // Wait for upload/presentation queues and provider-owned work, not just submitted copy lists.
+    // Successful draining is required before resize, provider destruction or shared-input release.
     HRESULT drain() {
         auto* queue = static_cast<ID3D12CommandQueue*>(graphics.queue);
         if (!queue || !complete) return S_OK;
@@ -231,6 +241,9 @@ class Bridge final : public IDXGISwapChain4 {
         else publish_physical(replacement);
         return result;
     }
+    // Drain current work and probe a replacement before destroying/recreating the physical chain.
+    // On creation failure restore the previous provider, then plain presentation as a last fallback.
+    // Publish backend/session plus a new generation so CPU markers reject retired frame identities.
     void switch_provider(uint32_t backend) {
         if (!settings.runtime_switching || (backend == RSF_FG_BACKEND_DLSS && !host)) { switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return; }
         if (backend == active_backend.load()) { switch_result.store(0); return; }
@@ -484,6 +497,8 @@ public:
                     if (SUCCEEDED(slot.list->Close())) {
                         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; present_queue->ExecuteCommandLists(1, lists);
                         if (streamline_present) {
+                            // Join presentation work back into the engine queue before its next
+                            // source frame can overwrite a stable render buffer.
                             const auto copied = ++serial;
                             if (FAILED(present_queue->Signal(complete.Get(), copied)) ||
                                 FAILED(direct_queue->Wait(complete.Get(), copied))) return DXGI_ERROR_DEVICE_REMOVED;
@@ -539,6 +554,8 @@ public:
                     if (settings.prepare) settings.prepare(settings.user, this, context.Get(), command, buffer.Get(), host, provider, sync);
                     if (SUCCEEDED(slot.list->Close())) {
                         ID3D12CommandList* lists[]{slot.list.Get()}; queue->ExecuteCommandLists(1, lists);
+                        // Hand the shared surface back to D3D11 after upload has consumed it;
+                        // generated consumers use the physical backbuffer and provider retirement.
                         const auto copied = ++serial;
                         if (SUCCEEDED(queue->Signal(static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(shared_fence)), copied)) &&
                             SUCCEEDED(static_cast<ID3D12CommandQueue*>(graphics.queue)->Wait(
@@ -570,6 +587,8 @@ public:
         if (FAILED(result)) faulted = true;
         return result;
     }
+    // Keep engine buffer identities stable across provider switching. Ordinary GetBuffer ownership
+    // still applies: each successful QueryInterface hands the caller a reference released at resize.
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
         if (native12 && settings.runtime_switching) {
             if (!out) return E_POINTER; *out = nullptr;
@@ -586,6 +605,9 @@ public:
         return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenState(enabled, target); });
     }
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !settings.runtime_switching) return physical->GetDesc(out); *out = description; return S_OK; }
+    // Retire GPU use and refuse live application buffer references before replacing shared/facade
+    // resources. Failed physical resize recreates the previous D3D11 surface; fatal allocation
+    // failure after resize marks the facade faulted so later Present does not use incomplete storage.
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override {
         if ((!native12 && count > 1) || faulted) return DXGI_ERROR_INVALID_CALL;
         if (!width || !height) { RECT rect{}; if (!GetClientRect(description.OutputWindow, &rect)) return E_FAIL; width = UINT(rect.right); height = UINT(rect.bottom); }
@@ -657,6 +679,9 @@ public:
     HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return physical->SetHDRMetaData(type, bytes, data); }
 };
 
+// Accept only one selected main window and supported single-sample colour chain. The TLS guard
+// bypasses factory recursion from provider initialization; creation_guard serializes competing calls.
+// Unsupported/failed interception returns to the hooks, which forward the original factory request.
 HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
     if (!settings.accept_window || !settings.accept_window(settings.user, desc.OutputWindow)) return DXGI_ERROR_UNSUPPORTED;
     if (creating || active_chain.load() || !out || desc.SampleDesc.Count != 1 ||
@@ -692,6 +717,8 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
+// Publish immutable settings and copied directory strings before activating factory detours.
+// No uninstall API is exposed: callbacks and the module remain available for process lifetime.
 extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (!setup || setup->struct_size < sizeof(*setup) || !setup->runtime_directory_utf8 || !setup->accept_window || original_create) return 0;
     ComPtr<IDXGIFactory2> factory;

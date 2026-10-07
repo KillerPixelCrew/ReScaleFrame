@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The AC7 interface classifier, without a device.
- *
- * The rule is a pure function over facts the frame tap shadows, so it can be driven from a table.
- * The cases below are the frame the run log recorded: four world space widget quads reading
- * 1920x1080 converter targets into a render resolution layer, the converter's own Slate draws that
- * fill those textures, and the scene draws that must stay untouched. Everything that was ever
- * classified wrongly in this project has a row here.
+/**
+ * @file
+ * Check AC7 UI classification from synthetic shadowed draw facts.
+ * Cases represent recorded widget, Slate, canvas and scene shapes, including stale
+ * input bindings, blend restrictions, declaration fingerprints and settings overrides.
+ * Pointers are identities only. An optional local shader file checks the instruction
+ * guard; the routine fixture uses no device or distributed game bytecode.
  */
 #include <rescaleframe/ac7_ui_rules.h>
 

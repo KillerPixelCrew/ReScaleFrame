@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The display-range colour transport on WARP: the encode lands on its analytic curve, decode
-// inverts it, and a saturated reconstruction takes the scene's own highlight.
+/**
+ * @file
+ * Check the display-range colour transport with WARP texture readback.
+ * Analytic encoding, inverse decoding and saturated-highlight recovery are compared
+ * to known source values. Identity reconstruction isolates transport arithmetic;
+ * FP16 quantisation determines the round-trip tolerance.
+ */
 #include <rescaleframe/colour_transport.h>
 #include <d3d11.h>
 #include <DirectXPackedVector.h>

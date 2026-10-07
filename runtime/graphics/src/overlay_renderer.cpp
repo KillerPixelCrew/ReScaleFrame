@@ -15,14 +15,8 @@
 
 namespace {
 
-// Kept as source and compiled at load rather than shipped as bytecode, for the same reason as the
-// motion decode pass: the cross build has no shader compiler, so a pass built from bytecode would
-// exist only in the MSVC build and could not be built or read anywhere else. d3dcompiler_47 is
-// present both on Windows and in a Proton prefix.
-//
-// Compiled as 4_0 rather than 5_0. Nothing here needs shader model 5, and 4_0 also creates on a
-// feature level 10 device, which costs nothing and removes a way for this to fail on hardware
-// nobody tested it on.
+// Compile at creation through d3dcompiler_47. Shader model 4 requires no feature-level-11-only
+// operations; vertex colour and atlas bytes remain in their supplied premultiplied encoding.
 const char* const overlay_shader = R"(
 cbuffer Params : register(b0)
 {
@@ -104,13 +98,9 @@ struct Texture {
     uint32_t height;
 };
 
-// Everything this pass touches on the context. The game did not ask for any of it to change, and
-// what is left changed corrupts the game's own rendering after we return, which presents as the
-// game breaking rather than as the overlay breaking.
-//
-// The list matches what the draw below sets, one for one, by reading. That is the only check it
-// has had: none of this has been run against a device, so it is not evidence that a game renders
-// correctly after the overlay returns.
+// Narrow snapshot mirrors bindings changed by draw. Get calls retain every saved interface until
+// restore releases it. Render targets/UAVs remain bound; predication and SO are inherited.
+// Recorded validation status is tracked in docs/implementation.md.
 struct SavedState {
     ID3D11InputLayout* input_layout;
     D3D11_PRIMITIVE_TOPOLOGY topology;
@@ -310,6 +300,8 @@ compile_fn load_compiler()
 
 } // namespace
 
+// Own atlas entries, growable dynamic geometry, pipeline objects and device references. This
+// object has no mutex; upload/free/draw/destroy share the owning immediate-context thread.
 struct rsf_overlay_renderer {
     ID3D11Device* device = nullptr;
     ID3D11VertexShader* vertex_shader = nullptr;
@@ -348,10 +340,7 @@ void say(const rsf_overlay_renderer* renderer, const char* format, ...)
     renderer->log(renderer->log_user, message);
 }
 
-// The two ways this can draw nothing visible without anything failing. Neither is corrected here:
-// an absent render target is the caller's to bind, and an sRGB view needs a colour conversion that
-// nobody has yet been able to look at on a screen. Reported once each, because a message every
-// frame for the length of a session is not a diagnostic.
+// Report an absent target or double sRGB encoding once each; the caller chooses target policy.
 void report_target_once(rsf_overlay_renderer* renderer, ID3D11DeviceContext* context)
 {
     if (renderer->reported_no_target && renderer->reported_srgb_target) {
@@ -391,6 +380,7 @@ Texture* find_texture(rsf_overlay_renderer* renderer, uint64_t id)
     return nullptr;
 }
 
+// Grow in fixed geometry blocks and publish only after allocation succeeds; never shrink per frame.
 bool grow_buffer(rsf_overlay_renderer* renderer, ID3D11Buffer** buffer, uint32_t* capacity,
                  uint32_t needed, uint32_t stride, UINT bind_flag)
 {
@@ -555,15 +545,8 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
 
-    // The overlay sits on top of a finished image. It reads no depth and writes none, so whatever
-    // depth buffer the game has is neither consulted nor damaged.
-    //
-    // The stencil fields are filled in even though stencil is off. Zero is not a member of
-    // D3D11_STENCIL_OP or D3D11_COMPARISON_FUNC, and D3D11 range checks the descriptor it is
-    // handed: there are message ids for an invalid FrontFace.StencilFailOp and friends, and the
-    // CD3D11_DEPTH_STENCIL_DESC default in d3d11.h writes all of these with StencilEnable FALSE.
-    // Whether the runtime really rejects a zeroed pair here could not be tried without a device,
-    // so these are set to the documented defaults, which is correct either way.
+    // Disable depth/stencil tests and writes. Fill valid stencil enum defaults even with stencil
+    // disabled so the descriptor passes runtime validation.
     const D3D11_DEPTH_STENCILOP_DESC stencil_unused = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP,
                                                        D3D11_STENCIL_OP_KEEP,
                                                        D3D11_COMPARISON_ALWAYS};

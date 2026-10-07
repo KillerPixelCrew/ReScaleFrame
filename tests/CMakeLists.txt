@@ -1,3 +1,9 @@
+# Native fixtures are built when the root project enables BUILD_TESTING. add_test
+# registers routine checks; targets requiring SDK paths accept explicit arguments
+# for manual hardware runs and otherwise return the documented skip code.
+# See README.md for fixture coverage and environment-dependent early exits.
+
+# Compile-only C ABI fixtures deliberately have no executable entry point.
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
@@ -16,6 +22,8 @@ add_executable(rsf_gpu_policy_test gpu_policy.cpp)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME gpu_sr_policy COMMAND rsf_gpu_policy_test)
 add_executable(rsf_unity_mono_runtime_test unity_mono_runtime.cpp)
+# Manual host: a Mono DLL, framework directory and built managed test assembly
+# must be supplied by the caller, so this target has no add_test registration.
 target_link_libraries(rsf_unity_mono_runtime_test PRIVATE rsf_build_options)
 if(MSVC)
     add_executable(rsf_shared_shim_exports shared_shim_exports.cpp)
@@ -80,42 +88,39 @@ target_link_libraries(rsf_constant_override PRIVATE ReScaleFrame::Graphics rsf_b
 add_test(NAME constant_override COMMAND rsf_constant_override)
 set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-# No device: the classifier is a pure function over shadowed facts, which is the point of it.
+# Pure classifier fixture; no graphics device is required.
 add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.cpp)
 target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)
 add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
 
-# No device: this holds answers decided elsewhere, so stand-in pointers exercise all of it.
+# Address-only registry fixture; stand-in pointers are never dereferenced.
 add_executable(rsf_ui_identify ui_identify.cpp)
 target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
-# A vendor that is not compiled in still has to answer, and has to answer differently from one
-# whose runtime is missing. Runs in both configurations and CI builds it both ways.
+# Capability/refusal contracts must distinguish compiled-out SDKs from missing runtimes.
 add_executable(rsf_fsr_backend fsr_backend.cpp)
 target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR ReScaleFrame::XeSS rsf_build_options)
 add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
 
-# Choosing between three vendors on a machine that has none of them, which is the point of
-# negotiation being a pure function over what each one said it could do.
+# Negotiation uses synthetic vendor capabilities and requires no SDK or device.
 add_executable(rsf_negotiate negotiate.cpp)
 target_link_libraries(rsf_negotiate PRIVATE ReScaleFrame::Contract rsf_build_options)
 add_test(NAME negotiate COMMAND rsf_negotiate)
 
-# Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
-# HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
+# Shared-handle interoperability is runtime dependent; unsupported export/import exits 77.
 add_executable(rsf_shared_surface shared_surface.cpp)
 target_link_libraries(rsf_shared_surface PRIVATE ReScaleFrame::Presentation rsf_build_options)
 add_test(NAME shared_surface COMMAND rsf_shared_surface)
 set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-# The layer, and the alpha accumulation that decides whether diverting into it works at all.
+# Pixel readback pins transparent-layer alpha accumulation and blend correction.
 add_executable(rsf_ui_layer ui_layer.cpp)
 target_link_libraries(rsf_ui_layer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_layer COMMAND rsf_ui_layer)
 set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-# The composite's arithmetic, which nothing covered while it lived in present_blit.
+# Pixel readback pins premultiplied composition and transfer-function conversion.
 add_executable(rsf_fullscreen_pass fullscreen_pass.cpp)
 target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
@@ -148,8 +153,7 @@ set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 add_executable(rsf_d3d11_observer d3d11_observer.cpp)
 target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")
-# These touch a graphics runtime and patch vtables, so a deadlock is a plausible failure. Fail in
-# a couple of minutes rather than hanging the suite.
+# Bound runtime/vtable-hook stalls so routine verification cannot hang indefinitely.
 set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
 add_library(rsf_overlay_panel_fixture SHARED overlay_panel_fixture.cpp)
@@ -168,7 +172,7 @@ set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
 add_executable(rsf_dlss_backend dlss_backend.cpp)
 target_link_libraries(rsf_dlss_backend PRIVATE ReScaleFrame::DLSS rsf_build_options)
 add_test(NAME dlss_backend COMMAND rsf_dlss_backend)
-# Loading a vendor runtime that talks to a driver is another place a hang is plausible.
+# Bound vendor-runtime/driver initialization stalls.
 set_tests_properties(dlss_backend PROPERTIES TIMEOUT 120)
 
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
@@ -226,6 +230,7 @@ add_test(NAME fg_leases COMMAND rsf_fg_leases_test)
 set_tests_properties(fg_leases PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 add_library(rsf_fg_c_header OBJECT fg_c_header.c)
+# This second C fixture covers runtime controller headers beyond the public Game SDK.
 target_include_directories(rsf_fg_c_header PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_options)
 
@@ -270,6 +275,8 @@ add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
 # Explicit hardware experiment, never run by routine CTest verification.
+# Optional SDK headers enable tracing only when locally available; the target is
+# built here for convenience and is deliberately absent from add_test.
 add_executable(rsf_exposure_probe ../tools/exposure-probe.cpp)
 target_link_libraries(rsf_exposure_probe PRIVATE ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
 if(EXISTS "${RSF_RENDERDOC_INCLUDE}/renderdoc_app.h")

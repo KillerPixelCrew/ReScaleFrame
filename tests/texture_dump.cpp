@@ -1,6 +1,10 @@
-// Dump a texture whose contents we chose, and check the decode against values computed here.
-// Under Wine this runs on DXVK, which is the same D3D11 the game sees on this machine.
-
+/**
+ * @file
+ * Check texture export and packed-motion statistics from chosen D3D11 texels.
+ * Independent encoding expectations cover clear pixels and quantised extremes.
+ * Cases also cover progress logging, unsupported formats, mip selection and refusal
+ * of cross-device copies. CTest supplies a disposable output directory.
+ */
 #include <rescaleframe/texture_dump.h>
 
 #include <d3d11.h>

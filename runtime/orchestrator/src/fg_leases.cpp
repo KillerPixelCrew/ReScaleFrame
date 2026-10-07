@@ -4,6 +4,8 @@
 #include <wrl/client.h>
 #include <new>
 using Microsoft::WRL::ComPtr;
+// Each ring slot retains COM inputs through both application-queue and asynchronous vendor reads.
+// No lock: the graphics owner serializes every transition acquire -> submit -> seal -> collect.
 struct rsf_fg_leases {
     struct Slot {
         uint64_t id = 0;
@@ -23,6 +25,7 @@ rsf_fg_leases::Slot* find(rsf_fg_leases* leases, uint64_t id)
     auto& slot = leases->slots[id % leases->capacity];
     return slot.id == id ? &slot : nullptr;
 }
+// UINT64_MAX from GetCompletedValue means device removal, never successful retirement.
 rsf_backend_result ready(ID3D12Fence* fence, uint64_t value)
 {
     if (!fence) return value ? RSF_BACKEND_ERROR_INVALID_ARGUMENT : RSF_BACKEND_OK;

@@ -7,6 +7,9 @@
 #include <cmath>
 #include <cstring>
 
+// Exact-variant DXBC transform at native shader creation. Container sizes, tokens and checksum
+// are validated before edits; an engine trailer is preserved outside the rebuilt container.
+// Evidence: docs/research/ac7-lighting-shadow-20261004.md and ue418-hook-map.md.
 namespace {
 uint32_t word(const uint8_t* bytes, size_t offset)
 {
@@ -14,6 +17,7 @@ uint32_t word(const uint8_t* bytes, size_t offset)
 }
 void store(uint8_t* bytes, size_t offset, uint32_t value)
 { std::memcpy(bytes + offset, &value, sizeof(value)); }
+// Fingerprint the complete original container before interpreting its build-specific token offsets.
 bool fingerprint(const uint8_t* bytes, size_t size)
 {
     constexpr std::array<uint8_t, 32> expected{
@@ -110,13 +114,9 @@ rsf_ac7_contact_shadow_result rsf_ac7_contact_shadow_correct(
             0x06000056u,0x00100012u,14u,0x0020802au,0u,137u,
             0x0c000032u,0x00100032u,14u,0x00100006u,14u,0x00004002u,
             0x4202a8f6u,0x413d0a3du,0u,0u,0x00101046u,2u};
-        // 2. Depth quantisation bias. The depth texture is point sampled (UE 4.18 binds
-        //    SF_Point to SceneDepthTextureSampler), so each ray sample compares against the depth
-        //    at the nearest texel centre. On a surface seen at a grazing angle that centre lies
-        //    up to half a texel in front of the ray and counts as an occluder: the regular dots.
-        //    The largest such error on a plane is half the depth change across one texel per axis.
-        //    It is measured at the pixel from its four neighbours, taking the smaller side per
-        //    axis so a silhouette does not inflate it, and added to the ray's starting depth.
+        // 2. Point-sampled scene depth can falsely occlude a grazing-angle ray by half a texel
+        //    per axis. Estimate that bias from four neighbours, using the smaller side per axis
+        //    to avoid silhouette inflation, and add it to the starting depth.
         //    Uses new temporaries r15..r17:
         //      add r15, v0.xyxy, cb0[128].zwzw / add r16, v0.xyxy, -cb0[128].zwzw
         //      mov r15.y, v0.y / mov r16.y, v0.y / mov r15.z, v0.x / mov r16.z, v0.x

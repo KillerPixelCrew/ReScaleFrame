@@ -1,7 +1,12 @@
 ; SPDX-License-Identifier: GPL-3.0-only
+; Windows x64 version.dll forwarding ABI. Each stub places its names[] index in eax; dispatch
+; resolves the real function and tail-jumps to it with the original argument registers/stack.
+; Keep index order synchronized with shim_loader.cpp, separately from .def export ordinals.
 EXTERN rsf_version_resolve:PROC
 .code
 dispatch PROC
+    ; 88h reserves 20h shadow space, saves integer/XMM arguments and aligns rsp for the resolver.
+    ; Original caller stack arguments remain at their original locations after rsp is restored.
     sub rsp, 88h
     mov [rsp+20h], rcx
     mov [rsp+28h], rdx
@@ -22,6 +27,7 @@ dispatch PROC
     movdqu xmm2, [rsp+60h]
     movdqu xmm3, [rsp+70h]
     add rsp, 88h
+    ; Tail dispatch preserves the caller's return address and target-specific return convention.
     jmp rax
 dispatch ENDP
 forward MACRO name, index

@@ -12,9 +12,7 @@
 
 namespace {
 
-// The decode itself. Kept as source and compiled at load rather than shipped as bytecode, because
-// the cross build has no shader compiler and a pass that only exists in the MSVC build could not be
-// tested here at all. d3dcompiler_47 is present both on Windows and in a Proton prefix.
+// Runtime-compiled shader source keeps the pass available without a build-time HLSL compiler.
 const char* const decode_shader = R"(
 Texture2D<float2>   Source : register(t0);
 RWTexture2D<float2> Target : register(u0);
@@ -68,6 +66,8 @@ using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MA
 
 } // namespace
 
+// Fixed-size pass-owned output and constant storage. Device/output references last until destroy;
+// the source SRV is created for one run and all saved compute getter references are released.
 struct rsf_motion_decode {
     ID3D11Device* device = nullptr;
     ID3D11ComputeShader* shader = nullptr;
@@ -269,8 +269,8 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     std::memcpy(mapped.pData, &values, sizeof(values));
     context->Unmap(pass->constants, 0);
 
-    // This dispatch happens inside a frame the game is in the middle of. It did not ask for its
-    // compute bindings to change, so they are put back exactly as they were.
+    // Save only changed compute state: shader/linkage, SRV 0, UAV 0 and constant buffer 0.
+    // The owner provides an immediate-context scope without conflicting bindings elsewhere.
     ID3D11ComputeShader* previous_shader = nullptr;
     ID3D11ClassInstance* previous_instances[16] = {};
     UINT previous_instance_count = 16;

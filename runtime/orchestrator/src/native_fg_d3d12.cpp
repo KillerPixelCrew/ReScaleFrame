@@ -17,6 +17,8 @@
 
 namespace {
 using Microsoft::WRL::ComPtr;
+// Cold-installed presentation integration lives for the process. guard protects CPU records,
+// queue capture metadata and status across Unity's distinct graphics/presentation threads.
 std::mutex guard;
 rsf_native_fg_options options{sizeof(options), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
 rsf_native_fg_status state{};
@@ -30,6 +32,9 @@ struct Cpu {
     bool begun = false, simulation = false, failed = false, render_started = false, completed = false;
 };
 std::array<Cpu, 128> cpu;
+// Persistent copies isolate vendor reads from engine resource reuse. ready means copy commands
+// were recorded; submitted separately confirms their queue submission. value/completion joins
+// application work after vendor retirement before the modulo slot can be overwritten.
 struct Slot {
     rsf_frame_record record{};
     ComPtr<ID3D12Resource> depth, motion, hudless;
@@ -76,6 +81,8 @@ void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* texture,
     D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition = {texture, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to}; list->ResourceBarrier(1, &b);
 }
+// Diagnostic pair per provider generation after 30 state samples. GPU copies are fenced during
+// retire; PPM output happens only on a later prepare when those readback bytes are complete.
 void capture_colors(ID3D12GraphicsCommandList* list, ID3D12Resource* final, ID3D12Resource* hudless, uint64_t frame) {
     if (log_path.empty()) return;
     auto& capture = color_capture;
@@ -126,12 +133,15 @@ void capture_colors(ID3D12GraphicsCommandList* list, ID3D12Resource* final, ID3D
     capture.height = desc.Height; capture.bgra = desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
     capture.value = 0; capture.pending = true;
 }
+// No CPU wait in capture: an unretired/device-removed slot refuses fresh recording.
 bool finished(const Slot& slot) {
     if (!slot.value) return true;
     if (!slot.completion) return false;
     const auto done = slot.completion->GetCompletedValue();
     return done != UINT64_MAX && done >= slot.value;
 }
+// Record a same-description immutable copy, restoring the source state and tracking the target
+// state for later vendor reads/reuse. Callers establish old-target retirement before entry.
 bool copy(ID3D12GraphicsCommandList* list, ID3D12Resource* source, ComPtr<ID3D12Resource>& target,
     D3D12_RESOURCE_STATES source_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
     D3D12_RESOURCE_STATES* target_state = nullptr) {
@@ -154,6 +164,9 @@ bool copy(ID3D12GraphicsCommandList* list, ID3D12Resource* source, ComPtr<ID3D12
     transition(list, source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_state);
     return true;
 }
+// Presentation callback consumes exactly this backbuffer index's source identity. A matching
+// captured/submitted frame, CPU provider generation and optional HUD-less copy are all required;
+// incomplete/reset frames present normally with interpolation Off.
 void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_streamline_host*, void* context, uint32_t) {
     std::lock_guard<std::mutex> lock(guard);
     ComPtr<IDXGISwapChain3> chain;
@@ -239,6 +252,8 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     if (state.last_result == RSF_BACKEND_OK) { consumed = &slot; ++state.tagged_frames; }
     else { request.mode = RSF_FG_OFF; provider->configure(context, &request); }
 }
+// Provider retirement may join asynchronous interpolation. Release guard while it runs to let
+// CPU/window processing progress, then signal this queue to retire capture/preparation as well.
 void retire(void*, void* context) {
     std::unique_lock<std::mutex> lock(guard);
     const auto* provider = rsf_d3d11_present_provider();
@@ -283,6 +298,8 @@ void retire(void*, void* context) {
     }
     consumed->ready = false; consumed = nullptr;
 }
+// Real Present begin/end markers use the generation captured during CPU pacing; a switched
+// provider cannot consume an older token. Completed CPU records may then be reused.
 void latency(void*, const rsf_observer_present_event* event) {
     if (!window_frame || event->flags & DXGI_PRESENT_TEST) return;
     const auto generation = window_generation;
@@ -297,6 +314,7 @@ void latency(void*, const rsf_observer_present_event* event) {
         if (timing.id == window_frame) timing.completed = true;
     }
 }
+// Intercept only this process's real Unity window, excluding other tool/auxiliary windows.
 int accept(void*, void* hwnd) {
     DWORD process = 0; wchar_t name[64]{}; GetWindowThreadProcessId(static_cast<HWND>(hwnd), &process);
     return process == GetCurrentProcessId() && GetClassNameW(static_cast<HWND>(hwnd), name, 64) &&
@@ -317,6 +335,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_se
     if ((request->backend == 0 && !request->runtime_switching) || (request->backend != 0 && request->backend != RSF_FG_BACKEND_DLSS && request->backend != RSF_FG_BACKEND_FSR3 && request->backend != RSF_FG_BACKEND_FSR4 && request->backend != RSF_FG_BACKEND_XESS))
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     directory = request->runtime_directory_utf8; options = request->options;
+    // Install with Reflex Off; a later presentation-owner options request may enable it.
     options.reflex_mode = RSF_REFLEX_OFF; logger = request->log; logger_user = request->user;
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup); setup.runtime_directory_utf8 = directory.c_str();
     setup.backend = request->backend; setup.max_generated_frames = request->max_generated_frames;

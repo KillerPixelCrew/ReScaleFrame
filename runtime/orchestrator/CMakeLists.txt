@@ -1,7 +1,4 @@
-# The orchestrator's code lives in an object library so it can be linked both into the runtime DLL
-# and directly into the research proxy, which is what actually gets loaded into the game today.
-# Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
-# would both be worse.
+# Share the compiled runtime objects between the runtime DLL and research proxy.
 add_library(rsf_orchestrator_core OBJECT
     src/runtime.cpp
     src/plugin_session.cpp
@@ -33,8 +30,7 @@ add_library(rsf_orchestrator_core OBJECT
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
-# Public because the orchestrator's own headers name a backend's frame structure and the decode
-# pass's parameters.
+# Public dependencies provide backend frame/decode types exposed by orchestrator headers.
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
 target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Package the AC7 Release build, overlay and required DLSS, FSR and XeSS runtimes."""
+"""Package existing AC7 Release artifacts and pinned SR runtimes from a clean source revision.
+
+Does not build or launch the game. Writes a staging tree, binary/source ZIPs and SHA256SUMS.txt;
+version-named archives may replace earlier outputs. Optional expected artifact hashes tie DLLs
+to externally validated bytes. SDK hashes/default settings are enforced; vendor signatures are
+not revalidated here. Missing Rust license text may be fetched at its exact Cargo source revision.
+"""
 from __future__ import annotations
 
 import argparse
@@ -33,6 +39,11 @@ def copy(source: Path, destination: Path) -> None:
 
 
 def dependency_notices(stage: Path) -> None:
+    """Collect license files for external packages in locked Cargo metadata into the stage.
+
+    Cargo may resolve/download metadata dependencies. If a crate omits license files, retrieve
+    a GitHub license at its packaged VCS revision or fail. No moving-branch fallback is accepted.
+    """
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT, encoding="utf-8"))
     index = ["# Third-party notices", "", "Dependency licenses apply to their respective components.", ""]
@@ -78,6 +89,11 @@ def dependency_notices(stage: Path) -> None:
 
 
 def main() -> None:
+    """Validate sources, stage payload/notices, create deterministic-entry ZIPs and read back hashes.
+
+    ZIP timestamps use the source commit time; provenance records HEAD rather than proving that
+    existing DLLs were built from it. Partial staging/output files remain if packaging fails.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--streamline-root", required=True, type=Path)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
