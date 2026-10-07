@@ -1,5 +1,9 @@
 # AC7 native renderer refactor, 1 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Current status, 2 October: the user accepted the corrected native SR/UI path, hangar crash and
 wing/cloud result, followed by the GPU-fence bridge/FSR4 compatibility deployment. The build-only
 and pending notes below are the dated development trail. Later corrections preserve exact active

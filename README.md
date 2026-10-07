@@ -18,18 +18,22 @@ The AC7 proxy loads the game plugin and shared runtime services.
 | Area | Status |
 | --- | --- |
 | DLSS Super Resolution / DLAA | Working in AC7 |
-| Game detection and native SDK | Versioned C ABI, guarded AC7 engine hooks and renderer/resource ownership implemented; other games remain unsupported |
-| Frame generation and latency | Planned; graphics interoperability research and shared-surface tests are in place |
+| Game detection and native SDK | Game ABI 13 with lifecycle, CPU events and renderer callbacks; AC7 and Unity Mono paths implemented; Project Wingman remains a scaffold |
+| Frame generation and latency | Current source implements DLSS-G, FSR3/4 FG, XeSS FG, Reflex/XeLL and live provider switching; AC7 DLSS-G and Unity corrections have user acceptance; broader hardware/scene and measured latency validation remain open |
 | FSR and XeSS | FSR 2/3/4 and XeSS SR available in AC7; optimized D3D11/D3D12 transfer; FSR 4 INT8 compatibility device-tested on RTX 4070 |
 | Standalone launcher and WSGM | Scaffolding and planned integration |
 
+The published v0.1.0 AC7 ZIP provides SR and the overlay; it does not contain the later FG/Reflex
+work on `main`. Unity currently has local test packages, not a published release.
+See [current implementation and validation](docs/current-status.md) for evidence and remaining limits.
+
 For downloads, supported builds, installation and controls, see the relevant game's README:
 
-| Game | Released features | Guide |
+| Game | Availability | Guide |
 | --- | --- | --- |
 | Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
 | Project Wingman | Scaffold and static UE4.27.2 research; rendering unsupported | [Project Wingman README](games/project-wingman/README.md) |
-| Drag'n Wash | Experimental Unity Mono DX12 SR and shared overlay; Claw test package | [Drag'n Wash README](games/drag-n-wash/README.md) |
+| Drag'n Wash | Unity Mono DX12 SR, shared overlay and runtime FG switching in source/local test builds; Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
 
 [Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
 · [Implementation tracker](docs/implementation.md)
@@ -49,9 +53,9 @@ to the shared runtime. Loading that runtime is separate from activating a render
 | Game SDK | Keep the plugin/runtime boundary versioned and explicit through a C ABI |
 | Frontends | Configure sessions and show status through bounded IPC |
 
-These are the framework's ownership boundaries. The current AC7 proxy still contains some glue
-that will move into the plugin lifecycle; the working game path and that migration are tracked
-separately.
+The AC7 DirectInput carrier prepares the game plugin and links shared runtime objects into its
+proxy. The Unity version shim loads the runtime DLL and shared Mono plugin. Bootstrap and launcher
+remain scaffolds; frontend IPC is intended architecture rather than an implemented control route.
 
 Super resolution consumes scene colour before tonemapping. Frame generation needs a completed
 HUD-less image later in the frame. ReScaleFrame treats those as separate inputs and keeps frame/view
@@ -84,7 +88,9 @@ All first-party components live in this monorepo and share one release version.
 ## Build and verify
 
 Windows/MSVC is the reference platform. You need Visual Studio C++ tools, a Windows SDK, CMake,
-PowerShell and the Rust toolchain pinned in `rust-toolchain.toml`.
+PowerShell and the Rust toolchain pinned in `rust-toolchain.toml`. Unity managed builds additionally
+need .NET, Unity native headers and the researched player's Managed assemblies; see
+[the Unity guide](games/unity-mono/README.md).
 
 ```powershell
 ./eng/verify.ps1 -Configuration Release
@@ -93,7 +99,8 @@ cargo build --release --locked -p rescaleframe-overlay
 ```
 
 Use `-VS2026` on the verification command if you have Visual Studio 2026 instead of 2022.
-Native outputs are written to `build/windows-x64/bin/Release`; the Rust overlay is in `target/release`.
+Shared native outputs are written to `build/windows-x64/bin/Release`; the dedicated AC7 carrier is
+`build/windows-x64/ac7/bin/Release/dinput8.dll`. The Rust overlay is in `target/release`.
 
 The verification gate builds and tests the native tree, checks Rust formatting and runs Clippy.
 Rust tests use the separate command above. Verification never launches a game or changes an

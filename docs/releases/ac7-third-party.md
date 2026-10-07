@@ -1,6 +1,10 @@
 # Package notices
 
-ReScaleFrame's first-party implementation is GPL-3.0-only. Its public Game SDK header is MIT.
+Scope: the corrected published v0.1.0 AC7 **SR package**, replaced on 2 October 2026.
+Later `main` includes FG/Reflex and Unity work; those features are absent from this ZIP. See
+[current source status](https://github.com/KillerPixelCrew/ReScaleFrame/blob/main/docs/current-status.md).
+
+ReScaleFrame's first-party implementation is GPL-3.0-only. Its public Game SDK headers are MIT.
 The corresponding texts are included here. Source for this release is available at
 https://github.com/KillerPixelCrew/ReScaleFrame/tree/v0.1.0 and in the release's source archive.
 

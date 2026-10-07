@@ -1,5 +1,9 @@
 # AC7 reconstruction stability, 1 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 ## Follow-up retest and producer ordering, 23:19
 
 The user confirms both background and clouds are stable after the 22:52 build. Residual

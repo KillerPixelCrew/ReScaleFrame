@@ -1,19 +1,27 @@
 # Rendering research
 
+Use [current status](../current-status.md) for implemented/released features and acceptance limits.
+These notes are dated evidence and development history. Older pending claims do not override later
+corrections, and a source inspection is not a new runtime test. Published evidence snapshots keep
+their original measurements, revisions and hashes.
+
 Research began on 5 September 2026. The source comparisons are pinned to the revisions in [source-map.md](source-map.md) and `evidence/repositories.json`. Later AC7 captures and DLSS runs are recorded separately.
 
-Current status, 2 October: the user accepted the native SR/UI path, corrected TrueSky wing/cloud
-production and optimized SR bridge/FSR4 compatibility deployment. Earlier dated pending notes
-preserve the investigation trail. Missing-object motion coverage, FG and latency integration
-remain separate work. [Maintained skills and session corrections](skills-session-update-20261002.md)
+Recorded SR acceptance, 2 October: the user accepted the native SR/UI path, corrected TrueSky wing/cloud
+production and optimized SR bridge/FSR4 compatibility deployment. Subsequent AC7 DLSS-G and
+shared Unity FG acceptance are recorded independently. Missing-object motion, higher MFG/Claw
+coverage and measured latency remain open. Earlier pending notes preserve the investigation trail. [Maintained skills and session corrections](skills-session-update-20261002.md)
 route general Unreal 4, version-specific UE4.18 and TrueSky research.
 
 | Document | Read it for |
 | --- | --- |
-| [Shared FSR/XeSS generation](shared-fg-20261004.md) | Independent SR/FG selection, shared D3D11/D3D12 presentation, Unity timing, hardware fixtures and remaining game validation |
+| [Shared FSR/XeSS generation](shared-fg-20261004.md) | Independent SR/FG selection, live provider replacement, Unity input/pacing corrections, device fixtures and final user acceptance |
+| [Unity DX12 SR runtime](unity-dx12-runtime-20261004.md) | Shared shim, Mono/Harmony contracts, live SR execution, jitter/order corrections and Auto policy |
+| [AC7 motion/depth follow-up](ac7-motion-depth-20261004.md) | Dense motion, translucency hints, cloud depth and material mip bias with separate validation scopes |
+| [AC7 lighting/shadow investigation](ac7-lighting-shadow-20261004.md) | Later unresolved low-resolution stippling, shader transforms and capture requirements |
 | [Shared Unity Mono plugin](unity-mono-plugin.md) | Reflection/Harmony adapters, existing-domain bootstrap, RenderGraph execution and lifecycle design |
 | [Drag'n Wash renderer](drag-n-wash-renderer.md) | First Unity case: 6000.3.14f1 Mono/URP, complete selected assembly decompiles, temporal/UI boundaries and unmeasured runtime limits |
-| [AC7 DLSS-G/Reflex MVP](ac7-dlss-fg-20261003.md) | Shared presentation/SR host, frame identity, synthetic enabled FG, UE4.18.3 FID reference and pending game validation |
+| [AC7 DLSS-G/Reflex MVP](ac7-dlss-fg-20261003.md) | Shared presentation/SR host, native CPU/Present identity, recorded flight/hangar activation, hybrid-laptop pacing investigation and limits |
 | [Project Wingman renderer](project-wingman-renderer.md) | UE4.27.2 fingerprint, Function ID results, temporal/widget hook map and remaining HUD/VR validation |
 | [Native AC7 renderer](ac7-native-renderer-refactor-20261001.md) | Native view/graph/UI ownership, copied RHI identity, shared-uniform crash correction and retirement |
 | [Reconstruction stability](ac7-stability-20261001.md) | Exact input rectangles, bloom/exposure order, TrueSky jitter and valid-zero motion |
@@ -42,9 +50,9 @@ route general Unreal 4, version-specific UE4.18 and TrueSky research.
 
 The early SR input chain was game-tested on 7 September. The 2 October implementation uses
 engine-owned view sizing, a native SR/fallback graph node and coordinated UI/cloud producers;
-the runtime supplies DLSS, FSR and XeSS plus ordered D3D11/D3D12 transfers. That accepted SR
-path does not complete the presentation/FG/latency milestones in
-[the representation plan](../representation-plan.md). The Claw target and standalone/WSGM
+the runtime supplies DLSS, FSR and XeSS plus ordered D3D11/D3D12 transfers. That SR acceptance alone does not establish FG or latency. Later
+[AC7 DLSS-G work](ac7-dlss-fg-20261003.md) and [shared FG corrections](shared-fg-20261004.md)
+record runtime switching, device activity and Unity user acceptance separately. The Claw target and standalone/WSGM
 operation remain unproven as a complete combination.
 
 The interface investigation in [UI composition](ac7-ui-composition.md) and

@@ -1,5 +1,9 @@
 # AC7 session lessons, 30 September to 2 October 2026
 
+Scope: this reference records AC7 SR findings through 2 October. Later FG/Reflex, shared Unity
+services and unresolved lighting work are summarized in
+[current status](../../../../docs/current-status.md). SR acceptance alone does not validate those paths.
+
 These are AC7 findings, not universal engine or GPU rules. The parent transcript and current
 source were reviewed before this reference was written. On 2 October the user accepted clean
 wing/cloud rendering, then accepted the optimized SR bridge and FSR4 compatibility deployment.

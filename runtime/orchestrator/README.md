@@ -1,35 +1,39 @@
 # Orchestrator
 
-The reusable runtime owns backend sessions, selection, history continuity and graphics interop.
-Game plugins own detection, hooks, renderer preparation, input conventions and reinsertion.
-The SR APIs accept no game identifier, signature or engine address.
+The reusable runtime owns plugin sessions, backend selection, history continuity, graphics interop,
+latency services and presentation. Game plugins own detection, hooks, engine conventions and
+reinsertion. Shared SR/FG APIs accept no game signature or private engine address.
 
 | Module | Purpose |
 | --- | --- |
-| `sr_session` | C ABI over prepared D3D12 frames; transactional FSR2/FSR3/FSR4/XeSS selection and status |
-| `sr_bridge` | Same-adapter D3D11/D3D12 copies, shared fences, resource states and synchronized SR output |
-| `sr_legacy_adapter` | Private conversion from the existing pipeline into SDK records and prepared inputs |
-| `dlss_pipeline` | Compatibility entry points for the working D3D11 path, including switching to the new backends |
-| `frame_assembly` | Existing decoded-camera/resource validation; legacy camera type has a distinct name |
-| `runtime` | DLL version entry point |
+| `plugin_session` | Exact-build selection and prepare/start/quiesce/stop/status with game ABI 13 |
+| `native_scene`, `native_window`, `native_cpu`, `render_links`, `frame_sequencer` | Associate engine CPU/view/submission/window events and reject mismatched or ambiguous frames |
+| `native_sr`, `native_sr_d3d12`, `sr_session` | Prepare inputs and evaluate SR through D3D11/D3D12 routes |
+| `sr_bridge`, `sr_legacy_adapter`, `dlss_pipeline` | Same-adapter shared transfers and compatibility SR entry points |
+| `native_fg`, `native_fg_d3d12`, `fg_session`, `fg_providers`, `fg_leases`, `fg_choice` | Independent FG providers, drained live replacement, input retirement and saved provider choice |
+| `native_composition`, `native_translucency` | Native composition and translucency inputs |
+| `gpu_policy`, `unity_sr_host`, `overlay_d3d12` | Actual-adapter Auto policy, Unity hosting and shared overlay drawing |
+| `runtime` | DLL version entry point; other services are exported by their own modules |
 
-Direct sessions consume dense motion in previous-minus-current render pixels, device depth,
-pre-tonemap scene color, jitter, exposure convention and matching SDK frame/view records. The
-caller owns the resources and graphics thread. It must finish submitted D3D12 work before switching
-or destroying a direct session. The bridge performs that synchronization for its D3D11 caller.
+Direct SR sessions consume matching frame/view records, pre-tonemap colour, device depth, dense
+previous-minus-current render-pixel motion, jitter and exposure conventions. Callers own resources
+and the graphics thread, and must drain submitted GPU work before switching/destroying sessions.
+The D3D11 bridge uses ordered shared fences and three command slots, with CPU waits at slot reuse
+or retirement rather than a wait after every evaluation. Failure paths still preserve ordering.
 
-A switch opens and plans the replacement before releasing the active backend. Failures retain the
-old backend and are reported separately from evaluation failures. The next accepted frame resets
-history after selection, gaps, refusals, view/session changes and resource-generation changes.
-Separate paths and optional provider IDs let FSR SDK releases coexist; requested family and actual
-provider version must agree. Native XeSS D3D11, FG and latency are not implemented here.
+SR replacement is planned before releasing the active backend; refusal retains it. Accepted frames
+reset history after switches, gaps, refusals and identity/resource changes. FSR family selection
+must match the actual provider. Native XeSS D3D11 SR remains unimplemented; current XeSS SR uses DX12.
 
-The Insert overlay switches the compatibility pipeline on its render thread. AC7 still starts DLSS
-first. The carrier supplies its engine identity, world-unit scale, game hooks and output reinsertion.
-The newer direct APIs can start on FSR or XeSS independently of DLSS. Moving plugin preparation,
-tap ownership and settings into the public DLL/plugin lifecycle remains separate work.
+The FG facade keeps engine buffers stable across provider replacement after a drained Present.
+DLSS-G, FSR3/4 and XeSS are independent from SR. Unity Off/FSR1 can normalize FG inputs without
+reconstructing colour. DLSS SR/FG share one Streamline owner with distinct Unity viewports.
+Pacing follows the FG provider: Reflex for DLSS-G, XeLL for XeSS, no NVIDIA SR sleep for FSR/XeSS.
+Requested settings, effective settings, SDK activity and presentation counters remain distinct.
 
-The synchronous bridge has serialization overhead. FSR2/FSR3/XeSS have synthetic device evidence
-on Intel UHD and RTX 4070 Laptop; the compatibility switch sequence also passed on the RTX.
-FSR4 refusal is tested, but its evaluation requires compatible hardware. New AC7 backend image
-quality and transition tests are pending. See [research and checks](../../docs/research/orchestrator-sr-switching.md).
+AC7 links shared runtime objects into its DirectInput proxy; Unity loads the runtime DLL through
+the version shim. Product bootstrap, standalone launching and WSGM IPC remain planned.
+[Current status](../../docs/current-status.md) separates released SR, current source features and
+recorded game/device acceptance. See [SR evidence](../../docs/research/orchestrator-sr-switching.md),
+[bridge/FSR4 correction](../../docs/research/sr-interop-performance-20261002.md) and
+[shared FG corrections](../../docs/research/shared-fg-20261004.md).

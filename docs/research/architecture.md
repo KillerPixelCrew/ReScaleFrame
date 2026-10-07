@@ -1,5 +1,9 @@
 # Architecture
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Design from the source inspection begun on 5 September 2026. [The source map](source-map.md) pins the inspected revisions. [The tracker](../implementation.md) records implementation; the current AC7 DLSS research proxy does not yet implement this full lifecycle.
 
 ## Ownership and loading

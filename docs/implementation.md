@@ -1,5 +1,10 @@
 # Implementation tracker
 
+See [current status](current-status.md) for the source/release/acceptance summary checked on
+7 October 2026. This tracker preserves dated increments, test counts and superseded failures;
+earlier unchecked or pending entries are not automatically current blockers. No new game/device
+experiment was performed for the documentation audit; [scope and checks](documentation-audit.md).
+
 ## Shared frame generation, 4 October 2026
 
 Current acceptance: the user confirms the final Drag'n Wash corrections resolved the FSR
@@ -96,20 +101,22 @@ FSR4 remains a manual experimental choice. Claw hardware acceptance remains pend
       [Design and validation sequence](research/unity-mono-plugin.md).
 - [x] Add `rsf_game_unity_mono`, producing `ReScaleFrame.Game.UnityMono.dll` through the existing
       game-plugin ABI. The researched Drag'n Wash name/hash/architecture is the initial allowlist.
-      Preparation and activation refuse with `RSF_ERROR_NOT_READY`; no hooks or host-service
-      references are retained. Rendering readiness stays false.
+      The initial scaffold refused preparation/start without retaining services; it has since been
+      replaced by the Mono/Harmony lifecycle described above. Rendering readiness stays false.
 - [x] Build and synthetic-test the scaffold on Windows/MSVC with
       `eng/verify.ps1 -Configuration Release -VS2026`: the repository gate passed with six
       expected environment/vendor skips; Rust formatting and Clippy passed. The Unity fixture verifies
       detection, ABI/size guards, inactive lifecycle and repeated cleanup. This is not a Mono,
       Harmony, graphics-device or game test.
-- [ ] Implement the managed bootstrap in the player's existing Mono domain, generic capability
-      discovery and guarded Harmony patches. The native scaffold does not establish these paths.
-- [ ] Validate render-thread native copy-through, API state/fences, view/frame identity and graph
-      resource lifetime, then temporal inputs and output-resolution SR reinsertion.
+- [x] Implement the managed bootstrap in the player's existing Mono domain and guarded Harmony
+      URP contracts for the fingerprinted player. Broad discovery across other players remains open.
+- [x] Implement native copy-through, fences, frame identity, temporal inputs and output-resolution
+      SR reinsertion with managed/device fixtures and recorded live evaluation. General transitions
+      and resize/teardown acceptance remain separate coverage.
 - [ ] Game-test custom fluid/deformation coverage, scene/settings/resize transitions, HUD-less/UI
       boundaries, teardown, FG and latency. No game launch, injection or installation change
-      occurred during the static investigation. Built/synthetic/game/device readiness stays false.
+      occurred during the initial static investigation. Later live SR and user-accepted FG corrections
+      are recorded above; complete scene/resize/Claw coverage and broad readiness remain open.
 
 2 October documentation: repository skills now separate general renderer analysis, shared
 Unreal 4 concepts, UE4.18/AC7 evidence and TrueSky production. The parent transcript, accepted
@@ -415,7 +422,7 @@ this overlay preflight is not a gameplay test.
 - [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
-- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024Ã—576 input and 2048Ã—1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
+- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024×576 input and 2048×1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
 - [x] Conditional composed-colour selection for the DLSS bridge. Persistent input watch and AC7
       recombine rule are cross-built and synthetic-tested under Wine. Each frame falls back to the
       identified colour unless a matching composition is observed; no new per-frame allocations.
@@ -436,7 +443,7 @@ this overlay preflight is not a gameplay test.
       quality level instead of being fixed. Going above the scene's resolution needs the engine to
       size the layer's depth to match, which four one-byte patches enable by narrowing `Scale < 1.f`
       to `Scale == 1.f`; they are no-ops for every scale the engine produces on its own.
-      Game-tested on 7 September: the briefing relief draws at 2048Ã—1152 inside a 1024Ã—576 scene
+      Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
       with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
       other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
 - [x] Consumer session controls: automatic DLSS startup and deferred reinsertion; Insert opens an
@@ -477,7 +484,7 @@ this overlay preflight is not a gameplay test.
       there and each failed differently, which is worth keeping because the failures were all the
       same mistake about bindings.
 
-      First run: nothing happened at all. The tail walk had taken a 2048Ã—32 strip as the composite,
+      First run: nothing happened at all. The tail walk had taken a 2048×32 strip as the composite,
       a UI bar the final draw also reads, and promoted that. Zero gates opened, so F6 did precisely
       nothing. Fixed by rejecting any input less than half the height of the target it is drawn into.
 

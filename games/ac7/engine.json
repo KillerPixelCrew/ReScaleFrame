@@ -1,4 +1,24 @@
 {
+  "current_validation": {
+    "audited": "2026-10-07",
+    "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
+    "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
+    "game_abi": 13,
+    "plugin_rendering_ready": false,
+    "current_status": "../../docs/current-status.md",
+    "sr": "Corrected native SR/UI/TrueSky and optimized bridge/FSR4 INT8 path user-accepted.",
+    "fg": "DLSS-G user-accepted; live shared FG replacement and additional FSR/XeSS providers implemented with device fixtures.",
+    "published_release": "v0.1.0 AC7 ZIP remains SR-only without FG/Reflex.",
+    "limits": [
+      "new AC7 FSR/XeSS FG live acceptance",
+      "briefing FG deferred",
+      "later lighting/shadow defect",
+      "missing-object motion coverage",
+      "higher MFG and other GPU families",
+      "measured latency reduction"
+    ],
+    "research": "../../docs/research/shared-fg-20261004.md"
+  },
   "game": {
     "title": "Ace Combat 7: Skies Unknown",
     "steam_appid": 502500,
@@ -6,7 +26,8 @@
     "executable": "Ace7Game.exe",
     "platform": "windows-x64",
     "render_api": "d3d11",
-    "examined": "2026-09-06"
+    "examined": "2026-09-06",
+    "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f"
   },
   "frame_generation_cpu_research": {
     "status": "guarded CPU, primary RHI and queued window hooks built; FG/Reflex connected in experimental cold profile; new game validation pending",

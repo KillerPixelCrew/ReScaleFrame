@@ -1,4 +1,14 @@
 {
+  "current_validation": {
+    "audited": "2026-10-07",
+    "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
+    "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
+    "game_abi": 13,
+    "plugin_rendering_ready": false,
+    "current_status": "../../docs/current-status.md",
+    "status": "Exact-build detection and lifecycle scaffold; prepare/start return NOT_READY; rendering/SR/FG/latency/VR unimplemented.",
+    "research": "../../docs/research/project-wingman-renderer.md"
+  },
   "game": {
     "id": "project-wingman",
     "title": "Project Wingman",

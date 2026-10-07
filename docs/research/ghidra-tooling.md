@@ -1,5 +1,9 @@
 # AC7 binary analysis
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Inspection and runtime capture: 6 September 2026. The initial inspection read the executable and Ghidra project; the later capture ran AC7 under Proton with the research proxy. [The hook map](ue418-hook-map.md) identifies the researched build.
 
 ## Why the runtime image was needed

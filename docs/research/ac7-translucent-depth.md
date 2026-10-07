@@ -1,5 +1,9 @@
 # AC7 translucent depth for camera motion
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 ## The path is complete, 7 September 2026
 
 The replayed depth reaches the backend: 67,801 of 68,995 candidate draws replayed and 1,194 selected evaluations, with the swap logged each frame as `0x2FB41790 -> 0x30359A20 at 1024x576`. Nothing was selected until two bugs cleared, and both had been introduced by earlier fixes rather than found in the game.

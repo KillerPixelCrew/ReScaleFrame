@@ -18,7 +18,7 @@ RSF_DLSS_TONEMAP=1
 # Briefing resolution is relative to output, never the reduced scene.
 # 100 renders the briefing at full output resolution, independently of the DLSS preset.
 RSF_TRANSLUCENCY_TARGET=100
-# Draw with an unjittered VS/PS view, then composite after scene SR.
+# Draw with unjittered VS/PS/HS/DS/GS views, then composite after scene SR.
 # 0 selects the experimental jittered 1:1 layer resolve for comparison.
 RSF_TRANSLUCENCY_UNJITTER=1
 
@@ -39,3 +39,17 @@ RSF_TRANSLUCENCY_UNJITTER=1
 # RSF_TRANSLUCENCY_SCALE=0        # overrides the output-relative target when nonzero
 # RSF_REINSERT_DEPTH=0            # existing overlay-depth policy
 # RSF_RENDERDOC=0                 # cannot be used alongside DLSS in the observed setup
+
+# Current-source FG defaults. The published v0.1.0 SR ZIP has no FG/Reflex runtime payload.
+# Saved [Rendering] FrameGeneration in the per-user AC7.ini can override the cold-start defaults.
+# Insert offers live provider selection; changes do not require restart.
+# RSF_FG_ENABLE=0                 # no default FG; saved provider selection can still activate it
+# RSF_FG_BACKEND=1                # 1 DLSS-G, 3 FSR3, 4 FSR4, 5 XeSS FG
+# RSF_FG_MODE=1                   # 0 Off, 1 fixed; cold-start default is fixed when FG is selected
+# RSF_FG_GENERATED=1              # one generated frame per source = 2x; SDK maximum clamps it
+# RSF_REFLEX_MODE=1               # 0 Off, 1 On, 2 Boost; active DLSS-G requires at least On
+# RSF_FRAME_LIMIT_FPS=0           # requested rendered-frame limit before FG; 0 disables it
+# RSF_REFLEX_LIMIT_US=0           # alternative microsecond interval when FPS override is zero
+# RSF_FG_DEVELOPMENT=0            # production SDK by default
+# RSF_FG_DEBUG=0                  # bounded marker diagnostics
+# RSF_REFLEX_ASYNC=0              # 1 restores the earlier overlapping sleep for comparison

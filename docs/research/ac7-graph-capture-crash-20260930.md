@@ -1,5 +1,9 @@
 # AC7 graph capture and pause-menu crash, 30 September 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The question was whether the engine graph could identify the passes that still reduce the
 reconstructed image and UI, while preserving queued view identity. Process 215904 used the
 19:29 capture build, proxy SHA-256

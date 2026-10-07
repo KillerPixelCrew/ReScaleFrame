@@ -1,5 +1,9 @@
 # AC7 motion and depth inputs, 4 October
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The question was what limits the motion and depth AC7 hands its upscalers after the native SR
 path settled, and which of the remaining gaps engine patches, shader work or 4.27 systems can
 close. The user also asked for the translucency hint buffers (`BiasCurrentColorHint`,

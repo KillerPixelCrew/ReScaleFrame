@@ -1,9 +1,15 @@
 # Shared Unity Mono plugin
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Direction agreed on 3 October 2026: use a shared Unity Mono plugin, reflection for discovery,
-and Harmony for managed method patches. Drag'n Wash is the first validation case. The native
-game-plugin scaffold and contract fixture now exist; managed bootstrap, Harmony and rendering
-remain unimplemented and untested in a game.
+and Harmony for managed method patches. Drag'n Wash is the first validation case. The initial
+scaffold was followed by implemented Mono/Harmony URP hooks, DX12 SR, shared overlay and FG.
+Live SR and the final Unity FG corrections have recorded user acceptance. See
+[runtime notes](unity-dx12-runtime-20261004.md) and [shared FG corrections](shared-fg-20261004.md).
+The original design and validation sequence below retain their dated scope.
 
 ## Question and evidence
 
@@ -27,8 +33,9 @@ Mono/CLR runtime or another orchestrator.
 Vendor SDKs, graphics interoperability, settings and presentation remain in `runtime/`.
 
 `ReScaleFrame.Game.UnityMono.dll` currently recognizes only the exact researched Drag'n Wash
-x64 name and SHA256. It reports rendering readiness false, refuses `prepare` and `start` with
-`RSF_ERROR_NOT_READY`, retains no host services and allows repeated cleanup. This exact allowlist
+x64 name and SHA256. Its current lifecycle prepares the native bridge and managed helper, then
+activates guarded hooks. Unsupported preparation refuses; quiesce/stop drain owned work. The
+initial scaffold refused all activation. Readiness still stays false. This exact allowlist
 is deliberate: executable metadata alone cannot prove another Unity game's adapter compatibility.
 The synthetic contract fixture validates C ABI guards and lifecycle refusal. It does not load
 Mono, install Harmony patches or touch a graphics device.

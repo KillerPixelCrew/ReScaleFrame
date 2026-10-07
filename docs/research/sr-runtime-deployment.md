@@ -1,5 +1,9 @@
 # FSR and XeSS switching refusal: missing deployed runtimes
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 30 September 2026. AC7 log inspection, signed-file deployment and a Windows hardware fixture.
 No new AC7 gameplay or visual validation was performed for this fix.
 

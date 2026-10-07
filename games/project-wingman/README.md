@@ -1,7 +1,7 @@
 # Project Wingman
 
 The plugin is a Windows x64 scaffold. It recognizes the researched executable and exposes the
-shared game-plugin ABI. Renderer hooks, upscaling, HUD separation, frame generation and VR
+shared game-plugin ABI 13. Renderer hooks, upscaling, HUD separation, frame generation and VR
 integration are not implemented or game-tested.
 
 | Item | Value |
@@ -42,3 +42,6 @@ ABI refusal, inactive status and cleanup, and does not modify or launch the game
 [Renderer investigation](../../docs/research/project-wingman-renderer.md) records the question,
 method, source revision, named functions and remaining runtime experiments. Candidate addresses
 remain research data rather than executable hook code.
+
+[Current status](../../docs/current-status.md) compares this scaffold with the implemented AC7
+and Unity paths; no new Project Wingman game/device validation was performed in the documentation audit.

@@ -1,5 +1,9 @@
 # XeSS/FSR transfer cost and FSR4 compatibility, 2 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 The user confirms the wing/cloud build is clean, then reports DLSS Ultra Performance running
 about60 FPS faster than XeSS and FSR. The question is whether those backends execute at all,
 whether the transfer path adds stalls, and why selecting FSR4 refuses.

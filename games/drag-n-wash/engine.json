@@ -1,4 +1,23 @@
 {
+  "current_validation": {
+    "audited": "2026-10-07",
+    "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
+    "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
+    "game_abi": 13,
+    "plugin_rendering_ready": false,
+    "current_status": "../../docs/current-status.md",
+    "sr": "Live DX12 SR execution and improved pre-DoF order recorded.",
+    "fg": "Shared DLSS-G, FSR3/4 and XeSS provider selection and live replacement implemented; recorded user acceptance of XeSS/DLSS-G and final FSR correction.",
+    "limits": [
+      "MSI Claw acceptance",
+      "higher DLSS/Intel MFG counts",
+      "FSR4 FG hardware support",
+      "broader scene/resize/teardown coverage",
+      "other Unity players/pipelines",
+      "measured latency reduction"
+    ],
+    "research": "../../docs/research/shared-fg-20261004.md"
+  },
   "game": {
     "id": "drag-n-wash",
     "title": "Drag'n Wash",
@@ -15,7 +34,7 @@
     "id": "unity-mono",
     "target": "rsf_game_unity_mono",
     "dll": "ReScaleFrame.Game.UnityMono.dll",
-    "status": "experimental native DX12 SR and shared overlay; live DLSS evaluations and vendor control requests confirmed; visual acceptance pending",
+    "status": "Mono/Harmony DX12 SR and shared overlay/FG implemented; live SR and final FG corrections have recorded user acceptance; broader coverage pending",
     "rendering_ready": false,
     "implemented": true,
     "built_windows_msvc": true,
@@ -27,7 +46,7 @@
     "prepare_result": "live lifecycle activation and provider preparation confirmed",
     "game_tested": true,
     "device_tested": true,
-    "validation_limit": "device evidence is synthetic SR readback; game evidence includes successful DLSS evaluations, overlay and settings requests; image quality and scene transitions pending",
+    "validation_limit": "Synthetic GPU fixtures and user-run SR/FG acceptance are recorded separately; higher MFG, Claw and broader scene/resize coverage remain unproven",
     "runtime_research": "../../docs/research/unity-dx12-runtime-20261004.md",
     "visual_issue": "User confirms much better after moving SR before DoF; broader acceptance pending",
     "default_backend": "Auto: actual D3D12 adapter selects NVIDIA DLSS, Intel XeSS, AMD FSR3; RDNA4 auto classification deferred"
@@ -50,9 +69,10 @@
       "Direct3D12",
       "Direct3D11"
     ],
-    "active_api": null,
+    "active_api": "Direct3D12",
     "native_player_pdb_matches": true,
-    "native_executable_pdb_matches": true
+    "native_executable_pdb_matches": true,
+    "active_api_evidence": "../../docs/research/unity-dx12-runtime-20261004.md"
   },
   "packaged_defaults": {
     "pipeline_asset": "PC_RPAsset",
@@ -93,7 +113,8 @@
       "base camera without camera stack",
       "hardware dynamic resolution disabled",
       "renderer motion support"
-    ]
+    ],
+    "scope": "Initial packaged/static findings; live adapter execution and later corrections are in current_validation and runtime_research."
   },
   "hud": {
     "serialized_canvas_count": 21,
@@ -102,7 +123,8 @@
     ],
     "completed_hudless_surface_verified": false,
     "source_sdr_overlay_order": "after post-processing and final blit on last base camera",
-    "other_runtime_ui_routes_verified": false
+    "other_runtime_ui_routes_verified": false,
+    "scope": "Initial asset/source evidence; the later SDR pre-UI guide implementation and acceptance are recorded in shared-fg-20261004.md."
   },
   "custom_renderer_features": [
     "ScreenSpaceAmbientOcclusion",

@@ -1,9 +1,24 @@
 # Game SDK
 
-A small MIT-licensed C ABI between the orchestrator and game plugins. The current interface provides plugin metadata and executable recognition; renderer preparation and frame delivery are planned.
+The MIT-licensed native C ABI joins the orchestrator and game plugins. Current game ABI is **13**,
+defined in [game_api.h](include/rescaleframe/game_api.h). It includes executable recognition and
+`prepare`, `start`, `quiesce`, `stop` and `status` hooks. [game_renderer.h](include/rescaleframe/game_renderer.h)
+defines host services, CPU events and rendering callbacks; [game_frame.h](include/rescaleframe/game_frame.h)
+defines frame/camera records with its own ABI version 1.
 
 Use fixed-width fields, `struct_size`, and ABI versions. Keep STL/Rust types and allocator ownership inside their DLLs. The header must compile as C and C++.
 
-Recognition is separate from rendering support: AC7 currently reports `rendering_ready = 0` because the research proxy has not been integrated into this plugin lifecycle.
+Call structures start with `struct_size` and use the version required by their contract. Embedded
+metadata belongs to its enclosing ABI. Plugin strings are immutable and valid until DLL unload;
+probe strings are borrowed for the call. Renderer callbacks carry opaque native resource pointers
+with leases through the matching end callback. Frame identity alone does not prove Present ownership.
 
-ABI 2 is specified in the [representation plan](../../docs/representation-plan.md): a `game_frame.h` beside this header with the frame record and the draw description, a hooks table the plugin fills (prepare, start, quiesce, stop, classify a draw, screen policy, apply render scale, fill camera), and host services the runtime provides. Textures never cross the SDK; the plugin says which draw is interface and what the camera is. `rendering_ready` flips only with the game run that proves the path.
+The runtime selects and prepares the plugin before graphics activation. Quiesce stops producers;
+queued work may still need to drain. Keep the DLL and host services alive when stop returns busy.
+AC7 and Unity implement lifecycle/rendering paths; Project Wingman refuses preparation/start.
+All three currently return `rendering_ready = 0`, even where individual deployed paths have user
+acceptance. Recognition is separate from capability and validation.
+
+See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/plugin_contract.cpp).
+The ABI 2 sketches in the [representation plan](../../docs/representation-plan.md) are historical
+design, superseded by these headers.

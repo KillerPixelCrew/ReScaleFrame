@@ -1,5 +1,9 @@
 # Where render resolution belongs, and where the interface belongs
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Two questions, asked before writing any more reinsertion code: where 4.18 wants the render
 resolution cranked down without dragging the interface with it, and what the correct order of
 reconstruction, interface and presentation is once frame generation is in the picture.

@@ -1,5 +1,9 @@
 # AC7 aircraft composition artifacts, 2 October 2026
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Final status: after the 21:24 deployment the user reports "Works. And is clean!" Native logs
 verify Texture2D/RG32F depth bindings, divisor 1 and replacement dispatch. The wing/cloud
 correction is accepted with volumetrics present. The latest depth/format findings are in

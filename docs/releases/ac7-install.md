@@ -1,5 +1,9 @@
 # ReScaleFrame for Ace Combat 7
 
+Scope: the corrected published v0.1.0 AC7 **SR package**, replaced on 2 October 2026.
+Later `main` includes FG/Reflex and Unity work; those features are absent from this ZIP. See
+[current source status](https://github.com/KillerPixelCrew/ReScaleFrame/blob/main/docs/current-status.md).
+
 DLSS, FSR 2/3/4 and XeSS upscaling for AC7, with the game's lighting, post-processing and
 interface kept intact. Menus, HUD and briefing rendering keep full output resolution.
 The cloud depth path preserves small aircraft details at reduced scene resolutions.

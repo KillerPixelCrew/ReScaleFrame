@@ -1,5 +1,9 @@
 # Independent PCL and Reflex services
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 30 September 2026, following FG foundation commit `38e5aaf`. This extends the reusable runtime;
 it does not install AC7 input hooks or claim measured physical latency.
 

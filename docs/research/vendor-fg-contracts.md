@@ -1,5 +1,9 @@
 # Frame generation contracts: DLSS-G, FidelityFX, XeSS-FG
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Written 7 September 2026 from the vendored and referenced SDKs, not from summaries. Revisions:
 Streamline 2.12.0 (`vendor/streamline`, `references/Streamline`), FidelityFX SDK
 `60f4ea81909200d8542eca14dccb2628b763a9a3` (FrameGeneration 4.0.1), XeSS SDK 3.0.2

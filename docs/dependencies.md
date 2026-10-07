@@ -3,7 +3,8 @@
 ## Unity Mono DX12 adapter
 
 The managed helper uses Harmony 2.4.2 (MIT), pinned by its NuGet lockfile, with the executable
-net472 assembly for the shipped Mono runtime. Unity assemblies are build references supplied
+net472 Harmony assembly for the shipped Mono runtime. The RSF helper targets netstandard2.1.
+Unity assemblies are build references supplied
 by the local game installation and are never included in the mod ZIP. The native adapter uses
 the public Unity rendering interfaces from NativeRenderingPlugin revision
 `522254181faf188efa8b50c3e3bf6fce720b26e4` under `vendor/unity-native/include`; those headers
@@ -26,7 +27,7 @@ Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outsid
 | --- | --- | --- | --- |
 | RenderDoc header and x64 DLL | 1.45 | `vendor/renderdoc/` | In-application capture |
 | Streamline headers | 2.14.1 | `vendor/streamline/include/sl.h` | Compile the DLSS adapter |
-| Streamline/NGX x64 runtime | 2.14.1 release package | `vendor/streamline/bin/x64/` | Load and evaluate DLSS; `sl.dlss_g.dll`, `nvngx_dlssg.dll`, `sl.pcl.dll` and `sl.reflex.dll` are in the same package and are what frame generation will load |
+| Streamline/NGX x64 runtime | 2.14.1 release package | `vendor/streamline/bin/x64/` | Load and evaluate DLSS; `sl.dlss_g.dll`, `nvngx_dlssg.dll`, `sl.pcl.dll` and `sl.reflex.dll` are in the same package and are loaded by current-source FG/Reflex |
 | FidelityFX SDK headers | `60f4ea81909200d8542eca14dccb2628b763a9a3` (SDK 2.3.0; FSR 2.3.4, 3.1.5 and hardware-dependent 4.1.1) | `vendor/fidelityfx/Kits/FidelityFX/api/include/` and `upscalers/include/` | Compile the FSR adapter |
 | FidelityFX x64 runtime | same | `vendor/fidelityfx/Kits/FidelityFX/signedbin/` | `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` |
 | XeSS SDK headers | 3.0.2, `8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0` | `vendor/xess/inc/` (`xess/`, `xess_fg/`, `xell/`) | Compile the XeSS adapter |
@@ -34,7 +35,8 @@ Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outsid
 
 Without the headers, the checkout still builds; the relevant API reports that the feature is unavailable. `RSF_RENDERDOC_DLL`, `RSF_STREAMLINE_BIN`, `RSF_FFX_BIN`, per-family `RSF_FSR2_BIN` / `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, and `RSF_XESS_BIN` select runtime locations. See [loader setup](../loader/README.md). The new SR adapters use the SDK checkout layouts above. A single current AMD package can provide all three FSR algorithms; separate runtime directories and explicit version overrides also permit side-by-side SDK releases. See [the switching evidence](research/orchestrator-sr-switching.md). Vendor checkouts remain untracked.
 
-RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. The FidelityFX signed DX12 DLLs carry the SDK release's bundled binary redistribution terms; ship `Kits/FidelityFX/docs/license.md` and `3rdpartynotice.md` beside them. The earlier statement grouping these signed binaries under MIT was incorrect for the inspected SDK 2.3 package. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. The corrected AC7 package also includes FidelityFX SDK 2.3.0 upscaling (FSR 2/3/4) and XeSS SR 2.0.2 with their terms and notices. Frame generation and Reflex are not enabled. Vendor binaries stay untracked in Git.
+RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. The FidelityFX signed DX12 DLLs carry the SDK release's bundled binary redistribution terms; ship `Kits/FidelityFX/docs/license.md` and `3rdpartynotice.md` beside them. The earlier statement grouping these signed binaries under MIT was incorrect for the inspected SDK 2.3 package. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. The corrected AC7 package also includes FidelityFX SDK 2.3.0 upscaling (FSR 2/3/4) and XeSS SR 2.0.2 with their terms and notices. Frame generation and Reflex are not included in that published SR package. Current-source
+deployments use separate FG DLLs and shared latency services. Vendor binaries stay untracked in Git.
 
 The Skyrim and Fallout 4 Community Shaders presentation bridges, fo4test, OptiScaler and SpecialK were studied for the plan and not copied: they are GPL or carry their own exceptions, and `AGENTS.md` forbids copying reference code because it was useful to study.
 
@@ -66,4 +68,25 @@ The package includes the proxy, AC7 game plugin, Rust overlay, retail Streamline
 FidelityFX upscaler DLL (FSR 2/3/4), XeSS SR DLL and their licenses and notices.
 The optional `--expected-proxy-sha256`, `--expected-plugin-sha256` and `--expected-overlay-sha256`
 require the exact validated binaries. FSR/XeSS runtime hashes are pinned to the tested SDK files.
-The packager never reads or writes the game installation.
+The packager never reads or writes the game installation. Its current input remains
+`build/windows-x64/bin/Release/dinput8.dll` (the shared shim); the deployment helper uses the
+dedicated AC7 carrier at `build/windows-x64/ac7/bin/Release/dinput8.dll`. Do not describe a new
+package as matching the dedicated carrier without checking these inputs/hashes. The packager's
+allowlist remains SR-only and omits `sl.dlss_g.dll`, `sl.reflex.dll`, `nvngx_dlssg.dll`, AMD FG and
+XeFG/XeLL. Building new source does not make this script an FG release packager.
+
+## Current-source frame-generation runtime files
+
+DLSS-G requires matched Streamline interposer/common/DLSS-G/Reflex/PCL and NGX FG files; shared
+DLSS SR also needs the SR plugin and NGX SR DLL. FSR3/4 FG uses
+`amd_fidelityfx_framegeneration_dx12.dll` with the loader/upscaler set from the pinned SDK. XeSS
+FG uses `libxess_fg.dll` and `libxell.dll`. Keep each SDK's notices with its runtime family.
+FSR4 SR INT8 compatibility does not establish FSR4 FG support.
+
+`eng/deploy-unity-sr.ps1` copies all three SR/FG families even when its `-FrameGeneration` default
+is Off. `eng/package-unity-sr.ps1` includes that allowlisted deployed vendor payload and local
+Release first-party artifacts, with notices and file hashes. It preserves the deployed FG default,
+while setting package SR Backend/Quality. Preference files are excluded. The generated README
+therefore describes FG configuration independently of package defaults. This is a local test ZIP,
+not a published or universally validated release. See [Unity guide](../games/unity-mono/README.md)
+and [current status](current-status.md).

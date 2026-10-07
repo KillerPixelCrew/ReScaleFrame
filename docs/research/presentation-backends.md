@@ -1,5 +1,9 @@
 # Vulkan and DX12 presentation options
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Updated 5 September 2026 after inspecting Community Shaders' Vulkan branch and its pinned Streamline fork.
 
 ## The XeSS distinction

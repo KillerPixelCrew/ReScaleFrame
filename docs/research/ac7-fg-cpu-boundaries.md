@@ -1,5 +1,9 @@
 # AC7 frame-generation CPU boundaries
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 30 September 2026. Static source/binary inspection only. None of these sites is installed as an
 FG/latency hook, and no frame handoff or latency measurement is established by this note.
 

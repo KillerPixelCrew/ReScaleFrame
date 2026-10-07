@@ -1,5 +1,9 @@
 # AC7 native ownership on UE4.18
 
+Scope: this reference records AC7 SR findings through 2 October. Later FG/Reflex, shared Unity
+services and unresolved lighting work are summarized in
+[current status](../../../../docs/current-status.md). SR acceptance alone does not validate those paths.
+
 This is the working AC7 integration's evidence map, not a portable binary patch recipe.
 Always read current guards and structures in source. Values below were checked against that
 source on 2 October 2026; private layouts depend on the fingerprinted executable.

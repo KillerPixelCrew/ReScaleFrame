@@ -1,5 +1,9 @@
 # Drag'n Wash renderer investigation
 
+Research history: findings, hook addresses and pending statuses below apply to their recorded
+experiments. Later increments can supersede earlier conclusions. See
+[current implementation and validation](../current-status.md) before using this as a feature list.
+
 Examined on 3 October 2026. This is ReScaleFrame's third game research case and first Unity game.
 The intended implementation is a shared [Unity Mono plugin](unity-mono-plugin.md) using reflection
 and Harmony, with Drag'n Wash as its first URP RenderGraph validation case.
