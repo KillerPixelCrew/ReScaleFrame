@@ -5,6 +5,16 @@ See [current status](current-status.md) for the source/release/acceptance summar
 earlier unchecked or pending entries are not automatically current blockers. No new game/device
 experiment was performed for the documentation audit; [scope and checks](documentation-audit.md).
 
+## REA development tooling, 8 October 2026
+
+Installed REA 6.0.0 with a locked repository-local npm dependency, a shared MIT
+workflow, and project registrations for Codex and Claude Code. Both registered
+stdio launch commands pass initialization, the 139-tool/six-prompt catalog check,
+and a target-free session request. Existing Ghidra 12.1.4/JDK provider readiness
+passes. Claude Code still needs its normal project-server approval, and both
+clients need a restart/reconnection. No runtime build, game analysis or deployment
+was performed. [Setup and evidence](tooling.md#rea-for-codex-and-claude-code).
+
 ## Shared frame generation, 4 October 2026
 
 Current acceptance: the user confirms the final Drag'n Wash corrections resolved the FSR

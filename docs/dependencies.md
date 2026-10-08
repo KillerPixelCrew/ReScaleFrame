@@ -1,5 +1,16 @@
 # Dependencies
 
+## REA development tooling
+
+`tools/rea` pins `rea-agents` 6.0.0 from npm, whose published Git revision is
+`6fee42689ae6e95a0182e0d4d0f55644e73e72be` in [morluto/rea](https://github.com/morluto/rea).
+The package and its bundled `reverse-engineer-anything` workflow are MIT licensed.
+The shared skill is copied unchanged from that release, with its upstream license;
+the npm lockfile records dependency versions and integrity hashes. Installed
+`node_modules` and provider paths remain ignored. REA is used only for development
+and research and is not linked into or shipped with the runtime.
+[Installation and client scope](tooling.md#rea-for-codex-and-claude-code).
+
 ## Unity Mono DX12 adapter
 
 The managed helper uses Harmony 2.4.2 (MIT), pinned by its NuGet lockfile, with the executable

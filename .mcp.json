@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "rea": {
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-File", "tools/rea/run.ps1", "mcp"]
+    },
     "ghidra-mcp": {
       "command": "bridge-mcp-ghidra",
       "args": ["--transport", "stdio"],

@@ -1,0 +1,7 @@
+{
+  "name": "rescaleframe-rea-tools",
+  "private": true,
+  "dependencies": {
+    "rea-agents": "6.0.0"
+  }
+}

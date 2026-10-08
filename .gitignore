@@ -16,3 +16,5 @@ __pycache__/
 /captures/
 /dumps/
 /ghidra_projects/
+/tools/rea/node_modules/
+/.claude/skills/reverse-engineer-anything/

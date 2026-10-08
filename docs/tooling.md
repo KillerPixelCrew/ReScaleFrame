@@ -43,6 +43,76 @@ record the actual setup instead of claiming an attachment succeeded. F9 usage is
 
 ## Ghidra MCP and signatures
 
+### REA for Codex and Claude Code
+
+[REA](https://github.com/morluto/rea) 6.0.0 is a repository-local development tool,
+pinned with its transitive dependencies in `tools/rea/package-lock.json`. Install with
+`npm ci --prefix tools/rea`, then run `powershell.exe -NoProfile -File tools/rea/run.ps1 --help`.
+It requires Node.js 22.19+, 24.11+, or 26+ within the supported release lines.
+It is not a game/runtime dependency.
+
+Claude Code reads the `rea` registration in `.mcp.json`; Codex reads
+`.codex/config.toml`. Both launch the same package through `tools/rea/run.ps1`.
+The existing Ghidra MCP registration is preserved. Restart/reconnect each client
+after installation; a running chat does not gain new MCP tools automatically.
+Codex uses a 360-second tool timeout for cold Ghidra imports.
+
+Codex's configuration is ignored here and holds checkout-specific launch paths.
+On another checkout, add the following table to `.codex/config.toml`, substituting
+the absolute checkout path:
+
+```toml
+[mcp_servers.rea]
+command = "powershell.exe"
+args = ["-NoProfile", "-File", "D:/Coding/ReScaleFrame/tools/rea/run.ps1", "mcp"]
+cwd = "D:/Coding/ReScaleFrame"
+startup_timeout_sec = 30
+tool_timeout_sec = 360
+```
+
+Claude Code requires its normal one-time project-server approval before connecting.
+No user-wide client configuration is changed by this installation.
+
+Machine-specific provider paths stay in ignored `.local/rea/environment.json`:
+
+```json
+{
+  "REA_ANALYSIS_PROVIDER": "ghidra",
+  "GHIDRA_INSTALL_DIR": "C:\\tools\\ghidra_12.1.4_PUBLIC",
+  "JAVA_HOME": "C:\\tools\\jdk-21"
+}
+```
+
+The launcher sets these values only in its own process. Without the file, it uses
+the inherited environment. Check the provider with
+`powershell.exe -NoProfile -File tools/rea/run.ps1 doctor --provider ghidra --json`.
+REA's client doctor currently checks user-wide registration paths, so verify these
+project registrations with `codex mcp get rea` and `claude mcp get rea` instead.
+
+The release's unchanged workflow and references are installed under
+`.agents/skills/reverse-engineer-anything`, with its MIT license. Claude Code uses
+one ignored directory junction to that shared skill. To create it on another checkout:
+
+```powershell
+New-Item -ItemType Directory -Path .claude/skills -Force
+New-Item -ItemType Junction -Path .claude/skills/reverse-engineer-anything `
+    -Target (Resolve-Path .agents/skills/reverse-engineer-anything).Path
+```
+
+Windows Ghidra support is experimental and read-only. It uses an existing Ghidra
+12.1.x/full JDK installation and private headless projects; it does not attach to
+the existing GUI analysis database. Keep the original Ghidra bridge for that workflow.
+Provider readiness and MCP connection checks do not establish real-game analysis.
+
+Installation checks on 8 October 2026: `npm ci` installed the locked package,
+the launcher reported 6.0.0, and both clients resolved their project registration.
+Production stdio checks through each registered command passed initialization,
+139-tool/six-prompt catalog identity, and a target-free `binary_session` request.
+Ghidra provider doctor passed with the existing 12.1.4 distribution and full x64
+JDK 25.0.4.1. These checks did not launch or analyze a game. Claude's client-level
+connection remains pending its project-server approval; the stdio check used an
+independent MCP client.
+
 Use [bethington/ghidra-mcp](https://github.com/bethington/ghidra-mcp) for agent access to Ghidra. Its bridge command matches this repo's `.mcp.json`: `bridge-mcp-ghidra --transport stdio`, with `GHIDRA_MCP_URL=http://127.0.0.1:8089`. Follow that project's installation guide for the extension and Python bridge; neither is installed by ReScaleFrame. Verify the selected program and connection before analysis. Keep local paths in client-local configuration.
 
 The suggested signature library is [threatrack/ghidra-fidb-repo](https://github.com/threatrack/ghidra-fidb-repo), a collection of Ghidra Function ID databases. Attach the relevant `.fidb` through **Tools → Function ID → Attach existing FidDB** and run the appropriate analysis. Select databases for the architecture/compiler/library being investigated, record their revision, and inspect ambiguous matches.
