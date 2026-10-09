@@ -27,6 +27,8 @@ target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
 target_link_libraries(rsf_graphics PUBLIC d3d11 dxgi)
 target_link_libraries(rsf_graphics PRIVATE minhook)
+# Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.
+target_link_libraries(rsf_graphics PUBLIC ReScaleFrame::RuntimeCommon)
 # MinHook's length disassembler, for building a trampoline over a function's bytes as the file has
 # them rather than as memory has them. It is compiled into the library but not exported by its
 # public header.

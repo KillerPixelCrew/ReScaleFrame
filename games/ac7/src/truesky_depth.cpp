@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "truesky_depth.h"
-#include <d3dcompiler.h>
-#include <wrl/client.h>
+#include <rescaleframe/shader_compile.h>
 
 namespace {
 constexpr char source[] = R"(
@@ -37,13 +36,5 @@ bool rsf_ac7_create_truesky_depth_shader(ID3D11Device* device, ID3D11ComputeShad
 {
     if (!device || !shader) return false;
     *shader = nullptr;
-    HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!compiler) return false;
-    auto compile = reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(compiler,"D3DCompile")));
-    Microsoft::WRL::ComPtr<ID3DBlob> bytes, errors;
-    HRESULT result = compile ? compile(source,sizeof(source)-1,"AC7TrueSkyDepth1",nullptr,nullptr,
-        "main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&bytes,&errors) : E_FAIL;
-    if (SUCCEEDED(result)) result = device->CreateComputeShader(bytes->GetBufferPointer(),bytes->GetBufferSize(),nullptr,shader);
-    bytes.Reset(); errors.Reset(); FreeLibrary(compiler);
-    return SUCCEEDED(result);
+    return rsf::compile_compute(device, source, "AC7TrueSkyDepth1", "main", shader);
 }

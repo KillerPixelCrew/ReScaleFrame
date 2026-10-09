@@ -3,7 +3,7 @@ set(RSF_FFX_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/api/i
 
 add_library(rsf_fsr STATIC src/fsr_backend.cpp src/fsr_generation.cpp src/fsr4_compat.cpp)
 target_include_directories(rsf_fsr PUBLIC include)
-target_link_libraries(rsf_fsr PRIVATE rsf_build_options minhook bcrypt)
+target_link_libraries(rsf_fsr PRIVATE rsf_build_options minhook bcrypt ReScaleFrame::RuntimeCommon)
 target_link_libraries(rsf_fsr PUBLIC ReScaleFrame::Contract d3d12 dxgi)
 
 # Fetched into an untracked vendor directory, exactly as Streamline is, so a checkout without it

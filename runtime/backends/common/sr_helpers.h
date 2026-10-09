@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <rescaleframe/backend.h>
+#include <rescaleframe/log.h>
 #include <windows.h>
 #include <cmath>
 #include <cstdio>
@@ -8,33 +9,80 @@
 #include <d3d12.h>
 
 namespace rsf {
+// True when `object` (a queue, list or resource) was created by `device`. GetDevice adds a
+// reference, so the owner is released again before comparing the pointers.
+template<class T> bool owned_by(T* object, const void* device)
+{
+    ID3D12Device* owner = nullptr;
+    if (!object || FAILED(object->GetDevice(IID_PPV_ARGS(&owner)))) return false;
+    const bool same = owner == device; owner->Release();
+    return same;
+}
+// Every element of a fixed array or container is a finite float.
+template<class Range> bool all_finite(const Range& values)
+{
+    for (const auto value : values) if (!std::isfinite(value)) return false;
+    return true;
+}
+// A UTF-8 runtime directory as wide text, accepted only when it is absolute (drive or UNC), so a
+// library beside the game's executable cannot answer instead.
+inline bool runtime_directory(const char* utf8, wchar_t (&directory)[1024])
+{
+    return utf8 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, directory, 1024) &&
+        ((directory[0] && directory[1] == L':' && (directory[2] == L'\\' || directory[2] == L'/')) ||
+         (directory[0] == L'\\' && directory[1] == L'\\'));
+}
+// LoadLibraryExW of an absolute path. Its own dependencies come from its folder and System32 only.
+inline HMODULE load_module(const wchar_t* path, void (*log)(void*, const char*), void* user)
+{
+    HMODULE module = LoadLibraryExW(path, nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!module) say(log, user, "could not load %ls (Windows error %lu)", path, GetLastError());
+    return module;
+}
 inline HMODULE load_runtime(const rsf_sr_open_desc& desc, const wchar_t* name)
 {
     wchar_t directory[1024]{};
     wchar_t path[1200]{};
-    if (!desc.runtime_directory_utf8 ||
-        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, desc.runtime_directory_utf8, -1,
-                            directory, 1024) ||
-        !((directory[0] && directory[1] == L':' && (directory[2] == L'\\' || directory[2] == L'/')) ||
-          (directory[0] == L'\\' && directory[1] == L'\\'))) {
+    if (!runtime_directory(desc.runtime_directory_utf8, directory) ||
+        swprintf_s(path, L"%s\\%s", directory, name) < 0) {
         return nullptr;
     }
-    if (swprintf_s(path, L"%s\\%s", directory, name) < 0) {
-        return nullptr;
-    }
-    HMODULE module = LoadLibraryExW(path, nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module && desc.log) {
-        char message[1400]{};
-        std::snprintf(message, sizeof(message), "SR: could not load %s (Windows error %lu)",
-                      desc.runtime_directory_utf8, GetLastError());
-        desc.log(desc.log_user, message);
-    }
-    return module;
+    return load_module(path, desc.log, desc.log_user);
 }
 template<class T> T entry(HMODULE module, const char* name)
 {
     return reinterpret_cast<T>(reinterpret_cast<void*>(GetProcAddress(module, name)));
+}
+inline void probe_say(const rsf_backend_probe_desc* desc, const char* message)
+{
+    if (desc && desc->log) desc->log(desc->log_user, message);
+}
+// The shared opening of a vendor probe(): validate the descriptor, then reset `caps` to an empty
+// answer that names the vendor. The caller fills in what it can do.
+inline rsf_backend_result probe_begin(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps,
+                                      rsf_vendor vendor, const char* name)
+{
+    if (!desc || !caps || desc->struct_size < sizeof(rsf_backend_probe_desc) ||
+        caps->struct_size < sizeof(rsf_backend_caps)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (desc->abi_version != RSF_BACKEND_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    const uint32_t size = caps->struct_size;
+    *caps = rsf_backend_caps{};
+    caps->struct_size = size; caps->vendor = vendor; caps->name = name;
+    return RSF_BACKEND_OK;
+}
+inline rsf_backend_result sr_release(void* pointer)
+{
+    // No vendor has an independent release operation. Closing requires GPU completion by the owner.
+    return pointer ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+}
+// get_version for a session type with `version` and `name` members.
+template<class Session> rsf_backend_result sr_version(void* pointer, uint64_t* id, const char** name)
+{
+    if (!pointer || !id || !name) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    auto* session = static_cast<Session*>(pointer);
+    *id = session->version; *name = session->name;
+    return RSF_BACKEND_OK;
 }
 inline rsf_backend_result validate_open(const rsf_sr_open_desc* desc, void** out)
 {
@@ -105,13 +153,10 @@ inline rsf_backend_result validate_d3d12_resources(const rsf_sr_frame& frame, vo
         const auto& resource = *resources[i];
         if (!resource.resource) continue;
         auto* texture = static_cast<ID3D12Resource*>(resource.resource);
-        ID3D12Device* owner = nullptr;
-        if (FAILED(texture->GetDevice(IID_PPV_ARGS(&owner)))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        const bool same = owner == device; owner->Release();
         const auto desc = texture->GetDesc();
         const uint32_t width = i == 3 ? frame.record->output_width : i == 4 ? 1 : frame.record->render_width;
         const uint32_t height = i == 3 ? frame.record->output_height : i == 4 ? 1 : frame.record->render_height;
-        if (!same || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Width < width ||
+        if (!owned_by(texture, device) || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Width < width ||
             desc.Height < height || desc.DepthOrArraySize != 1 || desc.SampleDesc.Count != 1 ||
             resource.state != uint32_t(i == 3 ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE))
             return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

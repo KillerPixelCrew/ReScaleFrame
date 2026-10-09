@@ -8,6 +8,7 @@
 #include <rescaleframe/motion_resolve.h>
 #include <rescaleframe/colour_fidelity.h>
 #include <rescaleframe/colour_transport.h>
+#include <rescaleframe/log.h>
 #include "sr_legacy_adapter.h"
 
 #include <windows.h>
@@ -16,7 +17,6 @@
 #include <wrl/client.h>
 #include <memory>
 
-#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <atomic>
@@ -63,13 +63,16 @@ struct Pipeline {
     // fails every frame it will ever render, so without this the expected case costs a file open,
     // write and close per frame on the render thread: the sink appends and closes per line by
     // design and cannot keep up at frame rate.
-    rsf_dlss_pipeline_result reported = RSF_DLSS_PIPELINE_OK;
-    uint32_t reported_width = 0;
-    uint32_t reported_height = 0;
+    struct Reported {
+        rsf_dlss_pipeline_result result = RSF_DLSS_PIPELINE_OK;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+    Reported reported;
     bool streamline_loaded = false;
     rsf_sr_legacy_adapter* alternate = nullptr;
-    uint32_t backend = 1;
-    uint32_t requested_backend = 1;
+    uint32_t backend = RSF_SR_DLSS;
+    uint32_t requested_backend = RSF_SR_DLSS;
     uint32_t last_evaluated_backend = 0;
     uint32_t last_evaluated_width = 0, last_evaluated_height = 0;
     int32_t last_switch_result = 0;
@@ -107,10 +110,14 @@ struct Pipeline {
     uint32_t render_width_max = 0;
     uint32_t render_height_max = 0;
     rsf_dlss_quality quality = RSF_DLSS_QUALITY_NATIVE;
-    rsf_dlss_preset dlss_preset = RSF_DLSS_PRESET_AUTO;
-    uint64_t frames_evaluated = 0;
-    uint64_t frames_refused = 0;
-    rsf_dlss_pipeline_result last_result = RSF_DLSS_PIPELINE_OK;
+    // Frames that reached a successful evaluate and frames that did not, for the scene and for the
+    // layer feature.
+    struct Counters {
+        uint64_t evaluated = 0;
+        uint64_t refused = 0;
+        rsf_dlss_pipeline_result last_result = RSF_DLSS_PIPELINE_OK;
+    };
+    Counters scene;
     bool dump_pending = false;
     std::string dump_prefix;
 
@@ -122,10 +129,8 @@ struct Pipeline {
     bool layer_rebuilt = false;
     uint32_t layer_consecutive_failures = 0;
     bool layer_given_up = false;
-    rsf_dlss_pipeline_result layer_reported = RSF_DLSS_PIPELINE_OK;
-    uint64_t layer_frames_evaluated = 0;
-    uint64_t layer_frames_refused = 0;
-    rsf_dlss_pipeline_result layer_last_result = RSF_DLSS_PIPELINE_OK;
+    Reported layer_reported;
+    Counters layer_counts;
 };
 
 void release_layer(Pipeline& self)
@@ -150,54 +155,135 @@ Pipeline& pipeline()
     return instance;
 }
 
-void say(Pipeline& self, const char* format, ...)
+// The pipeline's own sink, through the shared formatter. A line without arguments goes through as
+// an argument rather than as the format.
+template <class... Arguments>
+void say(Pipeline& self, const char* format, Arguments... arguments)
 {
-    if (!self.log) {
-        return;
-    }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    self.log(self.log_user, message);
+    rsf::say(self.log, self.log_user, format, arguments...);
+}
+inline void say(Pipeline& self, const char* message)
+{
+    rsf::say(self.log, self.log_user, "%s", message);
 }
 
-// Streamline and the decode pass each take their own sink. Both are forwarded to ours with a
-// prefix rather than being given to the caller separately, so that one log carries the whole
+// Streamline, the decode pass and the dump each take their own sink. All are forwarded to ours with
+// a prefix rather than being given to the caller separately, so that one log carries the whole
 // sequence in the order it happened. The message goes through as an argument, never as the format,
 // because a vendor's line may contain a percent sign.
-void from_dlss(void* user, const char* message)
+constexpr char dlss_log_prefix[] = "dlss";
+constexpr char decode_log_prefix[] = "motion decode";
+constexpr char dump_log_prefix[] = "dump";
+template <const char* Prefix>
+void forward(void* user, const char* message)
 {
     (void)user;
-    say(pipeline(), "dlss: %s", message ? message : "");
-}
-
-void from_decode(void* user, const char* message)
-{
-    (void)user;
-    say(pipeline(), "motion decode: %s", message ? message : "");
-}
-
-void from_dump(void* user, const char* message)
-{
-    (void)user;
-    say(pipeline(), "dump: %s", message ? message : "");
+    Pipeline& self = pipeline();
+    say(self, "%s: %s", Prefix, message ? message : "");
 }
 
 // Whether this failure is worth a line, which it is the first time and again whenever the failure
 // or the render size it concerns changes. Called only from the thread that drives frames, which is
 // the only one that touches the fields it reads.
-bool worth_saying(Pipeline& self, rsf_dlss_pipeline_result result, uint32_t width, uint32_t height)
+bool worth_saying(Pipeline::Reported& reported, rsf_dlss_pipeline_result result, uint32_t width = 0,
+                  uint32_t height = 0)
 {
-    if (self.reported == result && self.reported_width == width &&
-        self.reported_height == height) {
+    if (reported.result == result && reported.width == width && reported.height == height) {
         return false;
     }
-    self.reported = result;
-    self.reported_width = width;
-    self.reported_height = height;
+    reported = {result, width, height};
     return true;
+}
+
+// A float colour target at output size with every bind, cleared to black once. A fresh texture
+// holds whatever was in that memory and there is no promise that a reconstruction writes every
+// pixel of it. It does not: a frame whose render size differs from the one the feature was built
+// for left a corner of the target untouched, and the previous tenant of that memory showed through
+// as blocks. Black there is honest, where blocks read as an artifact of the reconstruction rather
+// than as an absence of one. Returns an owned reference, or null.
+ID3D11Texture2D* create_cleared_target(ID3D11Device* device, uint32_t width, uint32_t height)
+{
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = width;
+    description.Height = height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    // The format Ace Combat 7's own full resolution colour targets are in, established from a
+    // replayed capture in docs/research/ac7-frame-capture.md. Matching it means the result can go
+    // back where the input came from without a conversion, and it is wide enough for pre-tonemap
+    // values.
+    description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    description.SampleDesc.Count = 1;
+    description.Usage = D3D11_USAGE_DEFAULT;
+    // All three binds: DLSS writes it, whatever reinserts it reads it, and a compute pass may yet
+    // need to touch it. None of them can be added later without recreating the texture.
+    description.BindFlags =
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+    if (FAILED(device->CreateTexture2D(&description, nullptr, &target)) || !target) {
+        return nullptr;
+    }
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> view;
+    device->GetImmediateContext(&context);
+    if (context && SUCCEEDED(device->CreateRenderTargetView(target.Get(), nullptr, &view)) && view) {
+        const FLOAT black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        context->ClearRenderTargetView(view.Get(), black);
+    }
+    return target.Detach();
+}
+
+// The render sizes a frame may carry, and the one planned for.
+struct RenderRange {
+    uint32_t width = 0, height = 0;
+    uint32_t min_width = 0, min_height = 0;
+    uint32_t max_width = 0, max_height = 0;
+};
+// A build of the SDK that reports no range is taken to accept the optimal size only, rather than
+// being read as "any size".
+RenderRange range_of(const rsf_dlss_plan& plan)
+{
+    RenderRange range;
+    range.width = plan.render_width;
+    range.height = plan.render_height;
+    range.min_width = plan.render_width_min ? plan.render_width_min : plan.render_width;
+    range.min_height = plan.render_height_min ? plan.render_height_min : plan.render_height;
+    range.max_width = plan.render_width_max ? plan.render_width_max : plan.render_width;
+    range.max_height = plan.render_height_max ? plan.render_height_max : plan.render_height;
+    return range;
+}
+// Caller holds `guard`.
+void commit_range(Pipeline& self, const RenderRange& range)
+{
+    self.planned_render_width = range.width;
+    self.planned_render_height = range.height;
+    self.render_width_min = range.min_width;
+    self.render_height_min = range.min_height;
+    self.render_width_max = range.max_width;
+    self.render_height_max = range.max_height;
+}
+
+rsf_backend_result create_alternate(Pipeline& self, uint32_t width, uint32_t height,
+                                    rsf_sr_legacy_adapter** out)
+{
+    return rsf_sr_legacy_create(self.device, width, height, self.sdk_directories[0].c_str(),
+        self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(), self.sdk_directories[3].c_str(),
+        self.units_to_meters, self.log, self.log_user, out);
+}
+
+/* Input conditioning this pipeline does for a backend before it evaluates. The alternate backends
+   condition their own inputs in the legacy adapter, which resolves dense motion with the unwritten
+   sentinel and converts units, so only DLSS declares anything here. Colour transport and colour
+   correction are remedies for DLSS's own behaviour: its auto-exposing presets band in dark linear
+   HDR, and its output is pulled toward the current jittered frame. */
+struct BackendNeeds {
+    bool dense_motion;
+    bool colour_transport;
+    bool colour_correction;
+};
+constexpr BackendNeeds needs_of(uint32_t backend)
+{
+    return backend == RSF_SR_DLSS ? BackendNeeds{true, true, true} : BackendNeeds{false, false, false};
 }
 
 // Undo whatever is currently held, in the reverse of the order it was acquired. Safe to call at any
@@ -243,73 +329,55 @@ void tear_down(Pipeline& self)
     }
 
     // Dropped after the last line above, and dropped at all because the DLSS backend keeps
-    // `from_dlss` as its own sink for the life of the process and that forwards to here. Leaving
-    // these set would hand a later vendor line a `log_user` the caller stopped owning when it
-    // stopped the pipeline.
+    // `forward<dlss_log_prefix>` as its own sink for the life of the process and that forwards to
+    // here. Leaving these set would hand a later vendor line a `log_user` the caller stopped owning
+    // when it stopped the pipeline.
     self.log = nullptr;
     self.log_user = nullptr;
-    self.reported = RSF_DLSS_PIPELINE_OK;
-    self.reported_width = 0;
-    self.reported_height = 0;
+    self.reported = {};
     self.last_evaluated_backend = self.last_evaluated_width = self.last_evaluated_height = 0;
 
     self.layer_consecutive_failures = 0;
     self.layer_given_up = false;
-    self.layer_reported = RSF_DLSS_PIPELINE_OK;
+    self.layer_reported = {};
     std::lock_guard<std::mutex> lock(self.guard);
     self.running = false;
-    self.backend = self.requested_backend = 1;
+    self.backend = self.requested_backend = RSF_SR_DLSS;
     self.last_switch_result = 0;
     self.supported = false;
     self.dump_pending = false;
-    self.layer_frames_evaluated = 0;
-    self.layer_frames_refused = 0;
-    self.layer_last_result = RSF_DLSS_PIPELINE_OK;
-}
-
-rsf_dlss_pipeline_result finish_layer(Pipeline& self, rsf_dlss_pipeline_result result)
-{
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (result == RSF_DLSS_PIPELINE_OK) {
-        ++self.layer_frames_evaluated;
-    } else {
-        ++self.layer_frames_refused;
-    }
-    self.layer_last_result = result;
-    return result;
-}
-
-// Said once per run of the same failure, like the scene's, and for the same reason.
-bool layer_worth_saying(Pipeline& self, rsf_dlss_pipeline_result result)
-{
-    if (self.layer_reported == result) {
-        return false;
-    }
-    self.layer_reported = result;
-    return true;
+    self.layer_counts = {};
 }
 
 // Record the outcome of a frame and hand it back. Every frame that did not reach a successful
 // evaluate counts as refused, whether this code refused it or DLSS did, so that the two counters
 // sum to the well formed frames offered while running and a caller cannot report activity that did
 // not happen. A call that carried no frame at all, or the wrong ABI, is counted as neither.
+rsf_dlss_pipeline_result count(Pipeline& self, Pipeline::Counters& counters, rsf_dlss_pipeline_result result)
+{
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (result == RSF_DLSS_PIPELINE_OK) {
+        ++counters.evaluated;
+    } else {
+        ++counters.refused;
+    }
+    counters.last_result = result;
+    return result;
+}
+
+rsf_dlss_pipeline_result finish_layer(Pipeline& self, rsf_dlss_pipeline_result result)
+{
+    return count(self, self.layer_counts, result);
+}
+
 rsf_dlss_pipeline_result finish(Pipeline& self, rsf_dlss_pipeline_result result)
 {
     if (result == RSF_DLSS_PIPELINE_OK) {
         // A failure that follows a good frame is news again, so the suppression above only ever
         // covers an unbroken run of the same one.
-        self.reported = RSF_DLSS_PIPELINE_OK;
-        self.reported_width = 0;
-        self.reported_height = 0;
+        self.reported = {};
     }
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (result == RSF_DLSS_PIPELINE_OK) {
-        ++self.frames_evaluated;
-    } else {
-        ++self.frames_refused;
-    }
-    self.last_result = result;
-    return result;
+    return count(self, self.scene, result);
 }
 
 } // namespace
@@ -376,7 +444,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
     dlss.engine_version_utf8 = setup->engine_version_utf8;
     dlss.project_id_utf8 = setup->project_id_utf8;
     dlss.require_signature = setup->require_signature;
-    dlss.log = from_dlss;
+    dlss.log = forward<dlss_log_prefix>;
 
     auto* shared = rsf_d3d11_present_host();
     const rsf_dlss_result loaded = shared ? rsf_dlss_share_host(shared, setup->log, setup->log_user) : rsf_dlss_load(&dlss);
@@ -436,46 +504,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
     }
 
     say(self, "creating the %ux%u output target", setup->output_width, setup->output_height);
-    D3D11_TEXTURE2D_DESC description{};
-    description.Width = setup->output_width;
-    description.Height = setup->output_height;
-    description.MipLevels = 1;
-    description.ArraySize = 1;
-    // The format Ace Combat 7's own full resolution colour targets are in, established from a
-    // replayed capture in docs/research/ac7-frame-capture.md. Matching it means the result can go
-    // back where the input came from without a conversion, and it is wide enough for pre-tonemap
-    // values.
-    description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    description.SampleDesc.Count = 1;
-    description.Usage = D3D11_USAGE_DEFAULT;
-    // All three binds: DLSS writes it, whatever reinserts it reads it, and a compute pass may yet
-    // need to touch it. None of them can be added later without recreating the texture.
-    description.BindFlags =
-        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    if (FAILED(device->CreateTexture2D(&description, nullptr, &self.output)) || !self.output) {
+    self.output = create_cleared_target(device, setup->output_width, setup->output_height);
+    if (!self.output) {
         say(self, "the output target could not be created");
         tear_down(self);
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-    }
-
-    // Cleared once, because a fresh texture holds whatever was in that memory and there is no
-    // promise that a reconstruction writes every pixel of it. It does not: a frame whose render
-    // size differs from the one the feature was built for left a corner of this target untouched,
-    // and the previous tenant of that memory showed through as blocks. Black there is honest,
-    // where blocks read as an artifact of the reconstruction rather than as an absence of one.
-    {
-        ID3D11DeviceContext* context = nullptr;
-        ID3D11RenderTargetView* target = nullptr;
-        device->GetImmediateContext(&context);
-        if (context && SUCCEEDED(device->CreateRenderTargetView(self.output, nullptr, &target)) &&
-            target) {
-            const FLOAT black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-            context->ClearRenderTargetView(target, black);
-            target->Release();
-        }
-        if (context) {
-            context->Release();
-        }
     }
 
     {
@@ -484,22 +517,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
         self.output_width = setup->output_width;
         self.output_height = setup->output_height;
         self.quality = setup->quality;
-        self.planned_render_width = plan.render_width;
-        self.planned_render_height = plan.render_height;
-        // A build of the SDK that reports no range is taken to accept the optimal size only,
-        // rather than being read as "any size".
-        self.render_width_min = plan.render_width_min ? plan.render_width_min : plan.render_width;
-        self.render_height_min =
-            plan.render_height_min ? plan.render_height_min : plan.render_height;
-        self.render_width_max = plan.render_width_max ? plan.render_width_max : plan.render_width;
-        self.render_height_max =
-            plan.render_height_max ? plan.render_height_max : plan.render_height;
-        self.frames_evaluated = 0;
-        self.frames_refused = 0;
+        commit_range(self, range_of(plan));
+        self.scene = {};
         // Starting again is the way back from having given up, which the message says.
         self.consecutive_evaluate_failures = 0;
         self.evaluate_given_up = false;
-        self.last_result = RSF_DLSS_PIPELINE_OK;
         self.running = true;
     }
 
@@ -556,7 +578,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     rsf_dlss_quality quality = RSF_DLSS_QUALITY_NATIVE;
     {
         std::lock_guard<std::mutex> lock(self.guard);
-        first = self.frames_evaluated == 0 && self.frames_refused == 0;
+        first = self.scene.evaluated == 0 && self.scene.refused == 0;
         width_min = self.render_width_min;
         height_min = self.render_height_min;
         width_max = self.render_width_max;
@@ -568,7 +590,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
 
     if (frame->render_width < width_min || frame->render_width > width_max ||
         frame->render_height < height_min || frame->render_height > height_max) {
-        if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT, frame->render_width,
+        if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT, frame->render_width,
                          frame->render_height)) {
             say(self,
                 "frame renders at %ux%u, outside the %ux%u to %ux%u DLSS accepts at this quality",
@@ -612,11 +634,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // a few tenths of a pixel at common render widths, coarser than the UNORM16 source. The
         // dense resolve consumes it on D3D11; only its R16G16_FLOAT output is shared with D3D12.
         decode.output_format = DXGI_FORMAT_R32G32_FLOAT;
-        decode.log = from_decode;
+        decode.log = forward<decode_log_prefix>;
         const rsf_motion_decode_result built =
             rsf_motion_decode_create(self.device, &decode, &self.decode);
         if (built != RSF_MOTION_DECODE_OK || !self.decode) {
-            if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED, frame->render_width,
+            if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED, frame->render_width,
                              frame->render_height)) {
                 say(self, "the motion decode pass could not be built (result %d)", int(built));
             }
@@ -641,7 +663,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     const rsf_motion_decode_result decoded =
         rsf_motion_decode_run(self.decode, context_pointer, frame->game_motion, &self.motion);
     if (decoded != RSF_MOTION_DECODE_OK) {
-        if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_MOTION_DECODE_FAILED, frame->render_width,
+        if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_MOTION_DECODE_FAILED, frame->render_width,
                          frame->render_height)) {
             say(self, "the motion decode did not run (result %d)", int(decoded));
         }
@@ -660,6 +682,9 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     // encoding reserved a clear value in the first place.
     camera.has_motion_sentinel = self.motion.zero_means_unwritten ? 1u : 0u;
     camera.motion_sentinel = self.motion.invalid_value;
+    // A caller that gives a scale gives canonical current-minus-previous UV (the native path's
+    // producer measures it). Left at zero, the decode's output is used as it stands.
+    const bool motion_in_uv = camera.motion_scale[0] != 0.0f || camera.motion_scale[1] != 0.0f;
     // Decoded Unreal motion already spans the [-1,1] range Streamline wants, so 1 and 1 leave it
     // alone. The axis directions and the sign of the difference are unverified: they can only be
     // settled against a rendered result, and a flip belongs in the decode's output scale rather
@@ -698,7 +723,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // Worth naming once, and only once: a frame refused for want of jitter is the expected
         // state of Ace Combat 7 until the anti-aliasing gate is patched, so it is not a
         // malfunction and it repeats for as long as the game runs.
-        if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED, frame->render_width,
+        if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED, frame->render_width,
                          frame->render_height)) {
             say(self, "the frame was refused before DLSS saw it (result %d)", int(assembled));
         }
@@ -720,16 +745,15 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         say(self, "cloud motion: unwritten pixels reproject at the nearer of cloud and scene depth");
     }
 
-    if (self.backend == 1 && !camera.camera_motion_included && camera.has_motion_sentinel) {
-        if (!self.dense_motion || self.dense_width != frame->render_width || self.dense_height != frame->render_height) {
-            rsf_motion_resolve* replacement = nullptr;
-            if (!rsf_motion_resolve_create(self.device, frame->render_width, frame->render_height, &replacement))
-                return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
-            rsf_motion_resolve_destroy(self.dense_motion); self.dense_motion = replacement;
-            self.dense_width = frame->render_width; self.dense_height = frame->render_height;
+    const BackendNeeds needs = needs_of(self.backend);
+    if (needs.dense_motion && !camera.camera_motion_included && camera.has_motion_sentinel) {
+        bool rebuilt_resolve = false;
+        if (!rsf::fit_motion_resolve(self.device, frame->render_width, frame->render_height, self.dense_motion,
+                self.dense_width, self.dense_height, &rebuilt_resolve))
+            return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        if (rebuilt_resolve)
             say(self, "DLSS dense motion: explicit unwritten sentinel, preserving valid zero vectors at %ux%u",
                 frame->render_width, frame->render_height);
-        }
         rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
         std::memcpy(resolve.clip_to_previous, dlss_frame.clip_to_prev_clip, sizeof(resolve.clip_to_previous));
         // Canonical sparse inputs are current-minus-previous UV. Resolve emits previous-minus-current pixels.
@@ -745,7 +769,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         dlss_frame.motion_scale_x = 1.0f / float(frame->render_width);
         dlss_frame.motion_scale_y = 1.0f / float(frame->render_height);
     }
-    const bool correct_colour = self.backend == 1 && colour_correction.load(std::memory_order_acquire);
+    const bool correct_colour = needs.colour_correction && colour_correction.load(std::memory_order_acquire);
     if (correct_colour && !self.colour_fidelity) {
         if (!self.colour_fidelity_create_failed &&
             !rsf_colour_fidelity_create(self.device, &self.colour_fidelity)) {
@@ -755,13 +779,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         if (!self.colour_fidelity) return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
         say(self, "DLSS colour correction: current linear scene colour, depth-guarded bounded RGB residual, before native tonemapping");
     }
-    if (self.backend == 1 && rsf_dlss_set_preset(self.dlss_preset) != RSF_DLSS_OK)
-        return finish(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED);
     // DLSS 310's Performance and Ultra Performance defaults (presets M and L) auto-expose and band in
     // AC7's dark linear HDR; a preset choice cannot fix that, since a driver override replaces it.
     // DLSS instead receives an invertible display-range encoding and runs with HDR input off, on
     // every preset, and its output is decoded back to linear before the engine grades it.
-    const bool transported = self.backend == 1 && colour_transport.load(std::memory_order_acquire);
+    const bool transported = needs.colour_transport && colour_transport.load(std::memory_order_acquire);
     if (transported && !self.transport && !self.transport_create_failed &&
         !rsf_colour_transport_create(self.device, &self.transport)) {
         self.transport_create_failed = true;
@@ -778,11 +800,27 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             say(self, "DLSS colour transport: exposed display-range encoding in, HDR input off, decoded to linear with highlight recovery");
         }
     }
-    const rsf_dlss_result evaluated = self.backend == 1 ? rsf_native_fg_evaluate(context_pointer, &dlss_frame) :
-        rsf_sr_legacy_evaluate(self.alternate, context_pointer, &dlss_frame, self.motion.zero_means_unwritten);
-    if (evaluated == RSF_DLSS_OK && rsf_d3d11_present_has_owner() && (!rsf_d3d11_present_host() || self.backend != 1)) {
+    rsf_dlss_result evaluated = RSF_DLSS_OK;
+    if (self.backend == RSF_SR_DLSS) {
+        evaluated = rsf_native_fg_evaluate(context_pointer, &dlss_frame);
+    } else {
+        // The legacy adapter takes canonical UV. The decode's own output, with no scale from the
+        // caller, is current-minus-previous NDC with y up, as the adapter has always read it.
+        rsf_dlss_frame alternate_frame = dlss_frame;
+        if (!motion_in_uv) {
+            alternate_frame.motion_scale_x *= 0.5f;
+            alternate_frame.motion_scale_y *= -0.5f;
+        }
+        evaluated = rsf_sr_legacy_evaluate(self.alternate, context_pointer, &alternate_frame,
+                                           self.motion.zero_means_unwritten);
+    }
+    // Every backend offers its frame to FG capture, which keeps one copy per frame: DLSS through a
+    // Streamline host has already filled the slot in its evaluate. The alternate backends hand over
+    // the adapter's dense inputs.
+    if (evaluated == RSF_DLSS_OK) {
         auto generation_frame = dlss_frame;
-        if (self.backend != 1 && rsf_sr_legacy_fg_inputs(self.alternate, &generation_frame.depth, &generation_frame.motion))
+        if (self.backend != RSF_SR_DLSS &&
+            rsf_sr_legacy_fg_inputs(self.alternate, &generation_frame.depth, &generation_frame.motion))
             generation_frame.camera_motion_included = 1;
         rsf_native_fg_capture(context_pointer, &generation_frame);
     }
@@ -797,7 +835,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
                 "try again. If the log above says NGX create feature failed, a capture layer such "
                 "as RenderDoc is the usual reason: it wraps the device and NGX refuses it",
                 self.consecutive_evaluate_failures, int(evaluated));
-        } else if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED, frame->render_width,
+        } else if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED, frame->render_width,
                                 frame->render_height)) {
             say(self, "SR did not evaluate this frame (result %d)", int(evaluated));
         }
@@ -834,13 +872,13 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             const std::string raw_prefix = prefix + "_output_uncorrected";
             rsf_texture_dump_options raw{}; raw.struct_size = sizeof(raw);
             raw.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; raw.output_prefix_utf8 = raw_prefix.c_str();
-            raw.log = from_dump;
+            raw.log = forward<dump_log_prefix>;
             rsf_dump_texture_bytes(self.device, context_pointer, self.output, &raw);
         }
         if (!rsf_colour_fidelity_run(self.colour_fidelity, context_pointer, frame->scene_color,
                 self.output, dlss_frame.depth, dlss_frame.depth_inverted, camera.jitter_pixels)) {
             self.reset_pending = true;
-            if (worth_saying(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED, frame->render_width,
+            if (worth_saying(self.reported, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED, frame->render_width,
                     frame->render_height))
                 say(self, "DLSS colour correction refused this frame; retaining the native graph");
             return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
@@ -850,43 +888,39 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         // Both sides of the comparison, from the same frame. An upscaled image on its own says
         // nothing: the question is whether it is this scene, sharper, and that needs the input it
         // was made from rather than a different frame's.
-        const std::string input_prefix = prefix + "_input";
-        const std::string output_prefix = prefix + "_output";
         /* The velocity the backend was actually handed, rather than one that merely looks like
            velocity. The observer retains several `R16G16_UNORM` targets and the key dump writes the
            first of them, which is not necessarily the one the pass binds: a flight capture read
            entirely unwritten while the tap was recognising motion in every frame. These two come
            from this frame's own inputs, so what they show is what the backend saw. */
-        const std::string motion_prefix = prefix + "_motion";
-        const std::string decoded_prefix = prefix + "_motion_decoded";
-        const std::string depth_prefix = prefix + "_depth";
         const struct {
             const char* what;
-            const std::string& path;
+            const char* suffix;
             void* texture;
         } targets[] = {
-            {"the scene colour it was given", input_prefix, frame->scene_color},
-            {"the upscaled result", output_prefix, self.output},
-            {"the game velocity it was given", motion_prefix, frame->game_motion},
-            {"the decoded motion it submitted", decoded_prefix,
+            {"the scene colour it was given", "_input", frame->scene_color},
+            {"the upscaled result", "_output", self.output},
+            {"the game velocity it was given", "_motion", frame->game_motion},
+            {"the decoded motion it submitted", "_motion_decoded",
              self.decode ? rsf_motion_decode_texture(self.decode) : nullptr},
-            {"the complete motion it submitted", prefix + "_motion_submitted", dlss_frame.motion},
-            {"the depth it submitted", depth_prefix, frame->depth},
-            {"the engine exposure guide", prefix + "_exposure", frame->exposure},
+            {"the complete motion it submitted", "_motion_submitted", dlss_frame.motion},
+            {"the depth it submitted", "_depth", frame->depth},
+            {"the engine exposure guide", "_exposure", frame->exposure},
         };
 
         for (const auto& target : targets) {
             if (!target.texture) {
                 continue;
             }
-            say(self, "writing %s to %s", target.what, target.path.c_str());
+            const std::string path = prefix + target.suffix;
+            say(self, "writing %s to %s", target.what, path.c_str());
             rsf_texture_dump_options options{};
             options.struct_size = uint32_t(sizeof(options));
             options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
-            options.output_prefix_utf8 = target.path.c_str();
+            options.output_prefix_utf8 = path.c_str();
             options.view = RSF_DUMP_VIEW_RAW;
             options.scale = 1.0f;
-            options.log = from_dump;
+            options.log = forward<dump_log_prefix>;
             rsf_texture_dump_report report{};
             report.struct_size = uint32_t(sizeof(report));
             const rsf_dump_texture_result raw =
@@ -966,14 +1000,14 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(rsf_dlss_pipeli
     status->render_height = self.planned_render_height;
     status->output_width = self.output_width;
     status->output_height = self.output_height;
-    status->frames_evaluated = self.frames_evaluated;
-    status->frames_refused = self.frames_refused;
-    status->last_result = self.last_result;
-    status->layer_frames_evaluated = self.layer_frames_evaluated;
-    status->layer_frames_refused = self.layer_frames_refused;
+    status->frames_evaluated = self.scene.evaluated;
+    status->frames_refused = self.scene.refused;
+    status->last_result = self.scene.last_result;
+    status->layer_frames_evaluated = self.layer_counts.evaluated;
+    status->layer_frames_refused = self.layer_counts.refused;
     status->layer_width = self.layer_width;
     status->layer_height = self.layer_height;
-    status->layer_last_result = self.layer_last_result;
+    status->layer_last_result = self.layer_counts.last_result;
     status->backend = self.backend;
     status->requested_backend = self.requested_backend;
     status->last_switch_result = self.last_switch_result;
@@ -1004,26 +1038,22 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_t wid
     release_layer(self);
 
     say(self, "creating the %ux%u layer output and its zero motion", width, height);
-    D3D11_TEXTURE2D_DESC description{};
-    description.Width = width;
-    description.Height = height;
-    description.MipLevels = 1;
-    description.ArraySize = 1;
-    description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    description.SampleDesc.Count = 1;
-    description.Usage = D3D11_USAGE_DEFAULT;
-    description.BindFlags =
-        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    if (FAILED(self.device->CreateTexture2D(&description, nullptr, &self.layer_output)) ||
-        !self.layer_output) {
+    self.layer_output = create_cleared_target(self.device, width, height);
+    if (!self.layer_output) {
         say(self, "the layer output could not be created");
         release_layer(self);
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
     }
     // Zero motion for the whole layer. Its materials carry no velocity of their own, and the
     // camera's share is derived from the depth by Streamline as for the scene's static geometry.
-    D3D11_TEXTURE2D_DESC motion = description;
+    D3D11_TEXTURE2D_DESC motion{};
+    motion.Width = width;
+    motion.Height = height;
+    motion.MipLevels = 1;
+    motion.ArraySize = 1;
     motion.Format = DXGI_FORMAT_R16G16_FLOAT;
+    motion.SampleDesc.Count = 1;
+    motion.Usage = D3D11_USAGE_DEFAULT;
     motion.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     std::vector<uint32_t> zeros(size_t(width) * size_t(height), 0u);
     D3D11_SUBRESOURCE_DATA initial{};
@@ -1034,21 +1064,6 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_t wid
         say(self, "the layer's zero motion could not be created");
         release_layer(self);
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-    }
-    {
-        ID3D11DeviceContext* context = nullptr;
-        ID3D11RenderTargetView* target = nullptr;
-        self.device->GetImmediateContext(&context);
-        if (context &&
-            SUCCEEDED(self.device->CreateRenderTargetView(self.layer_output, nullptr, &target)) &&
-            target) {
-            const FLOAT clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-            context->ClearRenderTargetView(target, clear);
-            target->Release();
-        }
-        if (context) {
-            context->Release();
-        }
     }
     self.layer_width = width;
     self.layer_height = height;
@@ -1069,7 +1084,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
         return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
     }
     Pipeline& self = pipeline();
-    if (self.backend != 1 || !self.device || !self.streamline_loaded || !self.layer_output || !self.layer_motion) {
+    if (self.backend != RSF_SR_DLSS || !self.device || !self.streamline_loaded || !self.layer_output ||
+        !self.layer_motion) {
         return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
     }
     if (self.layer_given_up) {
@@ -1114,7 +1130,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
     const rsf_frame_assembly_result assembled =
         rsf_assemble_dlss_frame(&camera, &resources, &dlss_frame);
     if (assembled != RSF_FRAME_ASSEMBLY_OK) {
-        if (layer_worth_saying(self, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED)) {
+        if (worth_saying(self.layer_reported, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED)) {
             say(self, "the layer frame was refused before DLSS saw it (result %d)",
                 int(assembled));
         }
@@ -1124,7 +1140,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
     dlss_frame.alpha = 1u;
     {
         std::lock_guard<std::mutex> lock(self.guard);
-        dlss_frame.frame_index = uint32_t(self.frames_evaluated + self.frames_refused);
+        dlss_frame.frame_index = uint32_t(self.scene.evaluated + self.scene.refused);
     }
 
     const rsf_dlss_result evaluated = rsf_dlss_evaluate(context_pointer, &dlss_frame);
@@ -1135,20 +1151,21 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
             say(self, "DLSS failed to integrate the layer %u frames in a row (last result %d), "
                       "so it will not be asked again until the layer is prepared anew",
                 self.layer_consecutive_failures, int(evaluated));
-        } else if (layer_worth_saying(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED)) {
+        } else if (worth_saying(self.layer_reported, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED)) {
             say(self, "DLSS did not integrate the layer this frame (result %d)", int(evaluated));
         }
         return finish_layer(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
     }
-    if (self.layer_frames_evaluated == 0) {
+    if (self.layer_counts.evaluated == 0) {
         say(self, "DLSS integrated the layer at %ux%u, one to one, alpha carried", layer->width,
             layer->height);
     }
     self.layer_consecutive_failures = 0;
-    self.layer_reported = RSF_DLSS_PIPELINE_OK;
+    self.layer_reported = {};
     return finish_layer(self, RSF_DLSS_PIPELINE_OK);
 }
 
+// No caller in the repository; kept as a public entry point. prepare_layer returns the same texture.
 extern "C" void* rsf_dlss_pipeline_layer_output(void)
 {
     return pipeline().layer_output;
@@ -1169,7 +1186,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quali
                                                                   uint32_t* render_height)
 {
     Pipeline& self = pipeline();
-    if (self.backend != 1) {
+    if (self.backend != RSF_SR_DLSS) {
         uint32_t width = 0, height = 0;
         const auto result = rsf_sr_legacy_select(self.alternate, self.backend, quality, &width, &height);
         if (result != 0) return RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED;
@@ -1210,14 +1227,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quali
         self.reset_pending = true;
         self.evaluate_given_up = false;
         self.consecutive_evaluate_failures = 0;
-        self.planned_render_width = plan.render_width;
-        self.planned_render_height = plan.render_height;
-        self.render_width_min = plan.render_width_min ? plan.render_width_min : plan.render_width;
-        self.render_height_min =
-            plan.render_height_min ? plan.render_height_min : plan.render_height;
-        self.render_width_max = plan.render_width_max ? plan.render_width_max : plan.render_width;
-        self.render_height_max =
-            plan.render_height_max ? plan.render_height_max : plan.render_height;
+        commit_range(self, range_of(plan));
     }
     say(self, "quality %u: DLSS renders %ux%u for %ux%u", unsigned(quality), plan.render_width,
         plan.render_height, output_width, output_height);
@@ -1242,30 +1252,24 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_t wid
         if (render_height) *render_height = self.planned_render_height;
         return RSF_DLSS_PIPELINE_OK;
     }
-    uint32_t planned_width = 0, planned_height = 0;
-    uint32_t min_width = 1, min_height = 1, max_width = width, max_height = height;
+    // The alternate backends accept any render size up to the output.
+    RenderRange range{0, 0, 1, 1, width, height};
     using AlternateOwner = std::unique_ptr<rsf_sr_legacy_adapter, decltype(&rsf_sr_legacy_destroy)>;
     AlternateOwner next_alternate(nullptr, rsf_sr_legacy_destroy);
-    if (self.backend == 1) {
+    if (self.backend == RSF_SR_DLSS) {
         rsf_dlss_plan plan{}; plan.struct_size = sizeof(plan);
         plan.output_width = width; plan.output_height = height; plan.quality = self.quality;
         const auto result = rsf_dlss_plan_render_size(&plan);
         if (result != RSF_DLSS_OK || !plan.render_width || !plan.render_height)
             return RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
-        planned_width = plan.render_width; planned_height = plan.render_height;
-        min_width = plan.render_width_min ? plan.render_width_min : planned_width;
-        min_height = plan.render_height_min ? plan.render_height_min : planned_height;
-        max_width = plan.render_width_max ? plan.render_width_max : planned_width;
-        max_height = plan.render_height_max ? plan.render_height_max : planned_height;
+        range = range_of(plan);
     } else {
         rsf_sr_legacy_adapter* created = nullptr;
-        auto result = rsf_sr_legacy_create(self.device, width, height,
-            self.sdk_directories[0].c_str(), self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(),
-            self.sdk_directories[3].c_str(), self.units_to_meters, self.log, self.log_user, &created);
+        auto result = create_alternate(self, width, height, &created);
         next_alternate.reset(created);
         if (result == RSF_BACKEND_OK)
-            result = rsf_sr_legacy_select(created, self.backend, self.quality, &planned_width, &planned_height);
-        if (result != RSF_BACKEND_OK || !planned_width || !planned_height)
+            result = rsf_sr_legacy_select(created, self.backend, self.quality, &range.width, &range.height);
+        if (result != RSF_BACKEND_OK || !range.width || !range.height)
             return RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED;
     }
     D3D11_TEXTURE2D_DESC descriptor{}; self.output->GetDesc(&descriptor);
@@ -1273,7 +1277,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_t wid
     Microsoft::WRL::ComPtr<ID3D11Texture2D> replacement;
     if (FAILED(self.device->CreateTexture2D(&descriptor, nullptr, &replacement)))
         return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-    if (self.backend == 1 && rsf_dlss_release_resources() != RSF_DLSS_OK)
+    if (self.backend == RSF_SR_DLSS && rsf_dlss_release_resources() != RSF_DLSS_OK)
         return RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
     auto* previous_output = self.output;
     auto* previous_alternate = self.alternate;
@@ -1284,14 +1288,12 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_t wid
     {
         std::lock_guard<std::mutex> lock(self.guard);
         self.output_width = width; self.output_height = height;
-        self.planned_render_width = planned_width; self.planned_render_height = planned_height;
-        self.render_width_min = min_width; self.render_height_min = min_height;
-        self.render_width_max = max_width; self.render_height_max = max_height;
+        commit_range(self, range);
     }
     previous_output->Release(); rsf_sr_legacy_destroy(previous_alternate);
-    if (render_width) *render_width = planned_width;
-    if (render_height) *render_height = planned_height;
-    say(self, "output resized to %ux%u; backend %u plans %ux%u", width, height, self.backend, planned_width, planned_height);
+    if (render_width) *render_width = range.width;
+    if (render_height) *render_height = range.height;
+    say(self, "output resized to %ux%u; backend %u plans %ux%u", width, height, self.backend, range.width, range.height);
     return RSF_DLSS_PIPELINE_OK;
 }
 catch (...) { return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
@@ -1301,34 +1303,29 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t ba
 {
     auto& self = pipeline();
     if (!self.device || !self.output) return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
-    if (backend < 1 || backend > 5) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    if (backend < RSF_SR_DLSS || backend > RSF_SR_XESS) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
     { std::lock_guard<std::mutex> lock(self.guard); self.requested_backend = backend; }
-    uint32_t width = 0, height = 0;
-    uint32_t min_width = 1, min_height = 1, max_width = self.output_width, max_height = self.output_height;
+    RenderRange range{0, 0, 1, 1, self.output_width, self.output_height};
     rsf_backend_result result = RSF_BACKEND_OK;
-    if (backend == 1) {
+    if (backend == RSF_SR_DLSS) {
         rsf_dlss_plan plan{}; plan.struct_size = sizeof(plan);
         plan.output_width = self.output_width; plan.output_height = self.output_height; plan.quality = self.quality;
         result = rsf_dlss_plan_render_size(&plan);
-        width = plan.render_width; height = plan.render_height;
-        min_width = plan.render_width_min; min_height = plan.render_height_min;
-        max_width = plan.render_width_max; max_height = plan.render_height_max;
+        // Taken as reported, without range_of's zero defaulting.
+        range = {plan.render_width, plan.render_height, plan.render_width_min, plan.render_height_min,
+                 plan.render_width_max, plan.render_height_max};
         if (result == 0 && self.alternate) result = rsf_sr_legacy_select(self.alternate, RSF_SR_NONE, self.quality, nullptr, nullptr);
         if (result == 0) rsf_dlss_release_resources();
     } else {
-        if (!self.alternate) result = rsf_sr_legacy_create(self.device, self.output_width, self.output_height,
-            self.sdk_directories[0].c_str(), self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(),
-            self.sdk_directories[3].c_str(), self.units_to_meters, self.log, self.log_user, &self.alternate);
-        if (result == 0) result = rsf_sr_legacy_select(self.alternate, backend, self.quality, &width, &height);
+        if (!self.alternate) result = create_alternate(self, self.output_width, self.output_height, &self.alternate);
+        if (result == 0) result = rsf_sr_legacy_select(self.alternate, backend, self.quality, &range.width, &range.height);
     }
     {
         std::lock_guard<std::mutex> lock(self.guard);
         self.last_switch_result = result;
         if (result == 0) {
             self.backend = backend;
-            self.planned_render_width = width; self.planned_render_height = height;
-            self.render_width_min = min_width; self.render_height_min = min_height;
-            self.render_width_max = max_width; self.render_height_max = max_height;
+            commit_range(self, range);
         }
     }
     if (result != 0) {
@@ -1336,9 +1333,9 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t ba
         return RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED;
     }
     self.reset_pending = true; self.evaluate_given_up = false; self.consecutive_evaluate_failures = 0;
-    if (render_width) *render_width = width;
-    if (render_height) *render_height = height;
-    say(self, "selected backend %u: %ux%u", backend, width, height);
+    if (render_width) *render_width = range.width;
+    if (render_height) *render_height = range.height;
+    say(self, "selected backend %u: %ux%u", backend, range.width, range.height);
     return RSF_DLSS_PIPELINE_OK;
 }
 

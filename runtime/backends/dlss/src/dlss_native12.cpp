@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/dlss_native12.h>
+#include "streamline_frame.h"
+#include "streamline_load.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -14,14 +16,11 @@
 #include <sl_dlss.h>
 #include <sl_consts.h>
 #include <DirectXMath.h>
-// The existing DLSS translation unit owns Streamline's non-inline signature verifier.
-namespace sl::security { bool verifyEmbeddedSignature(const wchar_t* path); }
 #endif
 
 struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
-    bool owned_module = false;
     rsf_streamline_host* shared_host = nullptr;
     rsf_quality quality = RSF_QUALITY_QUALITY;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
@@ -36,31 +35,6 @@ struct rsf_dlss_native12 {
     PFun_slDLSSSetOptions* options = nullptr;
 #endif
 };
-#if RSF_HAVE_STREAMLINE
-namespace {
-template<typename T> bool entry(HMODULE module, const char* name, T*& out)
-{
-    out = reinterpret_cast<T*>(reinterpret_cast<void*>(GetProcAddress(module, name)));
-    return out != nullptr;
-}
-sl::DLSSMode mode(rsf_quality quality)
-{
-    switch (quality) {
-    case RSF_QUALITY_NATIVE: return sl::DLSSMode::eDLAA;
-    case RSF_QUALITY_QUALITY: return sl::DLSSMode::eMaxQuality;
-    case RSF_QUALITY_BALANCED: return sl::DLSSMode::eBalanced;
-    case RSF_QUALITY_PERFORMANCE: return sl::DLSSMode::eMaxPerformance;
-    default: return sl::DLSSMode::eUltraPerformance;
-    }
-}
-sl::float4x4 matrix(const float* values)
-{
-    sl::float4x4 out{};
-    for (size_t i = 0; i < 4; ++i) out.row[i] = {values[i*4], values[i*4+1], values[i*4+2], values[i*4+3]};
-    return out;
-}
-}
-#endif
 static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared, rsf_dlss_native12** out) try
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -73,36 +47,34 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     // Shared SR borrows the presentation host; standalone SR owns one registration.
     if (!shared && GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NOT_READY;
     std::unique_ptr<rsf_dlss_native12, decltype(&rsf_dlss_native12_destroy)> context(new rsf_dlss_native12, rsf_dlss_native12_destroy);
-    auto widen = [](const char* text) {
-        int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
-        std::wstring result(length > 0 ? static_cast<size_t>(length) : 0, L'\0');
-        if (length > 0) MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, result.data(), length);
-        return result;
-    };
-    auto path = widen(setup->interposer_path_utf8), directory = widen(setup->plugin_directory_utf8);
-    if (path.empty() || directory.empty()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->require_signature && !sl::security::verifyEmbeddedSignature(path.c_str()))
-        return RSF_BACKEND_ERROR_LOAD_FAILED;
+    std::wstring path, directory;
+    if (!rsf::widen_utf8(setup->interposer_path_utf8, path) || !rsf::widen_utf8(setup->plugin_directory_utf8, directory))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     context->shared_host = shared;
     if (shared) {
+        if (setup->require_signature && !rsf_dlss_verify_runtime_signature(path.c_str()))
+            return RSF_BACKEND_ERROR_LOAD_FAILED;
         rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
         if (rsf_streamline_host_graphics(shared, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
             return RSF_BACKEND_ERROR_WRONG_API;
         context->module = static_cast<HMODULE>(rsf_streamline_host_module(shared));
     } else {
-        context->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        context->owned_module = context->module != nullptr;
+        context->module = rsf::load_interposer(path.c_str(), setup->require_signature != 0, setup->log, setup->log_user);
     }
     if (!context->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    PFun_slInit* init = nullptr;
-    PFun_slSetD3DDevice* set_device = nullptr;
-    PFun_slIsFeatureSupported* support = nullptr;
-    PFun_slGetFeatureFunction* feature = nullptr;
-    if (!entry(context->module, "slInit", init) || !entry(context->module, "slSetD3DDevice", set_device) ||
-        !entry(context->module, "slIsFeatureSupported", support) || !entry(context->module, "slGetFeatureFunction", feature) ||
-        !entry(context->module, "slShutdown", context->shutdown) || !entry(context->module, "slGetNewFrameToken", context->token) ||
-        !entry(context->module, "slSetConstants", context->constants) || !entry(context->module, "slSetTagForFrame", context->tags) ||
-        !entry(context->module, "slEvaluateFeature", context->evaluate) || !entry(context->module, "slFreeResources", context->free_resources))
+    HMODULE module = context->module;
+    auto* init = rsf::entry<PFun_slInit*>(module, "slInit");
+    auto* set_device = rsf::entry<PFun_slSetD3DDevice*>(module, "slSetD3DDevice");
+    auto* support = rsf::entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
+    auto* feature = rsf::entry<PFun_slGetFeatureFunction*>(module, "slGetFeatureFunction");
+    context->shutdown = rsf::entry<PFun_slShutdown*>(module, "slShutdown");
+    context->token = rsf::entry<PFun_slGetNewFrameToken*>(module, "slGetNewFrameToken");
+    context->constants = rsf::entry<PFun_slSetConstants*>(module, "slSetConstants");
+    context->tags = rsf::entry<PFun_slSetTagForFrame*>(module, "slSetTagForFrame");
+    context->evaluate = rsf::entry<PFun_slEvaluateFeature*>(module, "slEvaluateFeature");
+    context->free_resources = rsf::entry<PFun_slFreeResources*>(module, "slFreeResources");
+    if (!init || !set_device || !support || !feature || !context->shutdown || !context->token ||
+        !context->constants || !context->tags || !context->evaluate || !context->free_resources)
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     const wchar_t* paths[] = {directory.c_str()};
     sl::Feature features[] = {sl::kFeatureDLSS};
@@ -151,7 +123,7 @@ rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t w
     if (!context || !width || !height || !render_width || !render_height || quality > RSF_QUALITY_ULTRA_PERFORMANCE)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if RSF_HAVE_STREAMLINE
-    sl::DLSSOptions options{}; options.mode = mode(quality); options.outputWidth = width; options.outputHeight = height;
+    sl::DLSSOptions options{}; options.mode = rsf::dlss_mode(quality); options.outputWidth = width; options.outputHeight = height;
     sl::DLSSOptimalSettings settings{};
     if (context->optimal(options, settings) != sl::Result::eOk || !settings.optimalRenderWidth || !settings.optimalRenderHeight)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -164,10 +136,12 @@ rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t w
 }
 rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame)
 {
-    if (!context || !list || !frame || frame->struct_size < sizeof(*frame) || !frame->record ||
-        !frame->color.resource || !frame->depth.resource || !frame->motion.resource || !frame->output.resource)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!context || !list) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if RSF_HAVE_STREAMLINE
+    // The same checks FSR and XeSS apply, so the three backends accept the same frames.
+    auto valid = rsf::validate_frame(frame);
+    if (valid == RSF_BACKEND_OK) valid = rsf::validate_d3d12_resources(*frame, context->device.Get());
+    if (valid != RSF_BACKEND_OK) return valid;
     const auto& record = *frame->record;
     const auto& camera = record.camera;
     uint32_t index = static_cast<uint32_t>(record.frame_id);
@@ -179,15 +153,15 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     // The shared host reserves viewport zero for completed-frame generation.
     sl::ViewportHandle viewport(context->shared_host ? 1u : 0u);
     sl::Constants constants{};
-    constants.cameraViewToClip = matrix(camera.view_to_clip); constants.clipToCameraView = matrix(camera.clip_to_view);
-    constants.clipToPrevClip = matrix(camera.clip_to_previous_clip);
+    constants.cameraViewToClip = rsf::sl_matrix(camera.view_to_clip); constants.clipToCameraView = rsf::sl_matrix(camera.clip_to_view);
+    constants.clipToPrevClip = rsf::sl_matrix(camera.clip_to_previous_clip);
     DirectX::XMFLOAT4X4 copied{}, inverted{};
     std::memcpy(&copied, camera.clip_to_previous_clip, sizeof(copied));
     DirectX::XMVECTOR determinant{};
     DirectX::XMStoreFloat4x4(&inverted, DirectX::XMMatrixInverse(&determinant, DirectX::XMLoadFloat4x4(&copied)));
     const float det = DirectX::XMVectorGetX(determinant);
     if (!std::isfinite(det) || std::abs(det) < 1e-12f) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    constants.prevClipToClip = matrix(&inverted.m[0][0]);
+    constants.prevClipToClip = rsf::sl_matrix(&inverted.m[0][0]);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
     constants.mvecScale = {1.0f / record.render_width, 1.0f / record.render_height};
     constants.cameraPinholeOffset = {0, 0};
@@ -204,7 +178,7 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     constants.motionVectorsInvalidValue = std::numeric_limits<float>::max();
     constants.reset = frame->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     if (context->constants(constants, *token, viewport) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    sl::DLSSOptions options{}; options.mode = mode(context->quality);
+    sl::DLSSOptions options{}; options.mode = rsf::dlss_mode(context->quality);
     options.outputWidth = record.output_width; options.outputHeight = record.output_height;
     options.colorBuffersHDR = sl::Boolean::eTrue; options.useAutoExposure = sl::Boolean::eTrue;
     if (context->options(viewport, options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -224,6 +198,7 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     return context->evaluate(sl::kFeatureDLSS, *token, inputs, 1, list) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 #else
+    (void)frame;
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
@@ -233,6 +208,6 @@ void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 #if RSF_HAVE_STREAMLINE
     if (context->initialized && context->shutdown) context->shutdown();
 #endif
-    if (context->module && context->owned_module) FreeLibrary(context->module);
+    if (context->module && !context->shared_host) FreeLibrary(context->module);
     delete context;
 }

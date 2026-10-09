@@ -100,18 +100,6 @@ rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
 /* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
 rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
 
-/* Requested model for viewport0, independent of render quality. Zero lets NVIDIA choose.
-   E/F are legacy; J/K/L/M are current. Driver overrides may take precedence. */
-typedef uint32_t rsf_dlss_preset;
-#define RSF_DLSS_PRESET_AUTO ((rsf_dlss_preset)0)
-#define RSF_DLSS_PRESET_E ((rsf_dlss_preset)5)
-#define RSF_DLSS_PRESET_F ((rsf_dlss_preset)6)
-#define RSF_DLSS_PRESET_J ((rsf_dlss_preset)10)
-#define RSF_DLSS_PRESET_K ((rsf_dlss_preset)11)
-#define RSF_DLSS_PRESET_L ((rsf_dlss_preset)12)
-#define RSF_DLSS_PRESET_M ((rsf_dlss_preset)13)
-rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset);
-
 typedef struct rsf_dlss_support {
     uint32_t struct_size;
     uint32_t supported;

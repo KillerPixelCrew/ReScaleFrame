@@ -228,11 +228,6 @@ rsf_backend_result after(void* pointer)
         status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS;
     return RSF_BACKEND_OK;
 }
-rsf_backend_result status(void* pointer, rsf_fg_status* out)
-{
-    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = static_cast<XegSession*>(pointer)->state; return RSF_BACKEND_OK;
-}
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -244,26 +239,9 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
     auto& self = *static_cast<XegSession*>(pointer);
     self.history_valid = false; self.state.active = 0; return RSF_BACKEND_OK;
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<XegSession>, retirement, destroy, abort_frame};
 }
 extern "C" const rsf_generation_provider* rsf_generation_xess() { return &provider; }
 #else
-namespace {
-rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
-{
-    const auto result = rsf::fg_setup_header(setup, out, chain);
-    return result != 0 ? result : RSF_BACKEND_ERROR_NOT_COMPILED;
-}
-rsf_backend_result configure(void*, const rsf_fg_options*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result begin(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result after(void*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result status(void*, rsf_fg_status*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result retirement(void*, rsf_fg_retirement*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-void destroy(void*) {}
-rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
-}
-extern "C" const rsf_generation_provider* rsf_generation_xess() { return &provider; }
+extern "C" const rsf_generation_provider* rsf_generation_xess() { return rsf::not_compiled_provider(); }
 #endif

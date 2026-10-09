@@ -1,20 +1,21 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include <rescaleframe/ui_layer.h>
 
+#include <rescaleframe/log.h>
+
 #include <windows.h>
 
 #include <d3d11.h>
+#include <wrl/client.h>
 
-#include <cstdarg>
-#include <cstdio>
 #include <new>
 
 struct rsf_ui_layer {
-    ID3D11Device* device = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
     struct Slot {
-        ID3D11Texture2D* texture = nullptr;
-        ID3D11RenderTargetView* target = nullptr;
-        ID3D11ShaderResourceView* source = nullptr;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> source;
     };
     Slot slots[RSF_UI_LAYER_RING];
     uint32_t width = 0;
@@ -29,23 +30,6 @@ struct rsf_ui_layer {
     rsf_ui_layer_log_fn log = nullptr;
     void* log_user = nullptr;
 };
-
-namespace {
-
-void say(const rsf_ui_layer* layer, const char* format, ...)
-{
-    char message[512];
-    va_list arguments;
-    if (!layer || !layer->log) {
-        return;
-    }
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    layer->log(layer->log_user, message);
-}
-
-} // namespace
 
 extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
                                                    const rsf_ui_layer_setup* setup,
@@ -68,7 +52,6 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
         return RSF_UI_LAYER_ERROR_RESOURCE_FAILED;
     }
     layer->device = device;
-    layer->device->AddRef();
     layer->width = setup->width;
     layer->height = setup->height;
     layer->shareable = setup->shareable ? 1u : 0u;
@@ -106,7 +89,8 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
                composites but cannot be handed to a D3D12 vendor is far better than no layer, and
                the alternative is a run that produces no interface at all. */
             if (layer->shareable) {
-                say(layer, "ui layer: shared creation refused, retrying without sharing");
+                rsf::say(layer->log, layer->log_user,
+                         "ui layer: shared creation refused, retrying without sharing");
                 description.MiscFlags = 0;
                 layer->shareable = 0;
                 if (FAILED(device->CreateTexture2D(&description, nullptr, &slot.texture)) ||
@@ -140,8 +124,8 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
             target_desc = &target_view;
             source_desc = &source_view;
         }
-        if (FAILED(device->CreateRenderTargetView(slot.texture, target_desc, &slot.target)) ||
-            FAILED(device->CreateShaderResourceView(slot.texture, source_desc, &slot.source))) {
+        if (FAILED(device->CreateRenderTargetView(slot.texture.Get(), target_desc, &slot.target)) ||
+            FAILED(device->CreateShaderResourceView(slot.texture.Get(), source_desc, &slot.source))) {
             rsf_ui_layer_destroy(layer);
             return RSF_UI_LAYER_ERROR_RESOURCE_FAILED;
         }
@@ -154,34 +138,21 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_create(void* device_pointer,
     if (context) {
         const FLOAT nothing[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         for (auto& slot : layer->slots) {
-            context->ClearRenderTargetView(slot.target, nothing);
+            context->ClearRenderTargetView(slot.target.Get(), nothing);
             ++layer->clears;
         }
         context->Release();
     }
 
-    say(layer, "ui layer: %ux%u R8G8B8A8_UNORM, %u deep, %s", setup->width, setup->height,
-        (unsigned)RSF_UI_LAYER_RING, layer->shareable ? "shareable" : "not shared");
+    rsf::say(layer->log, layer->log_user, "ui layer: %ux%u R8G8B8A8_UNORM, %u deep, %s",
+             setup->width, setup->height, (unsigned)RSF_UI_LAYER_RING,
+             layer->shareable ? "shareable" : "not shared");
     *out = layer;
     return RSF_UI_LAYER_OK;
 }
 
 extern "C" void rsf_ui_layer_destroy(rsf_ui_layer* layer)
 {
-    if (!layer) {
-        return;
-    }
-    auto drop = [](auto* item) {
-        if (item) {
-            item->Release();
-        }
-    };
-    for (auto& slot : layer->slots) {
-        drop(slot.source);
-        drop(slot.target);
-        drop(slot.texture);
-    }
-    drop(layer->device);
     delete layer;
 }
 
@@ -201,7 +172,7 @@ extern "C" rsf_ui_layer_result rsf_ui_layer_begin_frame(rsf_ui_layer* layer, voi
     ++layer->frames_begun;
 
     const FLOAT nothing[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    context->ClearRenderTargetView(layer->slots[layer->slot].target, nothing);
+    context->ClearRenderTargetView(layer->slots[layer->slot].target.Get(), nothing);
     ++layer->clears;
     return RSF_UI_LAYER_OK;
 }
@@ -211,7 +182,7 @@ extern "C" void* rsf_ui_layer_target(rsf_ui_layer* layer)
     if (!layer || !layer->started) {
         return nullptr;
     }
-    return layer->slots[layer->slot].target;
+    return layer->slots[layer->slot].target.Get();
 }
 
 extern "C" void* rsf_ui_layer_source(rsf_ui_layer* layer)
@@ -219,7 +190,7 @@ extern "C" void* rsf_ui_layer_source(rsf_ui_layer* layer)
     if (!layer || !layer->started) {
         return nullptr;
     }
-    return layer->slots[layer->slot].source;
+    return layer->slots[layer->slot].source.Get();
 }
 
 extern "C" void* rsf_ui_layer_texture(rsf_ui_layer* layer)
@@ -227,7 +198,7 @@ extern "C" void* rsf_ui_layer_texture(rsf_ui_layer* layer)
     if (!layer || !layer->started) {
         return nullptr;
     }
-    return layer->slots[layer->slot].texture;
+    return layer->slots[layer->slot].texture.Get();
 }
 
 extern "C" void rsf_ui_layer_mark_written(rsf_ui_layer* layer)

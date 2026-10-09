@@ -99,14 +99,18 @@ pub unsafe extern "C" fn rsf_overlay_frame(
         return RSF_OVERLAY_ERROR_PANICKED;
     }
 
-    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        frame_inner(&mut handle.overlay, input, stats, draw_data, intent)
-    }));
-    match result {
-        Ok(code) => code,
+    guarded(handle, RSF_OVERLAY_ERROR_PANICKED, |overlay| unsafe {
+        frame_inner(overlay, input, stats, draw_data, intent)
+    })
+}
+
+/// Run `body` on the handle's overlay, poisoning the handle and returning `on_panic` if it panics.
+fn guarded<T>(handle: &mut RsfOverlay, on_panic: T, body: impl FnOnce(&mut Overlay) -> T) -> T {
+    match catch_unwind(AssertUnwindSafe(|| body(&mut handle.overlay))) {
+        Ok(value) => value,
         Err(_) => {
             handle.poisoned = true;
-            RSF_OVERLAY_ERROR_PANICKED
+            on_panic
         }
     }
 }
@@ -131,8 +135,8 @@ pub unsafe extern "C" fn rsf_overlay_texture_updates(
         return 0;
     }
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let taken = handle.overlay.drain_texture_updates(max_updates as usize);
+    guarded(handle, 0, |overlay| {
+        let taken = overlay.drain_texture_updates(max_updates as usize);
         for (index, update) in taken.iter().enumerate() {
             let entry = RsfOverlayTextureUpdate {
                 id: update.id,
@@ -146,14 +150,7 @@ pub unsafe extern "C" fn rsf_overlay_texture_updates(
             unsafe { updates.add(index).write(entry) };
         }
         taken.len() as u32
-    }));
-    match result {
-        Ok(written) => written,
-        Err(_) => {
-            handle.poisoned = true;
-            0
-        }
-    }
+    })
 }
 
 /// Collect the ids of textures the overlay has finished with. Drains like
@@ -174,20 +171,13 @@ pub unsafe extern "C" fn rsf_overlay_textures_to_free(
         return 0;
     }
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let taken = handle.overlay.drain_textures_to_free(max_ids as usize);
+    guarded(handle, 0, |overlay| {
+        let taken = overlay.drain_textures_to_free(max_ids as usize);
         for (index, id) in taken.iter().enumerate() {
             unsafe { ids.add(index).write(*id) };
         }
         taken.len() as u32
-    }));
-    match result {
-        Ok(written) => written,
-        Err(_) => {
-            handle.poisoned = true;
-            0
-        }
-    }
+    })
 }
 
 /// # Safety
@@ -248,17 +238,18 @@ unsafe fn frame_inner(
             performance_hud: u32::from(produced.performance_hud),
             frame_limit_changed: u32::from(produced.frame_limit_changed),
             frame_limit_us: produced.frame_limit_us,
-            dump_requested: u32::from(produced.dump_requested),
-            start_requested: u32::from(produced.start_requested),
-            debug_view_changed: u32::from(produced.debug_view_changed),
-            debug_view: u32::from(produced.debug_view),
-            reinsert_changed: u32::from(produced.reinsert_changed),
-            reinsert: u32::from(produced.reinsert),
-            scale_requested: u32::from(produced.scale_requested),
-            scale_percent: produced.scale_percent,
-            capture_requested: u32::from(produced.capture_requested),
-            jitter_changed: u32::from(produced.jitter_changed),
-            jitter: u32::from(produced.jitter),
+            // The panel offers none of these; the fields stay in the header for older hosts.
+            dump_requested: 0,
+            start_requested: 0,
+            debug_view_changed: 0,
+            debug_view: 0,
+            reinsert_changed: 0,
+            reinsert: 0,
+            scale_requested: 0,
+            scale_percent: 0,
+            capture_requested: 0,
+            jitter_changed: 0,
+            jitter: 0,
             backend_changed: u32::from(produced.backend_changed),
             backend: produced.backend,
         };
@@ -308,34 +299,12 @@ fn slice_ptr<T>(slice: &[T]) -> *const T {
 unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
-        backend_supported: stats.backend_supported != 0,
-        backend_name: unsafe { borrow_str(stats.backend_name) },
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
-        render: [stats.render_width, stats.render_height],
-        output: [stats.output_width, stats.output_height],
-        frames_presented: stats.frames_presented,
-        frames_evaluated: stats.frames_evaluated,
-        frames_refused: stats.frames_refused,
-        last_result: stats.last_result,
-        have_scene_color: stats.have_scene_color != 0,
-        have_depth: stats.have_depth != 0,
-        have_motion: stats.have_motion != 0,
-        have_exposure: stats.have_exposure != 0,
-        motion_decoded: stats.motion_decoded != 0,
-        jitter_active: stats.jitter_active != 0,
-        jitter_pixels: stats.jitter_pixels,
         quality: Quality::from_abi(stats.quality),
         quality_raw: stats.quality,
         enabled: stats.enabled != 0,
-        debug_view_on: stats.debug_view_on != 0,
-        reinsert_on: stats.reinsert_on != 0,
-        reinsert_available: stats.reinsert_available != 0,
-        render_scale_percent: stats.render_scale_percent,
-        captures_written: stats.captures_written,
-        jitter_gate_on: stats.jitter_on != 0,
-        jitter_gate_available: stats.jitter_available != 0,
         backend: stats.backend,
-        requested_backend: stats.requested_backend,
+        backend_choices: stats.sr_backend_choices,
         last_switch_result: stats.last_switch_result,
         generation: crate::model::GenerationStats {
             backend: stats.fg_backend,
@@ -480,6 +449,7 @@ mod tests {
             fg_requested_backend: 0,
             fg_backend_choices: 0,
             fg_selection_result: 0,
+            sr_backend_choices: 0,
         }
     }
 
@@ -641,7 +611,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 9);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 10);
     }
 
     #[test]

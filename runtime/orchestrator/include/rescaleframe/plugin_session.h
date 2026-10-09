@@ -23,6 +23,8 @@ typedef struct rsf_plugin_session_options {
 RSF_RUNTIME_API rsf_result rsf_plugin_session_prepare(const rsf_plugin_session_options*, rsf_plugin_session** out);
 RSF_RUNTIME_API rsf_result rsf_plugin_session_start(rsf_plugin_session*);
 RSF_RUNTIME_API rsf_result rsf_plugin_session_quiesce(rsf_plugin_session*);
+/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+   work (see docs/representation-plan.md). Do not delete as dead code. */
 RSF_RUNTIME_API rsf_result rsf_plugin_session_status(rsf_plugin_session*, rsf_game_renderer_status*);
 RSF_RUNTIME_API rsf_result rsf_plugin_session_stop(rsf_plugin_session*);
 #ifdef __cplusplus

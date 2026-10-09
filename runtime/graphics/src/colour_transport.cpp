@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/colour_transport.h>
 #include <rescaleframe/d3d11_state.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_cache.h>
+#include <rescaleframe/srv_format.h>
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <new>
 using Microsoft::WRL::ComPtr;
@@ -68,36 +70,18 @@ struct rsf_colour_transport {
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Texture2D> encoded, scratch;
     ComPtr<ID3D11UnorderedAccessView> encoded_target, scratch_target;
+    // The source, the exposure scalar and the scene are engine targets that come back every frame.
+    rsf::SrvCache<8> sources;
     uint32_t encoded_width = 0, encoded_height = 0;
     D3D11_TEXTURE2D_DESC scratch_desc{};
 };
 namespace {
-bool compile(ID3D11Device* device, const char* entry, ComPtr<ID3D11ComputeShader>& out)
-{
-    HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) return false;
-    auto compile = reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
-    ComPtr<ID3DBlob> code, errors;
-    HRESULT result = compile ? compile(shaders, sizeof(shaders) - 1, "ColourTransport", nullptr, nullptr, entry,
-        "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &code, &errors) : E_FAIL;
-    if (SUCCEEDED(result)) result = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out);
-    // Blob vtables live in the compiler module. Drop both before unloading it.
-    code.Reset(); errors.Reset(); FreeLibrary(module);
-    return SUCCEEDED(result);
-}
-DXGI_FORMAT typed(DXGI_FORMAT format)
-{
-    if (format == DXGI_FORMAT_R16G16B16A16_TYPELESS) return DXGI_FORMAT_R16G16B16A16_FLOAT;
-    if (format == DXGI_FORMAT_R32G32B32A32_TYPELESS) return DXGI_FORMAT_R32G32B32A32_FLOAT;
-    return format;
-}
-bool view_of(ID3D11Device* device, ID3D11Texture2D* texture, ComPtr<ID3D11ShaderResourceView>& out)
+bool view_of(rsf_colour_transport& self, ID3D11Texture2D* texture, ID3D11ShaderResourceView*& out)
 {
     D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
     if (desc.SampleDesc.Count != 1) return false;
-    D3D11_SHADER_RESOURCE_VIEW_DESC view{}; view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; view.Texture2D.MipLevels = 1;
-    view.Format = typed(desc.Format);
-    return SUCCEEDED(device->CreateShaderResourceView(texture, &view, &out));
+    out = self.sources.get(self.device.Get(), texture, rsf::srv_format(desc.Format));
+    return out != nullptr;
 }
 bool run(rsf_colour_transport& self, ID3D11DeviceContext* context, ID3D11ComputeShader* shader,
     ID3D11Texture2D* source, ID3D11Texture2D* exposure, ID3D11UnorderedAccessView* target, uint32_t width, uint32_t height,
@@ -105,18 +89,18 @@ bool run(rsf_colour_transport& self, ID3D11DeviceContext* context, ID3D11Compute
 {
     D3D11_TEXTURE2D_DESC desc{}; source->GetDesc(&desc);
     if (desc.Width < width || desc.Height < height) return false;
-    ComPtr<ID3D11ShaderResourceView> source_view, exposure_view, scene_view;
-    if (!view_of(self.device.Get(), source, source_view)) return false;
+    ID3D11ShaderResourceView *source_view = nullptr, *exposure_view = nullptr, *scene_view = nullptr;
+    if (!view_of(self, source, source_view)) return false;
     if (exposure) {
         D3D11_TEXTURE2D_DESC scalar{}; exposure->GetDesc(&scalar);
-        if (scalar.Format != DXGI_FORMAT_R32_FLOAT || FAILED(self.device->CreateShaderResourceView(exposure, nullptr, &exposure_view)))
-            return false;
+        if (scalar.Format != DXGI_FORMAT_R32_FLOAT ||
+            !(exposure_view = self.sources.get(self.device.Get(), exposure, DXGI_FORMAT_R32_FLOAT))) return false;
     }
     Constants constants{{width, height}, exposure_view ? 1u : 0u, 0u, {}, {}, {highlights.jitter[0], highlights.jitter[1]}, {}};
     if (highlights.scene) {
         D3D11_TEXTURE2D_DESC scene{}; highlights.scene->GetDesc(&scene);
         if (!highlights.width || !highlights.height || scene.Width < highlights.width || scene.Height < highlights.height ||
-            !view_of(self.device.Get(), highlights.scene, scene_view)) return false;
+            !view_of(self, highlights.scene, scene_view)) return false;
         constants.has_scene = 1;
         constants.scene_view[0] = float(highlights.width); constants.scene_view[1] = float(highlights.height);
         // The view can be a sub-rectangle of a larger texture: normalise against the texture.
@@ -127,7 +111,7 @@ bool run(rsf_colour_transport& self, ID3D11DeviceContext* context, ID3D11Compute
     context->SetPredication(nullptr, FALSE);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     context->UpdateSubresource(self.constants.Get(), 0, nullptr, &constants, 0, 0);
-    ID3D11ShaderResourceView* views[] = {source_view.Get(), exposure_view.Get(), scene_view.Get()};
+    ID3D11ShaderResourceView* views[] = {source_view, exposure_view, scene_view};
     ID3D11Buffer* buffers[] = {self.constants.Get()};
     ID3D11SamplerState* samplers[] = {self.sampler.Get()};
     context->CSSetShader(shader, nullptr, 0);
@@ -154,7 +138,8 @@ extern "C" int rsf_colour_transport_create(void* device, rsf_colour_transport** 
     sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
-    if (!compile(self->device.Get(), "encode", self->encode) || !compile(self->device.Get(), "decode", self->decode) ||
+    if (!rsf::compile_compute(self->device.Get(), shaders, "ColourTransport", "encode", &self->encode) ||
+        !rsf::compile_compute(self->device.Get(), shaders, "ColourTransport", "decode", &self->decode) ||
         FAILED(self->device->CreateBuffer(&buffer, nullptr, &self->constants)) ||
         FAILED(self->device->CreateSamplerState(&sampler, &self->sampler))) { delete self; return 0; }
     *out = self; return 1;
@@ -191,7 +176,7 @@ extern "C" int rsf_colour_transport_decode(rsf_colour_transport* self, void* con
         D3D11_TEXTURE2D_DESC scratch = desc;
         scratch.MipLevels = scratch.ArraySize = 1; scratch.Usage = D3D11_USAGE_DEFAULT; scratch.CPUAccessFlags = 0; scratch.MiscFlags = 0;
         scratch.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-        D3D11_UNORDERED_ACCESS_VIEW_DESC view{}; view.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D; view.Format = typed(desc.Format);
+        D3D11_UNORDERED_ACCESS_VIEW_DESC view{}; view.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D; view.Format = rsf::srv_format(desc.Format);
         if (FAILED(self->device->CreateTexture2D(&scratch, nullptr, &self->scratch)) ||
             FAILED(self->device->CreateUnorderedAccessView(self->scratch.Get(), &view, &self->scratch_target))) return 0;
         self->scratch_desc = desc;

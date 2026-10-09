@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+   work (see docs/representation-plan.md). Do not delete as dead code. */
 /* Choosing who reconstructs and who generates, and saying why when the answer is nobody.
  *
  * With one vendor this was a question nobody had to ask. With three it is the question, because the

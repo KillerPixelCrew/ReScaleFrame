@@ -1,9 +1,10 @@
 // Drive the frame tap's render target watch the way a game's frame tail drives it: bind a target,
 // bind inputs, draw, and check that what comes back describes the draw that was made.
 //
-// The reconstruction input set is not exercised here. It is recognised from a combination of
-// textures that only a real engine frame produces, and a synthetic imitation of it would test the
-// imitation. The watch is different: it reports the game's own draw with no rule about what
+// The reconstruction input set is recognised from a combination of textures that only a real engine
+// frame produces, so what is checked at the end is the mechanism: that the caller's role table and
+// nothing else decides which bound textures are the set, not that a particular game's frame is
+// recognised. The watch is different: it reports the game's own draw with no rule about what
 // qualifies, so a synthetic draw is the same draw a game makes.
 //
 // The draws are real ones, with shaders and an index buffer, even though nothing here looks at a
@@ -836,6 +837,65 @@ float4 ps() : SV_Target { return float4(1,0,0,1); }
     vs->Release();
 }
 
+// The input set as the tap's pass callback reports it.
+struct PassRecord {
+    unsigned count = 0;
+    void* scene_color = nullptr;
+    void* history = nullptr;
+    void* motion = nullptr;
+    void* depth = nullptr;
+    void* exposure = nullptr;
+    uint32_t render_width = 0;
+    uint32_t render_height = 0;
+    uint32_t scene_color_format = 0;
+};
+
+void collect_pass(void* user, const rsf_frame_tap_pass* pass)
+{
+    auto& record = *static_cast<PassRecord*>(user);
+    ++record.count;
+    record.scene_color = pass->scene_color;
+    record.history = pass->history;
+    record.motion = pass->motion;
+    record.depth = pass->depth;
+    record.exposure = pass->exposure;
+    record.render_width = pass->render_width;
+    record.render_height = pass->render_height;
+    record.scene_color_format = pass->scene_color_format;
+}
+
+// A role table of the shape a game hands the tap. Which format is which role is the table's
+// business; the tap only matches.
+const rsf_role_rule test_rules[] = {
+    {RSF_ROLE_EXPOSURE, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_FIXED_SIZE, DXGI_FORMAT_R32G32_FLOAT, 0, 1,
+     1},
+    {RSF_ROLE_MOTION, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R16G16_UNORM,
+     D3D11_BIND_RENDER_TARGET, 0, 0},
+    {RSF_ROLE_DEPTH, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_ANY_DEPTH_FORMAT,
+     0, D3D11_BIND_DEPTH_STENCIL, 0, 0},
+    {RSF_ROLE_HISTORY, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED,
+     DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0},
+    {RSF_ROLE_SCENE_COLOR, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED,
+     DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET, 0, 0},
+};
+const rsf_role_table test_roles = {sizeof(rsf_role_table), test_rules,
+                                   uint32_t(sizeof(test_rules) / sizeof(test_rules[0]))};
+
+// Install a tap that wants the input set, with or without a table.
+rsf_frame_tap_result install_for_passes(ID3D11DeviceContext* context, PassRecord* record,
+                                        const rsf_role_table* roles)
+{
+    rsf_frame_tap_options options{};
+    options.struct_size = sizeof(options);
+    options.abi_version = RSF_FRAME_TAP_ABI_VERSION;
+    options.on_pass = collect_pass;
+    options.on_pass_user = record;
+    options.output_width = 512;
+    options.output_height = 288;
+    options.roles = roles;
+    return rsf_frame_tap_install(context, &options);
+}
+
 } // namespace
 
 int main()
@@ -868,6 +928,25 @@ int main()
 
     check(rsf_frame_tap_install(context, nullptr) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
           "A missing options structure must be rejected.");
+    {
+        rsf_role_rule oversized[RSF_FRAME_TAP_MAX_ROLE_RULES + 1]{};
+        rsf_role_table too_long = {sizeof(rsf_role_table), oversized,
+                                   RSF_FRAME_TAP_MAX_ROLE_RULES + 1};
+        rsf_role_table short_table = test_roles;
+        short_table.struct_size = sizeof(rsf_role_table) - 4;
+        rsf_role_table no_rules = test_roles;
+        no_rules.rules = nullptr;
+        rsf_frame_tap_options bad = options;
+        bad.roles = &too_long;
+        check(rsf_frame_tap_install(context, &bad) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "A role table longer than the tap holds must be refused, not truncated.");
+        bad.roles = &short_table;
+        check(rsf_frame_tap_install(context, &bad) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "A short role table must be refused.");
+        bad.roles = &no_rules;
+        check(rsf_frame_tap_install(context, &bad) == RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT,
+              "A role table that counts rules and has none must be refused.");
+    }
     options.abi_version = RSF_FRAME_TAP_ABI_VERSION + 1u;
     check(rsf_frame_tap_install(context, &options) == RSF_FRAME_TAP_ERROR_ABI_MISMATCH,
           "An incompatible ABI must be rejected.");
@@ -1555,6 +1634,130 @@ int main()
     context->OMSetRenderTargets(1, &composite_view, nullptr);
     context->Draw(3, 0);
     check(reports.empty(), "Nothing may be reported once the tap is uninstalled.");
+
+    // Nothing reads the shader resource shadow in a tap with no callbacks, so it is not kept; when
+    // something starts to read it, it is seeded from what the context already has bound.
+    stage("a shadow wanted late is seeded from the context");
+    {
+        rsf_frame_tap_options bare{};
+        bare.struct_size = sizeof(bare);
+        bare.abi_version = RSF_FRAME_TAP_ABI_VERSION;
+        check(rsf_frame_tap_install(context, &bare) == RSF_FRAME_TAP_OK,
+              "A tap with no callbacks must install.");
+        reports.clear();
+        set_viewport(context, 128.0f, 72.0f);
+        context->OMSetRenderTargets(1, &other_view, nullptr);
+        context->PSSetShaderResources(2, 1, &source_view);
+        context->Draw(3, 0);
+        check(rsf_frame_tap_set_research_callbacks(collect_target_draw, nullptr, nullptr) ==
+                  RSF_FRAME_TAP_OK,
+              "Research callbacks must be accepted.");
+        context->Draw(3, 0);
+        check(reports.size() == 1 && reports[0].inputs.size() == 1 &&
+                  reports[0].inputs[0].slot == 2 && reports[0].inputs[0].texture == source,
+              "A binding made before anything read the shadow must be seen once something does.");
+        rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
+        check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK, "Uninstalling must succeed.");
+        ID3D11ShaderResourceView* no_view = nullptr;
+        context->PSSetShaderResources(2, 1, &no_view);
+    }
+
+    // The input set is whatever the caller's role table says it is. Sizes are judged against the
+    // 512x288 presented size, so 384x216 is a render scale of three quarters.
+    stage("recognising the input set through a role table");
+    {
+        ID3D11Texture2D* motion = make_target(device, 384, 216, DXGI_FORMAT_R16G16_UNORM);
+        ID3D11Texture2D* colour = make_target(device, 384, 216, DXGI_FORMAT_R11G11B10_FLOAT);
+        ID3D11Texture2D* history = make_target(device, 384, 216, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        ID3D11Texture2D* exposure = make_target(device, 1, 1, DXGI_FORMAT_R32G32_FLOAT);
+        D3D11_TEXTURE2D_DESC depth_description{};
+        depth_description.Width = 384;
+        depth_description.Height = 216;
+        depth_description.MipLevels = 1;
+        depth_description.ArraySize = 1;
+        depth_description.Format = DXGI_FORMAT_R32_TYPELESS;
+        depth_description.SampleDesc.Count = 1;
+        depth_description.Usage = D3D11_USAGE_DEFAULT;
+        depth_description.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+        ID3D11Texture2D* depth = nullptr;
+        device->CreateTexture2D(&depth_description, nullptr, &depth);
+        check(motion && colour && history && exposure && depth,
+              "The input set textures must be created.");
+        if (motion && colour && history && exposure && depth) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC depth_view_description{};
+            depth_view_description.Format = DXGI_FORMAT_R32_FLOAT;
+            depth_view_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            depth_view_description.Texture2D.MipLevels = 1;
+            ID3D11ShaderResourceView *motion_view = nullptr, *colour_view = nullptr,
+                                     *history_view = nullptr, *exposure_view = nullptr,
+                                     *depth_view = nullptr;
+            check(SUCCEEDED(device->CreateShaderResourceView(motion, nullptr, &motion_view)) &&
+                      SUCCEEDED(device->CreateShaderResourceView(colour, nullptr, &colour_view)) &&
+                      SUCCEEDED(device->CreateShaderResourceView(history, nullptr, &history_view)) &&
+                      SUCCEEDED(
+                          device->CreateShaderResourceView(exposure, nullptr, &exposure_view)) &&
+                      SUCCEEDED(device->CreateShaderResourceView(depth, &depth_view_description,
+                                                                 &depth_view)),
+                  "The input set views must be created.");
+            // One slot at a time, the way the engine binds them.
+            auto bind_set = [&] {
+                context->PSSetShaderResources(1, 1, &history_view);
+                context->PSSetShaderResources(3, 1, &colour_view);
+                context->PSSetShaderResources(5, 1, &motion_view);
+                context->PSSetShaderResources(6, 1, &depth_view);
+                context->PSSetShaderResources(9, 1, &exposure_view);
+            };
+            set_viewport(context, 128.0f, 72.0f);
+
+            PassRecord record;
+            check(install_for_passes(context, &record, &test_roles) == RSF_FRAME_TAP_OK,
+                  "A tap with a role table must install.");
+            context->OMSetRenderTargets(1, &other_view, nullptr);
+            bind_set();
+            context->Draw(3, 0);
+            check(record.count == 1, "The set must be recognised once when it is first drawn with.");
+            check(record.scene_color == colour && record.history == history &&
+                      record.motion == motion && record.depth == depth &&
+                      record.exposure == exposure,
+                  "Each role must come back as the texture the table matched to it.");
+            check(record.render_width == 384 && record.render_height == 216 &&
+                      record.scene_color_format == DXGI_FORMAT_R11G11B10_FLOAT,
+                  "The render size is the motion target's and the format is the colour's.");
+            context->Draw(3, 0);
+            check(record.count == 1, "A set that stays bound is recognised once, not per draw.");
+            ID3D11ShaderResourceView* none = nullptr;
+            context->PSSetShaderResources(5, 1, &none);
+            context->Draw(3, 0);
+            context->PSSetShaderResources(5, 1, &motion_view);
+            context->Draw(3, 0);
+            check(record.count == 2, "The set must be recognised again once it has been broken.");
+            check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK, "Uninstalling must succeed.");
+
+            // The same bindings and no table: the tap decides nothing about formats itself.
+            PassRecord unrecognised;
+            check(install_for_passes(context, &unrecognised, nullptr) == RSF_FRAME_TAP_OK,
+                  "A tap with no role table must install.");
+            bind_set();
+            context->Draw(3, 0);
+            check(unrecognised.count == 0, "A tap given no role table must recognise nothing.");
+            check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK, "Uninstalling must succeed.");
+
+            for (int slot : {1, 3, 5, 6, 9}) {
+                context->PSSetShaderResources(slot, 1, &none);
+            }
+            for (ID3D11ShaderResourceView* view :
+                 {motion_view, colour_view, history_view, exposure_view, depth_view}) {
+                if (view) {
+                    view->Release();
+                }
+            }
+        }
+        for (ID3D11Texture2D* texture : {motion, colour, history, exposure, depth}) {
+            if (texture) {
+                texture->Release();
+            }
+        }
+    }
 
     stage("releasing");
     reconstruction_resource->Release();

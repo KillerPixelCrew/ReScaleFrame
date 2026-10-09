@@ -1,22 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/game_api.h>
+#include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/version.h>
 
-#include <cstddef>
-
 namespace {
+using rsf_game::equal_ascii;
+using rsf_game::validate;
+
 constexpr char known_sha256[] =
     "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a";
 constexpr char renderer_status[] =
     "Project Wingman renderer hooks are not implemented; static research only.";
-
-template<class T> rsf_result validate(const T* value) noexcept
-{
-    if (!value || value->struct_size < sizeof(T)) {
-        return RSF_ERROR_INVALID_ARGUMENT;
-    }
-    return value->abi_version == RSF_GAME_ABI_VERSION ? RSF_OK : RSF_ERROR_ABI_MISMATCH;
-}
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept
 {
@@ -62,26 +56,6 @@ rsf_result status(rsf_game_renderer_status* output) noexcept
     output->rendering_ready = 0;
     output->reason = renderer_status;
     return RSF_OK;
-}
-
-char ascii_lower(char value) noexcept
-{
-    return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
-}
-
-bool equal_ascii(const char* value, const char* expected) noexcept
-{
-    if (!value) {
-        return false;
-    }
-    for (std::size_t i = 0;; ++i) {
-        if (ascii_lower(value[i]) != ascii_lower(expected[i])) {
-            return false;
-        }
-        if (expected[i] == '\0') {
-            return true;
-        }
-    }
 }
 
 rsf_detection detect(const rsf_game_probe* probe) noexcept

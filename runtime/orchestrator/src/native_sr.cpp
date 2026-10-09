@@ -8,6 +8,7 @@
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/fullscreen_pass.h>
+#include <rescaleframe/srv_format.h>
 #include "native_regions.h"
 #include <d3d11.h>
 #include <cstring>
@@ -52,11 +53,7 @@ ID3D11Texture2D* scalar_exposure(ID3D11DeviceContext* context, ID3D11Texture2D* 
     if (descriptor.Width != 1 || descriptor.Height != 1 || descriptor.ArraySize != 1 || descriptor.SampleDesc.Count != 1)
         return nullptr;
     if (descriptor.Format == DXGI_FORMAT_R32_FLOAT) return source;
-    DXGI_FORMAT format = descriptor.Format;
-    if (format == DXGI_FORMAT_R32G32B32A32_TYPELESS) format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    if (format == DXGI_FORMAT_R16G16B16A16_TYPELESS) format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    if (format == DXGI_FORMAT_R32G32_TYPELESS) format = DXGI_FORMAT_R32G32_FLOAT;
-    if (format == DXGI_FORMAT_R16G16_TYPELESS) format = DXGI_FORMAT_R16G16_FLOAT;
+    const DXGI_FORMAT format = rsf::srv_format(descriptor.Format);
     if (format != DXGI_FORMAT_R32G32B32A32_FLOAT && format != DXGI_FORMAT_R16G16B16A16_FLOAT &&
         format != DXGI_FORMAT_R32G32_FLOAT && format != DXGI_FORMAT_R16G16_FLOAT) return nullptr;
     auto& resources = exposure_resources(); Microsoft::WRL::ComPtr<ID3D11Device> device;
@@ -129,13 +126,8 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     camera.vertical_fov = source.vertical_fov_radians;
     camera.aspect_ratio = source.view_to_clip[5] / source.view_to_clip[0];
     camera.camera_motion_included = pass->motion_camera_included;
+    // Canonical UV for every backend; the pipeline's legacy adapter does its own conversion.
     camera.motion_scale[0] = pass->motion_to_uv[0]; camera.motion_scale[1] = pass->motion_to_uv[1];
-    rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
-    if (rsf_dlss_pipeline_get_status(&status) == RSF_DLSS_PIPELINE_OK && status.backend != 1) {
-        // The legacy alternate-backend adapter accepts NDC-basis multipliers. Translate the
-        // producer's canonical UV convention here; new native plugins never learn vendor units.
-        camera.motion_scale[0] *= 2.0f; camera.motion_scale[1] *= -2.0f;
-    }
     camera.reset = (pass->flags & RSF_GAME_RENDER_RESET) || history.session != pass->session_id ||
         history.owner != pass->history_key || pass->native_frame != uint32_t(history.frame + 1) ||
         history.width != source.render_width || history.height != source.render_height ||

@@ -25,8 +25,8 @@ typedef struct rsf_d3d11_present_setup {
     /* Cold-start generation owner, independent of SR. Zero retains the DLSS default.
        Also accepts native D3D12 queues; no D3D11 facade or upload is used on that path. */
     uint32_t backend, max_generated_frames;
-    /* Positive units_to_meters supplies explicit plugin depth conventions. Zero keeps the
-       legacy D3D11 defaults; native D3D12 defaults to reversed, finite depth in meters. */
+    /* The plugin's depth conventions. units_to_meters must be > 0; install refuses otherwise,
+       since the bridge cannot tell an engine's units from its graphics API. */
     uint32_t depth_inverted, depth_infinite;
     float units_to_meters;
     /* Native D3D12 keeps engine buffers stable while swapping the physical presentation
@@ -36,6 +36,12 @@ typedef struct rsf_d3d11_present_setup {
     const char* fsr4_directory_utf8;
     const char* xess_directory_utf8;
     const char* streamline_directory_utf8;
+    /* Engine identity for Streamline (sl::EngineType value, version, project id), supplied by the
+       plugin or engine.json. Without a version and project id there is no Streamline host, so
+       DLSS-G is unavailable; other generation backends are unaffected. */
+    uint32_t engine_type;
+    const char* engine_version_utf8;
+    const char* project_id_utf8;
 } rsf_d3d11_present_setup;
 /* Cold startup only, before the game's main swapchain. Unsupported creation forwards unchanged.
    No game-specific sites or policies live in the bridge. Hooks remain for process lifetime. */
@@ -44,6 +50,18 @@ rsf_streamline_host* rsf_d3d11_present_host(void);
 /* D3D11 execution thread: shared device plus the dedicated SR/upload queue, borrowed through
    process lifetime. native_queue is null; this proxy queue differs from the FG present queue. */
 int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics);
+/* Present owner only. Borrowed creation queue for the current physical provider, distinct
+   from the D3D11 SR/upload queue. Valid until the next drained provider transition. */
+void* rsf_d3d11_present_queue(void);
+/* The list a provider-queue consumer should record into for a list created on the shared
+   device: the native list behind a Streamline proxy unless the provider queue is Streamline's.
+   Null when it cannot be unwrapped. Borrowed for the list's lifetime. */
+void* rsf_d3d11_present_command_list(void* list);
+/* Retire callback only. Joins the session's vendor retirement fence on the provider queue, then
+   executes list (closed, created on the shared device, may be null) there, then signals a private
+   fence. On success fence/value cover vendor reads, the list and all earlier provider-queue work;
+   the fence is borrowed (AddRef to keep it). On failure nothing was signalled and both are zero. */
+int32_t rsf_d3d11_present_retire(void* provider_session, void* list, void** fence, uint64_t* value);
 int rsf_d3d11_present_is_owner(void* swapchain);
 int rsf_d3d11_present_has_owner(void);
 const rsf_generation_provider* rsf_d3d11_present_provider(void);

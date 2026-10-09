@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "fsr4_compat.h"
 #include <MinHook.h>
-#include <bcrypt.h>
+#include <rescaleframe/sha256_file.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <array>
 #include <cstring>
 #include <mutex>
 
@@ -28,25 +27,11 @@ bool fingerprint(HMODULE module)
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(module,path,32768);
     if (!length || length >= 32768) return false;
-    HANDLE file = CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER size{};
-    bool ok = GetFileSizeEx(file,&size) && size.QuadPart == 28761864;
-    BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
-    ok = ok && BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0) >= 0;
-    ok = ok && BCryptCreateHash(algorithm,&hash,nullptr,0,nullptr,0,0) >= 0;
-    std::array<unsigned char,65536> bytes{}; DWORD read = 0;
-    while (ok) {
-        if (!ReadFile(file,bytes.data(),DWORD(bytes.size()),&read,nullptr)) { ok=false; break; }
-        if (!read) break;
-        ok = BCryptHashData(hash,bytes.data(),read,0) >= 0;
-    }
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path,GetFileExInfoStandard,&attributes) || attributes.nFileSizeHigh ||
+        attributes.nFileSizeLow != 28761864) return false;
     unsigned char actual[32]{};
-    ok = ok && BCryptFinishHash(hash,actual,sizeof(actual),0) >= 0 && !std::memcmp(actual,digest,sizeof(digest));
-    if (hash) BCryptDestroyHash(hash);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm,0);
-    CloseHandle(file);
-    return ok;
+    return rsf::sha256_file(path,actual,FILE_SHARE_READ) && !std::memcmp(actual,digest,sizeof(digest));
 }
 }
 struct Fsr4Compatibility {

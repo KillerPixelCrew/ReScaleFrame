@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <rescaleframe/game_renderer.h>
 
-#define RSF_GAME_ABI_VERSION 13u
+#define RSF_GAME_ABI_VERSION 14u
 #define RSF_GAME_ENTRY_POINT "rsf_get_game_plugin_api"
 
 #ifdef __cplusplus

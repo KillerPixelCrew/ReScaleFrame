@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
@@ -27,14 +26,30 @@ namespace ReScaleFrame.Unity
             internal TextureHandle Color, Depth, Motion, Output;
             internal Packet Packet;
         }
+        // The URP methods the adapter depends on, in the order Contracts() resolves them.
+        private enum Site
+        {
+            UpdateResolution, InitializeStackedCamera, InitializeAdditionalCamera, JitterMatrix, RenderStp,
+            PostProcessing, CreateCameraData, AfterRendering, AdaptivePerformance, ScreenSpaceUi,
+            RecordRenderGraph, RenderPassInputs, Count
+        }
         private static readonly Dictionary<int, ViewState> views = new Dictionary<int, ViewState>();
-        private static FieldInfo filter, scaling, rawProjection, antialiasing;
+        private static FieldInfo filter, scaling, antialiasing;
+        private static AccessTools.FieldRef<UniversalCameraData, Matrix4x4> rawProjection;
         private static MethodInfo updateResolution;
-        private static PropertyInfo frameDataProperty;
-        private static PropertyInfo hdrOutputProperty;
+        private static Func<ScriptableRenderer, object> frameDataGetter;
+        private static Func<UniversalCameraData, bool> hdrOutputGetter;
         private static int overlayFrame = -1;
         private static int hudlessFrame = -1;
         private static object stpFilter, fsrFilter, upscaling;
+        private static readonly object temporalAA = AntialiasingMode.TemporalAntiAliasing;
+        // Render-graph pass callbacks are created once, not per pass per frame.
+        private static readonly BaseRenderFunc<PassData, UnsafeGraphContext> executePass = Execute;
+        private static readonly BaseRenderFunc<PassData, UnsafeGraphContext> overlayPass = ExecuteOverlay;
+        // Reflection arguments for UpdateCameraResolution, reused while the size is unchanged.
+        private static readonly object[] resolutionArguments = new object[3];
+        private static Vector2Int resolutionValue;
+        private static object resolutionBox;
         private static uint failures;
         private static uint jitterReports;
         [ThreadStatic] private static bool inputScope;
@@ -42,18 +57,18 @@ namespace ReScaleFrame.Unity
         internal static void Install()
         {
             MethodInfo[] methods = Contracts();
-            updateResolution = methods[0];
-            Patch(methods[1], postfix: nameof(StackedCamera));
-            Patch(methods[2], prefix: nameof(AdditionalCamera), finalizer: nameof(RestoreAdditionalCamera));
-            Patch(methods[3], postfix: nameof(Jitter));
-            Patch(methods[4], prefix: nameof(Reconstruct));
-            Patch(methods[5], prefix: nameof(Probe));
-            Patch(methods[6], postfix: nameof(CameraCreated));
-            Patch(methods[7], postfix: nameof(Overlay));
-            Patch(methods[8], postfix: nameof(AdaptiveCamera));
-            Patch(methods[9], prefix: nameof(Hudless));
-            Patch(methods[10], prefix: nameof(InputScope), finalizer: nameof(RestoreInputScope));
-            Patch(methods[11], prefix: nameof(RequireMotion));
+            updateResolution = methods[(int)Site.UpdateResolution];
+            Patch(methods[(int)Site.InitializeStackedCamera], postfix: nameof(StackedCamera));
+            Patch(methods[(int)Site.InitializeAdditionalCamera], prefix: nameof(AdditionalCamera), finalizer: nameof(RestoreAdditionalCamera));
+            Patch(methods[(int)Site.JitterMatrix], postfix: nameof(Jitter));
+            Patch(methods[(int)Site.RenderStp], prefix: nameof(Reconstruct));
+            Patch(methods[(int)Site.PostProcessing], prefix: nameof(Probe));
+            Patch(methods[(int)Site.CreateCameraData], postfix: nameof(CameraCreated));
+            Patch(methods[(int)Site.AfterRendering], postfix: nameof(Overlay));
+            Patch(methods[(int)Site.AdaptivePerformance], postfix: nameof(AdaptiveCamera));
+            Patch(methods[(int)Site.ScreenSpaceUi], prefix: nameof(Hudless));
+            Patch(methods[(int)Site.RecordRenderGraph], prefix: nameof(InputScope), finalizer: nameof(RestoreInputScope));
+            Patch(methods[(int)Site.RenderPassInputs], prefix: nameof(RequireMotion));
         }
 
         // Pure metadata preflight. Resolve the complete contract before installing any patch.
@@ -64,36 +79,40 @@ namespace ReScaleFrame.Unity
             var recorder = pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.PostProcessPassRenderGraph", true);
             filter = RequireField(camera, "upscalingFilter");
             scaling = RequireField(camera, "imageScalingMode");
-            rawProjection = RequireField(camera, "m_ProjectionMatrix");
+            rawProjection = AccessTools.FieldRefAccess<UniversalCameraData, Matrix4x4>(RequireField(camera, "m_ProjectionMatrix"));
             antialiasing = RequireField(camera, "antialiasing");
-            frameDataProperty = AccessTools.Property(typeof(ScriptableRenderer), "frameData") ?? throw new MissingMemberException("ScriptableRenderer.frameData");
-            hdrOutputProperty = AccessTools.Property(camera, "isHDROutputActive") ?? throw new MissingMemberException("UniversalCameraData.isHDROutputActive");
+            frameDataGetter = (Func<ScriptableRenderer, object>)Delegate.CreateDelegate(
+                typeof(Func<ScriptableRenderer, object>), RequireGetter(typeof(ScriptableRenderer), "frameData"));
+            hdrOutputGetter = (Func<UniversalCameraData, bool>)Delegate.CreateDelegate(
+                typeof(Func<UniversalCameraData, bool>), RequireGetter(camera, "isHDROutputActive"));
             stpFilter = Enum.Parse(filter.FieldType, "STP");
             fsrFilter = Enum.Parse(filter.FieldType, "FSR");
             upscaling = Enum.Parse(scaling.FieldType, "Upscaling");
-            return new[] {
-                RequireMethod(recorder, "UpdateCameraResolution", typeof(RenderGraph), camera, typeof(Vector2Int)),
-                RequireMethod(pipeline, "InitializeStackedCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), camera),
-                RequireMethod(pipeline, "InitializeAdditionalCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), typeof(bool), typeof(bool), camera),
-                RequireMethod(typeof(TemporalAA), "CalculateJitterMatrix", camera, typeof(TemporalAA).GetNestedType("JitterFunc", BindingFlags.NonPublic)),
-                RequireMethod(recorder, "RenderSTP", typeof(RenderGraph), typeof(UniversalResourceData), camera,
-                    typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType()),
-                RequireMethod(recorder, "RenderPostProcessingRenderGraph", typeof(RenderGraph), typeof(ContextContainer),
-                    typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType(),
-                    typeof(TextureHandle).MakeByRefType(), typeof(bool), typeof(bool), typeof(bool)),
-                RequireMethod(pipeline, "CreateCameraData", typeof(ContextContainer), typeof(Camera), typeof(UniversalAdditionalCameraData)),
-                RequireMethod(typeof(UniversalRenderer), "OnAfterRendering", typeof(RenderGraph), typeof(bool)),
-                RequireMethod(pipeline, "ApplyAdaptivePerformance", camera),
-                RequireMethod(pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.DrawScreenSpaceUIPass", true),
-                    "RenderOverlay", typeof(RenderGraph), typeof(ContextContainer), typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType()),
-                RequireMethod(typeof(UniversalRenderer), "OnRecordRenderGraph", typeof(RenderGraph), typeof(ScriptableRenderContext)),
-                RequireMethod(typeof(UniversalRenderer), "GetRenderPassInputs", typeof(bool), typeof(bool), typeof(bool), typeof(bool),
-                    typeof(List<ScriptableRenderPass>), pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.MotionVectorRenderPass", true))
-            };
+            var methods = new MethodInfo[(int)Site.Count];
+            methods[(int)Site.UpdateResolution] = RequireMethod(recorder, "UpdateCameraResolution", typeof(RenderGraph), camera, typeof(Vector2Int));
+            methods[(int)Site.InitializeStackedCamera] = RequireMethod(pipeline, "InitializeStackedCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), camera);
+            methods[(int)Site.InitializeAdditionalCamera] = RequireMethod(pipeline, "InitializeAdditionalCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), typeof(bool), typeof(bool), camera);
+            methods[(int)Site.JitterMatrix] = RequireMethod(typeof(TemporalAA), "CalculateJitterMatrix", camera, typeof(TemporalAA).GetNestedType("JitterFunc", BindingFlags.NonPublic));
+            methods[(int)Site.RenderStp] = RequireMethod(recorder, "RenderSTP", typeof(RenderGraph), typeof(UniversalResourceData), camera,
+                typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType());
+            methods[(int)Site.PostProcessing] = RequireMethod(recorder, "RenderPostProcessingRenderGraph", typeof(RenderGraph), typeof(ContextContainer),
+                typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType(),
+                typeof(TextureHandle).MakeByRefType(), typeof(bool), typeof(bool), typeof(bool));
+            methods[(int)Site.CreateCameraData] = RequireMethod(pipeline, "CreateCameraData", typeof(ContextContainer), typeof(Camera), typeof(UniversalAdditionalCameraData));
+            methods[(int)Site.AfterRendering] = RequireMethod(typeof(UniversalRenderer), "OnAfterRendering", typeof(RenderGraph), typeof(bool));
+            methods[(int)Site.AdaptivePerformance] = RequireMethod(pipeline, "ApplyAdaptivePerformance", camera);
+            methods[(int)Site.ScreenSpaceUi] = RequireMethod(pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.DrawScreenSpaceUIPass", true),
+                "RenderOverlay", typeof(RenderGraph), typeof(ContextContainer), typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType());
+            methods[(int)Site.RecordRenderGraph] = RequireMethod(typeof(UniversalRenderer), "OnRecordRenderGraph", typeof(RenderGraph), typeof(ScriptableRenderContext));
+            methods[(int)Site.RenderPassInputs] = RequireMethod(typeof(UniversalRenderer), "GetRenderPassInputs", typeof(bool), typeof(bool), typeof(bool), typeof(bool),
+                typeof(List<ScriptableRenderPass>), pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.MotionVectorRenderPass", true));
+            return methods;
         }
 
         private static FieldInfo RequireField(Type owner, string name) =>
             AccessTools.Field(owner, name) ?? throw new MissingFieldException(owner.FullName, name);
+        private static MethodInfo RequireGetter(Type owner, string name) =>
+            AccessTools.Property(owner, name)?.GetGetMethod(true) ?? throw new MissingMemberException(owner.FullName, name);
         private static MethodInfo RequireMethod(Type owner, string name, params Type[] arguments)
         {
             MethodInfo method = AccessTools.Method(owner, name, arguments);
@@ -120,7 +139,7 @@ namespace ReScaleFrame.Unity
         private static void InputScope(UniversalRenderer __instance, out bool __state)
         {
             __state = inputScope;
-            var frame = (ContextContainer)frameDataProperty.GetValue(__instance);
+            var frame = (ContextContainer)frameDataGetter(__instance);
             inputScope = Eligible(frame.Get<UniversalCameraData>().camera);
         }
         private static Exception RestoreInputScope(bool __state, Exception __exception)
@@ -149,9 +168,9 @@ namespace ReScaleFrame.Unity
             // Keep those allocations at least as large as both exact vendor dimensions.
             cameraData.renderScale = Mathf.Max((config.RenderWidth + 0.01f) / config.OutputWidth,
                 (config.RenderHeight + 0.01f) / config.OutputHeight);
-            filter.SetValue(cameraData, config.Backend == 6 ? fsrFilter : stpFilter);
+            filter.SetValue(cameraData, config.EngineSpatial != 0 ? fsrFilter : stpFilter);
             scaling.SetValue(cameraData, upscaling);
-            if (config.Backend != 6) antialiasing.SetValue(cameraData, AntialiasingMode.TemporalAntiAliasing);
+            if (config.EngineSpatial == 0) antialiasing.SetValue(cameraData, temporalAA);
             }
         }
         private static void CameraCreated(Camera camera, UniversalAdditionalCameraData additionalCameraData, UniversalCameraData __result)
@@ -172,7 +191,7 @@ namespace ReScaleFrame.Unity
             if (!producer.Valid) return;
             if (!Eligible(camera, additionalCameraData)) return;
             Configuration config = Native.Configuration(camera);
-            if (config.Enabled == 0 || config.Backend == 6 || additionalCameraData == null) return;
+            if (config.Enabled == 0 || config.EngineSpatial != 0 || additionalCameraData == null) return;
             __state = additionalCameraData.antialiasing;
             additionalCameraData.antialiasing = AntialiasingMode.TemporalAntiAliasing;
             }
@@ -207,7 +226,7 @@ namespace ReScaleFrame.Unity
             var camera = data.camera;
             ViewState state = State(camera);
             Configuration config = Native.Configuration(camera);
-            Matrix4x4 projection = GL.GetGPUProjectionMatrix((Matrix4x4)rawProjection.GetValue(data), true);
+            Matrix4x4 projection = GL.GetGPUProjectionMatrix(rawProjection(data), true);
             Matrix4x4 rasterProjection = GL.GetGPUProjectionMatrix(data.GetProjectionMatrix(), true);
             Matrix4x4 shift = rasterProjection * projection.inverse;
             // Measure the translation actually applied after Unity's GPU projection conversion.
@@ -219,11 +238,11 @@ namespace ReScaleFrame.Unity
             bool reset = state.Frame != Time.frameCount - 1 || state.Generation != config.Generation;
             Matrix4x4 previous = reset ? vp : state.PreviousVp;
             var packet = new Packet {
-                Size = (uint)Marshal.SizeOf<Packet>(), Version = 1, Session = Native.Api.Session,
+                Size = Native.PacketSize, Version = Native.BridgeVersion, Session = Native.Api.Session,
                 Frame = (ulong)(uint)Time.frameCount + 1, View = (ulong)(uint)camera.GetInstanceID(),
-                Generation = config.Generation, Flags = probe ? 2u : reset ? 1u : 0u,
+                Generation = config.Generation, Flags = probe ? PacketFlags.Probe : reset ? PacketFlags.Reset : 0u,
                 Camera = new CameraFrame {
-                    Size = (uint)Marshal.SizeOf<CameraFrame>(), Version = 1,
+                    Size = Native.CameraFrameSize, Version = 1,
                     Projection = projection, InverseProjection = projection.inverse,
                     ViewToWorld = view.inverse, WorldToView = view, ClipToPrevious = previous * vp.inverse,
                     Jitter = rasterJitter, PreviousJitter = reset ? rasterJitter : state.PreviousJitter,
@@ -243,10 +262,10 @@ namespace ReScaleFrame.Unity
             var camera = frameData.Get<UniversalCameraData>();
             if (!Eligible(camera.camera)) return;
             Configuration config = Native.Configuration(camera.camera);
-            if (config.Enabled == 0 || config.Backend == 6) {
+            if (config.Enabled == 0 || config.EngineSpatial != 0) {
                 var resources = frameData.Get<UniversalResourceData>();
                 if (!resources.cameraDepthTexture.IsValid() || !resources.motionVectorColor.IsValid()) return;
-                var packet = Snapshot(camera, false); packet.Flags |= 34;
+                var packet = Snapshot(camera, false); packet.Flags |= PacketFlags.Probe | PacketFlags.InputsOnly;
                 Record(renderGraph, packet, activeCameraColorTexture, resources.cameraDepthTexture, resources.motionVectorColor, default);
                 return;
             }
@@ -262,25 +281,18 @@ namespace ReScaleFrame.Unity
         {
             using (var producer = Bootstrap.EnterProducer()) {
                 if (!producer.Valid || overlayFrame == Time.frameCount) return;
-                var frame = (ContextContainer)frameDataProperty.GetValue(__instance);
+                var frame = (ContextContainer)frameDataGetter(__instance);
                 var camera = frame.Get<UniversalCameraData>();
                 var resources = frame.Get<UniversalResourceData>();
                 if (camera.camera.cameraType != CameraType.Game || camera.camera.targetTexture != null ||
                     !camera.resolveFinalTarget || !resources.backBufferColor.IsValid()) return;
                 overlayFrame = Time.frameCount;
-                Packet packet = Snapshot(camera, true); packet.Flags = 4;
+                Packet packet = Snapshot(camera, true); packet.Flags = PacketFlags.Window;
                 using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame overlay", out var pass)) {
                     pass.Packet = packet;
                     builder.UseTexture(resources.backBufferColor, AccessFlags.ReadWrite);
                     builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
-                    builder.SetRenderFunc<PassData>((data, context) => {
-                        using (var scope = Bootstrap.EnterProducer()) {
-                            if (!scope.Valid) return;
-                            Packet copy = data.Packet;
-                            IntPtr owned = Native.Enqueue(ref copy);
-                            if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id() + 1, owned);
-                        }
-                    });
+                    builder.SetRenderFunc<PassData>(overlayPass);
                 }
             }
         }
@@ -289,14 +301,14 @@ namespace ReScaleFrame.Unity
             using (var producer = Bootstrap.EnterProducer()) {
                 if (!producer.Valid || hudlessFrame == Time.frameCount || !colorBuffer.IsValid()) return;
                 var camera = frameData.Get<UniversalCameraData>();
-                if (!Eligible(camera.camera) || !camera.resolveFinalTarget || (bool)hdrOutputProperty.GetValue(camera)) return;
+                if (!Eligible(camera.camera) || !camera.resolveFinalTarget || hdrOutputGetter(camera)) return;
                 hudlessFrame = Time.frameCount;
-                Packet packet = Snapshot(camera, true); packet.Flags = 10; // completed SDR colour, before the UI draw
+                Packet packet = Snapshot(camera, true); packet.Flags = PacketFlags.Hudless | PacketFlags.Probe; // completed SDR colour, before the UI draw
                 using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame completed scene before UI", out var pass)) {
                     pass.Packet = packet; pass.Color = colorBuffer;
                     builder.UseTexture(colorBuffer, AccessFlags.Read);
                     builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
-                    builder.SetRenderFunc<PassData>(Execute);
+                    builder.SetRenderFunc<PassData>(executePass);
                 }
             }
         }
@@ -311,7 +323,7 @@ namespace ReScaleFrame.Unity
                 return false;
             }
             Configuration config = Native.Configuration(cameraData.camera);
-            if (config.Enabled == 0 || config.Backend == 6 || !source.IsValid()) return true;
+            if (config.Enabled == 0 || config.EngineSpatial != 0 || !source.IsValid()) return true;
             try
             {
                 TextureDesc descriptor = source.GetDescriptor(renderGraph);
@@ -328,8 +340,8 @@ namespace ReScaleFrame.Unity
                 descriptor.name = "ReScaleFrame reconstructed scene";
                 TextureHandle output = renderGraph.CreateTexture(in descriptor);
                 Packet packet = Snapshot(cameraData, false);
-                if (!native) packet.Flags |= 16;
-                updateResolution.Invoke(__instance, new object[] { renderGraph, cameraData, new Vector2Int(descriptor.width, descriptor.height) });
+                if (!native) packet.Flags |= PacketFlags.NoInputs;
+                UpdateResolution(__instance, renderGraph, cameraData, new Vector2Int(descriptor.width, descriptor.height));
                 Record(renderGraph, packet, source, resourceData.cameraDepthTexture, resourceData.motionVectorColor, output);
                 destination = output;
                 return false;
@@ -341,6 +353,13 @@ namespace ReScaleFrame.Unity
             }
             }
         }
+        private static void UpdateResolution(object recorder, RenderGraph renderGraph, UniversalCameraData cameraData, Vector2Int size)
+        {
+            if (resolutionBox == null || resolutionValue != size) { resolutionValue = size; resolutionBox = size; }
+            resolutionArguments[0] = renderGraph; resolutionArguments[1] = cameraData; resolutionArguments[2] = resolutionBox;
+            try { updateResolution.Invoke(recorder, resolutionArguments); }
+            finally { resolutionArguments[0] = resolutionArguments[1] = null; }
+        }
         private static void Record(RenderGraph graph, Packet packet, TextureHandle color, TextureHandle depth, TextureHandle motion, TextureHandle output)
         {
             using (var builder = graph.AddUnsafePass<PassData>("ReScaleFrame native D3D12", out var pass))
@@ -351,19 +370,41 @@ namespace ReScaleFrame.Unity
                 if (motion.IsValid()) builder.UseTexture(motion, AccessFlags.Read);
                 if (output.IsValid()) builder.UseTexture(output, AccessFlags.Write);
                 builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
-                builder.SetRenderFunc<PassData>(Execute);
+                builder.SetRenderFunc<PassData>(executePass);
+            }
+        }
+        // Hands the packet to the native bridge and queues its render event. The event id is the
+        // base event plus `eventOffset` (0 scene and hudless packets, 1 the window event).
+        private static void Submit(UnsafeGraphContext context, ref Packet packet, int eventOffset)
+        {
+            IntPtr owned = Native.Enqueue(ref packet);
+            if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id() + eventOffset, owned);
+        }
+        // Resolves the temporal inputs' native textures into the packet.
+        private static bool BindTemporal(PassData pass, ref Packet packet)
+        {
+            RTHandle depth = pass.Depth, motion = pass.Motion;
+            if (depth == null || depth.rt == null || motion == null || motion.rt == null) return false;
+            packet.Depth = depth.rt.GetNativeTexturePtr(); packet.Motion = motion.rt.GetNativeTexturePtr();
+            return true;
+        }
+        private static void ExecuteOverlay(PassData data, UnsafeGraphContext context)
+        {
+            using (var scope = Bootstrap.EnterProducer()) {
+                if (!scope.Valid) return;
+                Packet copy = data.Packet;
+                Submit(context, ref copy, 1);
             }
         }
         private static void Execute(PassData pass, UnsafeGraphContext context)
         {
             using (var producer = Bootstrap.EnterProducer()) {
             Packet packet = pass.Packet;
-            if ((packet.Flags & 8) != 0) {
+            if ((packet.Flags & PacketFlags.Hudless) != 0) {
                 // Imported backbuffers have an RTHandle without a RenderTexture. Resolve
                 // the current engine buffer in the queued native callback, not through rt.
                 if (!producer.Valid) return;
-                IntPtr final = Native.Enqueue(ref packet);
-                if (final != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id(), final);
+                Submit(context, ref packet, 0);
                 return;
             }
             RTHandle color = pass.Color;
@@ -371,7 +412,7 @@ namespace ReScaleFrame.Unity
                 if (++failures <= 6) Native.Log("Temporal inputs refused: source has no owned RenderTexture.");
                 return;
             }
-            if ((packet.Flags & 2) == 0)
+            if ((packet.Flags & PacketFlags.Probe) == 0)
             {
                 RTHandle output = pass.Output;
                 // Queued before the event, so provider refusal always leaves a complete spatial fallback.
@@ -381,23 +422,20 @@ namespace ReScaleFrame.Unity
                     (float)packet.Camera.RenderHeight / color.rt.height, 0, 0);
                 Blitter.BlitTexture(CommandBufferHelpers.GetNativeCommandBuffer(context.cmd), color, validRectangle, 0, true);
                 if (!producer.Valid) return;
-                if ((packet.Flags & 16) != 0) return;
+                if ((packet.Flags & PacketFlags.NoInputs) != 0) return;
                 packet.Output = output.rt.GetNativeTexturePtr();
-                RTHandle depth = pass.Depth, motion = pass.Motion;
-                if (depth == null || depth.rt == null || motion == null || motion.rt == null) return;
-                packet.Depth = depth.rt.GetNativeTexturePtr(); packet.Motion = motion.rt.GetNativeTexturePtr();
+                if (!BindTemporal(pass, ref packet)) return;
             }
-            if ((packet.Flags & 32) != 0) {
-                RTHandle depth = pass.Depth, motion = pass.Motion;
-                if (depth == null || depth.rt == null || motion == null || motion.rt == null) return;
-                packet.Depth = depth.rt.GetNativeTexturePtr(); packet.Motion = motion.rt.GetNativeTexturePtr();
-            }
+            if ((packet.Flags & PacketFlags.InputsOnly) != 0 && !BindTemporal(pass, ref packet)) return;
             if (!producer.Valid) return;
             packet.Color = color.rt.GetNativeTexturePtr();
-            IntPtr owned = Native.Enqueue(ref packet);
-            if (owned != IntPtr.Zero) context.cmd.IssuePluginEventAndData(Native.Api.RenderEvent, Native.rsf_unity_get_event_id(), owned);
+            Submit(context, ref packet, 0);
             }
         }
-        internal static void Clear() { views.Clear(); failures = jitterReports = 0; overlayFrame = hudlessFrame = -1; }
+        internal static void Clear()
+        {
+            views.Clear(); failures = jitterReports = 0; overlayFrame = hudlessFrame = -1;
+            Native.ResetConfiguration();
+        }
     }
 }

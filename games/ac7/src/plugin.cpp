@@ -1,8 +1,8 @@
 #include <rescaleframe/game_api.h>
+#include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/version.h>
 #include <rescaleframe/ac7_native_renderer.h>
 
-#include <cstddef>
 #include <mutex>
 
 namespace {
@@ -13,11 +13,8 @@ rsf_ac7_native_renderer* renderer = nullptr;
 bool transitioning = false, active = false;
 const char* reason = "Native renderer has not been prepared.";
 
-template<class T> rsf_result validate(const T* value)
-{
-    if (!value || value->struct_size < sizeof(T)) return RSF_ERROR_INVALID_ARGUMENT;
-    return value->abi_version == RSF_GAME_ABI_VERSION ? RSF_OK : RSF_ERROR_ABI_MISMATCH;
-}
+using rsf_game::validate;
+using rsf_game::equal_ascii;
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
@@ -46,69 +43,64 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
         return RSF_ERROR_NOT_READY;
     }
 }
-rsf_result start(const rsf_game_start_args* args) noexcept
+// Marks the lifecycle busy, runs `work` on the renderer outside the lock, then publishes the
+// outcome. `check` runs under the lock and may refuse; `finish` runs under the lock afterwards.
+template<class Check, class Work, class Finish>
+rsf_result transition(Check check, Work work, Finish finish) noexcept
 {
-    const auto valid = validate(args); if (valid != RSF_OK) return valid;
     rsf_ac7_native_renderer* current = nullptr;
     try {
         {
             std::lock_guard<std::mutex> lock(lifecycle_guard);
             if (transitioning) return RSF_ERROR_BUSY;
-            if (!renderer) return RSF_ERROR_NOT_READY;
+            const rsf_result refused = check();
+            if (refused != RSF_OK) return refused;
             transitioning = true; current = renderer;
         }
-        const bool started = rsf_ac7_native_renderer_start(current) != 0;
-        {
-            std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false;
-            active = started;
-            reason = started ? "Native view producer and pre-tonemap SR graph active; game validation pending."
-                             : "Native renderer activation refused.";
-        }
-        return started ? RSF_OK : RSF_ERROR_NOT_READY;
+        const bool succeeded = work(current);
+        std::lock_guard<std::mutex> lock(lifecycle_guard);
+        transitioning = false;
+        return finish(succeeded);
     } catch (...) {
         std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
     }
+}
+rsf_result start(const rsf_game_start_args* args) noexcept
+{
+    const auto valid = validate(args); if (valid != RSF_OK) return valid;
+    return transition(
+        [] { return renderer ? RSF_OK : RSF_ERROR_NOT_READY; },
+        [](rsf_ac7_native_renderer* current) { return rsf_ac7_native_renderer_start(current) != 0; },
+        [](bool started) {
+            active = started;
+            reason = started ? "Native view producer and pre-tonemap SR graph active; game validation pending."
+                             : "Native renderer activation refused.";
+            return started ? RSF_OK : RSF_ERROR_NOT_READY;
+        });
 }
 rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
-    rsf_ac7_native_renderer* current = nullptr;
-    try {
-        {
-            std::lock_guard<std::mutex> lock(lifecycle_guard);
-            if (transitioning) return RSF_ERROR_BUSY;
-            transitioning = true; current = renderer;
-        }
-        if (current) rsf_ac7_native_renderer_quiesce(current);
-        {
-            std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; active = false;
+    return transition(
+        [] { return RSF_OK; },
+        [](rsf_ac7_native_renderer* current) { if (current) rsf_ac7_native_renderer_quiesce(current); return true; },
+        [](bool) {
+            active = false;
             reason = "Native producers quiesced; queued RHI work may still need to drain.";
-        }
-        return RSF_OK;
-    } catch (...) {
-        std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
-    }
+            return RSF_OK;
+        });
 }
 rsf_result stop(const rsf_game_control_args* args) noexcept
 {
     const auto valid = validate(args); if (valid != RSF_OK) return valid;
-    rsf_ac7_native_renderer* current = nullptr;
-    try {
-        {
-            std::lock_guard<std::mutex> lock(lifecycle_guard);
-            if (transitioning || active) return RSF_ERROR_BUSY;
-            transitioning = true; current = renderer;
-        }
-        const bool stopped = !current || rsf_ac7_native_renderer_stop(current) != 0;
-        {
-            std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false;
+    return transition(
+        [] { return active ? RSF_ERROR_BUSY : RSF_OK; },
+        [](rsf_ac7_native_renderer* current) { return !current || rsf_ac7_native_renderer_stop(current) != 0; },
+        [](bool stopped) {
             if (stopped) { renderer = nullptr; reason = "Native renderer stopped."; }
             else reason = "Native renderer draining; module and host services remain owned.";
-        }
-        return stopped ? RSF_OK : RSF_ERROR_BUSY;
-    } catch (...) {
-        std::lock_guard<std::mutex> lock(lifecycle_guard); transitioning = false; return RSF_ERROR_NOT_READY;
-    }
+            return stopped ? RSF_OK : RSF_ERROR_BUSY;
+        });
 }
 rsf_result status(rsf_game_renderer_status* output) noexcept
 {
@@ -122,26 +114,6 @@ rsf_result status(rsf_game_renderer_status* output) noexcept
         output->reason = active && !output->active ? "Native renderer deactivated after command ownership refusal." : reason;
         return RSF_OK;
     } catch (...) { return RSF_ERROR_NOT_READY; }
-}
-
-char ascii_lower(char value) noexcept
-{
-    return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
-}
-
-bool equal_ascii(const char* value, const char* expected) noexcept
-{
-    if (!value || !expected) {
-        return false;
-    }
-    for (std::size_t i = 0;; ++i) {
-        if (ascii_lower(value[i]) != ascii_lower(expected[i])) {
-            return false;
-        }
-        if (expected[i] == '\0') {
-            return true;
-        }
-    }
 }
 
 rsf_detection detect(const rsf_game_probe* probe) noexcept

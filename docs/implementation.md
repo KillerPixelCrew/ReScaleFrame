@@ -15,6 +15,27 @@ passes. Claude Code still needs its normal project-server approval, and both
 clients need a restart/reconnection. No runtime build, game analysis or deployment
 was performed. [Setup and evidence](tooling.md#rea-for-codex-and-claude-code).
 
+## AC7 shared frame generation, 5 October 2026
+
+Built and deployed the AC7 adapter correction for DLSS-G, FSR3/FSR4 and XeSS switching.
+Completed SDR scene colour is now required and supplied as HUD-less colour, so FidelityFX
+uses its UI extraction/composition path. Captured resources stay in their declared read
+states until provider interpolation completes. A separate completion fence on the physical
+presentation queue authorizes D3D11 reuse. Native command-list aliases are used for non-
+Streamline queues. Off diagnostics no longer dereference an absent provider, and provider
+transitions reset pacing-counter baselines. Non-NVIDIA adapters can create FSR/XeSS/Off
+presentation without initializing a NVIDIA host.
+
+The extended AC7 CPU/RHI/window fixture passes 120 sampled/direct frames with DLSS SR,
+repeated DLSS/FSR3/XeSS/Off provider changes and 2x/4x requests clamped to queried limits.
+It records 24 active FSR samples and 20 XeSS samples. DLSS activity was not established:
+Windows denied the fixture foreground ownership. The RTX 4070 Laptop SDKs report one
+generated frame; higher MFG counts and FSR4 execution require suitable hardware.
+Release verification passes 42 executed native tests, seven opt-in skips and Rust
+formatting/Clippy. Deployment includes matched binaries, signed dependencies and backups.
+New AC7 gameplay switching, HUD/image quality and DLSS reactivation are pending a user run.
+[Research and exact validation](research/shared-fg-20261004.md#ac7-adapter-completion-5-october-2026).
+
 ## Shared frame generation, 4 October 2026
 
 Current acceptance: the user confirms the final Drag'n Wash corrections resolved the FSR
@@ -1401,3 +1422,26 @@ six captured frames: ground stipple gone, aircraft and vegetation contact shadow
 bit-identical output outside the contact branch. New transformed CRC 4154163049. Deployed with
 backup `.local/deploy-backups/ac7-pair-20261004-132153-981`; not yet seen in game. Research:
 `docs/research/ac7-lighting-shadow-20261004.md`.
+
+## Codebase review pass (2026-10-09)
+
+Implemented the [codebase review](reviews/codebase-review-20261009.md): shared helpers for D3D12, logging, shader compile, SRV formats and plugin boilerplate; the FG bridge reads engine identity from setup and has one retire export; the frame tap uses a game-supplied role table; per-frame cost reductions in the tap, SR bridge and Unity managed code; dead code removed. The full item table is section 8 of the review.
+
+Status: built (Release, MSVC) and synthetic-tested (ctest 49/49, 7 hardware-gated tests skipped; cargo fmt, clippy and test clean; RTX shared-host test passed). NOT game-tested.
+
+ABI: frame tap ABI 14 (role table, removed override target and UAV refusal). Unity bridge ABI 2 and native ABI 3; rsf_unity_set_policy is now rsf_unity_set_engine_spatial. Deploy the Unity plugin and ReScaleFrame.Unity.Managed.dll together.
+
+Behaviour changes to watch in the next game run:
+- AC7 FG needs dinput8_proxy to set units and identity; "units_to_meters must be positive" in the log means FG is off. SR engine version is now 4.18.3.
+- Unity FG depends on pass.screen being FLIGHT. AC7 replay and other non-menu screens are now FG-eligible.
+- DLSS-G and XeSS get depth and motion in NON_PIXEL_SHADER_RESOURCE; check for D3D12 validation errors.
+- DLSS SR no longer resets history every frame while FG is requested but inactive. With FG off there is no HUD-less copy.
+- Retire now joins on the provider queue (Unity DLSS-G): look for hitches or 10 s stalls. Trailing Flushes were removed; CPU waits flush first.
+- On AMD and Intel there must be no Streamline load attempts. On RTX without a usable Streamline folder, FSR/XeSS/Off stay selectable.
+- The interposer loads with DLL_LOAD_DIR and SYSTEM32; watch for "could not load ... (Windows error ...)".
+- DLSS SR on native D3D12 now rejects invalid frames (pre_exposure, frame time, resource states).
+- FSR/XeSS: exposure appearing or disappearing should not pump brightness; at most one provider reopen at start.
+- Nested fullscreen passes no longer restore between each other (3.10): look for flicker, missing UI or SR corruption.
+- Frame tap in compat mode: sampler bias, constant-buffer size patches and view constants (3.1 to 3.3); the "reconstruction input set" line must still appear.
+- Pixel-binding diagnostic log lines are off by default (RSF_AC7_PIXEL_DIAGNOSTICS=1 enables them).
+- The FG choice is saved only after a successful switch. A failed overlay start is final until the overlay is stopped.

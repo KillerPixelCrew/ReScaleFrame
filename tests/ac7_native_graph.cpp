@@ -44,7 +44,7 @@ void clear(void*, Command* c) { auto* cmd = static_cast<Clear*>(c); immediate->C
 void spatial(void* raw_node, void* raw_context) {
     check(auxiliary_done, "native auxiliary graph branches finish before SR size transition");
     ++fallback_draws; auto* node = static_cast<SRNode*>(raw_node);
-    int32_t current[4]{}; copy(current, view.data() + 0x70, 16);
+    int32_t current[4]{}; copy_memory(current, view.data() + 0x70, 16);
     check(current[2] == 2 && current[3] == 2, "fallback must read original source rectangle");
     check(node->output.descriptor[0x2c] == 10, "SR graph keeps linear floating point output");
     check(raw_context == context.data(), "native context forwarded");
@@ -61,7 +61,7 @@ void aa(void*, void*) { ++aa_draws; }
 void material(void*, void*) {}
 void source_process(void*, void*) {}
 void auxiliary_process(void*, void*) {
-    int32_t rect[4]{}; copy(rect, view.data()+0x70, 16);
+    int32_t rect[4]{}; copy_memory(rect, view.data()+0x70, 16);
     check(rect[2] == 2 && rect[3] == 2, "bloom/grading producer keeps original native rectangle");
     auxiliary_done = true;
 }
@@ -149,9 +149,9 @@ void execute_graph(uint64_t node, void* ctx) {
 }
 void original_context(void* raw_context, void* raw_root) {
     gather(uint64_t(uintptr_t(raw_root))); execute_graph(uint64_t(uintptr_t(raw_root)), raw_context);
-    int32_t rect[4]{}; copy(rect, view.data() + 0x70, 16);
+    int32_t rect[4]{}; copy_memory(rect, view.data() + 0x70, 16);
     check(rect[2] == 4 && rect[3] == 4, "post-SR consumers get output rectangle in same graph");
-    int32_t size[2]{}; copy(size, scene.data() + 0x208, 8);
+    int32_t size[2]{}; copy_memory(size, scene.data() + 0x208, 8);
     check(size[0] == 4 && size[1] == 4, "post-SR shader source size is native output size");
     check(aa_draws == 0, "FXAA does not filter the temporal reconstruction again");
 }
@@ -177,11 +177,15 @@ int main() {
     installed.store(&renderer); test_engine = resolve_engine;
     dynamic_table[30] = reinterpret_cast<void*>(&create_uniform);
     Process originals[] = {tone, aa, material, hud, composite, spatial};
-    void* wrappers[]{reinterpret_cast<void*>(&hooked_process<0>), reinterpret_cast<void*>(&hooked_process<1>),
-        reinterpret_cast<void*>(&hooked_process<2>), reinterpret_cast<void*>(&hooked_process<3>),
-        reinterpret_cast<void*>(&hooked_process<4>), reinterpret_cast<void*>(&hooked_process<5>)};
-    for (uint32_t i = 0; i < 6; ++i) { sites[i].target = wrappers[i]; sites[i].original = reinterpret_cast<void*>(originals[i]); sites[i+6].original = reinterpret_cast<void*>(&get_desc); }
-    sites[13].original = reinterpret_cast<void*>(&original_context);
+    void* wrappers[]{reinterpret_cast<void*>(&hooked_process<hook_process_tonemap>), reinterpret_cast<void*>(&hooked_process<hook_process_aa>),
+        reinterpret_cast<void*>(&hooked_process<hook_process_material>), reinterpret_cast<void*>(&hooked_process<hook_process_hud>),
+        reinterpret_cast<void*>(&hooked_process<hook_process_composite>), reinterpret_cast<void*>(&hooked_process<hook_process_output>)};
+    for (uint32_t i = 0; i < process_hooks; ++i) {
+        sites[hook_process_tonemap + i].target = wrappers[i];
+        sites[hook_process_tonemap + i].original = reinterpret_cast<void*>(originals[i]);
+        sites[hook_descriptor_tonemap + i].original = reinterpret_cast<void*>(&get_desc);
+    }
+    sites[hook_context].original = reinterpret_cast<void*>(&original_context);
     void* source_table[17]{}; void* tone_table[17]{}; void* aa_table[17]{}; void* auxiliary_table[17]{};
     for (auto* table : {source_table, tone_table, aa_table, auxiliary_table}) {
         table[1] = reinterpret_cast<void*>(&get_input); table[2] = table[1];
@@ -214,7 +218,7 @@ int main() {
     check(registered != nullptr && fallback_draws == 1, "graph has native SR node and complete spatial fallback");
     check(std::memcmp(view.data()+0x70, render, 16) == 0 && std::memcmp(scene.data()+0x208, internal, 8) == 0,
         "CPU view/scene sizes restored after graph construction");
-    uint64_t restored_uniform = 0; copy(&restored_uniform, view.data()+0x10, 8);
+    uint64_t restored_uniform = 0; copy_memory(&restored_uniform, view.data()+0x10, 8);
     check(uniform_rebuilds == 1 && restored_uniform == old_uniform,
         "only shader parameters rebuilt; original native uniform ownership restored");
     if (!registered) return 1;
@@ -253,18 +257,52 @@ int main() {
     }
     rsf_game_render_config desired{sizeof(desired),1,16,16,7,5};
     prepare_owned_views(owned_renderer.data(), desired);
-    int32_t adjusted[4]{}; copy(adjusted, owned_views.data()+0x70, 16);
+    int32_t adjusted[4]{}; copy_memory(adjusted, owned_views.data()+0x70, 16);
     check(adjusted[2] == 7 && adjusted[3] == 5 && family_rebuilds == 1,
         "renderer producer keeps exact backend rectangle before recomputing family allocation extent");
     check(std::memcmp(owned_views.data()+0x27c0+0x70, secondary, 16) == 0,
         "secondary view retains its producer resolution");
     int32_t native_buffer[2]{8,8}; std::memcpy(scene.data()+0x208, native_buffer, 8);
     configured_output = 16; configured_width = 7; configured_height = 5;
-    sites[14].original = reinterpret_cast<void*>(&visibility);
+    sites[hook_visibility].original = reinterpret_cast<void*>(&visibility);
     hooked_visibility(owned_renderer.data(), nullptr, 77, nullptr);
-    uint32_t restored_mode = 0; copy(&restored_mode, owned_views.data()+0x13c0, 4);
+    uint32_t restored_mode = 0; copy_memory(&restored_mode, owned_views.data()+0x13c0, 4);
     check(restored_mode == 1, "native AA graph choice restored after jitter producer");
     configured_output = 4; configured_width = configured_height = 2;
+    // The hook enum names table entries; the diagnostic gate covers only the evidence hooks.
+    check(sites[hook_engine_tick].rva == 0x3a3f70 && sites[hook_base_pass].rva == 0xebf050 &&
+        sites[hook_process_output].role == RSF_AC7_ROLE_OUTPUT && sites[hook_descriptor_output].rva == 0x10991e0 &&
+        sites[hook_pixel_enqueue_d].rva == 0xf4c620 && sites[hook_create_pixel_shader].rva == 0xe31e90,
+        "hook enum indexes the site table by name");
+    check(evidence_hook(hook_rhi_pixel_uniform) && evidence_hook(hook_pixel_enqueue_d) &&
+        !evidence_hook(hook_pixel_view_uniform) && !evidence_hook(hook_sky_projection),
+        "only the pixel bind evidence hooks wait for the diagnostic");
+    // Hook guards count per thread and sum for the stop path.
+    check(guards_held(true) == 0, "no hook body is running");
+    {
+        const EntryGuard entry; const OuterGuard outer;
+        check(guards_held(false) == 1 && guards_held(true) == 2, "entry and outer guards are summed separately");
+    }
+    check(guards_held(true) == 0, "guards release their slot");
+    // A call redirected through a relay slot reads back as the native call after restore.
+    auto* code = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(code != nullptr, "allocate a code page for the relay");
+    if (code) {
+        const unsigned char native[]{0x41, 0xff, 0x92, 0x48, 0x01, 0x00, 0x00};
+        std::memcpy(code, native, sizeof(native));
+        CallRelay relay;
+        check(make_call_relay(relay, code, native, sizeof(native), code) && relay.slot &&
+            std::memcmp(code, native, sizeof(native)) == 0, "preparing a relay leaves the code alone");
+        if (relay.slot) {
+            check(patch_call_relay(relay) && code[0] == 0xff && code[1] == 0x15 && code[6] == 0x90, "relay call is patched in");
+            int32_t relative = 0; std::memcpy(&relative, code + 2, 4);
+            void* target = nullptr; std::memcpy(&target, code + 6 + relative, sizeof(target));
+            check(target == code, "relay slot holds the handler");
+            check(restore_call_relay(relay) && std::memcmp(code, native, sizeof(native)) == 0 && !relay.call,
+                "restore puts back the native call and releases the slot");
+        }
+        VirtualFree(code, 0, MEM_RELEASE);
+    }
     rsf_ac7_render_scopes_quiesce(renderer.scopes);
     check(rsf_ac7_render_scopes_destroy(renderer.scopes) != 0, "quiescent graph unload"); installed.store(nullptr);
     return passed ? 0 : 1;

@@ -9,7 +9,11 @@
 #include <cstring>
 #include <new>
 #include <atomic>
-namespace { std::atomic<uint64_t> next_session_id{1}; }
+namespace {
+std::atomic<uint64_t> next_session_id{1};
+// Frames the exposure input has to stay present or absent before the context follows it.
+constexpr uint32_t kExposureSettleFrames = 30;
+}
 struct rsf_sr_legacy_adapter {
     rsf_sr_bridge* bridge = nullptr;
     rsf_motion_resolve* resolve = nullptr;
@@ -19,6 +23,12 @@ struct rsf_sr_legacy_adapter {
     uint64_t session_id = next_session_id.fetch_add(1);
     LARGE_INTEGER previous{}, frequency{};
     float units_to_meters = 1;
+    // The exposure policy the context was created with, and the run of frames that disagreed.
+    // FSR and XeSS take it at context creation, so a change reopens the provider and its history.
+    uint32_t auto_exposure = 1;
+    uint32_t exposure_mismatch = 0;
+    // No frame since create or select: nothing to lose, so the policy follows the first frame now.
+    bool fresh = true;
 };
 rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
     const char* fsr2, const char* fsr3, const char* fsr4, const char* xess,
@@ -50,6 +60,7 @@ rsf_backend_result rsf_sr_legacy_select(rsf_sr_legacy_adapter* adapter, uint32_t
     if (!adapter) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const auto result = rsf_sr_bridge_select(adapter->bridge, backend, quality, 0);
     if (result == 0) {
+        adapter->fresh = true;
         rsf_sr_session_status status{}; status.struct_size = sizeof(status);
         rsf_sr_bridge_get_status(adapter->bridge, &status);
         if (width) *width = status.render_width;
@@ -61,23 +72,29 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     const rsf_dlss_frame* input, uint32_t has_sentinel)
 {
     if (!adapter || !input) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // FSR/XeSS choose exposure behavior at context creation, unlike DLSS's per-frame option.
-    const auto exposure_policy = rsf_sr_bridge_set_auto_exposure(adapter->bridge, input->exposure ? 0u : 1u);
-    if (exposure_policy != RSF_BACKEND_OK) return exposure_policy;
-    if (adapter->width != input->render_width || adapter->height != input->render_height) {
-        rsf_motion_resolve* replacement = nullptr;
-        if (!rsf_motion_resolve_create(adapter->device, input->render_width, input->render_height, &replacement))
-            return RSF_BACKEND_ERROR_INIT_FAILED;
-        rsf_motion_resolve_destroy(adapter->resolve); adapter->resolve = replacement;
-        adapter->width = input->render_width; adapter->height = input->render_height; ++adapter->generation;
+    // FSR/XeSS choose exposure behavior at context creation, unlike DLSS's per-frame option. Going
+    // manual waits for a settled run so an exposure that comes and goes does not rebuild each time;
+    // until then auto mode ignores the supplied exposure. Going back to auto is immediate, because
+    // a manual XeSS context refuses frames without an exposure texture.
+    const uint32_t wanted = input->exposure ? 0u : 1u;
+    if (wanted == adapter->auto_exposure) adapter->exposure_mismatch = 0;
+    else if (adapter->fresh || wanted || ++adapter->exposure_mismatch >= kExposureSettleFrames) {
+        const auto exposure_policy = rsf_sr_bridge_set_auto_exposure(adapter->bridge, wanted);
+        if (exposure_policy != RSF_BACKEND_OK) return exposure_policy;
+        adapter->auto_exposure = wanted; adapter->exposure_mismatch = 0;
     }
+    adapter->fresh = false;
+    bool rebuilt = false;
+    if (!rsf::fit_motion_resolve(adapter->device, input->render_width, input->render_height, adapter->resolve,
+            adapter->width, adapter->height, &rebuilt)) return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (rebuilt) ++adapter->generation;
     rsf_motion_resolve_params resolve{};
     resolve.struct_size = sizeof(resolve);
     std::memcpy(resolve.clip_to_previous, input->clip_to_prev_clip, sizeof(resolve.clip_to_previous));
-    // Compatibility assumption: written motion is current-minus-previous NDC. Convert to
-    // previous-current pixels; each game's direction and camera coverage still need live validation.
-    resolve.decoded_to_pixels[0] = -0.5f * input->render_width * input->motion_scale_x;
-    resolve.decoded_to_pixels[1] = 0.5f * input->render_height * input->motion_scale_y;
+    // Canonical current-minus-previous UV to previous-minus-current pixels, as the DLSS dense path
+    // converts it. Each game's direction and camera coverage still need live validation.
+    resolve.decoded_to_pixels[0] = -float(input->render_width) * input->motion_scale_x;
+    resolve.decoded_to_pixels[1] = -float(input->render_height) * input->motion_scale_y;
     resolve.sentinel = input->motion_invalid_value; resolve.has_sentinel = has_sentinel;
     resolve.depth_layer = input->motion_depth_layer;
     if (!rsf_motion_resolve_run(adapter->resolve, context, input->motion, input->depth, &resolve))

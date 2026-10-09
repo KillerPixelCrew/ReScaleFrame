@@ -56,18 +56,7 @@ rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
     if (session->query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32) {
         sr_close(session); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     }
-    // IDs are opaque. Family identification uses the SDK's paired display version, never bit masks.
-    unsigned best_minor = 0, best_patch = 0;
-    for (uint64_t i = 0; i < count; ++i) {
-        unsigned major = 0, minor = 0, patch = 0;
-        if (!names[i] || std::sscanf(names[i], "%u.%u.%u", &major, &minor, &patch) != 3 ||
-            major != desc->fsr_major || (desc->version_id && ids[i] != desc->version_id)) continue;
-        if (!session->version || minor > best_minor || (minor == best_minor && patch > best_patch)) {
-            session->version = ids[i];
-            best_minor = minor; best_patch = patch;
-            std::snprintf(session->name, sizeof(session->name), "%s", names[i]);
-        }
-    }
+    rsf::select_ffx_version(ids, names, count, desc->fsr_major, desc->version_id, session->version, session->name, sizeof(session->name));
     if (!session->version) {
         if (desc->log) {
             char message[192]{};
@@ -163,16 +152,4 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     dispatch.viewSpaceToMetersFactor = frame->view_space_to_meters;
     const auto code = session->dispatch(&session->context, &dispatch.header);
     return code == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-}
-rsf_backend_result sr_release(void* pointer)
-{
-    // No independent release operation in FFX API. Closing requires GPU completion by the owner.
-    return pointer ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-}
-rsf_backend_result sr_version(void* pointer, uint64_t* id, const char** name)
-{
-    if (!pointer || !id || !name) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto* session = static_cast<FsrSession*>(pointer);
-    *id = session->version; *name = session->name;
-    return RSF_BACKEND_OK;
 }

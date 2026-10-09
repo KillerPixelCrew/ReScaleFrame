@@ -13,7 +13,8 @@
    labels a pass. What is established is the input set, so that is what this looks for.
 
    Identification comes from the bound resources alone: each view's resource is queried as a
-   texture and classified through `resource_roles.h`. Nothing is remembered from creation time, so
+   texture and classified through `resource_roles.h` against the caller's role table. Nothing is
+   remembered from creation time, so
    this module needs neither the observer nor agreement with it, and it works on textures allocated
    before it was installed.
 
@@ -53,6 +54,8 @@
 
 #include <stdint.h>
 
+#include <rescaleframe/resource_roles.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -68,8 +71,15 @@ extern "C" {
    so the next binding of the same target in the frame asks again. A frame that renders the same
    scene several times, the briefing's among them, binds the recombined target once per render,
    and only the main view's is the one to reconstruct at. */
-#define RSF_FRAME_TAP_ABI_VERSION 13u
+/* 14: the role table moved out of the tap into `rsf_frame_tap_options::roles`, so a tap given none
+   recognises no input set; `rsf_frame_tap_set_override_target` is gone, it had no caller; and the
+   constant watch can say it never writes (`rsf_frame_tap_set_constant_watch_writable`). */
+#define RSF_FRAME_TAP_ABI_VERSION 14u
 #define RSF_FRAME_TAP_CONSTANT_SLOTS 70u
+
+/* Rules a role table handed to the tap may hold. The tap copies them, so the table may be freed
+   after install. */
+#define RSF_FRAME_TAP_MAX_ROLE_RULES 16u
 
 /* Render targets watched at once. The first two answer the tail's question: the swap chain's back
    buffer, and whichever target the draw into it reads. The other two confirm chain candidates, the
@@ -327,8 +337,6 @@ typedef rsf_frame_tap_verdict (*rsf_frame_tap_verdict_fn)(void* user,
 #define RSF_FRAME_TAP_REFUSED_NO_LAYER 1u
 /* Several render targets. Moving slot zero changes what the others mean. */
 #define RSF_FRAME_TAP_REFUSED_MULTIPLE_TARGETS 2u
-/* Unordered access views bound, which are written wherever the draw decides and cannot follow. */
-#define RSF_FRAME_TAP_REFUSED_UAV 3u
 /* The draw already writes the layer, so there is nothing to move. */
 #define RSF_FRAME_TAP_REFUSED_ALREADY_LAYER 4u
 /* The blend could not be patched, and diverting without the patch would produce a layer with no
@@ -375,26 +383,30 @@ rsf_frame_tap_result rsf_frame_tap_set_constant_override(rsf_frame_tap_constant_
    callback must validate the remaining draw facts; a format alone does not identify a pass. */
 void rsf_frame_tap_set_constant_override_format(uint32_t format);
 
-/* Offer the constant override for every draw into `texture`, an `ID3D11Texture2D*`, as well as for
-   the candidates. Four slots; a null texture clears one. For scene geometry whose projection must
-   not carry the jitter, such as a separate translucency layer composited after the reconstruction. */
-rsf_frame_tap_result rsf_frame_tap_set_override_target(uint32_t index, void* texture);
-
 /* Called with the contents of a constant buffer the game uploads with Map(WRITE_DISCARD), before
    the Unmap is forwarded. Unreal 4.18's D3D11 RHI writes every pooled uniform buffer that way
    (`D3D11UniformBuffer.cpp:168`), so this is each view's uniform buffer as the frame fills it, and
    it sends each shader's own constants with UpdateSubresource from its CPU shadow, a whole
    sub-buffer sized to the upload (`WindowsD3D11ConstantBuffer.cpp:90`), right before the draw
-   that uses them; the watch sees those on a copy that is then uploaded in the shadow's place. `contents` is the
+   that uses them; the watch sees those on a copy that is then uploaded in the shadow's place, unless
+   it has said it only reads (`rsf_frame_tap_set_constant_watch_writable`). `contents` is the
    mapped memory itself and `bytes` the buffer's width: the callback may write into it, and what it
    writes is what the game's draw reads. Render thread; must not call into the context.
 
    `bytes` names the buffers to watch: a width, or zero for every constant buffer of up to 4096
-   bytes. Null disarms. */
+   bytes. Null disarms. A watch that is not needed should be disarmed: it costs a lookup on every
+   constant upload the game makes. */
 typedef void (*rsf_frame_tap_constants_fn)(void* user, void* buffer, void* contents,
                                            uint32_t bytes);
 rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes, rsf_frame_tap_constants_fn fn,
                                                       void* user);
+
+/* Whether the watch may write into the memory it is handed. The default is yes, and an
+   UpdateSubresource upload is then copied first, because the game's own shadow is not the watch's
+   to change. Say no while the watch only reads and the copy is skipped: `contents` is then the
+   game's memory and must not be written. Render thread, between draws. Reset to yes by uninstall
+   and by every `rsf_frame_tap_set_constant_watch`, so say no after arming, not before. */
+void rsf_frame_tap_set_constant_watch_writable(uint32_t writable);
 
 /* The `ID3D11Texture2D*` behind the render target the game has at output slot 0, as the game bound
    it, or null. Borrowed, not retained; render thread only. This is how a constant watch tells which
@@ -540,6 +552,11 @@ typedef struct rsf_frame_tap_options {
        interface. Silent until `rsf_frame_tap_set_candidates` has been given something to match. */
     rsf_frame_tap_target_fn on_candidate_draw;
     void* on_candidate_draw_user;
+    /* Appended in ABI 14. Which descriptor is which role, in the game's terms. The tap decides
+       nothing about formats itself: motion, depth, exposure, history and scene colour are whatever
+       these rules say, and a null table, or one with no rule for a role, never recognises it. At
+       most `RSF_FRAME_TAP_MAX_ROLE_RULES` rules, copied at install. */
+    const rsf_role_table* roles;
 } rsf_frame_tap_options;
 
 typedef struct rsf_frame_tap_status {

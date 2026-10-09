@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 9;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 10;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -161,6 +161,9 @@ pub struct RsfOverlayStats {
     pub fg_backend_choices: u32,
     /// Last provider-selection persistence result.
     pub fg_selection_result: i32,
+    /// ABI 10. Super-resolution backend IDs the host can switch to, as bits (bit n is backend ID
+    /// n). Zero means no mask was supplied and the default list applies.
+    pub sr_backend_choices: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -395,7 +398,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 256);
+        assert_eq!(size_of::<RsfOverlayStats>(), 264);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -427,6 +430,8 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, display_refresh_mhz), 236);
         assert_eq!(offset_of!(RsfOverlayStats, fg_backend), 240);
         assert_eq!(offset_of!(RsfOverlayStats, fg_selection_result), 252);
+        // Appended in ABI 10.
+        assert_eq!(offset_of!(RsfOverlayStats, sr_backend_choices), 256);
     }
 
     #[test]

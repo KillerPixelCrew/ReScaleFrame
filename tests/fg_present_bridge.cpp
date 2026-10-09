@@ -107,8 +107,8 @@ void retire(void*, void* session) {
     if (!api || !session) return;
     accepted &= api->status(session, &status) == RSF_BACKEND_OK;
     observed_active += status.active;
-    rsf_fg_retirement retirement{}; retirement.struct_size = sizeof(retirement);
-    accepted &= api->retirement(session, &retirement) == RSF_BACKEND_OK;
+    void* fence = nullptr; uint64_t value = 0;
+    accepted &= rsf_d3d11_present_retire(session, nullptr, &fence, &value) == RSF_BACKEND_OK && fence && value;
 }
 }
 int main(int argc, char** argv) {
@@ -144,6 +144,10 @@ int main(int argc, char** argv) {
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup); setup.runtime_directory_utf8 = argv[2];
     setup.backend = backend; setup.max_generated_frames = 3; setup.log = log; setup.accept_window = accept;
     setup.prepare = prepare; setup.latency_event = latency; setup.retire = retire;
+    // The fixture's engines: native D3D12 stands in for Unity, D3D11 for AC7.
+    setup.depth_inverted = 1; setup.depth_infinite = native ? 0u : 1u; setup.units_to_meters = native ? 1.0f : 0.01f;
+    setup.engine_type = native ? 2u : 1u; setup.engine_version_utf8 = native ? "6000.3" : "4.18.3";
+    setup.project_id_utf8 = native ? "57a42c7e-faf0-4bda-a9f9-892870948ac1" : "a3ed1f08-3542-4698-b85c-e1a9908e861a";
     if (legacy_hot) {
         setup.runtime_switching = 1; setup.streamline_directory_utf8 = argv[2];
         setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = argc == 7 ? argv[6] : argv[2];
@@ -154,6 +158,8 @@ int main(int argc, char** argv) {
         request.runtime_directory_utf8 = argv[2]; request.max_generated_frames = 3;
         request.options = {sizeof(request.options), RSF_FG_FIXED, 1, RSF_REFLEX_OFF, 0, 0};
         request.depth_inverted = 1; request.units_to_meters = 1; request.log = log; request.accept_window = accept;
+        request.engine_type = setup.engine_type; request.engine_version_utf8 = setup.engine_version_utf8;
+        request.project_id_utf8 = setup.project_id_utf8;
         if (hot) {
             request.runtime_switching = 1; request.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
             request.fsr3_directory_utf8 = request.fsr4_directory_utf8 = argv[2];

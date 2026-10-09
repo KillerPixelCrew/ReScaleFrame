@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "truesky_motion.h"
-#include <d3dcompiler.h>
+#include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
 #include <algorithm>
 using Microsoft::WRL::ComPtr;
@@ -61,17 +61,10 @@ bool prepare(rsf_ac7_cloud_depth& state, ID3D11Device* device, uint32_t width, u
     if (state.refused) return false;
     if (!state.shader) {
         state.refused = true;
-        HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!compiler) return false;
-        auto compile = reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(compiler, "D3DCompile")));
-        ComPtr<ID3DBlob> bytes, errors;
-        HRESULT result = compile ? compile(source, sizeof(source) - 1, "AC7TrueSkyCloudDepth", nullptr, nullptr,
-            "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &bytes, &errors) : E_FAIL;
-        if (SUCCEEDED(result)) result = device->CreateComputeShader(bytes->GetBufferPointer(), bytes->GetBufferSize(), nullptr, &state.shader);
-        bytes.Reset(); errors.Reset(); FreeLibrary(compiler);
+        const bool compiled = rsf::compile_compute(device, source, "AC7TrueSkyCloudDepth", "main", &state.shader);
         D3D11_BUFFER_DESC buffer{};
         buffer.ByteWidth = sizeof(Params); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        if (FAILED(result) || FAILED(device->CreateBuffer(&buffer, nullptr, &state.constants))) return false;
+        if (!compiled || FAILED(device->CreateBuffer(&buffer, nullptr, &state.constants))) return false;
         state.refused = false;
     }
     if (state.texture && state.width == width && state.height == height) return true;

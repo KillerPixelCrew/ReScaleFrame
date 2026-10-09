@@ -8,6 +8,25 @@
 #include <initializer_list>
 #include <cstring>
 
+// What the constant watch was handed by an UpdateSubresource.
+struct Watched {
+    const void* contents = nullptr;
+    uint32_t bytes = 0;
+    unsigned calls = 0;
+    bool write = false;
+};
+
+static void watch_constants(void* user, void*, void* contents, uint32_t bytes)
+{
+    auto& seen = *static_cast<Watched*>(user);
+    seen.contents = contents;
+    seen.bytes = bytes;
+    ++seen.calls;
+    if (seen.write) {
+        static_cast<float*>(contents)[0] = 9.0f;
+    }
+}
+
 struct Bindings {
     ID3D11Buffer *vs, *ps, *replacement_vs, *replacement_ps;
     unsigned calls = 0;
@@ -181,6 +200,67 @@ int main()
     check(!rsf_constant_twins_find(cache, bindings.vs),
           "A 16-byte material buffer must not receive a stale 4096-byte view twin.");
     rsf_constant_twins_destroy(cache);
+
+    // The constant watch sees UpdateSubresource uploads on a copy it may write to, because the
+    // game's own memory is not its to change. A watch that says it only reads is shown that memory
+    // itself, and pays for no copy.
+    {
+        ID3D11Buffer* uploaded = buffer(0.0f);
+        D3D11_BUFFER_DESC read_desc{};
+        read_desc.ByteWidth = 16;
+        read_desc.Usage = D3D11_USAGE_STAGING;
+        read_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ID3D11Buffer* readback = nullptr;
+        check(uploaded && SUCCEEDED(device->CreateBuffer(&read_desc, nullptr, &readback)),
+              "The upload fixture must be created.");
+        auto first_float = [&] {
+            float value = -1.0f;
+            context->CopyResource(readback, uploaded);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (SUCCEEDED(context->Map(readback, 0, D3D11_MAP_READ, 0, &mapped))) {
+                value = *static_cast<const float*>(mapped.pData);
+                context->Unmap(readback, 0);
+            }
+            return value;
+        };
+        if (uploaded && readback) {
+            Watched seen;
+            float upload[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+            rsf_frame_tap_set_constant_watch(16, watch_constants, &seen);
+            seen.write = true;
+            context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
+            check(seen.calls == 1 && seen.bytes == 16 && seen.contents != upload,
+                  "A writing watch must be handed a copy of the upload.");
+            check(upload[0] == 1.0f, "The game's own memory must not be written by the watch.");
+            check(first_float() == 9.0f, "What the watch writes must be what the buffer receives.");
+
+            rsf_frame_tap_set_constant_watch_writable(0);
+            seen.write = false;
+            context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
+            check(seen.calls == 2 && seen.contents == upload,
+                  "A watch that only reads must be handed the game's own memory.");
+            check(first_float() == 1.0f, "An unwritten upload must arrive as the game made it.");
+
+            // A buffer of another width is not the watch's business, and the verdict for it must
+            // not be taken from the one remembered for the first.
+            rsf_frame_tap_set_constant_watch_writable(1);
+            rsf_frame_tap_set_constant_watch(32, watch_constants, &seen);
+            context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
+            check(seen.calls == 2, "A buffer of another width than the one watched must be skipped.");
+
+            // Arming a watch makes it a writer again, so a watch that wrote while the last one only
+            // read cannot reach the game's memory.
+            rsf_frame_tap_set_constant_watch_writable(0);
+            rsf_frame_tap_set_constant_watch(16, watch_constants, &seen);
+            seen.write = true;
+            context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
+            check(seen.calls == 3 && seen.contents != upload && upload[0] == 1.0f,
+                  "A newly armed watch must be handed a copy until it says it only reads.");
+            rsf_frame_tap_set_constant_watch(0, nullptr, nullptr);
+        }
+        if (readback) { readback->Release(); }
+        if (uploaded) { uploaded->Release(); }
+    }
     hc->Release(); dc->Release(); gc->Release(); hs->Release(); ds->Release(); gs->Release();
     context->ClearState();
     bind_draw();

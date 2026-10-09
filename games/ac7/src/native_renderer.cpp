@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/ac7_native_renderer.h>
 #include <rescaleframe/ac7_view.h>
+#include <rescaleframe/ac7_hooks.h>
+#include <rescaleframe/ac7_memory.h>
 #include "truesky_depth.h"
 #include "truesky_motion.h"
 #include "contact_shadow.h"
@@ -22,20 +24,51 @@
 #endif
 
 namespace {
+using rsf::ac7::copy_memory;
+using rsf::ac7::read;
 using Process = void(*)(void*, void*);
 struct Site {
     uint32_t rva, role;
     const char* expected;
     void* target = nullptr;
     void* original = nullptr;
+    void* detour = nullptr;
 };
+// Index of each hooked function in sites[], in table order.
+enum Hook : uint32_t {
+    hook_process_tonemap, hook_process_aa, hook_process_material, hook_process_hud, hook_process_composite,
+    hook_process_output,
+    hook_descriptor_tonemap, hook_descriptor_aa, hook_descriptor_material, hook_descriptor_hud,
+    hook_descriptor_composite, hook_descriptor_output,
+    hook_postprocess, hook_context, hook_visibility, hook_construct,
+    hook_widget_queue, hook_widget_targets, hook_widget_draw,
+    hook_engine_tick, hook_renderer_retire, hook_poll_input, hook_game_instance_init, hook_target_init,
+    hook_simulation_a, hook_simulation_b, hook_redraw, hook_viewport_draw,
+    hook_slate_private, hook_slate_allocate, hook_slate_task, hook_slate_window, hook_slate_texture,
+    hook_translucency_size, hook_unmodified_begin, hook_unmodified_resolve, hook_translucency_render,
+    hook_pixel_view_uniform, hook_rhi_pixel_uniform, hook_rhi_pixel_tables,
+    hook_pixel_enqueue_a, hook_pixel_enqueue_b, hook_pixel_enqueue_c, hook_pixel_enqueue_d,
+    hook_sky_projection, hook_sky_render, hook_temporal_sample_index, hook_scene_colour_format,
+    hook_render_family, hook_frame_task_construct, hook_frame_task_execute,
+    hook_rhi_frame_begin, hook_rhi_frame_end, hook_frame_sync, hook_pump_messages, hook_engine_pacing,
+    hook_create_pixel_shader, hook_base_pass,
+    hook_count
+};
+static_assert(hook_process_tonemap == 0 && hook_process_output == 5);
+// The pass hooks come first: one process and one descriptor hook per reviewed graph pass.
+constexpr uint32_t process_hooks = 6;
+// Hooks that only log evidence of a native failure. They are not installed unless the pixel
+// binding diagnostic is on, because they run for every pixel uniform bind of every draw.
+constexpr bool evidence_hook(uint32_t hook)
+{ return hook >= hook_rhi_pixel_uniform && hook <= hook_pixel_enqueue_d; }
 Site sites[] = {
     {0x10b0220, RSF_AC7_ROLE_TONEMAP, "\x40\x55\x53\x56\x57\x41\x55\x41\x57\x48\x8d\x6c\x24\xb8\x48\x81"},
     {0xfbfe90, RSF_AC7_ROLE_AA, "\x40\x55\x56\x41\x56\x48\x8d\x6c\x24\xb9\x48\x81\xec\x00\x01\x00"},
     {0x1004960, RSF_AC7_ROLE_MATERIAL, "\x40\x55\x53\x56\x57\x41\x54\x41\x55\x41\x56\x48\x8d\xac\x24\xe0"},
     {0xfcbc90, RSF_AC7_ROLE_HUD, "\x40\x55\x53\x56\x41\x55\x41\x56\x41\x57\x48\x8d\xac\x24\xe8\xfe"},
     {0xfc86c0, RSF_AC7_ROLE_COMPOSITE, "\x48\x89\x5c\x24\x18\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57"},
-    {0x10b1650, RSF_AC7_ROLE_OUTPUT, "\x40\x55\x56\x57\x48\x8d\x6c\x24\xf0\x48\x81\xec\x10\x01\x00\x00"},    {0x1098ff0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"},
+    {0x10b1650, RSF_AC7_ROLE_OUTPUT, "\x40\x55\x56\x57\x48\x8d\x6c\x24\xf0\x48\x81\xec\x10\x01\x00\x00"},
+    {0x1098ff0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"},
     {0xfb6f20, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"},
     {0xff7b50, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xfa"},
     {0xfb7bc0, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"},
@@ -88,33 +121,80 @@ Site sites[] = {
     {0xe31e90, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
     {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
 };
+static_assert(sizeof(sites) / sizeof(sites[0]) == hook_count);
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
-std::atomic<uint32_t> entry_calls{0};
-std::atomic<uint32_t> outer_calls{0};
+// Hook bodies count themselves in and out so stop() can tell when no thread is inside this module.
+// Each thread keeps to one cache line, so the counting does not bounce a shared line between the
+// game, render and RHI threads; the slots are summed only on the stop and failure paths.
+constexpr uint32_t guard_slot_count = 64;
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4324) // the padding to one cache line is the point
+#endif
+struct alignas(64) GuardSlot {
+    std::atomic<uint32_t> entry{0}, outer{0};
+};
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+GuardSlot guard_slots[guard_slot_count];
+std::atomic<uint32_t> next_guard_slot{0};
+GuardSlot& guard_slot()
+{
+    thread_local uint32_t index = guard_slot_count;
+    if (index == guard_slot_count) index = next_guard_slot.fetch_add(1, std::memory_order_relaxed) % guard_slot_count;
+    return guard_slots[index];
+}
+// Hook bodies held by a thread: the entry guards, and the outer guards too when asked.
+uint32_t guards_held(bool outer_too)
+{
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    uint32_t total = 0;
+    for (const auto& slot : guard_slots) {
+        total += slot.entry.load(std::memory_order_acquire);
+        if (outer_too) total += slot.outer.load(std::memory_order_acquire);
+    }
+    return total;
+}
 struct OuterGuard {
-    OuterGuard() { ++outer_calls; }
-    ~OuterGuard() { --outer_calls; }
+    GuardSlot& slot = guard_slot();
+    OuterGuard() { slot.outer.fetch_add(1, std::memory_order_relaxed); }
+    ~OuterGuard() { slot.outer.fetch_sub(1, std::memory_order_release); }
 };
 struct EntryGuard {
-    EntryGuard() { entry_calls.fetch_add(1); }
-    ~EntryGuard() { entry_calls.fetch_sub(1); }
+    GuardSlot& slot = guard_slot();
+    EntryGuard() { slot.entry.fetch_add(1, std::memory_order_relaxed); }
+    ~EntryGuard() { slot.entry.fetch_sub(1, std::memory_order_release); }
 };
-bool copy(void* output, const void* input, size_t size)
+unsigned char* game_module()
 {
-    if (!output || !input) return false;
-#if defined(_MSC_VER)
-    __try { std::memcpy(output, input, size); return true; }
-    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION m{};
-    if (!VirtualQuery(input, &m, sizeof(m)) || m.State != MEM_COMMIT ||
-        (m.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
-        uintptr_t(input) + size > uintptr_t(m.BaseAddress) + m.RegionSize) return false;
-    std::memcpy(output, input, size); return true;
-#endif
+    static unsigned char* const module = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
+    return module;
 }
-template<class T> bool read(uint64_t input, size_t offset, T& output)
-{ return input && copy(&output, reinterpret_cast<const void*>(uintptr_t(input) + offset), sizeof(T)); }
+#if defined(RSF_AC7_GRAPH_TEST)
+void* (*test_engine)(uint32_t) = nullptr;
+#endif
+template<class Fn> Fn engine(uint32_t rva)
+{
+#if defined(RSF_AC7_GRAPH_TEST)
+    if (test_engine) return reinterpret_cast<Fn>(test_engine(rva));
+#endif
+    return reinterpret_cast<Fn>(game_module() + rva);
+}
+using MoveUniform = void*(*)(void*, void*);
+// True when `count` bytes of live code at `address` equal `expected`. Unreadable memory differs.
+bool bytes_match(const void* address, const void* expected, size_t count)
+{
+    unsigned char actual[16]{};
+    return count <= sizeof(actual) && copy_memory(actual, address, count) && !std::memcmp(actual, expected, count);
+}
+// The engine singleton (GEngine), or 0 when it cannot be read.
+uint64_t game_engine_object()
+{
+    uint64_t object = 0;
+    copy_memory(&object, engine<const void*>(0x3cbbc28), 8);
+    return object;
+}
 }
 namespace { struct PassLease; }
 struct RendererIdentity {
@@ -132,31 +212,35 @@ struct WindowSource {
 struct FinalSurfaceSource { uint64_t source = 0, viewport = 0, surface = 0; bool ambiguous = false; };
 struct UniformOwner { uint64_t renderer = 0, view = 0, uniform = 0; };
 struct PixelUniformBinding { uint64_t sequence = 0, context = 0, shader = 0, uniform = 0, command = 0; uint32_t slot = 0; };
+// A `call [reg+disp]` in third-party code redirected through a pointer slot allocated within reach of
+// its `call [rip+rel]` form. Keeps both byte sequences so the restore needs nothing else.
+struct CallRelay {
+    unsigned char* call = nullptr;
+    void* slot = nullptr;
+    unsigned char native[7]{}, relayed[7]{};
+    uint32_t size = 0;
+};
 struct rsf_ac7_native_renderer {
     rsf_ac7_native_renderer_options options{};
     rsf_ac7_render_scopes* scopes = nullptr;
     std::atomic<bool> active{false};
     std::atomic<bool> quiescing{false};
     unsigned char* cloud_resolution_site = nullptr;
-    unsigned char* cloud_depth_call = nullptr;
-    unsigned char cloud_depth_call_bytes[7]{};
+    CallRelay cloud_depth_call;
     unsigned char* cloud_depth_branch = nullptr;
     unsigned char* cloud_depth_format_site = nullptr;
-    void* cloud_depth_relay = nullptr;
-    ID3D11ComputeShader* cloud_depth_shader = nullptr;
-    ID3D11Device* cloud_depth_device = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> cloud_depth_shader;
+    Microsoft::WRL::ComPtr<ID3D11Device> cloud_depth_device;
     std::atomic<bool> cloud_depth_ready{false};
     std::atomic<uint32_t> cloud_depth_dispatches{0};
     std::atomic<uint32_t> cloud_depth_binding_refusals{0};
-    unsigned char* cloud_motion_call = nullptr;
-    void* cloud_motion_relay = nullptr;
+    CallRelay cloud_motion_call;
     rsf_ac7_cloud_depth cloud_motion{};
     std::atomic<uint32_t> cloud_motion_reports{0};
     bool cloud_depth_shader_refused = false;
     unsigned char* scene_precision_site = nullptr;
     bool cloud_resolution_refused = false;
     std::mutex cloud_resolution_guard;
-    uint32_t hooks = 0;
     std::atomic<uint32_t> render_thread{0};
     std::atomic<PassLease*> retired{nullptr};
     std::mutex identities_guard;
@@ -175,6 +259,9 @@ struct rsf_ac7_native_renderer {
     HHOOK input_hook = nullptr;
     std::atomic<uint32_t> contact_reports{0};
     std::array<FinalSurfaceSource, 64> final_surfaces{};
+    // Surface of each final_surfaces slot, readable without the lock. A Slate texture bind that
+    // does not match it cannot be the final scene surface, so most binds never take the lock.
+    std::array<std::atomic<uint64_t>, 64> final_surface_hint{};
     std::array<UniformOwner, 4096> uniform_owners{};
     std::atomic<uint32_t> pending_uniforms{0};
     std::mutex pixel_bindings_guard;
@@ -190,12 +277,28 @@ thread_local bool inside_simulation = false, after_simulation = false;
 thread_local bool simulation_closed = false, simulation_started = false, input_sampled = false;
 thread_local uint64_t input_source_frame = 0, reserved_source_frame = 0;
 thread_local uint32_t source_render_expected = 0;
+// The host's current render configuration, or false when it has none.
+bool fetch_config(const rsf_ac7_native_renderer& self, rsf_game_render_config& config)
+{
+    config = {}; config.struct_size = sizeof(config);
+    return self.options.render_config && self.options.render_config(self.options.user, &config);
+}
+constexpr uint64_t view_stride = 0x27c0;
+// Calls fn(view address, index) for each view of a renderer, stopping when it returns false. False
+// when the view array cannot be read or has an implausible count.
+template<class Fn> bool for_each_view(void* renderer, Fn&& fn)
+{
+    uint64_t storage = 0; int32_t count = 0;
+    if (!read(uint64_t(uintptr_t(renderer)), 0xb8, storage) || !read(uint64_t(uintptr_t(renderer)), 0xc0, count) ||
+        count < 1 || count > 16) return false;
+    for (int32_t i = 0; i < count; ++i) if (!fn(storage + uint64_t(i) * view_stride, i)) break;
+    return true;
+}
 bool object_has_class(uint64_t object, uint32_t cache_rva)
 {
     uint64_t expected = 0, actual = 0, bases = 0, entry = 0;
     int32_t depth = 0, actual_depth = 0;
-    const auto module = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
-    return object && copy(&expected, module + cache_rva, 8) && expected && read(object, 0x10, actual) &&
+    return object && copy_memory(&expected, game_module() + cache_rva, 8) && expected && read(object, 0x10, actual) &&
         read(expected, 0x90, depth) && read(actual, 0x90, actual_depth) && depth >= 0 &&
         depth <= actual_depth && actual_depth <= 4096 && read(actual, 0x88, bases) &&
         read(bases, size_t(depth) * 8, entry) && entry == expected + 0x88;
@@ -217,9 +320,9 @@ uint32_t render_screen(uint32_t& reset, uint32_t& why, uint64_t& view_target)
     uint64_t level = 0, settings = 0, pauser = 0, hud = 0, ui = 0, layer = 0, focused = 0, mode = 0;
     int32_t count = 0; uint8_t camera_input = 0, vr = 0, cut = 0;
     view_target = 0;
-    const auto module = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    engine_object = game_engine_object();
     why = 1;
-    if (!copy(&engine_object, module + 0x3cbbc28, 8) || !read(engine_object, 0x720, client) ||
+    if (!read(engine_object, 0x720, client) ||
         !read(client, 0x80, world) || !read(client, 0x88, instance) || !read(instance, 0x38, players) ||
         !read(instance, 0x40, count) || count != 1 || !read(players, 0, player) || !read(player, 0x30, controller) ||
         !read(controller, 0x370, pawn) || !read(controller, 0x400, camera) ||
@@ -286,9 +389,9 @@ LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
 }
 bool source_primary_renderer(rsf_ac7_native_renderer& self, void* renderer)
 {
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    rsf_game_render_config config{};
     uint64_t views = 0; int32_t count = 0, rect[4]{}; unsigned char capture[3]{};
-    return self.options.render_config && self.options.render_config(self.options.user, &config) &&
+    return fetch_config(self, config) &&
         config.output_width && config.output_height && read(uint64_t(uintptr_t(renderer)), 0xb8, views) &&
         read(uint64_t(uintptr_t(renderer)), 0xc0, count) && count == 1 && read(views, 0x90, rect) &&
         read(views, 0xc42, capture) && !capture[0] && !capture[1] && !capture[2] &&
@@ -365,7 +468,7 @@ void hooked_engine_tick(void* loop)
             "AC7 input markers refused: game-thread message hook failed");
     }
     cpu_event(self, reserved_source_frame, RSF_GAME_CPU_FRAME_BEGIN);
-    reinterpret_cast<void(*)(void*)>(sites[19].original)(loop);
+    reinterpret_cast<void(*)(void*)>(sites[hook_engine_tick].original)(loop);
     cpu_event(self, reserved_source_frame, RSF_GAME_CPU_FRAME_END);
     reserved_source_frame = old_reserved; submitting_viewport = old_viewport;
     inside_engine_tick = old_tick; input_source_frame = old_source; shared_repaint_targets = old_repaint;
@@ -375,9 +478,7 @@ void hooked_engine_tick(void* loop)
 }
 bool current_game_engine(void* object)
 {
-    uint64_t current = 0;
-    return copy(&current, reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x3cbbc28, 8) &&
-        current == uint64_t(uintptr_t(object));
+    return object && game_engine_object() == uint64_t(uintptr_t(object));
 }
 template<uint32_t Index> void hooked_simulation(void* object, float delta, uint8_t idle)
 {
@@ -403,20 +504,19 @@ void hooked_redraw(void* object, uint8_t present)
     if (inside_engine_tick && inside_simulation && input_source_frame && !after_simulation && current_game_engine(object)) {
         after_simulation = true;
     }
-    reinterpret_cast<void(*)(void*, uint8_t)>(sites[26].original)(object, present);
+    reinterpret_cast<void(*)(void*, uint8_t)>(sites[hook_redraw].original)(object, present);
 }
 void hooked_viewport_draw(void* viewport, uint8_t should_present)
 {
     OuterGuard lifetime;
     const auto saved = submitting_viewport;
     submitting_viewport = 0;
-    uint64_t engine_object = 0, client = 0, main_viewport = 0;
+    uint64_t client = 0, main_viewport = 0;
     auto* self = installed.load(std::memory_order_acquire);
     if (self && self->active.load() && inside_engine_tick && input_source_frame &&
-        copy(&engine_object, reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x3cbbc28, 8) &&
-        read(engine_object, 0x720, client) && read(client, 0xa0, main_viewport) &&
+        read(game_engine_object(), 0x720, client) && read(client, 0xa0, main_viewport) &&
         main_viewport == uint64_t(uintptr_t(viewport))) submitting_viewport = main_viewport;
-    reinterpret_cast<void(*)(void*, uint8_t)>(sites[27].original)(viewport, should_present);
+    reinterpret_cast<void(*)(void*, uint8_t)>(sites[hook_viewport_draw].original)(viewport, should_present);
     submitting_viewport = saved;
 }
 void hooked_poll_input(void* slate)
@@ -431,7 +531,7 @@ void hooked_poll_input(void* slate)
     if (self && self->active.load() && inside_engine_tick && input_source_frame &&
         read(uint64_t(uintptr_t(slate)), 0x1b0, modal_count) && modal_count == 0)
         cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_INPUT_CONTROLLER);
-    reinterpret_cast<void(*)(void*)>(sites[21].original)(slate);
+    reinterpret_cast<void(*)(void*)>(sites[hook_poll_input].original)(slate);
 }
 void hooked_pump_messages(uint8_t main_loop)
 {
@@ -440,17 +540,17 @@ void hooked_pump_messages(uint8_t main_loop)
         input_sampled = true;
         cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_INPUT_SAMPLE);
     }
-    reinterpret_cast<void(*)(uint8_t)>(sites[54].original)(main_loop);
+    reinterpret_cast<void(*)(uint8_t)>(sites[hook_pump_messages].original)(main_loop);
 }
 void hooked_frame_sync(void* sync, uint8_t one_frame_lag)
 {
     OuterGuard lifetime;
-    const auto* engine_sync = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x3a4a6f8;
+    const auto* engine_sync = game_module() + 0x3a4a6f8;
     if (sync == engine_sync && inside_engine_tick && input_source_frame && simulation_started && !simulation_closed) {
         simulation_closed = true;
         cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_SIMULATION_END);
     }
-    reinterpret_cast<void(*)(void*, uint8_t)>(sites[53].original)(sync, one_frame_lag);
+    reinterpret_cast<void(*)(void*, uint8_t)>(sites[hook_frame_sync].original)(sync, one_frame_lag);
 }
 void hooked_engine_pacing(void* object)
 {
@@ -459,7 +559,7 @@ void hooked_engine_pacing(void* object)
         cpu_event(installed.load(std::memory_order_acquire), reserved_source_frame, RSF_GAME_CPU_PACING);
     // This runs after BeginFrame dispatch, and before PumpMessages/PollGameDeviceState.
     // Sleeping before the native time update also includes that delay in FApp's delta time.
-    reinterpret_cast<void(*)(void*)>(sites[55].original)(object);
+    reinterpret_cast<void(*)(void*)>(sites[hook_engine_pacing].original)(object);
 }
 struct NativeShaderCode { const uint8_t* data; int32_t count, capacity; };
 static_assert(sizeof(NativeShaderCode) == 16 && offsetof(NativeShaderCode, count) == 8);
@@ -467,10 +567,10 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
 {
     OuterGuard lifetime;
     using Create = void*(*)(void*, void*, const NativeShaderCode*);
-    auto original = reinterpret_cast<Create>(sites[56].original);
+    auto original = reinterpret_cast<Create>(sites[hook_create_pixel_shader].original);
     auto* self = installed.load(std::memory_order_acquire);
     NativeShaderCode input{};
-    if (!self || self->quiescing.load() || !copy(&input, code, sizeof(input)) || !input.data ||
+    if (!self || self->quiescing.load() || !copy_memory(&input, code, sizeof(input)) || !input.data ||
         input.count < 32 || input.count > 8 * 1024 * 1024 || input.capacity < input.count)
         return original(rhi, result, code);
     // The matched native factory reads ResourceTableBits and five uint32 arrays, then DXBC.
@@ -478,15 +578,15 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
     size_t offset = 4;
     for (uint32_t i = 0; i < 5; ++i) {
         uint32_t count = 0;
-        if (offset + 4 > size_t(input.count) || !copy(&count, input.data + offset, 4) ||
+        if (offset + 4 > size_t(input.count) || !copy_memory(&count, input.data + offset, 4) ||
             count > 65536 || size_t(count) * 4 > size_t(input.count) - offset - 4)
             return original(rhi, result, code);
         offset += 4 + size_t(count) * 4;
     }
     uint32_t optional = 0, dxbc_size = 0; char magic[4]{};
-    if (offset + 32 > size_t(input.count) || !copy(magic, input.data + offset, 4) || std::memcmp(magic, "DXBC", 4) ||
-        !copy(&optional, input.data + input.count - 4, 4) || optional < 4 || optional > size_t(input.count) - offset ||
-        !copy(&dxbc_size, input.data + offset + 24, 4) || dxbc_size != size_t(input.count) - offset - optional)
+    if (offset + 32 > size_t(input.count) || !copy_memory(magic, input.data + offset, 4) || std::memcmp(magic, "DXBC", 4) ||
+        !copy_memory(&optional, input.data + input.count - 4, 4) || optional < 4 || optional > size_t(input.count) - offset ||
+        !copy_memory(&dxbc_size, input.data + offset + 24, 4) || dxbc_size != size_t(input.count) - offset - optional)
         return original(rhi, result, code);
     std::vector<uint8_t> transformed;
     const auto patched = rsf_ac7_contact_shadow_correct(input.data + offset, size_t(input.count) - offset, transformed);
@@ -502,7 +602,7 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
         NativeShaderCode replacement{complete.data(), int32_t(complete.size()), int32_t(complete.size())};
         auto* created = original(rhi, result, &replacement);
         uint64_t shader = 0, native = 0;
-        const bool accepted = copy(&shader, result, sizeof(shader)) && read(shader, 0xa0, native) && native;
+        const bool accepted = copy_memory(&shader, result, sizeof(shader)) && read(shader, 0xa0, native) && native;
         if (self->contact_reports.fetch_add(1) < 8) {
             char message[288]{};
             std::snprintf(message, sizeof(message),
@@ -522,7 +622,7 @@ thread_local rsf_ac7_render_ticket* full_frame_ticket = nullptr;
 void* hooked_frame_task_construct(void* task, void* completion, int32_t prerequisites)
 {
     OuterGuard lifetime;
-    auto* result = reinterpret_cast<void*(*)(void*, void*, int32_t)>(sites[49].original)(task, completion, prerequisites);
+    auto* result = reinterpret_cast<void*(*)(void*, void*, int32_t)>(sites[hook_frame_task_construct].original)(task, completion, prerequisites);
     auto* self = installed.load(std::memory_order_acquire);
     if (self && self->active.load() && inside_engine_tick && reserved_source_frame) {
         bool bound = false;
@@ -545,7 +645,7 @@ void hooked_frame_task_execute(void* task, void* scratch, uint32_t thread)
             frame_task_source = entry.source; entry = {}; --self->live_frame_tasks; break;
         }
     }
-    reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[50].original)(task, scratch, thread);
+    reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[hook_frame_task_execute].original)(task, scratch, thread);
     frame_task_source = saved;
 }
 void hooked_rhi_frame_begin(void* list)
@@ -560,7 +660,7 @@ void hooked_rhi_frame_begin(void* list)
             self->active.store(false); log(*self, "AC7 full RHI frame refused: overlapping or invalid BeginFrame");
         }
     }
-    reinterpret_cast<void(*)(void*)>(sites[51].original)(list);
+    reinterpret_cast<void(*)(void*)>(sites[hook_rhi_frame_begin].original)(list);
 }
 void hooked_rhi_frame_end(void* list)
 {
@@ -572,7 +672,7 @@ void hooked_rhi_frame_end(void* list)
         }
         full_frame_ticket = nullptr;
     }
-    reinterpret_cast<void(*)(void*)>(sites[52].original)(list);
+    reinterpret_cast<void(*)(void*)>(sites[hook_rhi_frame_end].original)(list);
 }
 void hooked_renderer_retire(void* list, void* renderer)
 {
@@ -591,7 +691,7 @@ void hooked_renderer_retire(void* list, void* renderer)
             }
         }
     }
-    reinterpret_cast<void(*)(void*, void*)>(sites[20].original)(list, renderer);
+    reinterpret_cast<void(*)(void*, void*)>(sites[hook_renderer_retire].original)(list, renderer);
     {
         EntryGuard producer;
         // Native task/RHI waits may release the last leases synchronously. OuterGuard keeps
@@ -624,7 +724,7 @@ void hooked_render_family(void* list, void* renderer)
             !rsf_ac7_render_scope_open(self->scopes, list, &pass, &ticket))
             log(*self, "AC7 submission scope refused: no RHI completion marker will be queued");
     }
-    reinterpret_cast<void(*)(void*, void*)>(sites[48].original)(list, renderer);
+    reinterpret_cast<void(*)(void*, void*)>(sites[hook_render_family].original)(list, renderer);
     if (ticket && !rsf_ac7_render_scope_close(ticket, list)) {
         self->active.store(false); log(*self, "AC7 submission source deactivated: RHI scope could not close");
     }
@@ -642,26 +742,64 @@ struct PassLease {
 };
 using GetPointer = void*(*)(void*, uint32_t);
 using Ref = uint32_t(*)(void*);
+struct NativeRef { uint64_t node = 0; uint32_t index = 0, padding = 0; };
+struct NativeOutput { alignas(8) unsigned char descriptor[0x50]{}; uint64_t pool = 0; uint32_t dependencies = 0, padding = 0; };
+static_assert(sizeof(NativeRef) == 0x10 && sizeof(NativeOutput) == 0x60 && offsetof(NativeOutput, pool) == 0x50);
+// Virtual slot `slot` (a byte offset into the vtable) of the engine object at `node`, or 0.
+uint64_t method(uint64_t node, uint32_t slot)
+{
+    uint64_t table = 0, entry = 0;
+    if (!read(node, 0, table) || !read(table, slot, entry)) return 0;
+    return entry;
+}
+NativeRef* input_ref(uint64_t node, uint32_t index = 0)
+{
+    const auto entry = method(node, 8);
+    return entry ? static_cast<NativeRef*>(reinterpret_cast<GetPointer>(uintptr_t(entry))(
+        reinterpret_cast<void*>(uintptr_t(node)), index)) : nullptr;
+}
+NativeOutput* node_output(uint64_t node, uint32_t index = 0)
+{
+    const auto entry = method(node, 0x38);
+    return entry ? static_cast<NativeOutput*>(reinterpret_cast<GetPointer>(uintptr_t(entry))(
+        reinterpret_cast<void*>(uintptr_t(node)), index)) : nullptr;
+}
+// Calls fn(ref) for each dependency of a graph node until it returns false. True only when the
+// node lists all of its (at most 16) dependencies and fn took every one.
+template<class Fn> bool for_each_dependency(uint64_t node, Fn&& fn)
+{
+    const auto entry = method(node, 0x40);
+    if (!entry) return false;
+    for (uint32_t i = 0; i <= 16; ++i) {
+        const auto* ref = static_cast<const NativeRef*>(reinterpret_cast<GetPointer>(uintptr_t(entry))(
+            reinterpret_cast<void*>(uintptr_t(node)), i));
+        if (!ref) return true;
+        if (!fn(*ref)) return false;
+    }
+    return false;
+}
+void* native_texture(uint64_t texture)
+{
+    const auto entry = method(texture, 0x30);
+    return entry ? reinterpret_cast<void*(*)(void*)>(uintptr_t(entry))(
+        reinterpret_cast<void*>(uintptr_t(texture))) : nullptr;
+}
 uint64_t output_pool(uint64_t node, uint32_t index)
 {
-    uint64_t table = 0, method = 0;
-    if (!read(node, 0, table) || !read(table, 0x38, method) || !method) return 0;
-    auto* output = reinterpret_cast<GetPointer>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(node)), index);
-    uint64_t pool = 0; read(uint64_t(uintptr_t(output)), 0x50, pool); return pool;
+    uint64_t pool = 0;
+    read(uint64_t(uintptr_t(node_output(node, index))), offsetof(NativeOutput, pool), pool);
+    return pool;
 }
 void pool_ref(uint64_t pool, uint32_t offset)
 {
-    uint64_t table = 0, method = 0;
-    if (read(pool, 0, table) && read(table, offset, method) && method)
-        reinterpret_cast<Ref>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(pool)));
+    const auto entry = method(pool, offset);
+    if (entry) reinterpret_cast<Ref>(uintptr_t(entry))(reinterpret_cast<void*>(uintptr_t(pool)));
 }
 void* pool_texture(uint64_t pool, bool target)
 {
-    uint64_t texture = 0, table = 0, method = 0;
+    uint64_t texture = 0;
     if (!read(pool, target ? 8 : 16, texture) || !texture) read(pool, 8, texture);
-    if (!read(texture, 0, table) || !read(table, 0x30, method) || !method) return nullptr;
-    using GetNative = void*(*)(void*);
-    return reinterpret_cast<GetNative>(uintptr_t(method))(reinterpret_cast<void*>(uintptr_t(texture)));
+    return native_texture(texture);
 }
 void resolve_pass(void* object, rsf_ac7_render_scope* scope)
 {
@@ -690,8 +828,7 @@ void drain_retired(rsf_ac7_native_renderer& self)
     while (lease) {
         auto* next = lease->next;
         pool_ref(lease->input_pool, 0x30); pool_ref(lease->depth_pool, 0x30); pool_ref(lease->exposure_pool, 0x30); pool_ref(lease->output_pool.load(), 0x30);
-        using MoveRef = void*(*)(void*, void*);
-        auto release = reinterpret_cast<MoveRef>(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0xde5cf0);
+        auto release = engine<MoveUniform>(0xde5cf0);
         for (auto& uniform : lease->uniforms) {
             uint64_t empty = 0; release(&uniform, &empty);
         }
@@ -701,37 +838,10 @@ void drain_retired(rsf_ac7_native_renderer& self)
 void log(rsf_ac7_native_renderer& self, const char* message)
 { if (self.options.log) self.options.log(self.options.user, message); }
 
-struct NativeRef { uint64_t node = 0; uint32_t index = 0, padding = 0; };
-struct NativeOutput { alignas(8) unsigned char descriptor[0x50]{}; uint64_t pool = 0; uint32_t dependencies = 0, padding = 0; };
-static_assert(sizeof(NativeRef) == 0x10 && sizeof(NativeOutput) == 0x60);
-uint64_t method(uint64_t node, uint32_t slot)
-{
-    uint64_t table = 0, entry = 0;
-    if (!read(node, 0, table) || !read(table, slot, entry)) return 0;
-    return entry;
-}
-NativeRef* input_ref(uint64_t node, uint32_t index = 0)
-{
-    const auto entry = method(node, 8);
-    return entry ? static_cast<NativeRef*>(reinterpret_cast<GetPointer>(uintptr_t(entry))(
-        reinterpret_cast<void*>(uintptr_t(node)), index)) : nullptr;
-}
-NativeOutput* node_output(uint64_t node, uint32_t index = 0)
-{
-    const auto entry = method(node, 0x38);
-    return entry ? static_cast<NativeOutput*>(reinterpret_cast<GetPointer>(uintptr_t(entry))(
-        reinterpret_cast<void*>(uintptr_t(node)), index)) : nullptr;
-}
-void* native_texture(uint64_t texture)
-{
-    const auto entry = method(texture, 0x30);
-    return entry ? reinterpret_cast<void*(*)(void*)>(uintptr_t(entry))(
-        reinterpret_cast<void*>(uintptr_t(texture))) : nullptr;
-}
 void hooked_translucency_size(void* scene, uint8_t downsample)
 {
     EntryGuard entry;
-    reinterpret_cast<void(*)(void*, uint8_t)>(sites[33].original)(scene, downsample);
+    reinterpret_cast<void(*)(void*, uint8_t)>(sites[hook_translucency_size].original)(scene, downsample);
     auto* self = installed.load(std::memory_order_acquire);
     // Ordinary 3D translucency owns this scale. The UnmodifiedTranslucency UI producer
     // allocates from BufferSize +0x208 under its own output-size view/depth scope.
@@ -740,16 +850,6 @@ void hooked_translucency_size(void* scene, uint8_t downsample)
         reported = true;
         log(*self, "native ordinary translucency: engine sizing retained; full-resolution UI uses its scoped producer");
     }
-}
-#if defined(RSF_AC7_GRAPH_TEST)
-void* (*test_engine)(uint32_t) = nullptr;
-#endif
-template<class Fn> Fn engine(uint32_t rva)
-{
-#if defined(RSF_AC7_GRAPH_TEST)
-    if (test_engine) return reinterpret_cast<Fn>(test_engine(rva));
-#endif
-    return reinterpret_cast<Fn>(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + rva);
 }
 bool retain_generated_uniform(rsf_ac7_native_renderer& self, uint64_t view, uint64_t uniform)
 {
@@ -828,7 +928,6 @@ struct GraphPlan {
     std::array<unsigned char, 0xcf0> saved_parameters{};
     uint64_t cached_parameters = 0, saved_uniform = 0;
     void* scene = nullptr;
-    SRNode* node = nullptr;
     bool resized = false;
     int32_t surface_extent[2]{};
     bool contains(uint64_t pass) const
@@ -868,7 +967,6 @@ void* node_descriptor(SRNode* node, void* result, uint32_t)
     std::memcpy(bytes + 0x40, &name, 8);
     return result;
 }
-using MoveUniform = void*(*)(void*, void*);
 void wait_for_view_recorders()
 {
     // Native WaitForOutstandingTasksOnly joins CPU command recording before shared view edits.
@@ -877,7 +975,7 @@ void wait_for_view_recorders()
 uint64_t retain_view_uniform(unsigned char* view, size_t offset)
 {
     uint64_t uniform = 0;
-    copy(&uniform, view + offset, sizeof(uniform));
+    copy_memory(&uniform, view + offset, sizeof(uniform));
     if (uniform) InterlockedIncrement(reinterpret_cast<volatile LONG*>(uintptr_t(uniform) + 8));
     return uniform;
 }
@@ -888,7 +986,7 @@ void build_postprocess_uniform(GraphPlan& plan, unsigned char* view)
     engine<void(*)(void*, void*, void*, void*, void*, uint32_t, void*)>(0x11346d0)(view, plan.scene,
         view + 0xc0, view + 0x21e0, bounds, 2, reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)));
     uint64_t dynamic = 0, create = 0, uniform = 0;
-    copy(&dynamic, engine<void*>(0x3c783d0), 8); create = method(dynamic, 0xf0);
+    copy_memory(&dynamic, engine<void*>(0x3c783d0), 8); create = method(dynamic, 0xf0);
     if (!create) return;
     using CreateUniform = void*(*)(void*, uint64_t*, const void*, const void*, uint32_t);
     reinterpret_cast<CreateUniform>(uintptr_t(create))(reinterpret_cast<void*>(uintptr_t(dynamic)), &uniform,
@@ -908,9 +1006,9 @@ void resize_consumers(GraphPlan& plan)
     wait_for_view_recorders();
     auto* view = reinterpret_cast<unsigned char*>(uintptr_t(plan.packet.view_key));
     auto* scene = static_cast<unsigned char*>(plan.scene);
-    copy(plan.saved_rect, view + 0x70, 16); copy(plan.saved_buffer, scene + 0x208, 8);
-    copy(plan.saved_matrices.data(), view + 0xc0, plan.saved_matrices.size());
-    copy(plan.saved_parameters.data(), reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)), plan.saved_parameters.size());
+    copy_memory(plan.saved_rect, view + 0x70, 16); copy_memory(plan.saved_buffer, scene + 0x208, 8);
+    copy_memory(plan.saved_matrices.data(), view + 0xc0, plan.saved_matrices.size());
+    copy_memory(plan.saved_parameters.data(), reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)), plan.saved_parameters.size());
     std::memcpy(view + 0x70, plan.packet.output_rect, 16);
     const int32_t extent[] = {plan.surface_extent[0], plan.surface_extent[1]};
     std::memcpy(scene + 0x208, extent, 8);
@@ -919,12 +1017,27 @@ void resize_consumers(GraphPlan& plan)
     build_postprocess_uniform(plan, view);
     plan.resized = true;
 }
+// Puts back the view rectangle, scene buffer size, matrices and cached parameters that
+// resize_consumers changed. Callers have already waited for the recorders.
+void restore_view_state(GraphPlan& plan)
+{
+    auto* view = reinterpret_cast<unsigned char*>(uintptr_t(plan.packet.view_key));
+    std::memcpy(view + 0x70, plan.saved_rect, sizeof(plan.saved_rect));
+    std::memcpy(static_cast<unsigned char*>(plan.scene) + 0x208, plan.saved_buffer, sizeof(plan.saved_buffer));
+    std::memcpy(view + 0xc0, plan.saved_matrices.data(), plan.saved_matrices.size());
+    std::memcpy(reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)), plan.saved_parameters.data(), plan.saved_parameters.size());
+}
+void restore_view_uniform(GraphPlan& plan)
+{
+    auto* view = reinterpret_cast<unsigned char*>(uintptr_t(plan.packet.view_key));
+    if (plan.saved_uniform) engine<MoveUniform>(0xde5cf0)(view + 0x10, &plan.saved_uniform);
+}
 void node_process(SRNode* node, void* context)
 {
     auto& plan = *node->plan;
     // A complete native bilinear result exists even if SR refuses on the RHI thread. This uses
     // the engine's own draw/resolve commands and never bypasses later grading or UI processing.
-    reinterpret_cast<Process>(sites[5].original)(node, context);
+    reinterpret_cast<Process>(sites[hook_process_output].original)(node, context);
     auto* lease = new(std::nothrow) PassLease;
     if (lease) {
         lease->owner = plan.owner;
@@ -967,30 +1080,25 @@ NativeRef* bloom_scene_input(uint64_t bloom, const NativeRef& scene)
         seen.push_back(node);
         if (method(node, 0x70) == uint64_t(uintptr_t(engine<void*>(0xfb7a00)))) {
             uint64_t name = 0; wchar_t label[18]{};
-            if (read(node, 0xc8, name) && copy(label, reinterpret_cast<void*>(uintptr_t(name)), sizeof(label)) &&
+            if (read(node, 0xc8, name) && copy_memory(label, reinterpret_cast<void*>(uintptr_t(name)), sizeof(label)) &&
                 std::memcmp(label, L"SceneColorHalfRes", sizeof(label)) == 0) {
                 auto* input = input_ref(node);
                 if (!input || input->node != scene.node || input->index != scene.index || result) return nullptr;
                 result = input;
             }
         }
-        const auto dependency = method(node, 0x40);
-        if (!dependency) return nullptr;
-        bool bounded = false;
-        for (uint32_t i = 0; i <= 16; ++i) {
-            const auto* ref = static_cast<const NativeRef*>(reinterpret_cast<GetPointer>(uintptr_t(dependency))(
-                reinterpret_cast<void*>(uintptr_t(node)), i));
-            if (!ref) { bounded = true; break; }
-            if (ref->node) pending.push_back(ref->node);
-        }
+        const bool bounded = for_each_dependency(node, [&](const NativeRef& ref) {
+            if (ref.node) pending.push_back(ref.node);
+            return true;
+        });
         if (!bounded) return nullptr;
     }
     return pending.empty() ? result : nullptr;
 }
 bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPlan& plan) try
 {
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
-    if (!self.options.render_config || !self.options.render_config(self.options.user, &config) || !config.enabled ||
+    rsf_game_render_config config{};
+    if (!fetch_config(self, config) || !config.enabled ||
         !config.output_width || !config.output_height || config.output_width > 16384 || config.output_height > 16384) return false;
     auto& p = plan.packet; p.struct_size = sizeof(p); p.session_id = self.options.session_id; p.role = RSF_AC7_ROLE_SR;
     uint32_t frame = 0; uint64_t cached = 0, uniform = 0;
@@ -1004,7 +1112,7 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     if (!primary_view(p.view_key, config)) return false;
     std::array<unsigned char, RSF_AC7_VIEW_BUFFER_BYTES> bytes{};
     rsf_ac7_view view{}; view.struct_size = sizeof(view);
-    if (!copy(bytes.data(), reinterpret_cast<void*>(uintptr_t(cached)), 0xcf0) ||
+    if (!copy_memory(bytes.data(), reinterpret_cast<void*>(uintptr_t(cached)), 0xcf0) ||
         rsf_ac7_view_read(bytes.data(), uint32_t(bytes.size()), RSF_AC7_VIEW_ABI_VERSION, &view) != RSF_AC7_VIEW_OK ||
         !view.has_jitter || view.view_width != uint32_t(p.render_rect[2] - p.render_rect[0]) ||
         view.view_height != uint32_t(p.render_rect[3] - p.render_rect[1])) return false;
@@ -1012,9 +1120,9 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     for (uint32_t count = 0; cursor && count < 64; ++count) {
         if (plan.contains(cursor)) return false;
         const auto entry = method(cursor, 0x28);
-        const auto found = std::find_if(std::begin(sites), std::begin(sites) + 6,
+        const auto found = std::find_if(std::begin(sites), std::begin(sites) + process_hooks,
             [entry](const Site& site) { return uint64_t(uintptr_t(site.target)) == entry; });
-        if (found == std::begin(sites) + 6) return false; // No unreviewed downstream pass is resized.
+        if (found == std::begin(sites) + process_hooks) return false; // No unreviewed downstream pass is resized.
         plan.consumers.push_back(cursor);
         if (found->role == RSF_AC7_ROLE_TONEMAP) { tone = cursor; break; }
         auto* input = input_ref(cursor); if (!input) return false; cursor = input->node;
@@ -1039,21 +1147,16 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
             read(state, 0xbe0 + size_t(index) * 8, node->preceding_exposure_pool);
     } else if (const auto* exposure = input_ref(tone, 2)) node->exposure_ref = *exposure;
     node->extent[0] = int32_t(config.output_width); node->extent[1] = int32_t(config.output_height); node->plan = &plan;
-    const auto dependency = method(tone, 0x40);
-    if (!dependency) { delete node; return false; }
+    if (!method(tone, 0x40)) { delete node; return false; }
     // The graph processes dependencies in input order. Finish all original tonemap branches
     // before SR changes view/scene sizes, including auxiliary and additional dependencies.
-    bool bounded = false;
-    for (uint32_t i = 0; !bloom_input && i <= 16; ++i) {
-        const auto* ref = static_cast<const NativeRef*>(reinterpret_cast<GetPointer>(uintptr_t(dependency))(
-            reinterpret_cast<void*>(uintptr_t(tone)), i));
-        if (!ref) { bounded = true; break; }
-        if (ref->node && !(ref->node == input->node && ref->index == input->index)) {
-            if (node->auxiliary_count == node->auxiliary.size()) break;
-            node->auxiliary[node->auxiliary_count++] = *ref;
-        }
-    }
-    if (!bloom_input && !bounded) { delete node; return false; }
+    const bool bounded = bloom_input || for_each_dependency(tone, [&](const NativeRef& ref) {
+        if (!ref.node || (ref.node == input->node && ref.index == input->index)) return true;
+        if (node->auxiliary_count == node->auxiliary.size()) return false;
+        node->auxiliary[node->auxiliary_count++] = ref;
+        return true;
+    });
+    if (!bounded) { delete node; return false; }
     // Register through the native graph owner so it retires this heap node through Release.
     engine<void*(*)(void*, void*)>(0xe93670)(static_cast<unsigned char*>(context) + 0x18, node);
     input->node = uint64_t(uintptr_t(node)); input->index = 0;
@@ -1062,7 +1165,7 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
         static uint32_t reports = 0;
         if (reports++ < 6) log(self, "native SR ordering: SceneColorHalfRes, bloom and exposure now consume reconstructed colour");
     }
-    plan.node = node; p.pass_key = uint64_t(uintptr_t(node)); p.native_frame = frame;
+    p.pass_key = uint64_t(uintptr_t(node)); p.native_frame = frame;
     read(p.view_key, 8, p.history_key);
     p.motion_to_uv[0] = 0.5f; p.motion_to_uv[1] = -0.5f; p.motion_camera_included = 0;
     p.camera_valid = 1; p.camera.struct_size = sizeof(p.camera); p.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
@@ -1074,7 +1177,6 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     renderer_identity(self, p); p.flags |= RSF_GAME_RENDER_PRIMARY;
     std::memcpy(p.camera.clip_to_previous_clip, view.clip_to_prev_clip, 64);
     std::memcpy(p.previous_clip_to_clip, view.prev_clip_to_clip, 64);
-    std::memcpy(p.jitter_pixels, view.jitter_pixels, 8); std::memcpy(p.previous_jitter_pixels, view.previous_jitter_pixels, 8);
     std::memcpy(p.camera.jitter_pixels, view.jitter_pixels, 8); std::memcpy(p.camera.previous_jitter_pixels, view.previous_jitter_pixels, 8);
     const float* axes[] = {view.camera_right, view.camera_up, view.camera_forward};
     for (uint32_t row = 0; row < 3; ++row) for (uint32_t col = 0; col < 3; ++col) {
@@ -1091,19 +1193,15 @@ catch (...) { return false; }
 void hooked_context(void* context, void* root)
 {
     const EntryGuard guard; auto* self = installed.load(); GraphPlan plan;
-    auto original = reinterpret_cast<Process>(sites[13].original);
+    auto original = reinterpret_cast<Process>(sites[hook_context].original);
     if (!self || !self->active.load() || !make_plan(*self, context, root, plan)) { original(context, root); return; }
     auto* previous = graph_plan; graph_plan = &plan;
     original(context, root);
     graph_plan = previous;
     if (plan.resized) {
         wait_for_view_recorders();
-        auto* view = reinterpret_cast<unsigned char*>(uintptr_t(plan.packet.view_key));
-        std::memcpy(view + 0x70, plan.saved_rect, 16);
-        std::memcpy(static_cast<unsigned char*>(plan.scene) + 0x208, plan.saved_buffer, 8);
-        std::memcpy(view + 0xc0, plan.saved_matrices.data(), plan.saved_matrices.size());
-        std::memcpy(reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)), plan.saved_parameters.data(), plan.saved_parameters.size());
-        if (plan.saved_uniform) engine<MoveUniform>(0xde5cf0)(view + 0x10, &plan.saved_uniform);
+        restore_view_state(plan);
+        restore_view_uniform(plan);
     }
     // GraphPlan is CPU-only. Queued packets contain copies and pool leases, never this pointer.
 }
@@ -1123,28 +1221,24 @@ void restore_ui_producer()
     wait_for_view_recorders();
     auto& plan = state.plan;
     auto* view = reinterpret_cast<unsigned char*>(uintptr_t(plan.packet.view_key));
-    auto* scene = static_cast<unsigned char*>(plan.scene);
-    std::memcpy(scene + 0x60, &state.depth, sizeof(state.depth));
-    std::memcpy(scene + 0x208, plan.saved_buffer, sizeof(plan.saved_buffer));
-    std::memcpy(view + 0x70, plan.saved_rect, sizeof(plan.saved_rect));
-    std::memcpy(view + 0xc0, plan.saved_matrices.data(), plan.saved_matrices.size());
-    std::memcpy(reinterpret_cast<void*>(uintptr_t(plan.cached_parameters)), plan.saved_parameters.data(), plan.saved_parameters.size());
+    std::memcpy(static_cast<unsigned char*>(plan.scene) + 0x60, &state.depth, sizeof(state.depth));
+    restore_view_state(plan);
     if (state.scaled_uniform_bound) {
         engine<MoveUniform>(0xde5cf0)(view + 0x18, &state.saved_scaled_uniform);
         state.scaled_uniform_bound = false;
     }
-    if (plan.saved_uniform) engine<MoveUniform>(0xde5cf0)(view + 0x10, &plan.saved_uniform);
+    restore_view_uniform(plan);
     pool_ref(state.depth, 0x30); pool_ref(state.scaled_depth, 0x30);
     state.depth = state.scaled_depth = 0; state.active = false; plan.resized = false;
 }
 bool prepare_ui_producer(rsf_ac7_native_renderer& self, void* scene, void* list, void* view)
 {
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    rsf_game_render_config config{};
     auto& state = ui_producer; auto& plan = state.plan;
     const auto key = uint64_t(uintptr_t(view));
     int32_t buffer[2]{}, rect[4]{}; uint64_t cached = 0, uniform = 0, depth = 0;
-    if (state.active || !translucency_renderer || !self.active.load() || !self.options.render_config ||
-        !self.options.render_config(self.options.user, &config) || !config.enabled ||
+    if (state.active || !translucency_renderer || !self.active.load() ||
+        !fetch_config(self, config) || !config.enabled ||
         !primary_view(key, config) || !read(key, 0x80, rect) || !read(key, 0x1418, cached) || !cached ||
         !read(key, 0x10, uniform) || !uniform || !read(uint64_t(uintptr_t(scene)), 0x60, depth) || !depth ||
         !read(uint64_t(uintptr_t(scene)), 0x208, buffer) || buffer[0] <= 0 || buffer[1] <= 0 ||
@@ -1192,7 +1286,7 @@ uint64_t hooked_unmodified_begin(void* scene, void* list, void* view, uint8_t cl
 {
     EntryGuard entry; auto* self = installed.load();
     const bool prepared = self && prepare_ui_producer(*self, scene, list, view);
-    const auto result = reinterpret_cast<uint64_t(*)(void*, void*, void*, uint8_t, uint8_t, uint8_t)>(sites[34].original)(
+    const auto result = reinterpret_cast<uint64_t(*)(void*, void*, void*, uint8_t, uint8_t, uint8_t)>(sites[hook_unmodified_begin].original)(
         scene, list, view, clear, glow, extra);
     if (prepared && !(result & 0xffu)) restore_ui_producer();
     return result;
@@ -1200,7 +1294,7 @@ uint64_t hooked_unmodified_begin(void* scene, void* list, void* view, uint8_t cl
 void hooked_unmodified_resolve(void* scene, void* list, void* view, uint8_t glow, uint8_t extra)
 {
     EntryGuard entry;
-    reinterpret_cast<void(*)(void*, void*, void*, uint8_t, uint8_t)>(sites[35].original)(scene, list, view, glow, extra);
+    reinterpret_cast<void(*)(void*, void*, void*, uint8_t, uint8_t)>(sites[hook_unmodified_resolve].original)(scene, list, view, glow, extra);
     if (ui_producer.active && ui_producer.plan.scene == scene && ui_producer.plan.packet.view_key == uint64_t(uintptr_t(view)))
         restore_ui_producer();
 }
@@ -1221,9 +1315,8 @@ uint64_t scene_colour_pool(void* scene)
 // Identity of the single primary view of a renderer that SR reconstructs, or false.
 bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role, rsf_ac7_render_scope& scope)
 {
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
-    if (!self.active.load() || !self.options.render_config ||
-        !self.options.render_config(self.options.user, &config) || !config.enabled) return false;
+    rsf_game_render_config config{};
+    if (!self.active.load() || !fetch_config(self, config) || !config.enabled) return false;
     uint64_t storage = 0; int32_t count = 0; uint32_t frame = 0;
     scope = {}; scope.struct_size = sizeof(scope); scope.role = role; scope.session_id = self.options.session_id;
     if (!read(uint64_t(uintptr_t(renderer)), 0xb8, storage) || !read(uint64_t(uintptr_t(renderer)), 0xc0, count) ||
@@ -1263,7 +1356,7 @@ uint8_t hooked_base_pass(void* renderer, void* list, uint32_t access)
     rsf_ac7_render_ticket* ticket = nullptr;
     if (self && primary_scope(*self, renderer, RSF_GAME_RENDER_MATERIALS, scope) &&
         !rsf_ac7_render_scope_open(self->scopes, list, &scope, &ticket)) ticket = nullptr;
-    const auto result = reinterpret_cast<uint8_t(*)(void*, void*, uint32_t)>(sites[57].original)(renderer, list, access);
+    const auto result = reinterpret_cast<uint8_t(*)(void*, void*, uint32_t)>(sites[hook_base_pass].original)(renderer, list, access);
     if (ticket && !rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 base pass scope could not close");
     return result;
 }
@@ -1272,34 +1365,32 @@ void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
     OuterGuard lifetime;
     auto* previous = translucency_renderer; translucency_renderer = renderer;
     auto* self = installed.load();
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
-    uint64_t storage = 0; int32_t count = 0;
+    rsf_game_render_config config{};
     auto* scene = engine<GetScene>(0x109dc70)(); float layer_scale = 1;
     read(uint64_t(uintptr_t(scene)), 0x220, layer_scale);
-    if (self && self->active.load() && self->options.render_config &&
-        self->options.render_config(self->options.user, &config) && config.enabled && layer_scale != 1.0f &&
-        read(uint64_t(uintptr_t(renderer)), 0xb8, storage) && read(uint64_t(uintptr_t(renderer)), 0xc0, count) &&
-        count > 0 && count <= 16) {
-        for (int32_t i = 0; i < count; ++i) {
-            const uint64_t view = storage + uint64_t(i) * 0x27c0;
+    bool refused = false;
+    if (self && self->active.load() && fetch_config(*self, config) && config.enabled && layer_scale != 1.0f) {
+        for_each_view(renderer, [&](uint64_t view, int32_t) {
             uint64_t scaled_uniform = 0, parameters = 0, normal_uniform = 0;
             if (!read(view, 0x1418, parameters) || !parameters || !read(view, 0x10, normal_uniform) || !normal_uniform)
-                continue;
-            if (read(view, 0x18, scaled_uniform) && scaled_uniform) continue;
+                return true;
+            if (read(view, 0x18, scaled_uniform) && scaled_uniform) return true;
             // The stock producer is conditional on the ordinary translucency pass. AC7's
             // unmodified/extra passes can select this slot without taking that branch first.
             engine<void(*)(void*, void*, void*)>(0x116ea00)(renderer, list, reinterpret_cast<void*>(uintptr_t(view)));
             if (!read(view, 0x18, scaled_uniform) || !scaled_uniform) {
                 log(*self, "AC7 translucency pass refused: native scaled-view uniform producer returned no buffer");
-                translucency_renderer = previous; return;
+                refused = true; return false;
             }
             static uint32_t reports = 0;
             if (reports++ < 6) log(*self, "native translucency: populated missing scaled-view uniform before material selection");
-        }
+            return true;
+        });
     }
+    if (refused) { translucency_renderer = previous; return; }
     PassLease* lease = nullptr;
     auto* ticket = self ? open_translucency(*self, renderer, list, pass, scene, lease) : nullptr;
-    reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[36].original)(renderer, list, pass);
+    reinterpret_cast<void(*)(void*, void*, uint32_t)>(sites[hook_translucency_render].original)(renderer, list, pass);
     if (ticket) {
         // The layer is allocated on demand inside the pass. Publish it before end is queued.
         uint64_t layer = 0;
@@ -1327,7 +1418,7 @@ void hooked_pixel_view_uniform(void* shader, void* list, void* rhi_shader, void*
 #elif defined(__GNUC__)
             caller = uintptr_t(__builtin_return_address(0));
 #endif
-            const auto base = uintptr_t(GetModuleHandleW(nullptr));
+            const auto base = uintptr_t(game_module());
             char message[224]{};
             std::snprintf(message, sizeof(message),
                 "native null pixel View uniform enqueue: caller RVA 0x%llx, shader %p, UI scope %u, renderer %p, thread %lu",
@@ -1336,21 +1427,21 @@ void hooked_pixel_view_uniform(void* shader, void* list, void* rhi_shader, void*
             log(*self, message);
         }
     }
-    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[37].original)(shader, list, rhi_shader, uniform);
+    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[hook_pixel_view_uniform].original)(shader, list, rhi_shader, uniform);
 }
 void hooked_rhi_pixel_uniform(void* context, void* shader, uint32_t slot, void* uniform)
 {
     EntryGuard entry; auto* self = installed.load();
     if (self && self->active.load()) {
         uint64_t command = 0;
-        read(uint64_t(uintptr_t(GetModuleHandleW(nullptr))), 0x3c78358, command);
+        read(game_module(), 0x3c78358, command);
         std::lock_guard<std::mutex> lock(self->pixel_bindings_guard);
         const auto sequence = ++self->pixel_binding_sequence;
         self->pixel_bindings[sequence % self->pixel_bindings.size()] = {sequence,
             uint64_t(uintptr_t(context)) - 0x18, uint64_t(uintptr_t(shader)),
             uint64_t(uintptr_t(uniform)), command, slot};
     }
-    reinterpret_cast<void(*)(void*, void*, uint32_t, void*)>(sites[38].original)(context, shader, slot, uniform);
+    reinterpret_cast<void(*)(void*, void*, uint32_t, void*)>(sites[hook_rhi_pixel_uniform].original)(context, shader, slot, uniform);
 }
 void hooked_rhi_pixel_tables(void* context, void* shader)
 {
@@ -1394,7 +1485,7 @@ void hooked_rhi_pixel_tables(void* context, void* shader)
         }
     }
     // Evidence only: preserve the native failure rather than hiding an incomplete material draw.
-    reinterpret_cast<void(*)(void*, void*)>(sites[39].original)(context, shader);
+    reinterpret_cast<void(*)(void*, void*)>(sites[hook_rhi_pixel_tables].original)(context, shader);
 }
 template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, void* parameter, void* input)
 {
@@ -1404,10 +1495,10 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
         read(uint64_t(uintptr_t(parameter)), 6, bound) && bound &&
         read(uint64_t(uintptr_t(parameter)), 4, slot) && slot == 1;
     uint64_t uniform = uint64_t(uintptr_t(input));
-    if (Index == 41) read(uint64_t(uintptr_t(input)), 0x38, uniform);
-    if (Index == 42) read(uint64_t(uintptr_t(input)), 0, uniform);
+    if (Index == hook_pixel_enqueue_b) read(uint64_t(uintptr_t(input)), 0x38, uniform);
+    if (Index == hook_pixel_enqueue_c) read(uint64_t(uintptr_t(input)), 0, uniform);
     auto original = reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[Index].original);
-    if (Index == 43) {
+    if (Index == hook_pixel_enqueue_d) {
         original(list, shader, parameter, input);
         uint64_t command = 0;
         if (!selected || !read(uint64_t(uintptr_t(list)), 8, command) || !read(command, 0x20, uniform)) return;
@@ -1417,7 +1508,7 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
         if (reports.fetch_add(1) < 4) {
             void* frames[10]{};
             const auto count = CaptureStackBackTrace(0, 10, frames, nullptr);
-            const auto base = uint64_t(uintptr_t(GetModuleHandleW(nullptr)));
+            const auto base = uint64_t(uintptr_t(game_module()));
             char message[224]{};
             std::snprintf(message, sizeof(message), "native null PS slot1 CPU creator: RVA 0x%x shader %p parameter %p input %p UI %u renderer %p",
                 sites[Index].rva, shader, parameter, input, ui_producer.active ? 1u : 0u, translucency_renderer);
@@ -1431,7 +1522,7 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
             }
         }
     }
-    if (Index != 43) original(list, shader, parameter, input);
+    if (Index != hook_pixel_enqueue_d) original(list, shader, parameter, input);
 }
 void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
 {
@@ -1441,12 +1532,12 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
     if (self) { self->render_thread.store(GetCurrentThreadId()); drain_retired(*self); }
     rsf_ac7_render_ticket* final_ticket = nullptr;
     if (self && self->active.load()) {
-        rsf_game_render_config config{}; config.struct_size = sizeof(config);
+        rsf_game_render_config config{};
         rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
         scope.session_id = self->options.session_id; scope.role = RSF_GAME_RENDER_FINAL_SCENE;
         scope.view_key = uint64_t(uintptr_t(view)); scope.pass_key = scope.view_key;
         uint32_t frame = 0; uint64_t target = 0;
-        if (self->options.render_config && self->options.render_config(self->options.user, &config) &&
+        if (fetch_config(*self, config) &&
             primary_view(scope.view_key, config) && read(scope.view_key, 0, scope.family_key) &&
             read(scope.family_key, 0x68, frame) && read(scope.family_key, 0x20, target) &&
             read(scope.view_key, 0x70, scope.render_rect) && read(scope.view_key, 0x80, scope.output_rect)) {
@@ -1467,10 +1558,14 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
                     lease->scene_surface->AddRef();
                     if (scope.source_frame_id && scope.viewport_key) {
                         std::lock_guard<std::mutex> lock(self->identities_guard);
-                        auto& key = self->final_surfaces[scope.source_frame_id % self->final_surfaces.size()];
+                        const auto slot = scope.source_frame_id % self->final_surfaces.size();
+                        auto& key = self->final_surfaces[slot];
                         if (key.source == scope.source_frame_id) key.ambiguous = true;
-                        else key = {scope.source_frame_id, scope.viewport_key,
-                            uint64_t(uintptr_t(lease->scene_surface)), false};
+                        else {
+                            key = {scope.source_frame_id, scope.viewport_key,
+                                uint64_t(uintptr_t(lease->scene_surface)), false};
+                            self->final_surface_hint[slot].store(key.surface, std::memory_order_release);
+                        }
                     }
                     const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
                     if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &final_ticket)) release_pass(lease);
@@ -1478,7 +1573,7 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
             }
         }
     }
-    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[12].original)(owner, list, view, velocity_ref);
+    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[hook_postprocess].original)(owner, list, view, velocity_ref);
     if (final_ticket && !rsf_ac7_render_scope_close(final_ticket, list)) {
         self->active.store(false); log(*self, "AC7 final scene source deactivated: native RHI scope could not close");
     }
@@ -1493,18 +1588,15 @@ bool primary_view(uint64_t view, const rsf_game_render_config& config)
 }
 void prepare_owned_views(void* renderer, const rsf_game_render_config& config)
 {
-    uint64_t storage = 0; int32_t count = 0; bool changed = false;
+    bool changed = false;
     const uint32_t width = config.enabled ? config.render_width : config.output_width;
     const uint32_t height = config.enabled ? config.render_height : config.output_height;
     if (!width || !height || width > config.output_width || height > config.output_height ||
-        config.output_width > 16384 || config.output_height > 16384 ||
-        !read(uint64_t(uintptr_t(renderer)), 0xb8, storage) || !read(uint64_t(uintptr_t(renderer)), 0xc0, count) ||
-        count < 1 || count > 16) return;
-    for (int32_t i = 0; i < count; ++i) {
-        const auto view = storage + uint64_t(i) * 0x27c0;
+        config.output_width > 16384 || config.output_height > 16384) return;
+    for_each_view(renderer, [&](uint64_t view, int32_t) {
         uint32_t mode = 0; uint64_t state = 0; int32_t rect[4]{};
         if (!read(view, 0x80, rect) || !read(view, 0x13c0, mode) || !read(view, 8, state) || mode != 1 || !state ||
-            !primary_view(view, config) || rect[0] < 0 || rect[1] < 0 || rect[2] <= rect[0] || rect[3] <= rect[1]) continue;
+            !primary_view(view, config) || rect[0] < 0 || rect[1] < 0 || rect[2] <= rect[0] || rect[3] <= rect[1]) return true;
         // Keep the active rectangle at the backend's exact size. The engine pads allocations
         // separately; Ultra Performance can accept a single width that is not divisible by four.
         const auto scale = [](int32_t value, uint32_t input, uint32_t output) {
@@ -1515,18 +1607,18 @@ void prepare_owned_views(void* renderer, const rsf_game_render_config& config)
             x + scale(rect[2] - rect[0], width, config.output_width),
             y + scale(rect[3] - rect[1], height, config.output_height)};
         std::memcpy(reinterpret_cast<void*>(uintptr_t(view + 0x70)), scaled, sizeof(scaled)); changed = true;
-    }
+        return true;
+    });
     if (changed) engine<OneArg>(0x19b6fe0)(static_cast<unsigned char*>(renderer) + 0x10);
 }
 void* hooked_construct(void* renderer, void* family, void* hit_proxy)
 {
     const EntryGuard guard;
-    auto* result = reinterpret_cast<void*(*)(void*, void*, void*)>(sites[15].original)(renderer, family, hit_proxy);
-    auto* self = installed.load(); rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    auto* result = reinterpret_cast<void*(*)(void*, void*, void*)>(sites[hook_construct].original)(renderer, family, hit_proxy);
+    auto* self = installed.load(); rsf_game_render_config config{};
     if (self && self->active.load()) {
         bind_renderer(*self, renderer);
-        if (self->options.render_config && self->options.render_config(self->options.user, &config))
-            prepare_owned_views(renderer, config);
+        if (fetch_config(*self, config)) prepare_owned_views(renderer, config);
     }
     return result;
 }
@@ -1545,64 +1637,60 @@ uint32_t hooked_temporal_sample_index(void* state)
             return index;
         }
     }
-    return reinterpret_cast<uint32_t(*)(void*)>(sites[46].original)(state);
+    return reinterpret_cast<uint32_t(*)(void*)>(sites[hook_temporal_sample_index].original)(state);
 }
 void hooked_visibility(void* renderer, void* list, uintptr_t third, void* fourth)
 {
     const EntryGuard guard; auto* self = installed.load();
     std::array<uint64_t, 16> views{}; std::array<uint32_t, 16> modes{}; uint32_t selected = 0;
     const auto previous_samples = temporal_sample_owners; temporal_sample_owners = {};
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
-    uint64_t storage = 0; int32_t count = 0; int32_t buffer[2]{};
+    rsf_game_render_config config{};
+    int32_t buffer[2]{};
     auto* scene = engine<GetScene>(0x109dc70)();
     read(uint64_t(uintptr_t(scene)), 0x208, buffer);
-    if (self && self->active.load() && self->options.render_config &&
-        self->options.render_config(self->options.user, &config) && config.enabled &&
-        read(uint64_t(uintptr_t(renderer)), 0xb8, storage) && read(uint64_t(uintptr_t(renderer)), 0xc0, count) &&
-        count > 0 && count <= 16) {
-        for (int32_t i = 0; i < count; ++i) {
-            const uint64_t view = storage + uint64_t(i) * 0x27c0;
+    if (self && self->active.load() && fetch_config(*self, config) && config.enabled) {
+        for_each_view(renderer, [&](uint64_t view, int32_t) {
             int32_t rect[4]{}; uint32_t mode = 0; uint64_t state = 0;
-            if (read(view, 0x80, rect) && read(view, 0x13c0, mode) && read(view, 8, state) && state && mode == 1 &&
-                primary_view(view, config) && rect[0] >= 0 && rect[1] >= 0 && rect[2] > rect[0] && rect[3] > rect[1]) {
-                int32_t render[4]{}; read(view, 0x70, render);
-                const bool cropped = rect[0] || rect[1] || rect[2] != int32_t(config.output_width) || rect[3] != int32_t(config.output_height);
-                const uint32_t expected_width = (config.render_width + 3) & ~3u;
-                const uint32_t expected_height = (config.render_height + 3) & ~3u;
-                const bool allocated = buffer[0] == int32_t(expected_width) && buffer[1] == int32_t(expected_height) &&
-                    (cropped || (render[2] - render[0] == int32_t(config.render_width) &&
-                                 render[3] - render[1] == int32_t(config.render_height)));
-                if (!allocated || render[2] > buffer[0] || render[3] > buffer[1]) {
-                    // Engine buffer hysteresis can retain a larger allocation after a scale
-                    // change. Render a complete unjittered native frame until allocation and
-                    // viewport agree; never feed padded bloom/depth regions to the SR graph.
-                    if (buffer[0] >= rect[2] && buffer[1] >= rect[3])
-                        std::memcpy(reinterpret_cast<void*>(uintptr_t(view + 0x70)), rect, 16);
-                    continue;
-                }
-                views[selected] = view; modes[selected++] = mode;
-                uint64_t temporal_state = 0, family = 0; uint32_t frame = 0;
-                if (read(view, 0x1410, temporal_state) && temporal_state && read(view, 0, family) &&
-                    read(family, 0x68, frame)) {
-                    const auto phases = uint32_t(std::clamp(std::round(8.0 * double(config.output_width) * config.output_height /
-                        (double(render[2] - render[0]) * (render[3] - render[1]))), 8.0, 255.0));
-                    temporal_sample_owners[selected - 1] = {temporal_state, frame, phases};
-                    static uint32_t last_phases = 0;
-                    if (last_phases != phases) {
-                        last_phases = phases;
-                        char message[112]{}; std::snprintf(message, sizeof(message),
-                            "native temporal sampling: %u phases for %ux%u from %dx%d", phases,
-                            config.output_width, config.output_height, render[2] - render[0], render[3] - render[1]);
-                        log(*self, message);
-                    }
-                }
-                const uint32_t temporal = 2; std::memcpy(reinterpret_cast<void*>(uintptr_t(view + 0x13c0)), &temporal, 4);
+            if (!(read(view, 0x80, rect) && read(view, 0x13c0, mode) && read(view, 8, state) && state && mode == 1 &&
+                primary_view(view, config) && rect[0] >= 0 && rect[1] >= 0 && rect[2] > rect[0] && rect[3] > rect[1])) return true;
+            int32_t render[4]{}; read(view, 0x70, render);
+            const bool cropped = rect[0] || rect[1] || rect[2] != int32_t(config.output_width) || rect[3] != int32_t(config.output_height);
+            const uint32_t expected_width = (config.render_width + 3) & ~3u;
+            const uint32_t expected_height = (config.render_height + 3) & ~3u;
+            const bool allocated = buffer[0] == int32_t(expected_width) && buffer[1] == int32_t(expected_height) &&
+                (cropped || (render[2] - render[0] == int32_t(config.render_width) &&
+                             render[3] - render[1] == int32_t(config.render_height)));
+            if (!allocated || render[2] > buffer[0] || render[3] > buffer[1]) {
+                // Engine buffer hysteresis can retain a larger allocation after a scale
+                // change. Render a complete unjittered native frame until allocation and
+                // viewport agree; never feed padded bloom/depth regions to the SR graph.
+                if (buffer[0] >= rect[2] && buffer[1] >= rect[3])
+                    std::memcpy(reinterpret_cast<void*>(uintptr_t(view + 0x70)), rect, 16);
+                return true;
             }
-        }
+            views[selected] = view; modes[selected++] = mode;
+            uint64_t temporal_state = 0, family = 0; uint32_t frame = 0;
+            if (read(view, 0x1410, temporal_state) && temporal_state && read(view, 0, family) &&
+                read(family, 0x68, frame)) {
+                const auto phases = uint32_t(std::clamp(std::round(8.0 * double(config.output_width) * config.output_height /
+                    (double(render[2] - render[0]) * (render[3] - render[1]))), 8.0, 255.0));
+                temporal_sample_owners[selected - 1] = {temporal_state, frame, phases};
+                static uint32_t last_phases = 0;
+                if (last_phases != phases) {
+                    last_phases = phases;
+                    char message[112]{}; std::snprintf(message, sizeof(message),
+                        "native temporal sampling: %u phases for %ux%u from %dx%d", phases,
+                        config.output_width, config.output_height, render[2] - render[0], render[3] - render[1]);
+                    log(*self, message);
+                }
+            }
+            const uint32_t temporal = 2; std::memcpy(reinterpret_cast<void*>(uintptr_t(view + 0x13c0)), &temporal, 4);
+            return true;
+        });
     }
     // Select the stock temporal preparation only here. DOF/SSR and native AA graph selection see
     // their original modes afterward. Engine histories and derived projection values stay native.
-    reinterpret_cast<void(*)(void*, void*, uintptr_t, void*)>(sites[14].original)(renderer, list, third, fourth);
+    reinterpret_cast<void(*)(void*, void*, uintptr_t, void*)>(sites[hook_visibility].original)(renderer, list, third, fourth);
     for (uint32_t i = 0; i < selected; ++i)
         std::memcpy(reinterpret_cast<void*>(uintptr_t(views[i] + 0x13c0)), &modes[i], 4);
     temporal_sample_owners = previous_samples;
@@ -1610,7 +1698,7 @@ void hooked_visibility(void* renderer, void* list, uintptr_t third, void* fourth
 void* descriptor(uint32_t index, void* node, void* out, uint32_t output)
 {
     const EntryGuard guard;
-    auto* result = reinterpret_cast<void*(*)(void*, void*, uint32_t)>(sites[index + 6].original)(node, out, output);
+    auto* result = reinterpret_cast<void*(*)(void*, void*, uint32_t)>(sites[hook_descriptor_tonemap + index].original)(node, out, output);
     if (graph_plan && graph_plan->contains(uint64_t(uintptr_t(node)))) {
         const int32_t extent[] = {graph_plan->surface_extent[0], graph_plan->surface_extent[1]};
         std::memcpy(static_cast<unsigned char*>(result) + 0x14, extent, 8);
@@ -1636,14 +1724,12 @@ void process(uint32_t index, void* node, void* context)
     const auto ctx = uint64_t(uintptr_t(context));
     const bool valid = read(ctx, 0, scope.view_key) && read(ctx, 0x28, list) &&
         read(scope.view_key, 0, scope.family_key) && read(scope.family_key, 0x68, frame) &&
-        read(scope.view_key, 0x70, scope.render_rect) && read(scope.view_key, 0x80, scope.output_rect) &&
-        read(scope.view_key, 0xab4, scope.jitter_pixels);
+        read(scope.view_key, 0x70, scope.render_rect) && read(scope.view_key, 0x80, scope.output_rect);
     scope.native_frame = frame;
     if (valid) {
         renderer_identity(*self, scope);
-        rsf_game_render_config config{}; config.struct_size = sizeof(config);
-        if (self->options.render_config && self->options.render_config(self->options.user, &config) &&
-            primary_view(scope.view_key, config)) scope.flags |= RSF_GAME_RENDER_PRIMARY;
+        rsf_game_render_config config{};
+        if (fetch_config(*self, config) && primary_view(scope.view_key, config)) scope.flags |= RSF_GAME_RENDER_PRIMARY;
     }
     rsf_ac7_render_ticket* ticket = nullptr;
     PassLease* lease = nullptr;
@@ -1651,24 +1737,19 @@ void process(uint32_t index, void* node, void* context)
         lease = new(std::nothrow) PassLease;
         if (lease) {
             lease->owner = self;
-            uint64_t table = 0, getter = 0, reference = 0, input = 0; uint32_t output = 0;
-            if (read(scope.pass_key, 0, table) && read(table, 8, getter) && getter) {
+            uint64_t reference = 0, input = 0; uint32_t output = 0;
+            if (const auto getter = method(scope.pass_key, 8)) {
                 reference = uint64_t(uintptr_t(reinterpret_cast<GetPointer>(uintptr_t(getter))(node, 0)));
                 if (read(reference, 0, input) && read(reference, 8, output)) lease->input_pool = output_pool(input, output);
             }
             pool_ref(lease->input_pool, 0x28);
-            if (index == 3) {
+            if (index == hook_process_hud) {
                 // All reviewed HUD shader variants bind view+0x13a0's render-target resource.
                 uint64_t target = 0, resource = 0, texture = 0;
                 if (read(scope.view_key, 0x13a0, target) && read(target, 0x70, resource) &&
                     read(resource, 0x30, texture)) {
-                    const auto get_native = method(texture, 0x30);
-                    if (get_native) {
-                        using Native = void*(*)(void*);
-                        lease->ui = static_cast<ID3D11Resource*>(reinterpret_cast<Native>(uintptr_t(get_native))(
-                            reinterpret_cast<void*>(uintptr_t(texture))));
-                        if (lease->ui) lease->ui->AddRef();
-                    }
+                    lease->ui = static_cast<ID3D11Resource*>(native_texture(texture));
+                    if (lease->ui) lease->ui->AddRef();
                 }
             }
             const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
@@ -1677,7 +1758,7 @@ void process(uint32_t index, void* node, void* context)
             }
         }
     }
-    if (index == 1 && graph_plan && graph_plan->contains(scope.pass_key)) {
+    if (index == hook_process_aa && graph_plan && graph_plan->contains(scope.pass_key)) {
         auto* input = input_ref(scope.pass_key); auto* output = node_output(scope.pass_key);
         const auto pool = input ? output_pool(input->node, input->index) : 0;
         if (pool && output) { pool_ref(pool, 0x28); pool_ref(output->pool, 0x30); output->pool = pool; }
@@ -1705,9 +1786,8 @@ using WidgetPrepare = void(*)(void*);
 using WidgetDraw = void(*)(void*, void*, void*, void*, float, uint64_t, float, uint8_t);
 uint32_t widget_density(rsf_ac7_native_renderer* self)
 {
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
-    if (!self || !self->active.load() || !self->options.render_config ||
-        !self->options.render_config(self->options.user, &config) || !config.enabled ||
+    rsf_game_render_config config{};
+    if (!self || !self->active.load() || !fetch_config(*self, config) || !config.enabled ||
         !config.output_width || !config.output_height) return 1;
     const auto density = std::max({1u, (config.output_width + 1919u) / 1920u,
         (config.output_height + 1079u) / 1080u});
@@ -1719,7 +1799,7 @@ bool resize_widget_target(uint64_t target, int32_t width, int32_t height)
     if (!read(target, 0xd0, extent) || (extent[0] == width && extent[1] == height)) return false;
     using Init = void(*)(void*, int32_t, int32_t, uint8_t, uint8_t);
     auto* object = reinterpret_cast<void*>(uintptr_t(target));
-    reinterpret_cast<Init>(sites[23].original)(object, width, height, 2, 1);
+    reinterpret_cast<Init>(sites[hook_target_init].original)(object, width, height, 2, 1);
     engine<void(*)(void*, uint8_t)>(0x1ab7dc0)(object, 0);
     return true;
 }
@@ -1745,7 +1825,7 @@ void hooked_game_instance_init(void* instance)
     EntryGuard entry;
     const auto previous = initializing_game_instance;
     initializing_game_instance = uint64_t(uintptr_t(instance));
-    reinterpret_cast<void(*)(void*)>(sites[22].original)(instance);
+    reinterpret_cast<void(*)(void*)>(sites[hook_game_instance_init].original)(instance);
     initializing_game_instance = previous;
 }
 void hooked_target_init(void* target, int32_t width, int32_t height, uint8_t format, uint8_t linear)
@@ -1759,7 +1839,7 @@ void hooked_target_init(void* target, int32_t width, int32_t height, uint8_t for
         width *= int32_t(density); height *= int32_t(density);
     }
     using Init = void(*)(void*, int32_t, int32_t, uint8_t, uint8_t);
-    reinterpret_cast<Init>(sites[23].original)(target, width, height, format, linear);
+    reinterpret_cast<Init>(sites[hook_target_init].original)(target, width, height, format, linear);
 }
 void hooked_widget_queue(void* converter, float delta)
 {
@@ -1787,13 +1867,13 @@ void hooked_widget_queue(void* converter, float delta)
                 shared_repaint_targets.end()) *(static_cast<unsigned char*>(converter) + 0xe0) = 1;
         }
     }
-    reinterpret_cast<Queue>(sites[16].original)(converter, delta);
+    reinterpret_cast<Queue>(sites[hook_widget_queue].original)(converter, delta);
     widget_queue = saved;
 }
 void hooked_widget_targets(void* converter)
 {
     EntryGuard entry;
-    const auto original = reinterpret_cast<WidgetPrepare>(sites[17].original);
+    const auto original = reinterpret_cast<WidgetPrepare>(sites[hook_widget_targets].original);
     const auto address = uint64_t(uintptr_t(converter));
     int32_t logical[2]{};
     if (widget_queue.converter != address || !read(address, 0x28, logical)) {
@@ -1820,7 +1900,6 @@ void hooked_widget_targets(void* converter)
     // Stock PrepareTargets resizes the primary target, but only creates its glow siblings once.
     using Init = void(*)(void*, int32_t, int32_t, uint8_t, uint8_t);
     using Update = void(*)(void*, uint8_t);
-    auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     uint8_t glow = 0;
     if (!read(address, 0x80, glow) || !glow) return;
     for (const size_t offset : {size_t(0xc0), size_t(0xc8), size_t(0xd0), size_t(0xd8)}) {
@@ -1830,8 +1909,8 @@ void hooked_widget_targets(void* converter)
         if (!read(address, offset, target) || !read(target, 0xd0, extent) ||
             (extent[0] == desired[0] && extent[1] == desired[1])) continue;
         auto* object = reinterpret_cast<void*>(uintptr_t(target));
-        reinterpret_cast<Init>(base + 0x1ab0200)(object, desired[0], desired[1], 2, 1);
-        reinterpret_cast<Update>(base + 0x1ab7dc0)(object, 0);
+        engine<Init>(0x1ab0200)(object, desired[0], desired[1], 2, 1);
+        engine<Update>(0x1ab7dc0)(object, 0);
     }
 }
 void hooked_widget_draw(void* renderer, void* target, void* hit_grid, void* window,
@@ -1850,7 +1929,7 @@ void hooked_widget_draw(void* renderer, void* target, void* hit_grid, void* wind
         scale *= widget_queue.density;
         std::memcpy(&packed_size, size, sizeof(size));
     }
-    reinterpret_cast<WidgetDraw>(sites[18].original)(renderer, target, hit_grid, window,
+    reinterpret_cast<WidgetDraw>(sites[hook_widget_draw].original)(renderer, target, hit_grid, window,
         scale, packed_size, delta, defer);
 }
 thread_local WindowSource slate_producer_source{}, slate_execution_source{}, slate_binding_source{};
@@ -1861,21 +1940,20 @@ void hooked_slate_private(void* renderer, void* buffer)
     auto* self = installed.load(std::memory_order_acquire);
     uint64_t object = 0, client = 0, viewport = 0, window = 0, control = 0; int32_t refs = 0;
     if (self && self->active.load() && inside_engine_tick && input_source_frame &&
-        copy(&object, reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x3cbbc28, 8) &&
-        read(object, 0x720, client) && read(client, 0xa0, viewport) && viewport &&
+        (object = game_engine_object()) && read(object, 0x720, client) && read(client, 0xa0, viewport) && viewport &&
         read(object, 0xdf8, window) && window && read(object, 0xe00, control) &&
         read(control, 8, refs) && refs > 0) {
         slate_producer_source.source = input_source_frame; slate_producer_source.viewport = viewport;
         slate_producer_source.window = window; slate_producer_source.renderer = uint64_t(uintptr_t(renderer));
         slate_producer_source.after_simulation = after_simulation;
     }
-    reinterpret_cast<void(*)(void*, void*)>(sites[28].original)(renderer, buffer);
+    reinterpret_cast<void(*)(void*, void*)>(sites[hook_slate_private].original)(renderer, buffer);
     slate_producer_source = saved;
 }
 void* hooked_slate_allocate(void* result, uint64_t prerequisite, uint32_t priority)
 {
     EntryGuard producer;
-    auto* returned = reinterpret_cast<void*(*)(void*, uint64_t, uint32_t)>(sites[29].original)(result, prerequisite, priority);
+    auto* returned = reinterpret_cast<void*(*)(void*, uint64_t, uint32_t)>(sites[hook_slate_allocate].original)(result, prerequisite, priority);
     auto* self = installed.load(std::memory_order_acquire);
     uint64_t task = 0;
     if (self && self->active.load() && slate_producer_source.source &&
@@ -1915,24 +1993,22 @@ void hooked_slate_task(void* task)
     if (source.source && read(source.task, 0x28, window) && window == source.window &&
         read(source.task, 0x10, source.renderer) && read(source.task, 0x18, source.info) &&
         read(source.task, 0x20, source.elements)) slate_execution_source = source;
-    reinterpret_cast<void(*)(void*)>(sites[30].original)(task);
+    reinterpret_cast<void(*)(void*)>(sites[hook_slate_task].original)(task);
     slate_execution_source = saved;
 }
-struct WindowLease { IDXGISwapChain* swapchain = nullptr; };
+// A COM object held for the lifetime of a queued scope.
+template<class T> struct ComLease { Microsoft::WRL::ComPtr<T> object; };
+template<class T> void release_com_lease(void* object) { delete static_cast<ComLease<T>*>(object); }
+using WindowLease = ComLease<IDXGISwapChain>;
 void resolve_window(void* object, rsf_ac7_render_scope* scope)
-{ scope->swapchain = static_cast<WindowLease*>(object)->swapchain; }
-void release_window(void* object)
-{
-    auto* lease = static_cast<WindowLease*>(object);
-    if (lease->swapchain) lease->swapchain->Release();
-    delete lease;
-}
+{ scope->swapchain = static_cast<WindowLease*>(object)->object.Get(); }
+void release_window(void* object) { release_com_lease<IDXGISwapChain>(object); }
 void hooked_slate_window(void* renderer, void* list, void* info, void* elements, uint8_t vsync, uint8_t clear)
 {
     OuterGuard lifetime;
     auto* self = installed.load(std::memory_order_acquire);
     using Draw = void(*)(void*, void*, void*, void*, uint8_t, uint8_t);
-    auto original = reinterpret_cast<Draw>(sites[31].original);
+    auto original = reinterpret_cast<Draw>(sites[hook_slate_window].original);
     auto source = slate_execution_source;
     const auto element_key = uint64_t(uintptr_t(elements));
     if (!source.source && slate_producer_source.source) {
@@ -1955,7 +2031,7 @@ void hooked_slate_window(void* renderer, void* list, void* info, void* elements,
                 reinterpret_cast<void*>(uintptr_t(rhi)))) : nullptr;
             auto* lease = new(std::nothrow) WindowLease;
             if (lease && native && SUCCEEDED(native->QueryInterface(__uuidof(IDXGISwapChain),
-                    reinterpret_cast<void**>(&lease->swapchain)))) {
+                    reinterpret_cast<void**>(lease->object.GetAddressOf())))) {
                 rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
                 scope.session_id = self->options.session_id; scope.role = RSF_GAME_RENDER_WINDOW;
                 scope.source_frame_id = source.source; scope.viewport_key = source.viewport;
@@ -1979,15 +2055,10 @@ void hooked_slate_window(void* renderer, void* list, void* info, void* elements,
         self->active.store(false); log(*self, "AC7 window source deactivated: native RHI scope could not close");
     }
 }
-struct TextureBindingLease { ID3D11Resource* texture = nullptr; };
+using TextureBindingLease = ComLease<ID3D11Resource>;
 void resolve_texture_binding(void* object, rsf_ac7_render_scope* scope)
-{ scope->sampled_texture = static_cast<TextureBindingLease*>(object)->texture; }
-void release_texture_binding(void* object)
-{
-    auto* lease = static_cast<TextureBindingLease*>(object);
-    if (lease->texture) lease->texture->Release();
-    delete lease;
-}
+{ scope->sampled_texture = static_cast<TextureBindingLease*>(object)->object.Get(); }
+void release_texture_binding(void* object) { release_com_lease<ID3D11Resource>(object); }
 void hooked_slate_texture(void* shader, void* list, void* rhi_texture, void* sampler_ref)
 {
     EntryGuard producer;
@@ -1999,36 +2070,36 @@ void hooked_slate_texture(void* shader, void* list, void* rhi_texture, void* sam
         read(uint64_t(uintptr_t(shader)), 0xc2, count) && count &&
         read(uint64_t(uintptr_t(shader)), 0xc0, slot)) {
         auto* texture = static_cast<ID3D11Resource*>(native_texture(uint64_t(uintptr_t(rhi_texture))));
-        bool candidate = false;
-        {
-            std::lock_guard<std::mutex> lock(self->identities_guard);
-            const auto& key = self->final_surfaces[source.source % self->final_surfaces.size()];
-            candidate = key.source == source.source && key.viewport == source.viewport && !key.ambiguous &&
-                key.surface == uint64_t(uintptr_t(texture)) && texture;
-        }
+        const auto slot_index = source.source % self->final_surfaces.size();
         // Most Slate batches are fonts/icons. Only a surface produced by this exact scene source
-        // needs a queued validation marker and resource lease.
+        // needs a queued validation marker and resource lease. The lock-free hint rejects the
+        // rest, so the identity lock is taken only for a bind of a published final surface.
+        bool candidate = texture && self->final_surface_hint[slot_index].load(std::memory_order_acquire) ==
+            uint64_t(uintptr_t(texture));
+        if (candidate) {
+            std::lock_guard<std::mutex> lock(self->identities_guard);
+            const auto& key = self->final_surfaces[slot_index];
+            candidate = key.source == source.source && key.viewport == source.viewport && !key.ambiguous &&
+                key.surface == uint64_t(uintptr_t(texture));
+        }
         auto* lease = candidate ? new(std::nothrow) TextureBindingLease : nullptr;
         if (lease) {
-            lease->texture = texture;
-            if (lease->texture) {
-                lease->texture->AddRef();
-                rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
-                scope.session_id = self->options.session_id; scope.role = RSF_GAME_RENDER_TEXTURE_BINDING;
-                scope.source_frame_id = source.source; scope.viewport_key = source.viewport;
-                scope.window_key = source.window; scope.pass_key = uint64_t(uintptr_t(shader));
-                scope.texture_slot = slot; scope.flags = RSF_GAME_RENDER_PRIMARY;
-                if (source.after_simulation) scope.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
-                const rsf_ac7_scope_lease owned{lease, resolve_texture_binding, release_texture_binding};
-                if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
-                    release_texture_binding(lease);
-                    static std::atomic<uint32_t> refusals{0};
-                    if (refusals.fetch_add(1) < 4) log(*self, "AC7 texture-binding scope refused: final scene/window association was not queued");
-                }
-            } else delete lease;
+            lease->object = texture;
+            rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
+            scope.session_id = self->options.session_id; scope.role = RSF_GAME_RENDER_TEXTURE_BINDING;
+            scope.source_frame_id = source.source; scope.viewport_key = source.viewport;
+            scope.window_key = source.window; scope.pass_key = uint64_t(uintptr_t(shader));
+            scope.texture_slot = slot; scope.flags = RSF_GAME_RENDER_PRIMARY;
+            if (source.after_simulation) scope.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
+            const rsf_ac7_scope_lease owned{lease, resolve_texture_binding, release_texture_binding};
+            if (!rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
+                release_texture_binding(lease);
+                static std::atomic<uint32_t> refusals{0};
+                if (refusals.fetch_add(1) < 4) log(*self, "AC7 texture-binding scope refused: final scene/window association was not queued");
+            }
         }
     }
-    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[32].original)(shader, list, rhi_texture, sampler_ref);
+    reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[hook_slate_texture].original)(shader, list, rhi_texture, sampler_ref);
     if (ticket && !rsf_ac7_render_scope_close(ticket, list)) {
         self->active.store(false); log(*self, "AC7 texture binding deactivated: native RHI scope could not close");
     }
@@ -2042,8 +2113,7 @@ constexpr unsigned char native_scene_format[]{0x48,0x8b,0x05,0x29,0x33,0xbc,0x02
 constexpr unsigned char precise_scene_format[]{0xb8,0x04,0x00,0x00,0x00,0x90,0x90,0x48,0x8b,0xcb,0x90,0x90,0x90};
 bool write_render_code(unsigned char* site, const unsigned char* expected, const unsigned char* replacement, size_t size)
 {
-    unsigned char actual[16]{};
-    if (!size || size > sizeof(actual) || !copy(actual, site, size) || std::memcmp(actual, expected, size)) return false;
+    if (!size || !bytes_match(site, expected, size)) return false;
     DWORD protection = 0;
     if (!VirtualProtect(site, size, PAGE_EXECUTE_READWRITE, &protection)) return false;
     std::memcpy(site, replacement, size);
@@ -2063,15 +2133,14 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
         std::lock_guard<std::mutex> lock(self->cloud_resolution_guard);
         // A recreated D3D device cannot use the previous device's shader. Native texture ownership
         // supplies the replacement views; rebuild only our shader before validating this dispatch.
-        if (self->cloud_depth_device && self->cloud_depth_device != device.Get()) {
-            self->cloud_depth_shader->Release(); self->cloud_depth_shader = nullptr;
-            self->cloud_depth_device->Release(); self->cloud_depth_device = nullptr;
+        if (self->cloud_depth_device && self->cloud_depth_device.Get() != device.Get()) {
+            self->cloud_depth_shader.Reset(); self->cloud_depth_device.Reset();
             self->cloud_depth_shader_refused = false;
             self->cloud_depth_ready.store(false,std::memory_order_release);
         }
         if (!self->cloud_depth_shader && !self->cloud_depth_shader_refused) {
-            if (rsf_ac7_create_truesky_depth_shader(device.Get(),&self->cloud_depth_shader)) {
-                self->cloud_depth_device = device.Get(); self->cloud_depth_device->AddRef();
+            if (rsf_ac7_create_truesky_depth_shader(device.Get(),self->cloud_depth_shader.ReleaseAndGetAddressOf())) {
+                self->cloud_depth_device = device;
                 log(*self,"native TrueSky: one-to-one depth shader compiled; checking native pass bindings");
             } else {
                 self->cloud_depth_shader_refused = true;
@@ -2086,7 +2155,7 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
     Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
     context->CSGetShaderResources(1,1,&source); context->CSGetUnorderedAccessViews(0,1,&target);
     context->CSGetConstantBuffers(11,1,&constants);
-    bool bindings = self->cloud_depth_shader && self->cloud_depth_device == device.Get() && source && target && constants;
+    bool bindings = self->cloud_depth_shader && self->cloud_depth_device.Get() == device.Get() && source && target && constants;
     bool full = false;
     D3D11_TEXTURE2D_DESC src{},dst{}; D3D11_BUFFER_DESC cb{};
     D3D11_SHADER_RESOURCE_VIEW_DESC srv{}; D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -2143,7 +2212,7 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
         return;
     }
     if (full) {
-        context->CSSetShader(self->cloud_depth_shader,nullptr,0);
+        context->CSSetShader(self->cloud_depth_shader.Get(),nullptr,0);
         if (self->cloud_depth_dispatches.fetch_add(1) < 3)
             log(*self,"native TrueSky: normalized one-to-one scene depth dispatched on native effect resources");
     }
@@ -2167,6 +2236,46 @@ void* allocate_depth_relay(unsigned char* call)
         }
     }
     return nullptr;
+}
+// Builds the relay for the `size` (6 or 7) byte indirect call at `call`, whose current bytes are
+// `native`: a pointer slot holding `handler`, and the `call [rip+rel]` that reaches it. Writes nothing
+// to the code yet.
+bool make_call_relay(CallRelay& relay, unsigned char* call, const unsigned char* native, uint32_t size, void* handler)
+{
+    if (size < 6 || size > 7) return false;
+    auto* slot = allocate_depth_relay(call);
+    if (!slot) return false;
+    const auto distance = intptr_t(slot) - intptr_t(call + 6);
+    if (distance < INT32_MIN || distance > INT32_MAX) { VirtualFree(slot, 0, MEM_RELEASE); return false; }
+    std::memcpy(slot, &handler, sizeof(handler));
+    const int32_t relative = int32_t(distance);
+    relay = {};
+    relay.call = call; relay.slot = slot; relay.size = size;
+    std::memcpy(relay.native, native, size);
+    relay.relayed[0] = 0xff; relay.relayed[1] = 0x15; relay.relayed[6] = 0x90;
+    std::memcpy(relay.relayed + 2, &relative, 4);
+    return true;
+}
+void release_call_relay(CallRelay& relay)
+{
+    if (relay.slot) VirtualFree(relay.slot, 0, MEM_RELEASE);
+    relay = {};
+}
+// Redirects the call. On failure the slot is released and the relay cleared.
+bool patch_call_relay(CallRelay& relay)
+{
+    if (write_render_code(relay.call, relay.native, relay.relayed, relay.size)) return true;
+    release_call_relay(relay);
+    return false;
+}
+// Puts the native call back and releases the slot. False, with the relay left installed, when the
+// code cannot be restored.
+bool restore_call_relay(CallRelay& relay)
+{
+    if (!relay.call) return true;
+    if (!write_render_code(relay.call, relay.relayed, relay.native, relay.size)) return false;
+    release_call_relay(relay);
+    return true;
 }
 bool depth_effect_fingerprint()
 {
@@ -2192,30 +2301,20 @@ bool depth_effect_fingerprint()
 }
 bool install_depth_dispatch(rsf_ac7_native_renderer& self, unsigned char* module)
 {
-    if (self.cloud_depth_call) return self.cloud_depth_format_site != nullptr;
+    if (self.cloud_depth_call.call) return self.cloud_depth_format_site != nullptr;
     auto* call = module+0xc003f; auto* branch=module+0xbff0b;
     auto* format = module+0xbfc05;
     constexpr unsigned char call_expected[]{0x41,0xff,0x92,0x48,0x01,0x00,0x00,0x48,0x8b,0x4b,0x08,0x4c,0x8d,0x83,0xb0,0x01};
     constexpr unsigned char branch_expected[]{0x41,0x83,0xfc,0x02,0x75,0x1d,0x48,0x8b,0x4b,0x08,0x4c,0x8d,0x43,0x18,0x48,0x8b};
     constexpr unsigned char format_expected[]{0xc7,0x44,0x24,0x20,0x16,0x00,0x00,0x00,0xff,0x50,0x58,0x8b,0x87,0x94,0x00,0x00};
-    unsigned char actual[16]{};
-    if (!copy(actual,call,16) || std::memcmp(actual,call_expected,16) ||
-        !copy(actual,branch-4,16) || std::memcmp(actual,branch_expected,16) ||
-        !copy(actual,format,16) || std::memcmp(actual,format_expected,16) || !depth_effect_fingerprint()) return false;
-    auto* relay = allocate_depth_relay(call); if (!relay) return false;
-    const auto handler = reinterpret_cast<void*>(&native_cloud_depth_dispatch);
-    std::memcpy(relay,&handler,sizeof(handler));
-    unsigned char replacement[]{0xff,0x15,0,0,0,0,0x90};
-    const auto distance = intptr_t(relay)-intptr_t(call+6);
-    if (distance < INT32_MIN || distance > INT32_MAX) { VirtualFree(relay,0,MEM_RELEASE); return false; }
-    const int32_t relative = int32_t(distance); std::memcpy(replacement+2,&relative,4);
+    if (!bytes_match(call,call_expected,16) || !bytes_match(branch-4,branch_expected,16) ||
+        !bytes_match(format,format_expected,16) || !depth_effect_fingerprint()) return false;
+    CallRelay relay;
+    if (!make_call_relay(relay,call,call_expected,7,reinterpret_cast<void*>(&native_cloud_depth_dispatch))) return false;
     constexpr unsigned char old_branch[]{0x75}, supported_branch[]{0x77};
-    if (!write_render_code(branch,old_branch,supported_branch,1)) { VirtualFree(relay,0,MEM_RELEASE); return false; }
-    if (!write_render_code(call,call_expected,replacement,sizeof(replacement))) {
-        write_render_code(branch,supported_branch,old_branch,1); VirtualFree(relay,0,MEM_RELEASE); return false;
-    }
-    self.cloud_depth_call=call; self.cloud_depth_branch=branch; self.cloud_depth_relay=relay;
-    std::memcpy(self.cloud_depth_call_bytes,replacement,sizeof(replacement));
+    if (!write_render_code(branch,old_branch,supported_branch,1)) { release_call_relay(relay); return false; }
+    if (!patch_call_relay(relay)) { write_render_code(branch,supported_branch,old_branch,1); return false; }
+    self.cloud_depth_call=relay; self.cloud_depth_branch=branch;
     // This argument belongs to normalized scene-depth production, not cloud colour or scene Z.
     // The native ensure2D owner recreates the texture and both views when its format changes.
     if (!write_render_code(format+4,native_cloud_depth_format,precise_cloud_depth_format,sizeof(native_cloud_depth_format))) {
@@ -2259,32 +2358,25 @@ void native_cloud_composite_draw(void* platform, void* device_context, uint32_t 
 }
 void install_cloud_motion(rsf_ac7_native_renderer& self, unsigned char* module)
 {
-    if (self.cloud_motion_call) return;
+    if (self.cloud_motion_call.call) return;
     auto* call = module + 0xabc6b;
     constexpr unsigned char before[]{0x49,0x8b,0x8e,0x28,0x02,0x00,0x00,0x45,0x8b,0xc4,0x49,0x8b,0xd7,0x48,0x8b,0x01};
     constexpr unsigned char expected[]{0xff,0x90,0x30,0x01,0x00,0x00,0x49,0x8b,0x9e,0x60,0x02,0x00,0x00,0x48,0x8d,0x0d};
-    unsigned char actual[16]{};
-    if (!copy(actual, call - 16, 16) || std::memcmp(actual, before, 16) || !copy(actual, call, 16) || std::memcmp(actual, expected, 16)) {
+    if (!bytes_match(call - 16, before, 16) || !bytes_match(call, expected, 16)) {
         log(self, "native TrueSky cloud motion refused: composite_tile draw bytes differ at DLL RVA 0xabc6b"); return;
     }
-    auto* relay = allocate_depth_relay(call); if (!relay) return;
-    const auto handler = reinterpret_cast<void*>(&native_cloud_composite_draw);
-    std::memcpy(relay, &handler, sizeof(handler));
-    unsigned char replacement[]{0xff,0x15,0,0,0,0};
-    const auto distance = intptr_t(relay) - intptr_t(call + 6);
-    if (distance < INT32_MIN || distance > INT32_MAX) { VirtualFree(relay, 0, MEM_RELEASE); return; }
-    const int32_t relative = int32_t(distance); std::memcpy(replacement + 2, &relative, 4);
-    if (!write_render_code(call, expected, replacement, sizeof(replacement))) { VirtualFree(relay, 0, MEM_RELEASE); return; }
-    self.cloud_motion_call = call; self.cloud_motion_relay = relay;
+    CallRelay relay;
+    if (!make_call_relay(relay, call, expected, 6, reinterpret_cast<void*>(&native_cloud_composite_draw)) ||
+        !patch_call_relay(relay)) return;
+    self.cloud_motion_call = relay;
     log(self, "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b");
 }
 bool apply_scene_precision_patch(rsf_ac7_native_renderer& self)
 {
     if (self.scene_precision_site) return true;
-    auto* site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1095620;
+    auto* site = engine<unsigned char*>(0x1095620);
     constexpr unsigned char expected[]{0x48,0x8b,0x05,0x29,0x33,0xbc,0x02,0x48,0x8b,0xcb,0x8b,0x40,0x04,0x89,0x45,0xd7};
-    unsigned char actual[sizeof(expected)]{};
-    if (!copy(actual, site, sizeof(actual)) || std::memcmp(actual, expected, sizeof(actual)) ||
+    if (!bytes_match(site, expected, sizeof(expected)) ||
         !write_render_code(site, native_scene_format, precise_scene_format, sizeof(native_scene_format))) {
         log(self, "native scene-precision patch refused: expected bytes differ or code protection failed at RVA 0x1095620");
         return false;
@@ -2314,8 +2406,7 @@ void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
     // this consumer also covers settings the actor or a sequence writes after startup.
     constexpr unsigned char expected[]{0x8b,0x87,0x10,0x02,0x00,0x00,0x89,0x44,0x24,0x38,0x48,0x8b,0x45,0xd0,0x0f,0x29};
     auto* site = module + 0x87f6d;
-    unsigned char actual[sizeof(expected)]{};
-    if (!copy(actual, site, sizeof(actual)) || std::memcmp(actual, expected, sizeof(actual)) ||
+    if (!bytes_match(site, expected, sizeof(expected)) ||
         !write_render_code(site, native_cloud_divisor, full_cloud_divisor, sizeof(native_cloud_divisor))) {
         self.cloud_resolution_refused = true;
         log(self, "native TrueSky cloud-resolution patch refused: expected bytes differ or code protection failed at DLL RVA 0x87f6d");
@@ -2327,7 +2418,7 @@ void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
 void hooked_sky_projection(float* matrix, float units)
 {
     EntryGuard entry;
-    reinterpret_cast<void(*)(float*, float)>(sites[44].original)(matrix, units);
+    reinterpret_cast<void(*)(float*, float)>(sites[hook_sky_projection].original)(matrix, units);
     // The native handedness conversion negates M20 and M23. M21 must follow M20
     // for temporal projection offsets to retain the scene's vertical sampling direction.
     if (sky_projection_jitter && matrix) matrix[9] = -matrix[9];
@@ -2338,12 +2429,11 @@ void hooked_sky_render(void* plugin, void* parameters)
     const bool previous = sky_projection_jitter;
     sky_projection_jitter = false;
     auto* self = installed.load();
-    rsf_game_render_config config{}; config.struct_size = sizeof(config);
+    rsf_game_render_config config{};
     uint64_t view = 0, cached = 0; float jitter_y = 0, projection_y = 0, perspective = 0;
     const auto key = uint64_t(uintptr_t(parameters));
     if (self && self->active.load()) apply_cloud_resolution_patch(*self);
-    if (self && self->active.load() && self->options.render_config &&
-        self->options.render_config(self->options.user, &config) && config.enabled &&
+    if (self && self->active.load() && fetch_config(*self, config) && config.enabled &&
         read(key, 0xb0, view) && primary_view(view, config) &&
         read(view, 0x1418, cached) && read(cached, 0x724, jitter_y) &&
         read(key, 0x74, projection_y) && read(key, 0x7c, perspective) &&
@@ -2353,13 +2443,13 @@ void hooked_sky_render(void* plugin, void* parameters)
         static uint32_t reports = 0;
         if (reports++ < 4) log(*self, "native TrueSky: matched primary-view vertical jitter handedness corrected");
     }
-    reinterpret_cast<Process>(sites[45].original)(plugin, parameters);
+    reinterpret_cast<Process>(sites[hook_sky_render].original)(plugin, parameters);
     sky_projection_jitter = previous;
 }
 uint32_t hooked_scene_colour_format(void* scene)
 {
     EntryGuard entry;
-    const auto original = reinterpret_cast<uint32_t(*)(void*)>(sites[47].original);
+    const auto original = reinterpret_cast<uint32_t(*)(void*)>(sites[hook_scene_colour_format].original);
     auto* self = installed.load();
     int32_t feature = 0;
     if (!self || !self->active.load() || !read(uint64_t(uintptr_t(scene)), 0x258, feature) || feature < 2)
@@ -2373,46 +2463,87 @@ uint32_t hooked_scene_colour_format(void* scene)
     return 10;
 }
 template<uint32_t I> void hooked_process(void* node, void* context) { process(I, node, context); }
-void* hooks[] = {reinterpret_cast<void*>(&hooked_process<0>), reinterpret_cast<void*>(&hooked_process<1>),
-    reinterpret_cast<void*>(&hooked_process<2>), reinterpret_cast<void*>(&hooked_process<3>),
-    reinterpret_cast<void*>(&hooked_process<4>), reinterpret_cast<void*>(&hooked_process<5>),
-    reinterpret_cast<void*>(&hooked_descriptor<0>), reinterpret_cast<void*>(&hooked_descriptor<1>),
-    reinterpret_cast<void*>(&hooked_descriptor<2>), reinterpret_cast<void*>(&hooked_descriptor<3>),
-    reinterpret_cast<void*>(&hooked_descriptor<4>), reinterpret_cast<void*>(&hooked_descriptor<5>),
-    reinterpret_cast<void*>(&hooked_postprocess), reinterpret_cast<void*>(&hooked_context),
-    reinterpret_cast<void*>(&hooked_visibility), reinterpret_cast<void*>(&hooked_construct), reinterpret_cast<void*>(&hooked_widget_queue),
-    reinterpret_cast<void*>(&hooked_widget_targets), reinterpret_cast<void*>(&hooked_widget_draw),
-    reinterpret_cast<void*>(&hooked_engine_tick), reinterpret_cast<void*>(&hooked_renderer_retire),
-    reinterpret_cast<void*>(&hooked_poll_input), reinterpret_cast<void*>(&hooked_game_instance_init),
-    reinterpret_cast<void*>(&hooked_target_init), reinterpret_cast<void*>(&hooked_simulation<24>),
-    reinterpret_cast<void*>(&hooked_simulation<25>), reinterpret_cast<void*>(&hooked_redraw),
-    reinterpret_cast<void*>(&hooked_viewport_draw), reinterpret_cast<void*>(&hooked_slate_private),
-    reinterpret_cast<void*>(&hooked_slate_allocate), reinterpret_cast<void*>(&hooked_slate_task),
-    reinterpret_cast<void*>(&hooked_slate_window), reinterpret_cast<void*>(&hooked_slate_texture),
-    reinterpret_cast<void*>(&hooked_translucency_size), reinterpret_cast<void*>(&hooked_unmodified_begin),
-    reinterpret_cast<void*>(&hooked_unmodified_resolve), reinterpret_cast<void*>(&hooked_translucency_render),
-    reinterpret_cast<void*>(&hooked_pixel_view_uniform), reinterpret_cast<void*>(&hooked_rhi_pixel_uniform),
-    reinterpret_cast<void*>(&hooked_rhi_pixel_tables), reinterpret_cast<void*>(&hooked_pixel_enqueue<40>),
-    reinterpret_cast<void*>(&hooked_pixel_enqueue<41>), reinterpret_cast<void*>(&hooked_pixel_enqueue<42>),
-    reinterpret_cast<void*>(&hooked_pixel_enqueue<43>), reinterpret_cast<void*>(&hooked_sky_projection),
-    reinterpret_cast<void*>(&hooked_sky_render), reinterpret_cast<void*>(&hooked_temporal_sample_index),
-    reinterpret_cast<void*>(&hooked_scene_colour_format), reinterpret_cast<void*>(&hooked_render_family),
-    reinterpret_cast<void*>(&hooked_frame_task_construct), reinterpret_cast<void*>(&hooked_frame_task_execute),
-    reinterpret_cast<void*>(&hooked_rhi_frame_begin), reinterpret_cast<void*>(&hooked_rhi_frame_end),
-    reinterpret_cast<void*>(&hooked_frame_sync), reinterpret_cast<void*>(&hooked_pump_messages),
-    reinterpret_cast<void*>(&hooked_engine_pacing), reinterpret_cast<void*>(&hooked_create_pixel_shader),
-    reinterpret_cast<void*>(&hooked_base_pass)};
+// Attaches each detour to its site. Keyed by hook, so the order of this list carries no meaning.
+void bind_detours()
+{
+    const struct { Hook hook; void* detour; } bindings[] = {
+        {hook_process_tonemap, reinterpret_cast<void*>(&hooked_process<hook_process_tonemap>)},
+        {hook_process_aa, reinterpret_cast<void*>(&hooked_process<hook_process_aa>)},
+        {hook_process_material, reinterpret_cast<void*>(&hooked_process<hook_process_material>)},
+        {hook_process_hud, reinterpret_cast<void*>(&hooked_process<hook_process_hud>)},
+        {hook_process_composite, reinterpret_cast<void*>(&hooked_process<hook_process_composite>)},
+        {hook_process_output, reinterpret_cast<void*>(&hooked_process<hook_process_output>)},
+        {hook_descriptor_tonemap, reinterpret_cast<void*>(&hooked_descriptor<hook_process_tonemap>)},
+        {hook_descriptor_aa, reinterpret_cast<void*>(&hooked_descriptor<hook_process_aa>)},
+        {hook_descriptor_material, reinterpret_cast<void*>(&hooked_descriptor<hook_process_material>)},
+        {hook_descriptor_hud, reinterpret_cast<void*>(&hooked_descriptor<hook_process_hud>)},
+        {hook_descriptor_composite, reinterpret_cast<void*>(&hooked_descriptor<hook_process_composite>)},
+        {hook_descriptor_output, reinterpret_cast<void*>(&hooked_descriptor<hook_process_output>)},
+        {hook_postprocess, reinterpret_cast<void*>(&hooked_postprocess)},
+        {hook_context, reinterpret_cast<void*>(&hooked_context)},
+        {hook_visibility, reinterpret_cast<void*>(&hooked_visibility)},
+        {hook_construct, reinterpret_cast<void*>(&hooked_construct)},
+        {hook_widget_queue, reinterpret_cast<void*>(&hooked_widget_queue)},
+        {hook_widget_targets, reinterpret_cast<void*>(&hooked_widget_targets)},
+        {hook_widget_draw, reinterpret_cast<void*>(&hooked_widget_draw)},
+        {hook_engine_tick, reinterpret_cast<void*>(&hooked_engine_tick)},
+        {hook_renderer_retire, reinterpret_cast<void*>(&hooked_renderer_retire)},
+        {hook_poll_input, reinterpret_cast<void*>(&hooked_poll_input)},
+        {hook_game_instance_init, reinterpret_cast<void*>(&hooked_game_instance_init)},
+        {hook_target_init, reinterpret_cast<void*>(&hooked_target_init)},
+        {hook_simulation_a, reinterpret_cast<void*>(&hooked_simulation<hook_simulation_a>)},
+        {hook_simulation_b, reinterpret_cast<void*>(&hooked_simulation<hook_simulation_b>)},
+        {hook_redraw, reinterpret_cast<void*>(&hooked_redraw)},
+        {hook_viewport_draw, reinterpret_cast<void*>(&hooked_viewport_draw)},
+        {hook_slate_private, reinterpret_cast<void*>(&hooked_slate_private)},
+        {hook_slate_allocate, reinterpret_cast<void*>(&hooked_slate_allocate)},
+        {hook_slate_task, reinterpret_cast<void*>(&hooked_slate_task)},
+        {hook_slate_window, reinterpret_cast<void*>(&hooked_slate_window)},
+        {hook_slate_texture, reinterpret_cast<void*>(&hooked_slate_texture)},
+        {hook_translucency_size, reinterpret_cast<void*>(&hooked_translucency_size)},
+        {hook_unmodified_begin, reinterpret_cast<void*>(&hooked_unmodified_begin)},
+        {hook_unmodified_resolve, reinterpret_cast<void*>(&hooked_unmodified_resolve)},
+        {hook_translucency_render, reinterpret_cast<void*>(&hooked_translucency_render)},
+        {hook_pixel_view_uniform, reinterpret_cast<void*>(&hooked_pixel_view_uniform)},
+        {hook_rhi_pixel_uniform, reinterpret_cast<void*>(&hooked_rhi_pixel_uniform)},
+        {hook_rhi_pixel_tables, reinterpret_cast<void*>(&hooked_rhi_pixel_tables)},
+        {hook_pixel_enqueue_a, reinterpret_cast<void*>(&hooked_pixel_enqueue<hook_pixel_enqueue_a>)},
+        {hook_pixel_enqueue_b, reinterpret_cast<void*>(&hooked_pixel_enqueue<hook_pixel_enqueue_b>)},
+        {hook_pixel_enqueue_c, reinterpret_cast<void*>(&hooked_pixel_enqueue<hook_pixel_enqueue_c>)},
+        {hook_pixel_enqueue_d, reinterpret_cast<void*>(&hooked_pixel_enqueue<hook_pixel_enqueue_d>)},
+        {hook_sky_projection, reinterpret_cast<void*>(&hooked_sky_projection)},
+        {hook_sky_render, reinterpret_cast<void*>(&hooked_sky_render)},
+        {hook_temporal_sample_index, reinterpret_cast<void*>(&hooked_temporal_sample_index)},
+        {hook_scene_colour_format, reinterpret_cast<void*>(&hooked_scene_colour_format)},
+        {hook_render_family, reinterpret_cast<void*>(&hooked_render_family)},
+        {hook_frame_task_construct, reinterpret_cast<void*>(&hooked_frame_task_construct)},
+        {hook_frame_task_execute, reinterpret_cast<void*>(&hooked_frame_task_execute)},
+        {hook_rhi_frame_begin, reinterpret_cast<void*>(&hooked_rhi_frame_begin)},
+        {hook_rhi_frame_end, reinterpret_cast<void*>(&hooked_rhi_frame_end)},
+        {hook_frame_sync, reinterpret_cast<void*>(&hooked_frame_sync)},
+        {hook_pump_messages, reinterpret_cast<void*>(&hooked_pump_messages)},
+        {hook_engine_pacing, reinterpret_cast<void*>(&hooked_engine_pacing)},
+        {hook_create_pixel_shader, reinterpret_cast<void*>(&hooked_create_pixel_shader)},
+        {hook_base_pass, reinterpret_cast<void*>(&hooked_base_pass)},
+    };
+    for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
+}
+// True when the named environment variable is set to anything but zero.
+bool environment_flag(const char* name)
+{
+    char text[8]{};
+    const auto length = GetEnvironmentVariableA(name, text, sizeof(text));
+    return length != 0 && length < sizeof(text) && text[0] != '0';
+}
 }
 extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_options* options,
     rsf_ac7_native_renderer** out) try
 {
     if (!options || options->struct_size < sizeof(*options) || !out || !options->session_id || installed.load()) return 0;
     *out = nullptr;
-    auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
-    unsigned char actual[16]{};
+    auto* base = game_module();
     for (const auto& site : sites) {
-        if (!site.expected || !copy(actual, base + site.rva, sizeof(actual)) ||
-            std::memcmp(actual, site.expected, sizeof(actual))) {
+        if (!bytes_match(base + site.rva, site.expected, 16)) {
             char message[128]{};
             std::snprintf(message, sizeof(message), "AC7 native renderer refused: expected entry bytes differ at RVA 0x%x", site.rva);
             if (options->log) options->log(options->user, message);
@@ -2460,14 +2591,14 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
         {0x1031902, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9}
     };
     for (const auto& gate : depth_gates) {
-        if (!copy(actual, base + gate.rva, gate.count) || std::memcmp(actual, gate.bytes, gate.count)) {
+        if (!bytes_match(base + gate.rva, gate.bytes, gate.count)) {
             char message[144]{};
             std::snprintf(message, sizeof(message), "AC7 native renderer refused: enlarged UI depth/view gate missing at RVA 0x%x", gate.rva);
             if (options->log) options->log(options->user, message);
             return 0;
         }
     }
-    for (const auto& helper : helpers) if (!copy(actual, base + helper.rva, 16) || std::memcmp(actual, helper.expected, 16)) {
+    for (const auto& helper : helpers) if (!bytes_match(base + helper.rva, helper.expected, 16)) {
         char message[128]{};
         std::snprintf(message, sizeof(message), "AC7 native renderer refused: expected helper bytes differ at RVA 0x%x", helper.rva);
         if (options->log) options->log(options->user, message);
@@ -2485,20 +2616,21 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         rsf_ac7_render_scopes_quiesce(self->scopes); rsf_ac7_render_scopes_destroy(self->scopes); delete self; return 0;
     }
-    bool success = true;
-    for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
-        sites[i].target = base + sites[i].rva;
-        if (MH_CreateHook(sites[i].target, hooks[i], &sites[i].original) != MH_OK) { success = false; break; }
-        ++self->hooks;
+    // The evidence hooks run for every pixel uniform bind. Their sites are still verified above, but
+    // they are hooked only when the diagnostic is asked for.
+    const bool diagnostics = (options->diagnostics & RSF_AC7_DIAG_PIXEL_BINDINGS) != 0 ||
+        environment_flag("RSF_AC7_PIXEL_DIAGNOSTICS");
+    bind_detours();
+    void* targets[hook_count]; void* detours[hook_count]; void** originals[hook_count];
+    for (uint32_t i = 0; i < hook_count; ++i) {
+        sites[i].target = evidence_hook(i) && !diagnostics ? nullptr : base + sites[i].rva;
+        targets[i] = sites[i].target; detours[i] = sites[i].detour; originals[i] = &sites[i].original;
     }
-    if (success) {
-        installed.store(self, std::memory_order_release);
-        for (uint32_t i = 0; i < self->hooks; ++i) if (MH_EnableHook(sites[i].target) != MH_OK) success = false;
-    }
-    if (!success) {
+    installed.store(self, std::memory_order_release);
+    if (!rsf::ac7::install_hooks(targets, detours, originals, hook_count)) {
+        // Whatever the call made is already disabled and removed.
         self->active.store(false);
-        for (uint32_t i = 0; i < self->hooks; ++i) MH_DisableHook(sites[i].target);
-        if (entry_calls.load() || outer_calls.load()) {
+        if (guards_held(true)) {
             // Partial activation can overlap an inactive forwarding call. Pin this failed module
             // instead of unloading code that a native thread will return through.
             HMODULE pinned = nullptr;
@@ -2508,10 +2640,10 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
             *out = self; log(*self, "AC7 native preparation failed during a forwarding call; inactive module pinned until exit");
             return 0;
         }
-        for (uint32_t i = 0; i < self->hooks; ++i) MH_RemoveHook(sites[i].target);
         installed.store(nullptr);
         rsf_ac7_render_scopes_quiesce(self->scopes); rsf_ac7_render_scopes_destroy(self->scopes); delete self; return 0;
     }
+    if (diagnostics) log(*self, "AC7 native renderer: pixel uniform binding diagnostics enabled");
     log(*self, "AC7 native renderer prepared: owned view sizing, pre-tonemap SR graph node, downstream engine descriptors, owned widget raster targets and RHI leases; activation pending");
     *out = self; return 1;
 }
@@ -2532,13 +2664,14 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     // Keep inactive CPU observers installed until their render-thread-only pool refs retire.
     // Disabling first would remove the only owner that can drain an asynchronous RHI release.
     drain_retired(*self);
-    if (entry_calls.load() || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
+    if (guards_held(false) || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
     if (self->input_hook) {
         if (!UnhookWindowsHookEx(self->input_hook)) return 0;
         self->input_hook = nullptr;
     }
-    for (uint32_t i = 0; i < self->hooks; ++i) MH_DisableHook(sites[i].target);
-    if (entry_calls.load() || outer_calls.load()) return 0;
+    // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
+    for (const auto& site : sites) if (site.target) MH_DisableHook(site.target);
+    if (guards_held(true)) return 0;
     if (self->scene_precision_site) {
         if (!write_render_code(self->scene_precision_site, precise_scene_format, native_scene_format, sizeof(native_scene_format))) {
             log(*self, "native scene-precision patch could not restore; renderer retained"); return 0;
@@ -2551,24 +2684,14 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
         }
         self->cloud_resolution_site = nullptr;
     }
-    if (self->cloud_motion_call) {
-        constexpr unsigned char native_draw[]{0xff,0x90,0x30,0x01,0x00,0x00};
-        unsigned char relayed[6]{0xff,0x15};
-        const int32_t relative = int32_t(intptr_t(self->cloud_motion_relay) - intptr_t(self->cloud_motion_call + 6));
-        std::memcpy(relayed + 2, &relative, 4);
-        if (!write_render_code(self->cloud_motion_call, relayed, native_draw, sizeof(native_draw))) {
+    if (self->cloud_motion_call.call) {
+        if (!restore_call_relay(self->cloud_motion_call)) {
             log(*self,"native TrueSky cloud motion relay could not restore; renderer retained"); return 0;
         }
-        self->cloud_motion_call = nullptr;
-        VirtualFree(self->cloud_motion_relay, 0, MEM_RELEASE); self->cloud_motion_relay = nullptr;
         rsf_ac7_cloud_depth_release(self->cloud_motion);
     }
-    if (self->cloud_depth_call) {
-        constexpr unsigned char native_call[]{0x41,0xff,0x92,0x48,0x01,0x00,0x00};
-        if (!write_render_code(self->cloud_depth_call,self->cloud_depth_call_bytes,native_call,sizeof(native_call))) {
-            log(*self,"native TrueSky depth dispatch could not restore; renderer retained"); return 0;
-        }
-        self->cloud_depth_call=nullptr;
+    if (self->cloud_depth_call.call && !restore_call_relay(self->cloud_depth_call)) {
+        log(*self,"native TrueSky depth dispatch could not restore; renderer retained"); return 0;
     }
     if (self->cloud_depth_format_site) {
         if (!write_render_code(self->cloud_depth_format_site,precise_cloud_depth_format,native_cloud_depth_format,sizeof(native_cloud_depth_format))) {
@@ -2583,16 +2706,14 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
         }
         self->cloud_depth_branch=nullptr;
     }
-    if (self->cloud_depth_relay) { VirtualFree(self->cloud_depth_relay,0,MEM_RELEASE); self->cloud_depth_relay=nullptr; }
-    if (self->cloud_depth_shader) { self->cloud_depth_shader->Release(); self->cloud_depth_shader=nullptr; }
-    if (self->cloud_depth_device) { self->cloud_depth_device->Release(); self->cloud_depth_device=nullptr; }
+    self->cloud_depth_shader.Reset(); self->cloud_depth_device.Reset();
     self->cloud_depth_ready.store(false);
     if (!rsf_ac7_render_scopes_destroy(self->scopes)) return 0;
     self->scopes = nullptr;
     drain_retired(*self);
     if (self->retired.load()) return 0;
-    for (uint32_t i = 0; i < self->hooks; ++i) MH_RemoveHook(sites[i].target);
+    void* targets[hook_count];
+    for (uint32_t i = 0; i < hook_count; ++i) targets[i] = sites[i].target;
+    rsf::ac7::remove_hooks(targets, hook_count);
     installed.store(nullptr); delete self; return 1;
 }
-extern "C" int rsf_ac7_native_renderer_current(rsf_ac7_native_renderer* self, rsf_ac7_render_scope* out)
-{ return self && rsf_ac7_render_scope_current(self->scopes, out); }

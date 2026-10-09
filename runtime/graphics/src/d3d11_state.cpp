@@ -6,6 +6,7 @@
 
 #include <d3d11_1.h>
 
+#include <atomic>
 #include <cstring>
 #include <new>
 
@@ -80,10 +81,49 @@ struct State {
 };
 
 struct Storage {
+    // Null for a save that nested under an outer scope on the same context and took nothing.
     State* snapshot;
+    // This save is the one the thread's nesting check refers to.
+    bool outermost;
 };
 static_assert(sizeof(Storage) <= RSF_D3D11_STATE_BYTES);
 static_assert(alignof(Storage) <= alignof(uint64_t));
+
+// The context a save is open on, for this thread. A pass that runs inside another's save/restore
+// would only capture what the outer scope is already going to put back, at the cost of reading and
+// rebinding every slot of six stages, so it takes nothing and its restore does nothing. The passes
+// that nest set every binding they use and leave the outer scope to restore the game's.
+thread_local const void* open_scope = nullptr;
+
+// One snapshot is kept for reuse. A save takes it or allocates, a restore hands it back, so a frame
+// of passes does not allocate and free ~22 KB each time. Exchange rather than a lock: a thread that
+// finds it taken simply allocates its own.
+std::atomic<State*> spare_snapshot{nullptr};
+
+State* take_snapshot()
+{
+    State* snapshot = spare_snapshot.exchange(nullptr, std::memory_order_acquire);
+    if (!snapshot) {
+        return new (std::nothrow) State{};
+    }
+    std::memset(snapshot, 0, sizeof(State));
+    return snapshot;
+}
+
+void give_back_snapshot(State* snapshot)
+{
+    delete spare_snapshot.exchange(snapshot, std::memory_order_release);
+}
+
+// What a device can do does not change for its lifetime, so the feature queries are made once per
+// device and thread. The context's own interface is still asked for on each save when constant
+// buffer ranges are in play, because the snapshot holds a reference to it.
+struct DeviceTraits {
+    const void* device;
+    UINT uav_count;
+    bool constant_ranges;
+};
+thread_local DeviceTraits cached_traits{};
 
 Storage& storage_of(rsf_d3d11_state* state)
 {
@@ -139,20 +179,33 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
     std::memset(state_pointer, 0, sizeof(*state_pointer));
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
-    auto* snapshot = new (std::nothrow) State{};
+    if (open_scope == context) {
+        new (state_pointer->opaque) Storage{nullptr, false};
+        return 1;
+    }
+    State* snapshot = take_snapshot();
     if (!snapshot) return 0;
-    new (state_pointer->opaque) Storage{snapshot};
+    const bool outermost = !open_scope;
+    if (outermost) open_scope = context;
+    new (state_pointer->opaque) Storage{snapshot, outermost};
     State& state = *snapshot;
-    context->QueryInterface(IID_PPV_ARGS(&state.context1));
     ID3D11Device* device = nullptr;
     context->GetDevice(&device);
-    state.uav_count = device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 ?
-        saved_uavs : D3D11_PS_CS_UAV_REGISTER_COUNT;
-    D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
-    state.constant_ranges = state.context1 &&
-        SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) &&
-        options.ConstantBufferOffsetting;
+    if (cached_traits.device != device) {
+        D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
+        cached_traits.uav_count = device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 ?
+            saved_uavs : D3D11_PS_CS_UAV_REGISTER_COUNT;
+        cached_traits.constant_ranges =
+            SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) &&
+            options.ConstantBufferOffsetting;
+        cached_traits.device = device;
+    }
     device->Release();
+    state.uav_count = cached_traits.uav_count;
+    if (cached_traits.constant_ranges) {
+        context->QueryInterface(IID_PPV_ARGS(&state.context1));
+        state.constant_ranges = state.context1 != nullptr;
+    }
 
     context->IAGetInputLayout(&state.layout);
     context->IAGetPrimitiveTopology(&state.topology);
@@ -205,8 +258,13 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
         return;
     }
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    auto* snapshot = storage_of(state_pointer).snapshot;
-    if (!snapshot) return;
+    const Storage storage = storage_of(state_pointer);
+    auto* snapshot = storage.snapshot;
+    if (!snapshot) {
+        // A nested save took nothing, so there is nothing to put back.
+        std::memset(state_pointer, 0, sizeof(*state_pointer));
+        return;
+    }
     State& state = *snapshot;
 
     // Remove foreign bindings from every stage before restoring potentially conflicting resources.
@@ -286,7 +344,8 @@ extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* 
     };
     release_array(singles, sizeof(singles) / sizeof(singles[0]));
 
-    delete snapshot;
+    if (storage.outermost) open_scope = nullptr;
+    give_back_snapshot(snapshot);
     std::memset(state_pointer, 0, sizeof(*state_pointer));
 }
 
@@ -339,6 +398,90 @@ extern "C" void rsf_d3d11_depth_state_restore(void* pointer, rsf_d3d11_state* st
     if (s.shader) {
         s.shader->Release();
     }
+    std::memset(storage, 0, sizeof(*storage));
+}
+
+namespace {
+// What one fullscreen draw disturbs and nothing more: the output merger, the vertex and pixel
+// shaders, the input assembler's layout and topology, pixel slot 0 of each binding kind, and the
+// rasteriser with its viewports and scissors.
+struct FullscreenState {
+    ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    ID3D11DepthStencilView* depth_view;
+    ID3D11VertexShader* vertex_shader;
+    ID3D11PixelShader* pixel_shader;
+    ID3D11InputLayout* layout;
+    D3D11_PRIMITIVE_TOPOLOGY topology;
+    ID3D11ShaderResourceView* resource;
+    ID3D11SamplerState* sampler;
+    ID3D11Buffer* constants;
+    ID3D11BlendState* blend;
+    FLOAT blend_factor[4];
+    UINT blend_mask;
+    ID3D11DepthStencilState* depth_state;
+    UINT stencil_reference;
+    ID3D11RasterizerState* raster;
+    UINT viewport_count;
+    D3D11_VIEWPORT viewports[saved_viewports];
+    UINT scissor_count;
+    D3D11_RECT scissors[saved_viewports];
+};
+static_assert(sizeof(FullscreenState) <= RSF_D3D11_STATE_BYTES);
+} // namespace
+
+extern "C" uint32_t rsf_d3d11_draw_state_save(void* pointer, rsf_d3d11_state* storage)
+{
+    if (!pointer || !storage) {
+        return 0;
+    }
+    auto* context = static_cast<ID3D11DeviceContext*>(pointer);
+    auto& s = *new (storage->opaque) FullscreenState{};
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, &s.depth_view);
+    context->VSGetShader(&s.vertex_shader, nullptr, nullptr);
+    context->PSGetShader(&s.pixel_shader, nullptr, nullptr);
+    context->IAGetInputLayout(&s.layout);
+    context->IAGetPrimitiveTopology(&s.topology);
+    context->PSGetShaderResources(0, 1, &s.resource);
+    context->PSGetSamplers(0, 1, &s.sampler);
+    context->PSGetConstantBuffers(0, 1, &s.constants);
+    context->OMGetBlendState(&s.blend, s.blend_factor, &s.blend_mask);
+    context->OMGetDepthStencilState(&s.depth_state, &s.stencil_reference);
+    context->RSGetState(&s.raster);
+    s.viewport_count = saved_viewports;
+    context->RSGetViewports(&s.viewport_count, s.viewports);
+    s.scissor_count = saved_viewports;
+    context->RSGetScissorRects(&s.scissor_count, s.scissors);
+    return 1;
+}
+
+extern "C" void rsf_d3d11_draw_state_restore(void* pointer, rsf_d3d11_state* storage)
+{
+    if (!pointer || !storage) {
+        return;
+    }
+    auto* context = static_cast<ID3D11DeviceContext*>(pointer);
+    auto& s = *reinterpret_cast<FullscreenState*>(storage->opaque);
+    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, s.depth_view);
+    context->VSSetShader(s.vertex_shader, nullptr, 0);
+    context->PSSetShader(s.pixel_shader, nullptr, 0);
+    context->IASetInputLayout(s.layout);
+    context->IASetPrimitiveTopology(s.topology);
+    context->PSSetShaderResources(0, 1, &s.resource);
+    context->PSSetSamplers(0, 1, &s.sampler);
+    context->PSSetConstantBuffers(0, 1, &s.constants);
+    context->OMSetBlendState(s.blend, s.blend_factor, s.blend_mask);
+    context->OMSetDepthStencilState(s.depth_state, s.stencil_reference);
+    context->RSSetState(s.raster);
+    context->RSSetViewports(s.viewport_count, s.viewports);
+    context->RSSetScissorRects(s.scissor_count, s.scissors);
+
+    release_array(reinterpret_cast<IUnknown* const*>(s.targets),
+                  D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
+    IUnknown* const singles[] = {
+        s.depth_view, s.vertex_shader, s.pixel_shader, s.layout, s.resource,
+        s.sampler,    s.constants,     s.blend,        s.depth_state, s.raster,
+    };
+    release_array(singles, sizeof(singles) / sizeof(singles[0]));
     std::memset(storage, 0, sizeof(*storage));
 }
 

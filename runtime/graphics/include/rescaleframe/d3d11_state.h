@@ -29,7 +29,12 @@ typedef struct rsf_d3d11_state {
 
    Every interface pointer taken here carries a reference, so a save must be matched by exactly one
    restore or the game's resources outlive their pool. Returns non-zero when the state was taken;
-   zero means invalid arguments, a deferred context, or allocation failure. Nothing was saved. */
+   zero means invalid arguments, a deferred context, or allocation failure. Nothing was saved.
+
+   A save made on a thread while another save on the same context is open (the first not yet
+   restored) takes nothing and succeeds, and its restore does nothing: the outer restore puts the
+   game's bindings back, so the nested pass only has to leave nothing bound that the next one trips
+   on. Saves and their restores must therefore stay on one thread and pair up, which they always did. */
 uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* state);
 
 /* Put it all back and drop the references. Safe to call only on a state a save filled in.
@@ -43,6 +48,15 @@ void rsf_d3d11_state_restore(void* context, rsf_d3d11_state* state);
    rasterizer, predicate, or stream-output binding is touched. */
 uint32_t rsf_d3d11_depth_state_save(void* context, rsf_d3d11_state* state);
 void rsf_d3d11_depth_state_restore(void* context, rsf_d3d11_state* state);
+
+/* Narrow scope for one fullscreen draw. Saves the output merger (render targets, depth view, blend,
+   depth stencil), the vertex and pixel shaders, the input layout and topology, pixel slot 0 of
+   resources, samplers and constant buffers, and the rasteriser with its viewports and scissors.
+   That is everything a pass drawing a triangle from the vertex id touches. Shader linkage, other
+   stages and UAVs are not saved; a caller that binds more than this uses the full scope above.
+   Works on any context, deferred included, and does not take part in the nesting of the full scope. */
+uint32_t rsf_d3d11_draw_state_save(void* context, rsf_d3d11_state* state);
+void rsf_d3d11_draw_state_restore(void* context, rsf_d3d11_state* state);
 
 /* Two small device calls for a C caller. `rsf_d3d11_copy_resource` is CopyResource on `context`
    (`ID3D11DeviceContext*`) from `source` to `destination`, both `ID3D11Resource*` of one size and

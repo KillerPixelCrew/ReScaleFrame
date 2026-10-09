@@ -24,12 +24,9 @@ inline rsf_backend_result fg_setup(const rsf_generation_setup* setup, void** out
         (setup->chain.ui_mode != RSF_UI_MODE_NONE && setup->chain.ui_mode != RSF_UI_MODE_UI_LAYER &&
          setup->chain.ui_mode != RSF_UI_MODE_BACKBUFFER_HUDLESS && setup->chain.ui_mode != RSF_UI_MODE_BACKBUFFER_HUDLESS_UI))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    ID3D12Device* owner = nullptr;
     auto* queue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
-    if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT || FAILED(queue->GetDevice(IID_PPV_ARGS(&owner))))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const bool same = owner == setup->chain.d3d12_device; owner->Release();
-    return same ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT && owned_by(queue, setup->chain.d3d12_device) ?
+        RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
 inline HMODULE fg_library(const rsf_generation_setup& setup, const wchar_t* name)
 {
@@ -63,11 +60,8 @@ inline rsf_backend_result fg_command(void* command, void* device)
 {
     if (!command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(command);
-    ID3D12Device* owner = nullptr;
-    if (list->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT || FAILED(list->GetDevice(IID_PPV_ARGS(&owner))))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const bool same = owner == device; owner->Release();
-    return same ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return list->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT && owned_by(list, device) ?
+        RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
 inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
 {
@@ -81,9 +75,7 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
         record.output_width > INT32_MAX || record.output_height > INT32_MAX)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!frame->interpolate) return RSF_BACKEND_OK;
-    if (!record.session_id || !record.resource_generation || !record.input_qpc || record.phase != RSF_PHASE_UI_COMPLETE ||
-        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY &&
-         record.screen != RSF_SCREEN_HANGAR && record.screen != RSF_SCREEN_BRIEFING))
+    if (!record.session_id || !record.resource_generation || !record.input_qpc || record.phase != RSF_PHASE_UI_COMPLETE)
         return RSF_BACKEND_ERROR_NOT_READY;
     if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID))
         return RSF_BACKEND_ERROR_NOT_READY;
@@ -93,12 +85,10 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
         !std::isfinite(record.camera.vertical_fov_radians) || record.camera.vertical_fov_radians <= 0 ||
         record.camera.vertical_fov_radians >= 3.141593f || !std::isfinite(record.camera.far_plane) || record.camera.far_plane < 0)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.view_to_clip) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.clip_to_previous_clip) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.view_to_world) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.world_to_view) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.jitter_pixels) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (auto value : record.camera.clip_to_view) if (!std::isfinite(value)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!all_finite(record.camera.view_to_clip) || !all_finite(record.camera.clip_to_previous_clip) ||
+        !all_finite(record.camera.view_to_world) || !all_finite(record.camera.world_to_view) ||
+        !all_finite(record.camera.jitter_pixels) || !all_finite(record.camera.clip_to_view))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const rsf_backend_resource* resources[] = {&frame->backbuffer, &frame->depth, &frame->motion, &frame->hudless, &frame->ui};
     for (uint32_t i = 0; i < 5; ++i) {
         const auto& resource = *resources[i];
@@ -106,11 +96,8 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
         if (resource.struct_size < sizeof(resource) || !resource.resource) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
         if (resource.generation != record.resource_generation) return RSF_BACKEND_ERROR_STALE_RESOURCES;
         auto* texture = static_cast<ID3D12Resource*>(resource.resource);
-        ID3D12Device* owner = nullptr;
-        if (FAILED(texture->GetDevice(IID_PPV_ARGS(&owner)))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        const bool same = owner == device; owner->Release();
         const auto desc = texture->GetDesc();
-        if (!same || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
+        if (!owned_by(texture, device) || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
             resource.x > desc.Width || resource.width > desc.Width - resource.x ||
             resource.y > desc.Height || resource.height > desc.Height - resource.y ||
             !resource.width || !resource.height) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -121,5 +108,35 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
             return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
     return RSF_BACKEND_OK;
+}
+// provider.status for a session type whose `state` member is the rsf_fg_status to report.
+template<class Session> rsf_backend_result session_status(void* pointer, rsf_fg_status* out)
+{
+    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out = static_cast<Session*>(pointer)->state; return RSF_BACKEND_OK;
+}
+// The provider a vendor backend exposes when its SDK was not compiled in: it validates the setup
+// header like the real one, then reports NOT_COMPILED, which is a different thing from failing.
+inline const rsf_generation_provider* not_compiled_provider()
+{
+    struct Stub {
+        static rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
+        {
+            const auto result = fg_setup_header(setup, out, chain);
+            return result != 0 ? result : RSF_BACKEND_ERROR_NOT_COMPILED;
+        }
+        static rsf_backend_result configure(void*, const rsf_fg_options*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result begin(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result after(void*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result status(void*, rsf_fg_status*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static rsf_backend_result retirement(void*, rsf_fg_retirement*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+        static void destroy(void*) {}
+        static rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+    };
+    static const rsf_generation_provider provider{sizeof(provider), Stub::create, Stub::configure, Stub::begin,
+        Stub::marker, Stub::prepare, Stub::after, Stub::status, Stub::retirement, Stub::destroy, Stub::abort_frame};
+    return &provider;
 }
 }

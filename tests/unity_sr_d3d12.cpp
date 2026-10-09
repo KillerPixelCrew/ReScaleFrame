@@ -5,6 +5,7 @@
 #include <sl.h>
 #endif
 #include <rescaleframe/unity_bridge.h>
+#include <rescaleframe/unity_sr_host.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -91,13 +92,13 @@ int main(int argc, char** argv)
     std::string interposer = std::string(argv[2]) + "\\sl.interposer.dll";
     setup.dlss.struct_size = sizeof(setup.dlss); setup.dlss.abi_version = RSF_DLSS_ABI_VERSION;
     setup.dlss.interposer_path_utf8 = interposer.c_str(); setup.dlss.plugin_directory_utf8 = argv[2];
-    setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = "6000.3";
-    setup.dlss.project_id_utf8 = "57a42c7e-faf0-4bda-a9f9-892870948ac1"; setup.dlss.require_signature = 1;
+    setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = RSF_UNITY_ENGINE_VERSION;
+    setup.dlss.project_id_utf8 = RSF_UNITY_PROJECT_ID; setup.dlss.require_signature = 1;
     setup.log = setup.dlss.log = logger;
     rsf_streamline_host* shared = nullptr;
     if (argc == 7) {
         rsf_streamline_host_setup registration{sizeof(registration), RSF_STREAMLINE_HOST_ABI_VERSION,
-            argv[2], adapter.Get(), 2, "6000.3", setup.dlss.project_id_utf8, 1, 0, logger, nullptr, RSF_SL_PROFILE_DLSS_FG, 1};
+            argv[2], adapter.Get(), RSF_DLSS_ENGINE_UNITY, RSF_UNITY_ENGINE_VERSION, setup.dlss.project_id_utf8, 1, 0, logger, nullptr, RSF_SL_PROFILE_DLSS_FG, 1};
         if (rsf_streamline_host_adopt(&registration, device.Get(), queue.Get(), &shared) != RSF_BACKEND_OK ||
             rsf_streamline_host_acquire(shared, 1) != RSF_BACKEND_OK ||
             rsf_streamline_host_sleep(shared, 1) != RSF_BACKEND_OK) return 1;

@@ -31,13 +31,13 @@ internal static class Program
             try {
                 bootstrapState.SetValue(null, 2);
                 Native.Enqueue = (ref Packet packet) => {
-                    if (packet.Flags != 10 || packet.Color != IntPtr.Zero) throw new InvalidOperationException("Imported-buffer packet changed.");
+                    if (packet.Flags != (PacketFlags.Hudless | PacketFlags.Probe) || packet.Color != IntPtr.Zero) throw new InvalidOperationException("Imported-buffer packet changed.");
                     ++importedPackets; return IntPtr.Zero;
                 };
                 var passType = typeof(UrpAdapter).GetNestedType("PassData", System.Reflection.BindingFlags.NonPublic);
                 var pass = Activator.CreateInstance(passType, true);
                 passType.GetField("Packet", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    .SetValue(pass, new Packet { Flags = 10 });
+                    .SetValue(pass, new Packet { Flags = PacketFlags.Hudless | PacketFlags.Probe });
                 var execute = typeof(UrpAdapter).GetMethod("Execute", flags);
                 execute.Invoke(null, new[] { pass, Activator.CreateInstance(execute.GetParameters()[1].ParameterType) });
                 if (importedPackets != 1) throw new InvalidOperationException("Imported buffer was not forwarded to native resolution.");

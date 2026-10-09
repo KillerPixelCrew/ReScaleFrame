@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/colour_fidelity.h>
 #include <rescaleframe/d3d11_state.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_cache.h>
+#include <rescaleframe/srv_format.h>
+#include "device_owner.h"
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cmath>
 #include <new>
@@ -80,6 +83,8 @@ struct rsf_colour_fidelity {
     ComPtr<ID3D11Texture2D> residual, corrected[2];
     ComPtr<ID3D11ShaderResourceView> residual_view, corrected_views[2];
     ComPtr<ID3D11UnorderedAccessView> residual_target, corrected_targets[2];
+    // The scene, the reconstruction and the depth are engine targets that come back every frame.
+    rsf::SrvCache<8> sources;
     uint32_t render_width=0,render_height=0,width=0,height=0;
     DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
 };
@@ -89,18 +94,8 @@ extern "C" int rsf_colour_fidelity_create(void* device, rsf_colour_fidelity** ou
     auto* pass=new(std::nothrow) rsf_colour_fidelity;
     if (!pass) return 0;
     pass->device=static_cast<ID3D11Device*>(device);
-    HMODULE module=LoadLibraryExW(L"d3dcompiler_47.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) { delete pass; return 0; }
-    auto compile=reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(module,"D3DCompile")));
-    ComPtr<ID3DBlob> code,errors;
-    HRESULT result=compile ? compile(shaders,sizeof(shaders)-1,"ColourFidelity",nullptr,nullptr,"project",
-        "cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&code,&errors) : E_FAIL;
-    if (SUCCEEDED(result)) result=pass->device->CreateComputeShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&pass->project);
-    code.Reset(); errors.Reset();
-    if (SUCCEEDED(result)) result=compile(shaders,sizeof(shaders)-1,"ColourFidelity",nullptr,nullptr,"apply",
-        "cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&code,&errors);
-    if (SUCCEEDED(result)) result=pass->device->CreateComputeShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&pass->apply);
-    code.Reset(); errors.Reset(); FreeLibrary(module);
+    HRESULT result=rsf::compile_compute(pass->device.Get(),shaders,"ColourFidelity","project",&pass->project) &&
+        rsf::compile_compute(pass->device.Get(),shaders,"ColourFidelity","apply",&pass->apply) ? S_OK : E_FAIL;
     D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth=sizeof(Constants); buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     if (SUCCEEDED(result)) result=pass->device->CreateBuffer(&buffer,nullptr,&pass->constants);
     D3D11_SAMPLER_DESC sampler{}; sampler.Filter=D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
@@ -136,13 +131,12 @@ extern "C" int rsf_colour_fidelity_run(rsf_colour_fidelity* pass, void* raw_cont
         !std::isfinite(jitter[0]) || !std::isfinite(jitter[1])) return 0;
     auto* c=static_cast<ID3D11DeviceContext*>(raw_context);
     if (c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
-    ComPtr<ID3D11Device> owner; c->GetDevice(&owner); if (owner.Get()!=pass->device.Get()) return 0;
     auto* scene=static_cast<ID3D11Texture2D*>(raw_scene); auto* output=static_cast<ID3D11Texture2D*>(raw_output);
     auto* depth=static_cast<ID3D11Texture2D*>(raw_depth);
     if (scene==output) return 0;
-    scene->GetDevice(&owner); if (owner.Get()!=pass->device.Get()) return 0;
-    output->GetDevice(&owner); if (owner.Get()!=pass->device.Get()) return 0;
-    depth->GetDevice(&owner); if (owner.Get()!=pass->device.Get()) return 0;
+    ID3D11Device* device=pass->device.Get();
+    if (!rsf::same_device(c,device) || !rsf::same_device(scene,device) || !rsf::same_device(output,device) ||
+        !rsf::same_device(depth,device)) return 0;
     D3D11_TEXTURE2D_DESC low{},high{}; scene->GetDesc(&low); output->GetDesc(&high);
     D3D11_TEXTURE2D_DESC depth_desc{}; depth->GetDesc(&depth_desc);
     if (depth_desc.Width != low.Width || depth_desc.Height != low.Height ||
@@ -153,17 +147,11 @@ extern "C" int rsf_colour_fidelity_run(rsf_colour_fidelity* pass, void* raw_cont
         (high.Format!=DXGI_FORMAT_R16G16B16A16_FLOAT && high.Format!=DXGI_FORMAT_R32G32B32A32_FLOAT)) return 0;
     if (pass->render_width!=low.Width || pass->render_height!=low.Height || pass->width!=high.Width ||
         pass->height!=high.Height || pass->format!=high.Format) if (!allocate(*pass,low,high)) return 0;
-    ComPtr<ID3D11ShaderResourceView> scene_view,output_view,depth_view;
-    D3D11_SHADER_RESOURCE_VIEW_DESC depth_srv{};
-    depth_srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D; depth_srv.Texture2D.MipLevels=1;
-    depth_srv.Format=depth_desc.Format;
-    if (depth_srv.Format==DXGI_FORMAT_R32_TYPELESS) depth_srv.Format=DXGI_FORMAT_R32_FLOAT;
-    if (depth_srv.Format==DXGI_FORMAT_R24G8_TYPELESS) depth_srv.Format=DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-    if (depth_srv.Format==DXGI_FORMAT_R32G8X24_TYPELESS) depth_srv.Format=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-    if (depth_srv.Format==DXGI_FORMAT_R16_TYPELESS) depth_srv.Format=DXGI_FORMAT_R16_UNORM;
-    if (FAILED(pass->device->CreateShaderResourceView(scene,nullptr,&scene_view)) ||
-        FAILED(pass->device->CreateShaderResourceView(output,nullptr,&output_view)) ||
-        FAILED(pass->device->CreateShaderResourceView(depth,&depth_srv,&depth_view))) return 0;
+    // Typeless colour and depth resolve to the plane the shader samples; a typed texture is unchanged.
+    auto* scene_view=pass->sources.get(device,scene,rsf::srv_format(low.Format));
+    auto* output_view=pass->sources.get(device,output,rsf::srv_format(high.Format));
+    auto* depth_view=pass->sources.get(device,depth,rsf::srv_format(depth_desc.Format));
+    if (!scene_view || !output_view || !depth_view) return 0;
     rsf_d3d11_state saved{}; if (!rsf_d3d11_state_save(c,&saved)) return 0;
     // Vendor work can leave the output bound in a different stage or UAV slot. Restore the
     // complete engine bindings after dispatch, including UAV counters and CB ranges.
@@ -172,12 +160,12 @@ extern "C" int rsf_colour_fidelity_run(rsf_colour_fidelity* pass, void* raw_cont
     c->UpdateSubresource(pass->constants.Get(),0,nullptr,&data,0,0);
     auto* cb=pass->constants.Get(); auto* sampler=pass->sampler.Get();
     c->CSSetConstantBuffers(0,1,&cb); c->CSSetSamplers(0,1,&sampler);
-    ID3D11ShaderResourceView* current=output_view.Get();
+    ID3D11ShaderResourceView* current=output_view;
     ID3D11ShaderResourceView* no_views[4]{}; ID3D11UnorderedAccessView* no_target=nullptr;
     for (uint32_t i=0;i<3;++i) {
         c->CSSetUnorderedAccessViews(0,1,&no_target,nullptr);
         c->CSSetShaderResources(0,4,no_views);
-        ID3D11ShaderResourceView* inputs[]{scene_view.Get(),current,nullptr,depth_view.Get()};
+        ID3D11ShaderResourceView* inputs[]{scene_view,current,nullptr,depth_view};
         auto* target=pass->residual_target.Get(); c->CSSetShader(pass->project.Get(),nullptr,0);
         c->CSSetShaderResources(0,4,inputs); c->CSSetUnorderedAccessViews(0,1,&target,nullptr);
         c->Dispatch((low.Width+7)/8,(low.Height+7)/8,1);

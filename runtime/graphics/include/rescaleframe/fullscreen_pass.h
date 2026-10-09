@@ -64,6 +64,12 @@ typedef uint32_t rsf_fullscreen_mode;
 #define RSF_FULLSCREEN_PREMULTIPLIED_SRGB ((rsf_fullscreen_mode)4)
 #define RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22 ((rsf_fullscreen_mode)5)
 
+/* How the source is sampled. Point is right when the draw lands every texel on its own pixel, which is
+   the composite's case; linear is for a source drawn at a different size from its target. */
+typedef uint32_t rsf_fullscreen_filter;
+#define RSF_FULLSCREEN_FILTER_POINT ((rsf_fullscreen_filter)0)
+#define RSF_FULLSCREEN_FILTER_LINEAR ((rsf_fullscreen_filter)1)
+
 typedef void (*rsf_fullscreen_log_fn)(void* user, const char* message);
 
 typedef struct rsf_fullscreen_setup {
@@ -104,6 +110,11 @@ typedef struct rsf_fullscreen_draw {
 rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* pass, void* context,
                                                void* target, void* source,
                                                const rsf_fullscreen_draw* parameters);
+
+/* How every later draw on this pass samples its source. Point until this is called. It is a setting
+   of the pass rather than of a draw because a user of the pass has one answer for it: the composite
+   draws 1:1 and wants point, the debug blit scales and wants linear. */
+void rsf_fullscreen_pass_set_filter(rsf_fullscreen_pass* pass, rsf_fullscreen_filter filter);
 
 void rsf_fullscreen_pass_destroy(rsf_fullscreen_pass* pass);
 

@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <dxgiformat.h>
 #include <dxgi.h>
+#include <d3d11.h>
 
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_motion_capture.h>
@@ -22,6 +23,7 @@
 #include <rescaleframe/present_blit.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/fg_choice.h>
+#include <rescaleframe/overlay_fg_stats.h>
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
@@ -808,7 +810,7 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
     InterlockedExchange(&bridge.view_width, (LONG)pass->camera.render_width);
     InterlockedExchange(&bridge.view_height, (LONG)pass->camera.render_height);
     bridge.held_camera.has_jitter = pass->camera_valid;
-    memcpy(bridge.held_camera.jitter_pixels, pass->jitter_pixels, 8);
+    memcpy(bridge.held_camera.jitter_pixels, pass->camera.jitter_pixels, 8);
     bridge.held_width = pass->camera.render_width; bridge.held_height = pass->camera.render_height;
     bridge.last_result = rsf_native_sr_evaluate(bridge.context, pass);
     if (bridge.route_dump_frames) {
@@ -2271,6 +2273,43 @@ static void patch_input_sizes(void* contents, uint32_t bytes)
 }
 
 static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes);
+static void on_constants(void* user, void* buffer, void* contents, uint32_t bytes);
+
+/* Whether RSF_MOTION_CAPTURE is on, told by the proxy that reads the setting. */
+static volatile LONG motion_capture_on;
+void rsf_bridge_set_motion_capture(int on) { InterlockedExchange(&motion_capture_on, on != 0); }
+
+/* Arms the constant watch for what the active renderer needs. Native-owned, the callback only
+   feeds the motion capture, so the watch is off unless a capture was asked for. The compatibility
+   renderer reads the view's buffer and only the size patch writes, which is what makes the tap
+   copy an UpdateSubresource upload before handing it over. */
+static void refresh_constant_watch(void)
+{
+    static int armed = -1;
+    if (InterlockedCompareExchange(&native_owner, 0, 0) && !InterlockedCompareExchange(&motion_capture_on, 0, 0)) {
+        if (armed != 0) rsf_frame_tap_set_constant_watch(0u, NULL, NULL);
+        armed = 0;
+        return;
+    }
+    /* Re-arming drops every cached buffer verdict, so only a change of state does it. */
+    if (armed != 1) rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
+    armed = 1;
+    rsf_frame_tap_set_constant_watch_writable(!InterlockedCompareExchange(&native_owner, 0, 0) && bridge.size_patch_target != NULL);
+}
+
+/* How the compatibility renderer recognises AC7's input set. First match wins, so the order is
+   the priority: the 1x1 exposure texture, the render-target velocity buffer, any depth format,
+   then the half-float history and the R11G11B10 scene colour as candidates. */
+static const rsf_role_rule ac7_role_rules[] = {
+    {RSF_ROLE_EXPOSURE, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_FIXED_SIZE, DXGI_FORMAT_R32G32_FLOAT, 0, 1, 1},
+    {RSF_ROLE_MOTION, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R16G16_UNORM, D3D11_BIND_RENDER_TARGET, 0, 0},
+    {RSF_ROLE_DEPTH, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_ANY_DEPTH_FORMAT, 0, D3D11_BIND_DEPTH_STENCIL, 0, 0},
+    {RSF_ROLE_HISTORY, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R16G16B16A16_FLOAT,
+     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0},
+    {RSF_ROLE_SCENE_COLOR, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET, 0, 0},
+};
+static const rsf_role_table ac7_roles = {
+    sizeof(rsf_role_table), ac7_role_rules, sizeof(ac7_role_rules) / sizeof(ac7_role_rules[0])};
 
 /* Every constant buffer the game fills. The view's buffer is read for the camera and twinned
    without its jitter; an upload for a draw into the recombined target has its sizes promoted. */
@@ -2658,6 +2697,9 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->frames_refused = (uint32_t)pipeline.frames_refused;
         stats->last_result = (int32_t)pipeline.last_result;
     }
+    /* Every super-resolution backend the pipeline can switch to, bit n for backend ID n. */
+    stats->sr_backend_choices = (1u << RSF_SR_DLSS) | (1u << RSF_SR_FSR2) | (1u << RSF_SR_FSR3) |
+                                (1u << RSF_SR_FSR4) | (1u << RSF_SR_XESS) | (1u << RSF_SR_SPATIAL);
     stats->backend = pipeline.backend;
     stats->requested_backend = pipeline.requested_backend;
     stats->last_switch_result = pipeline.last_switch_result;
@@ -2706,31 +2748,10 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
     stats->frames_presented = bridge.frames_shown;
     {
-        const rsf_fg_choice choice = rsf_fg_choice_get();
-        stats->fg_backend = rsf_d3d11_present_has_owner() ? rsf_d3d11_present_backend() : 0;
-        stats->fg_requested_backend = choice.backend; stats->fg_backend_choices = choice.choices | RSF_OVERLAY_FG_RUNTIME_SWITCH;
-        stats->fg_selection_result = choice.last_result;
-        if (!stats->fg_selection_result) stats->fg_selection_result = rsf_d3d11_present_switch_result();
-    }
-    {
         rsf_native_fg_status fg = {0}; fg.struct_size = sizeof(fg);
-        if (rsf_native_fg_status_get(&fg)) {
-            stats->fg_available = fg.available;
-            stats->fg_requested_mode = fg.requested.mode;
-            stats->fg_requested_generated = fg.requested.generated_frames;
-            stats->fg_effective_mode = fg.vendor.effective_mode;
-            stats->fg_effective_generated = fg.vendor.effective_generated_frames;
-            stats->fg_active = fg.vendor.active;
-            stats->fg_max_generated = fg.vendor.max_generated_frames;
-            stats->reflex_available = fg.vendor.low_latency_available;
-            stats->reflex_requested_mode = fg.requested.reflex_mode;
-            stats->reflex_effective_mode = fg.vendor.effective_reflex;
-            stats->fg_reason = fg.reason; stats->fg_last_result = fg.last_result;
-            stats->fg_total_presented = fg.vendor.total_presented;
-            stats->fg_present_count_valid = fg.available && (fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED) != 0;
-            stats->frame_limit_us = fg.requested.frame_limit_us;
-            stats->display_refresh_mhz = display_refresh_mhz();
-        }
+        const int have_fg = rsf_native_fg_status_get(&fg);
+        rsf_overlay_fill_fg_stats(stats, have_fg ? &fg : NULL);
+        if (have_fg) stats->display_refresh_mhz = display_refresh_mhz();
     }
     {
         LARGE_INTEGER now, frequency;
@@ -2877,6 +2898,9 @@ void rsf_bridge_set_enabled(int enabled)
     }
 }
 
+/* The FG provider the panel asked for, saved once the switch has taken effect. UINT32_MAX is none. */
+static uint32_t pending_fg_save = UINT32_MAX;
+
 static void overlay_tick(void* swapchain)
 {
     rsf_overlay_stats stats;
@@ -2891,6 +2915,16 @@ static void overlay_tick(void* swapchain)
     }
 
     fill_overlay_stats(&stats);
+    /* The switch runs at a later Present, so the choice is saved once it has taken effect and
+       dropped when the switch reported a failure. */
+    if (pending_fg_save != UINT32_MAX) {
+        if (rsf_d3d11_present_switch_result() != 0) {
+            pending_fg_save = UINT32_MAX;
+        } else if (rsf_d3d11_present_backend() == pending_fg_save) {
+            rsf_fg_choice_save(pending_fg_save);
+            pending_fg_save = UINT32_MAX;
+        }
+    }
     memset(&intent, 0, sizeof(intent));
     intent.struct_size = sizeof(intent);
     if (!rsf_overlay_host_present(swapchain, &stats, &intent)) {
@@ -2898,7 +2932,7 @@ static void overlay_tick(void* swapchain)
     }
     if (intent.fg_backend_changed) {
         const rsf_backend_result result = rsf_d3d11_present_request(intent.fg_backend);
-        if (result == RSF_BACKEND_OK) rsf_fg_choice_save(intent.fg_backend);
+        pending_fg_save = result == RSF_BACKEND_OK ? intent.fg_backend : UINT32_MAX;
         say("FG provider requested at Present: backend=%u result=%d", intent.fg_backend, result);
     }
     if (intent.fg_changed || intent.reflex_changed || intent.frame_limit_changed) {
@@ -3556,6 +3590,7 @@ static int apply_tail(const rsf_promote_frame_tail* tail)
     }
     /* The recombine's size constants follow the plan: promoted while its target is bound. */
     bridge.size_patch_target = tail->composed;
+    refresh_constant_watch();
     return 1;
 }
 
@@ -3691,8 +3726,8 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     setup.log = log;
     setup.log_user = log_user;
     setup.engine = RSF_DLSS_ENGINE_UNREAL;
-    setup.engine_version_utf8 = "4.18";
-    setup.project_id_utf8 = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
+    setup.engine_version_utf8 = RSF_AC7_ENGINE_VERSION;
+    setup.project_id_utf8 = RSF_AC7_PROJECT_ID;
     setup.fsr2_directory_utf8 = sdk_directories[0];
     setup.fsr3_directory_utf8 = sdk_directories[1];
     setup.fsr4_directory_utf8 = sdk_directories[2];
@@ -3725,6 +3760,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.log = log;
     tap.log_user = log_user;
     tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
+    tap.roles = &ac7_roles;
     /* What the tap judges sizes against. The presented size, not a size derived from the bound
        set: deriving it there made the render size an exact requirement and nothing ever matched. */
     tap.output_width = (uint32_t)output_width;
@@ -3733,6 +3769,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     /* No translucent depth replay: the translucency layer renders at output size against the
        reconstruction's promoted scene, so it never needs a depth of another size. */
     tapped = rsf_frame_tap_install(bridge.context, &tap);
+    if (tapped == RSF_FRAME_TAP_OK) refresh_constant_watch();
 
     if (tapped != RSF_FRAME_TAP_OK) {
         say("dlss bridge: frame tap not installed, result %d", (int)tapped);
@@ -4001,8 +4038,8 @@ static void configure_view_overrides(void)
     rsf_frame_tap_set_constant_override(on && view_twins ? ui_constant_override : NULL, NULL);
     rsf_frame_tap_set_constant_override_format(bridge.layer_unjitter && view_twins ?
                                                DXGI_FORMAT_R16G16B16A16_FLOAT : 0);
-    /* Always: the recombine route takes this frame's camera from the upload. */
-    rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
+    /* The recombine route takes this frame's camera from the upload. */
+    refresh_constant_watch();
 }
 
 void rsf_bridge_set_unjitter(int on)

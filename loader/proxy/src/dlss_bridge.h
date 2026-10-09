@@ -57,6 +57,13 @@ void rsf_bridge_toggle_reinsert(void);
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 rsf_observer_present_event_fn rsf_bridge_present_event_hook(void);
 
+/* Streamline identity of the game this proxy is built for (Ace Combat 7, Unreal Engine 4.18.3).
+   One value for the SR pipeline and the frame generation bridge, so the two never register
+   differently. ENGINE_TYPE is sl::EngineType::eUnreal. */
+#define RSF_AC7_ENGINE_TYPE 1u
+#define RSF_AC7_ENGINE_VERSION "4.18.3"
+#define RSF_AC7_PROJECT_ID "a3ed1f08-3542-4698-b85c-e1a9908e861a"
+
 /* Ask for an action to run on the render thread at the next present, rather than on the caller's.
 
    For the hotkey worker. Starting the backend, toggling reinsertion and arming extraction create
@@ -188,6 +195,8 @@ void rsf_bridge_set_briefing_capture(const char* prefix);
 
 void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess);
 int rsf_bridge_running(void);
+/* Tells the bridge whether the motion capture is configured, so the constant watch it needs stays armed. */
+void rsf_bridge_set_motion_capture(int on);
 /* Request from a frontend thread. The graphics owner quiesces native producers and keeps the
    backend/device alive until queued plugin work has drained; no work runs under DllMain. */
 void rsf_bridge_request_shutdown(void);

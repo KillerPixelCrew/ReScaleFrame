@@ -38,9 +38,10 @@ struct Pixel {
     float r, g, b, a;
 };
 
-/* Read one pixel back through a staging copy. Small and slow and exactly what a test wants. */
+/* Read one pixel of the top row back through a staging copy. Small and slow and exactly what a test
+   wants. `x` is only honoured for the eight bit format. */
 bool read_pixel(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* texture,
-                Pixel& out)
+                Pixel& out, UINT x = 0)
 {
     D3D11_TEXTURE2D_DESC description{};
     texture->GetDesc(&description);
@@ -61,7 +62,7 @@ bool read_pixel(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     }
     bool ok = true;
     if (description.Format == DXGI_FORMAT_R8G8B8A8_UNORM) {
-        const uint8_t* p = static_cast<const uint8_t*>(mapped.pData);
+        const uint8_t* p = static_cast<const uint8_t*>(mapped.pData) + x * 4u;
         out.r = p[0] / 255.0f;
         out.g = p[1] / 255.0f;
         out.b = p[2] / 255.0f;
@@ -313,6 +314,64 @@ int main()
               "A copy must land as it is, whatever the source alpha says. The debug view uses "
               "this and a zero alpha source must not vanish.");
         check(near_enough(out.a, 1.0f, budget), "And must be written opaque.");
+    }
+
+    stage("sampling is point until the pass is told otherwise");
+    {
+        // Two texels, black then red, drawn across four pixels. Pixel 1 sits a quarter of the way
+        // between the two texel centres: point takes the black one, linear takes a quarter red.
+        const uint8_t texels[8] = {0, 0, 0, 255, 255, 0, 0, 255};
+        D3D11_TEXTURE2D_DESC ramp_description{};
+        ramp_description.Width = 2;
+        ramp_description.Height = 1;
+        ramp_description.MipLevels = 1;
+        ramp_description.ArraySize = 1;
+        ramp_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        ramp_description.SampleDesc.Count = 1;
+        ramp_description.Usage = D3D11_USAGE_DEFAULT;
+        ramp_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        const D3D11_SUBRESOURCE_DATA ramp_data{texels, 8, 0};
+        ID3D11Texture2D* ramp = nullptr;
+        ID3D11ShaderResourceView* ramp_source = nullptr;
+        device->CreateTexture2D(&ramp_description, &ramp_data, &ramp);
+        ID3D11Texture2D* wide = make_texture(device, 4, 1, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                             D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+        ID3D11RenderTargetView* wide_target = nullptr;
+        if (ramp) {
+            device->CreateShaderResourceView(ramp, nullptr, &ramp_source);
+        }
+        if (wide) {
+            device->CreateRenderTargetView(wide, nullptr, &wide_target);
+        }
+        check(ramp_source && wide_target, "The filter test resources must be created.");
+        if (ramp_source && wide_target) {
+            parameters.mode = RSF_FULLSCREEN_COPY;
+            Pixel out{};
+            rsf_fullscreen_pass_draw(pass, context, wide_target, ramp_source, &parameters);
+            check(read_pixel(device, context, wide, out, 1), "The point draw must be readable.");
+            check(near_enough(out.r, 0.0f, 2.0f / 255.0f),
+                  "The default is point sampling: the composite draws 1:1 and must not soften.");
+
+            rsf_fullscreen_pass_set_filter(pass, RSF_FULLSCREEN_FILTER_LINEAR);
+            rsf_fullscreen_pass_draw(pass, context, wide_target, ramp_source, &parameters);
+            check(read_pixel(device, context, wide, out, 1), "The linear draw must be readable.");
+            check(near_enough(out.r, 0.25f, 3.0f / 255.0f),
+                  "Linear sampling is what the present blit relies on when its source is not the "
+                  "back buffer's size.");
+            rsf_fullscreen_pass_set_filter(pass, RSF_FULLSCREEN_FILTER_POINT);
+        }
+        if (wide_target) {
+            wide_target->Release();
+        }
+        if (ramp_source) {
+            ramp_source->Release();
+        }
+        if (wide) {
+            wide->Release();
+        }
+        if (ramp) {
+            ramp->Release();
+        }
     }
 
     stage("the alpha mode shows coverage");

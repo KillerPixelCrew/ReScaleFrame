@@ -128,64 +128,18 @@ pub struct GenerationStats {
 pub struct Stats<'a> {
     /// Whether a backend has been loaded at all.
     pub backend_loaded: bool,
-    /// Whether the driver accepted it.
-    pub backend_supported: bool,
-    /// Vendor name, when there is one.
-    pub backend_name: Option<&'a str>,
     /// Why the backend is unusable, when it is.
     pub refusal_reason: Option<&'a str>,
-    /// Size the scene is rendered at.
-    pub render: [u32; 2],
-    /// Size the result is presented at.
-    pub output: [u32; 2],
-    /// Frames presented.
-    pub frames_presented: u32,
-    /// Frames the backend evaluated.
-    pub frames_evaluated: u32,
-    /// Frames the backend refused.
-    pub frames_refused: u32,
-    /// The backend's own last result code.
-    pub last_result: i32,
-    /// Scene colour was found this frame.
-    pub have_scene_color: bool,
-    /// Depth was found this frame.
-    pub have_depth: bool,
-    /// Motion was found this frame.
-    pub have_motion: bool,
-    /// An exposure value was found this frame.
-    pub have_exposure: bool,
-    /// The motion has been decoded into something a backend can consume.
-    pub motion_decoded: bool,
-    /// The projection carries a jitter.
-    pub jitter_active: bool,
-    /// The jitter offset in pixels, x then y.
-    pub jitter_pixels: [f32; 2],
     /// The quality in effect, or `None` when the runtime named one this build does not know.
     pub quality: Option<Quality>,
     /// The raw quality value, kept so an unknown one can be shown as the number it was.
     pub quality_raw: abi::RsfOverlayQuality,
     /// Whether reconstruction is currently enabled.
     pub enabled: bool,
-    /// Whether the debug view is drawing over the frame.
-    pub debug_view_on: bool,
-    /// Whether the reconstruction is being put into the game's own frame.
-    pub reinsert_on: bool,
-    /// Whether reinsertion has everything it needs, so the panel can refuse before asking.
-    pub reinsert_available: bool,
-    /// The render scale in effect as a percentage, or zero when nothing has set one.
-    pub render_scale_percent: u32,
-    /// Frame captures written this session.
-    pub captures_written: u32,
-    /// Whether the patched jitter gate is open. Distinct from `jitter_active`, which says the view
-    /// data arrived carrying an offset: the gate is the cause and that is the effect, and a run
-    /// where they disagree is telling us something.
-    pub jitter_gate_on: bool,
-    /// Whether the gate was found in this build, so the panel can refuse before offering a switch.
-    pub jitter_gate_available: bool,
     /// Effective SR backend.
     pub backend: u32,
-    /// Most recent backend request.
-    pub requested_backend: u32,
+    /// SR backend IDs the host can switch to, as bits. Zero keeps the panel's default list.
+    pub backend_choices: u32,
     /// Runtime switch result.
     pub last_switch_result: i32,
     /// Frame generation and latency selections with observed state.
@@ -206,34 +160,12 @@ impl Default for Stats<'_> {
     fn default() -> Self {
         Self {
             backend_loaded: false,
-            backend_supported: false,
-            backend_name: None,
             refusal_reason: None,
-            render: [0, 0],
-            output: [0, 0],
-            frames_presented: 0,
-            frames_evaluated: 0,
-            frames_refused: 0,
-            last_result: 0,
-            have_scene_color: false,
-            have_depth: false,
-            have_motion: false,
-            have_exposure: false,
-            motion_decoded: false,
-            jitter_active: false,
-            jitter_pixels: [0.0, 0.0],
             quality: Some(Quality::Native),
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
             enabled: false,
-            debug_view_on: false,
-            reinsert_on: false,
-            reinsert_available: false,
-            render_scale_percent: 0,
-            captures_written: 0,
-            jitter_gate_on: false,
-            jitter_gate_available: false,
             backend: 1,
-            requested_backend: 1,
+            backend_choices: 0,
             last_switch_result: 0,
             generation: GenerationStats::default(),
             application_presented_frames: 0,
@@ -249,34 +181,6 @@ impl Stats<'_> {
     pub fn set_quality(&mut self, raw: abi::RsfOverlayQuality) {
         self.quality_raw = raw;
         self.quality = Quality::from_abi(raw);
-    }
-
-    /// Render size as a fraction of output size, per axis.
-    ///
-    /// `None` when either output axis is zero, which is what a size the runtime has not yet
-    /// established looks like. This is the number a quality level actually means, so it is derived
-    /// from the two sizes rather than from the selected level.
-    #[must_use]
-    pub fn render_scale(&self) -> Option<[f32; 2]> {
-        if self.output[0] == 0 || self.output[1] == 0 {
-            return None;
-        }
-        Some([
-            self.render[0] as f32 / self.output[0] as f32,
-            self.render[1] as f32 / self.output[1] as f32,
-        ])
-    }
-
-    /// Evaluated frames as a fraction of presented frames.
-    ///
-    /// `None` when nothing has been presented yet. A rate is a convenience here and never a
-    /// replacement for the counters: the panel shows both.
-    #[must_use]
-    pub fn evaluated_fraction(&self) -> Option<f32> {
-        if self.frames_presented == 0 {
-            return None;
-        }
-        Some(self.frames_evaluated as f32 / self.frames_presented as f32)
     }
 }
 
@@ -295,28 +199,6 @@ pub struct Intent {
     pub enabled: bool,
     /// Whether the enable state changed in this frame.
     pub enabled_changed: bool,
-    /// Whether the user asked for this frame's inputs to be written out.
-    pub dump_requested: bool,
-    /// Whether the user asked to bring the backend up.
-    pub start_requested: bool,
-    /// The debug view state the panel shows.
-    pub debug_view: bool,
-    /// Whether the debug view was toggled in this frame.
-    pub debug_view_changed: bool,
-    /// The reinsertion state the panel shows.
-    pub reinsert: bool,
-    /// Whether reinsertion was toggled in this frame.
-    pub reinsert_changed: bool,
-    /// Whether the user asked for the render scale below to be applied.
-    pub scale_requested: bool,
-    /// The render scale the panel shows, as a percentage.
-    pub scale_percent: u32,
-    /// Whether the user asked for a frame capture.
-    pub capture_requested: bool,
-    /// The jitter gate state the panel shows.
-    pub jitter: bool,
-    /// Whether the jitter gate was toggled in this frame.
-    pub jitter_changed: bool,
     /// Whether the user chose an SR backend.
     pub backend_changed: bool,
     /// Backend requested by the user.
@@ -351,13 +233,6 @@ impl Intent {
     pub fn is_idle(&self) -> bool {
         !self.quality_changed
             && !self.enabled_changed
-            && !self.dump_requested
-            && !self.start_requested
-            && !self.debug_view_changed
-            && !self.reinsert_changed
-            && !self.scale_requested
-            && !self.capture_requested
-            && !self.jitter_changed
             && !self.backend_changed
             && !self.fg_changed
             && !self.fg_backend_changed
@@ -448,27 +323,5 @@ mod tests {
         stats.set_quality(7);
         assert_eq!(stats.quality, None);
         assert_eq!(stats.quality_raw, 7);
-    }
-
-    #[test]
-    fn render_scale_is_the_ratio_and_survives_an_unknown_size() {
-        let stats = Stats {
-            render: [1024, 576],
-            output: [2048, 1152],
-            ..Stats::default()
-        };
-        assert_eq!(stats.render_scale(), Some([0.5, 0.5]));
-        assert_eq!(Stats::default().render_scale(), None);
-    }
-
-    #[test]
-    fn evaluated_fraction_needs_a_presented_frame() {
-        assert_eq!(Stats::default().evaluated_fraction(), None);
-        let stats = Stats {
-            frames_presented: 200,
-            frames_evaluated: 150,
-            ..Stats::default()
-        };
-        assert_eq!(stats.evaluated_fraction(), Some(0.75));
     }
 }

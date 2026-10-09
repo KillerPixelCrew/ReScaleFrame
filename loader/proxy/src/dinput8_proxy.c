@@ -376,6 +376,7 @@ static void start_observer(void)
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
     options.log = observer_note;
+    rsf_bridge_set_motion_capture(read_number("RSF_MOTION_CAPTURE", 0) != 0);
     if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
         rsf_ac7_motion_capture_configure(observe_directory, observer_note, NULL);
         options.on_buffer = rsf_ac7_motion_capture_buffer;
@@ -865,19 +866,22 @@ static int accept_ac7_window(void* user, void* window)
 }
 static void fg_latency_event(void* user, const rsf_observer_present_event* event)
 { (void)user; rsf_native_fg_present(event); }
+/* Runtime directory for a backend: its environment override, RSF_FFX_BIN for the FidelityFX pair,
+   then the default folder beside this module. Backend 0 (off) and unknown ids use the Streamline one. */
+static int backend_directory(DWORD backend, char* directory, size_t size)
+{
+    const rsf_fg_backend_info* info = rsf_fg_backend_info_for(backend);
+    if (!info) info = rsf_fg_backend_info_for(RSF_FG_BACKEND_DLSS);
+    return read_text(info->env_var, directory, size) ||
+        ((info->id == RSF_FG_BACKEND_FSR3 || info->id == RSF_FG_BACKEND_FSR4) && read_text("RSF_FFX_BIN", directory, size)) ||
+        beside_this_module(info->default_subdir, directory, size);
+}
 static void start_generation(void)
 {
     char directory[MAX_PATH * 2];
     const DWORD fallback = read_number("RSF_FG_ENABLE", 0) ? read_number("RSF_FG_BACKEND", RSF_FG_BACKEND_DLSS) : 0;
-    const DWORD backend = rsf_fg_choice_start(preference_path, fallback,
-        (1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS));
-    const char* variable = backend == RSF_FG_BACKEND_XESS ? "RSF_XESS_BIN" :
-        backend == RSF_FG_BACKEND_FSR3 ? "RSF_FSR3_BIN" : backend == RSF_FG_BACKEND_FSR4 ? "RSF_FSR4_BIN" : "RSF_STREAMLINE_BIN";
-    const char* relative = backend == RSF_FG_BACKEND_XESS ? "ReScaleFrame\\xess" :
-        backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4 ? "ReScaleFrame\\fidelityfx" : "ReScaleFrame\\streamline";
-    if (!read_text(variable, directory, sizeof(directory)) &&
-        !((backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4) && read_text("RSF_FFX_BIN", directory, sizeof(directory))) &&
-        !beside_this_module(relative, directory, sizeof(directory))) {
+    const DWORD backend = rsf_fg_choice_start(preference_path, fallback, RSF_FG_BACKEND_ALL);
+    if (!backend_directory(backend, directory, sizeof(directory))) {
         note("frame generation: runtime directory unavailable; retaining D3D11 presentation"); return;
     }
     rsf_native_fg_options options = {0}; options.struct_size = sizeof(options);
@@ -901,13 +905,17 @@ static void start_generation(void)
     setup.latency_event = fg_latency_event; setup.prepare = rsf_native_fg_prepare; setup.retire = rsf_native_fg_retire;
     setup.debug_timing = options.debug;
     setup.backend = backend; setup.max_generated_frames = UINT32_MAX;
-    setup.runtime_switching = 1;
+    setup.runtime_switching = 1; setup.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
+    /* Unreal units are centimetres and the depth buffer is reversed with an infinite far plane. */
+    setup.units_to_meters = 0.01f; setup.depth_inverted = 1; setup.depth_infinite = 1;
+    setup.engine_type = RSF_AC7_ENGINE_TYPE; setup.engine_version_utf8 = RSF_AC7_ENGINE_VERSION;
+    setup.project_id_utf8 = RSF_AC7_PROJECT_ID;
     {
         char streamline[MAX_PATH * 2] = {0}, fsr3[MAX_PATH * 2] = {0}, fsr4[MAX_PATH * 2] = {0}, xess[MAX_PATH * 2] = {0};
-        if (!read_text("RSF_STREAMLINE_BIN", streamline, sizeof(streamline))) beside_this_module("ReScaleFrame\\streamline", streamline, sizeof(streamline));
-        if (!read_text("RSF_FSR3_BIN", fsr3, sizeof(fsr3)) && !read_text("RSF_FFX_BIN", fsr3, sizeof(fsr3))) beside_this_module("ReScaleFrame\\fidelityfx", fsr3, sizeof(fsr3));
-        if (!read_text("RSF_FSR4_BIN", fsr4, sizeof(fsr4)) && !read_text("RSF_FFX_BIN", fsr4, sizeof(fsr4))) beside_this_module("ReScaleFrame\\fidelityfx", fsr4, sizeof(fsr4));
-        if (!read_text("RSF_XESS_BIN", xess, sizeof(xess))) beside_this_module("ReScaleFrame\\xess", xess, sizeof(xess));
+        backend_directory(RSF_FG_BACKEND_DLSS, streamline, sizeof(streamline));
+        backend_directory(RSF_FG_BACKEND_FSR3, fsr3, sizeof(fsr3));
+        backend_directory(RSF_FG_BACKEND_FSR4, fsr4, sizeof(fsr4));
+        backend_directory(RSF_FG_BACKEND_XESS, xess, sizeof(xess));
         setup.streamline_directory_utf8 = streamline; setup.fsr3_directory_utf8 = fsr3;
         setup.fsr4_directory_utf8 = fsr4; setup.xess_directory_utf8 = xess;
         if (!rsf_d3d11_present_install(&setup)) note("frame generation: interception refused; retaining D3D11 presentation");

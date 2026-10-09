@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+// work (see docs/representation-plan.md). Do not delete as dead code.
 #include <rescaleframe/fg_session.h>
 #include <rescaleframe/frame_sequencer.h>
 #include <windows.h>
@@ -162,9 +164,7 @@ extern "C" rsf_backend_result rsf_fg_session_prepare(rsf_fg_session* self, void*
         return RSF_BACKEND_ERROR_NOT_READY;
     auto prepared_frame = *frame;
     const auto& record = *frame->record;
-    if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) ||
-        (record.screen != RSF_SCREEN_FLIGHT && record.screen != RSF_SCREEN_REPLAY &&
-         record.screen != RSF_SCREEN_HANGAR && record.screen != RSF_SCREEN_BRIEFING))
+    if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID))
         prepared_frame.interpolate = 0;
     if (prepared_frame.interpolate && record.input_qpc != sequence.timestamps[0])
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

@@ -8,8 +8,7 @@ std::mutex guard;
 std::wstring file;
 rsf_fg_choice choice{};
 bool allowed(uint32_t backend, uint32_t choices) {
-    return (backend == 0 || backend == RSF_FG_BACKEND_DLSS || backend == RSF_FG_BACKEND_FSR3 ||
-        backend == RSF_FG_BACKEND_FSR4 || backend == RSF_FG_BACKEND_XESS) && (choices & (1u << backend)) != 0;
+    return (backend == 0 || rsf_fg_backend_known(backend)) && (choices & (1u << backend)) != 0;
 }
 }
 extern "C" RSF_RUNTIME_API uint32_t rsf_fg_choice_start(const wchar_t* path, uint32_t fallback, uint32_t choices) try {

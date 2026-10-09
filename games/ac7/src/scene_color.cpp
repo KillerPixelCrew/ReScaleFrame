@@ -25,13 +25,20 @@ static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_widt
     return difference * 50u <= cross_b;
 }
 
+static void release_layers(rsf_ac7_scene_color* state)
+{
+    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
+        rsf_resource_release(state->composed_layers[i]);
+        state->composed_layers[i] = nullptr;
+    }
+    state->composed_layer_count = 0;
+}
+
 extern "C" void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
 {
     rsf_resource_release(state->source);
     rsf_resource_release(state->composed);
-    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
-        rsf_resource_release(state->composed_layers[i]);
-    }
+    release_layers(state);
     *state = rsf_ac7_scene_color{};
 }
 
@@ -108,10 +115,7 @@ extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
         rsf_resource_release(state->composed);
         state->composed = draw->render_target;
     }
-    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
-        rsf_resource_release(state->composed_layers[i]);
-        state->composed_layers[i] = nullptr;
-    }
+    release_layers(state);
     state->composed_layer_count = candidate_count;
     for (uint32_t i = 0; i < candidate_count; ++i) {
         rsf_resource_retain(candidates[i]);
@@ -127,11 +131,7 @@ extern "C" void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, 
 
 extern "C" void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state)
 {
-    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
-        rsf_resource_release(state->composed_layers[i]);
-        state->composed_layers[i] = nullptr;
-    }
-    state->composed_layer_count = 0;
+    release_layers(state);
     state->composed_this_frame = 0;
     state->search_closed = 0;
 }

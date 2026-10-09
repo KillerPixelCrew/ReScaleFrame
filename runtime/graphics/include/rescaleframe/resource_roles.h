@@ -13,9 +13,11 @@
    from the bound set. Being right by accident on the frame someone happened to test is the failure
    this distinction exists to prevent.
 
-   The counterpart to that honesty is where the certainty comes from. `docs/research/ac7-frame-
-   capture.md` establishes the formats and sizes from a replayed capture, not from what stock Unreal
-   would do, which is a different engine branch and was wrong about other things. */
+   Which descriptor means which role is a game fact, so it is data and not code: the caller hands a
+   rule table in, and the classifier only knows how to match one. The Ace Combat 7 table lives with
+   the Ace Combat 7 loader, whose formats and sizes come from a replayed capture
+   (`docs/research/ac7-frame-capture.md`) and not from what stock Unreal would do, which is a
+   different engine branch and was wrong about other things. */
 
 #ifndef RSF_RESOURCE_ROLES_H
 #define RSF_RESOURCE_ROLES_H
@@ -40,6 +42,8 @@ typedef uint32_t rsf_resource_role;
 #define RSF_ROLE_MOTION ((rsf_resource_role)3)
 /* The 1x1 target the tonemapper's eye adaptation writes. */
 #define RSF_ROLE_EXPOSURE ((rsf_resource_role)4)
+/* A second target with scene colour's shape: the candidate for the accumulated history. */
+#define RSF_ROLE_HISTORY ((rsf_resource_role)5)
 
 /* How much the descriptor alone settles. */
 typedef uint32_t rsf_role_confidence;
@@ -86,9 +90,40 @@ typedef struct rsf_role_verdict {
     rsf_role_confidence confidence;
 } rsf_role_verdict;
 
-/* Classify one texture. Returns zero and leaves `verdict` at unknown if the arguments are short. */
-uint32_t rsf_classify_texture(const rsf_texture_facts* facts, const rsf_frame_shape* shape,
-                              rsf_role_verdict* verdict);
+/* `rsf_role_rule::flags`. */
+/* Judged against the frame: the render size when it is known, otherwise the band from half the
+   output size up to it with the output's aspect. See `rsf_frame_shape`. */
+#define RSF_ROLE_RULE_RENDER_SIZED 0x1u
+/* Exactly `width` x `height`, whatever the frame's size. */
+#define RSF_ROLE_RULE_FIXED_SIZE 0x2u
+/* Any depth format, typeless or typed, in place of `format`. */
+#define RSF_ROLE_RULE_ANY_DEPTH_FORMAT 0x4u
+
+/* One row of a game's role table. A texture matches when it is a single plain surface (no
+   multisampling, mip chain or array), has `format` (or any depth format with
+   RSF_ROLE_RULE_ANY_DEPTH_FORMAT), has every bit of `bind_flags`, and satisfies the size flag if
+   there is one. Without a size flag any size matches. */
+typedef struct rsf_role_rule {
+    rsf_resource_role role;
+    rsf_role_confidence confidence;
+    uint32_t flags;
+    uint32_t format;
+    uint32_t bind_flags;
+    uint32_t width;
+    uint32_t height;
+} rsf_role_rule;
+
+/* Rules in priority order: the first match decides. Borrowed for the duration of a call. */
+typedef struct rsf_role_table {
+    uint32_t struct_size;
+    const rsf_role_rule* rules;
+    uint32_t count;
+} rsf_role_table;
+
+/* Classify one texture against a table. A texture no rule matches is unknown, which is a settled
+   verdict. Returns zero and leaves `verdict` at unknown if the arguments are short. */
+uint32_t rsf_classify_texture(const rsf_role_table* table, const rsf_texture_facts* facts,
+                              const rsf_frame_shape* shape, rsf_role_verdict* verdict);
 
 #ifdef __cplusplus
 } /* extern "C" */

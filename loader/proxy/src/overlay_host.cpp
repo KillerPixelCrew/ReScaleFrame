@@ -422,17 +422,19 @@ extern "C" int rsf_overlay_host_start_device(void* native_device, void* hwnd,
     if (self.started) return 1;
     if (!native_device || !hwnd || self.stopped_after_failure) return 0;
     self.log = logger; self.log_user = user;
-    if (!load_panel()) return 0;
+    // A failed start is final, like the swap chain path: the caller retries every frame, and each
+    // attempt would otherwise reload the panel DLL and rebuild the renderer.
+    if (!self.panel_module && !load_panel()) { self.stopped_after_failure = true; return 0; }
     self.panel = self.create(RSF_OVERLAY_ABI_VERSION);
-    if (!self.panel) { say("overlay: panel ABI mismatch"); return 0; }
+    if (!self.panel) { say("overlay: panel ABI mismatch"); self.stopped_after_failure = true; return 0; }
     rsf_overlay_renderer_setup setup{sizeof(setup), RSF_OVERLAY_RENDERER_ABI_VERSION, log_from_module, nullptr};
     if (rsf_overlay_renderer_create(native_device, &setup, &self.renderer) != RSF_OVERLAY_RENDERER_OK) {
-        self.destroy(self.panel); self.panel = nullptr; return 0;
+        self.destroy(self.panel); self.panel = nullptr; self.stopped_after_failure = true; return 0;
     }
     rsf_overlay_input_options options{sizeof(options), RSF_OVERLAY_INPUT_ABI_VERSION, kToggleKey, log_from_module, nullptr};
     if (rsf_overlay_input_install(hwnd, &options) != RSF_OVERLAY_INPUT_OK) {
         rsf_overlay_renderer_destroy(self.renderer); self.renderer = nullptr;
-        self.destroy(self.panel); self.panel = nullptr; return 0;
+        self.destroy(self.panel); self.panel = nullptr; self.stopped_after_failure = true; return 0;
     }
     self.device = static_cast<ID3D11Device*>(native_device); self.device->AddRef();
     QueryPerformanceFrequency(&self.frequency); self.last_frame.QuadPart = 0;
@@ -649,6 +651,8 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
 extern "C" void rsf_overlay_host_stop(void)
 {
     Host& self = host();
+    /* A deliberate stop and restart gets a fresh attempt. */
+    self.stopped_after_failure = false;
     if (!self.started) {
         return;
     }

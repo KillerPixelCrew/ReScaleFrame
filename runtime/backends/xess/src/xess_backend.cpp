@@ -5,6 +5,7 @@
 #include <rescaleframe/backend.h>
 #include <rescaleframe/xess_backend.h>
 #include "../../common/sr_helpers.h"
+#include <wrl/client.h>
 #include <new>
 #if defined(RSF_HAVE_XESS)
 #include <xess/xess_d3d12.h>
@@ -12,46 +13,20 @@
 
 namespace {
 
-void say(const rsf_backend_probe_desc* desc, const char* message)
-{
-    if (desc && desc->log) {
-        desc->log(desc->log_user, message);
-    }
-}
-
 rsf_backend_result probe(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps)
 {
-    if (!desc || !caps || desc->struct_size < sizeof(rsf_backend_probe_desc) ||
-        caps->struct_size < sizeof(rsf_backend_caps)) {
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-    if (desc->abi_version != RSF_BACKEND_ABI_VERSION) {
-        return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    }
-
-    const uint32_t size = caps->struct_size;
-    *caps = rsf_backend_caps{};
-    caps->struct_size = size;
-    caps->vendor = RSF_VENDOR_INTEL;
-    caps->name = "XeSS";
+    const auto begun = rsf::probe_begin(desc, caps, RSF_VENDOR_INTEL, "XeSS");
+    if (begun != RSF_BACKEND_OK) return begun;
 
 #if !defined(RSF_HAVE_XESS)
     caps->available = 0;
     caps->refusal_utf8 = "built without the XeSS headers";
-    say(desc, "xess: not compiled in");
+    rsf::probe_say(desc, "xess: not compiled in");
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #else
     caps->sr_apis = RSF_API_D3D12;
-    say(desc, "xess: SR compiled in, D3D12; native D3D11 and generation unavailable");
-    caps->fg_apis = 0;
-    caps->max_generated_frames = 0;
-    caps->ui_modes = 0;
+    rsf::probe_say(desc, "xess: SR compiled in, D3D12; native D3D11 and generation unavailable");
     caps->supported_lifetimes = 1u << RSF_LIFETIME_ONLY_NOW;
-    caps->fg_owns_swapchain = 0;
-    caps->sr_fg_share_session = 0;
-    caps->latency_modes = RSF_LATENCY_NONE;
-    caps->fg_requires_latency_markers = 0;
-    caps->supports_dynamic_fg = 0;
     caps->available = 1;
     return RSF_BACKEND_OK;
 #endif
@@ -73,6 +48,9 @@ rsf_backend_result sr_release(void*) { return absent; }
 void sr_close(void*) {}
 #endif
 
+/* Scaffolding: the legacy rsf_fg_provider vtable. Frame generation is reached through
+   rsf_generation_xess() in xess_generation.cpp, so these only answer for callers of the old
+   contract. */
 rsf_backend_result fg_create(const rsf_fg_swapchain_desc*, rsf_fg_swapchain_result*, void**)
 {
     return absent;
@@ -87,11 +65,11 @@ rsf_backend_result fg_generated(void*, uint64_t*) { return absent; }
 void fg_destroy(void*) {}
 
 const rsf_sr_provider sr_provider = {
-    sizeof(rsf_sr_provider), probe, sr_open, sr_plan, sr_evaluate, sr_release, sr_close,
+    sizeof(rsf_sr_provider), probe, sr_open, sr_plan, sr_evaluate,
 #if defined(RSF_HAVE_XESS)
-    sr_version,
+    rsf::sr_release, sr_close, rsf::sr_version<XessSession>,
 #else
-    nullptr,
+    sr_release, sr_close, nullptr,
 #endif
 };
 

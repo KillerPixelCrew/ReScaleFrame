@@ -11,7 +11,7 @@
  *   the plugin       assigns the identifier at the input boundary, names the screen, fills the
  *                    camera. It is the only one that can, because only it knows the engine.
  *   the orchestrator stamps the resource generation and the frame time.
- *   the presentation stamps the present index.
+ *   the presentation owns the present sequence; it is not part of the record.
  *
  * Frame generation is what makes this necessary. Every vendor wants to know which frame a resource
  * belongs to, and a resource tagged with the wrong frame produces a plausible, wrong picture rather
@@ -84,7 +84,7 @@ typedef uint32_t rsf_latency_marker;
 #define RSF_FRAME_FLAG_NO_FG 0x4u
 /* The identifier was not carried from the input boundary and was taken from the most recently begun
    frame instead. Reported rather than hidden: a vendor that interpolates on frame identity has to
-   be told to stop, and one that interpolates on present index need not be. */
+   be told to stop. */
 #define RSF_FRAME_FLAG_AMBIGUOUS_ID 0x8u
 /* The interface was diverted out of the scene this frame, so the scene is HUD-less by construction
    rather than by a copy taken at the right moment. */
@@ -168,11 +168,6 @@ typedef struct rsf_frame_record {
        and this measures the part the player feels. */
     uint64_t input_qpc;
     float frame_time_ms;
-
-    /* Contiguous over non-test presents, assigned by the presentation side. FidelityFX and XeFG
-       interpolate on this rather than on `frame_id`, which is why a frame with an ambiguous
-       identifier can still be generated around. */
-    uint64_t present_index;
 
     rsf_camera_frame camera;
 } rsf_frame_record;

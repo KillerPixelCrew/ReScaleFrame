@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/motion_resolve.h>
 #include <rescaleframe/d3d11_state.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_cache.h>
+#include <rescaleframe/srv_format.h>
+#include "device_owner.h"
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cmath>
 #include <cstring>
@@ -50,6 +53,8 @@ struct rsf_motion_resolve {
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11Texture2D> textures[2];
     ComPtr<ID3D11UnorderedAccessView> views[2];
+    // Motion, depth and the depth layer are engine targets that come back as the same textures.
+    rsf::SrvCache<8> sources;
     uint32_t width = 0, height = 0;
 };
 extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t height, rsf_motion_resolve** out)
@@ -59,17 +64,8 @@ extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t
     auto* pass = new (std::nothrow) rsf_motion_resolve;
     if (!pass) return 0;
     pass->device = static_cast<ID3D11Device*>(pointer); pass->width = width; pass->height = height;
-    HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!compiler) { delete pass; return 0; }
-    auto compile = reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(compiler, "D3DCompile")));
-    ComPtr<ID3DBlob> code, errors;
-    const HRESULT compiled = compile ? compile(shader_source, sizeof(shader_source) - 1, "motion_resolve", nullptr,
-        nullptr, "main", "cs_5_0", 0, 0, &code, &errors) : E_FAIL;
-    const HRESULT created = SUCCEEDED(compiled) && code ?
-        pass->device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &pass->shader) : E_FAIL;
-    // Blob vtables live in the compiler module. Drop both before unloading it.
-    code.Reset(); errors.Reset(); FreeLibrary(compiler);
-    if (FAILED(created)) { delete pass; return 0; }
+    if (!rsf::compile_compute(pass->device.Get(), shader_source, "motion_resolve", "main", &pass->shader,
+            nullptr, nullptr, 0)) { delete pass; return 0; }
     D3D11_BUFFER_DESC buffer{};
     buffer.ByteWidth = sizeof(Constants); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     if (FAILED(pass->device->CreateBuffer(&buffer, nullptr, &pass->constants))) { delete pass; return 0; }
@@ -96,33 +92,24 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
     if (!std::isfinite(params->decoded_to_pixels[0]) || !std::isfinite(params->decoded_to_pixels[1]) ||
         !std::isfinite(params->sentinel)) return 0;
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    ComPtr<ID3D11Device> context_owner; context->GetDevice(&context_owner);
-    if (context_owner.Get() != pass->device.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
+    if (!rsf::same_device(context, pass->device.Get()) || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
     ID3D11Texture2D* inputs[] = {static_cast<ID3D11Texture2D*>(motion_pointer), static_cast<ID3D11Texture2D*>(depth_pointer)};
-    ComPtr<ID3D11ShaderResourceView> source_views[2];
+    ID3D11ShaderResourceView* source_views[2]{};
     for (uint32_t i = 0; i < 2; ++i) {
-        ComPtr<ID3D11Device> owner; inputs[i]->GetDevice(&owner);
         D3D11_TEXTURE2D_DESC desc{}; inputs[i]->GetDesc(&desc);
-        if (owner.Get() != pass->device.Get() || desc.Width < pass->width || desc.Height < pass->height ||
+        if (!rsf::same_device(inputs[i], pass->device.Get()) || desc.Width < pass->width || desc.Height < pass->height ||
             desc.SampleDesc.Count != 1 || desc.ArraySize != 1) return 0;
-        D3D11_SHADER_RESOURCE_VIEW_DESC view{}; view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; view.Texture2D.MipLevels = 1;
-        view.Format = desc.Format;
-        if (i == 1) {
-            if (desc.Format == DXGI_FORMAT_R24G8_TYPELESS) view.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-            else if (desc.Format == DXGI_FORMAT_R32_TYPELESS) view.Format = DXGI_FORMAT_R32_FLOAT;
-            else if (desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS) view.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-        }
-        if (FAILED(pass->device->CreateShaderResourceView(inputs[i], &view, &source_views[i]))) return 0;
+        source_views[i] = pass->sources.get(pass->device.Get(), inputs[i], rsf::srv_format(desc.Format));
+        if (!source_views[i]) return 0;
     }
-    ComPtr<ID3D11ShaderResourceView> layer_view;
+    ID3D11ShaderResourceView* layer_view = nullptr;
     if (params->struct_size >= sizeof(*params) && params->depth_layer) {
         auto* layer = static_cast<ID3D11Texture2D*>(params->depth_layer);
-        ComPtr<ID3D11Device> owner; layer->GetDevice(&owner);
         D3D11_TEXTURE2D_DESC desc{}; layer->GetDesc(&desc);
         // A layer that does not fit is ignored: scene depth alone is the established behaviour.
-        if (owner.Get() == pass->device.Get() && desc.Format == DXGI_FORMAT_R32_FLOAT && desc.Width >= pass->width &&
+        if (rsf::same_device(layer, pass->device.Get()) && desc.Format == DXGI_FORMAT_R32_FLOAT && desc.Width >= pass->width &&
             desc.Height >= pass->height && desc.SampleDesc.Count == 1 && desc.ArraySize == 1)
-            pass->device->CreateShaderResourceView(layer, nullptr, &layer_view);
+            layer_view = pass->sources.get(pass->device.Get(), layer, DXGI_FORMAT_R32_FLOAT);
     }
     Constants constants{};
     constants.has_layer = layer_view ? 1u : 0u;
@@ -135,7 +122,7 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
     if (!rsf_d3d11_state_save(context, &saved)) return 0;
     context->SetPredication(nullptr, FALSE);
     context->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* sources[] = {source_views[0].Get(), source_views[1].Get(), layer_view.Get()};
+    ID3D11ShaderResourceView* sources[] = {source_views[0], source_views[1], layer_view};
     ID3D11UnorderedAccessView* targets[] = {pass->views[0].Get(), pass->views[1].Get()};
     ID3D11Buffer* buffers[] = {pass->constants.Get()};
     context->CSSetShader(pass->shader.Get(), nullptr, 0); context->CSSetShaderResources(0, 3, sources);

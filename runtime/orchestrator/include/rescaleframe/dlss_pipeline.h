@@ -142,7 +142,7 @@ typedef struct rsf_dlss_pipeline_frame {
 
        Which texture this is cannot be settled from a descriptor. Ace Combat 7 allocates many full
        resolution `R16G16B16A16_FLOAT` targets and the one temporal AA reads is distinguishable
-       only by what it is bound alongside, so `rsf_classify_texture` reports scene colour as a
+       only by what it is bound alongside, so the game's role table marks scene colour as a
        candidate rather than picking one. The caller resolves that, today by taking slot 0 of the
        bound set, and that assumption is unverified until a rendered result exists. */
     void* scene_color;
@@ -240,6 +240,8 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_prepare_layer(uint32_
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(
     void* d3d11_context, const rsf_dlss_pipeline_layer* layer);
 
+/* The layer output prepare_layer last returned, or null. No caller in the repository; kept as a
+   public entry point. */
 RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 
 /* Load Streamline, hand over the game's device, and find out whether DLSS can run on it.
@@ -312,15 +314,10 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_resize_output(uint32_
     uint32_t output_height, uint32_t* render_width, uint32_t* render_height);
 
 /* Compatibility selector for the existing frame pipeline. Run at the render-thread command
-   boundary. 1 DLSS, 2 FSR2, 3 FSR3, 4 FSR4, 5 XeSS. Refusals preserve the active backend.
+   boundary. RSF_SR_DLSS through RSF_SR_XESS (sr_session.h). Refusals preserve the active backend.
    New integrations can use sr_session.h/sr_bridge.h directly with SDK frame records. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t backend,
     uint32_t* render_width, uint32_t* render_height);
-
-/* Model request for DLSS viewport0. Apply between frames; resets reconstruction history.
-   The getter reports our request, not a driver's effective model override. */
-RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_select_preset(rsf_dlss_preset preset);
-RSF_RUNTIME_API rsf_dlss_preset rsf_dlss_pipeline_get_preset(void);
 
 /* Release everything in the reverse of the order it was acquired, and before the caller's device
    goes. Safe to call when nothing is running. */

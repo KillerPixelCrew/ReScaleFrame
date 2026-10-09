@@ -6,8 +6,8 @@
 #include <string>
 
 using Microsoft::WRL::ComPtr;
-namespace {
-uint32_t pixel_bytes(DXGI_FORMAT format)
+namespace rsf {
+uint32_t texture_pixel_bytes(DXGI_FORMAT format)
 {
     switch (format) {
     case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_TYPELESS: return 1;
@@ -25,6 +25,8 @@ uint32_t pixel_bytes(DXGI_FORMAT format)
     default: return 0;
     }
 }
+}
+namespace {
 struct Mapping {
     ID3D11DeviceContext* context;
     ID3D11Texture2D* texture;
@@ -57,7 +59,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(
         return RSF_TEXTURE_ERROR_FOREIGN_DEVICE;
     auto* texture = static_cast<ID3D11Texture2D*>(texture_pointer);
     D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
-    const uint32_t stride = pixel_bytes(desc.Format);
+    const uint32_t stride = rsf::texture_pixel_bytes(desc.Format);
     const uint64_t row_bytes = uint64_t(desc.Width) * stride;
     if (!stride || desc.SampleDesc.Count != 1 || !row_bytes || !desc.Height ||
         row_bytes * desc.Height > 256ull * 1024 * 1024) return RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT;

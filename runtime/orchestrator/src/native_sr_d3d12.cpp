@@ -2,9 +2,11 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/dlss_native12.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_format.h>
+#include "../../backends/common/d3d12_helpers.h"
 #include <windows.h>
 #include <d3d12.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <array>
 #include <cmath>
@@ -13,6 +15,7 @@
 #include <DirectXPackedVector.h>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 struct rsf_sr12 {
@@ -33,9 +36,16 @@ struct rsf_sr12 {
     std::array<ComPtr<ID3D12Resource>, 3> motion_readback;
     std::array<bool, 3> motion_pending{};
     uint32_t diagnostic_frames = 0;
+    // Colour, depth, motion and engine output as last validated, with the generation they were
+    // validated in and the SRV formats they read with. The references keep a freed resource's
+    // address from passing for the cached one.
+    std::array<ComPtr<ID3D12Resource>, 4> validated;
+    std::array<DXGI_FORMAT, 3> view_formats{};
+    uint32_t validated_generation = 0;
+    ComPtr<ID3D12GraphicsCommandList> validated_list;
 };
 namespace {
-void transition(ID3D12GraphicsCommandList*, ID3D12Resource*, D3D12_RESOURCE_STATES, D3D12_RESOURCE_STATES);
+using rsf::transition;
 void motion_diagnostic(rsf_sr12& self, ID3D12GraphicsCommandList* list, uint32_t slot)
 {
     if (!self.diagnostic_log) return;
@@ -92,22 +102,9 @@ cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; uint inputsOnl
     depthOut[id.xy] = depth.Load(int3(id.xy,0));
     motionOut[id.xy] = motion.Load(int3(id.xy,0)) * toPixels;
 })";
-void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
-    D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-{
-    D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource; barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after; barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    list->ResourceBarrier(1, &barrier);
-}
 bool texture(rsf_sr12& self, uint32_t width, uint32_t height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& out)
 {
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
-    desc.Format = format; desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    return SUCCEEDED(self.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out)));
+    return rsf::create_uav_texture(self.device.Get(), width, height, format, out.ReleaseAndGetAddressOf());
 }
 bool prepare_shader(rsf_sr12& self)
 {
@@ -120,13 +117,15 @@ bool prepare_shader(rsf_sr12& self)
     parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     parameters[1].Constants = {0, 0, 5};
     D3D12_ROOT_SIGNATURE_DESC desc{2, parameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
-    ComPtr<ID3DBlob> serialized, errors, shader;
+    ComPtr<ID3DBlob> serialized, errors;
+    std::vector<uint8_t> shader;
     if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)) ||
         FAILED(self.device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&self.root))) ||
-        FAILED(D3DCompile(normalize_shader, sizeof(normalize_shader)-1, "RSF temporal input normalization", nullptr, nullptr,
-            "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &shader, &errors))) return false;
+        !rsf::compile_shader(normalize_shader, sizeof(normalize_shader) - 1, "RSF temporal input normalization", "main",
+            "cs_5_0", shader, self.diagnostic_log, self.diagnostic_user,
+            D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3)) return false;
     D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline{}; pipeline.pRootSignature = self.root.Get();
-    pipeline.CS = {shader->GetBufferPointer(), shader->GetBufferSize()};
+    pipeline.CS = {shader.data(), shader.size()};
     if (FAILED(self.device->CreateComputePipelineState(&pipeline, IID_PPV_ARGS(&self.pipeline)))) return false;
     for (auto& heap : self.heaps) {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{}; heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -135,6 +134,13 @@ bool prepare_shader(rsf_sr12& self)
     }
     return true;
 }
+// The SRV format for a depth input: the readable plane of a depth format, R32_FLOAT otherwise.
+DXGI_FORMAT depth_view_format(DXGI_FORMAT format)
+{
+    const DXGI_FORMAT view = rsf::srv_format(format);
+    return view == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS || view == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ? view
+        : DXGI_FORMAT_R32_FLOAT;
+}
 bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
 {
     if (!pass.camera_valid || pass.camera.struct_size != sizeof(rsf_camera_frame) ||
@@ -142,7 +148,16 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
         !pass.history_key || pass.camera.render_width != self.width || pass.camera.render_height != self.height ||
         pass.camera.output_width != self.output_width || pass.camera.output_height != self.output_height)
         return false;
+    if (!(std::isfinite(pass.motion_to_uv[0]) && std::isfinite(pass.motion_to_uv[1]) &&
+          pass.motion_to_uv[0] != 0 && pass.motion_to_uv[1] != 0)) return false;
     void* pointers[] = {pass.color_input, pass.depth, pass.motion, pass.color_output};
+    // The resources' descriptions cannot change, and the extents they are checked against are
+    // fixed at create, so a set already accepted in this generation needs no second look.
+    bool cached = self.validated_generation == pass.resource_generation;
+    for (size_t i = 0; i < 4 && cached; ++i)
+        cached = (i == 3 && !self.backend) || (pointers[i] && self.validated[i].Get() == pointers[i]);
+    if (cached) return true;
+    for (auto& resource : self.validated) resource.Reset();
     for (size_t i = 0; i < 4; ++i) {
         if (i == 3 && !self.backend) continue;
         if (!pointers[i]) return false;
@@ -161,9 +176,11 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
             desc.Format != DXGI_FORMAT_D24_UNORM_S8_UINT && desc.Format != DXGI_FORMAT_R24G8_TYPELESS) return false;
         if (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT) return false;
         if (i == 3 && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) return false;
+        if (i < 3) self.view_formats[i] = i == 1 ? depth_view_format(desc.Format) : desc.Format;
     }
-    return std::isfinite(pass.motion_to_uv[0]) && std::isfinite(pass.motion_to_uv[1]) &&
-        pass.motion_to_uv[0] != 0 && pass.motion_to_uv[1] != 0;
+    for (size_t i = 0; i < 4; ++i) self.validated[i] = static_cast<ID3D12Resource*>(pointers[i]);
+    self.validated_generation = pass.resource_generation;
+    return true;
 }
 }
 extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_sr12** out) try
@@ -171,7 +188,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
     if (!setup || setup->struct_size < sizeof(*setup) || !setup->device || !setup->output_width || !setup->output_height ||
-        setup->backend > 5 || setup->quality > 5) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        setup->backend > RSF_SR_XESS || setup->quality > 5) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != 1) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     std::unique_ptr<rsf_sr12, decltype(&rsf_sr12_destroy)> self(new rsf_sr12, rsf_sr12_destroy);
     self->device = static_cast<ID3D12Device*>(setup->device);
@@ -182,7 +199,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
     if (!setup->backend) {
         self->width = setup->render_width ? setup->render_width : setup->output_width;
         self->height = setup->render_height ? setup->render_height : setup->output_height;
-    } else if (setup->backend == 1) {
+    } else if (setup->backend == RSF_SR_DLSS) {
         result = setup->streamline_host ? rsf_dlss_native12_create_shared(setup->device, &setup->dlss,
             static_cast<rsf_streamline_host*>(setup->streamline_host), &self->dlss) : rsf_dlss_native12_create(setup->device, &setup->dlss, &self->dlss);
         if (result == RSF_BACKEND_OK) result = rsf_dlss_native12_plan(self->dlss, self->output_width, self->output_height,
@@ -225,9 +242,12 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     if (!self || !commands || !pass || pass->struct_size < sizeof(*pass) || slot >= 3 || !inputs_valid(*self, *pass))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
-    ComPtr<ID3D12Device> list_device;
-    if (FAILED(list->GetDevice(IID_PPV_ARGS(&list_device))) || list_device.Get() != self->device.Get())
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (list != self->validated_list.Get()) {
+        ComPtr<ID3D12Device> list_device;
+        if (FAILED(list->GetDevice(IID_PPV_ARGS(&list_device))) || list_device.Get() != self->device.Get())
+            return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        self->validated_list = list;
+    }
     auto* heap = self->heaps[slot].Get();
     auto cpu = heap->GetCPUDescriptorHandleForHeapStart();
     const uint32_t stride = self->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -235,26 +255,20 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     for (size_t i = 0; i < 3; ++i) {
         auto* resource = static_cast<ID3D12Resource*>(inputs[i]);
         D3D12_SHADER_RESOURCE_VIEW_DESC view{}; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        view.Format = resource->GetDesc().Format;
-        if (i == 1) {
-            if (view.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || view.Format == DXGI_FORMAT_R32G8X24_TYPELESS ||
-                view.Format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS) view.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-            else if (view.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || view.Format == DXGI_FORMAT_R24G8_TYPELESS)
-                view.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-            else view.Format = DXGI_FORMAT_R32_FLOAT;
-        }
+        view.Format = self->view_formats[i];
         view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
         self->device->CreateShaderResourceView(resource, &view, cpu); cpu.ptr += stride;
     }
-    for (auto& resource : self->normalized) {
+    const DXGI_FORMAT normalized_formats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT};
+    for (size_t i = 0; i < self->normalized.size(); ++i) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC view{}; view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        view.Format = resource->GetDesc().Format;
-        self->device->CreateUnorderedAccessView(resource.Get(), nullptr, &view, cpu); cpu.ptr += stride;
+        view.Format = normalized_formats[i];
+        self->device->CreateUnorderedAccessView(self->normalized[i].Get(), nullptr, &view, cpu); cpu.ptr += stride;
     }
     list->SetDescriptorHeaps(1, &heap); list->SetComputeRootSignature(self->root.Get());
     list->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart()); list->SetPipelineState(self->pipeline.Get());
     struct Constants { uint32_t width, height; float x, y; uint32_t inputs_only; } constants{self->width, self->height,
-        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], self->backend == 0};
+        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], self->backend == RSF_SR_NONE};
     list->SetComputeRoot32BitConstants(1, 5, &constants, 0);
     list->Dispatch((self->width + 7) / 8, (self->height + 7) / 8, 1);
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -263,7 +277,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     motion_diagnostic(*self, list, slot);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = pass->session_id; record.frame_id = pass->native_frame; record.view_id = static_cast<uint32_t>(pass->view_key);
-    record.resource_generation = pass->resource_generation; record.camera = pass->camera;
+    record.resource_generation = pass->resource_generation; record.camera = pass->camera; record.screen = pass->screen;
     record.render_width = self->width; record.render_height = self->height;
     record.output_width = self->output_width; record.output_height = self->output_height;
     record.frame_time_ms = pass->camera.frame_time_seconds * 1000;
@@ -289,20 +303,17 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    if (result == RSF_BACKEND_OK && self->backend) {
+    if (result != RSF_BACKEND_OK) { self->last_frame = 0; return result; }
+    if (self->backend) {
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->output.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = static_cast<ID3D12Resource*>(pass->color_output); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         const D3D12_BOX rectangle{0, 0, 0, self->output_width, self->output_height, 1};
         list->CopyTextureRegion(&target, 0, 0, 0, &source, &rectangle);
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        self->last_frame = pass->native_frame; self->last_view = pass->history_key;
-        self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
-    } else self->last_frame = 0;
-    if (!self->backend && result == RSF_BACKEND_OK) {
-        self->last_frame = pass->native_frame; self->last_view = pass->history_key;
-        self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
     }
+    self->last_frame = pass->native_frame; self->last_view = pass->history_key;
+    self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
     return result;
 }
 extern "C" void rsf_sr12_destroy(rsf_sr12* self)

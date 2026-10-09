@@ -8,13 +8,33 @@
 
 use egui::{Color32, Context, Rect, RichText, Ui, Window};
 
-use crate::model::{Intent, Quality, Stats};
+use crate::model::{GenerationStats, Intent, Quality, Stats};
+use crate::performance::Rates;
 
 /// Present but not in the state it needs to be in, and anything the user should read before
 /// believing the rest of the panel.
 const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3a);
 /// Detail that is true but not load bearing.
 const MUTED: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
+
+/// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
+const SR_BACKENDS: [(u32, &str); 6] = [
+    (1, "DLSS"),
+    (2, "FSR2"),
+    (3, "FSR3"),
+    (4, "FSR4"),
+    (5, "XeSS"),
+    (6, "FSR1"),
+];
+
+/// Frame generation providers by ID. Zero is Off, and the ID is the bit in the choices mask.
+const FG_PROVIDERS: [(u32, &str); 5] = [
+    (0, "Off"),
+    (1, "DLSS-G"),
+    (3, "FSR3"),
+    (4, "FSR4"),
+    (5, "XeSS"),
+];
 
 /// What the panel currently shows as chosen, and what it is waiting to see take effect.
 ///
@@ -87,8 +107,8 @@ pub struct Controls {
     pub quality: [Option<Rect>; 5],
     /// The enable toggle.
     pub enabled: Option<Rect>,
-    /// One control per SR backend.
-    pub backend: [Option<Rect>; 5],
+    /// One control per SR backend, in `SR_BACKENDS` order.
+    pub backend: [Option<Rect>; 6],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
     pub fg_backend: [Option<Rect>; 5],
     /// Track of the hardware-supported frame generation multiplier slider.
@@ -114,23 +134,13 @@ pub(crate) fn show(
         // it is, so that frame produces no triangles. That is worth knowing when the renderer on
         // the other side of the header draws its first frame and sees nothing.
         .show(ctx, |ui| {
-            body(ui, selection, stats, intent, controls);
+            controls_section(ui, selection, stats, intent, controls);
+            if let Some(reason) = stats.refusal_reason {
+                ui.label(RichText::new(reason).color(WARN));
+            }
+            ui.separator();
+            ui.label(RichText::new("Insert to close").small().color(MUTED));
         });
-}
-
-fn body(
-    ui: &mut Ui,
-    selection: &Selection,
-    stats: &Stats<'_>,
-    intent: &mut Intent,
-    controls: &mut Controls,
-) {
-    controls_section(ui, selection, stats, intent, controls);
-    if let Some(reason) = stats.refusal_reason {
-        ui.label(RichText::new(reason).color(WARN));
-    }
-    ui.separator();
-    ui.label(RichText::new("Insert to close").small().color(MUTED));
 }
 
 fn controls_section(
@@ -156,26 +166,19 @@ fn controls_section(
     ui.add_enabled_ui(stats.backend_loaded, |ui| {
         ui.horizontal_wrapped(|ui| {
             let mut backend = stats.backend;
-            for (index, (id, name)) in [
-                (1, "DLSS"),
-                (2, "FSR2"),
-                (3, "FSR3"),
-                (4, "FSR4"),
-                (5, "XeSS"),
-            ]
-            .iter()
-            .enumerate()
-            {
-                let response = ui.radio_value(&mut backend, *id, *name);
+            for (index, (id, name)) in SR_BACKENDS.iter().enumerate() {
+                // A zero mask is a host that did not say, so every backend stays on offer.
+                let allowed = stats.backend_choices == 0 || stats.backend_choices & (1 << id) != 0;
+                let response =
+                    ui.add_enabled(allowed, egui::RadioButton::new(backend == *id, *name));
+                if response.clicked() {
+                    backend = *id;
+                }
                 controls.backend[index] = Some(response.rect);
             }
             if backend != stats.backend {
                 intent.backend_changed = true;
                 intent.backend = backend;
-            }
-            if ui.radio(stats.backend == 6, "FSR1").clicked() {
-                intent.backend_changed = true;
-                intent.backend = 6;
             }
         });
     });
@@ -191,16 +194,7 @@ fn controls_section(
     ui.label("Frame generation provider");
     let mut fg_backend = generation.requested_backend;
     ui.horizontal_wrapped(|ui| {
-        for (index, (id, name)) in [
-            (0, "Off"),
-            (1, "DLSS-G"),
-            (3, "FSR3"),
-            (4, "FSR4"),
-            (5, "XeSS"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (index, (id, name)) in FG_PROVIDERS.into_iter().enumerate() {
             let allowed = generation.backend_choices & (1 << id) != 0;
             let response = ui.add_enabled(allowed, egui::RadioButton::new(fg_backend == id, name));
             controls.fg_backend[index] = Some(response.rect);
@@ -213,30 +207,13 @@ fn controls_section(
     });
     let pending = fg_backend != generation.backend;
     if pending {
+        let (lead, tail) = match (runtime_switching, generation.selection_result == 0) {
+            (true, true) => ("Applying", " at the next frame."),
+            (true, false) => ("Requested", "."),
+            (false, _) => ("Saved:", ". Awaiting the presentation owner."),
+        };
         ui.label(
-            RichText::new(format!(
-                "{} {}{}",
-                if runtime_switching {
-                    if generation.selection_result == 0 {
-                        "Applying"
-                    } else {
-                        "Requested"
-                    }
-                } else {
-                    "Saved:"
-                },
-                fg_backend_name(fg_backend),
-                if runtime_switching {
-                    if generation.selection_result == 0 {
-                        " at the next frame."
-                    } else {
-                        "."
-                    }
-                } else {
-                    ". Awaiting the presentation owner."
-                }
-            ))
-            .color(MUTED),
+            RichText::new(format!("{lead} {}{tail}", fg_backend_name(fg_backend))).color(MUTED),
         );
     } else if generation.available {
         ui.label(
@@ -275,33 +252,31 @@ fn controls_section(
             mode = u32::from(enabled);
             intent.fg_changed = true;
         }
-        {
-            let maximum = generation.max_generated.saturating_add(1).max(2);
-            let mut multiplier = count.saturating_add(1).clamp(2, maximum);
-            let response = ui.add_enabled(
-                generation.max_generated > 1,
-                egui::Slider::new(&mut multiplier, 2..=maximum)
-                    .text("Frame generation multiplier")
-                    .custom_formatter(|value, _| format!("{value:.0}x")),
+        let maximum = generation.max_generated.saturating_add(1).max(2);
+        let mut multiplier = count.saturating_add(1).clamp(2, maximum);
+        let response = ui.add_enabled(
+            generation.max_generated > 1,
+            egui::Slider::new(&mut multiplier, 2..=maximum)
+                .text("Frame generation multiplier")
+                .custom_formatter(|value, _| format!("{value:.0}x")),
+        );
+        controls.fg_multiplier = Some(Rect::from_min_max(
+            response.rect.min,
+            egui::pos2(
+                response.rect.left() + ui.spacing().slider_width,
+                response.rect.bottom(),
+            ),
+        ));
+        if response.changed() {
+            count = multiplier - 1;
+        }
+        intent.fg_changed |= response.changed();
+        if generation.available && generation.max_generated == 1 {
+            ui.label(
+                RichText::new("This provider reports a maximum of 2x on the current GPU.")
+                    .small()
+                    .color(MUTED),
             );
-            controls.fg_multiplier = Some(Rect::from_min_max(
-                response.rect.min,
-                egui::pos2(
-                    response.rect.left() + ui.spacing().slider_width,
-                    response.rect.bottom(),
-                ),
-            ));
-            if response.changed() {
-                count = multiplier - 1;
-            }
-            intent.fg_changed |= response.changed();
-            if generation.available && generation.max_generated == 1 {
-                ui.label(
-                    RichText::new("This provider reports a maximum of 2x on the current GPU.")
-                        .small()
-                        .color(MUTED),
-                );
-            }
         }
         if intent.fg_changed {
             intent.fg_mode = mode;
@@ -327,6 +302,7 @@ fn controls_section(
             4 => "Waiting for flight, hangar, or briefing",
             5 => "Suspended for a camera cut",
             6 => "Current VSync mode is unsupported",
+            8 => "Waiting for a HUD-less scene color",
             _ => "Waiting for SDK-confirmed generation",
         };
         ui.label(RichText::new(reason).color(MUTED));
@@ -438,17 +414,15 @@ fn controls_section(
 
     // Presets can be saved while disabled; startup applies the selected level.
     ui.horizontal_wrapped(|ui| {
-        ui.scope(|ui| {
-            let mut choice = selection.quality;
-            for (index, level) in Quality::ALL.iter().enumerate() {
-                let response = ui.radio_value(&mut choice, *level, level.label());
-                controls.quality[index] = Some(response.rect);
-            }
-            if choice != selection.quality {
-                intent.quality = choice;
-                intent.quality_changed = true;
-            }
-        });
+        let mut choice = selection.quality;
+        for (index, level) in Quality::ALL.iter().enumerate() {
+            let response = ui.radio_value(&mut choice, *level, level.label());
+            controls.quality[index] = Some(response.rect);
+        }
+        if choice != selection.quality {
+            intent.quality = choice;
+            intent.quality_changed = true;
+        }
     });
 
     match (selection.requested_quality, stats.quality) {
@@ -495,18 +469,60 @@ fn controls_section(
 }
 
 fn fg_backend_name(backend: u32) -> &'static str {
-    match backend {
-        1 => "DLSS-G",
-        3 => "FSR3",
-        4 => "FSR4",
-        5 => "XeSS",
-        _ => "Off",
+    FG_PROVIDERS
+        .iter()
+        .find(|(id, _)| *id == backend)
+        .map_or("Off", |(_, name)| name)
+}
+
+/// Generation state as the compact HUD words it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HudState {
+    Active(u32),
+    Off,
+    Unavailable,
+    Suspended,
+}
+
+/// The compact HUD's text. Rates change about twice a second, so the strings are rebuilt only when
+/// the rates or the generation state differ from the ones they were built for.
+#[derive(Default)]
+pub(crate) struct HudCache {
+    key: Option<(Rates, HudState)>,
+    rendered: String,
+    presented: String,
+    state: String,
+}
+
+impl HudCache {
+    pub(crate) fn update(&mut self, rates: Rates, generation: &GenerationStats) {
+        let state = if generation.active {
+            HudState::Active(generation.effective_generated + 1)
+        } else if generation.requested_mode == 0 {
+            HudState::Off
+        } else if !generation.available {
+            HudState::Unavailable
+        } else {
+            HudState::Suspended
+        };
+        if self.key == Some((rates, state)) {
+            return;
+        }
+        let format_rate =
+            |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
+        self.rendered = format!("Rendered FPS   {}", format_rate(rates.rendered));
+        self.presented = format!("Presented FPS  {}", format_rate(rates.presented));
+        self.state = match state {
+            HudState::Active(multiplier) => format!("FG active  {multiplier}x"),
+            HudState::Off => "FG off".to_owned(),
+            HudState::Unavailable => "FG unavailable".to_owned(),
+            HudState::Suspended => "FG suspended".to_owned(),
+        };
+        self.key = Some((rates, state));
     }
 }
 
-pub(crate) fn performance_hud(ctx: &Context, rates: crate::performance::Rates, stats: &Stats<'_>) {
-    let format_rate =
-        |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
+pub(crate) fn performance_hud(ctx: &Context, hud: &HudCache) {
     egui::Area::new(egui::Id::new("rsf-performance"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
         .interactable(false)
@@ -515,25 +531,10 @@ pub(crate) fn performance_hud(ctx: &Context, rates: crate::performance::Rates, s
                 .fill(Color32::from_black_alpha(190))
                 .inner_margin(9.0)
                 .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!("Rendered FPS   {}", format_rate(rates.rendered)))
-                            .monospace(),
-                    );
-                    ui.label(
-                        RichText::new(format!("Presented FPS  {}", format_rate(rates.presented)))
-                            .monospace(),
-                    );
-                    let generation = stats.generation;
-                    let state = if generation.active {
-                        format!("FG active  {}x", generation.effective_generated + 1)
-                    } else if generation.requested_mode == 0 {
-                        "FG off".to_owned()
-                    } else if !generation.available {
-                        "FG unavailable".to_owned()
-                    } else {
-                        "FG suspended".to_owned()
-                    };
-                    ui.label(RichText::new(state).small().color(if generation.active {
+                    ui.label(RichText::new(&hud.rendered).monospace());
+                    ui.label(RichText::new(&hud.presented).monospace());
+                    let active = matches!(hud.key, Some((_, HudState::Active(_))));
+                    ui.label(RichText::new(&hud.state).small().color(if active {
                         Color32::LIGHT_GREEN
                     } else {
                         MUTED
@@ -600,8 +601,6 @@ mod tests {
     fn a_request_that_has_not_landed_is_said_out_loud() {
         let stats = Stats {
             backend_loaded: true,
-            backend_supported: true,
-            backend_name: Some("Test backend"),
             enabled: false,
             ..Stats::default()
         };
@@ -637,10 +636,6 @@ mod tests {
     fn what_the_panel_will_not_say() {
         let stats = Stats {
             backend_loaded: true,
-            backend_supported: true,
-            backend_name: Some("Test backend"),
-            frames_presented: 240,
-            frames_evaluated: 238,
             ..Stats::default()
         };
         // "On + Boost" names the SDK's Reflex option, rather than a measured speed claim.

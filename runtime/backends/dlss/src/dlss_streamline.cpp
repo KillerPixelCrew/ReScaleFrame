@@ -3,6 +3,7 @@
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/streamline_host.h>
 #include "streamline_frame.h"
+#include "streamline_load.h"
 
 #if RSF_HAVE_STREAMLINE
 
@@ -11,6 +12,7 @@
 #include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi.h>
+#include <wrl/client.h>
 
 #include <sl.h>
 #include <sl_consts.h>
@@ -26,7 +28,6 @@
 #define RSF_HAVE_SIGNATURE_CHECK 0
 #endif
 
-#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -68,13 +69,15 @@ struct State {
     // Resolved after the device is set, which is when Streamline will hand out feature functions.
     PFun_slDLSSGetOptimalSettings* get_optimal_settings = nullptr;
     PFun_slDLSSSetOptions* set_options = nullptr;
+    // What each viewport was last given. Streamline keeps options until they change, so a frame
+    // with identical options skips the call.
+    sl::DLSSOptions applied_options[2]{};
+    bool options_applied[2] = {false, false};
 
     ID3D11Device* device = nullptr;
     rsf_streamline_host* shared_host = nullptr;
     ID3D12Device* shared_device = nullptr;
     bool initialised = false;
-    bool supported = false;
-    rsf_dlss_preset preset = RSF_DLSS_PRESET_AUTO;
 
     // Kept alive for the process: Streamline is given pointers to these at init and the
     // documentation does not promise it copies them.
@@ -92,18 +95,15 @@ State& state()
     return instance;
 }
 
-void say(const char* format, ...)
+template <typename... Arguments>
+void say(const char* format, Arguments... arguments)
 {
     State& self = state();
-    if (!self.log) {
-        return;
+    if constexpr (sizeof...(arguments) == 0) {
+        rsf::say(self.log, self.log_user, "%s", format);
+    } else {
+        rsf::say(self.log, self.log_user, format, arguments...);
     }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    self.log(self.log_user, message);
 }
 
 // Streamline's own log messages, forwarded to the same sink rather than to a console nobody sees.
@@ -114,26 +114,7 @@ void streamline_message(sl::LogType type, const char* message)
     if (type != sl::LogType::eError && type != sl::LogType::eWarn) {
         return;
     }
-    const char* label = type == sl::LogType::eError     ? "error"
-                        : type == sl::LogType::eWarn    ? "warning"
-                                                        : "info";
-    say("streamline %s: %s", label, message ? message : "");
-}
-
-bool widen(const char* utf8, std::wstring& out)
-{
-    if (!utf8 || !*utf8) {
-        out.clear();
-        return false;
-    }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
-    if (needed <= 0) {
-        out.clear();
-        return false;
-    }
-    out.resize(static_cast<size_t>(needed) - 1);
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out.data(), needed);
-    return true;
+    say("streamline %s: %s", type == sl::LogType::eError ? "error" : "warning", message ? message : "");
 }
 
 template <typename T>
@@ -147,19 +128,26 @@ bool resolve(HMODULE module, const char* name, T*& target)
     return true;
 }
 
-sl::float4x4 to_matrix(const float source[16])
+// One resolve chain for both ways in. A Streamline owner loads the interposer itself and needs the
+// whole set; a borrower of the shared D3D12 host gets the module from the host, which has already
+// initialised it and owns the device and the frame tokens.
+bool resolve_entries(HMODULE module, Entries& entries, bool owner)
 {
-    // Row major on both sides, so this is a copy rather than a transpose. Streamline states row
-    // major in sl_consts.h and Unreal's matrices are row major too, which is the one piece of luck
-    // in this conversion.
-    sl::float4x4 matrix{};
-    for (int row = 0; row < 4; ++row) {
-        matrix.row[row].x = source[row * 4 + 0];
-        matrix.row[row].y = source[row * 4 + 1];
-        matrix.row[row].z = source[row * 4 + 2];
-        matrix.row[row].w = source[row * 4 + 3];
+    bool resolved = resolve(module, "slIsFeatureSupported", entries.is_feature_supported) &&
+                    resolve(module, "slGetFeatureFunction", entries.get_feature_function) &&
+                    resolve(module, "slGetFeatureRequirements", entries.get_feature_requirements) &&
+                    resolve(module, "slSetConstants", entries.set_constants) &&
+                    resolve(module, "slSetTagForFrame", entries.set_tag_for_frame) &&
+                    resolve(module, "slEvaluateFeature", entries.evaluate_feature) &&
+                    resolve(module, "slFreeResources", entries.free_resources);
+    if (owner) {
+        resolved = resolved && resolve(module, "slInit", entries.init) &&
+                   resolve(module, "slShutdown", entries.shutdown) &&
+                   resolve(module, "slSetD3DDevice", entries.set_device) &&
+                   resolve(module, "slGetNewFrameToken", entries.get_new_frame_token) &&
+                   resolve(module, "slAllocateResources", entries.allocate_resources);
     }
-    return matrix;
+    return resolved;
 }
 
 sl::Boolean flag(uint32_t value)
@@ -167,35 +155,25 @@ sl::Boolean flag(uint32_t value)
     return value ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 }
 
-sl::DLSSMode mode_for(rsf_dlss_quality quality)
-{
-    switch (quality) {
-    case RSF_DLSS_QUALITY_NATIVE:
-        return sl::DLSSMode::eDLAA;
-    case RSF_DLSS_QUALITY_QUALITY:
-        return sl::DLSSMode::eMaxQuality;
-    case RSF_DLSS_QUALITY_BALANCED:
-        return sl::DLSSMode::eBalanced;
-    case RSF_DLSS_QUALITY_PERFORMANCE:
-        return sl::DLSSMode::eMaxPerformance;
-    case RSF_DLSS_QUALITY_ULTRA_PERFORMANCE:
-        return sl::DLSSMode::eUltraPerformance;
-    default:
-        return sl::DLSSMode::eOff;
-    }
-}
-
 // The viewports this integration drives: the scene, and a second feature with its own history for
 // a layer integrated at one to one. Each has its own tags, constants and options.
+uint32_t viewport_slot(uint32_t index)
+{
+    return index < 2u ? index : 0u;
+}
+
 const sl::ViewportHandle& viewport_handle(uint32_t index)
 {
     static sl::ViewportHandle handles[2] = {sl::ViewportHandle{0u}, sl::ViewportHandle{1u}};
-    return handles[index < 2u ? index : 0u];
+    return handles[viewport_slot(index)];
 }
 
-const sl::ViewportHandle& sole_viewport()
+// The fields this integration sets, which are the ones that can differ between two frames.
+bool same_options(const sl::DLSSOptions& a, const sl::DLSSOptions& b)
 {
-    return viewport_handle(0u);
+    return a.mode == b.mode && a.outputWidth == b.outputWidth && a.outputHeight == b.outputHeight &&
+           a.colorBuffersHDR == b.colorBuffersHDR && a.useAutoExposure == b.useAutoExposure &&
+           a.alphaUpscalingEnabled == b.alphaUpscalingEnabled;
 }
 
 } // namespace
@@ -226,53 +204,19 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     self.log_user = setup->log_user;
 
     std::wstring interposer;
-    if (!widen(setup->interposer_path_utf8, interposer)) {
+    if (!rsf::widen_utf8(setup->interposer_path_utf8, interposer)) {
         return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     }
 
-    // This loads a signed NVIDIA module into a game process from a configured path. Verifying the
-    // signature is the difference between that and loading whatever is at that path.
-    if (setup->require_signature) {
-#if RSF_HAVE_SIGNATURE_CHECK
-        if (!sl::security::verifyEmbeddedSignature(interposer.c_str())) {
-            say("interposer at %s failed signature verification", setup->interposer_path_utf8);
-            return RSF_DLSS_ERROR_LOAD_FAILED;
-        }
-#else
-        say("signature verification was asked for but is not compiled into this build");
-        return RSF_DLSS_ERROR_LOAD_FAILED;
-#endif
-    }
-
-    // By absolute path, never by name: the search path must not get to decide which module answers
-    // for the SDK inside somebody else's process.
-    self.interposer = LoadLibraryW(interposer.c_str());
+    // By absolute path, never by name, and verified first when asked: this loads a signed NVIDIA
+    // module into a game process from a configured path, and the signature is the difference
+    // between that and loading whatever is at that path.
+    self.interposer = rsf::load_interposer(interposer.c_str(), setup->require_signature != 0, self.log, self.log_user);
     if (!self.interposer) {
-        say("could not load %s (error %lu)", setup->interposer_path_utf8, GetLastError());
         return RSF_DLSS_ERROR_LOAD_FAILED;
     }
 
-    Entries& sl_entries = self.sl;
-    const bool resolved = resolve(self.interposer, "slInit", sl_entries.init) &&
-                          resolve(self.interposer, "slShutdown", sl_entries.shutdown) &&
-                          resolve(self.interposer, "slIsFeatureSupported",
-                                  sl_entries.is_feature_supported) &&
-                          resolve(self.interposer, "slSetD3DDevice", sl_entries.set_device) &&
-                          resolve(self.interposer, "slGetFeatureFunction",
-                                  sl_entries.get_feature_function) &&
-                          resolve(self.interposer, "slGetFeatureRequirements",
-                                  sl_entries.get_feature_requirements) &&
-                          resolve(self.interposer, "slGetNewFrameToken",
-                                  sl_entries.get_new_frame_token) &&
-                          resolve(self.interposer, "slSetConstants", sl_entries.set_constants) &&
-                          resolve(self.interposer, "slSetTagForFrame",
-                                  sl_entries.set_tag_for_frame) &&
-                          resolve(self.interposer, "slEvaluateFeature",
-                                  sl_entries.evaluate_feature) &&
-                          resolve(self.interposer, "slAllocateResources",
-                                  sl_entries.allocate_resources) &&
-                          resolve(self.interposer, "slFreeResources", sl_entries.free_resources);
-    if (!resolved) {
+    if (!resolve_entries(self.interposer, self.sl, true)) {
         FreeLibrary(self.interposer);
         self.interposer = nullptr;
         return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
@@ -297,12 +241,12 @@ extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = 1;
 
-    if (widen(setup->plugin_directory_utf8, self.plugin_directory)) {
+    if (rsf::widen_utf8(setup->plugin_directory_utf8, self.plugin_directory)) {
         self.plugin_paths[0] = self.plugin_directory.c_str();
         preferences.pathsToPlugins = self.plugin_paths;
         preferences.numPathsToPlugins = 1;
     }
-    if (widen(setup->log_directory_utf8, self.log_directory)) {
+    if (rsf::widen_utf8(setup->log_directory_utf8, self.log_directory)) {
         preferences.pathToLogsAndData = self.log_directory.c_str();
     }
     // NGX will not start without an identity, and DLSS is an NGX feature, so getting this wrong
@@ -364,6 +308,7 @@ extern "C" rsf_dlss_result rsf_dlss_set_device(void* d3d11_device)
     self.sl.get_feature_function(sl::kFeatureDLSS, "slDLSSSetOptions", options);
     self.get_optimal_settings = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     self.set_options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
+    self.options_applied[0] = self.options_applied[1] = false;
     if (!self.get_optimal_settings || !self.set_options) {
         say("DLSS feature functions are not available");
         return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
@@ -388,23 +333,15 @@ extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
     if (self.shared_device) {
         description.AdapterLuid = self.shared_device->GetAdapterLuid();
     } else {
-    IDXGIDevice* dxgi_device = nullptr;
-    if (FAILED(self.device->QueryInterface(__uuidof(IDXGIDevice),
-                                           reinterpret_cast<void**>(&dxgi_device))) ||
-        !dxgi_device) {
-        return RSF_DLSS_ERROR_NOT_READY;
-    }
-    IDXGIAdapter* adapter = nullptr;
-    const HRESULT got_adapter = dxgi_device->GetAdapter(&adapter);
-    dxgi_device->Release();
-    if (FAILED(got_adapter) || !adapter) {
-        return RSF_DLSS_ERROR_NOT_READY;
-    }
-    const HRESULT described = adapter->GetDesc(&description);
-    adapter->Release();
-    if (FAILED(described)) {
-        return RSF_DLSS_ERROR_NOT_READY;
-    }
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        if (FAILED(self.device->QueryInterface(IID_PPV_ARGS(&dxgi_device))) ||
+            FAILED(dxgi_device->GetAdapter(&adapter)) || !adapter) {
+            return RSF_DLSS_ERROR_NOT_READY;
+        }
+        if (FAILED(adapter->GetDesc(&description))) {
+            return RSF_DLSS_ERROR_NOT_READY;
+        }
     }
 
     sl::AdapterInfo info{};
@@ -425,12 +362,12 @@ extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
         support->detected_driver_minor = requirements.driverVersionDetected.minor;
     }
 
-    self.supported = support->supported != 0u;
+    const bool supported = support->supported != 0u;
     say("DLSS support on this adapter: %s (streamline result %u, driver %u.%u, requires %u.%u)",
-        self.supported ? "yes" : "no", static_cast<unsigned>(result),
+        supported ? "yes" : "no", static_cast<unsigned>(result),
         support->detected_driver_major, support->detected_driver_minor,
         support->required_driver_major, support->required_driver_minor);
-    return self.supported ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_SUPPORTED;
+    return supported ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_SUPPORTED;
 }
 
 extern "C" rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
@@ -445,7 +382,7 @@ extern "C" rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
     }
 
     sl::DLSSOptions options{};
-    options.mode = mode_for(plan->quality);
+    options.mode = rsf::dlss_mode(plan->quality);
     options.outputWidth = plan->output_width;
     options.outputHeight = plan->output_height;
 
@@ -498,10 +435,10 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     const sl::ViewportHandle& viewport = viewport_handle(frame->viewport);
 
     sl::Constants constants{};
-    constants.cameraViewToClip = to_matrix(frame->camera_view_to_clip);
-    constants.clipToCameraView = to_matrix(frame->clip_to_camera_view);
-    constants.clipToPrevClip = to_matrix(frame->clip_to_prev_clip);
-    constants.prevClipToClip = to_matrix(frame->prev_clip_to_clip);
+    constants.cameraViewToClip = rsf::sl_matrix(frame->camera_view_to_clip);
+    constants.clipToCameraView = rsf::sl_matrix(frame->clip_to_camera_view);
+    constants.clipToPrevClip = rsf::sl_matrix(frame->clip_to_prev_clip);
+    constants.prevClipToClip = rsf::sl_matrix(frame->prev_clip_to_clip);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
     // Zero rather than left alone. Streamline warns that an invalid pinhole offset is a mistake,
     // and the game uses a plain pinhole camera, so zero is the true value rather than a placeholder.
@@ -535,7 +472,7 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     }
 
     sl::DLSSOptions options{};
-    options.mode = mode_for(frame->quality);
+    options.mode = rsf::dlss_mode(frame->quality);
     options.outputWidth = frame->output_width;
     options.outputHeight = frame->output_height;
     options.colorBuffersHDR = frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
@@ -543,14 +480,15 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     // it is bound at the same pass as everything else here, so normally it does.
     options.useAutoExposure = frame->exposure || frame->color_encoded ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     options.alphaUpscalingEnabled = flag(frame->alpha);
-    if (frame->viewport == 0) {
-        const auto preset = static_cast<sl::DLSSPreset>(self.preset);
-        options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
-        options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
-    }
-    if (self.set_options(viewport, options) != sl::Result::eOk) {
-        say("slDLSSSetOptions failed");
-        return RSF_DLSS_ERROR_FEATURE_FAILED;
+    const uint32_t slot = viewport_slot(frame->viewport);
+    if (!self.options_applied[slot] || !same_options(self.applied_options[slot], options)) {
+        if (self.set_options(viewport, options) != sl::Result::eOk) {
+            self.options_applied[slot] = false;
+            say("slDLSSSetOptions failed");
+            return RSF_DLSS_ERROR_FEATURE_FAILED;
+        }
+        self.applied_options[slot] = options;
+        self.options_applied[slot] = true;
     }
 
     const sl::Extent render_extent{0, 0, frame->render_width, frame->render_height};
@@ -635,13 +573,7 @@ extern "C" rsf_dlss_result rsf_dlss_share_host(void* pointer, rsf_dlss_log_fn lo
     if (!module || rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK)
         return RSF_DLSS_ERROR_NOT_READY;
     Entries entries{};
-    if (!resolve(module, "slIsFeatureSupported", entries.is_feature_supported) ||
-        !resolve(module, "slGetFeatureFunction", entries.get_feature_function) ||
-        !resolve(module, "slGetFeatureRequirements", entries.get_feature_requirements) ||
-        !resolve(module, "slSetConstants", entries.set_constants) ||
-        !resolve(module, "slSetTagForFrame", entries.set_tag_for_frame) ||
-        !resolve(module, "slEvaluateFeature", entries.evaluate_feature) ||
-        !resolve(module, "slFreeResources", entries.free_resources)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    if (!resolve_entries(module, entries, false)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
     void* optimal = nullptr; void* options = nullptr;
     if (entries.get_feature_function(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", optimal) != sl::Result::eOk ||
         entries.get_feature_function(sl::kFeatureDLSS, "slDLSSSetOptions", options) != sl::Result::eOk ||
@@ -651,19 +583,11 @@ extern "C" rsf_dlss_result rsf_dlss_share_host(void* pointer, rsf_dlss_log_fn lo
     self.shared_device->AddRef(); self.initialised = true; self.log = log; self.log_user = user;
     self.get_optimal_settings = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     self.set_options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
+    self.options_applied[0] = self.options_applied[1] = false;
     say("DLSS SR shares the D3D12 FG host and CPU frame token");
     return RSF_DLSS_OK;
 }
 
-extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
-{
-    switch (preset) {
-    case RSF_DLSS_PRESET_AUTO: case RSF_DLSS_PRESET_E: case RSF_DLSS_PRESET_F:
-    case RSF_DLSS_PRESET_J: case RSF_DLSS_PRESET_K: case RSF_DLSS_PRESET_L: case RSF_DLSS_PRESET_M:
-        state().preset = preset; return RSF_DLSS_OK;
-    default: return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    }
-}
 extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
 {
     State& self = state();
@@ -672,6 +596,7 @@ extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
     }
     if (self.shared_host && rsf_streamline_host_drain(self.shared_host) != RSF_BACKEND_OK)
         return RSF_DLSS_ERROR_FEATURE_FAILED;
+    self.options_applied[viewport_slot(index)] = false;
     if (self.sl.free_resources(sl::kFeatureDLSS, viewport_handle(index)) != sl::Result::eOk) {
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -702,8 +627,8 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
     }
     self.get_optimal_settings = nullptr;
     self.set_options = nullptr;
+    self.options_applied[0] = self.options_applied[1] = false;
     self.initialised = false;
-    self.supported = false;
     say("streamline shut down");
     return RSF_DLSS_OK;
 }
@@ -713,11 +638,6 @@ extern "C" rsf_dlss_result rsf_dlss_share_host(void*, rsf_dlss_log_fn, void*)
 { return RSF_DLSS_ERROR_NOT_COMPILED; }
 extern "C" rsf_dlss_result rsf_dlss_evaluate_shared(void*, const rsf_dlss_frame*, uint64_t)
 { return RSF_DLSS_ERROR_NOT_COMPILED; }
-
-extern "C" rsf_dlss_result rsf_dlss_set_preset(rsf_dlss_preset preset)
-{
-    (void)preset; return RSF_DLSS_ERROR_NOT_COMPILED;
-}
 
 // Built without the SDK. The contract still exists so callers compile and can say honestly that
 // this build has no DLSS in it, rather than reporting a runtime failure that never happened.

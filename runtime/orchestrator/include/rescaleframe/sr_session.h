@@ -9,10 +9,15 @@ extern "C" {
 #define RSF_SR_SESSION_ABI_VERSION 1u
 typedef uint32_t rsf_sr_backend;
 #define RSF_SR_NONE 0u
+#define RSF_SR_DLSS 1u
 #define RSF_SR_FSR2 2u
 #define RSF_SR_FSR3 3u
 #define RSF_SR_FSR4 4u
 #define RSF_SR_XESS 5u
+/* Engine spatial upscale (FSR1 in the Unity path): no jitter, no history. */
+#define RSF_SR_SPATIAL 6u
+/* Settings value, not a backend: let the host choose per GPU. Never reaches a session. */
+#define RSF_SR_AUTO 7u
 
 typedef struct rsf_sr_session rsf_sr_session;
 typedef struct rsf_sr_session_setup {

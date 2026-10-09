@@ -224,6 +224,81 @@ int main()
     check(scissor_count == 1 && restored_scissor.right == 64 && restored_scissor.bottom == 48,
           "The scissor rectangle must come back.");
 
+    stage("a nested save takes nothing and the outer restore puts it all back");
+    {
+        rsf_d3d11_state outer{};
+        rsf_d3d11_state inner{};
+        check(rsf_d3d11_state_save(context, &outer) == 1, "The outer save must succeed.");
+        context->PSSetShaderResources(3, 1, &no_resource);
+        // Under an open save on the same context, a second one succeeds without reading anything.
+        check(rsf_d3d11_state_save(context, &inner) == 1, "A nested save must succeed.");
+        rsf_d3d11_state_restore(context, &inner);
+        ID3D11ShaderResourceView* still_cleared = nullptr;
+        context->PSGetShaderResources(3, 1, &still_cleared);
+        check(dropped(still_cleared) == nullptr,
+              "A nested restore must put nothing back: the outer one owns the game's bindings.");
+        rsf_d3d11_state_restore(context, &outer);
+        ID3D11ShaderResourceView* back = nullptr;
+        context->PSGetShaderResources(3, 1, &back);
+        check(dropped(back) == first_resource, "The outer restore must bring the binding back.");
+
+        // With the outer scope closed, a save is a real one again.
+        check(rsf_d3d11_state_save(context, &outer) == 1, "A save after the scope closed must succeed.");
+        context->PSSetShaderResources(3, 1, &no_resource);
+        rsf_d3d11_state_restore(context, &outer);
+        back = nullptr;
+        context->PSGetShaderResources(3, 1, &back);
+        check(dropped(back) == first_resource, "A save after the scope closed must save for real.");
+    }
+
+    stage("the draw scope puts back what a fullscreen draw disturbs");
+    {
+        rsf_d3d11_state draw{};
+        context->PSSetShaderResources(0, 1, &second_resource);
+        context->PSSetSamplers(0, 1, &sampler);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        check(rsf_d3d11_draw_state_save(context, &draw) == 1, "The draw scope must save.");
+
+        D3D11_VIEWPORT other{};
+        other.Width = 8.0f;
+        other.Height = 8.0f;
+        const D3D11_RECT other_rect{0, 0, 8, 8};
+        ID3D11SamplerState* no_sampler_here = nullptr;
+        context->OMSetRenderTargets(0, nullptr, nullptr);
+        context->PSSetShaderResources(0, 1, &no_resource);
+        context->PSSetSamplers(0, 1, &no_sampler_here);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+        context->RSSetState(nullptr);
+        context->RSSetViewports(1, &other);
+        context->RSSetScissorRects(1, &other_rect);
+        rsf_d3d11_draw_state_restore(context, &draw);
+
+        ID3D11RenderTargetView* target_back = nullptr;
+        context->OMGetRenderTargets(1, &target_back, nullptr);
+        check(dropped(target_back) == first_target, "The draw scope must bring the target back.");
+        ID3D11ShaderResourceView* resource_back = nullptr;
+        context->PSGetShaderResources(0, 1, &resource_back);
+        check(dropped(resource_back) == second_resource, "And pixel resource 0.");
+        ID3D11SamplerState* sampler_back = nullptr;
+        context->PSGetSamplers(0, 1, &sampler_back);
+        check(dropped(sampler_back) == sampler, "And pixel sampler 0.");
+        D3D11_PRIMITIVE_TOPOLOGY topology_back = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+        context->IAGetPrimitiveTopology(&topology_back);
+        check(topology_back == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, "And the topology.");
+        ID3D11RasterizerState* raster_back = nullptr;
+        context->RSGetState(&raster_back);
+        check(dropped(raster_back) == raster, "And the rasteriser state.");
+        D3D11_VIEWPORT viewport_back{};
+        UINT viewports_back = 1;
+        context->RSGetViewports(&viewports_back, &viewport_back);
+        check(viewports_back == 1 && viewport_back.Width == 64.0f, "And the viewport.");
+        D3D11_RECT scissor_back{};
+        UINT scissors_back = 1;
+        context->RSGetScissorRects(&scissors_back, &scissor_back);
+        check(scissors_back == 1 && scissor_back.right == 64, "And the scissor.");
+        check(rsf_d3d11_draw_state_save(nullptr, &draw) == 0, "A null context must be refused.");
+    }
+
     stage("releasing");
     // Unbound first, so the references the context holds are gone before the test drops its own and
     // a leak here is a leak in the restore rather than in the teardown.

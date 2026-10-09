@@ -2,6 +2,7 @@
 #include <rescaleframe/sr_bridge.h>
 #include <rescaleframe/shared_surface.h>
 #include "../../backends/common/sr_helpers.h"
+#include "../../backends/common/d3d12_helpers.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -11,6 +12,9 @@ using Microsoft::WRL::ComPtr;
 
 struct rsf_sr_bridge {
     ComPtr<ID3D11Device> device11;
+    // The immediate context as GetImmediateContext returned it, which is the pointer callers pass,
+    // so the per-frame identity check needs no QueryInterface.
+    ComPtr<ID3D11DeviceContext> immediate;
     ComPtr<ID3D11DeviceContext4> context11;
     ComPtr<ID3D12Device> device12;
     ComPtr<ID3D12CommandQueue> queue;
@@ -33,7 +37,15 @@ struct rsf_sr_bridge {
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
     bool faulted = false;
+    // A D3D11 signal of `tick` that has not been flushed yet. CPU waits flush it first.
+    bool signal_unflushed = false;
     uint32_t auto_exposure = 0;
+    // Inputs (colour, depth, motion, exposure, output, reactive, transparency) as last validated.
+    // Holding the texture keeps its address from being reused by another one while cached.
+    struct Validated {
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC desc{};
+    } validated[7];
 };
 namespace {
 rsf_backend_result gpu_failure(rsf_sr_bridge* bridge)
@@ -43,15 +55,30 @@ rsf_backend_result gpu_failure(rsf_sr_bridge* bridge)
 }
 rsf_backend_result wait_value(rsf_sr_bridge* bridge, uint64_t value)
 {
-    if (!value) return RSF_BACKEND_OK;
-    auto* fence = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(bridge->fence));
-    if (fence->GetCompletedValue() == UINT64_MAX) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (fence->GetCompletedValue() >= value) return RSF_BACKEND_OK;
-    if (FAILED(fence->SetEventOnCompletion(value, bridge->event))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    const DWORD result = WaitForSingleObject(bridge->event, 10000);
-    return result == WAIT_OBJECT_0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+    return SUCCEEDED(rsf::wait_fence(static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(bridge->fence)), value,
+                                     bridge->event)) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
-rsf_backend_result wait(rsf_sr_bridge* bridge) { return wait_value(bridge, bridge->tick); }
+rsf_backend_result wait(rsf_sr_bridge* bridge)
+{
+    // The last tick may be the D3D11 signal after the output copy, which reaches the GPU only with
+    // the context's next flush. Waiting on it unflushed would sit out the whole timeout.
+    if (bridge->signal_unflushed) { bridge->context11->Flush(); bridge->signal_unflushed = false; }
+    return wait_value(bridge, bridge->tick);
+}
+// The description of a D3D11 input owned by the bridge's device, from the cache when the texture
+// is the one last seen in this slot. Null for a texture from another device.
+const D3D11_TEXTURE2D_DESC* describe(rsf_sr_bridge* bridge, uint32_t slot, void* resource)
+{
+    auto& cached = bridge->validated[slot];
+    auto* texture = static_cast<ID3D11Texture2D*>(resource);
+    if (cached.texture.Get() == texture) return &cached.desc;
+    cached.texture.Reset();
+    ComPtr<ID3D11Device> owner; texture->GetDevice(&owner);
+    if (owner.Get() != bridge->device11.Get()) return nullptr;
+    texture->GetDesc(&cached.desc);
+    cached.texture = texture;
+    return &cached.desc;
+}
 void release_surfaces(rsf_sr_bridge* bridge)
 {
     for (auto*& surface : bridge->surfaces) {
@@ -60,20 +87,12 @@ void release_surfaces(rsf_sr_bridge* bridge)
     bridge->output.Reset();
     bridge->width = 0;
 }
-void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
-                D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-{
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after};
-    list->ResourceBarrier(1, &barrier);
-}
-rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame)
+using rsf::transition;
+// Takes the descriptions evaluate already validated.
+rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame,
+                           const D3D11_TEXTURE2D_DESC& color, const D3D11_TEXTURE2D_DESC& motion)
 {
     const auto& record = *frame.record;
-    auto* source = static_cast<ID3D11Texture2D*>(frame.color.resource);
-    D3D11_TEXTURE2D_DESC color{}, motion{}; source->GetDesc(&color);
-    static_cast<ID3D11Texture2D*>(frame.motion.resource)->GetDesc(&motion);
     if (bridge->width == record.render_width && bridge->height == record.render_height &&
         bridge->color_format == color.Format && bridge->motion_format == motion.Format) return RSF_BACKEND_OK;
     if (wait(bridge) != RSF_BACKEND_OK) return gpu_failure(bridge);
@@ -91,14 +110,8 @@ rsf_backend_result prepare(rsf_sr_bridge* bridge, const rsf_sr_frame& frame)
             release_surfaces(bridge); return RSF_BACKEND_ERROR_INIT_FAILED;
         }
     }
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = record.output_width; desc.Height = record.output_height;
-    desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
-    desc.Format = color.Format; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    if (FAILED(bridge->device12->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&bridge->output)))) {
+    if (!rsf::create_uav_texture(bridge->device12.Get(), record.output_width, record.output_height, color.Format,
+                                 bridge->output.ReleaseAndGetAddressOf())) {
         release_surfaces(bridge); return RSF_BACKEND_ERROR_INIT_FAILED;
     }
     bridge->width = record.render_width; bridge->height = record.render_height;
@@ -120,11 +133,10 @@ extern "C" rsf_backend_result rsf_sr_bridge_create(const rsf_sr_session_setup* s
     bridge->device11 = static_cast<ID3D11Device*>(setup->open.device);
     bridge->log = setup->open.log; bridge->log_user = setup->open.log_user;
     bridge->auto_exposure = setup->open.auto_exposure;
-    ComPtr<ID3D11DeviceContext> context;
-    bridge->device11->GetImmediateContext(&context);
+    bridge->device11->GetImmediateContext(&bridge->immediate);
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
-    if (FAILED(context.As(&bridge->context11)) || FAILED(bridge->device11.As(&dxgi)) ||
+    if (FAILED(bridge->immediate.As(&bridge->context11)) || FAILED(bridge->device11.As(&dxgi)) ||
         FAILED(dxgi->GetAdapter(&adapter)) || FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                                         IID_PPV_ARGS(&bridge->device12)))) {
         rsf_sr_bridge_destroy(bridge); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
@@ -138,9 +150,8 @@ extern "C" rsf_backend_result rsf_sr_bridge_create(const rsf_sr_session_setup* s
     bridge->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!bridge->event) { rsf_sr_bridge_destroy(bridge); return RSF_BACKEND_ERROR_INIT_FAILED; }
     for (auto& commands : bridge->commands) {
-        if (FAILED(bridge->device12->CreateCommandAllocator(queue.Type, IID_PPV_ARGS(&commands.allocator))) ||
-            FAILED(bridge->device12->CreateCommandList(0, queue.Type, commands.allocator.Get(), nullptr,
-                                                      IID_PPV_ARGS(&commands.list))) || FAILED(commands.list->Close())) {
+        if (!rsf::create_command_list(bridge->device12.Get(), queue.Type, commands.allocator.ReleaseAndGetAddressOf(),
+                                      commands.list.ReleaseAndGetAddressOf())) {
             rsf_sr_bridge_destroy(bridge); return RSF_BACKEND_ERROR_INIT_FAILED;
         }
     }
@@ -177,35 +188,45 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
     if (bridge->faulted) return RSF_BACKEND_ERROR_NOT_READY;
     auto result = rsf::validate_frame(frame);
     if (result != RSF_BACKEND_OK) return result;
-    ComPtr<ID3D11DeviceContext4> context;
-    if (FAILED(static_cast<ID3D11DeviceContext*>(context_pointer)->QueryInterface(IID_PPV_ARGS(&context))) ||
-        context.Get() != bridge->context11.Get()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // The pointer the device handed out needs no QueryInterface; anything else must be the same
+    // context reached through another interface.
+    auto* context = bridge->context11.Get();
+    if (context_pointer != bridge->immediate.Get()) {
+        ComPtr<ID3D11DeviceContext4> queried;
+        if (FAILED(static_cast<ID3D11DeviceContext*>(context_pointer)->QueryInterface(IID_PPV_ARGS(&queried))) ||
+            queried.Get() != context) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    }
     // Check all source owners, extents and formats before issuing any copy.
     const rsf_backend_resource* inputs[] = {&frame->color, &frame->depth, &frame->motion, &frame->exposure, &frame->output};
+    const D3D11_TEXTURE2D_DESC* described[5]{};
     for (uint32_t i = 0; i < 5; ++i) {
         if (i == 3 && !inputs[i]->resource) continue;
-        auto* texture = static_cast<ID3D11Texture2D*>(inputs[i]->resource);
-        ComPtr<ID3D11Device> owner; texture->GetDevice(&owner);
-        D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
+        described[i] = describe(bridge, i, inputs[i]->resource);
+        if (!described[i]) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        const auto& desc = *described[i];
         uint32_t width = i == 4 ? frame->record->output_width : i == 3 ? 1 : frame->record->render_width;
         uint32_t height = i == 4 ? frame->record->output_height : i == 3 ? 1 : frame->record->render_height;
-        if (owner.Get() != bridge->device11.Get() || desc.Width < width || desc.Height < height ||
+        if (desc.Width < width || desc.Height < height ||
             desc.SampleDesc.Count != 1 || desc.ArraySize != 1 ||
             (i == 4 && (desc.Width != width || desc.Height != height)) ||
             ((i == 1 || i == 3) && desc.Format != DXGI_FORMAT_R32_FLOAT) ||
-            (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT && desc.Format != DXGI_FORMAT_R32G32_FLOAT) ||
+            // Motion crosses to D3D12 in a shared surface of its own format; R32G32_FLOAT is not shareable.
+            (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT) ||
             ((i == 0 || i == 4) && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
     const rsf_backend_resource* masks[] = {frame->reactive.struct_size ? &frame->reactive : nullptr,
         frame->transparency.struct_size ? &frame->transparency : nullptr};
-    for (auto*& mask : masks) {
+    for (uint32_t m = 0; m < 2; ++m) {
+        auto*& mask = masks[m];
         if (!mask || !mask->resource) { mask = nullptr; continue; }
-        D3D11_TEXTURE2D_DESC desc{}; static_cast<ID3D11Texture2D*>(mask->resource)->GetDesc(&desc);
         // An unusable mask is dropped rather than refusing the reconstruction.
+        const auto* mask_desc = describe(bridge, 5 + m, mask->resource);
+        if (!mask_desc) { mask = nullptr; continue; }
+        const auto& desc = *mask_desc;
         if (desc.Format != DXGI_FORMAT_R32_FLOAT || desc.Width < frame->record->render_width ||
             desc.Height < frame->record->render_height || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) mask = nullptr;
     }
-    result = prepare(bridge, *frame);
+    result = prepare(bridge, *frame, *described[0], *described[2]);
     if (result != RSF_BACKEND_OK) return result;
     // CPU waits protect allocator reuse only. Cross-API resource ownership stays ordered on
     // the GPU: D3D11 inputs -> D3D12 SR -> D3D11 output copy -> the next frame's inputs.
@@ -230,7 +251,9 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(bridge->fence));
     const uint64_t ready = ++bridge->tick;
     if (FAILED(context->Signal(fence11, ready))) return gpu_failure(bridge);
+    // Required: the D3D12 queue waits on this signal, which has to reach the GPU first.
     context->Flush();
+    bridge->signal_unflushed = false;
     if (FAILED(bridge->queue->Wait(fence12, ready))) return gpu_failure(bridge);
     rsf_sr_frame translated = *frame;
     rsf_backend_resource* targets[] = {&translated.color, &translated.depth, &translated.motion, &translated.exposure};
@@ -260,13 +283,10 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
     }
     auto* shared_output = static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(bridge->surfaces[4]));
-    if (result == RSF_BACKEND_OK) {
-        transition(list, bridge->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        transition(list, shared_output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-        list->CopyResource(shared_output, bridge->output.Get());
-        transition(list, shared_output, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
-        transition(list, bridge->output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
+    if (result == RSF_BACKEND_OK)
+        rsf::copy_transitioned(list, shared_output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
+                               bridge->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (FAILED(list->Close())) return gpu_failure(bridge);
     ID3D12CommandList* lists[] = {list}; bridge->queue->ExecuteCommandLists(1, lists);
     const uint64_t complete = ++bridge->tick;
@@ -281,8 +301,10 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
                              static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(bridge->surfaces[4])));
         const uint64_t copied = ++bridge->tick;
         if (FAILED(context->Signal(fence11, copied))) return gpu_failure(bridge);
+        // Not flushed here: the game's Present submits it, and only a CPU wait needs it sooner,
+        // which wait() covers.
+        bridge->signal_unflushed = true;
     }
-    context->Flush();
     return result;
 }
 extern "C" rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,

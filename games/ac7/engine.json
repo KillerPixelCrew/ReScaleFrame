@@ -30,18 +30,21 @@
     "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f"
   },
   "frame_generation_cpu_research": {
-    "status": "guarded CPU, primary RHI and queued window hooks built; FG/Reflex connected in experimental cold profile; new game validation pending",
+    "status": "guarded CPU/RHI/window path and earlier DLSS-G are game accepted; shared FSR/XeSS switching and HUD-less retirement correction built, device-fixture tested and deployed; new gameplay acceptance pending",
     "ghidra_name_manifest": "../../docs/research/evidence/ac7-fg-cpu-names-20260930.json",
-    "runtime_active": false,
+    "runtime_active": true,
     "outer_loop_candidate_rva": "0x3a3f70",
     "message_pump_call_rva": "0x3a42c4",
     "slate_device_poll_call_rva": "0x3a4365",
     "engine_tick_virtual_call_rva": "0x3a43cd",
-    "render_handoff_validated": false,
-    "render_handoff_status": "22:37 game logs confirm CPU/RHI/window/scene identity and flight classification; sampled/direct resource match gates FG; generated-frame activation pending",
+    "render_handoff_validated": true,
+    "render_handoff_status": "Earlier AC7 flight logs and user acceptance confirm DLSS-G activation and copied CPU/RHI/window identity. The 5 October shared-provider correction passes 120 sampled/direct device-fixture frames; new AC7 FSR/XeSS gameplay remains pending.",
     "render_handoff_manifest": "../../docs/research/evidence/ac7-render-frame-handoff-20260930.json",
     "research": "../../docs/research/ac7-fg-cpu-boundaries.md",
-    "frame_generation_research": "../../docs/research/ac7-dlss-fg-20261003.md"
+    "frame_generation_research": "../../docs/research/ac7-dlss-fg-20261003.md",
+    "shared_generation_research": "../../docs/research/shared-fg-20261004.md",
+    "runtime_provider_switching": true,
+    "multiplier_policy": "DLSS-G and XeSS use SDK-reported maximum generated counts; pinned FidelityFX API supports one generated frame. Higher-MFG hardware acceptance is pending."
   },
   "engine": {
     "family": "Unreal Engine 4",

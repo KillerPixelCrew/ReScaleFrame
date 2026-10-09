@@ -15,13 +15,12 @@ typedef struct rsf_ac7_render_ticket rsf_ac7_render_ticket;
    Native family frames are separate from input/simulation frame IDs and cannot authorize FG. */
 typedef rsf_game_render_pass rsf_ac7_render_scope;
 
-#define RSF_AC7_ROLE_SCENE 0u
+/* Roles 0 and 6 are unassigned; zero is also the value of a pass with no role. */
 #define RSF_AC7_ROLE_SR 1u
 #define RSF_AC7_ROLE_TONEMAP 2u
 #define RSF_AC7_ROLE_AA 3u
 #define RSF_AC7_ROLE_MATERIAL 4u
 #define RSF_AC7_ROLE_HUD 5u
-#define RSF_AC7_ROLE_UI_FILTER 6u
 #define RSF_AC7_ROLE_COMPOSITE 7u
 #define RSF_AC7_ROLE_OUTPUT 8u
 

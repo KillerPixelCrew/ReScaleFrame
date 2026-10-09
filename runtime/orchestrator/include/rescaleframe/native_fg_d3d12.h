@@ -20,6 +20,11 @@ typedef struct rsf_fg12_setup {
     const char* fsr4_directory_utf8;
     const char* xess_directory_utf8;
     const char* streamline_directory_utf8;
+    /* Streamline engine identity (sl::EngineType value, version, project id), passed to the
+       presentation bridge. Without version and project id there is no host and no DLSS-G. */
+    uint32_t engine_type;
+    const char* engine_version_utf8;
+    const char* project_id_utf8;
 } rsf_fg12_setup;
 RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_setup*);
 RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* configuration);

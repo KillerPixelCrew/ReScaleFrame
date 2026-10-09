@@ -28,10 +28,22 @@ namespace ReScaleFrame.Unity
         internal Matrix4x4 PreviousToClip;
     }
 
+    // Mirrors RSF_UNITY_PACKET_* in unity_bridge.h.
+    internal static class PacketFlags
+    {
+        internal const uint Reset = 1;       // history restarts at this frame
+        internal const uint Probe = 2;       // camera constants only, no reconstruction requested
+        internal const uint Window = 4;      // overlay event on the engine swapchain
+        internal const uint Hudless = 8;     // completed scene colour before the UI draw
+        internal const uint NoInputs = 16;   // depth or motion unusable, spatial fallback only
+        internal const uint InputsOnly = 32; // depth and motion for generation, no reconstruction
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct Configuration
     {
-        internal uint Size, Version, Enabled, Backend, Quality, Generation;
+        // EngineSpatial: the engine upscales spatially itself (no jitter, no history).
+        internal uint Size, Version, Enabled, EngineSpatial, Quality, Generation;
         internal uint RenderWidth, RenderHeight, OutputWidth, OutputHeight;
     }
 
@@ -50,6 +62,12 @@ namespace ReScaleFrame.Unity
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr EnqueueDelegate(ref Packet packet);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void StateDelegate(uint state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CpuDelegate(uint stage, ulong frame);
+        // RSF_UNITY_BRIDGE_ABI_VERSION and RSF_UNITY_NATIVE_ABI_VERSION.
+        internal const uint BridgeVersion = 2, NativeVersion = 3;
+        private static readonly int ApiSize = Marshal.SizeOf<Api>();
+        internal static readonly uint PacketSize = (uint)Marshal.SizeOf<Packet>();
+        internal static readonly uint CameraFrameSize = (uint)Marshal.SizeOf<CameraFrame>();
+        private static readonly uint ConfigurationSize = (uint)Marshal.SizeOf<Configuration>();
         internal static Api Api;
         internal static LogDelegate Log;
         internal static ConfigDelegate GetConfig;
@@ -66,7 +84,7 @@ namespace ReScaleFrame.Unity
         internal static void Initialize(IntPtr address)
         {
             Api = Marshal.PtrToStructure<Api>(address);
-            if (Api.Size != Marshal.SizeOf<Api>() || Api.Version != 2 || Api.Session == 0 ||
+            if (Api.Size != ApiSize || Api.Version != NativeVersion || Api.Session == 0 ||
                 Api.Log == IntPtr.Zero || Api.Config == IntPtr.Zero || Api.Enqueue == IntPtr.Zero)
                 throw new InvalidOperationException("Unity native bridge ABI mismatch.");
             Log = Marshal.GetDelegateForFunctionPointer<LogDelegate>(Api.Log);
@@ -76,12 +94,24 @@ namespace ReScaleFrame.Unity
             ReportCpu = Api.CpuEvent == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<CpuDelegate>(Api.CpuEvent);
         }
 
+        private static Configuration cached;
+        private static int cachedFrame = -1;
+        private static uint cachedWidth, cachedHeight;
+
+        // Each frame several patched stages ask for the configuration. Sample it once per frame and
+        // camera size, so every stage of a frame agrees and the P/Invoke and its native lock are paid once.
         internal static Configuration Configuration(Camera camera)
         {
-            var config = new Configuration { Size = (uint)Marshal.SizeOf<Configuration>(), Version = 1 };
-            if (GetConfig((uint)camera.pixelWidth, (uint)camera.pixelHeight, ref config) == 0)
+            uint width = (uint)camera.pixelWidth, height = (uint)camera.pixelHeight;
+            int frame = Time.frameCount;
+            if (frame == cachedFrame && width == cachedWidth && height == cachedHeight) return cached;
+            var config = new Configuration { Size = ConfigurationSize, Version = BridgeVersion };
+            if (GetConfig(width, height, ref config) == 0)
                 config.Enabled = 0;
+            cached = config; cachedFrame = frame; cachedWidth = width; cachedHeight = height;
             return config;
         }
+
+        internal static void ResetConfiguration() { cachedFrame = -1; }
     }
 }

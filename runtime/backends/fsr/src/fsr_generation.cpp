@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "../../common/fg_helpers.h"
+#include "../../common/d3d12_helpers.h"
+#include "ffx_version.h"
 #include <wrl/client.h>
 #include <atomic>
 #include <new>
@@ -58,15 +60,6 @@ bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
     if (state & FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT) out |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
     return true;
 }
-void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
-                D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-{
-    if (before == after) return;
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after};
-    list->ResourceBarrier(1, &barrier);
-}
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer);
@@ -91,13 +84,7 @@ ffxReturnCode_t present(ffxCallbackDescFrameGenerationPresent* desc, void* point
     D3D12_RESOURCE_STATES source_state{}, output_state{};
     if (!native_state(desc->currentBackBuffer.state, source_state) ||
         !native_state(desc->outputSwapChainBuffer.state, output_state)) return FFX_API_RETURN_ERROR_PARAMETER;
-    if (source != output) {
-        transition(list, source, source_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        transition(list, output, output_state, D3D12_RESOURCE_STATE_COPY_DEST);
-        list->CopyResource(output, source);
-        transition(list, output, D3D12_RESOURCE_STATE_COPY_DEST, output_state);
-        transition(list, source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_state);
-    }
+    if (source != output) rsf::copy_transitioned(list, output, output_state, output_state, source, source_state, source_state);
     ++self->presented;
     if (desc->isGeneratedFrame) ++self->generated;
     return FFX_API_RETURN_OK;
@@ -155,16 +142,8 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
     versions.device = self->device.Get(); versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
     if (self->query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
-    unsigned best_minor = 0, best_patch = 0;
-    for (uint64_t i = 0; i < count; ++i) {
-        unsigned major = 0, minor = 0, patch = 0;
-        if (!names[i] || std::sscanf(names[i], "%u.%u.%u", &major, &minor, &patch) != 3 || major != setup->feature_major ||
-            (setup->version_id && ids[i] != setup->version_id)) continue;
-        if (!self->state.version_id || minor > best_minor || (minor == best_minor && patch > best_patch)) {
-            self->state.version_id = ids[i]; best_minor = minor; best_patch = patch;
-            std::snprintf(self->state.version_name, sizeof(self->state.version_name), "%s", names[i]);
-        }
-    }
+    rsf::select_ffx_version(ids, names, count, setup->feature_major, setup->version_id, self->state.version_id,
+        self->state.version_name, sizeof(self->state.version_name));
     if (!self->state.version_id) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
     self->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12; self->backend.device = self->device.Get();
     self->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION; self->override_version.versionId = self->state.version_id;
@@ -357,11 +336,6 @@ rsf_backend_result after(void* pointer)
     }
     return RSF_BACKEND_OK;
 }
-rsf_backend_result status(void* pointer, rsf_fg_status* out)
-{
-    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = static_cast<FfxSession*>(pointer)->state; return RSF_BACKEND_OK;
-}
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -377,26 +351,9 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
     self.history_valid = false; self.prepared_enabled = false; self.state.active = 0;
     return RSF_BACKEND_OK;
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<FfxSession>, retirement, destroy, abort_frame};
 }
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
 #else
-namespace {
-rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
-{
-    const auto result = rsf::fg_setup_header(setup, out, chain);
-    return result != 0 ? result : RSF_BACKEND_ERROR_NOT_COMPILED;
-}
-rsf_backend_result configure(void*, const rsf_fg_options*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result begin(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result after(void*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result status(void*, rsf_fg_status*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result retirement(void*, rsf_fg_retirement*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-void destroy(void*) {}
-rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
-}
-extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
+extern "C" const rsf_generation_provider* rsf_generation_fsr() { return rsf::not_compiled_provider(); }
 #endif

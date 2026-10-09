@@ -15,22 +15,21 @@ namespace ReScaleFrame.Unity
         internal static readonly Harmony Harmony = new Harmony(Owner);
         private static int state;
         private static int mainThread;
-        private static string failure;
-        private static readonly object producerGate = new object();
         private static int producers;
-        internal sealed class Producer : IDisposable
+        // A producer registers before it looks at the state and Stop publishes the state before it
+        // looks at the producers; both sides use full fences, so one of them always sees the other.
+        // A spurious count only makes Stop report busy, and the host retries.
+        internal struct Producer : IDisposable
         {
             internal bool Valid;
-            public void Dispose() { if (Valid) { lock (producerGate) --producers; Valid = false; } }
+            public void Dispose() { if (Valid) { Interlocked.Decrement(ref producers); Valid = false; } }
         }
         internal static Producer EnterProducer()
         {
-            lock (producerGate)
-            {
-                bool valid = state == 2;
-                if (valid) ++producers;
-                return new Producer { Valid = valid };
-            }
+            Interlocked.Increment(ref producers);
+            if (Volatile.Read(ref state) == 2) return new Producer { Valid = true };
+            Interlocked.Decrement(ref producers);
+            return new Producer();
         }
 
         // Called on an attached Mono thread. Unity objects are accessed only after its render loop.
@@ -50,8 +49,7 @@ namespace ReScaleFrame.Unity
             }
             catch (Exception error)
             {
-                failure = error.ToString();
-                Native.Log?.Invoke("Mono bootstrap refused: " + failure);
+                Native.Log?.Invoke("Mono bootstrap refused: " + error);
                 Native.ReportState?.Invoke(3);
                 Harmony.UnpatchAll(Owner);
                 state = 0;
@@ -61,7 +59,12 @@ namespace ReScaleFrame.Unity
 
         private static void RenderLoop()
         {
-            lock (producerGate) { if (state != 1) return; ++producers; }
+            Interlocked.Increment(ref producers);
+            if (Volatile.Read(ref state) != 1)
+            {
+                Interlocked.Decrement(ref producers);
+                return;
+            }
             try
             {
                 if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset)) return;
@@ -74,25 +77,25 @@ namespace ReScaleFrame.Unity
                     throw new NotSupportedException("Unity did not register its D3D12 native interface.");
                 UrpAdapter.Install();
                 CpuBoundaries.Install();
-                lock (producerGate) { if (state == 4) return; state = 2; }
+                if (Interlocked.CompareExchange(ref state, 2, 1) != 1) return;
                 Native.ReportState(2);
                 Native.Log("Unity main-thread URP adapter installed; waiting for native D3D12 provider plan.");
             }
             catch (Exception error)
             {
-                failure = error.ToString();
                 Volatile.Write(ref state, 3);
-                Native.Log("Unity adapter refused: " + failure);
+                Native.Log("Unity adapter refused: " + error);
                 Native.ReportState(3);
                 Harmony.UnpatchAll(Owner);
             }
-            finally { lock (producerGate) --producers; }
+            finally { Interlocked.Decrement(ref producers); }
         }
 
         internal static bool OnMainThread => Volatile.Read(ref state) == 2 && Thread.CurrentThread.ManagedThreadId == mainThread;
         public static int Stop()
         {
-            lock (producerGate) { state = 4; if (producers != 0) return -1; }
+            Interlocked.Exchange(ref state, 4);
+            if (Volatile.Read(ref producers) != 0) return -1;
             Harmony.UnpatchAll(Owner);
             UrpAdapter.Clear();
             CpuBoundaries.Clear();

@@ -27,6 +27,8 @@ RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* event);
 RSF_RUNTIME_API int rsf_native_cpu_read(uint64_t session, uint64_t source, rsf_native_cpu_frame* frame);
 /* Set/change the sink only while game CPU producers are quiescent. User state must outlive
    callbacks. The sink may sleep/mark the vendor; it must not use the graphics immediate context. */
+/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+   work (see docs/representation-plan.md). Do not delete as dead code. */
 RSF_RUNTIME_API void rsf_native_cpu_set_sink(rsf_game_cpu_event_fn sink, void* user);
 /* After the plugin has stopped CPU producers. */
 RSF_RUNTIME_API void rsf_native_cpu_release(void);

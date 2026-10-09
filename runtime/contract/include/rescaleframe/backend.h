@@ -345,6 +345,8 @@ typedef struct rsf_fg_frame {
     uint32_t generated_frames;
 } rsf_fg_frame;
 
+/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+   work (see docs/representation-plan.md). Do not delete as dead code. */
 typedef struct rsf_fg_provider {
     uint32_t struct_size;
     rsf_backend_result (*probe)(const rsf_backend_probe_desc* desc, rsf_backend_caps* caps);

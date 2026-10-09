@@ -129,14 +129,17 @@ NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MAR
     return result;
 }
 }
+RsfNvapiQuery rsf_nvapi_query()
+{
+    const auto module = GetModuleHandleW(L"nvapi64.dll");
+    return module ? reinterpret_cast<RsfNvapiQuery>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
+}
 void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
 {
     std::lock_guard<std::mutex> lock(guard);
     listener = log; listener_user = user; sources = {}; lines = 0; sync_state = {};
     if (installed) return;
-    const auto module = GetModuleHandleW(L"nvapi64.dll");
-    using Query = void*(__cdecl*)(unsigned int);
-    auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
+    const auto query = rsf_nvapi_query();
     if (!query) { if (listener) listener(listener_user, "Reflex API audit unavailable: NVAPI module/export absent"); return; }
     const auto init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) return;
@@ -184,6 +187,7 @@ void rsf_reflex_audit_report()
     listener(listener_user, text);
 }
 #else
+RsfNvapiQuery rsf_nvapi_query() { return nullptr; }
 void rsf_reflex_audit_start(rsf_backend_log_fn, void*) {}
 void rsf_reflex_audit_stop() {}
 void rsf_reflex_audit_report() {}

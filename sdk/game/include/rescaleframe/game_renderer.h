@@ -22,8 +22,6 @@ typedef struct rsf_game_render_pass {
     uint32_t flags;
     int32_t render_rect[4];
     int32_t output_rect[4];
-    float jitter_pixels[2];
-    float previous_jitter_pixels[2];
     /* Native graphics resources leased by the plugin until the matching end callback. */
     void* color_input;
     void* color_output;
@@ -96,6 +94,9 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_AFTER_SIMULATION 4u
 /* TRANSLUCENCY scopes only: the pass renders an offscreen layer rather than into scene colour. */
 #define RSF_GAME_RENDER_TRANSLUCENCY_LAYER 8u
+/* The render or output configuration is changing; the pass carries no usable frame. Jitter lives in
+   camera.jitter_pixels. */
+#define RSF_GAME_RENDER_RECONFIGURE 0x80000000u
 typedef struct rsf_game_render_config {
     uint32_t struct_size;
     uint32_t enabled;

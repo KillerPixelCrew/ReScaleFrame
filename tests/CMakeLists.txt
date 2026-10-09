@@ -183,7 +183,7 @@ set_tests_properties(sr_bridge PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_executable(rsf_sr_session_test sr_session.cpp ../runtime/orchestrator/src/sr_session.cpp)
 target_compile_definitions(rsf_sr_session_test PRIVATE RSF_RUNTIME_BUILD)
 target_include_directories(rsf_sr_session_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_sr_session_test PRIVATE ReScaleFrame::Contract rsf_build_options)
+target_link_libraries(rsf_sr_session_test PRIVATE ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options)
 add_test(NAME sr_session COMMAND rsf_sr_session_test)
 
 add_executable(rsf_motion_resolve_test motion_resolve.cpp)

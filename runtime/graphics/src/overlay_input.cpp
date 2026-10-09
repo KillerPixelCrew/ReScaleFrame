@@ -8,11 +8,11 @@
 
 #include <MinHook.h>
 
+#include <rescaleframe/log.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstdarg>
-#include <cstdio>
 #include <mutex>
 
 namespace {
@@ -102,9 +102,6 @@ struct State {
     int cursor_shows = 0;
     std::atomic<unsigned long> swallowed_warps{0};
     std::atomic<unsigned long> swallowed_hides{0};
-    /* Function keys seen pressed since the caller last took them, bit n for F(n+1), and which
-       route saw them: bit 16 the window procedure's key messages, bit 17 raw keyboard input. */
-    std::atomic<uint32_t> function_keys{0};
     /* The previous report's raw position, and whether there has been one. The overlay's pointer
        moves by the distance between reports rather than to the position in them, because a game
        that warps the pointer makes the position meaningless. See record_mouse_position. */
@@ -133,22 +130,6 @@ State& state()
 {
     static State instance;
     return instance;
-}
-
-// Both callers hold `lifecycle` across this, so a log sink that calls back into install or
-// uninstall deadlocks on a non-recursive mutex. Nothing in the runtime does, and the other sinks in
-// this directory log the same way, but it is a real constraint on what a sink may do.
-void say(const State& self, const char* format, ...)
-{
-    if (!self.log) {
-        return;
-    }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    self.log(self.log_user, message);
 }
 
 bool game_holds_key(const State& self, uint32_t key)
@@ -216,15 +197,12 @@ void record_raw_mouse(State& self, HWND window, LPARAM lparam)
     if (self.cursor.installed) {
         return;
     }
-    UINT size = 0;
-    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, nullptr, &size,
-                        sizeof(RAWINPUTHEADER)) != 0 ||
-        size == 0 || size > sizeof(RAWINPUT)) {
-        return;
-    }
+    // One read into a RAWINPUT-sized record: a mouse report always fits, and a larger one is refused.
     RAWINPUT raw{};
-    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
-                        sizeof(RAWINPUTHEADER)) != size ||
+    UINT size = sizeof(raw);
+    const UINT read = GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
+                                      sizeof(RAWINPUTHEADER));
+    if (read == static_cast<UINT>(-1) || read < sizeof(RAWINPUTHEADER) ||
         raw.header.dwType != RIM_TYPEMOUSE) {
         return;
     }
@@ -481,16 +459,26 @@ UINT WINAPI hooked_get_raw_input_buffer(PRAWINPUT data, PUINT size, UINT header_
     return result;
 }
 
+// Takes down every detour created so far, for both a failed install and a removal.
+void unhook_cursor_targets(State& self)
+{
+    for (size_t index = 0; index < self.cursor.target_count; ++index) {
+        MH_DisableHook(self.cursor.targets[index]);
+        MH_RemoveHook(self.cursor.targets[index]);
+    }
+    self.cursor.target_count = 0;
+}
+
 bool install_cursor_hooks(State& self)
 {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
-        say(self, "overlay input: user32 is not loaded, so the cursor stays the game's");
+        rsf::say(self.log, self.log_user, "overlay input: user32 is not loaded, so the cursor stays the game's");
         return false;
     }
     const MH_STATUS initialised = MH_Initialize();
     if (initialised != MH_OK && initialised != MH_ERROR_ALREADY_INITIALIZED) {
-        say(self, "overlay input: MinHook did not initialise (%d), so the cursor stays the game's",
+        rsf::say(self.log, self.log_user, "overlay input: MinHook did not initialise (%d), so the cursor stays the game's",
             static_cast<int>(initialised));
         return false;
     }
@@ -527,19 +515,15 @@ bool install_cursor_hooks(State& self)
             }
         }
         if (status != MH_OK) {
-            say(self, "overlay input: %s could not be detoured (%d), so the cursor stays the game's",
+            rsf::say(self.log, self.log_user, "overlay input: %s could not be detoured (%d), so the cursor stays the game's",
                 hook.name, static_cast<int>(status));
-            for (size_t index = 0; index < self.cursor.target_count; ++index) {
-                MH_DisableHook(self.cursor.targets[index]);
-                MH_RemoveHook(self.cursor.targets[index]);
-            }
-            self.cursor.target_count = 0;
+            unhook_cursor_targets(self);
             return false;
         }
         self.cursor.targets[self.cursor.target_count++] = target;
     }
     self.cursor.installed = true;
-    say(self, "overlay input: cursor detours in place, %zu user32 functions", self.cursor.target_count);
+    rsf::say(self.log, self.log_user, "overlay input: cursor detours in place, %zu user32 functions", self.cursor.target_count);
     return true;
 }
 
@@ -549,11 +533,7 @@ void remove_cursor_hooks(State& self)
         return;
     }
     self.cursor.installed = false;
-    for (size_t index = 0; index < self.cursor.target_count; ++index) {
-        MH_DisableHook(self.cursor.targets[index]);
-        MH_RemoveHook(self.cursor.targets[index]);
-    }
-    self.cursor.target_count = 0;
+    unhook_cursor_targets(self);
 }
 
 // Take the cursor for the panel, or give it back. Always through the genuine functions.
@@ -580,7 +560,7 @@ void set_cursor_capture(State& self, bool on)
         self.cursor.set_cursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
         self.swallowed_warps.store(0, std::memory_order_relaxed);
         self.swallowed_hides.store(0, std::memory_order_relaxed);
-        say(self, "overlay input: cursor freed for the panel, shown after %d call%s", shows,
+        rsf::say(self.log, self.log_user, "overlay input: cursor freed for the panel, shown after %d call%s", shows,
             shows == 1 ? "" : "s");
     } else {
         for (int index = 0; index < self.cursor_shows; ++index) {
@@ -598,7 +578,7 @@ void set_cursor_capture(State& self, bool on)
         if (restore) {
             self.cursor.clip_cursor(&clip);
         }
-        say(self, "overlay input: cursor returned to the game; swallowed %lu warps and %lu hides "
+        rsf::say(self.log, self.log_user, "overlay input: cursor returned to the game; swallowed %lu warps and %lu hides "
                   "while the panel was open",
             self.swallowed_warps.load(std::memory_order_relaxed),
             self.swallowed_hides.load(std::memory_order_relaxed));
@@ -636,7 +616,7 @@ void apply_visibility(State& self, bool visible)
     // Announced because this is the one thing that happens on the message thread when the toggle
     // is pressed, and a crash on the first opened frame looks identical whether the window
     // procedure or the render thread died. The last line in the log says which.
-    say(self, visible ? "overlay input: toggle pressed, now visible"
+    rsf::say(self.log, self.log_user, visible ? "overlay input: toggle pressed, now visible"
                       : "overlay input: toggle pressed, now hidden");
 }
 
@@ -664,32 +644,25 @@ bool release_is_owed_to_game(State& self, uint32_t virtual_key)
     return true;
 }
 
-// Record a function key press for the caller's hotkeys, from whichever route saw it.
-void note_function_key(State& self, uint32_t key, uint32_t route_bit)
+// The virtual key a mouse button message stands for, down, double-click and up alike.
+uint32_t mouse_button_key(UINT message, WPARAM wparam)
 {
-    if (key < VK_F1 || key > VK_F12 || key == self.toggle_key.load(std::memory_order_relaxed)) {
-        return;
+    switch (message) {
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONDBLCLK:
+    case WM_RBUTTONUP:
+        return VK_RBUTTON;
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONDBLCLK:
+    case WM_MBUTTONUP:
+        return VK_MBUTTON;
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONDBLCLK:
+    case WM_XBUTTONUP:
+        return GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
+    default:
+        return VK_LBUTTON;
     }
-    self.function_keys.fetch_or((1u << (key - VK_F1)) | route_bit, std::memory_order_acq_rel);
-}
-
-// A key press in a raw input record, for the same purpose. Reads through the genuine function
-// where it is detoured, so reading it here does not depend on the detour's own rules.
-void note_raw_function_key(State& self, LPARAM lparam)
-{
-    RAWINPUT raw{};
-    UINT size = sizeof(raw);
-    const UINT read =
-        self.cursor.installed
-            ? self.cursor.get_raw_input_data(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw,
-                                             &size, sizeof(RAWINPUTHEADER))
-            : GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
-                              sizeof(RAWINPUTHEADER));
-    if (read == static_cast<UINT>(-1) || read < sizeof(RAWINPUTHEADER) ||
-        raw.header.dwType != RIM_TYPEKEYBOARD || (raw.data.keyboard.Flags & RI_KEY_BREAK) != 0) {
-        return;
-    }
-    note_function_key(self, raw.data.keyboard.VKey, 1u << 17);
 }
 
 LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
@@ -720,9 +693,6 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
         const uint32_t key = static_cast<uint32_t>(wparam);
-        if ((lparam & 0x40000000) == 0) {
-            note_function_key(self, key, 1u << 16);
-        }
         if (key == toggle) {
             // Bit 30 is the previous key state. Holding the toggle down otherwise opens and closes
             // the overlay at the auto repeat rate.
@@ -804,14 +774,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_MBUTTONDBLCLK:
     case WM_XBUTTONDOWN:
     case WM_XBUTTONDBLCLK: {
-        uint32_t key = VK_LBUTTON;
-        if (message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK) {
-            key = VK_RBUTTON;
-        } else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK) {
-            key = VK_MBUTTON;
-        } else if (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) {
-            key = GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
-        }
+        const uint32_t key = mouse_button_key(message, wparam);
         if (visible) {
             // The position first: a click can arrive without a move before it, and the overlay
             // would otherwise apply it wherever the cursor was last seen.
@@ -828,14 +791,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_RBUTTONUP:
     case WM_MBUTTONUP:
     case WM_XBUTTONUP: {
-        uint32_t key = VK_LBUTTON;
-        if (message == WM_RBUTTONUP) {
-            key = VK_RBUTTON;
-        } else if (message == WM_MBUTTONUP) {
-            key = VK_MBUTTON;
-        } else if (message == WM_XBUTTONUP) {
-            key = GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
-        }
+        const uint32_t key = mouse_button_key(message, wparam);
         const bool owed = release_is_owed_to_game(self, key);
         if (visible) {
             record_mouse_position(self, window, lparam);
@@ -872,9 +828,6 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         break;
 
     case WM_INPUT:
-        if (GET_RAWINPUT_CODE_WPARAM(wparam) == RIM_INPUT) {
-            note_raw_function_key(self, lparam);
-        }
         if (visible) {
             // Read before it is stopped. This is the movement the overlay's own pointer follows:
             // raw input is what the mouse reported, before the pointer was warped back to the
@@ -945,7 +898,7 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
         // registers an ANSI window has not been checked, and this path has never been exercised, so
         // this line is the only warning anyone gets. The fix, if such a game turns up, is the A
         // variants of the read, the swap and the forward.
-        say(self, "overlay input: window is ANSI, subclassing it with the wide entry point "
+        rsf::say(self.log, self.log_user, "overlay input: window is ANSI, subclassing it with the wide entry point "
                   "converts it to Unicode");
     }
 
@@ -954,14 +907,14 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
     // be there when it does.
     const LONG_PTR existing = GetWindowLongPtrW(target, GWLP_WNDPROC);
     if (existing == 0) {
-        say(self, "overlay input: could not read the window procedure, error %lu",
+        rsf::say(self.log, self.log_user, "overlay input: could not read the window procedure, error %lu",
             static_cast<unsigned long>(GetLastError()));
         return RSF_OVERLAY_INPUT_ERROR_SUBCLASS_FAILED;
     }
     self.original.store(reinterpret_cast<WNDPROC>(existing), std::memory_order_release);
     self.installed.store(true, std::memory_order_release);
 
-    say(self, "overlay input: subclassing window %p, toggle key 0x%02x", static_cast<void*>(target),
+    rsf::say(self.log, self.log_user, "overlay input: subclassing window %p, toggle key 0x%02x", static_cast<void*>(target),
         static_cast<unsigned>(toggle));
 
     SetLastError(0);
@@ -974,7 +927,7 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
         self.installed.store(false, std::memory_order_release);
         self.original.store(nullptr, std::memory_order_release);
         self.window.store(nullptr, std::memory_order_relaxed);
-        say(self, "overlay input: subclass failed, error %lu",
+        rsf::say(self.log, self.log_user, "overlay input: subclass failed, error %lu",
             static_cast<unsigned long>(swap_error));
         return RSF_OVERLAY_INPUT_ERROR_SUBCLASS_FAILED;
     }
@@ -982,7 +935,7 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
         // Something replaced the procedure between the read and the swap. The value the swap
         // returned is the one that was actually displaced, so that is the chain to forward to.
         self.original.store(reinterpret_cast<WNDPROC>(previous), std::memory_order_release);
-        say(self, "overlay input: window procedure changed during install, forwarding to the "
+        rsf::say(self.log, self.log_user, "overlay input: window procedure changed during install, forwarding to the "
                   "displaced one");
     }
     // The cursor detours are not a reason to fail: without them the message path still works, as
@@ -1003,7 +956,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
     if (!target || !IsWindow(target)) {
         // The game closed its window while we were installed. There is nothing to restore, and
         // touching a dead handle would be worse than leaving it.
-        say(self, "overlay input: window is gone, dropping the subclass without restoring");
+        rsf::say(self.log, self.log_user, "overlay input: window is gone, dropping the subclass without restoring");
         self.installed.store(false, std::memory_order_release);
         self.visible.store(0, std::memory_order_release);
         self.window.store(nullptr, std::memory_order_relaxed);
@@ -1015,7 +968,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
         // Somebody subclassed after us and their procedure now holds ours as its forward. Writing
         // our saved original back would erase their hook, which is a fault in their code that they
         // cannot see and we caused. Staying installed is the lesser damage.
-        say(self, "overlay input: uninstall refused, the window procedure is not ours");
+        rsf::say(self.log, self.log_user, "overlay input: uninstall refused, the window procedure is not ours");
         return RSF_OVERLAY_INPUT_ERROR_FOREIGN_SUBCLASS;
     }
 
@@ -1038,22 +991,13 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
     self.window.store(nullptr, std::memory_order_relaxed);
     forget_game_holds(self);
     clear_transient_input(self);
-    say(self, "overlay input: window procedure restored");
+    rsf::say(self.log, self.log_user, "overlay input: window procedure restored");
     return RSF_OVERLAY_INPUT_OK;
 }
 
 extern "C" uint32_t rsf_overlay_input_visible(void)
 {
     return state().visible.load(std::memory_order_acquire);
-}
-
-extern "C" uint32_t rsf_overlay_input_take_function_keys(uint32_t* sources)
-{
-    const uint32_t taken = state().function_keys.exchange(0, std::memory_order_acq_rel);
-    if (sources) {
-        *sources = taken & 0xFFFF0000u;
-    }
-    return taken & 0x0FFFu;
 }
 
 extern "C" void rsf_overlay_input_set_visible(uint32_t visible)

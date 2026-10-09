@@ -32,6 +32,8 @@ typedef struct rsf_native_present_record {
 } rsf_native_present_record;
 RSF_RUNTIME_API int rsf_native_window_present(const rsf_observer_present_event* event);
 /* Copied numeric data only, no resource borrowed beyond window scope. Graphics owner thread. */
+/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
+   work (see docs/representation-plan.md). Do not delete as dead code. */
 RSF_RUNTIME_API int rsf_native_window_last_present(rsf_native_present_record* record);
 RSF_RUNTIME_API void rsf_native_window_reset(void);
 #ifdef __cplusplus

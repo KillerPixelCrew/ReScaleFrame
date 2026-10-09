@@ -3,7 +3,7 @@ set(RSF_XESS_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/xess/inc" CACHE PATH
 
 add_library(rsf_xess STATIC src/xess_backend.cpp src/xess_generation.cpp)
 target_include_directories(rsf_xess PUBLIC include)
-target_link_libraries(rsf_xess PRIVATE rsf_build_options)
+target_link_libraries(rsf_xess PRIVATE rsf_build_options ReScaleFrame::RuntimeCommon)
 target_link_libraries(rsf_xess PUBLIC ReScaleFrame::Contract d3d11 d3d12 dxgi)
 
 # As with the other two: fetched into an untracked vendor directory, so a checkout without it still

@@ -52,10 +52,42 @@ pub struct Overlay {
     /// Texture work from the last frame, drained by the two collection entry points. The pixels
     /// stay owned here until the next frame clears them, so a caller that reads them after the
     /// draw call it belongs to still reads live memory.
-    texture_updates: Vec<TextureUpdate>,
-    texture_updates_taken: usize,
-    textures_to_free: Vec<u64>,
-    textures_to_free_taken: usize,
+    texture_updates: Drain<TextureUpdate>,
+    textures_to_free: Drain<u64>,
+    /// Performance HUD text, rebuilt only when the rates or the generation state change.
+    hud: panel::HudCache,
+}
+
+/// A list the host empties in batches: pushed during a frame, taken through a cursor afterwards.
+struct Drain<T> {
+    items: Vec<T>,
+    taken: usize,
+}
+
+impl<T> Drain<T> {
+    const fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            taken: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
+        self.taken = 0;
+    }
+
+    fn push(&mut self, item: T) {
+        self.items.push(item);
+    }
+
+    /// Up to `max` items that have not been taken yet.
+    fn take(&mut self, max: usize) -> &[T] {
+        let start = self.taken;
+        let end = self.items.len().min(start.saturating_add(max));
+        self.taken = end;
+        &self.items[start..end]
+    }
 }
 
 impl Default for Overlay {
@@ -92,10 +124,9 @@ impl Overlay {
             vertices: Vec::new(),
             indices: Vec::new(),
             calls: Vec::new(),
-            texture_updates: Vec::new(),
-            texture_updates_taken: 0,
-            textures_to_free: Vec::new(),
-            textures_to_free_taken: 0,
+            texture_updates: Drain::new(),
+            textures_to_free: Drain::new(),
+            hud: panel::HudCache::default(),
         }
     }
 
@@ -109,12 +140,13 @@ impl Overlay {
         self.indices.clear();
         self.calls.clear();
         self.texture_updates.clear();
-        self.texture_updates_taken = 0;
         self.textures_to_free.clear();
-        self.textures_to_free_taken = 0;
 
         self.selection.reconcile(stats);
         let rates = self.performance.sample(stats);
+        if stats.show_performance_hud {
+            self.hud.update(rates, &stats.generation);
+        }
 
         let mut intent = Intent {
             quality: self.selection.quality(),
@@ -136,25 +168,15 @@ impl Overlay {
                 && display[0] > 0.0
                 && display[1] > 0.0
             {
-                let scale = pixels_per_point(display[1]);
-                let mut raw = RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        Pos2::ZERO,
-                        egui::vec2(display[0] / scale, display[1] / scale),
-                    )),
-                    max_texture_side: Some(MAX_TEXTURE_SIDE),
-                    ..RawInput::default()
-                };
-                if let Some(viewport) = raw.viewports.get_mut(&ViewportId::ROOT) {
-                    viewport.native_pixels_per_point = Some(scale);
-                }
+                let raw = base_raw_input(display, pixels_per_point(display[1]));
                 // No pointer events, widgets or cursor while the hint is shown.
+                let hud = &self.hud;
                 let output = self.context.run_ui(raw, |ui| {
                     if alpha > 0.0 {
                         paint_startup_hint(ui.ctx(), alpha);
                     }
                     if stats.show_performance_hud {
-                        panel::performance_hud(ui.ctx(), rates, stats);
+                        panel::performance_hud(ui.ctx(), hud);
                     }
                 });
                 self.collect_textures(output.textures_delta);
@@ -166,10 +188,12 @@ impl Overlay {
             return intent;
         }
 
-        let points_per_pixel = 1.0 / pixels_per_point(display[1]);
-        let raw = self.raw_input(input, display, points_per_pixel);
+        let scale = pixels_per_point(display[1]);
+        let points_per_pixel = 1.0 / scale;
+        let raw = self.raw_input(input, display, scale);
 
         let selection = &self.selection;
+        let hud = &self.hud;
         let controls = &mut self.controls;
         *controls = Controls::default();
         let pointer = Pos2::new(
@@ -179,7 +203,7 @@ impl Overlay {
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), selection, stats, &mut intent, controls);
             if stats.show_performance_hud {
-                panel::performance_hud(ui.ctx(), rates, stats);
+                panel::performance_hud(ui.ctx(), hud);
             }
             paint_cursor(ui.ctx(), pointer);
         });
@@ -230,30 +254,20 @@ impl Overlay {
     /// Draining rather than repeating, so a caller with a small array can loop until it gets
     /// nothing back. The pixels stay owned by the overlay either way.
     pub fn drain_texture_updates(&mut self, max: usize) -> &[TextureUpdate] {
-        let start = self.texture_updates_taken;
-        let end = self.texture_updates.len().min(start.saturating_add(max));
-        self.texture_updates_taken = end;
-        &self.texture_updates[start..end]
+        self.texture_updates.take(max)
     }
 
     /// Take up to `max` ids of textures the overlay has finished with.
     pub fn drain_textures_to_free(&mut self, max: usize) -> &[u64] {
-        let start = self.textures_to_free_taken;
-        let end = self.textures_to_free.len().min(start.saturating_add(max));
-        self.textures_to_free_taken = end;
-        &self.textures_to_free[start..end]
+        self.textures_to_free.take(max)
     }
 
     /// Turn the host's snapshot of the mouse into the events egui expects.
     ///
     /// The header hands over a position and a button mask, not events, so the transitions have to
     /// be recovered by comparing against the previous frame.
-    fn raw_input(
-        &mut self,
-        input: &FrameInput,
-        display: [f32; 2],
-        points_per_pixel: f32,
-    ) -> RawInput {
+    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> RawInput {
+        let points_per_pixel = 1.0 / scale;
         let mouse = [sanitise(input.mouse[0], 0.0), sanitise(input.mouse[1], 0.0)];
         let position = Pos2::new(mouse[0] * points_per_pixel, mouse[1] * points_per_pixel);
 
@@ -325,22 +339,13 @@ impl Overlay {
         let advance = if delta > 0.0 { delta } else { 1.0 / 60.0 };
         self.time += f64::from(advance);
 
-        let mut raw = RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                Pos2::ZERO,
-                egui::vec2(display[0] * points_per_pixel, display[1] * points_per_pixel),
-            )),
-            max_texture_side: Some(MAX_TEXTURE_SIDE),
+        RawInput {
             time: Some(self.time),
             predicted_dt: advance,
             events,
             focused: true,
-            ..RawInput::default()
-        };
-        if let Some(viewport) = raw.viewports.get_mut(&ViewportId::ROOT) {
-            viewport.native_pixels_per_point = Some(1.0 / points_per_pixel);
+            ..base_raw_input(display, scale)
         }
-        raw
     }
 
     fn collect_textures(&mut self, delta: epaint::textures::TexturesDelta) {
@@ -427,11 +432,22 @@ impl Overlay {
     }
 }
 
-/// How large the panel should be drawn.
-///
-/// Chosen rather than measured, and the one number here that is pure taste: a panel laid out at
-/// one point per pixel is unreadable on a 4K display, so it scales with the display height and
-/// stops at 3x. There is no way to ask the host for a preferred scale in ABI version 1.
+/// The screen and texture limits every egui pass here starts from.
+fn base_raw_input(display: [f32; 2], scale: f32) -> RawInput {
+    let mut raw = RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            Pos2::ZERO,
+            egui::vec2(display[0] / scale, display[1] / scale),
+        )),
+        max_texture_side: Some(MAX_TEXTURE_SIDE),
+        ..RawInput::default()
+    };
+    if let Some(viewport) = raw.viewports.get_mut(&ViewportId::ROOT) {
+        viewport.native_pixels_per_point = Some(scale);
+    }
+    raw
+}
+
 fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -476,6 +492,11 @@ fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     ));
 }
 
+/// How large the panel should be drawn.
+///
+/// Chosen rather than measured, and the one number here that is pure taste: a panel laid out at
+/// one point per pixel is unreadable on a 4K display, so it scales with the display height and
+/// stops at 3x. There is no way to ask the host for a preferred scale in ABI version 1.
 fn pixels_per_point(display_height: f32) -> f32 {
     (display_height / REFERENCE_HEIGHT).clamp(1.0, 3.0)
 }
@@ -559,18 +580,6 @@ mod tests {
     fn stats_with_backend() -> Stats<'static> {
         Stats {
             backend_loaded: true,
-            backend_supported: true,
-            backend_name: Some("Test backend"),
-            render: [1024, 576],
-            output: [2048, 1152],
-            frames_presented: 240,
-            frames_evaluated: 238,
-            have_scene_color: true,
-            have_depth: true,
-            have_motion: true,
-            motion_decoded: true,
-            jitter_active: true,
-            jitter_pixels: [0.25, -0.125],
             ..Stats::default()
         }
     }
@@ -660,7 +669,6 @@ mod tests {
         assert!(release.backend_changed);
         assert_eq!(release.backend, 3);
         assert!(!idle_frame(&mut overlay, &stats).backend_changed);
-        stats.requested_backend = 3;
         stats.last_switch_result = -7;
         assert!(!idle_frame(&mut overlay, &stats).backend_changed);
         stats.backend = 3;
@@ -835,9 +843,6 @@ mod tests {
     fn missing_inputs_and_unknown_values_still_lay_out() {
         let mut overlay = Overlay::new();
         let mut stats = Stats {
-            frames_presented: 12,
-            frames_refused: 12,
-            last_result: -2_005_270_522,
             refusal_reason: Some("device does not support the backend"),
             backend_loaded: true,
             ..Stats::default()
@@ -986,8 +991,7 @@ mod tests {
         assert!(overlay.controls().enabled.is_some());
         assert!(overlay.controls().quality.iter().all(Option::is_some));
         let intent = idle_frame(&mut overlay, &stats);
-        assert!(!intent.dump_requested && !intent.capture_requested);
-        assert!(!intent.reinsert_changed && !intent.jitter_changed && !intent.debug_view_changed);
+        assert!(intent.is_idle());
     }
 
     #[test]

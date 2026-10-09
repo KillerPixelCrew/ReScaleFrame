@@ -1,7 +1,7 @@
 //! Rates derived from real application and SDK present counters on the host QPC clock.
 use crate::model::Stats;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Rates {
     pub rendered: Option<f64>,
     pub presented: Option<f64>,

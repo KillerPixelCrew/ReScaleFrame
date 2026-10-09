@@ -21,6 +21,9 @@ int main() {
     ok &= rsf_fg_choice_start(path, 0, 0x39) == RSF_FG_BACKEND_XESS;
     ok &= WritePrivateProfileStringW(L"Rendering", L"FrameGeneration", L"2", path) != 0;
     ok &= rsf_fg_choice_start(path, RSF_FG_BACKEND_FSR3, 0x39) == RSF_FG_BACKEND_FSR3;
+    // The shared mask names exactly the four providers; an unknown id falls back to Off.
+    ok &= (RSF_FG_BACKEND_ALL | 1u) == 0x3bu;
+    ok &= rsf_fg_choice_start(path, 9, RSF_FG_BACKEND_ALL) == 0;
     rsf_fg_choice_start(nullptr, RSF_FG_BACKEND_DLSS, 0x3b);
     ok &= rsf_fg_choice_save(RSF_FG_BACKEND_FSR3) == RSF_BACKEND_ERROR_FEATURE_FAILED;
     choice = rsf_fg_choice_get();

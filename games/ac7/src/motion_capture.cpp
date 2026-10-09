@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include <rescaleframe/ac7_hooks.h>
+#include <rescaleframe/ac7_memory.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/frame_tap.h>
@@ -12,6 +14,7 @@
 #include <MinHook.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -54,6 +57,7 @@ constexpr uint32_t max_draws = 12000;
 constexpr uint32_t max_blobs = 4096;
 constexpr size_t shader_budget = 64u * 1024u * 1024u;
 constexpr size_t blob_budget = 32u * 1024u * 1024u;
+constexpr bool sampled(uint32_t interval) { return interval == 0 || interval == 30 || interval == 59; }
 constexpr uint32_t cloud_composite_shader = 0x83524e47u;
 // Captured directional light variant: screen-space contact ray and stationary IGN.
 constexpr uint32_t contact_light_shader = 3619939816u;
@@ -62,7 +66,7 @@ constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: 
 struct EngineRecord {
     rsf_ac7_velocity_facts facts{};
     uint64_t qpc = 0, primitive = 0, proxy = 0, view = 0;
-    uint32_t interval = 0, thread = 0, component = 0, index = 0, history_called = 0;
+    uint32_t interval = 0, thread = 0, component = 0, index = 0;
     float camera[3]{}, origin[3]{}, current[16]{}, previous[16]{};
 };
 struct RootRecord {
@@ -89,6 +93,15 @@ struct QueuedScope {
     uint64_t scope = 0, view = 0, family = 0, command_list = 0, execute = 0;
     uint32_t native_frame = 0, queue_uid = 0;
 };
+// Everything a new capture session starts from zero.
+struct SessionCounters {
+    uint32_t engine_dropped = 0, draw_dropped = 0, blob_dropped = 0, roots_dropped = 0, commands_dropped = 0;
+    uint32_t readbacks = 0, readback_failed = 0;
+    uint32_t readback_interval = UINT32_MAX, interval_readbacks = 0;
+    uint32_t lighting_readbacks = 0, lighting_interval = UINT32_MAX;
+    bool lighting_after_pending = false;
+    uint32_t colour_readbacks = 0, colour_readback_failed = 0;
+};
 struct Capture {
     std::mutex guard;
     bool configured = false, key_down = false;
@@ -111,15 +124,8 @@ struct Capture {
     std::unordered_map<void*, Bytes> buffers;
     std::vector<Shader> shaders;
     size_t shader_bytes = 0, blob_bytes = 0;
-    uint32_t engine_dropped = 0, draw_dropped = 0, blob_dropped = 0, shaders_dropped = 0;
-    uint32_t roots_dropped = 0;
-    uint32_t commands_dropped = 0;
-    uint32_t readbacks = 0, readback_failed = 0;
-    uint32_t readback_interval = UINT32_MAX, interval_readbacks = 0;
-    uint32_t lighting_readbacks = 0;
-    uint32_t lighting_interval = UINT32_MAX;
-    bool lighting_after_pending = false;
-    uint32_t colour_readbacks = 0, colour_readback_failed = 0;
+    uint32_t shaders_dropped = 0;
+    SessionCounters counters;
     std::atomic<uint32_t> failures{0};
 };
 Capture& state() { static Capture s; return s; }
@@ -161,24 +167,8 @@ void capture_failed()
     say("motion capture stopped after an allocation or serialization failure; game decisions are unchanged");
 }
 
-// No C++ objects in the SEH scope. These are live engine arguments, but a mismatched layout
-// must produce an unreadable record rather than a second fault inside diagnostic code.
-bool copy_memory(void* out, const void* in, size_t bytes)
-{
-    if (!in || !out) return false;
-#if defined(_MSC_VER)
-    __try { std::memcpy(out, in, bytes); return true; }
-    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION m{};
-    if (!VirtualQuery(in, &m, sizeof(m)) || m.State != MEM_COMMIT ||
-        (m.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
-        uintptr_t(in) + bytes > uintptr_t(m.BaseAddress) + m.RegionSize) return false;
-    std::memcpy(out, in, bytes); return true;
-#endif
-}
-template<class T> bool read(void* p, size_t offset, T& out)
-{ return p && copy_memory(&out, static_cast<unsigned char*>(p) + offset, sizeof(T)); }
+using rsf::ac7::copy_memory;
+using rsf::ac7::read;
 
 bool hooked_history(void* cache, void* primitive, float* previous)
 {
@@ -186,7 +176,6 @@ bool hooked_history(void* cache, void* primitive, float* previous)
     if (current_event && current_event->primitive == uint64_t(uintptr_t(primitive))) {
         current_event->facts.history_checked = 1;
         current_event->facts.history_found = result ? 1u : 0u;
-        current_event->history_called = 1;
         if (result && !copy_memory(current_event->previous, previous, sizeof(current_event->previous)))
             current_event->facts.fields_valid = 0;
     }
@@ -244,7 +233,7 @@ bool hooked_should(void* primitive, void* view, bool check_visibility)
     try {
         std::lock_guard<std::mutex> lock(s.guard);
         if (s.active.load() && session == s.session.load()) {
-            if (s.engine.size() < max_engine) s.engine.push_back(event); else ++s.engine_dropped;
+            if (s.engine.size() < max_engine) s.engine.push_back(event); else ++s.counters.engine_dropped;
         }
     } catch (...) { capture_failed(); }
     return f.accepted != 0;
@@ -266,7 +255,7 @@ uint32_t save_blob(std::vector<unsigned char> bytes)
     for (size_t i = 0; i < s.blobs.size(); ++i)
         if (s.blobs[i] == bytes) return uint32_t(i + 1);
     if (s.blobs.size() >= max_blobs || s.blob_bytes + bytes.size() > blob_budget) {
-        ++s.blob_dropped; return 0;
+        ++s.counters.blob_dropped; return 0;
     }
     s.blob_bytes += bytes.size(); s.blobs.push_back(std::move(bytes));
     return uint32_t(s.blobs.size());
@@ -285,7 +274,7 @@ void record_root(const RootRecord& r) noexcept
     try {
         auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
         if (!s.active.load() || r.session != s.session.load()) return;
-        if (s.roots.size() < max_roots) s.roots.push_back(r); else ++s.roots_dropped;
+        if (s.roots.size() < max_roots) s.roots.push_back(r); else ++s.counters.roots_dropped;
     } catch (...) { capture_failed(); }
 }
 void widget_fields(RootRecord& r, void* converter) noexcept
@@ -310,7 +299,7 @@ void hooked_postprocess(void* owner, void* command_list, void* view, void* veloc
     // The renderer's per-view iteration establishes this AC7-specific stride. Capture its bytes
     // only at the three GPU sample intervals, without interpreting unverified view offsets.
     try {
-        if (r.interval == 0 || r.interval == 30 || r.interval == 59) {
+        if (sampled(r.interval)) {
             std::vector<unsigned char> bytes(0x27c0);
             if (copy_memory(bytes.data(), view, bytes.size())) r.view_blob = save_blob(std::move(bytes));
         }
@@ -321,7 +310,7 @@ void hooked_postprocess(void* owner, void* command_list, void* view, void* veloc
     original_postprocess(owner, command_list, view, velocity_reference);
     current_root = saved_root; current_postprocess_view = saved_view;
     r.kind = "postprocess_end"; r.qpc = tick(); record_root(r);
-    if (r.interval == 0 || r.interval == 30 || r.interval == 59) checkpoint_native();
+    if (sampled(r.interval)) checkpoint_native();
 }
 void hooked_widget_prepare(void* converter)
 {
@@ -350,7 +339,7 @@ void hooked_add_temporal(void* context, void* velocity)
     original_add_temporal(context, velocity);
     r.kind = "main_temporal_build_after"; r.qpc = tick();
     r.fields_valid = r.fields_valid && read(context, 0x28, r.output_node);
-    if (r.output_node) r.fields_valid = r.fields_valid && read(reinterpret_cast<void*>(uintptr_t(r.output_node)), 0, r.vtable);
+    if (r.output_node) r.fields_valid = r.fields_valid && read(r.output_node, 0, r.vtable);
     record_root(r);
 }
 void hooked_temporal_process(void* node, void* context)
@@ -360,7 +349,7 @@ void hooked_temporal_process(void* node, void* context)
     r.context = uint64_t(uintptr_t(context)); r.output_node = r.owner;
     r.fields_valid = read(context, 0, r.view) && read(context, 0x28, r.command_list) && read(node, 0, r.vtable);
     try {
-        if (r.interval == 0 || r.interval == 30 || r.interval == 59) {
+        if (sampled(r.interval)) {
             std::vector<unsigned char> bytes(0xe0);
             if (copy_memory(bytes.data(), node, bytes.size())) r.node_blob = save_blob(std::move(bytes));
         }
@@ -379,9 +368,9 @@ void graph_output(RootRecord& r) noexcept
     r.output_valid = 0; std::memset(r.output_name, 0, sizeof(r.output_name));
     auto* node = reinterpret_cast<void*>(uintptr_t(r.output_node));
     uint64_t getter = 0, output = 0, name = 0;
-    if (!read(node, 0, r.vtable) || !read(reinterpret_cast<void*>(uintptr_t(r.vtable)), 0x38, getter) ||
-        !read(reinterpret_cast<void*>(uintptr_t(r.vtable)), 0x28, r.process_fn) ||
-        !read(reinterpret_cast<void*>(uintptr_t(r.vtable)), 0x70, r.desc_fn) || r.output_id > 7) return;
+    if (!read(node, 0, r.vtable) || !read(r.vtable, 0x38, getter) ||
+        !read(r.vtable, 0x28, r.process_fn) ||
+        !read(r.vtable, 0x70, r.desc_fn) || r.output_id > 7) return;
     using GetOutputFn = void*(*)(void*, uint32_t);
 #if defined(_MSC_VER)
     __try { output = uint64_t(uintptr_t(reinterpret_cast<GetOutputFn>(uintptr_t(getter))(node, r.output_id))); }
@@ -397,7 +386,7 @@ void graph_output(RootRecord& r) noexcept
     r.output_valid = 1;
     for (size_t i = 0; i < sizeof(r.output_name) - 1; ++i) {
         uint16_t c = 0;
-        if (!name || !read(reinterpret_cast<void*>(uintptr_t(name)), i * 2, c) || !c) break;
+        if (!name || !read(name, i * 2, c) || !c) break;
         r.output_name[i] = (c >= 32 && c < 127 && c != '"' && c != '\\') ? char(c) : '?';
     }
 }
@@ -408,7 +397,7 @@ void associate_commands(RootRecord& r, uint64_t first_link) noexcept
         uint32_t uid = 0;
         auto* list = reinterpret_cast<void*>(uintptr_t(r.command_list));
         if (!read(list, 8, link) || !read(list, 0x18, uid) || uid != r.queue_uid ||
-            !first_link || first_link == link || !read(reinterpret_cast<void*>(uintptr_t(first_link)), 0, command)) return;
+            !first_link || first_link == link || !read(first_link, 0, command)) return;
         r.queue_end = link;
         for (uint32_t i = 0; command && i < 4096; ++i) {
             uint64_t next = 0, execute = 0;
@@ -424,7 +413,7 @@ void associate_commands(RootRecord& r, uint64_t first_link) noexcept
                     found->second.command_list != r.command_list || found->second.family != r.family) {
                     if (found != s.commands.end() || s.commands.size() < max_commands) {
                         s.commands[command] = {r.id, r.view, r.family, r.command_list, execute, r.native_frame, uid};
-                    } else ++s.commands_dropped;
+                    } else ++s.counters.commands_dropped;
                 }
             }
             ++r.commands;
@@ -436,17 +425,17 @@ void associate_commands(RootRecord& r, uint64_t first_link) noexcept
 void hooked_graph_process(void* graph, void* output_reference, void* context)
 {
     auto& s = state(); const auto interval = s.interval.load();
-    if (!s.active.load(std::memory_order_acquire) || (interval != 0 && interval != 30 && interval != 59)) {
+    if (!s.active.load(std::memory_order_acquire) || !sampled(interval)) {
         original_graph_process(graph, output_reference, context); return;
     }
     auto r = root_record("graph_pass_begin", graph); r.context = uint64_t(uintptr_t(context));
     uint64_t first_link = 0;
     r.fields_valid = read(output_reference, 0, r.output_node) && read(output_reference, 8, r.output_id) &&
         read(context, 0, r.view) && read(context, 0x28, r.command_list) &&
-        read(reinterpret_cast<void*>(uintptr_t(r.view)), 0, r.family) &&
-        read(reinterpret_cast<void*>(uintptr_t(r.family)), 0x68, r.native_frame) &&
-        read(reinterpret_cast<void*>(uintptr_t(r.command_list)), 8, first_link) &&
-        read(reinterpret_cast<void*>(uintptr_t(r.command_list)), 0x18, r.queue_uid);
+        read(r.view, 0, r.family) &&
+        read(r.family, 0x68, r.native_frame) &&
+        read(r.command_list, 8, first_link) &&
+        read(r.command_list, 0x18, r.queue_uid);
     r.queue_begin = first_link;
     if (r.fields_valid && r.output_node) graph_output(r);
     record_root(r);
@@ -463,7 +452,7 @@ void queued_scope(std::ostream& out)
     uint64_t command = 0, execute = 0;
     QueuedScope scope{};
     if (state().roots_installed && copy_memory(&command, current_rhi_command_address, sizeof(command)) && command &&
-        read(reinterpret_cast<void*>(uintptr_t(command)), 8, execute)) {
+        read(command, 8, execute)) {
         auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
         const auto found = s.commands.find(command);
         if (found != s.commands.end() && found->second.execute == execute) scope = found->second;
@@ -513,22 +502,16 @@ void install_roots(unsigned char* base)
                          reinterpret_cast<void**>(&original_widget_prepare), reinterpret_cast<void**>(&original_widget_queue),
                          reinterpret_cast<void**>(&original_add_temporal), reinterpret_cast<void**>(&original_temporal_process),
                          reinterpret_cast<void**>(&original_graph_process)};
-    uint32_t made = first;
-    for (; made < 6; ++made) {
-        if (made == 2 && native_owner.load()) continue;
-        root_targets[made] = base + rvas[made];
-        if (MH_CreateHook(root_targets[made], detours[made], originals[made]) != MH_OK) break;
+    for (uint32_t i = first; i < 6; ++i) {
+        if (i == 2 && native_owner.load()) continue;
+        root_targets[i] = base + rvas[i];
     }
-    if (made == 6) {
-        bool enabled = true;
-        for (auto* target : root_targets) if (target) enabled = MH_EnableHook(target) == MH_OK && enabled;
-        if (enabled) {
-            s.roots_installed = true;
-            current_rhi_command_address = base + 0x3c78358;
-            say("renderer root capture installed: graph/RHI associations, main temporal graph and widget producers; engine arguments unchanged"); return;
-        }
+    if (rsf::ac7::install_hooks(root_targets, detours, originals, 6)) {
+        s.roots_installed = true;
+        current_rhi_command_address = base + 0x3c78358;
+        say("renderer root capture installed: graph/RHI associations, main temporal graph and widget producers; engine arguments unchanged"); return;
     }
-    for (uint32_t i = first; i < made; ++i) { MH_DisableHook(root_targets[i]); MH_RemoveHook(root_targets[i]); }
+    std::fill(std::begin(root_targets), std::end(root_targets), nullptr);
     say("renderer root capture failed and was rolled back");
 }
 void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
@@ -536,8 +519,8 @@ void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buf
 {
     auto& s = state();
     const auto interval = s.interval.load();
-    if (s.readback_interval != interval) {
-        s.readback_interval = interval; s.interval_readbacks = 0; s.lighting_readbacks = 0;
+    if (s.counters.readback_interval != interval) {
+        s.counters.readback_interval = interval; s.counters.interval_readbacks = 0; s.counters.lighting_readbacks = 0;
     }
     out << '['; bool first = true;
     for (uint32_t slot = 0; slot < 14; ++slot) {
@@ -553,18 +536,18 @@ void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buf
         bool fallback = false;
         // Reserve eight of the existing 128 reads for the verified lighting producer.
         // UI and base-pass reads otherwise exhaust the quota before its View/light values.
-        const bool budget = lighting ? s.interval_readbacks < 128 && s.lighting_readbacks < 8 :
-            s.interval_readbacks < 120;
+        const bool budget = lighting ? s.counters.interval_readbacks < 128 && s.counters.lighting_readbacks < 8 :
+            s.counters.interval_readbacks < 120;
         if (bytes.empty() && budget) {
             auto* buffer = static_cast<ID3D11Buffer*>(buffers[slot]);
             D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
             if (desc.ByteWidth <= 8192 && desc.ByteWidth) {
-                ++s.readbacks; ++s.interval_readbacks; bytes.resize(desc.ByteWidth);
-                if (lighting) ++s.lighting_readbacks;
+                ++s.counters.readbacks; ++s.counters.interval_readbacks; bytes.resize(desc.ByteWidth);
+                if (lighting) ++s.counters.lighting_readbacks;
                 ComPtr<ID3D11Device> device; context->GetDevice(&device);
                 fallback = true;
                 if (rsf_read_constant_buffer(device.Get(), context, buffer, bytes.data(), desc.ByteWidth) != RSF_CONSTANT_BUFFER_OK) {
-                    bytes.clear(); ++s.readback_failed;
+                    bytes.clear(); ++s.counters.readback_failed;
                 }
             }
         }
@@ -576,29 +559,26 @@ void constants(std::ostream& out, ID3D11DeviceContext* context, void* const* buf
     }
     out << ']';
 }
-uint32_t shader_hash(void* pointer, uint32_t stage)
+template<class T> T shader_field(void* pointer, uint32_t stage, T Shader::*field, T fallback)
 {
     auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
     for (const auto& shader : s.shaders)
-        if (shader.pointer == pointer && shader.stage == stage) return shader.hash;
-    return 0;
+        if (shader.pointer == pointer && shader.stage == stage) return shader.*field;
+    return fallback;
 }
-uint32_t shader_constants(void* pointer, uint32_t stage)
-{
-    auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-    for (const auto& shader : s.shaders)
-        if (shader.pointer == pointer && shader.stage == stage) return shader.constant_mask;
-    return 0x3fffu;
-}
+uint32_t shader_hash(void* pointer, uint32_t stage) { return shader_field(pointer, stage, &Shader::hash, 0u); }
+uint32_t shader_constants(void* pointer, uint32_t stage) { return shader_field(pointer, stage, &Shader::constant_mask, 0x3fffu); }
 uint32_t declared_constants(const void* bytes, uint32_t size)
 {
     // UE strips reflection data. DXBC declarations still name the actual CB slots consumed.
-    HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) return 0x3fffu;
-    auto disassemble = reinterpret_cast<decltype(&D3DDisassemble)>(
-        reinterpret_cast<void*>(GetProcAddress(module, "D3DDisassemble")));
-    ComPtr<ID3DBlob> code;
+    // Loaded once and kept: this runs on every shader creation, possibly under the loader lock.
+    static const auto disassemble = [] {
+        HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        return module ? reinterpret_cast<decltype(&D3DDisassemble)>(
+            reinterpret_cast<void*>(GetProcAddress(module, "D3DDisassemble"))) : nullptr;
+    }();
     uint32_t mask = 0x3fffu;
+    ComPtr<ID3DBlob> code;
     if (disassemble && SUCCEEDED(disassemble(bytes, size, 0, nullptr, &code)) && code) {
         mask = 0;
         const std::string text(static_cast<const char*>(code->GetBufferPointer()), code->GetBufferSize());
@@ -610,7 +590,6 @@ uint32_t declared_constants(const void* bytes, uint32_t size)
             if (slot < 14) mask |= 1u << slot;
         }
     }
-    code.Reset(); FreeLibrary(module);
     return mask;
 }
 void resource(std::ostream& out, ID3D11Resource* r)
@@ -626,11 +605,22 @@ void resource(std::ostream& out, ID3D11Resource* r)
     }
     out << '}';
 }
+template<class View, size_t N> void bound_views(std::ostream& out, View* (&views)[N])
+{
+    bool first = true;
+    for (size_t i = 0; i < N; ++i) {
+        if (!views[i]) continue;
+        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
+        if (!first) out << ','; first = false;
+        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
+        views[i]->Release();
+    }
+}
 void record_draw(std::string text)
 {
     auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
     if (!s.active.load()) return;
-    if (s.draws.size() < max_draws) s.draws.push_back(std::move(text)); else ++s.draw_dropped;
+    if (s.draws.size() < max_draws) s.draws.push_back(std::move(text)); else ++s.counters.draw_dropped;
 }
 const char* colour_stage(uint32_t hash)
 {
@@ -651,25 +641,25 @@ void colour_snapshot(std::ostream& out, ID3D11DeviceContext* context, ID3D11Reso
     auto& s = state();
     // Eight reads at each sampled interval fit in twenty-four reserved slots. The total
     // remains 72, including the existing cloud and post-processing observations.
-    if (!role || !resource || s.colour_readbacks >= (lighting ? 72u : 48u)) return;
+    if (!role || !resource || s.counters.colour_readbacks >= (lighting ? 72u : 48u)) return;
     ComPtr<ID3D11Texture2D> texture;
     if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&texture)))) return;
     char name[96]{};
-    std::snprintf(name, sizeof(name), "f%03u_stage_%s_%03u", s.interval.load(), role, s.colour_readbacks++);
+    std::snprintf(name, sizeof(name), "f%03u_stage_%s_%03u", s.interval.load(), role, s.counters.colour_readbacks++);
     const std::string path = s.prefix + "\\" + name;
     ComPtr<ID3D11Device> device; context->GetDevice(&device);
     rsf_texture_dump_options options{}; options.struct_size = sizeof(options);
     options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; options.output_prefix_utf8 = path.c_str();
     const auto result = rsf_dump_texture_bytes(device.Get(), context, texture.Get(), &options);
-    if (result != RSF_TEXTURE_OK) ++s.colour_readback_failed;
+    if (result != RSF_TEXTURE_OK) ++s.counters.colour_readback_failed;
     out << ",\"snapshot\":\"" << name << "\",\"snapshot_result\":" << result;
 }
 void lighting_before(ID3D11DeviceContext* context, const rsf_frame_tap_target_draw& draw, uint32_t hash)
 {
     auto& s = state();
     const auto interval = s.interval.load();
-    if (s.lighting_interval == interval) return;
-    s.lighting_interval = interval; s.lighting_after_pending = true;
+    if (s.counters.lighting_interval == interval) return;
+    s.counters.lighting_interval = interval; s.counters.lighting_after_pending = true;
     std::ostringstream out;
     out << "{\"kind\":\"contact_light_before\",\"qpc\":" << tick()
         << ",\"interval\":" << interval << ",\"thread\":" << GetCurrentThreadId()
@@ -753,11 +743,11 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
 {
     auto& s = state();
     if (!s.active.load()) return;
-    { std::lock_guard<std::mutex> lock(s.guard); if (s.draws.size() >= max_draws) { ++s.draw_dropped; return; } }
+    { std::lock_guard<std::mutex> lock(s.guard); if (s.draws.size() >= max_draws) { ++s.counters.draw_dropped; return; } }
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
     const uint32_t ps = shader_hash(d->pixel_shader, 1);
-    const bool light_after = (ps == contact_light_shader || ps == contact_light_phased_shader) && s.lighting_after_pending;
-    if (light_after) s.lighting_after_pending = false;
+    const bool light_after = (ps == contact_light_shader || ps == contact_light_phased_shader) && s.counters.lighting_after_pending;
+    if (light_after) s.counters.lighting_after_pending = false;
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
     std::ostringstream out; out.precision(9);
@@ -782,26 +772,13 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
     }
     out << "],\"ps_resources\":[";
     ID3D11ShaderResourceView* views[128]{}; c->PSGetShaderResources(0, 128, views);
-    bool first = true;
-    for (uint32_t i = 0; i < 128; ++i) {
-        if (!views[i]) continue;
-        if (!first) out << ','; first = false;
-        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
-        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
-        views[i]->Release();
-    }
+    bound_views(out, views);
     out << "],\"vs_resources\":[";
-    c->VSGetShaderResources(0, 128, views); first = true;
-    for (uint32_t i = 0; i < 128; ++i) {
-        if (!views[i]) continue;
-        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
-        views[i]->Release();
-    }
+    c->VSGetShaderResources(0, 128, views);
+    bound_views(out, views);
     out << "],\"render_targets\":[";
     ID3D11RenderTargetView* targets[8]{}; ComPtr<ID3D11DepthStencilView> depth;
-    c->OMGetRenderTargets(8, targets, &depth); first = true;
+    c->OMGetRenderTargets(8, targets, &depth); bool first = true;
     for (uint32_t i = 0; i < 8; ++i) {
         if (!targets[i]) continue;
         if (!first) out << ','; first = false;
@@ -831,7 +808,7 @@ catch (...) { capture_failed(); }
 void compute_capture(void*, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) try
 {
     auto& s = state(); if (!s.active.load()) return;
-    { std::lock_guard<std::mutex> lock(s.guard); if (s.draws.size() >= max_draws) { ++s.draw_dropped; return; } }
+    { std::lock_guard<std::mutex> lock(s.guard); if (s.draws.size() >= max_draws) { ++s.counters.draw_dropped; return; } }
     auto* c = static_cast<ID3D11DeviceContext*>(context);
     ComPtr<ID3D11ComputeShader> shader; c->CSGetShader(&shader, nullptr, nullptr);
     std::ostringstream out;
@@ -841,23 +818,10 @@ void compute_capture(void*, void* context, uint32_t x, uint32_t y, uint32_t z, v
         << ",\"groups\":[" << x << ',' << y << ',' << z << "],\"indirect\":" << uint64_t(uintptr_t(indirect))
         << ",\"offset\":" << offset << ",\"cs_hash\":" << shader_hash(shader.Get(), 5) << ",\"inputs\":[";
     ID3D11ShaderResourceView* views[128]{}; c->CSGetShaderResources(0, 128, views);
-    bool first = true;
-    for (uint32_t i = 0; i < 128; ++i) {
-        if (!views[i]) continue;
-        if (!first) out << ','; first = false;
-        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
-        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
-        views[i]->Release();
-    }
+    bound_views(out, views);
     out << "],\"outputs\":[";
-    ID3D11UnorderedAccessView* outputs[8]{}; c->CSGetUnorderedAccessViews(0, 8, outputs); first = true;
-    for (uint32_t i = 0; i < 8; ++i) {
-        if (!outputs[i]) continue;
-        if (!first) out << ','; first = false;
-        ComPtr<ID3D11Resource> r; outputs[i]->GetResource(&r);
-        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
-        outputs[i]->Release();
-    }
+    ID3D11UnorderedAccessView* outputs[8]{}; c->CSGetUnorderedAccessViews(0, 8, outputs);
+    bound_views(out, outputs);
     out << "],\"cs_cb\":";
     ID3D11Buffer* cb[14]{}; void* borrowed[14]{}; c->CSGetConstantBuffers(0, 14, cb);
     for (uint32_t i = 0; i < 14; ++i) borrowed[i] = cb[i];
@@ -874,6 +838,13 @@ bool write_file(const std::string& name, const void* data, size_t bytes)
     if (!f) return false;
     const bool ok = std::fwrite(data, 1, bytes, f) == bytes;
     return std::fclose(f) == 0 && ok;
+}
+bool write_blobs(const std::string& prefix, const std::vector<std::vector<unsigned char>>& blobs)
+{
+    bool ok = true;
+    for (size_t i = 0; i < blobs.size(); ++i)
+        ok = write_file(prefix + "\\cb_" + std::to_string(i + 1) + ".bin", blobs[i].data(), blobs[i].size()) && ok;
+    return ok;
 }
 std::string roots_json(const std::vector<RootRecord>& records)
 {
@@ -918,10 +889,7 @@ void checkpoint_native() noexcept
         }
         const auto text = roots_json(roots);
         bool ok = write_file(prefix + "\\native.partial.jsonl", text.data(), text.size());
-        for (size_t i = 0; i < blobs.size(); ++i) {
-            const auto& b = blobs[i];
-            ok = write_file(prefix + "\\cb_" + std::to_string(i + 1) + ".bin", b.data(), b.size()) && ok;
-        }
+        ok = write_blobs(prefix, blobs) && ok;
         if (!ok) say("motion capture: native checkpoint could not be fully written");
     } catch (...) { capture_failed(); }
 }
@@ -957,10 +925,7 @@ void finish()
     ok = write_file(s.prefix + "\\native.jsonl", roots_text.data(), roots_text.size()) && ok;
     std::string draw_text; for (const auto& line : s.draws) { draw_text += line; draw_text += '\n'; }
     ok = write_file(s.prefix + "\\draws.jsonl", draw_text.data(), draw_text.size()) && ok;
-    for (size_t i = 0; i < s.blobs.size(); ++i) {
-        const auto& b = s.blobs[i];
-        ok = write_file(s.prefix + "\\cb_" + std::to_string(i + 1) + ".bin", b.data(), b.size()) && ok;
-    }
+    ok = write_blobs(s.prefix, s.blobs) && ok;
     for (size_t i = 0; i < s.shaders.size(); ++i) {
         const auto& shader = s.shaders[i];
         const std::string path = s.prefix + "\\shader_" + std::to_string(shader.stage) + "_" +
@@ -971,13 +936,13 @@ void finish()
     std::ostringstream summary;
     summary << "{\"schema\":1,\"qpc_frequency\":" << frequency.QuadPart << ",\"engine_hooks\":" << s.installed.load()
         << ",\"renderer_root_hooks\":" << s.roots_installed.load() << ",\"root_records\":" << s.roots.size()
-        << ",\"root_dropped\":" << s.roots_dropped
-        << ",\"command_associations\":" << s.commands.size() << ",\"command_associations_dropped\":" << s.commands_dropped
+        << ",\"root_dropped\":" << s.counters.roots_dropped
+        << ",\"command_associations\":" << s.commands.size() << ",\"command_associations_dropped\":" << s.counters.commands_dropped
         << ",\"intervals\":60,\"engine_records\":" << s.engine.size() << ",\"draw_records\":" << s.draws.size()
-        << ",\"engine_dropped\":" << s.engine_dropped << ",\"draw_dropped\":" << s.draw_dropped
-        << ",\"blob_dropped\":" << s.blob_dropped << ",\"shader_creation_dropped\":" << s.shaders_dropped
-        << ",\"readbacks\":" << s.readbacks << ",\"readback_failures\":" << s.readback_failed
-        << ",\"colour_readbacks\":" << s.colour_readbacks << ",\"colour_readback_failures\":" << s.colour_readback_failed
+        << ",\"engine_dropped\":" << s.counters.engine_dropped << ",\"draw_dropped\":" << s.counters.draw_dropped
+        << ",\"blob_dropped\":" << s.counters.blob_dropped << ",\"shader_creation_dropped\":" << s.shaders_dropped
+        << ",\"readbacks\":" << s.counters.readbacks << ",\"readback_failures\":" << s.counters.readback_failed
+        << ",\"colour_readbacks\":" << s.counters.colour_readbacks << ",\"colour_readback_failures\":" << s.counters.colour_readback_failed
         << ",\"capture_failures\":" << s.failures.load()
         << ",\"files_written\":" << (ok ? "true" : "false")
         << ",\"timing\":\"present intervals and QPC; CPU selection may precede GPU execution\""
@@ -1019,25 +984,19 @@ extern "C" int rsf_ac7_motion_capture_install(void)
     void* detours[] = {reinterpret_cast<void*>(&hooked_should), reinterpret_cast<void*>(&hooked_has), reinterpret_cast<void*>(&hooked_history)};
     void** originals[] = {reinterpret_cast<void**>(&original_should), reinterpret_cast<void**>(&original_has), reinterpret_cast<void**>(&original_history)};
     const uint32_t rvas[] = {0x10fdc00, 0x1183820, 0x10ee670};
-    uint32_t made = 0;
-    for (; made < 3; ++made) {
-        hook_targets[made] = base + rvas[made];
-        if (MH_CreateHook(hook_targets[made], detours[made], originals[made]) != MH_OK) break;
+    for (uint32_t i = 0; i < 3; ++i) hook_targets[i] = base + rvas[i];
+    if (rsf::ac7::install_hooks(hook_targets, detours, originals, 3)) {
+        s.installed = true; say("motion capture engine hooks installed; original decisions preserved"); return 1;
     }
-    if (made == 3) {
-        bool enabled = true;
-        for (uint32_t i = 0; i < 3; ++i) enabled = MH_EnableHook(hook_targets[i]) == MH_OK && enabled;
-        if (enabled) { s.installed = true; say("motion capture engine hooks installed; original decisions preserved"); return 1; }
-    }
-    for (uint32_t i = 0; i < made; ++i) { MH_DisableHook(hook_targets[i]); MH_RemoveHook(hook_targets[i]); }
+    std::fill(std::begin(hook_targets), std::end(hook_targets), nullptr);
     say("motion capture engine hooks failed and were rolled back"); return 0;
 }
 extern "C" void rsf_ac7_motion_capture_shutdown(void)
 {
     auto& s = state(); s.active.store(false);
     rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
-    if (s.installed) for (auto* p : hook_targets) { MH_DisableHook(p); MH_RemoveHook(p); }
-    if (s.roots_installed) for (auto* p : root_targets) { MH_DisableHook(p); MH_RemoveHook(p); }
+    if (s.installed) rsf::ac7::remove_hooks(hook_targets, 3);
+    if (s.roots_installed) rsf::ac7::remove_hooks(root_targets, 6);
     s.roots_installed = false;
     s.installed = false;
 }
@@ -1065,7 +1024,8 @@ extern "C" void rsf_ac7_motion_capture_buffer(void*, void* buffer, const void* i
 catch (...) { capture_failed(); }
 extern "C" void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, uint32_t size) try
 {
-    auto& s = state(); if (!s.configured || !buffer || !bytes || !size || size > 8192) return;
+    // Snapshots only matter inside a capture; copying every dynamic upload otherwise costs a lock and a vector.
+    auto& s = state(); if (!s.configured || !s.active.load(std::memory_order_acquire) || !buffer || !bytes || !size || size > 8192) return;
     std::lock_guard<std::mutex> lock(s.guard);
     if (!s.buffers.contains(buffer) && s.buffers.size() >= 2048) return;
     auto& snapshot = s.buffers[buffer]; snapshot.serial = ++s.upload_serial;
@@ -1079,7 +1039,7 @@ extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* p
     if (!pass || pass->struct_size < sizeof(*pass)) { execution_pass = {}; return; }
     execution_pass = *pass;
     auto& s = state(); if (!s.active.load()) return;
-    const auto interval = s.interval.load(); if (interval != 0 && interval != 30 && interval != 59) return;
+    const auto interval = s.interval.load(); if (!sampled(interval)) return;
     auto r = root_record(begin ? "rhi_scope_begin" : "rhi_scope_restore", nullptr);
     r.owner = pass->pass_key; r.view = pass->view_key; r.family = pass->family_key;
     r.native_frame = uint32_t(pass->native_frame); r.execution_scope = pass->scope_id; r.native_role = pass->role;
@@ -1109,12 +1069,10 @@ extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uin
         s.prefix = s.directory + name;
         if (CreateDirectoryA(s.prefix.c_str(), nullptr)) {
             std::lock_guard<std::mutex> lock(s.guard);
-            s.engine.clear(); s.roots.clear(); s.roots_dropped = 0; s.commands.clear(); s.commands_dropped = 0;
+            s.engine.clear(); s.roots.clear(); s.commands.clear();
             s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
-            s.engine_dropped = s.draw_dropped = s.blob_dropped = s.readbacks = s.readback_failed = 0;
-            s.readback_interval = UINT32_MAX; s.interval_readbacks = 0;
-            s.lighting_readbacks = 0; s.lighting_interval = UINT32_MAX; s.lighting_after_pending = false;
-            s.colour_readbacks = s.colour_readback_failed = 0;
+            s.buffers.clear(); // uploads are only recorded while active, so older snapshots may be stale
+            s.counters = {};
             s.start = s.presents; s.session.fetch_add(1); s.interval.store(0); s.active.store(true);
             say((std::string("motion capture armed: ") + s.prefix).c_str());
         } else say("motion capture: output directory could not be created");
@@ -1124,7 +1082,7 @@ extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uin
     const auto age = uint32_t(s.presents - s.start);
     if (age >= 60) { finish(); return 0; }
     s.interval.store(age);
-    const bool sample = age == 0 || age == 30 || age == 59;
+    const bool sample = sampled(age);
     rsf_frame_tap_set_research_phase_callbacks(sample ? before_draw_capture : nullptr,
         sample ? draw_capture : nullptr, sample ? compute_capture : nullptr, nullptr);
     if (!sample) return 0;

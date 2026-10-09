@@ -2,9 +2,12 @@
 #include <rescaleframe/streamline_host.h>
 #include "streamline_frame.h"
 #include "reflex_audit.h"
+#include "streamline_load.h"
 #include "../../common/fg_helpers.h"
+#include "../../common/d3d12_helpers.h"
 #include <wrl/client.h>
 #include <dxgi1_6.h>
+#include <algorithm>
 #include <mutex>
 #include <new>
 #include <cstring>
@@ -19,7 +22,6 @@
 #if RSF_HAVE_NVAPI_DIAGNOSTICS
 #include <nvapi.h>
 #endif
-bool rsf_dlss_verify_runtime_signature(const wchar_t* path);
 using Microsoft::WRL::ComPtr;
 struct rsf_streamline_host {
     HMODULE module = nullptr;
@@ -80,9 +82,7 @@ void report_driver_sleep(rsf_streamline_host& host)
 {
 #if RSF_HAVE_NVAPI_DIAGNOSTICS
     // Query only the module Streamline already initialized. Never create a second Reflex owner.
-    auto module = GetModuleHandleW(L"nvapi64.dll");
-    using Query = void*(__cdecl*)(unsigned int);
-    auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
+    const auto query = rsf_nvapi_query();
     auto status = query ? reinterpret_cast<decltype(&NvAPI_D3D_GetSleepStatus)>(query(0xaef96ca1u)) : nullptr;
     NV_GET_SLEEP_STATUS_PARAMS state{}; state.version = NV_GET_SLEEP_STATUS_PARAMS_VER;
     const auto result = status ? status(host.native_device.Get(), &state) : NVAPI_NO_IMPLEMENTATION;
@@ -174,10 +174,22 @@ struct DlssSession {
     bool history_valid = false, prepared_enabled = false;
     uint64_t last_prepare = 0;
 };
+// The in-flight slot carrying `id`, or null. Zero is the empty-slot marker and never matches.
+rsf_streamline_host::Token* find_slot(rsf_streamline_host& host, uint64_t id)
+{
+    if (!id) return nullptr;
+    for (auto& slot : host.tokens) if (slot.id == id) return &slot;
+    return nullptr;
+}
 sl::FrameToken* find_token(rsf_streamline_host& host, uint64_t id)
 {
-    for (const auto& token : host.tokens) if (token.id == id) return token.token;
-    return nullptr;
+    const auto* slot = find_slot(host, id);
+    return slot ? slot->token : nullptr;
+}
+// Whether two option sets ask for the same generation, ignoring the Reflex fields.
+bool same_generation(const rsf_fg_options& a, const rsf_fg_options& b)
+{
+    return a.mode == b.mode && a.generated_frames == b.generated_frames && a.dynamic_target_fps == b.dynamic_target_fps;
 }
 rsf_backend_result poll(DlssSession& self)
 {
@@ -292,13 +304,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         if (FAILED(host.factory->CreateSwapChainForHwnd(host.queue.Get(), static_cast<HWND>(setup->chain.hwnd),
             &description, nullptr, nullptr, &swap))) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
         void* raw = swap.Detach();
-        void* native_chain = nullptr;
-        if (host.native(raw, &native_chain) != sl::Result::eOk || !native_chain) {
-            static_cast<IUnknown*>(raw)->Release(); destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
-        }
-        const bool already_upgraded = native_chain != raw;
-        static_cast<IUnknown*>(native_chain)->Release();
-        if (!already_upgraded && host.upgrade(&raw) != sl::Result::eOk) {
+        if (rsf_streamline_host_upgrade_chain(&host, &raw) != RSF_BACKEND_OK) {
             static_cast<IUnknown*>(raw)->Release(); destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
         }
         auto* upgraded = static_cast<IDXGISwapChain1*>(raw);
@@ -313,9 +319,7 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     const auto validation = rsf::fg_options_result(options); if (validation != 0) return validation;
     auto& self = *static_cast<DlssSession*>(pointer);
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
-    if (self.options.struct_size && self.options.mode == options->mode &&
-        self.options.generated_frames == options->generated_frames &&
-        self.options.dynamic_target_fps == options->dynamic_target_fps &&
+    if (self.options.struct_size && same_generation(self.options, *options) &&
         self.options.reflex_mode == options->reflex_mode && self.options.frame_limit_us == options->frame_limit_us)
         return RSF_BACKEND_OK;
     if (options->mode == RSF_FG_DYNAMIC && !self.state.dynamic_supported) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
@@ -328,14 +332,12 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     const auto latency = rsf_streamline_host_reflex(self.host, mode, options->frame_limit_us);
     if (latency != 0) return latency;
     // A Reflex mode or limit change leaves generation and its history alone.
-    if (self.options.struct_size && self.options.mode == options->mode &&
-        self.options.generated_frames == options->generated_frames &&
-        self.options.dynamic_target_fps == options->dynamic_target_fps) {
+    if (self.options.struct_size && same_generation(self.options, *options)) {
         self.options = *options; self.state.effective_reflex = mode;
         return RSF_BACKEND_OK;
     }
     sl::DLSSGOptions fg{}; fg.mode = static_cast<sl::DLSSGMode>(options->mode);
-    fg.numFramesToGenerate = options->generated_frames < self.state.max_generated_frames ? options->generated_frames : self.state.max_generated_frames;
+    fg.numFramesToGenerate = std::min(options->generated_frames, self.state.max_generated_frames);
     fg.dynamicTargetFrameRate = options->dynamic_target_fps;
     fg.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     fg.enableUserInterfaceRecomposition = self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? sl::eTrue : sl::eFalse;
@@ -385,12 +387,11 @@ extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host* poi
     auto& host = *pointer;
     std::unique_lock<std::mutex> lock(host.marker_guard);
     const auto locked = Clock::now();
-    sl::FrameToken* token = nullptr;
-    for (auto& slot : host.tokens) if (slot.id == id) {
-        if (slot.sleep_claimed) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        slot.sleep_claimed = true; token = slot.token; break;
-    }
-    if (!token) return RSF_BACKEND_ERROR_NOT_READY;
+    auto* slot = find_slot(host, id);
+    if (slot && slot->sleep_claimed) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!slot || !slot->token) return RSF_BACKEND_ERROR_NOT_READY;
+    slot->sleep_claimed = true;
+    sl::FrameToken* const token = slot->token;
     const auto index = static_cast<uint32_t>(*token);
     const auto minted = Clock::now();
     lock.unlock();
@@ -407,9 +408,8 @@ extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host* poi
         // A requested limit makes long sleeps normal: with generation the driver waits up to
         // the limit times the presents per frame. Only sleeps well beyond that are stalls.
         const auto expected = std::chrono::microseconds(uint64_t(host.frame_limit_us) * 5 / 2);
-        const auto slow = expected > std::chrono::milliseconds(8) ?
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(expected) :
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::milliseconds(8));
+        const auto slow = std::max<Clock::duration>(std::chrono::duration_cast<Clock::duration>(expected),
+            std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(8)));
         if (host.log && finished - entered >= slow &&
             finished - host.last_slow_log >= std::chrono::seconds(1)) {
             host.last_slow_log = finished;
@@ -437,19 +437,10 @@ bool rsf_streamline_common_set(rsf_streamline_host* host, uint64_t id, uint32_t 
 {
     if (!host || !id || viewport >= 2) return false;
     std::lock_guard<std::mutex> lock(host->marker_guard);
-    for (auto& slot : host->tokens) if (slot.id == id) {
-        if (slot.common[viewport]) return false;
-        if (host->constants(constants, *slot.token, sl::ViewportHandle(viewport)) != sl::Result::eOk) return false;
-        slot.common[viewport] = true; return true;
-    }
-    return false;
-}
-bool rsf_streamline_common_exists(rsf_streamline_host* host, uint64_t id, uint32_t viewport)
-{
-    if (!host || !id || viewport >= 2) return false;
-    // FG prepare already holds this owner lock while resolving its token and tags.
-    for (const auto& slot : host->tokens) if (slot.id == id) return slot.common[viewport];
-    return false;
+    auto* slot = find_slot(*host, id);
+    if (!slot || slot->common[viewport]) return false;
+    if (host->constants(constants, *slot->token, sl::ViewportHandle(viewport)) != sl::Result::eOk) return false;
+    slot->common[viewport] = true; return true;
 }
 extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host* pointer, uint64_t id, rsf_latency_marker marker, uint32_t controller)
 {
@@ -457,50 +448,47 @@ extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host* po
     auto& host = *pointer;
     if (!host.pcl_marker) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     std::lock_guard<std::mutex> lock(host.marker_guard);
-    auto* token = find_token(host, id); if (!token) return RSF_BACKEND_ERROR_NOT_READY;
+    auto* slot = find_slot(host, id); if (!slot || !slot->token) return RSF_BACKEND_ERROR_NOT_READY;
     // PCL removed ordinary input sample marker 6. Marker 13 is for controllers only.
     if (marker == RSF_LATENCY_INPUT_SAMPLE && !controller) return RSF_BACKEND_OK;
     const auto mapped = marker == RSF_LATENCY_INPUT_SAMPLE ? sl::PCLMarker::eControllerInputSample : static_cast<sl::PCLMarker>(marker);
-    for (const auto& slot : host.tokens) if (slot.id == id && marker <= RSF_LATENCY_PRESENT_END &&
-        (slot.markers & (1u << marker))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto result = host.pcl_marker(mapped, *token);
+    if (marker <= RSF_LATENCY_PRESENT_END && (slot->markers & (1u << marker))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto result = host.pcl_marker(mapped, *slot->token);
     if (result == sl::Result::eOk) ++host.marker_calls;
-    if (result == sl::Result::eOk && marker <= RSF_LATENCY_PRESENT_END)
-        for (auto& slot : host.tokens) if (slot.id == id) {
-            slot.markers |= 1u << marker;
-            // UE's native EndFrame follows Present. Keep the token until every required
-            // marker has arrived, including configurations where simulation overlaps render.
-            if (slot.markers == 63u) slot.id = 0;
-        }
+    if (result == sl::Result::eOk && marker <= RSF_LATENCY_PRESENT_END) {
+        slot->markers |= 1u << marker;
+        // UE's native EndFrame follows Present. Keep the token until every required
+        // marker has arrived, including configurations where simulation overlaps render.
+        if (slot->markers == 63u) slot->id = 0;
+    }
     return result == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host* host, uint64_t id)
 {
     if (!host || !id) return 0;
     std::lock_guard<std::mutex> lock(host->marker_guard);
-    for (const auto& slot : host->tokens) if (slot.id == id) return (slot.markers & (1u << RSF_LATENCY_PRESENT_END)) != 0;
-    return 0;
+    const auto* slot = find_slot(*host, id);
+    return slot && (slot->markers & (1u << RSF_LATENCY_PRESENT_END)) != 0;
 }
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host* host, uint64_t id, uint32_t kinds, uint32_t message_id)
 {
     if (!host || !id || kinds & ~7u) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(host->marker_guard);
-    for (auto& slot : host->tokens) if (slot.id == id) {
-        for (uint32_t i = 0; i < 3; ++i) if (kinds & (1u << i)) ++host->input_counts[i];
-        sl::PCLMarker marker{};
-        if (message_id && message_id == host->pcl_message) { marker = sl::PCLMarker::ePCLatencyPing; ++host->input_counts[3]; }
-        else if ((kinds & 4u) && !slot.controller_sampled) { marker = sl::PCLMarker::eControllerInputSample; slot.controller_sampled = true; }
-        else return RSF_BACKEND_OK; // Mouse/keyboard timing uses real dequeue records and PCL pings, never deprecated marker 6.
-        if (!host->pcl_marker || host->pcl_marker(marker, *slot.token) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        ++host->marker_calls; return RSF_BACKEND_OK;
-    }
-    return RSF_BACKEND_ERROR_NOT_READY;
+    auto* slot = find_slot(*host, id);
+    if (!slot) return RSF_BACKEND_ERROR_NOT_READY;
+    for (uint32_t i = 0; i < 3; ++i) if (kinds & (1u << i)) ++host->input_counts[i];
+    sl::PCLMarker marker{};
+    if (message_id && message_id == host->pcl_message) { marker = sl::PCLMarker::ePCLatencyPing; ++host->input_counts[3]; }
+    else if ((kinds & 4u) && !slot->controller_sampled) { marker = sl::PCLMarker::eControllerInputSample; slot->controller_sampled = true; }
+    else return RSF_BACKEND_OK; // Mouse/keyboard timing uses real dequeue records and PCL pings, never deprecated marker 6.
+    if (!host->pcl_marker || host->pcl_marker(marker, *slot->token) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    ++host->marker_calls; return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host* host, uint64_t id)
 {
     if (!host || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(host->marker_guard);
-    for (auto& slot : host->tokens) if (slot.id == id) slot.id = 0;
+    if (auto* slot = find_slot(*host, id)) slot->id = 0;
     return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host* host, rsf_reflex_mode mode, uint32_t limit)
@@ -548,9 +536,9 @@ extern "C" rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_
 extern "C" rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_host* host, void** chain)
 {
     if (!host || !chain || !*chain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    void* native = nullptr;
-    if (host->native(*chain, &native) != sl::Result::eOk || !native) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    const bool upgraded = native != *chain; static_cast<IUnknown*>(native)->Release();
+    void* native = rsf_streamline_host_native(host, *chain);
+    if (!native) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    const bool upgraded = native != *chain;
     return upgraded || host->upgrade(chain) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 namespace {
@@ -564,11 +552,9 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     const bool enabled = frame->interpolate && self.options.mode != RSF_FG_OFF;
     if (enabled) {
         if (!command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        void* native_command = nullptr;
-        if (self.host->native(command, &native_command) != sl::Result::eOk || !native_command)
-            return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        result = rsf::fg_command(native_command, self.host->native_device.Get());
-        static_cast<IUnknown*>(native_command)->Release(); if (result != 0) return result;
+        void* native_command = rsf_streamline_host_native(self.host, command);
+        if (!native_command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        result = rsf::fg_command(native_command, self.host->native_device.Get()); if (result != 0) return result;
     }
     if (enabled && ((self.ui_mode != RSF_UI_MODE_NONE && !frame->hudless.resource) ||
         (self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI && !frame->ui.resource)))
@@ -576,7 +562,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     sl::DLSSGOptions options{};
     options.mode = enabled ? static_cast<sl::DLSSGMode>(self.options.mode) : sl::DLSSGMode::eOff;
     options.numFramesToGenerate = self.options.mode == RSF_FG_FIXED ?
-        (self.options.generated_frames < self.state.max_generated_frames ? self.options.generated_frames : self.state.max_generated_frames) : 1;
+        std::min(self.options.generated_frames, self.state.max_generated_frames) : 1;
     options.dynamicTargetFrameRate = self.options.dynamic_target_fps;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     options.enableUserInterfaceRecomposition = self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? sl::eTrue : sl::eFalse;
@@ -587,15 +573,11 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     self.state.active = 0; self.prepared_enabled = enabled;
     if (!enabled) { self.last_prepare = record.frame_id; self.history_valid = false; return RSF_BACKEND_OK; }
     std::lock_guard<std::mutex> lock(self.host->marker_guard);
-    auto* token = find_token(*self.host, record.frame_id); if (!token) return RSF_BACKEND_ERROR_NOT_READY;
+    auto* slot = find_slot(*self.host, record.frame_id); if (!slot || !slot->token) return RSF_BACKEND_ERROR_NOT_READY;
+    auto* token = slot->token;
     sl::Constants constants{};
-    auto matrix = [](const float* values) {
-        sl::float4x4 output{}; for (uint32_t i = 0; i < 4; ++i)
-            output[i] = {values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]};
-        return output;
-    };
-    constants.cameraViewToClip = matrix(camera.view_to_clip); constants.clipToCameraView = matrix(camera.clip_to_view);
-    constants.clipToPrevClip = matrix(camera.clip_to_previous_clip);
+    constants.cameraViewToClip = rsf::sl_matrix(camera.view_to_clip); constants.clipToCameraView = rsf::sl_matrix(camera.clip_to_view);
+    constants.clipToPrevClip = rsf::sl_matrix(camera.clip_to_previous_clip);
     sl::matrixFullInvert(constants.prevClipToClip, constants.clipToPrevClip);
     for (uint32_t i = 0; i < 4; ++i) {
         const auto& row = constants.prevClipToClip[i];
@@ -615,9 +597,10 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     constants.motionVectorsJittered = camera.motion_jittered ? sl::eTrue : sl::eFalse;
     constants.reset = !self.history_valid || record.frame_id != self.last_prepare + 1 ||
         (record.flags & RSF_FRAME_FLAG_RESET) ? sl::eTrue : sl::eFalse;
-    if (!rsf_streamline_common_exists(self.host, record.frame_id, 0)) {
+    // The SR side may already have set this frame's shared constants.
+    if (!slot->common[0]) {
         if (self.host->constants(constants, *token, sl::ViewportHandle(0)) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        for (auto& slot : self.host->tokens) if (slot.id == record.frame_id) slot.common[0] = true;
+        slot->common[0] = true;
     }
     const rsf_backend_resource* inputs[] = {&frame->backbuffer, &frame->depth, &frame->motion, &frame->hudless, &frame->ui};
     const sl::BufferType types[] = {sl::kBufferTypeBackbuffer, sl::kBufferTypeDepth, sl::kBufferTypeMotionVectors,
@@ -635,11 +618,6 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     self.history_valid = true; self.last_prepare = record.frame_id; return RSF_BACKEND_OK;
 }
 rsf_backend_result after(void* pointer) { return pointer ? poll(*static_cast<DlssSession*>(pointer)) : RSF_BACKEND_ERROR_INVALID_ARGUMENT; }
-rsf_backend_result status(void* pointer, rsf_fg_status* out)
-{
-    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = static_cast<DlssSession*>(pointer)->state; return RSF_BACKEND_OK;
-}
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -655,7 +633,7 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
     self.history_valid = false; self.prepared_enabled = false; self.state.active = 0;
     return RSF_BACKEND_OK;
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<DlssSession>, retirement, destroy, abort_frame};
 }
 static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, void* existing_device, void* existing_queue, rsf_streamline_host** out)
 {
@@ -665,6 +643,16 @@ static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, vo
     if (!setup->dxgi_adapter || !setup->runtime_directory_utf8 || setup->engine_type >= uint32_t(sl::EngineType::eCount) ||
         setup->profile > RSF_SL_PROFILE_PCL)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // Streamline here means NVIDIA. Any other adapter is not an error in the caller, it is simply
+    // not a host this backend can be, so the caller may carry on with another vendor.
+    ComPtr<IDXGIAdapter> adapter; DXGI_ADAPTER_DESC adapter_description{};
+    if (FAILED(static_cast<IUnknown*>(setup->dxgi_adapter)->QueryInterface(IID_PPV_ARGS(&adapter))) ||
+        FAILED(adapter->GetDesc(&adapter_description))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (adapter_description.VendorId != 0x10de) {
+        rsf::say(setup->log, setup->log_user, "Streamline host refused: adapter vendor 0x%04x is not NVIDIA",
+            unsigned(adapter_description.VendorId));
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    }
     std::lock_guard<std::mutex> lock(host_guard);
     if (GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto* host = new (std::nothrow) rsf_streamline_host; if (!host) return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -673,18 +661,13 @@ static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, vo
     host->profile = setup->profile;
     if (!copy_text(host->engine_version, sizeof(host->engine_version), setup->engine_version_utf8) ||
         !copy_text(host->project_id, sizeof(host->project_id), setup->project_id_utf8) ||
-        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, host->directory, 1024) ||
-        !((host->directory[1] == L':' && (host->directory[2] == L'\\' || host->directory[2] == L'/')) ||
-        (host->directory[0] == L'\\' && host->directory[1] == L'\\'))) {
+        !rsf::runtime_directory(setup->runtime_directory_utf8, host->directory)) {
         dispose(host); return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
     wchar_t path[1200]{}; swprintf_s(path, L"%s\\sl.interposer.dll", host->directory);
-    if (setup->require_signature) {
-        if (!rsf_dlss_verify_runtime_signature(path)) { dispose(host); return RSF_BACKEND_ERROR_LOAD_FAILED; }
-        host->signature_verified = true;
-    }
-    host->module = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    host->module = rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
     if (!host->module) { dispose(host); return RSF_BACKEND_ERROR_LOAD_FAILED; }
+    host->signature_verified = setup->require_signature != 0;
 #define CORE(member, function) host->member = rsf::entry<PFun_##function*>(host->module, #function); if (!host->member) { dispose(host); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
     CORE(init, slInit); CORE(shutdown, slShutdown); CORE(upgrade, slUpgradeInterface); CORE(native, slGetNativeInterface);
     CORE(set_device, slSetD3DDevice); CORE(supported, slIsFeatureSupported); CORE(function, slGetFeatureFunction);
@@ -772,8 +755,7 @@ extern "C" rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host* hos
     if (FAILED(host->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    const bool ready = SUCCEEDED(host->queue->Signal(fence.Get(), 1)) &&
-        SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
+    const bool ready = SUCCEEDED(host->queue->Signal(fence.Get(), 1)) && SUCCEEDED(rsf::wait_fence(fence.Get(), 1, event));
     CloseHandle(event);
     return ready ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
@@ -808,24 +790,7 @@ extern "C" void* rsf_streamline_host_native(rsf_streamline_host* host, void* pro
     static_cast<IUnknown*>(native)->Release(); return native;
 }
 #else
-namespace {
-rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
-{
-    const auto result = rsf::fg_setup_header(setup, out, chain);
-    return result != 0 ? result : RSF_BACKEND_ERROR_NOT_COMPILED;
-}
-rsf_backend_result configure(void*, const rsf_fg_options*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result begin(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result after(void*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result status(void*, rsf_fg_status*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-rsf_backend_result retirement(void*, rsf_fg_retirement*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-void destroy(void*) {}
-rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
-}
-extern "C" const rsf_generation_provider* rsf_generation_dlss() { return &provider; }
+extern "C" const rsf_generation_provider* rsf_generation_dlss() { return rsf::not_compiled_provider(); }
 extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_host_setup*, rsf_streamline_host**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_adopt(const rsf_streamline_host_setup*, void*, void*, rsf_streamline_host**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host*, rsf_streamline_graphics*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }

@@ -27,7 +27,7 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 9u
+#define RSF_OVERLAY_ABI_VERSION 10u
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -128,6 +128,10 @@ typedef struct rsf_overlay_stats {
        Zero is Off. GPU compatibility is checked at startup. */
     uint32_t fg_backend, fg_requested_backend, fg_backend_choices;
     int32_t fg_selection_result;
+    /* ABI 10: super-resolution backend IDs the host can switch to, as bits (bit n is backend ID n,
+       matching `backend`). Zero means the host supplied no mask and the panel keeps its default
+       list, so a host that zero-initialises the struct is unaffected. */
+    uint32_t sr_backend_choices;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the

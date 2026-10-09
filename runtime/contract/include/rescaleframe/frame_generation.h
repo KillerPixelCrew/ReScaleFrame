@@ -10,6 +10,39 @@ extern "C" {
 #define RSF_FG_BACKEND_FSR3 3u
 #define RSF_FG_BACKEND_FSR4 4u
 #define RSF_FG_BACKEND_XESS 5u
+/* Choices mask of every implemented backend, bit n for backend id n. */
+#define RSF_FG_BACKEND_ALL ((1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | \
+                            (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS))
+
+/* One row per backend. ini_key is the Unity ini path setting, env_var the override variable, and
+   default_subdir the SDK folder beside the module (FSR3 and FSR4 share the FidelityFX one). */
+typedef struct rsf_fg_backend_info {
+    uint32_t id;
+    const char* ini_key;
+    const char* env_var;
+    const char* default_subdir;
+} rsf_fg_backend_info;
+
+/* Null for an unknown id, so a caller cannot fall back to another vendor by accident. */
+static inline const rsf_fg_backend_info* rsf_fg_backend_info_for(uint32_t id)
+{
+    static const rsf_fg_backend_info table[] = {
+        {RSF_FG_BACKEND_DLSS, "Streamline", "RSF_STREAMLINE_BIN", "ReScaleFrame\\streamline"},
+        {RSF_FG_BACKEND_FSR3, "FSR3", "RSF_FSR3_BIN", "ReScaleFrame\\fidelityfx"},
+        {RSF_FG_BACKEND_FSR4, "FSR4", "RSF_FSR4_BIN", "ReScaleFrame\\fidelityfx"},
+        {RSF_FG_BACKEND_XESS, "XeSS", "RSF_XESS_BIN", "ReScaleFrame\\xess"},
+    };
+    uint32_t i;
+    for (i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+        if (table[i].id == id) return &table[i];
+    }
+    return (const rsf_fg_backend_info*)0;
+}
+
+static inline int rsf_fg_backend_known(uint32_t id)
+{
+    return rsf_fg_backend_info_for(id) != (const rsf_fg_backend_info*)0;
+}
 typedef uint32_t rsf_fg_mode;
 #define RSF_FG_OFF 0u
 #define RSF_FG_FIXED 1u

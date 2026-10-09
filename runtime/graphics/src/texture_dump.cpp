@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include <rescaleframe/log.h>
 #include <rescaleframe/texture_dump.h>
 
 #include <d3d11.h>
@@ -10,6 +11,11 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+// Defined in texture_dump_raw.cpp, shared so both dumpers accept the same formats.
+namespace rsf {
+uint32_t texture_pixel_bytes(DXGI_FORMAT format);
+}
 
 namespace {
 
@@ -183,28 +189,6 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
     }
 }
 
-uint32_t bytes_per_pixel(DXGI_FORMAT format)
-{
-    switch (format) {
-    case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS: case DXGI_FORMAT_R8G8B8A8_UNORM:
-    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-        return 4;
-    case DXGI_FORMAT_R16G16_UNORM:
-    case DXGI_FORMAT_R16G16_FLOAT:
-        return 4;
-    case DXGI_FORMAT_R32G32_FLOAT:
-        return 8;
-    case DXGI_FORMAT_R16G16B16A16_FLOAT:
-        return 8;
-    case DXGI_FORMAT_R11G11B10_FLOAT:
-        return 4;
-    default:
-        return 0;
-    }
-}
-
 uint8_t clamp_byte(float value)
 {
     if (value <= 0.0f) {
@@ -214,21 +198,6 @@ uint8_t clamp_byte(float value)
         return 255;
     }
     return static_cast<uint8_t>(value + 0.5f);
-}
-
-// Announce a step before taking it. Formatted here rather than in the sink so the sink can stay a
-// plain string callback and cross a DLL boundary without a varargs contract.
-void say(const rsf_texture_dump_options& options, const char* format, ...)
-{
-    if (!options.log) {
-        return;
-    }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    options.log(options.log_user, message);
 }
 
 bool write_targa(const std::string& path, uint32_t width, uint32_t height,
@@ -274,12 +243,15 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
 
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
-    say(*options, "dump %s: %ux%u format %u mips %u slices %u samples %u",
+    rsf::say(options->log, options->log_user, "dump %s: %ux%u format %u mips %u slices %u samples %u",
         options->output_prefix_utf8, desc.Width, desc.Height, unsigned(desc.Format), desc.MipLevels,
         desc.ArraySize, desc.SampleDesc.Count);
 
-    const uint32_t stride = bytes_per_pixel(desc.Format);
-    if (stride == 0) {
+    const uint32_t stride = rsf::texture_pixel_bytes(desc.Format);
+    // The shared size table also knows formats only the raw dumper can write, so ask the decoder.
+    const uint8_t probe_pixel[16]{};
+    Sample probe{};
+    if (stride == 0 || !decode(desc.Format, probe_pixel, probe)) {
         return RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT;
     }
 
@@ -293,7 +265,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         owner->Release();
     }
     if (!same_device) {
-        say(*options, "dump: refused, texture belongs to another device");
+        rsf::say(options->log, options->log_user, "dump: refused, texture belongs to another device");
         return RSF_TEXTURE_ERROR_FOREIGN_DEVICE;
     }
 
@@ -308,7 +280,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     staging.SampleDesc.Count = 1;
     staging.SampleDesc.Quality = 0;
 
-    say(*options, "dump: creating staging copy");
+    rsf::say(options->log, options->log_user, "dump: creating staging copy");
     ID3D11Texture2D* readable = nullptr;
     if (FAILED(device->CreateTexture2D(&staging, nullptr, &readable)) || !readable) {
         return RSF_TEXTURE_ERROR_STAGING_FAILED;
@@ -317,7 +289,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     // copy deliberately has one. Anything with mips or slices therefore has to name the top one
     // explicitly instead.
     const bool single_subresource = desc.MipLevels <= 1 && desc.ArraySize <= 1;
-    say(*options, "dump: copying (%s)",
+    rsf::say(options->log, options->log_user, "dump: copying (%s)",
         desc.SampleDesc.Count > 1 ? "resolve"
                                   : (single_subresource ? "whole resource" : "top subresource"));
     if (desc.SampleDesc.Count > 1) {
@@ -328,13 +300,13 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         context->CopySubresourceRegion(readable, 0, 0, 0, 0, texture, 0, nullptr);
     }
 
-    say(*options, "dump: mapping");
+    rsf::say(options->log, options->log_user, "dump: mapping");
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped))) {
         readable->Release();
         return RSF_TEXTURE_ERROR_MAP_FAILED;
     }
-    say(*options, "dump: decoding %u rows", desc.Height);
+    rsf::say(options->log, options->log_user, "dump: decoding %u rows", desc.Height);
 
     const float scale = options->scale != 0.0f ? options->scale : 1.0f;
     std::vector<uint8_t> image(static_cast<size_t>(desc.Width) * desc.Height * 4u);
@@ -414,7 +386,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     }
 
     const std::string prefix = options->output_prefix_utf8;
-    say(*options, "dump: writing %s.tga", prefix.c_str());
+    rsf::say(options->log, options->log_user, "dump: writing %s.tga", prefix.c_str());
     if (!write_targa(prefix + ".tga", desc.Width, desc.Height, image)) {
         return RSF_TEXTURE_ERROR_WRITE_FAILED;
     }
@@ -442,6 +414,6 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         report->min_y = min_y;
         report->max_y = max_y;
     }
-    say(*options, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
+    rsf::say(options->log, options->log_user, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
     return RSF_TEXTURE_OK;
 }

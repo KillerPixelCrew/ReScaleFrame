@@ -1,14 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include <rescaleframe/fullscreen_pass.h>
 
+#include <rescaleframe/d3d11_state.h>
+#include <rescaleframe/log.h>
+#include <rescaleframe/shader_compile.h>
+
 #include <windows.h>
 
 #include <d3d11.h>
-#include <d3dcompiler.h>
 
-#include <cstdarg>
-#include <cstdio>
-#include <cstring>
 #include <new>
 
 namespace {
@@ -93,29 +93,16 @@ struct Constants {
 };
 static_assert(sizeof(Constants) % 16 == 0, "constant buffers are bound in 16 byte registers");
 
-using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
-                                    LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
-
-/* Loaded from the system directory rather than linked, so nothing here needs the compiler import
-   library, and so a `d3dcompiler_47.dll` dropped next to the game cannot answer instead. */
-compile_fn load_compiler()
-{
-    const HMODULE module =
-        LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) {
-        return nullptr;
-    }
-    return reinterpret_cast<compile_fn>(
-        reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
-}
-
 } // namespace
 
 struct rsf_fullscreen_pass {
     ID3D11Device* device = nullptr;
     ID3D11VertexShader* vertex_shader = nullptr;
     ID3D11PixelShader* pixel_shader = nullptr;
-    ID3D11SamplerState* sampler = nullptr;
+    /* Point and linear. Which one draws is the pass's setting, see `rsf_fullscreen_pass_set_filter`. */
+    ID3D11SamplerState* point_sampler = nullptr;
+    ID3D11SamplerState* linear_sampler = nullptr;
+    rsf_fullscreen_filter filter = RSF_FULLSCREEN_FILTER_POINT;
     /* Two blend states, because the difference between them is the whole point of the premultiplied
        mode and choosing at draw time costs nothing. */
     ID3D11BlendState* opaque_blend = nullptr;
@@ -126,124 +113,6 @@ struct rsf_fullscreen_pass {
     rsf_fullscreen_log_fn log = nullptr;
     void* log_user = nullptr;
 };
-
-namespace {
-
-void say(const rsf_fullscreen_pass* pass, const char* format, ...)
-{
-    char message[512];
-    va_list arguments;
-    if (!pass || !pass->log) {
-        return;
-    }
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    pass->log(pass->log_user, message);
-}
-
-bool compile_one(rsf_fullscreen_pass* pass, compile_fn compile, const char* entry,
-                 const char* target, ID3DBlob** out)
-{
-    ID3DBlob* errors = nullptr;
-    const HRESULT compiled = compile(pass_shader, std::strlen(pass_shader), "fullscreen_pass",
-                                     nullptr, nullptr, entry, target, 0, 0, out, &errors);
-    if (FAILED(compiled) || !*out) {
-        say(pass, "%s did not compile: %s", entry,
-            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
-        if (errors) {
-            errors->Release();
-        }
-        return false;
-    }
-    if (errors) {
-        errors->Release();
-    }
-    return true;
-}
-
-/* Everything this draw disturbs. Restored in full, scissor rectangles included: the blit this was
-   generalised from saved viewports and not scissors, and a scissor left from a pass that used one
-   would clip the game's next draw to a rectangle nobody set. */
-struct SavedState {
-    ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* depth_view = nullptr;
-    ID3D11VertexShader* vertex_shader = nullptr;
-    ID3D11PixelShader* pixel_shader = nullptr;
-    ID3D11InputLayout* layout = nullptr;
-    D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-    ID3D11ShaderResourceView* resource = nullptr;
-    ID3D11SamplerState* sampler = nullptr;
-    ID3D11Buffer* constants = nullptr;
-    ID3D11BlendState* blend = nullptr;
-    FLOAT blend_factor[4] = {};
-    UINT blend_mask = 0;
-    ID3D11DepthStencilState* depth_state = nullptr;
-    UINT stencil_reference = 0;
-    ID3D11RasterizerState* raster = nullptr;
-    UINT viewport_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-    D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
-    UINT scissor_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-    D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
-};
-
-void save(ID3D11DeviceContext* context, SavedState& state)
-{
-    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, state.targets,
-                                &state.depth_view);
-    context->VSGetShader(&state.vertex_shader, nullptr, nullptr);
-    context->PSGetShader(&state.pixel_shader, nullptr, nullptr);
-    context->IAGetInputLayout(&state.layout);
-    context->IAGetPrimitiveTopology(&state.topology);
-    context->PSGetShaderResources(0, 1, &state.resource);
-    context->PSGetSamplers(0, 1, &state.sampler);
-    context->PSGetConstantBuffers(0, 1, &state.constants);
-    context->OMGetBlendState(&state.blend, state.blend_factor, &state.blend_mask);
-    context->OMGetDepthStencilState(&state.depth_state, &state.stencil_reference);
-    context->RSGetState(&state.raster);
-    context->RSGetViewports(&state.viewport_count, state.viewports);
-    context->RSGetScissorRects(&state.scissor_count, state.scissors);
-}
-
-void restore(ID3D11DeviceContext* context, SavedState& state)
-{
-    context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, state.targets,
-                                state.depth_view);
-    context->VSSetShader(state.vertex_shader, nullptr, 0);
-    context->PSSetShader(state.pixel_shader, nullptr, 0);
-    context->IASetInputLayout(state.layout);
-    context->IASetPrimitiveTopology(state.topology);
-    context->PSSetShaderResources(0, 1, &state.resource);
-    context->PSSetSamplers(0, 1, &state.sampler);
-    context->PSSetConstantBuffers(0, 1, &state.constants);
-    context->OMSetBlendState(state.blend, state.blend_factor, state.blend_mask);
-    context->OMSetDepthStencilState(state.depth_state, state.stencil_reference);
-    context->RSSetState(state.raster);
-    context->RSSetViewports(state.viewport_count, state.viewports);
-    context->RSSetScissorRects(state.scissor_count, state.scissors);
-
-    auto drop = [](auto*& item) {
-        if (item) {
-            item->Release();
-            item = nullptr;
-        }
-    };
-    for (auto*& target : state.targets) {
-        drop(target);
-    }
-    drop(state.depth_view);
-    drop(state.vertex_shader);
-    drop(state.pixel_shader);
-    drop(state.layout);
-    drop(state.resource);
-    drop(state.sampler);
-    drop(state.constants);
-    drop(state.blend);
-    drop(state.depth_state);
-    drop(state.raster);
-}
-
-} // namespace
 
 extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer,
                                                             const rsf_fullscreen_setup* setup,
@@ -267,39 +136,20 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer
     pass->log = setup->log;
     pass->log_user = setup->log_user;
 
-    const compile_fn compile = load_compiler();
-    if (!compile) {
-        say(pass, "d3dcompiler_47.dll could not be loaded from the system directory");
+    /* Flags 0: the shader has always been compiled without strictness and nothing here is new
+       enough to be worth finding out what the strict mode would say about it. */
+    if (!rsf::compile_vertex(device, pass_shader, "fullscreen_pass", "vertex_main",
+                             &pass->vertex_shader, setup->log, setup->log_user, 0) ||
+        !rsf::compile_pixel(device, pass_shader, "fullscreen_pass", "pixel_main",
+                            &pass->pixel_shader, setup->log, setup->log_user, 0)) {
+        rsf::say(pass->log, pass->log_user, "the fullscreen pass shaders could not be created");
         rsf_fullscreen_pass_destroy(pass);
         return RSF_FULLSCREEN_ERROR_SHADER_FAILED;
     }
 
-    ID3DBlob* vertex_code = nullptr;
-    ID3DBlob* pixel_code = nullptr;
-    if (!compile_one(pass, compile, "vertex_main", "vs_5_0", &vertex_code) ||
-        !compile_one(pass, compile, "pixel_main", "ps_5_0", &pixel_code)) {
-        if (vertex_code) {
-            vertex_code->Release();
-        }
-        rsf_fullscreen_pass_destroy(pass);
-        return RSF_FULLSCREEN_ERROR_SHADER_FAILED;
-    }
-
-    const HRESULT made_vertex =
-        device->CreateVertexShader(vertex_code->GetBufferPointer(), vertex_code->GetBufferSize(),
-                                   nullptr, &pass->vertex_shader);
-    const HRESULT made_pixel = device->CreatePixelShader(
-        pixel_code->GetBufferPointer(), pixel_code->GetBufferSize(), nullptr, &pass->pixel_shader);
-    vertex_code->Release();
-    pixel_code->Release();
-    if (FAILED(made_vertex) || FAILED(made_pixel)) {
-        say(pass, "the fullscreen pass shaders could not be created");
-        rsf_fullscreen_pass_destroy(pass);
-        return RSF_FULLSCREEN_ERROR_SHADER_FAILED;
-    }
-
-    /* Point sampling. The composite draws a layer at the target's own extent, so every texel lands
-       on its own pixel and a linear filter would only soften text that was rendered sharp. */
+    /* Point sampling unless asked otherwise. The composite draws a layer at the target's own extent,
+       so every texel lands on its own pixel and a linear filter would only soften text that was
+       rendered sharp. */
     D3D11_SAMPLER_DESC sampler{};
     sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
     sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -307,6 +157,8 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer
     sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    D3D11_SAMPLER_DESC linear = sampler;
+    linear.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 
     D3D11_BLEND_DESC opaque{};
     opaque.RenderTarget[0].BlendEnable = FALSE;
@@ -354,18 +206,19 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer
     constants.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     constants.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-    if (FAILED(device->CreateSamplerState(&sampler, &pass->sampler)) ||
+    if (FAILED(device->CreateSamplerState(&sampler, &pass->point_sampler)) ||
+        FAILED(device->CreateSamplerState(&linear, &pass->linear_sampler)) ||
         FAILED(device->CreateBlendState(&opaque, &pass->opaque_blend)) ||
         FAILED(device->CreateBlendState(&premultiplied, &pass->premultiplied_blend)) ||
         FAILED(device->CreateDepthStencilState(&depth, &pass->depth)) ||
         FAILED(device->CreateRasterizerState(&raster, &pass->raster)) ||
         FAILED(device->CreateBuffer(&constants, nullptr, &pass->constants))) {
-        say(pass, "the fullscreen pass pipeline state could not be created");
+        rsf::say(pass->log, pass->log_user, "the fullscreen pass pipeline state could not be created");
         rsf_fullscreen_pass_destroy(pass);
         return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED;
     }
 
-    say(pass, "fullscreen pass ready");
+    rsf::say(pass->log, pass->log_user, "fullscreen pass ready");
     *out = pass;
     return RSF_FULLSCREEN_OK;
 }
@@ -420,8 +273,10 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* p
     *static_cast<Constants*>(mapped.pData) = values;
     context->Unmap(pass->constants, 0);
 
-    SavedState state;
-    save(context, state);
+    /* Narrow scope: everything below is what this draw touches. The pass runs between the game's own
+       draws, so the full pipeline snapshot would cost far more than the triangle does. */
+    rsf_d3d11_state saved;
+    rsf_d3d11_draw_state_save(context, &saved);
 
     /* No depth stencil view, ever. This is an overlay: binding one would also mean matching its
        extent to the target's, and a mismatched pair is a binding Windows refuses and DXVK
@@ -432,7 +287,9 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* p
     context->IASetInputLayout(nullptr);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->PSSetShaderResources(0, 1, &source_view);
-    context->PSSetSamplers(0, 1, &pass->sampler);
+    ID3D11SamplerState* sampler =
+        pass->filter == RSF_FULLSCREEN_FILTER_LINEAR ? pass->linear_sampler : pass->point_sampler;
+    context->PSSetSamplers(0, 1, &sampler);
     context->PSSetConstantBuffers(0, 1, &pass->constants);
     const FLOAT factor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const bool premultiplied = parameters->mode == RSF_FULLSCREEN_PREMULTIPLIED ||
@@ -451,8 +308,15 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* p
 
     context->Draw(3, 0);
 
-    restore(context, state);
+    rsf_d3d11_draw_state_restore(context, &saved);
     return RSF_FULLSCREEN_OK;
+}
+
+extern "C" void rsf_fullscreen_pass_set_filter(rsf_fullscreen_pass* pass, rsf_fullscreen_filter filter)
+{
+    if (pass) {
+        pass->filter = filter;
+    }
 }
 
 extern "C" void rsf_fullscreen_pass_destroy(rsf_fullscreen_pass* pass)
@@ -470,7 +334,8 @@ extern "C" void rsf_fullscreen_pass_destroy(rsf_fullscreen_pass* pass)
     drop(pass->depth);
     drop(pass->premultiplied_blend);
     drop(pass->opaque_blend);
-    drop(pass->sampler);
+    drop(pass->linear_sampler);
+    drop(pass->point_sampler);
     drop(pass->pixel_shader);
     drop(pass->vertex_shader);
     drop(pass->device);

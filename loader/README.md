@@ -161,7 +161,12 @@ presentation/SR host while keeping the game-facing D3D11 renderer. `RSF_FG_MODE=
 independently of SR. The default is DLSS-G. FSR uses `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, then
 `RSF_FFX_BIN`, then `ReScaleFrame/fidelityfx`; XeSS uses `RSF_XESS_BIN`, then
 `ReScaleFrame/xess`. Unsupported creation preserves original presentation. Change provider
-in the overlay during play. FSR3/4 are 2x in the pinned swapchain API; XeSS limits come from the SDK/hardware query.
+in the overlay during play. The multiplier control applies immediately and uses the provider's
+queried maximum. `RSF_FG_GENERATED=3` requests 4x when supported. The pinned FidelityFX FG API
+provides 2x; DLSS-G and XeSS limits come from the SDK/hardware query and can be higher on supported
+hardware. Unsupported provider creation retains the current provider. AC7 supplies completed
+HUD-less scene colour and preserves depth/motion through interpolation, independently of the
+chosen SR vendor.
 `RSF_REFLEX_MODE=0/1/2` selects Off/On/On + Boost. Sleep and PCL markers remain integrated in Off mode.
 Reflex controls apply to DLSS-G. XeSS uses XeLL. FSR does not apply the Reflex frame limiter.
 

@@ -2,12 +2,17 @@
 
 #include <rescaleframe/motion_decode.h>
 
+#include <rescaleframe/log.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_cache.h>
+
+#include "device_owner.h"
+
 #include <windows.h>
 
 #include <d3d11.h>
+#include <wrl/client.h>
 
-#include <cstdarg>
-#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -63,52 +68,21 @@ struct Constants {
 };
 static_assert(sizeof(Constants) % 16 == 0, "constant buffers are bound in 16 byte registers");
 
-using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
-                                    LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
-
 } // namespace
 
 struct rsf_motion_decode {
-    ID3D11Device* device = nullptr;
-    ID3D11ComputeShader* shader = nullptr;
-    ID3D11Texture2D* target = nullptr;
-    ID3D11UnorderedAccessView* target_view = nullptr;
-    ID3D11Buffer* constants = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> shader;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> target_view;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
+    // The source is an engine target that is the same texture every frame.
+    rsf::SrvCache<2> sources;
     uint32_t width = 0;
     uint32_t height = 0;
     rsf_motion_decode_log_fn log = nullptr;
     void* log_user = nullptr;
 };
-
-namespace {
-
-void say(const rsf_motion_decode* pass, const char* format, ...)
-{
-    if (!pass || !pass->log) {
-        return;
-    }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    pass->log(pass->log_user, message);
-}
-
-// Loaded by name from the system directory only. This runs inside a game process, and a plain
-// LoadLibrary would let anything named d3dcompiler_47.dll next to the executable answer instead.
-compile_fn load_compiler()
-{
-    const HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr,
-                                          LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) {
-        return nullptr;
-    }
-    return reinterpret_cast<compile_fn>(
-        reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
-}
-
-} // namespace
 
 extern "C" rsf_motion_decode_result rsf_motion_decode_create(void* device_pointer,
                                                              const rsf_motion_decode_setup* setup,
@@ -127,45 +101,16 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_create(void* device_pointe
     auto* device = static_cast<ID3D11Device*>(device_pointer);
     auto* pass = new rsf_motion_decode();
     pass->device = device;
-    pass->device->AddRef();
     pass->width = setup->width;
     pass->height = setup->height;
     pass->log = setup->log;
     pass->log_user = setup->log_user;
 
-    const compile_fn compile = load_compiler();
-    if (!compile) {
-        say(pass, "d3dcompiler_47.dll could not be loaded from the system directory");
-        rsf_motion_decode_destroy(pass);
-        return RSF_MOTION_DECODE_ERROR_SHADER_FAILED;
-    }
-
-    ID3DBlob* bytecode = nullptr;
-    ID3DBlob* errors = nullptr;
-    const HRESULT compiled =
-        compile(decode_shader, std::strlen(decode_shader), "motion_decode", nullptr, nullptr,
-                "main", "cs_5_0", 0, 0, &bytecode, &errors);
-    if (FAILED(compiled) || !bytecode) {
-        say(pass, "motion decode shader did not compile: %s",
-            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
-        if (errors) {
-            errors->Release();
-        }
-        if (bytecode) {
-            bytecode->Release();
-        }
-        rsf_motion_decode_destroy(pass);
-        return RSF_MOTION_DECODE_ERROR_SHADER_FAILED;
-    }
-    if (errors) {
-        errors->Release();
-    }
-
-    const HRESULT made_shader = device->CreateComputeShader(
-        bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, &pass->shader);
-    bytecode->Release();
-    if (FAILED(made_shader) || !pass->shader) {
-        say(pass, "compute shader could not be created");
+    // Flags 0, as this shader has always been compiled.
+    if (!rsf::compile_compute(device, decode_shader, "motion_decode", "main", &pass->shader,
+                              pass->log, pass->log_user, 0) ||
+        !pass->shader) {
+        rsf::say(pass->log, pass->log_user, "motion decode shader could not be created");
         rsf_motion_decode_destroy(pass);
         return RSF_MOTION_DECODE_ERROR_SHADER_FAILED;
     }
@@ -184,13 +129,13 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_create(void* device_pointe
     // backend, which binds it as a texture.
     target.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
     if (FAILED(device->CreateTexture2D(&target, nullptr, &pass->target)) || !pass->target) {
-        say(pass, "decoded motion target could not be created");
+        rsf::say(pass->log, pass->log_user, "decoded motion target could not be created");
         rsf_motion_decode_destroy(pass);
         return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
     }
-    if (FAILED(device->CreateUnorderedAccessView(pass->target, nullptr, &pass->target_view)) ||
+    if (FAILED(device->CreateUnorderedAccessView(pass->target.Get(), nullptr, &pass->target_view)) ||
         !pass->target_view) {
-        say(pass, "unordered access view could not be created");
+        rsf::say(pass->log, pass->log_user, "unordered access view could not be created");
         rsf_motion_decode_destroy(pass);
         return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
     }
@@ -201,12 +146,13 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_create(void* device_pointe
     constants.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     constants.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     if (FAILED(device->CreateBuffer(&constants, nullptr, &pass->constants)) || !pass->constants) {
-        say(pass, "constant buffer could not be created");
+        rsf::say(pass->log, pass->log_user, "constant buffer could not be created");
         rsf_motion_decode_destroy(pass);
         return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
     }
 
-    say(pass, "motion decode ready for %ux%u", setup->width, setup->height);
+    rsf::say(pass->log, pass->log_user, "motion decode ready for %ux%u", setup->width,
+             setup->height);
     *out = pass;
     return RSF_MOTION_DECODE_OK;
 }
@@ -224,35 +170,27 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     auto* texture = static_cast<ID3D11Texture2D*>(source);
 
     // Same rule as the texture dump: a resource from another device faults rather than failing.
-    ID3D11Device* owner = nullptr;
-    texture->GetDevice(&owner);
-    const bool same_device = owner == pass->device;
-    if (owner) {
-        owner->Release();
-    }
-    if (!same_device) {
-        say(pass, "source belongs to another device");
+    if (!rsf::same_device(texture, pass->device.Get())) {
+        rsf::say(pass->log, pass->log_user, "source belongs to another device");
         return RSF_MOTION_DECODE_ERROR_SOURCE_MISMATCH;
     }
 
     D3D11_TEXTURE2D_DESC description{};
     texture->GetDesc(&description);
     if (description.Width != pass->width || description.Height != pass->height) {
-        say(pass, "source is %ux%u but this pass was built for %ux%u", description.Width,
-            description.Height, pass->width, pass->height);
+        rsf::say(pass->log, pass->log_user, "source is %ux%u but this pass was built for %ux%u",
+                 description.Width, description.Height, pass->width, pass->height);
         return RSF_MOTION_DECODE_ERROR_SOURCE_MISMATCH;
     }
 
-    ID3D11ShaderResourceView* source_view = nullptr;
-    if (FAILED(pass->device->CreateShaderResourceView(texture, nullptr, &source_view)) ||
-        !source_view) {
-        say(pass, "source view could not be created");
+    ID3D11ShaderResourceView* source_view = pass->sources.get(pass->device.Get(), texture);
+    if (!source_view) {
+        rsf::say(pass->log, pass->log_user, "source view could not be created");
         return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(pass->constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-        source_view->Release();
+    if (FAILED(context->Map(pass->constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
     }
     Constants values{};
@@ -267,26 +205,28 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     values.size[0] = pass->width;
     values.size[1] = pass->height;
     std::memcpy(mapped.pData, &values, sizeof(values));
-    context->Unmap(pass->constants, 0);
+    context->Unmap(pass->constants.Get(), 0);
 
     // This dispatch happens inside a frame the game is in the middle of. It did not ask for its
     // compute bindings to change, so they are put back exactly as they were.
-    ID3D11ComputeShader* previous_shader = nullptr;
-    ID3D11ClassInstance* previous_instances[16] = {};
-    UINT previous_instance_count = 16;
-    ID3D11ShaderResourceView* previous_source = nullptr;
-    ID3D11UnorderedAccessView* previous_target = nullptr;
-    ID3D11Buffer* previous_constants = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> previous_shader;
+    ID3D11ClassInstance* previous_instances[D3D11_SHADER_MAX_INTERFACES] = {};
+    UINT previous_instance_count = D3D11_SHADER_MAX_INTERFACES;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> previous_source;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> previous_target;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> previous_constants;
     context->CSGetShader(&previous_shader, previous_instances, &previous_instance_count);
     context->CSGetShaderResources(0, 1, &previous_source);
     context->CSGetUnorderedAccessViews(0, 1, &previous_target);
     context->CSGetConstantBuffers(0, 1, &previous_constants);
 
     const UINT no_offset = static_cast<UINT>(-1);
-    context->CSSetShader(pass->shader, nullptr, 0);
+    ID3D11UnorderedAccessView* target_view = pass->target_view.Get();
+    ID3D11Buffer* constants = pass->constants.Get();
+    context->CSSetShader(pass->shader.Get(), nullptr, 0);
     context->CSSetShaderResources(0, 1, &source_view);
-    context->CSSetUnorderedAccessViews(0, 1, &pass->target_view, &no_offset);
-    context->CSSetConstantBuffers(0, 1, &pass->constants);
+    context->CSSetUnorderedAccessViews(0, 1, &target_view, &no_offset);
+    context->CSSetConstantBuffers(0, 1, &constants);
     context->Dispatch((pass->width + 7) / 8, (pass->height + 7) / 8, 1);
 
     // Unbind our own views before restoring, so a target that was bound elsewhere is not left
@@ -296,56 +236,28 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     context->CSSetShaderResources(0, 1, &no_source);
     context->CSSetUnorderedAccessViews(0, 1, &no_target, &no_offset);
 
-    context->CSSetShader(previous_shader, previous_instances, previous_instance_count);
-    context->CSSetShaderResources(0, 1, &previous_source);
-    context->CSSetUnorderedAccessViews(0, 1, &previous_target, &no_offset);
-    context->CSSetConstantBuffers(0, 1, &previous_constants);
+    context->CSSetShader(previous_shader.Get(), previous_instances, previous_instance_count);
+    ID3D11ShaderResourceView* restored_source = previous_source.Get();
+    ID3D11UnorderedAccessView* restored_target = previous_target.Get();
+    ID3D11Buffer* restored_constants = previous_constants.Get();
+    context->CSSetShaderResources(0, 1, &restored_source);
+    context->CSSetUnorderedAccessViews(0, 1, &restored_target, &no_offset);
+    context->CSSetConstantBuffers(0, 1, &restored_constants);
 
-    if (previous_shader) {
-        previous_shader->Release();
-    }
     for (UINT index = 0; index < previous_instance_count; ++index) {
         if (previous_instances[index]) {
             previous_instances[index]->Release();
         }
     }
-    if (previous_source) {
-        previous_source->Release();
-    }
-    if (previous_target) {
-        previous_target->Release();
-    }
-    if (previous_constants) {
-        previous_constants->Release();
-    }
-    source_view->Release();
     return RSF_MOTION_DECODE_OK;
 }
 
 extern "C" void* rsf_motion_decode_texture(rsf_motion_decode* pass)
 {
-    return pass ? pass->target : nullptr;
+    return pass ? pass->target.Get() : nullptr;
 }
 
 extern "C" void rsf_motion_decode_destroy(rsf_motion_decode* pass)
 {
-    if (!pass) {
-        return;
-    }
-    if (pass->constants) {
-        pass->constants->Release();
-    }
-    if (pass->target_view) {
-        pass->target_view->Release();
-    }
-    if (pass->target) {
-        pass->target->Release();
-    }
-    if (pass->shader) {
-        pass->shader->Release();
-    }
-    if (pass->device) {
-        pass->device->Release();
-    }
     delete pass;
 }

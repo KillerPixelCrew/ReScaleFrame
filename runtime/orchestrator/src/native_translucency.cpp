@@ -2,8 +2,9 @@
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/shader_compile.h>
+#include <rescaleframe/srv_format.h>
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cmath>
 #include <cstring>
@@ -54,16 +55,13 @@ float change(float3 a, float3 b) { float3 d = abs(tonemap(a) - tonemap(b)); retu
 struct Constants {
     int32_t origin[2]; uint32_t size[2]; float scene_inv_size[2]; uint32_t mode; float coverage_scale;
 };
-DXGI_FORMAT typed(DXGI_FORMAT format)
-{
-    switch (format) {
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
-    case DXGI_FORMAT_R32G32B32A32_TYPELESS: return DXGI_FORMAT_R32G32B32A32_FLOAT;
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM;
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
-    default: return format;
-    }
-}
+using rsf::srv_format;
+// A shader view of a game texture, kept while the same texture comes back. Holding the texture
+// keeps its address from being taken by another one while the view is cached.
+struct SourceView {
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11ShaderResourceView> view;
+};
 struct Key {
     uint64_t family = 0, view = 0, frame = 0;
     int32_t rect[4]{};
@@ -78,7 +76,9 @@ struct State {
     ComPtr<ID3D11SamplerState> sampler;
     bool shader_failed = false;
     ComPtr<ID3D11Texture2D> opaque, layer, masks[3], clouds;
+    ComPtr<ID3D11ShaderResourceView> opaque_view;
     ComPtr<ID3D11UnorderedAccessView> mask_views[3];
+    SourceView scene_view, layer_view;
     uint32_t width = 0, height = 0;
     DXGI_FORMAT opaque_format = DXGI_FORMAT_UNKNOWN, layer_format = DXGI_FORMAT_UNKNOWN;
     Key key;
@@ -90,7 +90,8 @@ struct State {
     void release()
     {
         device.Reset(); shader.Reset(); constants.Reset(); sampler.Reset(); shader_failed = false;
-        opaque.Reset(); layer.Reset(); clouds.Reset();
+        opaque.Reset(); opaque_view.Reset(); layer.Reset(); clouds.Reset();
+        scene_view = {}; layer_view = {};
         clouds_pending = clouds_ready = false;
         for (auto& mask : masks) mask.Reset();
         for (auto& view : mask_views) view.Reset();
@@ -106,17 +107,11 @@ bool prepare_device(State& self, ID3D11Device* device)
     if (self.shader) return true;
     if (self.shader_failed) return false;
     self.shader_failed = true;
-    HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!compiler) return false;
-    auto compile = reinterpret_cast<decltype(&D3DCompile)>(reinterpret_cast<void*>(GetProcAddress(compiler, "D3DCompile")));
-    ComPtr<ID3DBlob> code, errors;
-    const HRESULT compiled = compile ? compile(shader_source, sizeof(shader_source) - 1, "translucency_masks", nullptr,
-        nullptr, "main", "cs_5_0", 0, 0, &code, &errors) : E_FAIL;
-    const HRESULT created = SUCCEEDED(compiled) && code ?
-        device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &self.shader) : E_FAIL;
-    // Blob vtables live in the compiler module. Drop both before unloading it.
-    code.Reset(); errors.Reset(); FreeLibrary(compiler);
-    if (FAILED(created)) return false;
+    // Compiled without strictness, as it always has been.
+    if (!rsf::compile_compute(device, shader_source, "translucency_masks", "main", self.shader.ReleaseAndGetAddressOf(),
+            nullptr, nullptr, 0)) {
+        self.shader.Reset(); return false;
+    }
     D3D11_BUFFER_DESC buffer{};
     buffer.ByteWidth = sizeof(Constants); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SAMPLER_DESC sampler{};
@@ -141,7 +136,8 @@ bool prepare_targets(State& self, uint32_t width, uint32_t height, DXGI_FORMAT o
 {
     if (self.width == width && self.height == height && self.opaque_format == opaque_format) return true;
     self.width = self.height = 0;
-    if (!texture(self.device.Get(), width, height, opaque_format, D3D11_BIND_SHADER_RESOURCE, self.opaque)) return false;
+    if (!texture(self.device.Get(), width, height, opaque_format, D3D11_BIND_SHADER_RESOURCE, self.opaque) ||
+        FAILED(self.device->CreateShaderResourceView(self.opaque.Get(), nullptr, &self.opaque_view))) return false;
     for (uint32_t i = 0; i < 3; ++i) {
         if (!texture(self.device.Get(), width, height, DXGI_FORMAT_R32_FLOAT,
                 D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, self.masks[i]) ||
@@ -151,20 +147,24 @@ bool prepare_targets(State& self, uint32_t width, uint32_t height, DXGI_FORMAT o
     self.width = width; self.height = height; self.opaque_format = opaque_format;
     return true;
 }
-bool view(ID3D11Device* device, ID3D11Texture2D* texture, ComPtr<ID3D11ShaderResourceView>& out)
+ID3D11ShaderResourceView* view(ID3D11Device* device, SourceView& cached, ID3D11Texture2D* texture)
 {
+    if (cached.texture.Get() == texture) return cached.view.Get();
+    cached = {};
     D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
-    if (desc.SampleDesc.Count != 1 || desc.ArraySize != 1) return false;
+    if (desc.SampleDesc.Count != 1 || desc.ArraySize != 1) return nullptr;
     D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format = typed(desc.Format); srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; srv.Texture2D.MipLevels = 1;
-    return SUCCEEDED(device->CreateShaderResourceView(texture, &srv, &out));
+    srv.Format = srv_format(desc.Format); srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; srv.Texture2D.MipLevels = 1;
+    if (FAILED(device->CreateShaderResourceView(texture, &srv, &cached.view))) return nullptr;
+    cached.texture = texture;
+    return cached.view.Get();
 }
 bool dispatch(State& self, ID3D11DeviceContext* context, ID3D11Texture2D* scene, ID3D11Texture2D* layer, uint32_t mode)
 {
     D3D11_TEXTURE2D_DESC scene_desc{}; scene->GetDesc(&scene_desc);
-    ComPtr<ID3D11ShaderResourceView> sources[3];
-    if (!view(self.device.Get(), scene, sources[0]) || !view(self.device.Get(), self.opaque.Get(), sources[1]) ||
-        (layer && !view(self.device.Get(), layer, sources[2]))) return false;
+    ID3D11ShaderResourceView* bound[] = {view(self.device.Get(), self.scene_view, scene), self.opaque_view.Get(),
+        layer ? view(self.device.Get(), self.layer_view, layer) : nullptr};
+    if (!bound[0] || !bound[1] || (layer && !bound[2])) return false;
     Constants constants{};
     constants.origin[0] = self.key.rect[0]; constants.origin[1] = self.key.rect[1];
     constants.size[0] = self.width; constants.size[1] = self.height;
@@ -177,7 +177,6 @@ bool dispatch(State& self, ID3D11DeviceContext* context, ID3D11Texture2D* scene,
     context->SetPredication(nullptr, FALSE);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     context->UpdateSubresource(self.constants.Get(), 0, nullptr, &constants, 0, 0);
-    ID3D11ShaderResourceView* bound[] = {sources[0].Get(), sources[1].Get(), sources[2].Get()};
     ID3D11UnorderedAccessView* targets[] = {self.mask_views[0].Get(), self.mask_views[1].Get(), self.mask_views[2].Get()};
     ID3D11Buffer* buffers[] = {self.constants.Get()};
     ID3D11SamplerState* samplers[] = {self.sampler.Get()};
@@ -266,7 +265,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_translucency_pass(void* context_point
         self.clouds_ready = self.clouds_pending && !std::memcmp(self.cloud_rect, key.rect, sizeof(key.rect));
         self.clouds_pending = false;
         if (!prepare_targets(self, uint32_t(key.rect[2] - key.rect[0]), uint32_t(key.rect[3] - key.rect[1]),
-                typed(scene_desc.Format))) { self.width = 0; return; }
+                srv_format(scene_desc.Format))) { self.width = 0; return; }
         context->CopySubresourceRegion(self.opaque.Get(), 0, 0, 0, 0, scene, 0, &box);
         self.snapshot = true;
         return;
@@ -285,9 +284,9 @@ extern "C" RSF_RUNTIME_API void rsf_native_translucency_pass(void* context_point
     // Only a layer at scene size shares the view rectangle; a scaled one is used for the masks only.
     if (layer_desc.Width != scene_desc.Width || layer_desc.Height != scene_desc.Height ||
         layer_desc.SampleDesc.Count != 1 || layer_desc.ArraySize != 1) return;
-    if (!self.layer || self.layer_format != typed(layer_desc.Format)) {
-        if (!texture(device.Get(), self.width, self.height, typed(layer_desc.Format), D3D11_BIND_SHADER_RESOURCE, self.layer)) return;
-        self.layer_format = typed(layer_desc.Format);
+    if (!self.layer || self.layer_format != srv_format(layer_desc.Format)) {
+        if (!texture(device.Get(), self.width, self.height, srv_format(layer_desc.Format), D3D11_BIND_SHADER_RESOURCE, self.layer)) return;
+        self.layer_format = srv_format(layer_desc.Format);
     }
     context->CopySubresourceRegion(self.layer.Get(), 0, 0, 0, 0, layer, 0, &box);
     self.layer_ready = true;

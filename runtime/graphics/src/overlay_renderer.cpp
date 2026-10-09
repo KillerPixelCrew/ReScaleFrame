@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <rescaleframe/overlay_renderer.h>
+#include <rescaleframe/log.h>
+#include <rescaleframe/shader_compile.h>
 
 #include <windows.h>
 
 #include <d3d11.h>
 
-#include <cstdarg>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <new>
 #include <vector>
@@ -80,9 +80,6 @@ static_assert(sizeof(Constants) % 16 == 0, "constant buffers are bound in 16 byt
 static_assert(sizeof(rsf_overlay_vertex) == 20, "the input layout below describes this exact size");
 static_assert(offsetof(rsf_overlay_vertex, u) == 8, "input layout offset");
 static_assert(offsetof(rsf_overlay_vertex, color) == 16, "input layout offset");
-
-using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
-                                    LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
 // Ceilings on one frame's geometry. egui is nowhere near these; they exist so that a count that
 // arrived wrong is refused rather than turned into an allocation the size of the address space.
@@ -295,19 +292,6 @@ bool is_srgb_format(DXGI_FORMAT format)
            format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
 }
 
-// Loaded by name from the system directory only. This runs inside a game process, and a plain
-// LoadLibrary would let anything named d3dcompiler_47.dll next to the executable answer instead.
-compile_fn load_compiler()
-{
-    const HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr,
-                                          LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) {
-        return nullptr;
-    }
-    return reinterpret_cast<compile_fn>(
-        reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
-}
-
 } // namespace
 
 struct rsf_overlay_renderer {
@@ -327,7 +311,7 @@ struct rsf_overlay_renderer {
     std::vector<Texture> textures;
     // Diagnostics that would otherwise repeat every frame for as long as the game runs.
     bool reported_missing_texture = false;
-    bool reported_srgb_target = false;
+    bool checked_target = false;
     bool reported_no_target = false;
     rsf_overlay_renderer_log_fn log = nullptr;
     void* log_user = nullptr;
@@ -335,26 +319,13 @@ struct rsf_overlay_renderer {
 
 namespace {
 
-void say(const rsf_overlay_renderer* renderer, const char* format, ...)
-{
-    if (!renderer || !renderer->log) {
-        return;
-    }
-    char message[512];
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    renderer->log(renderer->log_user, message);
-}
-
 // The two ways this can draw nothing visible without anything failing. Neither is corrected here:
 // an absent render target is the caller's to bind, and an sRGB view needs a colour conversion that
 // nobody has yet been able to look at on a screen. Reported once each, because a message every
 // frame for the length of a session is not a diagnostic.
 void report_target_once(rsf_overlay_renderer* renderer, ID3D11DeviceContext* context)
 {
-    if (renderer->reported_no_target && renderer->reported_srgb_target) {
+    if (renderer->checked_target) {
         return;
     }
     ID3D11RenderTargetView* target = nullptr;
@@ -362,19 +333,19 @@ void report_target_once(rsf_overlay_renderer* renderer, ID3D11DeviceContext* con
     if (!target) {
         if (!renderer->reported_no_target) {
             renderer->reported_no_target = true;
-            say(renderer, "no render target was bound when the overlay drew, so it went nowhere");
+            rsf::say(renderer->log, renderer->log_user,
+                     "no render target was bound when the overlay drew, so it went nowhere");
         }
         return;
     }
-    if (!renderer->reported_srgb_target) {
-        D3D11_RENDER_TARGET_VIEW_DESC description{};
-        target->GetDesc(&description);
-        if (is_srgb_format(description.Format)) {
-            renderer->reported_srgb_target = true;
-            say(renderer,
-                "the bound render target is an sRGB view, so the overlay's colours are encoded "
-                "twice and will look washed out");
-        }
+    // The first bound target decides; later frames skip the query entirely.
+    renderer->checked_target = true;
+    D3D11_RENDER_TARGET_VIEW_DESC description{};
+    target->GetDesc(&description);
+    if (is_srgb_format(description.Format)) {
+        rsf::say(renderer->log, renderer->log_user,
+                 "the bound render target is an sRGB view, so the overlay's colours are encoded "
+                 "twice and will look washed out");
     }
     target->Release();
 }
@@ -443,68 +414,26 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     renderer->log = setup->log;
     renderer->log_user = setup->log_user;
 
-    const compile_fn compile = load_compiler();
-    if (!compile) {
-        say(renderer, "d3dcompiler_47.dll could not be loaded from the system directory");
+    // Flags 0 and shader model 4_0, as before: see the note on overlay_shader.
+    std::vector<uint8_t> vertex_bytecode;
+    std::vector<uint8_t> pixel_bytecode;
+    if (!rsf::compile_shader(overlay_shader, "overlay_renderer", "vertex_main", "vs_4_0",
+                             vertex_bytecode, renderer->log, renderer->log_user, 0) ||
+        !rsf::compile_shader(overlay_shader, "overlay_renderer", "pixel_main", "ps_4_0",
+                             pixel_bytecode, renderer->log, renderer->log_user, 0)) {
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_SHADER_FAILED;
-    }
-
-    const SIZE_T source_length = std::strlen(overlay_shader);
-    ID3DBlob* vertex_bytecode = nullptr;
-    ID3DBlob* errors = nullptr;
-    HRESULT compiled = compile(overlay_shader, source_length, "overlay_renderer", nullptr, nullptr,
-                               "vertex_main", "vs_4_0", 0, 0, &vertex_bytecode, &errors);
-    if (FAILED(compiled) || !vertex_bytecode) {
-        say(renderer, "overlay vertex shader did not compile: %s",
-            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
-        if (errors) {
-            errors->Release();
-        }
-        if (vertex_bytecode) {
-            vertex_bytecode->Release();
-        }
-        rsf_overlay_renderer_destroy(renderer);
-        return RSF_OVERLAY_RENDERER_ERROR_SHADER_FAILED;
-    }
-    if (errors) {
-        errors->Release();
-        errors = nullptr;
-    }
-
-    ID3DBlob* pixel_bytecode = nullptr;
-    compiled = compile(overlay_shader, source_length, "overlay_renderer", nullptr, nullptr,
-                       "pixel_main", "ps_4_0", 0, 0, &pixel_bytecode, &errors);
-    if (FAILED(compiled) || !pixel_bytecode) {
-        say(renderer, "overlay pixel shader did not compile: %s",
-            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
-        if (errors) {
-            errors->Release();
-        }
-        if (pixel_bytecode) {
-            pixel_bytecode->Release();
-        }
-        vertex_bytecode->Release();
-        rsf_overlay_renderer_destroy(renderer);
-        return RSF_OVERLAY_RENDERER_ERROR_SHADER_FAILED;
-    }
-    if (errors) {
-        errors->Release();
     }
 
     const HRESULT made_vertex_shader =
-        device->CreateVertexShader(vertex_bytecode->GetBufferPointer(),
-                                   vertex_bytecode->GetBufferSize(), nullptr,
+        device->CreateVertexShader(vertex_bytecode.data(), vertex_bytecode.size(), nullptr,
                                    &renderer->vertex_shader);
     const HRESULT made_pixel_shader =
-        device->CreatePixelShader(pixel_bytecode->GetBufferPointer(),
-                                  pixel_bytecode->GetBufferSize(), nullptr,
+        device->CreatePixelShader(pixel_bytecode.data(), pixel_bytecode.size(), nullptr,
                                   &renderer->pixel_shader);
-    pixel_bytecode->Release();
     if (FAILED(made_vertex_shader) || FAILED(made_pixel_shader) || !renderer->vertex_shader ||
         !renderer->pixel_shader) {
-        say(renderer, "overlay shaders could not be created");
-        vertex_bytecode->Release();
+        rsf::say(renderer->log, renderer->log_user, "overlay shaders could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_SHADER_FAILED;
     }
@@ -517,11 +446,9 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
         {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
     const HRESULT made_layout = device->CreateInputLayout(
-        elements, 3, vertex_bytecode->GetBufferPointer(), vertex_bytecode->GetBufferSize(),
-        &renderer->input_layout);
-    vertex_bytecode->Release();
+        elements, 3, vertex_bytecode.data(), vertex_bytecode.size(), &renderer->input_layout);
     if (FAILED(made_layout) || !renderer->input_layout) {
-        say(renderer, "overlay input layout could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay input layout could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -533,7 +460,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     constants.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     if (FAILED(device->CreateBuffer(&constants, nullptr, &renderer->constants)) ||
         !renderer->constants) {
-        say(renderer, "overlay constant buffer could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay constant buffer could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -550,7 +477,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     if (FAILED(device->CreateBlendState(&blend, &renderer->blend)) || !renderer->blend) {
-        say(renderer, "overlay blend state could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay blend state could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -578,7 +505,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     depth_stencil.BackFace = stencil_unused;
     if (FAILED(device->CreateDepthStencilState(&depth_stencil, &renderer->depth_stencil)) ||
         !renderer->depth_stencil) {
-        say(renderer, "overlay depth stencil state could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay depth stencil state could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -595,7 +522,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     rasterizer.AntialiasedLineEnable = FALSE;
     if (FAILED(device->CreateRasterizerState(&rasterizer, &renderer->rasterizer)) ||
         !renderer->rasterizer) {
-        say(renderer, "overlay rasterizer state could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay rasterizer state could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -608,12 +535,12 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_create(
     sampler.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
     if (FAILED(device->CreateSamplerState(&sampler, &renderer->sampler)) || !renderer->sampler) {
-        say(renderer, "overlay sampler could not be created");
+        rsf::say(renderer->log, renderer->log_user, "overlay sampler could not be created");
         rsf_overlay_renderer_destroy(renderer);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
 
-    say(renderer, "overlay renderer ready");
+    rsf::say(renderer->log, renderer->log_user, "overlay renderer ready");
     *out = renderer;
     return RSF_OVERLAY_RENDERER_OK;
 }
@@ -630,7 +557,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_upload_texture(
     // the row pitch below from overflowing on a size that arrived wrong.
     if (update->width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
         update->height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
-        say(renderer, "overlay texture update of %ux%u is larger than D3D11 allows", update->width,
+        rsf::say(renderer->log, renderer->log_user, "overlay texture update of %ux%u is larger than D3D11 allows", update->width,
             update->height);
         return RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT;
     }
@@ -656,14 +583,14 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_upload_texture(
         ID3D11Texture2D* texture = nullptr;
         if (FAILED(renderer->device->CreateTexture2D(&description, &initial, &texture)) ||
             !texture) {
-            say(renderer, "overlay texture %llu could not be created at %ux%u",
+            rsf::say(renderer->log, renderer->log_user, "overlay texture %llu could not be created at %ux%u",
                 static_cast<unsigned long long>(update->id), update->width, update->height);
             return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
         }
         ID3D11ShaderResourceView* view = nullptr;
         if (FAILED(renderer->device->CreateShaderResourceView(texture, nullptr, &view)) || !view) {
             texture->Release();
-            say(renderer, "overlay texture %llu has no shader resource view",
+            rsf::say(renderer->log, renderer->log_user, "overlay texture %llu has no shader resource view",
                 static_cast<unsigned long long>(update->id));
             return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
         }
@@ -698,7 +625,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_upload_texture(
 
     Texture* target = find_texture(renderer, update->id);
     if (!target) {
-        say(renderer, "overlay patch for texture %llu, which was never uploaded whole",
+        rsf::say(renderer->log, renderer->log_user, "overlay patch for texture %llu, which was never uploaded whole",
             static_cast<unsigned long long>(update->id));
         return RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT;
     }
@@ -707,7 +634,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_upload_texture(
     const uint64_t right = static_cast<uint64_t>(update->x) + update->width;
     const uint64_t bottom = static_cast<uint64_t>(update->y) + update->height;
     if (right > target->width || bottom > target->height) {
-        say(renderer, "overlay patch %ux%u at %u,%u does not fit texture %llu of %ux%u",
+        rsf::say(renderer->log, renderer->log_user, "overlay patch %ux%u at %u,%u does not fit texture %llu of %ux%u",
             update->width, update->height, update->x, update->y,
             static_cast<unsigned long long>(update->id), target->width, target->height);
         return RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT;
@@ -766,7 +693,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_draw(rsf_overlay_ren
         return RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT;
     }
     if (data->vertex_count > max_vertices || data->index_count > max_indices) {
-        say(renderer, "overlay frame of %u vertices and %u indices is past any plausible ceiling",
+        rsf::say(renderer->log, renderer->log_user, "overlay frame of %u vertices and %u indices is past any plausible ceiling",
             data->vertex_count, data->index_count);
         return RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT;
     }
@@ -777,7 +704,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_draw(rsf_overlay_ren
                      sizeof(rsf_overlay_vertex), D3D11_BIND_VERTEX_BUFFER) ||
         !grow_buffer(renderer, &renderer->indices, &renderer->index_capacity, data->index_count,
                      sizeof(uint32_t), D3D11_BIND_INDEX_BUFFER)) {
-        say(renderer, "overlay geometry buffers could not be grown to %u vertices and %u indices",
+        rsf::say(renderer->log, renderer->log_user, "overlay geometry buffers could not be grown to %u vertices and %u indices",
             data->vertex_count, data->index_count);
         return RSF_OVERLAY_RENDERER_ERROR_RESOURCE_FAILED;
     }
@@ -853,7 +780,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_draw(rsf_overlay_ren
         // rather than an exception, so the ranges are checked rather than trusted.
         const uint64_t index_end = static_cast<uint64_t>(call.index_offset) + call.index_count;
         if (index_end > data->index_count || call.vertex_offset >= data->vertex_count) {
-            say(renderer, "overlay draw call %u indexes outside the frame's own geometry", index);
+            rsf::say(renderer->log, renderer->log_user, "overlay draw call %u indexes outside the frame's own geometry", index);
             continue;
         }
 
@@ -877,7 +804,7 @@ extern "C" rsf_overlay_renderer_result rsf_overlay_renderer_draw(rsf_overlay_ren
         if (!texture) {
             if (!renderer->reported_missing_texture) {
                 renderer->reported_missing_texture = true;
-                say(renderer, "overlay draw call names texture %llu, which was never uploaded",
+                rsf::say(renderer->log, renderer->log_user, "overlay draw call names texture %llu, which was never uploaded",
                     static_cast<unsigned long long>(call.texture_id));
             }
             continue;
