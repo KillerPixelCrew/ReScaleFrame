@@ -304,29 +304,14 @@ namespace ReScaleFrame.Unity
                 if (!Eligible(camera.camera) || !camera.resolveFinalTarget || hdrOutputGetter(camera)) return;
                 hudlessFrame = Time.frameCount;
                 Packet packet = Snapshot(camera, true); packet.Flags = PacketFlags.Hudless | PacketFlags.Probe; // completed SDR colour, before the UI draw
-                // Copy through Unity's graph before queuing native work. Looking up the current
-                // swapchain buffer in a later callback does not preserve this pass's contents.
-                TextureDesc descriptor = SceneSnapshotDescriptor(renderGraph, colorBuffer);
-                TextureHandle snapshot = renderGraph.CreateTexture(in descriptor);
                 using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame completed scene before UI", out var pass)) {
-                    pass.Packet = packet; pass.Color = colorBuffer; pass.Output = snapshot;
-                    builder.UseTexture(colorBuffer, AccessFlags.Read);
-                    builder.UseTexture(snapshot, AccessFlags.Write);
+                    pass.Packet = packet; pass.Color = colorBuffer;
+                    // The callback binds this target and records its native copy on Unity's list.
+                    builder.UseTexture(colorBuffer, AccessFlags.ReadWrite);
                     builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
                     builder.SetRenderFunc<PassData>(executePass);
                 }
             }
-        }
-        internal static TextureDesc SceneSnapshotDescriptor(RenderGraph graph, TextureHandle source)
-        {
-            // Built-in/imported backbuffers deliberately have no valid TextureDesc. Their
-            // supported metadata path is GetRenderTargetInfo, including the actual format.
-            RenderTargetInfo info = graph.GetRenderTargetInfo(source);
-            return new TextureDesc(info.width, info.height) {
-                format = info.format, slices = info.volumeDepth,
-                msaaSamples = (MSAASamples)info.msaaSamples, bindTextureMS = info.bindMS,
-                name = "ReScaleFrame scene snapshot before UI", clearBuffer = false
-            };
         }
         private static bool Reconstruct(object __instance, RenderGraph renderGraph, UniversalResourceData resourceData,
             UniversalCameraData cameraData, ref TextureHandle source, ref TextureHandle destination)
@@ -390,7 +375,7 @@ namespace ReScaleFrame.Unity
             }
         }
         // Hands the packet to the native bridge and queues its render event. The event id is the
-        // base event plus `eventOffset` (0 scene and hudless packets, 1 the window event).
+        // base event plus `eventOffset` (0 scene, 1 window, 2 pre-UI recording).
         private static void Submit(UnsafeGraphContext context, ref Packet packet, int eventOffset)
         {
             IntPtr owned = Native.Enqueue(ref packet);
@@ -417,14 +402,12 @@ namespace ReScaleFrame.Unity
             using (var producer = Bootstrap.EnterProducer()) {
             Packet packet = pass.Packet;
             if ((packet.Flags & PacketFlags.Hudless) != 0) {
-                if (!producer.Valid || !pass.Color.IsValid() || !pass.Output.IsValid()) return;
-                RTHandle source = pass.Color, snapshot = pass.Output;
-                if (source == null || snapshot == null || snapshot.rt == null) return;
-                // The imported source need not have a RenderTexture. Unity resolves its nameID;
-                // only the graph-owned destination crosses into the native callback.
-                context.cmd.CopyTexture(source.nameID, snapshot.nameID);
-                packet.Color = snapshot.rt.GetNativeTexturePtr();
-                Submit(context, ref packet, 0);
+                if (!producer.Valid || !pass.Color.IsValid()) return;
+                RTHandle source = pass.Color;
+                if (source == null) return;
+                context.cmd.SetRenderTarget(source.nameID);
+                if (source.rt != null) packet.Color = source.rt.GetNativeTexturePtr();
+                Submit(context, ref packet, 2);
                 return;
             }
             RTHandle color = pass.Color;

@@ -63,7 +63,7 @@ namespace ReScaleFrame.Unity
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void StateDelegate(uint state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CpuDelegate(uint stage, ulong frame);
         // RSF_UNITY_BRIDGE_ABI_VERSION and RSF_UNITY_NATIVE_ABI_VERSION.
-        internal const uint BridgeVersion = 2, NativeVersion = 3;
+        internal const uint BridgeVersion = 2, NativeVersion = 4;
         private static readonly int ApiSize = Marshal.SizeOf<Api>();
         internal static readonly uint PacketSize = (uint)Marshal.SizeOf<Packet>();
         internal static readonly uint CameraFrameSize = (uint)Marshal.SizeOf<CameraFrame>();

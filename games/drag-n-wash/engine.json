@@ -5,7 +5,9 @@
     "supplied_run": "Intel 8086:64a0; XeSS SR; FSR3 3.1.6 FG",
     "corrections": "Engine-owned pre-UI snapshot, serialized overlay drawing, touch input, owning-device Auto FG",
     "checked": "VS2026 Release gate, CoreCLR/shipped Mono contracts, promoted-touch fixture, RTX overlay/provider fixture",
-    "fresh_game_acceptance": false,
+    "fresh_game_acceptance": true,
+    "acceptance_scope": "Local PC native pre-UI format-28 copy, responsive menu/gameplay, FSR3/XeSS/DLSS-G replacements; user confirms works. Claw touch and non-AMD FSR4 ML-FG are not established.",
+    "native_helper_abi": 4,
     "startup_followup": "12bce3d first-frame regression: replaced invalid imported GetDescriptor lookup with GetRenderTargetInfo; physical creation now uses Auto's resolved provider; imported registry and real cold-start provider tests added",
     "research": "../../docs/research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026"
   },

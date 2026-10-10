@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <mutex>
 #if RSF_HAVE_UNITY_NATIVE
 #include <IUnityGraphics.h>
@@ -32,13 +33,11 @@ std::mutex guard;
 rsf_game_host_services services{};
 std::array<Pending, 32> pending;
 std::array<Commands, 3> commands;
-std::array<Commands, 3> hud_commands;
 ComPtr<ID3D12Fence> fence;
 std::atomic<bool> active{false};
 std::atomic<uint32_t> callbacks{0};
 std::atomic<uint32_t> managed_stage{0};
 uint32_t next_commands = 0;
-uint32_t next_hud_commands = 0;
 std::atomic<uint32_t> engine_spatial{0}, quality{1}, generation{1};
 std::atomic<bool> policy_pending{false};
 uint32_t refusals = 0;
@@ -65,13 +64,19 @@ bool player_registry_matches(HMODULE player)
 void configure_graphics()
 {
     if (!graphics || !unity || graphics->GetRenderer() != kUnityGfxRendererD3D12) { unity = nullptr; return; }
-    event_id = graphics->ReserveEventIDRange(2);
+    event_id = graphics->ReserveEventIDRange(3);
     UnityD3D12PluginEventConfig event{};
     event.graphicsQueueAccess = kUnityD3D12GraphicsQueueAccess_DontCare;
     event.flags = kUnityD3D12EventConfigFlag_SyncWorkerThreads | kUnityD3D12EventConfigFlag_FlushCommandBuffers;
     unity->ConfigureEvent(event_id, &event);
     event.graphicsQueueAccess = kUnityD3D12GraphicsQueueAccess_Allow;
     unity->ConfigureEvent(event_id + 1, &event);
+    // Keep the pre-UI capture on Unity's recording list, rather than submit a separate list
+    // whose worker execution can slip past the UI and direct-queue overlay draws.
+    event.graphicsQueueAccess = kUnityD3D12GraphicsQueueAccess_DontCare;
+    event.flags = kUnityD3D12EventConfigFlag_SyncWorkerThreads | kUnityD3D12EventConfigFlag_ModifiesCommandBuffersState;
+    event.ensureActiveRenderTextureIsBound = true;
+    unity->ConfigureEvent(event_id + 2, &event);
 }
 void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
 {
@@ -123,7 +128,7 @@ bool valid(const rsf_unity_packet& packet)
 {
     const auto& c = packet.camera;
     if (packet.struct_size != sizeof(packet) || packet.abi_version != RSF_UNITY_BRIDGE_ABI_VERSION ||
-        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & RSF_UNITY_PACKET_WINDOW) && !packet.color) ||
+        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & (RSF_UNITY_PACKET_WINDOW | RSF_UNITY_PACKET_HUDLESS)) && !packet.color) ||
         c.struct_size != sizeof(c) || c.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         !c.render_width || !c.render_height || !c.output_width || !c.output_height ||
         c.render_width > 16384 || c.render_height > 16384 || c.output_width > 16384 || c.output_height > 16384 ||
@@ -152,7 +157,7 @@ void* enqueue(const rsf_unity_packet* packet)
 }
 void __stdcall render(int id, void* address) noexcept try
 {
-    if (id != event_id && id != event_id + 1) return;
+    if (id != event_id && id != event_id + 1 && id != event_id + 2) return;
     callbacks.fetch_add(1);
     struct Finish { ~Finish() { callbacks.fetch_sub(1); } } finish;
     Pending entry;
@@ -167,7 +172,31 @@ void __stdcall render(int id, void* address) noexcept try
     if (!active.load() || !unity || !services.render_pass) return;
     ID3D12Device* device = unity->GetDevice();
     if (!device) return;
-    // HUD-less packets lease the graph snapshot made before UI, never a later swapchain lookup.
+    if (id == event_id + 2 && (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS)) {
+        UnityGraphicsD3D12RecordingState recording{};
+        if (!unity->CommandRecordingState(&recording) || !recording.commandList) {
+            if (++refusals <= 3) log("Unity pre-UI capture refused: no current recording list.");
+            return;
+        }
+        if (!entry.packet.color) {
+            ComPtr<IDXGISwapChain3> chain;
+            auto* owned = unity->GetSwapChain();
+            if (!owned || FAILED(owned->QueryInterface(IID_PPV_ARGS(&chain))) ||
+                FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&entry.resources[0])))) return;
+            entry.packet.color = entry.resources[0].Get();
+        }
+        rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
+        pass.role = RSF_GAME_RENDER_FINAL_SCENE;
+        services.render_pass(services.user, recording.commandList, &pass, 1);
+        services.render_pass(services.user, recording.commandList, &pass, 0);
+        static uint32_t reports = 0;
+        if (reports++ < 3) {
+            const auto source = entry.resources[0]->GetDesc();
+            char text[160]; std::snprintf(text, sizeof(text), "Unity pre-UI copy recorded on engine list: format=%u %llux%u", source.Format, source.Width, source.Height);
+            log(text);
+        }
+        return;
+    }
     if (id == event_id + 1 && (entry.packet.flags & RSF_UNITY_PACKET_WINDOW)) {
         rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
         pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity->GetSwapChain();
@@ -183,14 +212,14 @@ void __stdcall render(int id, void* address) noexcept try
     }
     const bool changing = policy_pending.load();
     if (changing) {
-        if (in_flight(commands) || in_flight(hud_commands)) return;
+        if (in_flight(commands)) return;
         policy_pending.store(false);
     } else if (entry.packet.generation != generation.load()) return;
     if ((output_width != entry.packet.camera.output_width || output_height != entry.packet.camera.output_height)) {
         if (in_flight(commands)) return;
         output_width = entry.packet.camera.output_width; output_height = entry.packet.camera.output_height;
     }
-    auto& slot = hudless ? hud_commands[next_hud_commands] : commands[next_commands];
+    auto& slot = commands[next_commands];
     // Reuse only after Unity's completion fence. Busy slots leave the queued spatial fallback.
     if (in_flight(slot)) return;
     slot.leases = {};
@@ -223,8 +252,7 @@ void __stdcall render(int id, void* address) noexcept try
     // A zero completion identity is an ownership failure, not permission to reuse the allocator.
     if (!slot.complete) { submission_unknown = true; active.store(false); log("Unity D3D12 submission returned no fence; adapter stopped and remains owned."); return; }
     services.render_pass(services.user, slot.list.Get(), &pass, 0);
-    if (hudless) next_hud_commands = (next_hud_commands + 1) % static_cast<uint32_t>(hud_commands.size());
-    else next_commands = (next_commands + 1) % static_cast<uint32_t>(commands.size());
+    next_commands = (next_commands + 1) % static_cast<uint32_t>(commands.size());
 #else
     (void)entry;
 #endif
@@ -257,12 +285,12 @@ bool rsf_unity_bridge_drained() noexcept
     std::lock_guard<std::mutex> lock(guard);
     if (callbacks.load() || submission_unknown) return false;
     for (const auto& entry : pending) if (entry.used) return false;
-    return !in_flight(commands) && !in_flight(hud_commands);
+    return !in_flight(commands);
 }
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    commands = {}; hud_commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = next_hud_commands = 0;
+    commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = 0;
     output_width = output_height = 0;
     input_width = input_height = 0;
     submission_unknown = false;

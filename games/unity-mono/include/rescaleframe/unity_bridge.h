@@ -3,7 +3,7 @@
 #include <rescaleframe/game_api.h>
 
 #define RSF_UNITY_BRIDGE_ABI_VERSION 2u
-#define RSF_UNITY_NATIVE_ABI_VERSION 3u
+#define RSF_UNITY_NATIVE_ABI_VERSION 4u
 
 // rsf_unity_packet::flags. The managed adapter mirrors these in PacketFlags (Native.cs).
 // History restarts at this frame.
@@ -13,7 +13,8 @@
 // Window event on the engine swapchain, carrying the overlay and no scene resources.
 #define RSF_UNITY_PACKET_WINDOW 4u
 // Completed scene colour before the UI draw. The colour is the swapchain buffer, resolved in the
-// native callback because an imported back buffer has no RenderTexture to hand over.
+// native callback because an imported back buffer has no RenderTexture to hand over. Its copy
+// is recorded on Unity's current command list before UI, through native event offset 2.
 #define RSF_UNITY_PACKET_HUDLESS 8u
 // Reconstruction is the engine's spatial fallback only: URP's depth or motion cannot be used.
 #define RSF_UNITY_PACKET_NO_INPUTS 16u

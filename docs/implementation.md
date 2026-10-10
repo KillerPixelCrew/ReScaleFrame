@@ -2,6 +2,16 @@
 
 ## Unity UI regression, touch and FG startup, 10 October 2026
 
+Live reproduction found that the managed snapshot still copied a null imported
+texture and used HDR metadata format 26 for the real SDR format-28 backbuffer.
+Replaced it with a native copy recorded on Unity's current pre-UI command list,
+removed the separate HUD-copy ring and bumped helper ABI to 4. The local run now
+survives menu/gameplay and FSR3/XeSS/DLSS-G replacements; the user confirms it
+works. This supersedes the earlier snapshot proposal below. Release/managed
+checks pass. Claw/touch hardware proof is separate. FSR4 ML-FG still refuses on
+non-AMD devices: the pinned SDK exposes only FG3.1.6 there; the non-AMD INT8
+path applies to SR. Exact live evidence and researched sources are linked below.
+
 The subsequent first-frame freeze exposed two defects in `12bce3d`: querying an
 invalid imported-backbuffer descriptor aborted graph recording, and Auto's
 resolved provider was discarded during physical-chain creation. Corrected the

@@ -49,11 +49,10 @@ internal static class Program
             Console.WriteLine("SKIP: supported render-target lookup needs Unity native Object calls unavailable in standalone Mono.");
             return;
         }
-        var descriptor = UrpAdapter.SceneSnapshotDescriptor(graph, handle);
-        if (descriptor.width != 1920 || descriptor.height != 1200 || descriptor.slices != 1 ||
-            descriptor.dimension != TextureDimension.Tex2D || descriptor.format != GraphicsFormat.B8G8R8A8_UNorm)
-            throw new InvalidOperationException("Imported snapshot metadata differs from its render target.");
-        Console.WriteLine("PASS: shipped imported backbuffer rejects GetTextureDesc; supported snapshot metadata succeeds.");
+        var info = graph.GetRenderTargetInfo(handle);
+        if (info.width != 1920 || info.height != 1200 || info.format != GraphicsFormat.B8G8R8A8_UNorm)
+            throw new InvalidOperationException("Imported metadata differs from its declared render target.");
+        Console.WriteLine("PASS: imported backbuffer descriptor is invalid; its declared metadata is readable but is not a native copy source.");
     }
     private static int Main()
     {
@@ -67,8 +66,8 @@ internal static class Program
             if (methods.Length != 12) throw new InvalidOperationException("Incomplete URP contract.");
             foreach (var method in methods) Console.WriteLine("Matched " + method.DeclaringType.FullName + "." + method.Name);
             ImportedBackbufferSnapshot();
-            // No snapshot means no native packet. In particular, a missing owned texture must
-            // never request a later lookup of the swapchain buffer as the HUD-less source.
+            // Invalid graph targets cannot queue a native capture callback. Imported targets
+            // use the native recording event and need no managed RenderTexture.
             var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
             var bootstrapState = typeof(Bootstrap).GetField("state", flags);
             int previousState = (int)bootstrapState.GetValue(null);
@@ -86,10 +85,10 @@ internal static class Program
                     .SetValue(pass, new Packet { Flags = PacketFlags.Hudless | PacketFlags.Probe });
                 var execute = typeof(UrpAdapter).GetMethod("Execute", flags);
                 execute.Invoke(null, new[] { pass, Activator.CreateInstance(execute.GetParameters()[1].ParameterType) });
-                if (importedPackets != 0) throw new InvalidOperationException("HUD-less work without an owned snapshot reached native resolution.");
+                if (importedPackets != 0) throw new InvalidOperationException("HUD-less work without a valid graph target reached native recording.");
             }
             finally { Native.Enqueue = previousEnqueue; bootstrapState.SetValue(null, previousState); }
-            Console.WriteLine("PASS: HUD-less work requires a graph-owned snapshot.");
+            Console.WriteLine("PASS: HUD-less work requires a valid graph target before native recording.");
             if (Type.GetType("Mono.Runtime") == null)
             {
                 Console.WriteLine("PASS: layout and shipped URP metadata. Run the Mono fixture to exercise the deployed Harmony assembly.");

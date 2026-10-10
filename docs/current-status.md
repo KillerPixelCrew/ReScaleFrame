@@ -6,6 +6,13 @@ FG corrections are applied and pass the recorded automated checks. Fresh game
 and Claw acceptance remain pending; the earlier acceptance below does not cover
 this package. [Correction and limits](research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026).
 
+Later local live testing replaced the managed snapshot with a native copy on
+Unity's current pre-UI recording list. Menu/gameplay and provider replacements
+remained responsive, and the user confirmed the correction works. This local
+acceptance supersedes the pending snapshot correction above. FSR4 ML-FG on
+NVIDIA/Intel and physical Claw touch remain unestablished; the investigated INT8
+guides provide FSR4 SR compatibility.
+
 Documentation checked on 7 October 2026 against source commit
 `fda5fd0f2730b40e5b96f419bc0a05cb0b73932b`, the recorded research and GitHub release metadata.
 This is a source/documentation audit. No new game, GPU or Windows build was run for this audit.
