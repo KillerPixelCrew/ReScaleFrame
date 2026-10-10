@@ -358,6 +358,24 @@ public:
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency); tick_ms = 1000.0 / double(frequency.QuadPart);
         ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter;
         native12 = SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(&direct_queue)));
+        if (settings.backend == RSF_FG_BACKEND_AUTO) {
+            ComPtr<IDXGIFactory4> owning_factory;
+            ComPtr<IDXGIAdapter1> owning_adapter;
+            if (native12) {
+                if (FAILED(direct_queue->GetDevice(IID_PPV_ARGS(&direct_device))) ||
+                    FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&owning_factory))) ||
+                    FAILED(owning_factory->EnumAdapterByLuid(direct_device->GetAdapterLuid(), IID_PPV_ARGS(&owning_adapter)))) return E_FAIL;
+            } else {
+                if (FAILED(source->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
+                    FAILED(adapter.As(&owning_adapter))) return E_FAIL;
+            }
+            DXGI_ADAPTER_DESC1 info{};
+            if (FAILED(owning_adapter->GetDesc1(&info))) return E_FAIL;
+            const auto backend = rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+            active_backend.store(backend);
+            char text[160]; std::snprintf(text, sizeof(text), "Auto FG selected backend %u from owning adapter vendor=0x%x device=0x%x", backend, info.VendorId, info.DeviceId);
+            log(text);
+        }
         graphics.struct_size = sizeof(graphics);
         if (native12) {
             // Unity and other native D3D12 plugins use the engine's device and queue.
@@ -429,7 +447,7 @@ public:
                     slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
         if (settings.runtime_switching) {
             if (native12 && FAILED(make_render_buffers())) return E_FAIL;
-            if (host && settings.backend != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
+            if (host && active_backend.load() != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
             const auto result = create_physical(settings.backend);
             if (result != RSF_BACKEND_OK) {
                 switch_result.store(result); active_backend.store(0);
@@ -743,7 +761,8 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
         if (setup->log) setup->log(setup->user, "presentation bridge: units_to_meters must be positive; interception refused");
         return 0;
     }
-    if (setup->backend && !rsf_fg_backend_known(setup->backend)) return 0;
+    if (setup->backend && !rsf_fg_backend_known(setup->backend) &&
+        !(setup->backend == RSF_FG_BACKEND_AUTO && setup->runtime_switching)) return 0;
     settings = *setup; runtime_directory = setup->runtime_directory_utf8;
     engine_version = setup->engine_version_utf8 ? setup->engine_version_utf8 : "";
     project_id = setup->project_id_utf8 ? setup->project_id_utf8 : "";

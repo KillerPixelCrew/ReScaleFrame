@@ -15,6 +15,8 @@ typedef struct rsf_fg_choice {
 RSF_RUNTIME_API uint32_t rsf_fg_choice_start(const wchar_t* path, uint32_t fallback, uint32_t choices);
 RSF_RUNTIME_API rsf_backend_result rsf_fg_choice_save(uint32_t backend);
 RSF_RUNTIME_API rsf_fg_choice rsf_fg_choice_get(void);
+/* Publish Auto's resolved startup choice without replacing the user's saved preference. */
+RSF_RUNTIME_API void rsf_fg_choice_resolve_auto(uint32_t backend);
 #ifdef __cplusplus
 }
 #endif

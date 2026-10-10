@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/unity_config.h>
+#include <rescaleframe/fg_choice.h>
 #include <rescaleframe/unity_sr_host.h>
 #include "../../backends/common/d3d12_helpers.h"
 #include <windows.h>
@@ -337,7 +338,9 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_se
         !request->options.generated_frames || request->units_to_meters <= 0)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (installed) return RSF_BACKEND_ERROR_NEEDS_RESTART;
-    if ((request->backend == 0 && !request->runtime_switching) || (request->backend != 0 && !rsf_fg_backend_known(request->backend)))
+    if ((request->backend == 0 && !request->runtime_switching) ||
+        (request->backend != 0 && !rsf_fg_backend_known(request->backend) &&
+         !(request->backend == RSF_FG_BACKEND_AUTO && request->runtime_switching)))
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     directory = request->runtime_directory_utf8; options = request->options;
     options.reflex_mode = RSF_REFLEX_OFF; logger = request->log; logger_user = request->user;
@@ -362,7 +365,7 @@ extern "C" RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* 
     if (!ini || installed) return installed ? 0u : 1u;
     const auto backend = rsf::unity_config::fg_choice_start(ini);
     // Off still installs the switching facade, which loads from the FSR3 folder.
-    directory = backend_directory(ini, backend ? backend : RSF_FG_BACKEND_FSR3);
+    directory = backend_directory(ini, backend && backend != RSF_FG_BACKEND_AUTO ? backend : RSF_FG_BACKEND_FSR3);
     if (directory.empty()) return 3;
     log_path = rsf::unity_config::path_setting(ini, L"Log");
     if (GetPrivateProfileIntW(L"UnitySR", L"GraphicsDebug", 0, ini)) {
@@ -393,6 +396,7 @@ extern "C" RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* 
 catch (...) { return 5; }
 extern "C" RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event* event) {
     if (!event || !event->source_frame_id || !rsf_d3d11_present_has_owner()) return;
+    rsf_fg_choice_resolve_auto(rsf_d3d11_present_backend());
     // Sleep is a CPU operation. Do not retain a lock needed by the presenting thread.
     uint64_t generation = rsf_d3d11_present_generation();
     const auto acquired = event->stage == RSF_GAME_CPU_FRAME_BEGIN ? rsf_d3d11_present_acquire(event->source_frame_id) : RSF_BACKEND_OK;

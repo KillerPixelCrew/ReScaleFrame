@@ -304,9 +304,16 @@ namespace ReScaleFrame.Unity
                 if (!Eligible(camera.camera) || !camera.resolveFinalTarget || hdrOutputGetter(camera)) return;
                 hudlessFrame = Time.frameCount;
                 Packet packet = Snapshot(camera, true); packet.Flags = PacketFlags.Hudless | PacketFlags.Probe; // completed SDR colour, before the UI draw
+                // Copy through Unity's graph before queuing native work. Looking up the current
+                // swapchain buffer in a later callback does not preserve this pass's contents.
+                TextureDesc descriptor = colorBuffer.GetDescriptor(renderGraph);
+                descriptor.name = "ReScaleFrame scene snapshot before UI";
+                descriptor.clearBuffer = false;
+                TextureHandle snapshot = renderGraph.CreateTexture(in descriptor);
                 using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame completed scene before UI", out var pass)) {
-                    pass.Packet = packet; pass.Color = colorBuffer;
+                    pass.Packet = packet; pass.Color = colorBuffer; pass.Output = snapshot;
                     builder.UseTexture(colorBuffer, AccessFlags.Read);
+                    builder.UseTexture(snapshot, AccessFlags.Write);
                     builder.AllowPassCulling(false); builder.AllowGlobalStateModification(true);
                     builder.SetRenderFunc<PassData>(executePass);
                 }
@@ -401,9 +408,13 @@ namespace ReScaleFrame.Unity
             using (var producer = Bootstrap.EnterProducer()) {
             Packet packet = pass.Packet;
             if ((packet.Flags & PacketFlags.Hudless) != 0) {
-                // Imported backbuffers have an RTHandle without a RenderTexture. Resolve
-                // the current engine buffer in the queued native callback, not through rt.
-                if (!producer.Valid) return;
+                if (!producer.Valid || !pass.Color.IsValid() || !pass.Output.IsValid()) return;
+                RTHandle source = pass.Color, snapshot = pass.Output;
+                if (source == null || snapshot == null || snapshot.rt == null) return;
+                // The imported source need not have a RenderTexture. Unity resolves its nameID;
+                // only the graph-owned destination crosses into the native callback.
+                context.cmd.CopyTexture(source.nameID, snapshot.nameID);
+                packet.Color = snapshot.rt.GetNativeTexturePtr();
                 Submit(context, ref packet, 0);
                 return;
             }

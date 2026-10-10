@@ -114,6 +114,8 @@ struct State {
     std::atomic<bool> have_raw_input{false};
     uint32_t buttons = 0;
     float scroll = 0.0f;
+    uint32_t contact_id = 0;
+    bool contact_position = false, contact_down = false, contact_press_pending = false;
 
     // Keys and buttons the game has seen pressed and not yet released, indexed by virtual key.
     // Atomic rather than under the lock so that the hidden path, which is the game's ordinary input
@@ -158,6 +160,7 @@ void clear_transient_input(State& self)
     std::lock_guard<std::mutex> lock(self.guard);
     self.buttons = 0;
     self.scroll = 0.0f;
+    self.contact_position = self.contact_down = self.contact_press_pending = false;
 }
 
 uint32_t overlay_button_bit(uint32_t virtual_key)
@@ -252,6 +255,10 @@ void record_raw_mouse(State& self, HWND window, LPARAM lparam)
    normally, so this costs nothing where it is not needed. */
 void record_mouse_position(State& self, HWND window, LPARAM lparam)
 {
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        self.contact_position = false;
+    }
     // Client pixels, which is the coordinate space the overlay works in. See the assumption note in
     // rsf_overlay_input_collect: this module does not scale them.
     const float x = static_cast<float>(GET_X_LPARAM(lparam));
@@ -311,6 +318,22 @@ void record_button(State& self, uint32_t virtual_key, bool down)
     } else {
         self.buttons &= ~bit;
     }
+}
+
+// Absolute contact coordinates belong to the contact, not to the separately polled mouse cursor.
+// Keep a short tap's press until a render sample sees it, then deliver its release next sample.
+void record_contact(State& self, HWND window, POINT point, uint32_t id, bool down, bool up)
+{
+    RECT client{};
+    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) return;
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (self.contact_down && self.contact_id != id) return;
+    self.contact_id = id;
+    self.contact_position = true;
+    self.mouse_x = static_cast<float>(point.x) * (self.display_width > 0 ? self.display_width / static_cast<float>(client.right) : 1);
+    self.mouse_y = static_cast<float>(point.y) * (self.display_height > 0 ? self.display_height / static_cast<float>(client.bottom) : 1);
+    if (down) { self.contact_down = true; self.contact_press_pending = true; }
+    if (up) self.contact_down = false;
 }
 
 // Where the cursor is when the overlay opens, so the first frame does not place it at the origin
@@ -675,7 +698,53 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     const bool visible = self.visible.load(std::memory_order_acquire) != 0;
     const uint32_t toggle = self.toggle_key.load(std::memory_order_relaxed);
 
+    // Windows can promote touch to mouse messages for a legacy window such as Unity's.
+    // Their location must survive cursor polling, and a down/up between frames is still a tap.
+    const auto extra = static_cast<ULONG_PTR>(GetMessageExtraInfo());
+    if (visible && (extra & 0xffffff80u) == 0xff515780u &&
+        (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
+        POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        record_contact(self, window, point, 0, message == WM_LBUTTONDOWN, message == WM_LBUTTONUP);
+        return 0;
+    }
+
     switch (message) {
+    case WM_POINTERDOWN:
+    case WM_POINTERUPDATE:
+    case WM_POINTERUP: {
+        if (!visible) break;
+        POINTER_INFO info{};
+        if (GetPointerInfo(GET_POINTERID_WPARAM(wparam), &info) &&
+            (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN)) {
+            POINT point = info.ptPixelLocation;
+            if (ScreenToClient(window, &point))
+                record_contact(self, window, point, info.pointerId, message == WM_POINTERDOWN,
+                    message == WM_POINTERUP || (info.pointerFlags & POINTER_FLAG_CANCELED) != 0);
+            return 0;
+        }
+        break;
+    }
+    case WM_POINTERCAPTURECHANGED:
+        if (visible) {
+            std::lock_guard<std::mutex> lock(self.guard);
+            if (self.contact_id == GET_POINTERID_WPARAM(wparam)) self.contact_down = false;
+            return 0;
+        }
+        break;
+    case WM_TOUCH: {
+        if (!visible) break;
+        TOUCHINPUT contacts[32]{};
+        const UINT count = LOWORD(wparam);
+        if (count > 32 || !GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(lparam), count, contacts, sizeof(TOUCHINPUT))) break;
+        for (UINT i = 0; i < count; ++i) {
+            POINT point{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
+            if (ScreenToClient(window, &point))
+                record_contact(self, window, point, contacts[i].dwID, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
+                    (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0);
+        }
+        CloseTouchInputHandle(reinterpret_cast<HTOUCHINPUT>(lparam));
+        return 0;
+    }
     case WM_KILLFOCUS:
         // Releases arrive at whatever took focus, not here, so anything still marked held would
         // stay held for the life of the process.
@@ -1050,7 +1119,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
         // already in presented pixels, so it passes through.
         self.display_width = static_cast<float>(display_width);
         self.display_height = static_cast<float>(display_height);
-        if (out->visible && self.cursor.installed) {
+        if (out->visible && self.cursor.installed && !self.contact_position) {
             // The real cursor, freed by the detours: read where it is, every frame, through the
             // genuine function, and scaled from client pixels to presented pixels. Nothing here
             // sends a message, so the lock is safe to hold.
@@ -1072,6 +1141,8 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
         out->mouse_x = self.mouse_x;
         out->mouse_y = self.mouse_y;
         out->mouse_buttons = self.buttons;
+        if (self.contact_down || self.contact_press_pending) out->mouse_buttons |= RSF_OVERLAY_MOUSE_LEFT;
+        self.contact_press_pending = false;
         // Taken, not read. The wheel accumulates between frames and each notch has to reach the
         // overlay exactly once.
         out->scroll_delta = self.scroll;

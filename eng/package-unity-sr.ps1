@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$GameDirectory,
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
+    [ValidateSet('Auto','Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Auto',
     [ValidateRange(0,4)][int]$Quality = 1
 )
 $ErrorActionPreference = 'Stop'
@@ -64,6 +65,8 @@ $taskBackendId = @{ Off=0; DLSS=1; FSR2=2; FSR3=3; FSR4=4; XeSS=5; FSR1=6; Auto=
 $taskSettings = [IO.File]::ReadAllText($taskIni)
 $taskSettings = [regex]::Replace($taskSettings, '(?m)^Backend=\d+', "Backend=$taskBackendId")
 $taskSettings = [regex]::Replace($taskSettings, '(?m)^Quality=\d+', "Quality=$Quality")
+$taskFgId = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5; Auto=7 }[$FrameGeneration]
+$taskSettings = [regex]::Replace($taskSettings, '(?m)^FrameGeneration=\d+', "FrameGeneration=$taskFgId")
 [IO.File]::WriteAllText($taskIni, $taskSettings, [Text.Encoding]::Unicode)
 Copy-Item -LiteralPath "$taskRoot/LICENSE" -Destination "$taskStage/LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/build/windows-x64/_deps/minhook-src/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
@@ -100,8 +103,10 @@ This is a Unity Mono/URP DX12 test build for Steam build 25286774,
 Unity 6000.3.14f1. It refuses an unrecognized executable or native player.
 Temporal SR runs before DoF/blur, bloom and tone mapping. UI is drawn afterward.
 This build includes independent DLSS-G, FSR3/4 and XeSS FG selection in Insert,
-with live provider changes and SDK-limited multiplier controls. The FG startup
-default is inherited from the deployment INI; a fresh deployment defaults Off.
+with live provider changes and SDK-limited multiplier controls. FG defaults to
+Auto: NVIDIA selects DLSS-G, Intel selects XeSS FG and AMD selects FSR3 FG.
+Software or unknown adapters select Off. Saved manual FG preferences take precedence.
+The overlay accepts touch/pen contacts and Windows-promoted touch taps.
 One generated frame means 2x. DLSS-G uses Reflex (effective mode at least On
 while active), XeSS uses XeLL, and the pinned FSR path stays 2x. Unsupported
 requests retain the working provider. FSR4 SR INT8 does not establish FSR4 FG.
@@ -144,7 +149,9 @@ $taskManifest = [ordered]@{
     format = 1; version = $taskVersion; game = 'drag-n-wash'; steam_build = '25286774'
     executable_sha256 = '5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc'
     artifact_source = 'verified Release build with hash-verified deployed vendor payload'; backend = $Backend; quality = $Quality
-    source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim(); source_has_uncommitted_changes = $true
+    source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim()
+    source_has_uncommitted_changes = [bool](& git -C $taskRoot status --porcelain)
+    frame_generation = $FrameGeneration
     claw_device_tested = $false; created_utc = [DateTime]::UtcNow.ToString('o')
 }
 [IO.File]::WriteAllText("$taskStage/package.json", ($taskManifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))

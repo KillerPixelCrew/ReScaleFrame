@@ -10,6 +10,16 @@ extern "C" {
 #define RSF_FG_BACKEND_FSR3 3u
 #define RSF_FG_BACKEND_FSR4 4u
 #define RSF_FG_BACKEND_XESS 5u
+/* Startup-only policy, resolved from the engine device before creating a vendor chain. */
+#define RSF_FG_BACKEND_AUTO 7u
+static inline uint32_t rsf_fg_default_backend(uint32_t vendor_id, uint32_t software_adapter)
+{
+    if (software_adapter) return 0;
+    if (vendor_id == 0x10de) return RSF_FG_BACKEND_DLSS;
+    if (vendor_id == 0x8086) return RSF_FG_BACKEND_XESS;
+    if (vendor_id == 0x1002) return RSF_FG_BACKEND_FSR3;
+    return 0;
+}
 /* Choices mask of every implemented backend, bit n for backend id n. */
 #define RSF_FG_BACKEND_ALL ((1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | \
                             (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS))

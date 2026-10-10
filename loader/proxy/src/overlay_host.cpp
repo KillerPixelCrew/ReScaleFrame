@@ -81,6 +81,7 @@ struct Host {
     LARGE_INTEGER last_frame{};
     ULONGLONG startup_hint_begin = 0;
     bool startup_hint_dismissed = false;
+    bool shared_visible = false;
 
     rsf_overlay_host_log_fn log = nullptr;
     void* log_user = nullptr;
@@ -446,7 +447,16 @@ extern "C" int rsf_overlay_host_draw_target(void* native_context, void* native_t
 {
     Host& self = host();
     if (!self.started || !native_context || !native_target || !stats || !width || !height) return 0;
+    bool idle = false;
+    if (!self.drawing.compare_exchange_strong(idle, true)) return 0;
+    struct DrawingGuard {
+        Host& host;
+        ~DrawingGuard() { host.drawing.store(false); }
+    } drawing_guard{self};
     const bool visible = rsf_overlay_input_visible() != 0;
+    if (visible && !self.shared_visible) self.trace_frames = 4;
+    self.shared_visible = visible;
+    const bool trace = visible && self.trace_frames > 0;
     const ULONGLONG elapsed = GetTickCount64() - self.startup_hint_begin;
     bool performance_hud = false;
 #if RSF_OVERLAY_ABI_VERSION >= 7
@@ -458,15 +468,19 @@ extern "C" int rsf_overlay_host_draw_target(void* native_context, void* native_t
     input.startup_hint_alpha = !visible && elapsed < 8000 ? (elapsed < 7000 ? 1.0f : float(8000-elapsed)/1000) : 0;
     rsf_overlay_draw_data data{}; data.struct_size = sizeof(data);
     rsf_overlay_intent decided{}; decided.struct_size = sizeof(decided);
+    if (trace) say("Unity overlay: laying out panel on thread %lu", static_cast<unsigned long>(GetCurrentThreadId()));
     if (self.frame(self.panel, &input, stats, &data, &decided) != RSF_OVERLAY_OK) return 0;
     auto* context = static_cast<ID3D11DeviceContext*>(native_context);
     auto* target = static_cast<ID3D11RenderTargetView*>(native_target);
+    if (trace) say("Unity overlay: uploading textures");
     carry_textures(context);
     SavedTargets targets{}; save_targets(context, targets);
     context->OMSetRenderTargets(1, &target, nullptr);
+    if (trace) say("Unity overlay: drawing %u vertices, %u indices", data.vertex_count, data.index_count);
     const auto result = rsf_overlay_renderer_draw(self.renderer, context, &data, width, height);
     restore_targets(context, targets);
     if (intent) *intent = decided;
+    if (trace) { say("Unity overlay: draw completed result=%d", result); --self.trace_frames; }
     return result == RSF_OVERLAY_RENDERER_OK ? 1 : 0;
 }
 

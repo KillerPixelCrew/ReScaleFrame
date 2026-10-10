@@ -1,5 +1,16 @@
 # Implementation tracker
 
+## Unity UI regression, touch and FG startup, 10 October 2026
+
+Applied an engine-owned pre-UI snapshot instead of a later native swapchain
+lookup, serialized the shared overlay draw/interop paths, and added touch/pen
+plus short-tap handling. Portable packages now select FG by the owning GPU
+instead of inheriting local FSR3: NVIDIA DLSS-G, Intel XeSS FG, AMD FSR3 FG.
+Saved manual selections retain precedence. Release verification, shipped Mono
+and CoreCLR contracts, promoted-touch input checks, and the RTX overlay/provider
+fixture pass. The reported game flicker/crash and physical Claw touch result
+still require a fresh game run. [Evidence and limits](research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026).
+
 See [current status](current-status.md) for the source/release/acceptance summary checked on
 7 October 2026. This tracker preserves dated increments, test counts and superseded failures;
 earlier unchecked or pending entries are not automatically current blockers. No new game/device

@@ -29,6 +29,19 @@ int main() {
     choice = rsf_fg_choice_get();
     ok &= choice.backend == RSF_FG_BACKEND_DLSS && choice.last_result == RSF_BACKEND_ERROR_FEATURE_FAILED;
     DeleteFileW(path);
+    ok &= rsf_fg_default_backend(0x8086, 0) == RSF_FG_BACKEND_XESS;
+    ok &= rsf_fg_default_backend(0x10de, 0) == RSF_FG_BACKEND_DLSS;
+    ok &= rsf_fg_default_backend(0x1002, 0) == RSF_FG_BACKEND_FSR3;
+    ok &= rsf_fg_default_backend(0x8086, 1) == 0 && rsf_fg_default_backend(0xffff, 0) == 0;
+    ok &= rsf_fg_choice_start(path, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_ALL) == RSF_FG_BACKEND_AUTO;
+    rsf_fg_choice_resolve_auto(RSF_FG_BACKEND_XESS);
+    ok &= rsf_fg_choice_get().backend == RSF_FG_BACKEND_XESS;
+    ok &= rsf_fg_choice_start(path, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_ALL) == RSF_FG_BACKEND_AUTO;
+    ok &= rsf_fg_choice_save(RSF_FG_BACKEND_FSR3) == RSF_BACKEND_OK;
+    ok &= rsf_fg_choice_start(path, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_ALL) == RSF_FG_BACKEND_FSR3;
+    rsf_fg_choice_resolve_auto(RSF_FG_BACKEND_XESS);
+    ok &= rsf_fg_choice_get().backend == RSF_FG_BACKEND_FSR3;
+    DeleteFileW(path);
     std::puts(ok ? "PASS: saved/reloaded provider, Off, renderer mask, corrupt value and failed save" : "FAIL: generation provider persistence");
     return ok ? 0 : 1;
 }

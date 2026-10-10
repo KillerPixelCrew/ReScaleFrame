@@ -8,6 +8,7 @@ std::mutex guard;
 std::wstring file;
 rsf_fg_choice choice{};
 bool allowed(uint32_t backend, uint32_t choices) {
+    if (backend == RSF_FG_BACKEND_AUTO) return (choices & RSF_FG_BACKEND_ALL) == RSF_FG_BACKEND_ALL;
     return (backend == 0 || rsf_fg_backend_known(backend)) && (choices & (1u << backend)) != 0;
 }
 }
@@ -31,4 +32,8 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg_choice_save(uint32_t backen
 }
 extern "C" RSF_RUNTIME_API rsf_fg_choice rsf_fg_choice_get() {
     std::lock_guard<std::mutex> lock(guard); return choice;
+}
+extern "C" RSF_RUNTIME_API void rsf_fg_choice_resolve_auto(uint32_t backend) {
+    std::lock_guard<std::mutex> lock(guard);
+    if (choice.backend == RSF_FG_BACKEND_AUTO && allowed(backend, choice.choices)) choice.backend = backend;
 }

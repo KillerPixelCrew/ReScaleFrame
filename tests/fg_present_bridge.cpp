@@ -3,6 +3,7 @@
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/overlay_d3d12.h>
+#include <rescaleframe/overlay_input.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <d3d12.h>
@@ -282,6 +283,8 @@ int main(int argc, char** argv) {
             std::thread render_callback([&pass] { rsf_fg12_window(&pass); });
             render_callback.join();
             if (overlay) {
+                if (frame_id == 2 || frame_id == 16) rsf_overlay_input_set_visible(1);
+                if (frame_id == 8 || frame_id == 25) rsf_overlay_input_set_visible(0);
                 rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats); stats.backend_name = "Fixture";
                 stats.show_performance_hud = 1; stats.output_width = 2560; stats.output_height = 1600;
                 rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);

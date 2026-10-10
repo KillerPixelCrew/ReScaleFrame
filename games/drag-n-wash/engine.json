@@ -1,4 +1,13 @@
 {
+  "ui_regression_20261010": {
+    "baseline": "843966947af4c62563ec231c1309eceb8fa13f3b",
+    "reported": "UI and overlay flicker on both PCs; opening-overlay crash; touch input missing",
+    "supplied_run": "Intel 8086:64a0; XeSS SR; FSR3 3.1.6 FG",
+    "corrections": "Engine-owned pre-UI snapshot, serialized overlay drawing, touch input, owning-device Auto FG",
+    "checked": "VS2026 Release gate, CoreCLR/shipped Mono contracts, promoted-touch fixture, RTX overlay/provider fixture",
+    "fresh_game_acceptance": false,
+    "research": "../../docs/research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026"
+  },
   "current_validation": {
     "audited": "2026-10-07",
     "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",

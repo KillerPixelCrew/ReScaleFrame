@@ -123,7 +123,7 @@ bool valid(const rsf_unity_packet& packet)
 {
     const auto& c = packet.camera;
     if (packet.struct_size != sizeof(packet) || packet.abi_version != RSF_UNITY_BRIDGE_ABI_VERSION ||
-        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & (RSF_UNITY_PACKET_WINDOW | RSF_UNITY_PACKET_HUDLESS)) && !packet.color) ||
+        packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & RSF_UNITY_PACKET_WINDOW) && !packet.color) ||
         c.struct_size != sizeof(c) || c.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         !c.render_width || !c.render_height || !c.output_width || !c.output_height ||
         c.render_width > 16384 || c.render_height > 16384 || c.output_width > 16384 || c.output_height > 16384 ||
@@ -167,13 +167,7 @@ void __stdcall render(int id, void* address) noexcept try
     if (!active.load() || !unity || !services.render_pass) return;
     ID3D12Device* device = unity->GetDevice();
     if (!device) return;
-    if (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS) {
-        ComPtr<IDXGISwapChain3> chain;
-        auto* owned = unity->GetSwapChain();
-        if (!owned || FAILED(owned->QueryInterface(IID_PPV_ARGS(&chain))) ||
-            FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&entry.resources[0])))) return;
-        entry.packet.color = entry.resources[0].Get();
-    }
+    // HUD-less packets lease the graph snapshot made before UI, never a later swapchain lookup.
     if (id == event_id + 1 && (entry.packet.flags & RSF_UNITY_PACKET_WINDOW)) {
         rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
         pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity->GetSwapChain();

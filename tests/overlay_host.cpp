@@ -3,12 +3,14 @@
 // Render in the real Present callback with no backend, then read pixels and resize the chain.
 #include "../loader/proxy/src/overlay_host.h"
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/overlay_input.h>
 
 #include <windows.h>
 #include <d3d11.h>
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 
 namespace {
 ID3D11Device* device = nullptr;
@@ -59,6 +61,22 @@ void present(void*, void* pointer)
         SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 0x40000001);
         require(rsf_overlay_host_visible() != 0, "holding Insert must not close it");
         SendMessageW(chain_desc.OutputWindow, WM_KEYUP, VK_INSERT, 0xc0000001);
+        // A Windows-promoted touch tap carries absolute coordinates and may finish between
+        // rendered frames. Cursor polling must not move it, and both edges must be sampled.
+        rsf_overlay_input touch{}; touch.struct_size = sizeof(touch);
+        require(rsf_overlay_input_collect(&touch, 800, 600, 0.016f) == RSF_OVERLAY_INPUT_OK, "seed touch display extent");
+        const LPARAM previous_extra = SetMessageExtraInfo(static_cast<LPARAM>(0xff515780u));
+        SendMessageW(chain_desc.OutputWindow, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(123, 234));
+        SendMessageW(chain_desc.OutputWindow, WM_LBUTTONUP, 0, MAKELPARAM(123, 234));
+        SetMessageExtraInfo(previous_extra);
+        require(rsf_overlay_input_collect(&touch, 800, 600, 0.016f) == RSF_OVERLAY_INPUT_OK, "collect quick touch press");
+        RECT client{}; GetClientRect(chain_desc.OutputWindow, &client);
+        require(std::abs(touch.mouse_x - 123.0f * 800 / static_cast<float>(client.right)) < 1 &&
+                std::abs(touch.mouse_y - 234.0f * 600 / static_cast<float>(client.bottom)) < 1,
+                "touch uses scaled contact position, not the mouse cursor");
+        require((touch.mouse_buttons & RSF_OVERLAY_MOUSE_LEFT) != 0, "tap press survives until a rendered frame");
+        require(rsf_overlay_input_collect(&touch, 800, 600, 0.016f) == RSF_OVERLAY_INPUT_OK &&
+                (touch.mouse_buttons & RSF_OVERLAY_MOUSE_LEFT) == 0, "tap release reaches the following frame");
         Sleep(260); // Separate physical presses beyond the dual-input debounce window.
         SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 1);
         require(rsf_overlay_host_visible() == 0, "second Insert closes the panel");

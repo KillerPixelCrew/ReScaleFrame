@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)][string]$GameDirectory,
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
     [ValidateRange(0,5)][int]$Quality = 1,
-    [ValidateSet('Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Off',
+    [ValidateSet('Auto','Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Auto',
     [ValidateRange(1,15)][int]$GeneratedFrames = 1,
     [switch]$GraphicsDebug,
     [ValidateSet('Debug','Release')][string]$Configuration = 'Release'
@@ -75,7 +75,7 @@ foreach ($taskCopy in $taskCopies) {
     if ($taskCopy.source) { Copy-Item -LiteralPath $taskCopy.source -Destination $taskDestination }
     else {
         $taskId = @{ Off=0; DLSS=1; FSR2=2; FSR3=3; FSR4=4; XeSS=5; FSR1=6; Auto=7 }[$Backend]
-        $taskFg = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5 }[$FrameGeneration]
+        $taskFg = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5; Auto=7 }[$FrameGeneration]
         [IO.File]::WriteAllLines($taskDestination, @('[UnitySR]',"Backend=$taskId","Quality=$Quality",
             "FrameGeneration=$taskFg","GeneratedFrames=$GeneratedFrames","GraphicsDebug=$([int]$GraphicsDebug.IsPresent)",
             'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',

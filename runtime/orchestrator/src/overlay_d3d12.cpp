@@ -6,12 +6,14 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <mutex>
 namespace {
 using Microsoft::WRL::ComPtr;
 ComPtr<ID3D11Device> device11;
 ComPtr<ID3D11DeviceContext> context11;
 ComPtr<ID3D11On12Device> interop;
 ComPtr<ID3D12Device> owner;
+std::mutex drawing;
 bool ready = false;
 // A refused start is final for this attach. overlay_host reloads the panel library on every
 // attempt, so retrying per frame would leak a module reference and log each frame.
@@ -29,6 +31,8 @@ int refuse(void (*log)(void*,const char*), void* user, const char* message)
 int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain, const rsf_overlay_stats* stats,
     rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
 {
+    std::unique_lock<std::mutex> lock(drawing, std::try_to_lock);
+    if (!lock.owns_lock()) return 0;
     if (failed || !device || !native_queue || !native_chain || !stats) return 0;
     auto* chain = static_cast<IDXGISwapChain*>(native_chain);
     if (!device11) {
@@ -70,5 +74,6 @@ int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain
 }
 void rsf_overlay_d3d12_stop()
 {
+    std::lock_guard<std::mutex> lock(drawing);
     rsf_overlay_host_stop(); interop.Reset(); context11.Reset(); device11.Reset(); owner.Reset(); ready = failed = false;
 }
