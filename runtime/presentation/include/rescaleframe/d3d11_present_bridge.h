@@ -67,6 +67,8 @@ int rsf_d3d11_present_has_owner(void);
 const rsf_generation_provider* rsf_d3d11_present_provider(void);
 void* rsf_d3d11_present_session(void);
 uint32_t rsf_d3d11_present_backend(void);
+/* Choice mask, with FSR4 FG enabled only when the SDK exposes major 4 for the engine device. */
+uint32_t rsf_d3d11_present_backend_choices(void);
 int32_t rsf_d3d11_present_request(uint32_t backend);
 int32_t rsf_d3d11_present_switch_result(void);
 uint64_t rsf_d3d11_present_generation(void);

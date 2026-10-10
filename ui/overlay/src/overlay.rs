@@ -714,6 +714,23 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_fsr4_generation_is_disabled_without_disabling_fsr3() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend_choices = 0x8000_002b;
+        settle(&mut overlay, &stats);
+        let target =
+            overlay.controls().fg_backend[3].expect("Disabled FSR4 choice remains visible");
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.fg_backend_changed);
+        assert!(!release.fg_backend_changed);
+        let available = overlay.controls().fg_backend[2].expect("FSR3 remains selectable");
+        let [_, release] = click(&mut overlay, &stats, available);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 3);
+    }
+
+    #[test]
     fn supported_mfg_multiplier_maps_to_generated_frames() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();

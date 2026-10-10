@@ -354,6 +354,23 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
 const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<FfxSession>, retirement, destroy, abort_frame};
 }
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
+extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* directory)
+{
+    if (!device || !directory || !*directory) return 0;
+    rsf_generation_setup setup{}; setup.runtime_directory_utf8 = directory;
+    HMODULE module = rsf::fg_library(setup, L"amd_fidelityfx_framegeneration_dx12.dll");
+    if (!module) return 0;
+    const auto query = rsf::entry<PfnFfxQuery>(module, "ffxQuery");
+    uint64_t count = 32, ids[32]{}, id = 0; const char* names[32]{}; char name[64]{};
+    ffxQueryDescGetVersions versions{}; versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    versions.device = device; versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
+    const bool supported = query && query(nullptr, &versions.header) == FFX_API_RETURN_OK && count <= 32 &&
+        rsf::select_ffx_version(ids, names, count, 4, 0, id, name, sizeof(name));
+    FreeLibrary(module);
+    return supported ? 1u : 0u;
+}
 #else
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return rsf::not_compiled_provider(); }
+extern "C" uint32_t rsf_generation_fsr4_supported(void*, const char*) { return 0; }
 #endif

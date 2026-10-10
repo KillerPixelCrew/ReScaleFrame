@@ -28,6 +28,7 @@ std::string engine_version, project_id;
 std::mutex creation_guard;
 std::shared_mutex provider_guard;
 std::atomic<uint32_t> active_backend{RSF_FG_BACKEND_DLSS}, requested_backend{UINT32_MAX};
+std::atomic<uint32_t> backend_choices{(RSF_FG_BACKEND_ALL | 1u) & ~(1u << RSF_FG_BACKEND_FSR4)};
 std::atomic<int32_t> switch_result{0};
 std::atomic<uint64_t> chain_generation{1};
 std::atomic<rsf_streamline_host*> active_host{nullptr};
@@ -435,6 +436,10 @@ public:
             SUCCEEDED(capability_factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
                 &allow_tearing, sizeof(allow_tearing))) && allow_tearing;
         auto* gpu = static_cast<ID3D12Device*>(graphics.device);
+        uint32_t choices = RSF_FG_BACKEND_ALL | 1u;
+        if (!rsf_generation_fsr4_supported(graphics.native_device, fsr4_directory.c_str()))
+            choices &= ~(1u << RSF_FG_BACKEND_FSR4);
+        backend_choices.store(choices);
         D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         if (native12) interop_queue = direct_queue;
         else if (FAILED(gpu->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&interop_queue)))) return E_FAIL;
@@ -799,9 +804,14 @@ extern "C" int rsf_d3d11_present_has_owner() { return active_chain.load(std::mem
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return generation_api(); }
 extern "C" void* rsf_d3d11_present_session() { return active_session.load(std::memory_order_acquire); }
 extern "C" uint32_t rsf_d3d11_present_backend() { return active_backend.load(); }
+extern "C" uint32_t rsf_d3d11_present_backend_choices() { return backend_choices.load(); }
 extern "C" int32_t rsf_d3d11_present_request(uint32_t backend) {
     if (!settings.runtime_switching || !active_chain.load()) return RSF_BACKEND_ERROR_NOT_READY;
     if (backend != 0 && !rsf_fg_backend_known(backend)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (!(backend_choices.load() & (1u << backend))) {
+        switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED);
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    }
     switch_result.store(0); requested_backend.store(backend); return RSF_BACKEND_OK;
 }
 extern "C" int32_t rsf_d3d11_present_switch_result() { return switch_result.load(); }

@@ -200,6 +200,8 @@ int main(int argc, char** argv) {
     rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
     if (!rsf_d3d11_present_graphics(&graphics)) return 1;
     auto* gpu = static_cast<ID3D12Device*>(graphics.native_device);
+    const bool fsr4_supported = rsf_generation_fsr4_supported(gpu, argv[2]) != 0;
+    accepted &= bool(rsf_d3d11_present_backend_choices() & (1u << RSF_FG_BACKEND_FSR4)) == fsr4_supported;
     rsf_sr12* dlss_sr = nullptr;
     if (hot && argc == 7) {
         rsf_sr12_setup sr{}; sr.struct_size = sizeof(sr); sr.abi_version = 1; sr.device = gpu;
@@ -344,7 +346,8 @@ int main(int argc, char** argv) {
                 if (frame_id == 8) accepted &= rsf_d3d11_present_request(0) == RSF_BACKEND_OK;
                 if (frame_id == 15) accepted &= rsf_d3d11_present_request(5) == RSF_BACKEND_OK;
                 if (frame_id == 25) accepted &= rsf_d3d11_present_request(3) == RSF_BACKEND_OK;
-                if (frame_id == 34 && vendor == 0x10de) accepted &= rsf_d3d11_present_request(4) == RSF_BACKEND_OK;
+                if (frame_id == 34 && vendor == 0x10de) accepted &= rsf_d3d11_present_request(4) ==
+                    (fsr4_supported ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED);
                 if (frame_id == 35 && vendor == 0x10de) accepted &= rsf_d3d11_present_backend() == 3 && rsf_d3d11_present_switch_result() == RSF_BACKEND_ERROR_NOT_SUPPORTED;
                 if (frame_id == 35 && argc == 7) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
                 if (frame_id == 36 && argc == 7) accepted &= rsf_d3d11_present_backend() == 1;

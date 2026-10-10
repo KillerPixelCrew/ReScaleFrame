@@ -161,6 +161,8 @@ typedef struct rsf_generation_provider {
 
 const rsf_generation_provider* rsf_generation_dlss(void);
 const rsf_generation_provider* rsf_generation_fsr(void);
+/* Query the loaded SDK's major-4 FG provider for this actual D3D12 device. No context is created. */
+uint32_t rsf_generation_fsr4_supported(void* device, const char* runtime_directory_utf8);
 const rsf_generation_provider* rsf_generation_xess(void);
 #ifdef __cplusplus
 }

@@ -18,7 +18,7 @@ static inline void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf
     const rsf_fg_choice choice = rsf_fg_choice_get();
     stats->fg_backend = rsf_d3d11_present_has_owner() ? rsf_d3d11_present_backend() : 0;
     stats->fg_requested_backend = choice.backend;
-    stats->fg_backend_choices = choice.choices | RSF_OVERLAY_FG_RUNTIME_SWITCH;
+    stats->fg_backend_choices = (choice.choices & rsf_d3d11_present_backend_choices()) | RSF_OVERLAY_FG_RUNTIME_SWITCH;
     stats->fg_selection_result = choice.last_result;
     if (!stats->fg_selection_result) stats->fg_selection_result = rsf_d3d11_present_switch_result();
     if (!fg) return;

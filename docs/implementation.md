@@ -2,6 +2,13 @@
 
 ## Unity UI regression, touch and FG startup, 10 October 2026
 
+FSR4 FG is now greyed out when the loaded SDK exposes no major-4 provider for
+the game's actual D3D12 device. The presentation owner caches that availability
+at creation; the shared overlay intersects it with its existing choice mask.
+Unsupported native requests are refused before queuing a transition. Supported
+devices retain the choice. Release verification, Rust tests including the disabled
+FSR4 click regression, and the RTX provider/mask fixture pass.
+
 Live reproduction found that the managed snapshot still copied a null imported
 texture and used HDR metadata format 26 for the real SDR format-28 backbuffer.
 Replaced it with a native copy recorded on Unity's current pre-UI command list,
