@@ -189,6 +189,14 @@ int main(int argc, char** argv) {
     ComPtr<IDXGISwapChain> chain;
     if (FAILED(factory->CreateSwapChain(producer, &desc, &chain))) return 1;
     if (!rsf_d3d11_present_has_owner()) { std::puts("SKIP: provider refused, original engine chain retained"); return 77; }
+    if (backend == RSF_FG_BACKEND_AUTO) {
+        const auto expected = rsf_fg_default_backend(vendor, 0);
+        if (rsf_d3d11_present_backend() != expected || (expected && !rsf_d3d11_present_session())) {
+            std::puts("FAIL: Auto must create the resolved provider, not silently fall back to Off");
+            return 1;
+        }
+        std::printf("PASS: Auto instantiated provider %u before the first Present\n", expected);
+    }
     rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
     if (!rsf_d3d11_present_graphics(&graphics)) return 1;
     auto* gpu = static_cast<ID3D12Device*>(graphics.native_device);

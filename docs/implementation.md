@@ -2,6 +2,15 @@
 
 ## Unity UI regression, touch and FG startup, 10 October 2026
 
+The subsequent first-frame freeze exposed two defects in `12bce3d`: querying an
+invalid imported-backbuffer descriptor aborted graph recording, and Auto's
+resolved provider was discarded during physical-chain creation. Corrected the
+lookup to GetRenderTargetInfo and passed the resolved provider to creation.
+The shipped-registry test reproduces the rejected descriptor call; the GPU test
+now asserts the actual cold-start provider before testing switches. New game
+progression remains unverified. The earlier automated pass did not cover these
+two paths; see the linked correction record below.
+
 Applied an engine-owned pre-UI snapshot instead of a later native swapchain
 lookup, serialized the shared overlay draw/interop paths, and added touch/pen
 plus short-tap handling. Portable packages now select FG by the owning GPU

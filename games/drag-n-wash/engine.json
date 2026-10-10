@@ -6,6 +6,7 @@
     "corrections": "Engine-owned pre-UI snapshot, serialized overlay drawing, touch input, owning-device Auto FG",
     "checked": "VS2026 Release gate, CoreCLR/shipped Mono contracts, promoted-touch fixture, RTX overlay/provider fixture",
     "fresh_game_acceptance": false,
+    "startup_followup": "12bce3d first-frame regression: replaced invalid imported GetDescriptor lookup with GetRenderTargetInfo; physical creation now uses Auto's resolved provider; imported registry and real cold-start provider tests added",
     "research": "../../docs/research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026"
   },
   "current_validation": {

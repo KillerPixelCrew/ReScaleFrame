@@ -306,9 +306,7 @@ namespace ReScaleFrame.Unity
                 Packet packet = Snapshot(camera, true); packet.Flags = PacketFlags.Hudless | PacketFlags.Probe; // completed SDR colour, before the UI draw
                 // Copy through Unity's graph before queuing native work. Looking up the current
                 // swapchain buffer in a later callback does not preserve this pass's contents.
-                TextureDesc descriptor = colorBuffer.GetDescriptor(renderGraph);
-                descriptor.name = "ReScaleFrame scene snapshot before UI";
-                descriptor.clearBuffer = false;
+                TextureDesc descriptor = SceneSnapshotDescriptor(renderGraph, colorBuffer);
                 TextureHandle snapshot = renderGraph.CreateTexture(in descriptor);
                 using (var builder = renderGraph.AddUnsafePass<PassData>("ReScaleFrame completed scene before UI", out var pass)) {
                     pass.Packet = packet; pass.Color = colorBuffer; pass.Output = snapshot;
@@ -318,6 +316,17 @@ namespace ReScaleFrame.Unity
                     builder.SetRenderFunc<PassData>(executePass);
                 }
             }
+        }
+        internal static TextureDesc SceneSnapshotDescriptor(RenderGraph graph, TextureHandle source)
+        {
+            // Built-in/imported backbuffers deliberately have no valid TextureDesc. Their
+            // supported metadata path is GetRenderTargetInfo, including the actual format.
+            RenderTargetInfo info = graph.GetRenderTargetInfo(source);
+            return new TextureDesc(info.width, info.height) {
+                format = info.format, slices = info.volumeDepth,
+                msaaSamples = (MSAASamples)info.msaaSamples, bindTextureMS = info.bindMS,
+                name = "ReScaleFrame scene snapshot before UI", clearBuffer = false
+            };
         }
         private static bool Reconstruct(object __instance, RenderGraph renderGraph, UniversalResourceData resourceData,
             UniversalCameraData cameraData, ref TextureHandle source, ref TextureHandle destination)

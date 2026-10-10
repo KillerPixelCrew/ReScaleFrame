@@ -448,7 +448,7 @@ public:
         if (settings.runtime_switching) {
             if (native12 && FAILED(make_render_buffers())) return E_FAIL;
             if (host && active_backend.load() != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
-            const auto result = create_physical(settings.backend);
+            const auto result = create_physical(active_backend.load());
             if (result != RSF_BACKEND_OK) {
                 switch_result.store(result); active_backend.store(0);
                 if (create_physical(0) != RSF_BACKEND_OK) return E_FAIL;
