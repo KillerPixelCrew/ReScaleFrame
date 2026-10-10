@@ -75,16 +75,15 @@ The packager writes the Windows archive, corresponding-source archive and SHA256
 `build/releases`. It refuses a dirty source tree, includes a source-commit/file-hash manifest,
 collects dependency notices from pinned Cargo packages (using their exact recorded upstream
 revision when a crate omits a root license), and verifies every archived file against its manifest.
-The package includes the proxy, AC7 game plugin, Rust overlay, retail Streamline/DLSS files,
-FidelityFX upscaler DLL (FSR 2/3/4), XeSS SR DLL and their licenses and notices.
+The current-source package includes the dedicated AC7 proxy, game plugin, Rust overlay,
+retail Streamline/DLSS/DLSS-G/Reflex files, FidelityFX SR/FG and XeSS SR/FG/XeLL
+runtimes with their licenses and notices. The published v0.1.0 download remains SR-only.
 The optional `--expected-proxy-sha256`, `--expected-plugin-sha256` and `--expected-overlay-sha256`
 require the exact validated binaries. FSR/XeSS runtime hashes are pinned to the tested SDK files.
-The packager never reads or writes the game installation. Its current input remains
-`build/windows-x64/bin/Release/dinput8.dll` (the shared shim); the deployment helper uses the
-dedicated AC7 carrier at `build/windows-x64/ac7/bin/Release/dinput8.dll`. Do not describe a new
-package as matching the dedicated carrier without checking these inputs/hashes. The packager's
-allowlist remains SR-only and omits `sl.dlss_g.dll`, `sl.reflex.dll`, `nvngx_dlssg.dll`, AMD FG and
-XeFG/XeLL. Building new source does not make this script an FG release packager.
+The packager never reads or writes the game installation. As corrected on 10 October,
+its proxy input matches the deployer: `build/windows-x64/ac7/bin/Release/dinput8.dll`.
+The allowlist includes generation dependencies; its development README and manifest
+distinguish this package from the historical SR release and fresh AC7 gameplay acceptance.
 
 ## Current-source frame-generation runtime files
 

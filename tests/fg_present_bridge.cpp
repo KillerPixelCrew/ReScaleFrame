@@ -200,7 +200,8 @@ int main(int argc, char** argv) {
     rsf_streamline_graphics graphics{}; graphics.struct_size = sizeof(graphics);
     if (!rsf_d3d11_present_graphics(&graphics)) return 1;
     auto* gpu = static_cast<ID3D12Device*>(graphics.native_device);
-    const bool fsr4_supported = rsf_generation_fsr4_supported(gpu, argv[2]) != 0;
+    const auto* fsr4_directory = legacy_hot && argc == 7 ? argv[6] : argv[2];
+    const bool fsr4_supported = rsf_generation_fsr4_supported(gpu, fsr4_directory) != 0;
     accepted &= bool(rsf_d3d11_present_backend_choices() & (1u << RSF_FG_BACKEND_FSR4)) == fsr4_supported;
     rsf_sr12* dlss_sr = nullptr;
     if (hot && argc == 7) {

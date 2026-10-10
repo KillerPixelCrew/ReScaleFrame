@@ -1,5 +1,16 @@
 # Implementation tracker
 
+## AC7 FSR4 FG availability delivery, 10 October 2026
+
+AC7's proxy calls the same shared overlay-stat helper as Unity, including the
+actual-device SDK availability mask. FSR4 FG is therefore disabled when no
+major-4 provider is exposed. The AC7 carrier/plugin/overlay were rebuilt and
+deployed with backups; the real overlay and D3D11 provider/mask fixtures pass.
+The AC7 packager now uses the dedicated carrier and includes FG SDK dependencies
+and a current development README, rather than the old shared shim/SR-only payload.
+Native Release verification passes 42 executed checks with seven skips. No new
+AC7 gameplay run was performed for this delivery. [Packaging](dependencies.md).
+
 ## Unity UI regression, touch and FG startup, 10 October 2026
 
 FSR4 FG is now greyed out when the loaded SDK exposes no major-4 provider for

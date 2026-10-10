@@ -16,7 +16,8 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ("sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.pcl.dll", "nvngx_dlss.dll")
+RUNTIME = ("sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.pcl.dll",
+           "sl.dlss_g.dll", "sl.reflex.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll")
 
 
 def git(*args: str) -> str:
@@ -95,7 +96,7 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     stage = output / f"stage-ac7-{uuid.uuid4().hex[:8]}"
     stage.mkdir()
-    native = ROOT / "build/windows-x64/bin/Release/dinput8.dll"
+    native = ROOT / "build/windows-x64/ac7/bin/Release/dinput8.dll"
     plugin = ROOT / "build/windows-x64/bin/Release/ReScaleFrame.Game.AC7.dll"
     overlay = ROOT / "target/release/rescaleframe_overlay.dll"
     for source, expected in ((native, args.expected_proxy_sha256),
@@ -116,8 +117,7 @@ def main() -> None:
         (native, "dinput8.dll"), (plugin, "ReScaleFrame.Game.AC7.dll"),
         (overlay, "rescaleframe_overlay.dll"),
         (ROOT / "loader/ReScaleFrame.ini.sample", "ReScaleFrame.ini"),
-        (ROOT / "docs/releases/ac7-install.md", "ReScaleFrame/README.md"),
-        (ROOT / "docs/releases/ac7-third-party.md", "ReScaleFrame/licenses/README.md"),
+        (ROOT / "docs/releases/ac7-development-install.md", "ReScaleFrame/README.md"),
         (ROOT / "LICENSE", "ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt"),
         (ROOT / "sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
         (ROOT / "build/windows-x64/_deps/minhook-src/LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
@@ -126,15 +126,26 @@ def main() -> None:
         (args.streamline_root / "bin/x64/nvngx_dlss.license.txt", "ReScaleFrame/streamline/nvngx_dlss.license.txt"),
         (args.streamline_root / "bin/x64/reflex.license.txt", "ReScaleFrame/licenses/NVIDIA-Reflex.txt"),
         (fsr, "ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll"),
+        (args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll",
+         "ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll"),
         (args.fidelityfx_root / "Kits/FidelityFX/docs/license.md", "ReScaleFrame/fidelityfx/LICENSE.md"),
         (args.fidelityfx_root / "3rdpartynotice.md", "ReScaleFrame/fidelityfx/3rdpartynotice.md"),
         (xess, "ReScaleFrame/xess/libxess.dll"),
+        (args.xess_root / "bin/libxess_fg.dll", "ReScaleFrame/xess/libxess_fg.dll"),
+        (args.xess_root / "bin/libxell.dll", "ReScaleFrame/xess/libxell.dll"),
         (args.xess_root / "LICENSE.txt", "ReScaleFrame/xess/LICENSE.txt"),
         (args.xess_root / "third-party-programs.txt", "ReScaleFrame/xess/third-party-programs.txt"),
     ):
         copy(source, stage / relative)
     for name in RUNTIME:
         copy(args.streamline_root / "bin/x64" / name, stage / "ReScaleFrame/streamline" / name)
+    (stage / "ReScaleFrame/licenses/README.md").write_text(
+        "# Package notices\n\nFirst-party code is GPL-3.0-only; the public Game SDK is MIT.\n"
+        "Source identity is recorded in ../manifest.json and the corresponding-source archive.\n\n"
+        "Streamline/DLSS/DLSS-G/Reflex, FidelityFX SR/FG and XeSS SR/FG/XeLL runtimes retain their\n"
+        "own licenses. Their terms and third-party notices are included beside the runtimes\n"
+        "or in this directory. Vendor binaries are unmodified. Rust dependency notices,\n"
+        "MinHook and the RenderDoc header notice are also included.\n", encoding="utf-8")
     header = (ROOT / "vendor/renderdoc/renderdoc_app.h").read_text(encoding="utf-8")
     (stage / "ReScaleFrame/licenses/RenderDoc-header.txt").write_text(header[:header.index("#pragma once")], encoding="utf-8")
     dependency_notices(stage)
@@ -150,6 +161,10 @@ def main() -> None:
         "platform": "Windows x64", "streamline": "2.14.1", "dlss_runtime": "310.9.1.0",
         "fidelityfx_sdk": "2.3.0", "fsr_providers": ["2.3.4", "3.1.5", "4.1.1"],
         "xess_sdk": "3.0.2", "xess_sr_runtime": "2.0.2",
+        "carrier": "dedicated AC7 dinput8",
+        "frame_generation": ["DLSS-G", "FSR3", "FSR4 when exposed by the device SDK", "XeSS FG"],
+        "fsr4_fg_availability": "Unavailable SDK/device combinations are greyed out",
+        "fresh_ac7_game_tested": False,
         "files": {p.relative_to(stage).as_posix(): digest(p) for p in sorted(stage.rglob("*")) if p.is_file()},
     }
     (stage / "ReScaleFrame/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
