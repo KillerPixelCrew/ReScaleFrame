@@ -37,7 +37,7 @@ it does not prove that a particular ZIP received game or Claw acceptance.
 | --- | --- | --- |
 | AC7, Steam build 9855922, D3D11 | Native renderer hooks and pre-tonemap SR; output-resolution UI/briefing; TrueSky correction; DLSS, FSR2/3/4, XeSS; D3D12 presentation facade and independent FG | User accepted corrected SR/UI/cloud rendering and DLSS-G. FSR3/XeSS FG have synthetic device activity; new AC7 vendor FG paths lack live acceptance. Briefing FG is deferred. Later low-resolution lighting defects and missing-object motion coverage remain open. |
 | Drag'n Wash, Steam build 25286774, Unity 6000.3.14f1 Mono/URP RenderGraph, D3D12 | Shared shim, Mono/Harmony hooks, pre-DoF SR, overlay, DLSS/FSR/XeSS FG switching, pre-UI colour and temporal inputs independent of SR | Live SR execution and improved post-processing order recorded; user accepted XeSS/DLSS-G and the final FSR correction. General scene/resize/teardown coverage, other Unity players and MSI Claw acceptance remain unproven. |
-| Project Wingman, researched UE4.27.2 build | Exact executable detection and ABI lifecycle scaffold | Contract-tested in a test process. Preparation/start refuse. No renderer, SR, FG, latency or VR integration. |
+| Project Wingman, researched UE4.27.2 build | Exact-build XInput carrier and guarded native temporal graph observer | Release-built, contract-tested and deployed; user-run desktop mission verifies readable inputs/history/rectangles. GPU leases, SR, FG, latency and VR processing remain unimplemented. VR hardware was unavailable. |
 
 All three native plugin APIs still report `rendering_ready = 0`. That conservative code-level
 flag is distinct from recorded user acceptance of individual deployed paths; it must not be

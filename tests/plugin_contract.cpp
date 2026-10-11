@@ -21,7 +21,7 @@ constexpr Fixture fixtures[] = {
      RSF_ERROR_NATIVE_REFUSED},
     {L"project-wingman", "project-wingman", "ProjectWingman-Win64-Shipping.exe",
      "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
-     RSF_ERROR_NOT_READY},
+     RSF_ERROR_NATIVE_REFUSED},
     {L"unity-mono", "unity-mono", "DragNWash.exe",
      "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
      RSF_ERROR_NOT_READY}};
@@ -143,7 +143,7 @@ int wmain(int argc, wchar_t* argv[])
     passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A missing executable name must not match.");
     probe.executable_name_utf8 = fixture->executable;
 
-    if (fixture->prepare_result == RSF_ERROR_NOT_READY) {
+    if (fixture->prepare_result == RSF_ERROR_NOT_READY || std::strcmp(fixture->id, "project-wingman") == 0) {
         passed &= check(api.hooks.prepare(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.start(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.quiesce(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
@@ -181,7 +181,7 @@ int wmain(int argc, wchar_t* argv[])
         host.session_id = 0;
         passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_INVALID_ARGUMENT, "A missing session must refuse.");
         host.session_id = 9;
-        passed &= check(api.hooks.prepare(&prepare) == RSF_ERROR_NOT_READY &&
+        passed &= check(api.hooks.prepare(&prepare) == fixture->prepare_result &&
                         api.hooks.start(&start) == RSF_ERROR_NOT_READY &&
                         api.hooks.quiesce(&control) == RSF_OK && api.hooks.stop(&control) == RSF_OK,
                         "The scaffold must remain inactive and allow repeated cleanup.");

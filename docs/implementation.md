@@ -1,5 +1,29 @@
 # Implementation tracker
 
+## Wingman native observation, 11 October 2026
+
+Built and deployed a dedicated XInput carrier and guarded native temporal-upscaler observer,
+using the orchestrator's plugin lifecycle. Native TAA remains unchanged; borrowed graph facts
+are copied without treating RDG pointers as GPU leases. Release verification passes 43 native
+checks with seven hardware skips, plus Rust formatting/Clippy. The user-run desktop mission
+confirms startup and 197 readable samples with a stable history owner, settled 1690x1057
+render rectangle and 1707x1067 temporal output. VR is unavailable. GPU leases, reconstruction,
+FG, latency, controls, HUD separation and VR routing remain required; readiness stays zero.
+[Evidence, lifecycle and deployment](research/project-wingman-renderer.md#native-observer-and-desktop-run-11-october-2026).
+
+## Wingman IDA validation and timeout correction, 11 October 2026
+
+The shared REA/IDA configuration now permits 30-minute requests (`38ebf17`). A
+fresh REA connection decompiled Wingman's native default temporal-upscaler entry
+after 20 minutes 9 seconds of cold analysis. Completed analysis, Hex-Rays readiness,
+normal worker/workspace cleanup and the unchanged original executable hash are
+verified. The helper's raw-byte request was unsupported by the IDA adapter and
+returned an explicit refusal. The old timed-out worker was stopped; policy blocked
+deletion of its retained workspace. No game code, build or deployment changed.
+Desktop and VR processing remain required and unimplemented; the subsequent observer is above.
+[Static corroboration](research/project-wingman-renderer.md#ida-cross-check-11-october-2026)
+and [tooling evidence](tooling.md#ida-pro-through-rea-and-direct-mcp).
+
 ## IDA Pro tooling and REA update, 11 October 2026
 
 Updated repo-local REA to 6.4.0 and refreshed its shared workflow. Configured the

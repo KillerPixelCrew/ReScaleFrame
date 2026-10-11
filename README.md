@@ -18,7 +18,7 @@ The AC7 proxy loads the game plugin and shared runtime services.
 | Area | Status |
 | --- | --- |
 | DLSS Super Resolution / DLAA | Working in AC7 |
-| Game detection and native SDK | Game ABI 13 with lifecycle, CPU events and renderer callbacks; AC7 and Unity Mono paths implemented; Project Wingman remains a scaffold |
+| Game detection and native SDK | Game ABI 13 with lifecycle, CPU events and renderer callbacks; AC7 and Unity Mono paths implemented; Project Wingman has a native temporal graph observer |
 | Frame generation and latency | Current source implements DLSS-G, FSR3/4 FG, XeSS FG, Reflex/XeLL and live provider switching; AC7 DLSS-G and Unity corrections have user acceptance; broader hardware/scene and measured latency validation remain open |
 | FSR and XeSS | FSR 2/3/4 and XeSS SR available in AC7; optimized D3D11/D3D12 transfer; FSR 4 INT8 compatibility device-tested on RTX 4070 |
 | Standalone launcher and WSGM | Scaffolding and planned integration |
@@ -32,7 +32,7 @@ For downloads, supported builds, installation and controls, see the relevant gam
 | Game | Availability | Guide |
 | --- | --- | --- |
 | Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
-| Project Wingman | Scaffold and static UE4.27.2 research; rendering unsupported | [Project Wingman README](games/project-wingman/README.md) |
+| Project Wingman | Native carrier and desktop-tested temporal observer; GPU processing unsupported | [Project Wingman README](games/project-wingman/README.md) |
 | Drag'n Wash | Unity Mono DX12 SR, shared overlay and runtime FG switching in source/local test builds; Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
 
 [Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)

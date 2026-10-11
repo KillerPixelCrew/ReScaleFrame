@@ -234,7 +234,27 @@ glow/grade and alpha behavior and account for every active route.
 
 ## Scaffold and next validation
 
-The [plugin](../../games/project-wingman/README.md) exports the existing C ABI and exact-build
+### IDA cross-check, 11 October 2026
+
+The installed executable still matches the fingerprint above. A fresh REA 6.4.0
+headless IDA session completed its cold analysis and decompiled the default
+temporal-upscaler entry at VA `0x145c442b0`. Its branch dispatches to the previously
+matched Gen4 helper at `0x145c41040`, or clears the half-resolution output before
+calling Gen5 at `0x145c413c0`, consistent with the matched UE4.27.2 source. This
+independently corroborates the entry's identity; IDA's inferred integer parameter
+types do not establish the native pointer ABI or member layouts.
+
+Evidence `ev_877e8b0ee65f66e099f766fd740c2529a1074bde95c165ead87b3abd78043e70`
+is retained locally in `.local/rea/wingman-ida-validation.json`. Cold analysis plus
+decompilation took 1208.678 seconds. The worker closed normally, its private
+workspace was removed and the original executable hash remained unchanged.
+No game was launched, injected or deployed; this is static corroboration only.
+The [tooling correction](../tooling.md#ida-pro-through-rea-and-direct-mcp) records
+the earlier timeout, cached failure and unsupported raw-byte operation.
+
+### Initial scaffold, 3 October 2026
+
+The initial [plugin](../../games/project-wingman/README.md) exported the existing C ABI and exact-build
 detection without renderer state or hooks. Preparation/start return `RSF_ERROR_NOT_READY`;
 validated quiesce/stop calls succeed. Status remains unprepared, inactive and not ready.
 Candidate RVAs are documented here and in engine metadata, rather than compiled into detours.
@@ -257,3 +277,47 @@ Windows/MSVC Release gate passed 34 executed tests with five skips, plus Rust fo
 checks. The Project Wingman contract test passed. Details are in the
 [implementation tracker](../implementation.md).
 Runtime rendering, motion quality, performance, FG and VR acceptance remain pending.
+
+### Native observer and desktop run, 11 October 2026
+
+The next implemented step is a dedicated XInput carrier and a guarded observation hook at
+`FDefaultTemporalUpscaler::AddPasses`, RVA `0x5c442b0`. Wingman's import table uses
+`XINPUT1_3.dll` ordinals 2/3; it does not import the existing version/DirectInput carriers.
+The new carrier forwards the system DLL's eight named exports and ordinals 100-103, and
+starts the runtime's existing plugin-session lifecycle outside the loader lock. Controller
+state/vibration forwarding is independent of observer startup.
+
+The loaded executable must match the recorded hash and this 32-byte entry fingerprint:
+`48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 48 8b 05 da 50 8d 03 49 8b f9 49 8b d8 48 8b f2 83`.
+These are comparison bytes, not a claim that 32 bytes are overwritten. MinHook creates
+the trampoline; start enables it. The native eight-argument method still executes before
+observation, preserving outputs and optional half-resolution behavior. The observer copies
+the researched view rectangle, view-state pointer, jitter and camera-cut byte plus native
+input/output graph references while their caller still owns them. It never publishes RDG
+pointers as GPU resources or retains them for execution. Serial numbers count logged
+observations, not engine frames. Sixteen fixed sampling slots limit per-history logging;
+rectangle changes publish immediately. Quiesce stops publication, stop disables the hook
+and waits through `BUSY` for active calls before clearing host services. The module and
+single trampoline remain pinned for late native entries, with no per-frame allocation.
+
+Release MSVC verification passed 43 native checks with seven hardware skips, plus Rust
+formatting and Clippy. The new carrier contract verifies names/ordinals and calls real
+GetState/SetState forwarding with an invalid controller index. The plugin contract verifies
+ABI checks and native refusal outside the matching process. Deployment at 16:09 Berlin time
+added the carrier, runtime/plugin DLLs and observation opt-in; no existing installation
+files were replaced. Exact hashes are in
+`.local/deploy-backups/wingman-20261011-160958/deployment.json`.
+
+The user completed a desktop mission run. Snapshot
+`.local/project-wingman/desktop-20261011.log` has successful prepare/start and 197 sampled
+temporal records, all readable. One stable view-state/history owner persists while view
+objects and RDG references change. Render size starts at 1696x1060 and settles at 1690x1057;
+temporal output is 1707x1067. Observed jitter includes `(-0.25, 1/6)` and `(0, -1/6)` pixels.
+Half-resolution outputs are null, downsample is disabled and the requested format enum is 9.
+These are temporal graph facts, not physical resource formats or final presentation dimensions.
+No camera-cut sample or stereo eye was established. The user reports VR is unavailable.
+
+Desktop loading/native invocation are now game-observed. GPU resource formats and RDG/RHI
+leases, matrices and sparse-motion handling, output reinsertion, shared SR/FG/latency
+execution and controls, HUD ownership and VR/compositor routing remain unimplemented or
+unverified. Desktop and VR stay in scope; the observer does not constitute that integration.

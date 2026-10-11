@@ -136,13 +136,19 @@ REA expects the original binary path, rather than an existing `.i64` database.
   "command": "powershell.exe",
   "args": ["-NoProfile", "-File", "D:/Coding/ReScaleFrame/tools/rea/run-ida.ps1"],
   "mode": "headless",
-  "timeoutMs": 300000
+  "timeoutMs": 1800000
 }
 ```
 
 The direct `ida-pro-mcp` registration in `.mcp.json` uses the same launcher.
 For Codex, add a matching `[mcp_servers.ida-pro-mcp]` table to its local config,
 using the REA table's checkout path and timeouts but the IDA launcher's arguments.
+Set `tool_timeout_sec = 1800` on both Codex registrations, matching the 30-minute
+REA upstream deadline and the supervisor's cold-import budget.
+Large shipping executables can take longer than REA's default 300-second request
+timeout. Reconnect existing MCP clients after changing these settings: the live
+REA provider caches its registration and a failed startup. An immediate repeat of
+the same failed call does not start a fresh analysis.
 The supervisor admits one worker and requires the returned database ID on analysis
 calls. Close owned databases explicitly; REA closes its private database without saving.
 IDA licensing and engine binaries remain supplied by the installed IDA Pro distribution.
@@ -163,6 +169,24 @@ The original SHA-256 stayed `23240ef9f8b0a9a324110b1c2331de31dc1b0e08f5359cb707e
 One intermediate startup returned an unsupported health payload; one retry passed
 the complete flow. No game, GUI database or user-wide activation setting was changed.
 Restart/reconnect the clients; Claude Code still needs its project-server approval.
+
+Wingman verification on 11 October: the default 300-second upstream deadline
+expired while IDA was still analyzing the 159,688,704-byte executable. The failed
+startup was cached, so an immediate retry returned the same error. A fresh REA
+connection with the longer deadline completed cold analysis and decompiled
+`0x145c442b0` in 1208.678 seconds. Both surrounding health observations reported
+completed auto-analysis, Hex-Rays readiness and the same private input. Normal
+`close_binary` completed in 314 ms; its worker and private workspace were absent
+afterward, and the original executable's SHA-256 was unchanged.
+
+The validation helper also requested `read_bytes`, which the IDA adapter does
+not declare. That operation returned `capability_unavailable`; it does not
+invalidate the successful decompilation or cleanup. Use declared IDA operations
+or the direct IDA MCP byte-reading tool. Local evidence is
+`.local/rea/wingman-ida-validation.json`. The earlier timed-out worker was stopped
+after parent/port ownership checks. Automatic approval review blocked deletion
+of its retained workspace; it remains recorded in
+`.local/rea/wingman-ida-recovery.json`.
 
 Use [bethington/ghidra-mcp](https://github.com/bethington/ghidra-mcp) for agent access to Ghidra. Its bridge command matches this repo's `.mcp.json`: `bridge-mcp-ghidra --transport stdio`, with `GHIDRA_MCP_URL=http://127.0.0.1:8089`. Follow that project's installation guide for the extension and Python bridge; neither is installed by ReScaleFrame. Verify the selected program and connection before analysis. Keep local paths in client-local configuration.
 

@@ -1,12 +1,13 @@
 {
   "current_validation": {
-    "audited": "2026-10-07",
-    "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
-    "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
+    "audited": "2026-10-11",
+    "source_base_commit": "38ebf179245de730b37c355023e49375426a6cb8",
+    "observer_source_sha256": "f7d754fe0d50ad8a5c2fe26fdd8ee2ad0d31a91db7c95f8102f6faf680876fd4",
+    "scope": "Release MSVC build; 43 native checks, seven skips, Rust formatting/lint; deployed carrier and temporal observer; user-run desktop mission produced 197 readable samples. VR unavailable. No GPU processing or image-quality acceptance.",
     "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
-    "status": "Exact-build detection and lifecycle scaffold; prepare/start return NOT_READY; rendering/SR/FG/latency/VR unimplemented.",
+    "status": "Exact-build XInput carrier and guarded temporal graph observer; GPU leases, SR, FG, latency and VR processing unimplemented.",
     "research": "../../docs/research/project-wingman-renderer.md"
   },
   "game": {
@@ -26,15 +27,18 @@
   "plugin": {
     "target": "rsf_game_project_wingman",
     "dll": "ReScaleFrame.Game.ProjectWingman.dll",
-    "status": "scaffold; detection and inactive lifecycle only",
+    "status": "native temporal graph observation; no GPU processing",
     "rendering_ready": false,
     "built_windows_msvc": true,
     "contract_tested": true,
-    "hooks_implemented": false,
-    "game_tested": false,
+    "hooks_implemented": true,
+    "hook_scope": "Default temporal-upscaler AddPasses observation only; native execution preserved.",
+    "game_tested": true,
+    "game_test_scope": "Desktop mission: loading, native invocation and readable graph/view/history facts only.",
     "device_tested": false,
-    "automatic_loading_implemented": false,
-    "prepare_result": "RSF_ERROR_NOT_READY",
+    "automatic_loading_implemented": true,
+    "carrier": "xinput1_3.dll, ordinal 2/3 imports, opt-in ObserveNative startup",
+    "prepare_result": "RSF_OK on matching loaded executable and entry; RSF_ERROR_NATIVE_REFUSED otherwise",
     "research": "../../docs/research/project-wingman-renderer.md"
   },
   "engine": {
@@ -119,7 +123,8 @@
     "notes": "UWingmanWidgetComponent shares stock allocation and draw slots. World-space HUD can be composited before TAA; head-following does not prove a final separate HUD layer."
   },
   "native_candidates": {
-    "status": "source-matched RVAs; expected hook bytes and runtime invocation not yet validated",
+    "status": "Default temporal-upscaler entry fingerprint and desktop invocation verified; other RVAs remain static candidates.",
+    "FDefaultTemporalUpscaler_AddPasses_entry_bytes": "48895c24084889742410574883ec40488b05da508d03498bf9498bd8488bf283",
     "AddPostProcessingPasses": "0x5bbfd00",
     "FDefaultTemporalUpscaler_AddPasses": "0x5c442b0",
     "AddTemporalAAPass": "0x5c44910",
