@@ -1,5 +1,15 @@
 # Implementation tracker
 
+## IDA Pro tooling and REA update, 11 October 2026
+
+Updated repo-local REA to 6.4.0 and refreshed its shared workflow. Configured the
+installed IDA Pro 9.3 through a local headless supervisor for REA, Codex and Claude
+Code. Corrected Windows interpreter ownership so worker closure releases the actual
+IDA process. MCP catalog/registration checks, real decompilation, unchanged input
+hash and database cleanup pass. Client reconnection and Claude's project-server
+approval remain required. No game build or deployment was performed.
+[Setup, initial failures and evidence](tooling.md#ida-pro-through-rea-and-direct-mcp).
+
 ## AC7 FSR4 FG availability delivery, 10 October 2026
 
 AC7's proxy calls the same shared overlay-stat helper as Unity, including the

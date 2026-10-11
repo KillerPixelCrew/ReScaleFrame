@@ -1,11 +1,15 @@
 # Evidence, comparison, and verification workflows
 
-REA returns Evidence with each result. Read that result directly, cite its
-Evidence ID when another tool or your explanation needs a stable reference, and
-preserve authority, limitations, coverage, and residual unknowns. If a result
+Evidence-producing tools return the complete Evidence record directly in MCP
+`structuredContent` and CLI JSON. Read `normalized_result` for operation data,
+and cite `evidence_id` when another tool or your explanation needs a stable
+reference. Preserve authority, limitations, coverage, and residual unknowns. If a result
 is incomplete or paginated, continue only when the remaining data matters to
 the task; do not fetch a bundle or resource merely to read a result already
-returned inline.
+returned inline. When complete `inspect_binary_layout` or
+`analyze_javascript_application` Evidence is already retained, call
+`inspect_analysis_view` for a summary, one section/symbol/module, or a stable
+page instead of repeating the producer.
 
 Use `record_unknown` to track unresolved questions in the user's investigation
 and name the authority or environment still required. Supply supporting and
@@ -34,3 +38,11 @@ or absence:
 Process captures are opt-in behavioral evidence, not a security sandbox. V3
 captures cannot be upgraded to V4; rerun the original scenario. Distinguish root
 exit from descendant settlement and require freshness when the task needs it.
+A timed-out target that must write a final report needs `finalization_ms`: REA
+sends SIGTERM to the captured root, keeps observing, and sends SIGKILL once
+only if the target has not exited by the end of the interval.
+`exit.finalization.signals` lists each attempt with its delivery result; the
+observed exit signal stays in `exit.signal`, `exit.code` is null for every
+deadline exit, and the code of a finalizer that exited on its own is in
+`exit.finalization.exit_code` (null on a signal exit or when no exit was
+observed).

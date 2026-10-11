@@ -2,14 +2,21 @@
 
 ## REA development tooling
 
-`tools/rea` pins `rea-agents` 6.0.0 from npm, whose published Git revision is
-`6fee42689ae6e95a0182e0d4d0f55644e73e72be` in [morluto/rea](https://github.com/morluto/rea).
+`tools/rea` pins `rea-agents` 6.4.0 from npm, whose published Git revision is
+`a56f7bb668ab23fec8d33f7af353ac7ed2fe1895` in [morluto/rea](https://github.com/morluto/rea).
 The package and its bundled `reverse-engineer-anything` workflow are MIT licensed.
 The shared skill is copied unchanged from that release, with its upstream license;
 the npm lockfile records dependency versions and integrity hashes. Installed
 `node_modules` and provider paths remain ignored. REA is used only for development
 and research and is not linked into or shipped with the runtime.
 [Installation and client scope](tooling.md#rea-for-codex-and-claude-code).
+
+The headless IDA bridge pins MIT-licensed `mrexodia/ida-pro-mcp` revision
+`c133c3853faa111a9b00ee615c013b720d0c4acd`, matching REA's verified IDA 9.3
+integration, plus `idapro` 0.0.11 and `tomli-w` 1.2.0 in `ida-requirements.txt`.
+Its Python packages stay under ignored `.local/rea/ida-venv`. IDA Pro and Hex-Rays
+retain their commercial licenses and are not copied into Git or runtime packages.
+[Setup and real-provider verification](tooling.md#ida-pro-through-rea-and-direct-mcp).
 
 ## Unity Mono DX12 adapter
 

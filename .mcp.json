@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "ida-pro-mcp": {
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-File", "tools/rea/run-ida.ps1"]
+    },
     "rea": {
       "command": "powershell.exe",
       "args": ["-NoProfile", "-File", "tools/rea/run.ps1", "mcp"]

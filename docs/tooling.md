@@ -45,7 +45,7 @@ record the actual setup instead of claiming an attachment succeeded. F9 usage is
 
 ### REA for Codex and Claude Code
 
-[REA](https://github.com/morluto/rea) 6.0.0 is a repository-local development tool,
+[REA](https://github.com/morluto/rea) 6.4.0 is a repository-local development tool,
 pinned with its transitive dependencies in `tools/rea/package-lock.json`. Install with
 `npm ci --prefix tools/rea`, then run `powershell.exe -NoProfile -File tools/rea/run.ps1 --help`.
 It requires Node.js 22.19+, 24.11+, or 26+ within the supported release lines.
@@ -112,6 +112,57 @@ Ghidra provider doctor passed with the existing 12.1.4 distribution and full x64
 JDK 25.0.4.1. These checks did not launch or analyze a game. Claude's client-level
 connection remains pending its project-server approval; the stdio check used an
 independent MCP client.
+
+### IDA Pro through REA and direct MCP
+
+The 11 October setup uses the [REA IDA provider guide](https://github.com/morluto/rea/blob/main/docs/ida-provider.md)
+and its verified upstream `ida-pro-mcp` revision, pinned in `tools/rea/ida-requirements.txt`.
+Install its Python environment without changing user-wide activation or client configuration:
+
+```powershell
+uv venv --python 3.14 .local/rea/ida-venv
+uv pip install --python .local/rea/ida-venv/Scripts/python.exe -r tools/rea/ida-requirements.txt
+```
+
+Add `IDADIR` and `REA_IDA_MCP_CONFIG` to `.local/rea/environment.json`. `IDADIR`
+names the existing IDA Pro directory; `REA_IDA_MCP_CONFIG` names an absolute path
+to the local upstream registration below. Set `REA_ANALYSIS_PROVIDER` to `ida`
+for the default native provider, or select `provider_id: "ida"` in `open_binary`.
+Ghidra remains available through its existing paths and explicit provider selection.
+REA expects the original binary path, rather than an existing `.i64` database.
+
+```json
+{
+  "command": "powershell.exe",
+  "args": ["-NoProfile", "-File", "D:/Coding/ReScaleFrame/tools/rea/run-ida.ps1"],
+  "mode": "headless",
+  "timeoutMs": 300000
+}
+```
+
+The direct `ida-pro-mcp` registration in `.mcp.json` uses the same launcher.
+For Codex, add a matching `[mcp_servers.ida-pro-mcp]` table to its local config,
+using the REA table's checkout path and timeouts but the IDA launcher's arguments.
+The supervisor admits one worker and requires the returned database ID on analysis
+calls. Close owned databases explicitly; REA closes its private database without saving.
+IDA licensing and engine binaries remain supplied by the installed IDA Pro distribution.
+
+The launcher uses the base Python interpreter with the repo-local environment's
+packages. Windows' venv redirector spawns another process: upstream otherwise owns
+the redirector PID and can acknowledge closure while its IDA child still appears
+in discovery. The direct reproduction returned a different worker PID and a stale,
+inactive discovery entry immediately after close. Using the base interpreter fixes
+process ownership; the immediate post-close inventory is empty, without a delay.
+
+11 October verification: IDA library 9.3 build 260421 loaded under Python 3.14.7;
+direct MCP advertised 66 tools and an empty session inventory. REA 6.4.0 advertised
+170 tools/six prompts through both client launch commands. Provider checks for IDA
+and Ghidra passed. REA imported a private copy of `whoami.exe`, listed functions,
+decompiled the function at `0x140001010`, and closed the database successfully.
+The original SHA-256 stayed `23240ef9f8b0a9a324110b1c2331de31dc1b0e08f5359cb707e51a939af56cd3`.
+One intermediate startup returned an unsupported health payload; one retry passed
+the complete flow. No game, GUI database or user-wide activation setting was changed.
+Restart/reconnect the clients; Claude Code still needs its project-server approval.
 
 Use [bethington/ghidra-mcp](https://github.com/bethington/ghidra-mcp) for agent access to Ghidra. Its bridge command matches this repo's `.mcp.json`: `bridge-mcp-ghidra --transport stdio`, with `GHIDRA_MCP_URL=http://127.0.0.1:8089`. Follow that project's installation guide for the extension and Python bridge; neither is installed by ReScaleFrame. Verify the selected program and connection before analysis. Keep local paths in client-local configuration.
 

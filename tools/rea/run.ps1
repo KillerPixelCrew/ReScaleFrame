@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $entryPoint)) {
 $environmentFile = Join-Path $repoRoot '.local/rea/environment.json'
 if (Test-Path -LiteralPath $environmentFile) {
     $providerEnvironment = Get-Content -LiteralPath $environmentFile -Raw | ConvertFrom-Json
-    foreach ($name in @('REA_ANALYSIS_PROVIDER', 'GHIDRA_INSTALL_DIR', 'JAVA_HOME')) {
+    foreach ($name in @('REA_ANALYSIS_PROVIDER', 'REA_IDA_MCP_CONFIG', 'GHIDRA_INSTALL_DIR', 'JAVA_HOME')) {
         $value = $providerEnvironment.$name
         if ($value) {
             [Environment]::SetEnvironmentVariable($name, $value, 'Process')

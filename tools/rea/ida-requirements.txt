@@ -1,0 +1,4 @@
+# Upstream revision verified by REA's IDA 9.3 headless integration guide.
+ida-pro-mcp @ https://github.com/mrexodia/ida-pro-mcp/archive/c133c3853faa111a9b00ee615c013b720d0c4acd.zip
+idapro==0.0.11
+tomli-w==1.2.0
