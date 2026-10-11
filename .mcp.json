@@ -2,11 +2,13 @@
   "mcpServers": {
     "ida-pro-mcp": {
       "command": "powershell.exe",
-      "args": ["-NoProfile", "-File", "tools/rea/run-ida.ps1"]
+      "args": ["-NoProfile", "-File", "tools/rea/run-ida.ps1"],
+      "timeout": 1800000
     },
     "rea": {
       "command": "powershell.exe",
-      "args": ["-NoProfile", "-File", "tools/rea/run.ps1", "mcp"]
+      "args": ["-NoProfile", "-File", "tools/rea/run.ps1", "mcp"],
+      "timeout": 1800000
     },
     "ghidra-mcp": {
       "command": "bridge-mcp-ghidra",

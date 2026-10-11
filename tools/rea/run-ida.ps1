@@ -22,5 +22,8 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $basePython)) {
 }
 $env:PYTHONPATH = Join-Path $repoRoot '.local/rea/ida-venv/Lib/site-packages'
 $env:PYTHONNOUSERSITE = '1'
+$env:IDA_MCP_OPEN_TIMEOUT = '1800'
+$env:IDA_MCP_WORKER_CALL_TIMEOUT = '1800'
+$env:IDA_MCP_TOOL_TIMEOUT_SEC = '1800'
 & $basePython -m ida_pro_mcp.idalib_supervisor --stdio --max-workers 1 @args
 exit $LASTEXITCODE
