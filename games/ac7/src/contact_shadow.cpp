@@ -188,6 +188,12 @@ rsf_ac7_contact_shadow_result rsf_ac7_contact_shadow_correct(
         return rsf_ac7_contact_shadow_result::patched;
     } catch (...) { output.clear(); return rsf_ac7_contact_shadow_result::refused; }
 }
+void rsf_ac7_dxbc_rehash(uint8_t* bytes, size_t size) noexcept
+{
+    if (!bytes || size < 32) return;
+    const auto hash = checksum(bytes, size);
+    std::memcpy(bytes + 4, hash.data(), sizeof(hash));
+}
 
 uint32_t rsf_ac7_contact_shadow_crc(const void* bytes, size_t size) noexcept
 {

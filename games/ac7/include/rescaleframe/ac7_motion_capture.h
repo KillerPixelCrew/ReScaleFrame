@@ -22,6 +22,11 @@ void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* byt
 void rsf_ac7_motion_capture_buffer(void* user, void* buffer, const void* initial,
                                   uint32_t bytes, uint32_t bind_flags);
 void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, uint32_t size);
+struct rsf_observer_layout_element;
+struct rsf_frame_tap_geometry;
+void rsf_ac7_motion_capture_layout(void* layout, const struct rsf_observer_layout_element* elements,
+                                  uint32_t copied, uint32_t count);
+void rsf_ac7_motion_capture_geometry(const struct rsf_frame_tap_geometry* draw);
 void rsf_ac7_motion_capture_request(void);
 /* Native controller supplies queued execution identity; capture must not detour its owner again. */
 void rsf_ac7_motion_capture_native_owner(uint32_t enabled);

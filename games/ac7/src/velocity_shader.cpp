@@ -1,0 +1,535 @@
+// SPDX-License-Identifier: GPL-3.0-only
+#include "velocity_shader.h"
+#include "contact_shadow.h"
+#include <rescaleframe/shader_compile.h>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <string>
+#include <map>
+#include <sstream>
+#include <bit>
+
+namespace {
+uint32_t word(const uint8_t* bytes, size_t offset)
+{ uint32_t value = 0; std::memcpy(&value, bytes + offset, 4); return value; }
+void put(std::vector<uint8_t>& bytes, uint32_t value)
+{
+    const size_t offset = bytes.size(); bytes.resize(offset + 4);
+    std::memcpy(bytes.data() + offset, &value, 4);
+}
+struct Chunk { std::array<uint8_t,4> tag{}; std::vector<uint8_t> bytes; };
+struct Container {
+    std::vector<Chunk> chunks;
+    bool read(const void* pointer, size_t size) {
+        const auto* bytes = static_cast<const uint8_t*>(pointer);
+        if (!bytes || size < 32 || size > 8 * 1024 * 1024 || std::memcmp(bytes,"DXBC",4)) return false;
+        const uint32_t total = word(bytes,24), count = word(bytes,28);
+        if (total > size || total < 32 || count > 32 || size_t(count) * 4 > total - 32) return false;
+        for (uint32_t i=0; i<count; ++i) {
+            const uint32_t offset = word(bytes,32 + size_t(i)*4);
+            if (offset < 32 + count*4 || offset > total || total-offset < 8) return false;
+            const uint32_t length = word(bytes,offset+4);
+            if (length > total-offset-8) return false;
+            Chunk chunk; std::memcpy(chunk.tag.data(),bytes+offset,4);
+            chunk.bytes.assign(bytes+offset+8,bytes+offset+8+length);
+            chunks.push_back(std::move(chunk));
+        }
+        return true;
+    }
+    Chunk* find(const char* tag) {
+        for (auto& chunk:chunks) if (!std::memcmp(chunk.tag.data(),tag,4)) return &chunk;
+        return nullptr;
+    }
+    void write(std::vector<uint8_t>& output) {
+        output.assign(32+chunks.size()*4,0); std::memcpy(output.data(),"DXBC",4);
+        uint32_t value=1; std::memcpy(output.data()+20,&value,4);
+        value=uint32_t(chunks.size()); std::memcpy(output.data()+28,&value,4);
+        for (size_t i=0;i<chunks.size();++i) {
+            value=uint32_t(output.size()); std::memcpy(output.data()+32+i*4,&value,4);
+            output.insert(output.end(),chunks[i].tag.begin(),chunks[i].tag.end());
+            put(output,uint32_t(chunks[i].bytes.size()));
+            output.insert(output.end(),chunks[i].bytes.begin(),chunks[i].bytes.end());
+        }
+        value=uint32_t(output.size()); std::memcpy(output.data()+24,&value,4);
+        rsf_ac7_dxbc_rehash(output.data(),output.size());
+    }
+};
+using Semantic=rsf_ac7_velocity_semantic;
+bool read_signature(const Chunk& chunk, std::vector<Semantic>& result)
+{
+    const auto& bytes=chunk.bytes;
+    if (bytes.size()<8) return false;
+    const auto count=word(bytes.data(),0);
+    if (count>64 || size_t(count)*24>bytes.size()-8) return false;
+    for (uint32_t i=0;i<count;++i) {
+        const size_t offset=8+size_t(i)*24; const auto name=word(bytes.data(),offset);
+        if (name>=bytes.size()) return false;
+        const auto end=std::find(bytes.begin()+name,bytes.end(),uint8_t(0));
+        if (end==bytes.end()) return false;
+        Semantic semantic;
+        semantic.name.assign(reinterpret_cast<const char*>(bytes.data()+name),size_t(end-(bytes.begin()+name)));
+        semantic.index=word(bytes.data(),offset+4); semantic.system=word(bytes.data(),offset+8);
+        semantic.type=word(bytes.data(),offset+12); semantic.reg=word(bytes.data(),offset+16);
+        semantic.mask=bytes[offset+20]; semantic.used=bytes[offset+21];
+        result.push_back(std::move(semantic));
+    }
+    return true;
+}
+void write_signature(Chunk& chunk, const std::vector<Semantic>& semantics)
+{
+    auto ordered=semantics;
+    std::stable_sort(ordered.begin(),ordered.end(),[](const auto& a,const auto& b) {
+        return std::tie(a.reg,a.mask)<std::tie(b.reg,b.mask);
+    });
+    auto& bytes=chunk.bytes; bytes.assign(8+ordered.size()*24,0);
+    const uint32_t count=uint32_t(ordered.size()), header=8;
+    std::memcpy(bytes.data(),&count,4); std::memcpy(bytes.data()+4,&header,4);
+    for (size_t i=0;i<ordered.size();++i) {
+        const size_t offset=8+i*24; const auto& s=ordered[i];
+        const uint32_t name=uint32_t(bytes.size());
+        const uint32_t fields[]{name,s.index,s.system,s.type,s.reg};
+        std::memcpy(bytes.data()+offset,fields,sizeof(fields));
+        bytes[offset+20]=s.mask; bytes[offset+21]=s.used;
+        bytes.insert(bytes.end(),s.name.begin(),s.name.end()); bytes.push_back(0);
+    }
+    while (bytes.size()%4) bytes.push_back(0);
+}
+struct Operand { size_t token=0,index=0,end=0; uint32_t type=0,reg=0; };
+bool operand(const std::vector<uint32_t>& code,size_t& cursor,Operand& out)
+{
+    if (cursor>=code.size()) return false;
+    out.token=cursor; uint32_t token=code[cursor++]; out.type=(token>>12)&255;
+    const uint32_t original=token, dimensions=(token>>20)&3;
+    while (token&0x80000000u) { if (cursor>=code.size()) return false; token=code[cursor++]; }
+    if (out.type==4 || out.type==5) {
+        const uint32_t count=(original&3)==1 ? 1u : (original&3)==2 ? 4u : 0u;
+        const size_t length=size_t(count)*(out.type==5 ? 2u : 1u);
+        if (!length || length>code.size()-cursor) return false;
+        cursor+=length;
+    } else {
+        for (uint32_t i=0;i<dimensions;++i) {
+            const uint32_t representation=(original>>(22+i*3))&7;
+            if (representation==0 || representation==1 || representation==3 || representation==4) {
+                const size_t length=representation==1 || representation==4 ? 2u : 1u;
+                if (length>code.size()-cursor) return false;
+                if (!i) { out.index=cursor; out.reg=code[cursor]; }
+                cursor+=length;
+            }
+            if (representation>=2 && representation<=4) {
+                Operand relative; if (!operand(code,cursor,relative)) return false;
+            } else if (representation>4) return false;
+        }
+    }
+    out.end=cursor; return true;
+}
+struct Instruction {
+    std::vector<uint32_t> words; uint32_t op=0;
+    bool declaration() const { return op>=88 && op<=106; }
+    bool operands(std::vector<Operand>& result) const {
+        size_t cursor=1;
+        while (words[cursor-1]&0x80000000u) { if (cursor>=words.size()) return false; ++cursor; }
+        while (cursor<words.size()) { Operand value; if (!operand(words,cursor,value)) return false; result.push_back(value); }
+        return true;
+    }
+};
+bool instructions(const Chunk& chunk,std::vector<Instruction>& output,uint32_t profile=0x50)
+{
+    if (chunk.bytes.size()<8 || chunk.bytes.size()%4 || word(chunk.bytes.data(),0)!=profile ||
+        word(chunk.bytes.data(),4)!=chunk.bytes.size()/4) return false;
+    for (size_t cursor=2;cursor<chunk.bytes.size()/4;) {
+        const auto token=word(chunk.bytes.data(),cursor*4); const uint32_t op=token&0x7ff;
+        const uint32_t count=op==53 && cursor+1<chunk.bytes.size()/4 ? word(chunk.bytes.data(),(cursor+1)*4) : (token>>24)&127;
+        if (!count || count>chunk.bytes.size()/4-cursor) return false;
+        Instruction instruction; instruction.op=op; instruction.words.resize(count);
+        std::memcpy(instruction.words.data(),chunk.bytes.data()+cursor*4,size_t(count)*4);
+        output.push_back(std::move(instruction)); cursor+=count;
+    }
+    return true;
+}
+uint32_t temp_count(const std::vector<Instruction>& code)
+{ for (const auto& i:code) if (i.op==104 && i.words.size()==2) return i.words[1]; return 0; }
+bool has_cb(const std::vector<Instruction>& code,uint32_t slot)
+{
+    for (const auto& i:code) if (i.op==89 && i.words.size()>2 && i.words[2]==slot) return true;
+    return false;
+}
+constexpr char helper_source[]=R"(
+cbuffer Velocity : register(b13) {
+    float4 Rect; float4 Jitter; float Cutoff; uint HasHistory; float2 Padding;
+};
+float4 main(float4 current_clip:RSFCUR0,float4 previous:RSFPREV0,float4 colour:RSFCOLOR0):SV_Target0 {
+    clip(colour.w-Cutoff);
+    float2 current=current_clip.xy/current_clip.w-Jitter.xy;
+    float2 old=previous.xy/previous.w-Jitter.zw;
+    return float4((current-old)*0.2495+32767.0/65535.0,0,0);
+})";
+const std::vector<uint8_t>& helper()
+{
+    static const auto bytes=[] { std::vector<uint8_t> result;
+        rsf::compile_shader(helper_source,"ac7-translucent-velocity","main","ps_5_0",result); return result; }();
+    return bytes;
+}
+}
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_pixel_shader(const void* bytes,size_t size,
+    uint32_t blend,std::vector<uint8_t>& output,uint32_t previous_register,uint32_t current_register) noexcept
+{
+    output.clear();
+    try {
+        if (blend<2 || blend>5) return rsf_ac7_velocity_shader_result::refused;
+        Container native,extra;
+        if (!native.read(bytes,size) || !extra.read(helper().data(),helper().size())) return rsf_ac7_velocity_shader_result::refused;
+        auto* shader=native.find("SHEX"); if (!shader) shader=native.find("SHDR");
+        auto* input=native.find("ISGN"); auto* output_signature=native.find("OSGN");
+        auto* add_shader=extra.find("SHEX"); if (!add_shader) add_shader=extra.find("SHDR");
+        auto* add_input=extra.find("ISGN");
+        std::vector<Instruction> original,added; std::vector<Semantic> inputs,outputs,add_inputs;
+        if (!shader || !input || !output_signature || !add_shader || !add_input ||
+            !instructions(*shader,original) || !instructions(*add_shader,added) ||
+            !read_signature(*input,inputs) || !read_signature(*output_signature,outputs) ||
+            !read_signature(*add_input,add_inputs) || has_cb(original,13)) return rsf_ac7_velocity_shader_result::refused;
+        bool target=false; for (const auto& s:outputs) {
+            if (!_stricmp(s.name.c_str(),"SV_Target")) {
+                if (s.index || s.reg) return rsf_ac7_velocity_shader_result::refused;
+                target=true;
+            }
+        }
+        if (!target) return rsf_ac7_velocity_shader_result::refused;
+        uint32_t current_clip=0,previous=0,extra_current=UINT32_MAX,extra_previous=UINT32_MAX,extra_colour=UINT32_MAX;
+        for (auto& s:inputs) {
+            previous=std::max(previous,s.reg+1);
+            if (s.name=="RSFPREV") return rsf_ac7_velocity_shader_result::refused;
+        }
+        if (previous_register!=UINT32_MAX) {
+            if (previous_register<previous) return rsf_ac7_velocity_shader_result::refused;
+            previous=previous_register;
+        }
+        current_clip=current_register==UINT32_MAX ? previous+1 : current_register;
+        if (previous>=32 || current_clip>=32 || current_clip==previous) return rsf_ac7_velocity_shader_result::refused;
+        for (const auto& s:inputs) if (s.reg==current_clip) return rsf_ac7_velocity_shader_result::refused;
+        for (const auto& s:add_inputs) {
+            if (s.name=="RSFCUR") extra_current=s.reg;
+            if (s.name=="RSFPREV") extra_previous=s.reg;
+            if (s.name=="RSFCOLOR") extra_colour=s.reg;
+        }
+        if (extra_current==UINT32_MAX || extra_previous==UINT32_MAX || extra_colour==UINT32_MAX)
+            return rsf_ac7_velocity_shader_result::refused;
+        inputs.push_back({"RSFPREV",0,0,3,previous,15,11});
+        inputs.push_back({"RSFCUR",0,0,3,current_clip,15,11});
+        const uint32_t native_temps=temp_count(original),colour=native_temps,helper_base=colour+1;
+        if (native_temps>4096 || temp_count(added)>4096) return rsf_ac7_velocity_shader_result::refused;
+        // Standard AC7 additive base-pass shaders finish with Colour*Opacity, alpha=0, return.
+        // Read that preserved scalar, never infer opacity from additive radiance or output alpha.
+        std::vector<uint32_t> additive_opacity;
+        if (blend==3) {
+            if (original.size()<3 || original.back().op!=62) return rsf_ac7_velocity_shader_result::refused;
+            size_t multiply_index=original.size(),zero_index=original.size();
+            for (size_t j=original.size()-1;j>0;--j) {
+                const auto& candidate=original[j-1];
+                if (candidate.declaration() || candidate.op==53) continue;
+                std::vector<Operand> values;
+                if (!candidate.operands(values)) return rsf_ac7_velocity_shader_result::refused;
+                if (values.empty() || values[0].type!=2 || values[0].reg!=0) continue;
+                const uint32_t mask=(candidate.words[values[0].token]>>4)&15;
+                if ((mask&7) && multiply_index==original.size()) multiply_index=j-1;
+                if ((mask&8) && zero_index==original.size()) zero_index=j-1;
+            }
+            if (multiply_index==original.size() || zero_index==original.size()) return rsf_ac7_velocity_shader_result::refused;
+            const auto& multiply=original[multiply_index]; const auto& zero=original[zero_index];
+            std::vector<Operand> operands,zero_operands;
+            if (multiply.op!=56 || zero.op!=54 || original.back().op!=62 ||
+                !multiply.operands(operands) || operands.size()!=3 || !zero.operands(zero_operands) || zero_operands.size()!=2 ||
+                operands[0].type!=2 || operands[0].reg!=0 || ((multiply.words[operands[0].token]>>4)&15)!=7 ||
+                zero_operands[0].type!=2 || zero_operands[0].reg!=0 || ((zero.words[zero_operands[0].token]>>4)&15)!=8 ||
+                zero_operands[1].type!=4 || zero.words[zero_operands[1].end-1]!=0)
+                return rsf_ac7_velocity_shader_result::refused;
+            const Operand* scalar=nullptr;
+            for (size_t i=1;i<3;++i) {
+                const uint32_t swizzle=(multiply.words[operands[i].token]>>4)&255;
+                if (operands[i].type==0 && swizzle==(swizzle&3)*85) {
+                    if (scalar) return rsf_ac7_velocity_shader_result::refused;
+                    scalar=&operands[i];
+                }
+            }
+            if (!scalar) return rsf_ac7_velocity_shader_result::refused;
+            for (size_t j=multiply_index+1;j+1<original.size();++j) {
+                std::vector<Operand> values; const auto& candidate=original[j];
+                if (candidate.declaration() || candidate.op==53) continue;
+                if (!candidate.operands(values)) return rsf_ac7_velocity_shader_result::refused;
+                if (!values.empty() && values[0].type==0 && values[0].reg==scalar->reg &&
+                    ((candidate.words[values[0].token]>>4)&(1u<<((multiply.words[scalar->token]>>4)&3))))
+                    return rsf_ac7_velocity_shader_result::refused;
+            }
+            additive_opacity.assign(multiply.words.begin()+scalar->token,multiply.words.begin()+scalar->end);
+        }
+        std::vector<uint32_t> declarations,body,injection; bool temps_declared=false;
+        auto append=[](std::vector<uint32_t>& into,const std::vector<uint32_t>& words) { into.insert(into.end(),words.begin(),words.end()); };
+        for (auto i:original) {
+            if (i.op==63 || i.op==4 || i.op==5) return rsf_ac7_velocity_shader_result::refused;
+            if (i.op==104) {
+                i.words[1]=helper_base+temp_count(added); temps_declared=true; append(declarations,i.words); continue;
+            }
+            if (i.declaration()) {
+                append(declarations,i.words); continue;
+            }
+            if (i.op==53) { append(body,i.words); continue; }
+            std::vector<Operand> operands;
+            if (!i.operands(operands)) return rsf_ac7_velocity_shader_result::refused;
+            for (const auto& o:operands) if (o.type==2 && o.reg==0) {
+                i.words[o.token]&=~0x000ff000u; i.words[o.index]=colour;
+            }
+            append(body,i.words);
+        }
+        if (!temps_declared) append(declarations,{0x02000068u,helper_base+temp_count(added)});
+        for (auto i:added) {
+            if (i.op==104 || i.op==106 || i.op==101 || i.op==62) continue;
+            if (i.op>=98 && i.op<=100) {
+                if (i.words.size()<3) return rsf_ac7_velocity_shader_result::refused;
+                if (i.words[2]==extra_colour) continue;
+                if (i.words[2]==extra_current) i.words[2]=current_clip;
+                else if (i.words[2]==extra_previous) i.words[2]=previous;
+                else return rsf_ac7_velocity_shader_result::refused;
+                append(declarations,i.words); continue;
+            }
+            if (i.declaration()) { append(declarations,i.words); continue; }
+            std::vector<Operand> operands;
+            if (!i.operands(operands)) return rsf_ac7_velocity_shader_result::refused;
+            for (const auto& o:operands) {
+                if (o.type==0) i.words[o.index]+=helper_base;
+                if (o.type==1) {
+                    if (o.reg==extra_colour) { i.words[o.token]&=~0x000ff000u; i.words[o.index]=colour; }
+                    else if (o.reg==extra_current) i.words[o.index]=current_clip;
+                    else if (o.reg==extra_previous) i.words[o.index]=previous;
+                    else return rsf_ac7_velocity_shader_result::refused;
+                }
+            }
+            append(injection,i.words);
+        }
+        // Inlining at each unconditional return keeps native material control flow and discards.
+        std::vector<uint32_t> code{0x50,0}; append(code,declarations);
+        size_t cursor=0;
+        while (cursor<body.size()) {
+            const uint32_t op=body[cursor]&0x7ff;
+            const uint32_t length=op==53 ? body[cursor+1] : (body[cursor]>>24)&127;
+            if (op==62) {
+                if (!additive_opacity.empty()) {
+                    const uint32_t length_mov=uint32_t(3+additive_opacity.size());
+                    append(code,{(length_mov<<24)|54u,0x00100082u,colour}); append(code,additive_opacity);
+                }
+                append(code,injection);
+            }
+            code.insert(code.end(),body.begin()+cursor,body.begin()+cursor+length); cursor+=length;
+        }
+        code[1]=uint32_t(code.size()); shader->bytes.resize(code.size()*4);
+        std::memcpy(shader->bytes.data(),code.data(),shader->bytes.size());
+        write_signature(*input,inputs);
+        native.write(output);
+        return rsf_ac7_velocity_shader_result::patched;
+    } catch (...) { output.clear(); return rsf_ac7_velocity_shader_result::refused; }
+}
+bool rsf_ac7_velocity_signature(const void* bytes,size_t size,bool output,
+    std::vector<rsf_ac7_velocity_semantic>& semantics) noexcept
+{
+    semantics.clear();
+    try {
+        Container container; if (!container.read(bytes,size)) return false;
+        const auto* chunk=container.find(output ? "OSGN" : "ISGN");
+        return chunk && read_signature(*chunk,semantics);
+    } catch (...) { semantics.clear(); return false; }
+}
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,size_t size,
+    std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info) noexcept
+{
+    output.clear(); info={};
+    try {
+        Container native;
+        if (!native.read(bytes,size)) return rsf_ac7_velocity_shader_result::refused;
+        auto* shader=native.find("SHEX"); if (!shader) shader=native.find("SHDR");
+        auto* input=native.find("ISGN"); auto* out=native.find("OSGN");
+        std::vector<Instruction> original;
+        std::vector<Semantic> inputs,outputs;
+        if (!shader || !input || !out || !instructions(*shader,original,0x10050) ||
+            !read_signature(*input,inputs) || !read_signature(*out,outputs)) return rsf_ac7_velocity_shader_result::refused;
+        uint32_t next_input=0,next_output=0;
+        const Semantic *position=nullptr,*old=nullptr,*corner=nullptr;
+        for (const auto& s:inputs) {
+            next_input=std::max(next_input,s.reg+1);
+            if (!_stricmp(s.name.c_str(),"ATTRIBUTE")) {
+                if (!s.index && s.mask==15) position=&s;
+                if (s.index==1 && s.mask==15) old=&s;
+                if (s.index==4 && s.mask==3) corner=&s;
+            }
+        }
+        info.particle=position && old && corner ? 1u : 0u;
+        bool has_position=false;
+        for (const auto& s:outputs) {
+            next_output=std::max(next_output,s.reg+1);
+            if (s.system==1) { info.position_register=s.reg; has_position=true; }
+            if (s.name.starts_with("RSF")) return rsf_ac7_velocity_shader_result::refused;
+        }
+        if (!has_position || next_output+3>32) return rsf_ac7_velocity_shader_result::refused;
+        static constexpr char generic_source[]=R"(
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;};
+O main(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {O o;o.p=float4(0,0,0,1);
+o.key=float4(float(vertex),float(instance),0,0);o.centre=0;o.old=0;return o;})";
+        static constexpr char particle_source[]=R"(
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;};
+O main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,float2 corner:ATTRIBUTE4) {
+O o;o.p=float4(0,0,0,1);o.key=float4(corner,old.w,1);o.centre=float4(centre.xyz,1);
+o.old=float4(old.xyz,1);return o;})";
+        static const auto generic=[] {std::vector<uint8_t> code;rsf::compile_shader(generic_source,"ac7-geometry-key","main","vs_5_0",code);return code;}();
+        static const auto particle=[] {std::vector<uint8_t> code;rsf::compile_shader(particle_source,"ac7-particle-key","main","vs_5_0",code);return code;}();
+        const auto& helper_bytes=info.particle ? particle : generic;
+        Container extra; if (!extra.read(helper_bytes.data(),helper_bytes.size())) return rsf_ac7_velocity_shader_result::refused;
+        auto* helper_shader=extra.find("SHEX"); if (!helper_shader) helper_shader=extra.find("SHDR");
+        auto* helper_input=extra.find("ISGN"); auto* helper_output=extra.find("OSGN");
+        std::vector<Instruction> added; std::vector<Semantic> add_inputs,add_outputs;
+        if (!helper_shader || !helper_input || !helper_output || !instructions(*helper_shader,added,0x10050) ||
+            !read_signature(*helper_input,add_inputs) || !read_signature(*helper_output,add_outputs))
+            return rsf_ac7_velocity_shader_result::refused;
+        std::map<uint32_t,uint32_t> input_map,output_map;
+        uint32_t dummy_position=UINT32_MAX;
+        for (const auto& s:add_inputs) {
+            auto found=std::find_if(inputs.begin(),inputs.end(),[&](const auto& native_input) {
+                return !_stricmp(native_input.name.c_str(),s.name.c_str()) && native_input.index==s.index;
+            });
+            if (found!=inputs.end()) { input_map[s.reg]=found->reg; found->used|=s.used; }
+            else {
+                if (!s.system || next_input>=32) return rsf_ac7_velocity_shader_result::refused;
+                auto appended=s; appended.reg=next_input++; input_map[s.reg]=appended.reg; inputs.push_back(std::move(appended));
+            }
+        }
+        for (const auto& s:add_outputs) {
+            if (s.system==1) { dummy_position=s.reg; continue; }
+            auto appended=s; appended.reg=next_output++; output_map[s.reg]=appended.reg;
+            outputs.push_back(std::move(appended));
+        }
+        const uint32_t base=temp_count(original),total=base+temp_count(added);
+        if (total>4096) return rsf_ac7_velocity_shader_result::refused;
+        std::vector<uint32_t> declarations,body,injection;
+        auto append=[](auto& into,const auto& values) { into.insert(into.end(),values.begin(),values.end()); };
+        std::map<uint32_t,size_t> input_declarations;
+        bool temps=false;
+        for (auto i:original) {
+            if (i.op==4 || i.op==5 || i.op==63) return rsf_ac7_velocity_shader_result::refused;
+            if (i.op==104) {i.words[1]=total;temps=true;append(declarations,i.words);continue;}
+            if (i.declaration()) {
+                if (i.op>=95 && i.op<=97 && i.words.size()>2) input_declarations[i.words[2]]=declarations.size()+1;
+                append(declarations,i.words);
+            } else append(body,i.words);
+        }
+        for (auto i:added) {
+            if (i.op==104 || i.op==106 || i.op==62) continue;
+            if (i.op>=95 && i.op<=97) {
+                if (i.words.size()<3 || !input_map.contains(i.words[2])) return rsf_ac7_velocity_shader_result::refused;
+                const uint32_t reg=input_map[i.words[2]];
+                const auto found=input_declarations.find(reg);
+                if (found!=input_declarations.end()) declarations[found->second]|=i.words[1]&0xf0;
+                else {i.words[2]=reg;append(declarations,i.words);}
+                continue;
+            }
+            if (i.op>=101 && i.op<=103) {
+                if (i.words.size()<3) return rsf_ac7_velocity_shader_result::refused;
+                if (i.words[2]==dummy_position) continue;
+                if (!output_map.contains(i.words[2])) return rsf_ac7_velocity_shader_result::refused;
+                i.words[2]=output_map[i.words[2]]; append(declarations,i.words); continue;
+            }
+            if (i.declaration()) {append(declarations,i.words);continue;}
+            std::vector<Operand> operands;
+            if (!i.operands(operands)) return rsf_ac7_velocity_shader_result::refused;
+            if (!operands.empty() && operands[0].type==2 && operands[0].reg==dummy_position) continue;
+            for (const auto& o:operands) {
+                if (o.type==0) i.words[o.index]+=base;
+                if (o.type==1) {if (!input_map.contains(o.reg)) return rsf_ac7_velocity_shader_result::refused;i.words[o.index]=input_map[o.reg];}
+                if (o.type==2) {if (!output_map.contains(o.reg)) return rsf_ac7_velocity_shader_result::refused;i.words[o.index]=output_map[o.reg];}
+            }
+            append(injection,i.words);
+        }
+        if (!temps) {declarations.push_back(0x02000068u);declarations.push_back(total);}
+        std::vector<uint32_t> code{0x10050,0}; append(code,declarations);
+        for (size_t cursor=0;cursor<body.size();) {
+            const uint32_t op=body[cursor]&0x7ff;
+            const uint32_t length=op==53 ? body[cursor+1] : (body[cursor]>>24)&127;
+            if (op==62) append(code,injection);
+            code.insert(code.end(),body.begin()+cursor,body.begin()+cursor+length);cursor+=length;
+        }
+        code[1]=uint32_t(code.size());shader->bytes.resize(code.size()*4);
+        std::memcpy(shader->bytes.data(),code.data(),shader->bytes.size());
+        write_signature(*input,inputs);write_signature(*out,outputs);native.write(output);info.outputs=std::move(outputs);
+        return rsf_ac7_velocity_shader_result::patched;
+    } catch (...) {output.clear();info={};return rsf_ac7_velocity_shader_result::refused;}
+}
+bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
+    std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept
+{
+    bytecode.clear(); previous_register=current_register=0;
+    try {
+        std::ostringstream fields;
+        std::string position,key,old;
+        uint32_t count=0;
+        for (const auto& s:info.outputs) {
+            if (!s.mask || s.mask>15 || s.reg>=32) return false;
+            const uint32_t components=std::popcount(uint32_t(s.mask));
+            const std::string field="f"+std::to_string(count++);
+            fields << (s.type==1 ? "uint" : s.type==2 ? "int" : "float");
+            if (components>1) fields << components;
+            fields << ' ' << field << ':' << s.name << s.index << ';';
+            if (s.system==1) position=field;
+            if (s.name=="RSFKEY") key=field;
+            if (s.name=="RSFOLD") old=field;
+            previous_register=std::max(previous_register,s.reg+1);
+        }
+        if (position.empty() || key.empty() || old.empty() || previous_register+1>=32) return false;
+        current_register=previous_register++;
+        std::ostringstream source;
+        source << "struct V{" << fields.str() << "};struct O{" << fields.str()
+            << "float4 current:RSFCUR0;float4 previous:RSFPREV0;};\n"
+R"(
+ByteAddressBuffer History:register(t0);
+cbuffer Parameters:register(b13) {
+    float4 Rect;float4 Jitter;float Cutoff;uint HasHistory;uint HistoryMask;uint Padding;
+    row_major float4x4 ClipToPrevious;
+};
+uint key_hash(uint4 key) {
+    uint value=2166136261;
+    [unroll]for(uint i=0;i<4;i++) {value=(value^key[i])*16777619;}
+    value^=value>>16;return max(1,value&0x7fffffff);
+}
+float4 previous_position(float4 current,float4 key,float3 old) {
+    float4 unjittered=current;unjittered.xy-=Jitter.xy*current.w;
+    float4 fallback=mul(unjittered,ClipToPrevious);fallback.xy+=Jitter.zw*fallback.w;
+    if(HasHistory==0)return fallback;
+    uint4 bits=asuint(key);uint hash=key_hash(bits);
+    bool found=false,ambiguous=false;float distance=3.402823e38;float4 selected=fallback;
+    [loop]for(uint probe=0;probe<32;probe++) {
+        uint address=((hash+probe)&HistoryMask)*64;
+        uint marker=History.Load(address);
+        if(marker==0)break;
+        if(marker!=hash || any(History.Load4(address+4)!=bits))continue;
+        float4 candidate=asfloat(History.Load4(address+20));
+        if(!all(isfinite(candidate)) || candidate.w<=0)continue;
+        float3 centre=asfloat(History.Load3(address+36));
+        float d=key.w==1 ? dot(centre-old,centre-old) : 0;
+        if(!found || d<distance) {found=true;distance=d;selected=candidate;ambiguous=false;}
+        else if(d==distance && any(asuint(candidate)!=asuint(selected)))ambiguous=true;
+    }
+    return found && !ambiguous ? selected : fallback;
+}
+[maxvertexcount(3)]void main(triangle V input[3],inout TriangleStream<O> stream) {
+    [unroll]for(uint j=0;j<3;j++) {O output;
+)";
+        for (size_t i=0;i<info.outputs.size();++i) source << "output.f" << i << "=input[j].f" << i << ';';
+        source << "output.current=input[j]." << position << ";output.previous=previous_position(input[j]." << position << ",input[j]." << key
+            << ",input[j]." << old << ".xyz);stream.Append(output);}stream.RestartStrip();}";
+        if (!rsf::compile_shader(source.str().c_str(),"ac7-previous-geometry","main","gs_5_0",bytecode)) return false;
+        std::vector<Semantic> actual_inputs;
+        if (!rsf_ac7_velocity_signature(bytecode.data(),bytecode.size(),false,actual_inputs)) return false;
+        for (const auto& s:info.outputs) {
+            const auto found=std::find_if(actual_inputs.begin(),actual_inputs.end(),[&](const auto& actual) {
+                return !_stricmp(s.name.c_str(),actual.name.c_str()) && s.index==actual.index;
+            });
+            if (found==actual_inputs.end() || found->reg!=s.reg || found->mask!=s.mask || found->type!=s.type) return false;
+        }
+        return true;
+    } catch (...) {bytecode.clear();return false;}
+}

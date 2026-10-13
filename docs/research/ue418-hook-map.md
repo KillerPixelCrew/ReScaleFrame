@@ -12,10 +12,16 @@ fingerprinted game/module. FG and full missing-object velocity coverage remain s
 
 ## Velocity gates mapped, 4 October
 
+13 October correction: the native temporal group now owns guarded replacements at `0x118a4e3`,
+`0x10fdd0c` and `0x11838c4`. The last follows successful history lookup; the camera-cut and
+missing-history branches remain. Translucency gates are not part of this group. The full
+translucent velocity/depth pass remains unimplemented.
+[Bytes, source match, restoration and proof limits](ac7-velocity-20261013.md).
+
 The question and its use are in the [motion and depth research](ac7-motion-depth-20261004.md).
 Each row was matched against the named 4.18.3 source and checked in both the live Ghidra image
 (base `0x7ff741350000`) and `.local/observe/Ace7Game.exe.dump`. 36 functions were named with the
-`AC7_` prefix in the live program; save it in Ghidra to keep them. No gate below is patched.
+`AC7_` prefix in the live program; save it in Ghidra to keep them. At that experiment's date no gate below was patched.
 
 | Function | RVA | Entry (16) | Gate RVA: bytes | Source |
 | --- | --- | --- | --- | --- |

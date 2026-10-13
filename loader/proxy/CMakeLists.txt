@@ -14,6 +14,7 @@ target_link_libraries(rsf_proxy_dinput8 PRIVATE
     ReScaleFrame::AC7UIRules
     ReScaleFrame::AC7View
     ReScaleFrame::AC7MotionCapture
+    ReScaleFrame::AC7VelocityPass
     bcrypt
     rsf_build_options)
 target_compile_definitions(rsf_proxy_dinput8 PRIVATE _CRT_SECURE_NO_WARNINGS)

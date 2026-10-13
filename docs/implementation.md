@@ -846,6 +846,23 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+Later 13 October increment: added and connected a dedicated material velocity/depth producer
+with opacity clipping, additive-opacity recovery, GPU generated-geometry history and a queued
+commit into native inputs before post-processing. ABI 15 carries per-mesh owner/material settings.
+The full GPU producer fixture, retained shader validation and Release gate pass (45 native tests,
+seven opt-in skips). Native GS/tessellation/indirect routes and particle correspondence coverage
+remain unfinished; affected-game testing is deferred because the human cannot test now. The
+overall motion goal remains active. [Current source and proof limits](research/ac7-velocity-20261013.md).
+
+13 October increment: native opaque velocity no longer depends on TAA/motion-blur selection,
+small primitives are retained, and unchanged-root movable meshes reach native velocity only after
+successful history lookup. F9 summaries now distinguish unwritten values from valid zero and
+capture bounded native translucency vertex streams/layouts. Release verification passed (44
+native tests passed, seven opt-in tests skipped). The full 4.27-style translucent velocity/depth
+pass is still unimplemented; the experimental blend-gate patch does not replace it. Weapons,
+vehicles, animated-mesh/kill-cam and particle coverage still require the affected native producer
+data and game checks. [Current increment and exact remaining work](research/ac7-velocity-20261013.md).
+
 The engine's camera transform is already available through `ClipToPrevClip`; camera motion is
 not being estimated from images. The current DLSS path decodes the sparse object-velocity buffer
 and asks Streamline to resolve unwritten pixels using depth and that transform. The tasks below
@@ -921,7 +938,8 @@ producer extensions have not been game-tested.
       `0x10fdc7c`) accounted for, or withdraw the 7 September result.
 - [ ] Trial `ShouldRenderVelocities` and the `HasVelocity` always-velocity jump (`0x118384c`)
       separately for animated movable meshes and the kill-cam.
-- [ ] Fix the F9 recorder's `fraction_unwritten` summaries, which ignore both unwritten encodings.
+- [x] Fix the F9 recorder's `fraction_unwritten` summaries: select packed/decoded views for the
+      corresponding textures, preserving valid decoded zero. Built and synthetic-tested on 13 October.
 - [ ] Prioritize the reported carrier-launch and refuelling weapon/attached-missile omissions,
       then possibly missing moving ground vehicles. Match each visible colour draw to its
       velocity draw or exact rejection reason, separating per-primitive bounds from material/LOD

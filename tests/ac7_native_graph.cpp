@@ -158,6 +158,31 @@ void original_context(void* raw_context, void* raw_root) {
 }
 int main() {
     using namespace harness;
+    // A mismatched site must leave the entire group native; teardown restores only owned bytes.
+    auto* patch_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x1190000,
+        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    check(patch_image != nullptr, "allocate temporal velocity code fixture");
+    if (!patch_image) return 1;
+    for (const auto& patch : velocity_patches)
+        std::memcpy(patch_image + patch.rva, patch.native, patch.size);
+    rsf_ac7_native_renderer patch_owner;
+    patch_image[velocity_patches[2].rva] = 0xcc;
+    check(!apply_velocity_patches(patch_owner, patch_image), "reject mismatched history gate");
+    check(patch_owner.velocity_patches == 0 && bytes_match(patch_image + velocity_patches[0].rva,
+        velocity_patches[0].native, 2), "preflight cannot leave earlier gates patched");
+    patch_image[velocity_patches[2].rva] = 0x77;
+    check(apply_velocity_patches(patch_owner, patch_image), "install complete temporal velocity group");
+    check(apply_velocity_patches(patch_owner, patch_image), "owned patch installation is idempotent");
+    for (const auto& patch : velocity_patches)
+        check(bytes_match(patch_image + patch.rva, patch.temporal, patch.size), "temporal gate bytes installed");
+    patch_image[velocity_patches[2].rva] = 0xcc;
+    check(!restore_velocity_patches(patch_owner) && patch_owner.velocity_patches == 3,
+        "teardown refuses foreign bytes and retains ownership");
+    patch_image[velocity_patches[2].rva] = 0xeb;
+    check(restore_velocity_patches(patch_owner), "restore owned temporal gates");
+    for (const auto& patch : velocity_patches)
+        check(bytes_match(patch_image + patch.rva, patch.native, patch.size), "native gates restored");
+    VirtualFree(patch_image, 0, MEM_RELEASE);
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
         &device, nullptr, &immediate))) return 77;
     D3D11_TEXTURE2D_DESC desc{}; desc.Width = desc.Height = 4; desc.MipLevels = desc.ArraySize = 1;

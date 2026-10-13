@@ -24,6 +24,9 @@ void shader_seen(void*, void* shader, uint32_t stage, const void* bytes, uint32_
 }
 void upload(void*, void* buffer, void* bytes, uint32_t size)
 { rsf_ac7_motion_capture_upload(buffer, bytes, size); }
+void layout_seen(void*, void* layout, const rsf_observer_layout_element* elements,
+                 uint32_t copied, uint32_t count)
+{ rsf_ac7_motion_capture_layout(layout, elements, copied, count); }
 std::string read_file(const std::filesystem::path& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -45,6 +48,7 @@ int main()
     rsf_observer_options observer{};
     observer.struct_size = sizeof(observer); observer.abi_version = RSF_OBSERVER_ABI_VERSION;
     observer.on_shader = shader_seen; observer.on_buffer = rsf_ac7_motion_capture_buffer;
+    observer.on_layout = layout_seen;
     check(rsf_observer_install(&observer) == RSF_OBSERVER_OK, "Observer must install.");
 
     WNDCLASSW window_class{}; window_class.lpfnWndProc = DefWindowProcW;
@@ -72,6 +76,8 @@ int main()
     auto ps_code = compile("cbuffer P:register(b0){float4 colour;} float4 main():SV_Target{return colour;}", "ps_5_0");
     auto cs_code = compile("RWTexture2D<float4> result:register(u0); [numthreads(1,1,1)]"
         "void main(uint3 id:SV_DispatchThreadID){result[id.xy]=float4(.25,.5,.75,1);}", "cs_5_0");
+    auto particle_code = compile("float4 main(float4 p:ATTRIBUTE0,float4 old:ATTRIBUTE1):SV_Position"
+        "{return p+old*.01;}", "vs_5_0");
     auto gs_code = compile("struct V{float4 p:SV_Position;};[maxvertexcount(3)]"
         "void main(triangle V v[3],inout TriangleStream<V> stream)"
         "{stream.Append(v[0]);stream.Append(v[1]);stream.Append(v[2]);}", "gs_5_0");
@@ -84,6 +90,20 @@ int main()
         "[domain(\"tri\")] V main(F f,float3 uv:SV_DomainLocation,const OutputPatch<V,3> v)"
         "{V o;o.p=v[0].p*uv.x+v[1].p*uv.y+v[2].p*uv.z;return o;}", "ds_5_0");
     if (!passed) return 1;
+    const D3D11_INPUT_ELEMENT_DESC particle_elements[]{
+        {"ATTRIBUTE",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",1,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,D3D11_INPUT_PER_VERTEX_DATA,0},
+    };
+    ComPtr<ID3D11InputLayout> particle_layout;
+    check(SUCCEEDED(device->CreateInputLayout(particle_elements, 2, particle_code->GetBufferPointer(),
+        particle_code->GetBufferSize(), &particle_layout)), "Capture particle stream layout.");
+    const float particle_data[24]{-1,-1,0,1, -1,-1,0,.0001f, 3,-1,0,1, 3,-1,0,.0002f,
+                                 -1,3,0,1, -1,3,0,.0003f};
+    D3D11_BUFFER_DESC particle_desc{}; particle_desc.ByteWidth = sizeof(particle_data);
+    particle_desc.Usage = D3D11_USAGE_IMMUTABLE; particle_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA particle_initial{particle_data,0,0};
+    ComPtr<ID3D11Buffer> particle_buffer;
+    check(SUCCEEDED(device->CreateBuffer(&particle_desc, &particle_initial, &particle_buffer)), "Create particle geometry history stream.");
     ComPtr<ID3D11VertexShader> vs; ComPtr<ID3D11PixelShader> ps; ComPtr<ID3D11ComputeShader> cs;
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     check(SUCCEEDED(device->CreateVertexShader(vs_code->GetBufferPointer(), vs_code->GetBufferSize(), nullptr, &vs)), "Create VS.");
@@ -121,6 +141,16 @@ int main()
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D11_VIEWPORT viewport{0,0,16,16,0,1}; context->RSSetViewports(1, &viewport);
         context->Draw(3, 0);
+        if (interval == 0) {
+            rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass);
+            pass.role = RSF_GAME_RENDER_TRANSLUCENCY; pass.scope_id = 17;
+            rsf_ac7_motion_capture_native_pass(&pass, 1);
+            rsf_frame_tap_geometry geometry{}; geometry.context = context.Get();
+            geometry.input_layout = particle_layout.Get(); geometry.vertex_buffers[0] = particle_buffer.Get();
+            geometry.strides[0] = 32; geometry.count = 3;
+            rsf_ac7_motion_capture_geometry(&geometry);
+            rsf_ac7_motion_capture_native_pass(nullptr, 0);
+        }
         context->OMSetRenderTargets(0, nullptr, nullptr);
         ID3D11UnorderedAccessView* output = uav.Get(); context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
         context->CSSetShader(cs.Get(), nullptr, 0); context->Dispatch(16, 16, 1);
@@ -134,6 +164,10 @@ int main()
           draws.find("\"kind\":\"dispatch\"") != std::string::npos, "Draw and compute records must both exist.");
     check(draws.find("\"blob\":0") == std::string::npos, "Initial CB contents must be captured.");
     check(read_file(captured / "cb_1.bin").size() == 16, "Exact CB bytes must be saved.");
+    check(draws.find("\"kind\":\"geometry\"") != std::string::npos &&
+          draws.find("\"attribute\":1") != std::string::npos &&
+          draws.find("\"sample_bytes\":96") != std::string::npos,
+          "Capture must retain actual particle attributes and bounded vertex bytes.");
 
     rsf_texture_dump_options dump{}; dump.struct_size = sizeof(dump); dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
     const std::string raw_prefix = (directory / "colour").string(); dump.output_prefix_utf8 = raw_prefix.c_str();

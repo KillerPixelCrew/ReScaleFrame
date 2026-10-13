@@ -6,6 +6,7 @@
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/ui_identify.h>
 #include <rescaleframe/texture_dump.h>
+#include <rescaleframe/d3d11_observer.h>
 
 #include <windows.h>
 #include <d3d11.h>
@@ -85,6 +86,7 @@ struct RootRecord {
     int32_t draw_size[2]{};
 };
 struct Bytes { std::vector<unsigned char> data; uint64_t serial = 0; };
+struct Layout { uint32_t count = 0; std::vector<rsf_observer_layout_element> elements; };
 struct Shader {
     void* pointer = nullptr; uint32_t stage = 0, hash = 0, constant_mask = 0x3fffu;
     std::vector<unsigned char> data;
@@ -122,6 +124,8 @@ struct Capture {
     std::vector<std::string> draws;
     std::vector<std::vector<unsigned char>> blobs;
     std::unordered_map<void*, Bytes> buffers;
+    std::unordered_map<void*, Layout> layouts;
+    uint32_t geometry_interval = UINT32_MAX, geometry_reads = 0;
     std::vector<Shader> shaders;
     size_t shader_bytes = 0, blob_bytes = 0;
     uint32_t shaders_dropped = 0;
@@ -975,10 +979,14 @@ extern "C" int rsf_ac7_motion_capture_install(void)
     const unsigned char has[] = {0x40,0x53,0x48,0x83,0xec,0x60,0x80,0xb9,0x34,0x0c,0,0,0};
     const unsigned char history[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x49,0x8b,0xd8,0x48,0x85,0xd2,0x74,0x3a};
     unsigned char actual[sizeof(should)]{};
+    unsigned char size_gate[5]{};
+    const bool size_matches = copy_memory(size_gate, base + 0x10fdd09, sizeof(size_gate)) &&
+        (!std::memcmp(size_gate, "\x0f\x2f\xdd\x76\x38", 5) ||
+         (native_owner.load() && !std::memcmp(size_gate, "\x0f\x2f\xdd\x90\x90", 5)));
     if (!base || !copy_memory(actual, base + 0x10fdc00, sizeof(should)) || std::memcmp(actual, should, sizeof(should)) ||
         !copy_memory(actual, base + 0x1183820, sizeof(has)) || std::memcmp(actual, has, sizeof(has)) ||
         !copy_memory(actual, base + 0x10ee670, sizeof(history)) || std::memcmp(actual, history, sizeof(history)) ||
-        !copy_memory(actual, base + 0x10fdd09, 5) || std::memcmp(actual, "\x0f\x2f\xdd\x76\x38", 5)) {
+        !size_matches) {
         say("motion capture engine hooks refused: expected AC7 bytes differ"); return 0;
     }
     void* detours[] = {reinterpret_cast<void*>(&hooked_should), reinterpret_cast<void*>(&hooked_has), reinterpret_cast<void*>(&hooked_history)};
@@ -1032,6 +1040,82 @@ extern "C" void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, u
     snapshot.data.assign(static_cast<const unsigned char*>(bytes), static_cast<const unsigned char*>(bytes) + size);
 }
 catch (...) { capture_failed(); }
+extern "C" void rsf_ac7_motion_capture_layout(void* layout, const rsf_observer_layout_element* elements,
+    uint32_t copied, uint32_t count) try
+{
+    auto& s = state();
+    if (!s.configured || !layout || !elements || !copied || copied > RSF_OBSERVER_MAX_LAYOUT_ELEMENTS) return;
+    std::lock_guard<std::mutex> lock(s.guard);
+    s.layouts.erase(layout); // a newly created object can reuse a retired pointer
+    if (s.layouts.size() >= max_blobs) return;
+    auto& item = s.layouts[layout]; item.count = count;
+    item.elements.assign(elements, elements + copied);
+}
+catch (...) { capture_failed(); }
+extern "C" void rsf_ac7_motion_capture_geometry(const rsf_frame_tap_geometry* draw) try
+{
+    auto& s = state();
+    if (!draw || !s.active.load() || !sampled(s.interval.load()) ||
+        (execution_pass.role != RSF_GAME_RENDER_TRANSLUCENCY && execution_pass.role != RSF_GAME_RENDER_TRANSLUCENT_MESH)) return;
+    const auto interval = s.interval.load();
+    if (s.geometry_interval != interval) { s.geometry_interval = interval; s.geometry_reads = 0; }
+    // Bounded samples carry actual OldPosition/particle IDs and mesh vertex histories. Never
+    // retain a borrowed buffer expecting a later frame to still contain the same vertices.
+    if (s.geometry_reads >= 24) return;
+    Layout layout;
+    {
+        std::lock_guard<std::mutex> lock(s.guard);
+        const auto found = s.layouts.find(draw->input_layout);
+        if (found == s.layouts.end()) return;
+        layout = found->second;
+    }
+    auto* context = static_cast<ID3D11DeviceContext*>(draw->context);
+    if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
+    ComPtr<ID3D11Device> device; context->GetDevice(&device);
+    std::ostringstream out;
+    out << "{\"kind\":\"geometry\",\"interval\":" << interval
+        << ",\"qpc\":" << tick() << ",\"layout\":" << uint64_t(uintptr_t(draw->input_layout))
+        << ",\"vs_hash\":" << shader_hash(draw->vertex_shader, 0)
+        << ",\"draw_kind\":" << draw->kind << ",\"count\":" << draw->count
+        << ",\"start\":" << draw->start << ",\"base_vertex\":" << draw->base_vertex
+        << ",\"instances\":" << draw->instances << ",\"start_instance\":" << draw->start_instance
+        << ",\"layout_count\":" << layout.count << ",\"elements\":[";
+    for (size_t i = 0; i < layout.elements.size(); ++i) {
+        const auto& e = layout.elements[i];
+        if (i) out << ',';
+        out << "{\"attribute\":" << e.semantic_index << ",\"format\":" << e.format
+            << ",\"slot\":" << e.input_slot << ",\"offset\":" << e.byte_offset
+            << ",\"instance\":" << e.per_instance << '}';
+    }
+    out << "],\"streams\":["; bool first = true;
+    for (uint32_t slot = 0; slot < 32 && s.geometry_reads < 24; ++slot) {
+        auto* buffer = static_cast<ID3D11Buffer*>(draw->vertex_buffers[slot]);
+        if (!buffer) continue;
+        D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
+        if (!desc.ByteWidth || draw->offsets[slot] >= desc.ByteWidth) continue;
+        const uint32_t bytes = std::min(desc.ByteWidth - draw->offsets[slot], 16384u);
+        D3D11_BUFFER_DESC staging{}; staging.ByteWidth = bytes;
+        staging.Usage = D3D11_USAGE_STAGING; staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Buffer> readable; std::vector<unsigned char> data(bytes);
+        ++s.geometry_reads;
+        if (SUCCEEDED(device->CreateBuffer(&staging, nullptr, &readable))) {
+            const D3D11_BOX box{draw->offsets[slot], 0, 0, draw->offsets[slot] + bytes, 1, 1};
+            context->CopySubresourceRegion(readable.Get(), 0, 0, 0, 0, buffer, 0, &box);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (SUCCEEDED(context->Map(readable.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                std::memcpy(data.data(), mapped.pData, bytes); context->Unmap(readable.Get(), 0);
+            } else data.clear();
+        } else data.clear();
+        const auto blob = data.empty() ? 0u : save_blob(std::move(data));
+        if (!first) out << ','; first = false;
+        out << "{\"slot\":" << slot << ",\"buffer\":" << uint64_t(uintptr_t(buffer))
+            << ",\"stride\":" << draw->strides[slot] << ",\"offset\":" << draw->offsets[slot]
+            << ",\"source_bytes\":" << desc.ByteWidth << ",\"sample_bytes\":" << bytes
+            << ",\"blob\":" << blob << '}';
+    }
+    out << ']'; queued_scope(out); out << '}'; record_draw(out.str());
+}
+catch (...) { capture_failed(); }
 extern "C" void rsf_ac7_motion_capture_native_owner(uint32_t enabled)
 { native_owner.store(enabled != 0); }
 extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin) try
@@ -1073,6 +1157,7 @@ extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uin
             s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
             s.buffers.clear(); // uploads are only recorded while active, so older snapshots may be stale
             s.counters = {};
+            s.geometry_interval = UINT32_MAX; s.geometry_reads = 0;
             s.start = s.presents; s.session.fetch_add(1); s.interval.store(0); s.active.store(true);
             say((std::string("motion capture armed: ") + s.prefix).c_str());
         } else say("motion capture: output directory could not be created");

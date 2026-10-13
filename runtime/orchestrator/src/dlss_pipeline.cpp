@@ -897,15 +897,16 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             const char* what;
             const char* suffix;
             void* texture;
+            rsf_dump_view view;
         } targets[] = {
-            {"the scene colour it was given", "_input", frame->scene_color},
-            {"the upscaled result", "_output", self.output},
-            {"the game velocity it was given", "_motion", frame->game_motion},
+            {"the scene colour it was given", "_input", frame->scene_color, RSF_DUMP_VIEW_RAW},
+            {"the upscaled result", "_output", self.output, RSF_DUMP_VIEW_RAW},
+            {"the game velocity it was given", "_motion", frame->game_motion, RSF_DUMP_VIEW_VELOCITY},
             {"the decoded motion it submitted", "_motion_decoded",
-             self.decode ? rsf_motion_decode_texture(self.decode) : nullptr},
-            {"the complete motion it submitted", "_motion_submitted", dlss_frame.motion},
-            {"the depth it submitted", "_depth", frame->depth},
-            {"the engine exposure guide", "_exposure", frame->exposure},
+             self.decode ? rsf_motion_decode_texture(self.decode) : nullptr, RSF_DUMP_VIEW_DECODED_MOTION},
+            {"the complete motion it submitted", "_motion_submitted", dlss_frame.motion, RSF_DUMP_VIEW_DECODED_MOTION},
+            {"the depth it submitted", "_depth", frame->depth, RSF_DUMP_VIEW_RAW},
+            {"the engine exposure guide", "_exposure", frame->exposure, RSF_DUMP_VIEW_RAW},
         };
 
         for (const auto& target : targets) {
@@ -918,7 +919,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             options.struct_size = uint32_t(sizeof(options));
             options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
             options.output_prefix_utf8 = path.c_str();
-            options.view = RSF_DUMP_VIEW_RAW;
+            options.view = target.view;
             options.scale = 1.0f;
             options.log = forward<dump_log_prefix>;
             rsf_texture_dump_report report{};

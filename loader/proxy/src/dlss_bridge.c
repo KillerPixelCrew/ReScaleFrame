@@ -11,6 +11,7 @@
 
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_motion_capture.h>
+#include <rescaleframe/ac7_velocity_pass.h>
 #include <rescaleframe/constant_twin.h>
 #include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/constant_buffer_read.h>
@@ -65,7 +66,7 @@ int rsf_bridge_native_owned(void) { return InterlockedCompareExchange(&native_ow
 static void on_native_pass(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin);
 static void route_dump(void* context, void* texture, const char* name);
 static void on_native_scope(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
-{ (void)user; (void)list; rsf_ac7_motion_capture_native_pass(pass, begin); }
+{ (void)user; (void)list; rsf_ac7_motion_capture_native_pass(pass, begin); rsf_ac7_velocity_scope(pass); }
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
 { (void)user; if (rsf_native_cpu_event(event)) rsf_native_fg_cpu(event); }
 
@@ -510,6 +511,7 @@ static void publish_ui_candidates(void)
 static void on_layout_created(void* user, void* layout, const rsf_observer_layout_element* elements,
                               uint32_t copied, uint32_t count)
 {
+    rsf_ac7_motion_capture_layout(layout, elements, copied, count);
     rsf_ac7_layout_element facts[RSF_AC7_UI_MAX_LAYOUT_ELEMENTS];
     uint32_t index;
     (void)user;
@@ -636,6 +638,7 @@ static void on_shader_created(void* user, void* shader, uint32_t stage, const vo
     unsigned int index;
     (void)user;
     rsf_ac7_motion_capture_shader(shader, stage, bytecode, bytes);
+    rsf_ac7_velocity_shader_seen(shader, stage, bytecode, bytes);
     if (stage > RSF_OBSERVER_STAGE_PIXEL) {
         return;
     }
@@ -748,6 +751,9 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
 {
     (void)user; (void)list;
     if (!pass || pass->struct_size != sizeof(*pass)) return;
+    if (pass->role == RSF_GAME_RENDER_VELOCITY_FINALIZE && begin && bridge.started)
+        rsf_ac7_velocity_commit(bridge.context, pass);
+    if (pass->role == RSF_GAME_RENDER_FRAME && !begin) rsf_ac7_velocity_frame_end();
     if (!begin && bridge.route_dump_frames && pass->color_output &&
         (pass->flags & RSF_GAME_RENDER_PRIMARY)) {
         char name[64];
@@ -1007,6 +1013,9 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
 
 static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
+    rsf_ac7_motion_capture_geometry(draw);
+    rsf_ac7_velocity_geometry(draw);
+    if (rsf_bridge_native_owned()) return;
     if (InterlockedCompareExchange(&native_owner, 0, 0)) return;
     unsigned int rejects[2];
     (void)user;
@@ -3123,6 +3132,7 @@ static int drain_shutdown(void)
     }
     // Queued native callbacks are finished before their backend, input refs or context disappear.
     stop_reinsert(); release_held(); rsf_frame_tap_uninstall();
+    rsf_ac7_velocity_release();
     rsf_dlss_pipeline_stop(); bridge.started = 0;
     InterlockedExchange(&native_owner, 0); rsf_ac7_motion_capture_native_owner(0);
     bridge.startup_attempted = 1; bridge.show = 0;
@@ -3338,6 +3348,7 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
 {
     bridge.log = log;
     bridge.log_user = log_user;
+    rsf_ac7_velocity_set_log(log, log_user);
 }
 
 int rsf_bridge_extract_ui(unsigned long width, unsigned long height)
@@ -3753,7 +3764,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.on_pass = rsf_bridge_native_owned() ? NULL : on_pass;
     tap.on_target_draw = rsf_bridge_native_owned() ? NULL : on_target_draw;
     tap.on_input_draw = rsf_bridge_native_owned() ? NULL : on_input_draw;
-    tap.on_geometry = rsf_bridge_native_owned() ? NULL : on_geometry;
+    tap.on_geometry = on_geometry;
     bridge.output_width = output_width;
     bridge.output_height = output_height;
     tap.on_candidate_draw = rsf_bridge_native_owned() ? NULL : on_candidate_draw;

@@ -60,6 +60,16 @@ typedef struct rsf_game_render_pass {
     uint32_t texture_slot;
     /* CPU-owned classification copied with the renderer. Unknown suspends interpolation. */
     uint32_t screen;
+    /* TRANSLUCENT_MESH scopes surround the native material draw commands. Keys are copied
+       engine identities, never dereferenced by the host. The opacity clip value is the material's
+       own setting; blend mode follows the plugin convention (AC7: translucent=2, additive=3,
+       modulate=4, alpha-composite=5). Native colour drawing remains unchanged. */
+    uint64_t primitive_key;
+    uint64_t vertex_factory_key;
+    uint64_t material_key;
+    uint64_t mesh_element_mask;
+    uint32_t material_blend;
+    float material_opacity_clip;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u
@@ -87,6 +97,13 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_MATERIALS 16u
 /* Normalize depth/motion for generation without reconstructing scene colour. */
 #define RSF_GAME_RENDER_FG_INPUTS 17u
+/* Per-mesh geometry input production inside a primary TRANSLUCENCY pass. Includes copied
+   material/primitive identity, camera, rectangles and native frame. All GPU work executes on
+   the enclosing graphics stream; CPU mesh pointers are not borrowed into that stream. */
+#define RSF_GAME_RENDER_TRANSLUCENT_MESH 18u
+/* Queued before native post-processing. motion/depth are engine-owned leased targets; the
+   completed translucent velocity/depth producer commits them before temporal/DoF consumers. */
+#define RSF_GAME_RENDER_VELOCITY_FINALIZE 19u
 #define RSF_GAME_RENDER_RESET 1u
 #define RSF_GAME_RENDER_PRIMARY 2u
 /* Constructor followed the engine update-to-redraw boundary. This does not promise vendor

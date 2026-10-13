@@ -51,7 +51,7 @@ enum Hook : uint32_t {
     hook_sky_projection, hook_sky_render, hook_temporal_sample_index, hook_scene_colour_format,
     hook_render_family, hook_frame_task_construct, hook_frame_task_execute,
     hook_rhi_frame_begin, hook_rhi_frame_end, hook_frame_sync, hook_pump_messages, hook_engine_pacing,
-    hook_create_pixel_shader, hook_base_pass,
+    hook_create_pixel_shader, hook_base_pass, hook_translucency_mesh,
     hook_count
 };
 static_assert(hook_process_tonemap == 0 && hook_process_output == 5);
@@ -120,6 +120,7 @@ Site sites[] = {
     {0x1adbcb0, 0, "\x40\x55\x53\x57\x48\x8d\x6c\x24\xb9\x48\x81\xec\xc0\x00\x00\x00"},
     {0xe31e90, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
     {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
+    {0x1158250, 0, "\x4c\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x48"},
 };
 static_assert(sizeof(sites) / sizeof(sites[0]) == hook_count);
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
@@ -239,6 +240,8 @@ struct rsf_ac7_native_renderer {
     std::atomic<uint32_t> cloud_motion_reports{0};
     bool cloud_depth_shader_refused = false;
     unsigned char* scene_precision_site = nullptr;
+    unsigned char* velocity_module = nullptr;
+    uint32_t velocity_patches = 0;
     bool cloud_resolution_refused = false;
     std::mutex cloud_resolution_guard;
     std::atomic<uint32_t> render_thread{0};
@@ -733,7 +736,7 @@ void hooked_render_family(void* list, void* renderer)
 struct PassLease {
     rsf_ac7_native_renderer* owner = nullptr;
     PassLease* next = nullptr;
-    uint64_t input_pool = 0, depth_pool = 0, exposure_pool = 0;
+    uint64_t input_pool = 0, depth_pool = 0, exposure_pool = 0, motion_pool = 0;
     ID3D11Resource* motion = nullptr;
     ID3D11Resource* ui = nullptr;
     ID3D11Resource* scene_surface = nullptr;
@@ -807,7 +810,8 @@ void resolve_pass(void* object, rsf_ac7_render_scope* scope)
     scope->color_input = pool_texture(lease.input_pool, false);
     scope->color_output = pool_texture(lease.output_pool.load(std::memory_order_acquire), true);
     scope->color_output_readable = pool_texture(lease.output_pool.load(std::memory_order_acquire), false);
-    scope->depth = pool_texture(lease.depth_pool, false); scope->motion = lease.motion;
+    scope->depth = pool_texture(lease.depth_pool, false);
+    scope->motion = lease.motion_pool ? pool_texture(lease.motion_pool, false) : lease.motion;
     scope->exposure = pool_texture(lease.exposure_pool, false);
     scope->ui_input = lease.ui; scope->scene_surface = lease.scene_surface;
 }
@@ -828,6 +832,7 @@ void drain_retired(rsf_ac7_native_renderer& self)
     while (lease) {
         auto* next = lease->next;
         pool_ref(lease->input_pool, 0x30); pool_ref(lease->depth_pool, 0x30); pool_ref(lease->exposure_pool, 0x30); pool_ref(lease->output_pool.load(), 0x30);
+        pool_ref(lease->motion_pool, 0x30);
         auto release = engine<MoveUniform>(0xde5cf0);
         for (auto& uniform : lease->uniforms) {
             uint64_t empty = 0; release(&uniform, &empty);
@@ -1405,6 +1410,66 @@ void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
     if (ui_producer.active) restore_ui_producer();
     translucency_renderer = previous;
 }
+// DrawMesh is shared by static and dynamic translucency. Its material, vertex factory and
+// primitive identity must travel with the queued draws, including parallel command recording.
+using TranslucencyMesh = uint8_t(*)(void*, void*, void*, void*, const uint64_t*, void*,
+                                  uint8_t, void*, uint32_t);
+uint8_t hooked_translucency_mesh(void* list, void* view_object, void* context, void* mesh,
+    const uint64_t* elements, void* state, uint8_t pre_fog, void* proxy, uint32_t hit)
+{
+    OuterGuard lifetime;
+    const auto original = reinterpret_cast<TranslucencyMesh>(sites[hook_translucency_mesh].original);
+    auto* self = installed.load();
+    rsf_game_render_config config{};
+    rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
+    const auto view = uint64_t(uintptr_t(view_object));
+    uint64_t material_proxy = 0, material = 0, cached = 0;
+    uint32_t feature = 0, frame = 0, pass = UINT32_MAX; uint8_t cut = 0;
+    rsf_ac7_render_ticket* ticket = nullptr;
+    if (self && self->active.load() && fetch_config(*self, config) && config.enabled &&
+        proxy && elements && read(uint64_t(uintptr_t(context)), 0, pass) && pass <= 2 && primary_view(view, config) &&
+        read(view, 0, scope.family_key) && read(scope.family_key, 0x68, frame) &&
+        read(view, 8, scope.history_key) && read(view, 0x70, scope.render_rect) &&
+        read(view, 0x80, scope.output_rect) && read(view, 0xc34, cut) &&
+        read(view, 0x13e8, feature) && read(view, 0x1418, cached) && cached &&
+        read(uint64_t(uintptr_t(mesh)), 0x90, scope.vertex_factory_key) &&
+        read(uint64_t(uintptr_t(mesh)), 0x98, material_proxy) && material_proxy &&
+        copy_memory(&scope.mesh_element_mask, elements, sizeof(scope.mesh_element_mask))) {
+        const auto get_material = method(material_proxy, 0x40);
+        if (get_material) material = reinterpret_cast<uint64_t(*)(void*, uint32_t)>(uintptr_t(get_material))(
+            reinterpret_cast<void*>(uintptr_t(material_proxy)), feature);
+        const auto blend = method(material, 0x198), clip = method(material, 0x1b8);
+        if (blend && clip) {
+            scope.material_blend = reinterpret_cast<uint32_t(*)(void*)>(uintptr_t(blend))(
+                reinterpret_cast<void*>(uintptr_t(material)));
+            scope.material_opacity_clip = reinterpret_cast<float(*)(void*)>(uintptr_t(clip))(
+                reinterpret_cast<void*>(uintptr_t(material)));
+            std::array<unsigned char, RSF_AC7_VIEW_BUFFER_BYTES> bytes{};
+            rsf_ac7_view camera{}; camera.struct_size = sizeof(camera);
+            if (scope.material_blend >= 2 && scope.material_blend <= 5 &&
+                std::isfinite(scope.material_opacity_clip) && scope.material_opacity_clip >= 0 &&
+                scope.material_opacity_clip <= 1 &&
+                copy_memory(bytes.data(), reinterpret_cast<void*>(uintptr_t(cached)), 0xcf0) &&
+                rsf_ac7_view_read(bytes.data(), uint32_t(bytes.size()), RSF_AC7_VIEW_ABI_VERSION, &camera) == RSF_AC7_VIEW_OK &&
+                camera.has_jitter) {
+                scope.role = RSF_GAME_RENDER_TRANSLUCENT_MESH; scope.session_id = self->options.session_id;
+                scope.view_key = view; scope.native_frame = frame; scope.pass_key = uint64_t(uintptr_t(mesh));
+                scope.primitive_key = uint64_t(uintptr_t(proxy)); scope.material_key = material_proxy;
+                scope.flags = RSF_GAME_RENDER_PRIMARY | (cut ? RSF_GAME_RENDER_RESET : 0u);
+                scope.camera.struct_size = sizeof(scope.camera); scope.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+                scope.camera.render_width = camera.view_width; scope.camera.render_height = camera.view_height;
+                std::memcpy(scope.camera.jitter_pixels, camera.jitter_pixels, sizeof(camera.jitter_pixels));
+                std::memcpy(scope.camera.previous_jitter_pixels, camera.previous_jitter_pixels, sizeof(camera.previous_jitter_pixels));
+                std::memcpy(scope.camera.clip_to_previous_clip, camera.clip_to_prev_clip, sizeof(camera.clip_to_prev_clip));
+                scope.camera_valid = 1;
+                if (!rsf_ac7_render_scope_open(self->scopes, list, &scope, &ticket)) ticket = nullptr;
+            }
+        }
+    }
+    const auto result = original(list, view_object, context, mesh, elements, state, pre_fog, proxy, hit);
+    if (ticket && !rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 translucent mesh scope could not close");
+    return result;
+}
 void hooked_pixel_view_uniform(void* shader, void* list, void* rhi_shader, void* uniform)
 {
     EntryGuard entry;
@@ -1530,6 +1595,30 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
     const auto old_view = postprocess_view, old_velocity = postprocess_velocity;
     postprocess_view = uint64_t(uintptr_t(view)); read(uint64_t(uintptr_t(velocity_ref)), 0, postprocess_velocity);
     if (self) { self->render_thread.store(GetCurrentThreadId()); drain_retired(*self); }
+    if (self && self->active.load() && postprocess_velocity) {
+        rsf_game_render_config config{};
+        rsf_ac7_render_scope scope{}; scope.struct_size = sizeof(scope);
+        scope.session_id = self->options.session_id; scope.role = RSF_GAME_RENDER_VELOCITY_FINALIZE;
+        scope.view_key = postprocess_view; scope.pass_key = postprocess_view;
+        uint32_t frame = 0; uint64_t depth = 0;
+        auto* scene = engine<GetScene>(0x109dc70)();
+        if (fetch_config(*self, config) && config.enabled && primary_view(scope.view_key, config) &&
+            read(scope.view_key, 0, scope.family_key) && read(scope.family_key, 0x68, frame) &&
+            read(scope.view_key, 8, scope.history_key) && read(scope.view_key, 0x70, scope.render_rect) &&
+            read(scope.view_key, 0x80, scope.output_rect) && read(uint64_t(uintptr_t(scene)), 0x60, depth) && depth) {
+            auto* lease = new(std::nothrow) PassLease;
+            if (lease) {
+                scope.native_frame = frame; scope.flags = RSF_GAME_RENDER_PRIMARY;
+                lease->owner = self; lease->depth_pool = depth; lease->motion_pool = postprocess_velocity;
+                pool_ref(depth, 0x28); pool_ref(postprocess_velocity, 0x28);
+                const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
+                rsf_ac7_render_ticket* ticket = nullptr;
+                if (rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
+                    if (!rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 velocity finalize scope could not close");
+                } else release_pass(lease);
+            }
+        }
+    }
     rsf_ac7_render_ticket* final_ticket = nullptr;
     if (self && self->active.load()) {
         rsf_game_render_config config{};
@@ -2121,6 +2210,50 @@ bool write_render_code(unsigned char* site, const unsigned char* expected, const
     DWORD ignored = 0; VirtualProtect(site, size, protection, &ignored);
     return true;
 }
+// UE4's motion-blur selection is too restrictive for temporal reconstruction. Keep visibility,
+// main-pass relevance, mobility, camera cuts, native transform/bone history and shader support.
+// The transform test becomes unconditional only AFTER a successful history lookup.
+struct VelocityPatch { uint32_t rva, size; const char* native; const char* temporal; };
+constexpr VelocityPatch velocity_patches[]{
+    {0x118a4e3, 2, "\x75\x0e", "\x90\x90"}, // produce velocity even without native TAA/motion blur
+    {0x10fdd0c, 2, "\x76\x38", "\x90\x90"}, // small weapons and distant vehicles
+    {0x11838c4, 2, "\x77\x88", "\xeb\x88"}, // bone/WPO motion with unchanged root transform
+};
+bool restore_velocity_patches(rsf_ac7_native_renderer& self)
+{
+    while (self.velocity_patches) {
+        const auto& patch = velocity_patches[self.velocity_patches - 1];
+        if (!write_render_code(self.velocity_module + patch.rva,
+            reinterpret_cast<const unsigned char*>(patch.temporal),
+            reinterpret_cast<const unsigned char*>(patch.native), patch.size)) return false;
+        --self.velocity_patches;
+    }
+    self.velocity_module = nullptr;
+    return true;
+}
+bool apply_velocity_patches(rsf_ac7_native_renderer& self, unsigned char* base)
+{
+    if (self.velocity_patches) return self.velocity_patches == std::size(velocity_patches);
+    for (const auto& patch : velocity_patches) {
+        if (!bytes_match(base + patch.rva, patch.native, patch.size)) {
+            char message[144]{};
+            std::snprintf(message, sizeof(message), "AC7 temporal velocity refused: expected bytes differ at RVA 0x%x", patch.rva);
+            log(self, message); return false;
+        }
+    }
+    self.velocity_module = base;
+    for (const auto& patch : velocity_patches) {
+        if (!write_render_code(base + patch.rva,
+            reinterpret_cast<const unsigned char*>(patch.native),
+            reinterpret_cast<const unsigned char*>(patch.temporal), patch.size)) {
+            if (!restore_velocity_patches(self)) log(self, "AC7 temporal velocity rollback refused; patched module retained");
+            return false;
+        }
+        ++self.velocity_patches;
+    }
+    log(self, "AC7 temporal velocity: native pass enabled without TAA; small and fixed-root movable opaque geometry retained with native history, camera-cut and shader checks");
+    return true;
+}
 void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)
 {
     OuterGuard outer; EntryGuard entry;
@@ -2525,6 +2658,7 @@ void bind_detours()
         {hook_engine_pacing, reinterpret_cast<void*>(&hooked_engine_pacing)},
         {hook_create_pixel_shader, reinterpret_cast<void*>(&hooked_create_pixel_shader)},
         {hook_base_pass, reinterpret_cast<void*>(&hooked_base_pass)},
+        {hook_translucency_mesh, reinterpret_cast<void*>(&hooked_translucency_mesh)},
     };
     for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
 }
@@ -2650,7 +2784,8 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
 catch (...) { return 0; }
 extern "C" int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer* self)
 {
-    if (!self || installed.load() != self || self->quiescing.load() || !apply_scene_precision_patch(*self)) return 0;
+    if (!self || installed.load() != self || self->quiescing.load() || !apply_scene_precision_patch(*self) ||
+        !apply_velocity_patches(*self, game_module())) return 0;
     self->active.store(true); return 1;
 }
 extern "C" int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer* self)
@@ -2672,6 +2807,9 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
     for (const auto& site : sites) if (site.target) MH_DisableHook(site.target);
     if (guards_held(true)) return 0;
+    if (!restore_velocity_patches(*self)) {
+        log(*self, "AC7 temporal velocity patch could not restore; renderer retained"); return 0;
+    }
     if (self->scene_precision_site) {
         if (!write_render_code(self->scene_precision_site, precise_scene_format, native_scene_format, sizeof(native_scene_format))) {
             log(*self, "native scene-precision patch could not restore; renderer retained"); return 0;
