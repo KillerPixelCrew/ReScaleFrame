@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <array>
 using Microsoft::WRL::ComPtr;
 namespace {
 bool ok=true;
@@ -143,9 +144,20 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
     rsf_frame_tap_geometry native_geometry{};native_geometry.context=context.Get();native_geometry.width=2;native_geometry.height=1;native_geometry.samples=1;
     native_geometry.target=output.Get();native_geometry.depth_view=engine_dsv.Get();native_geometry.kind=0;native_geometry.count=3;
     native_geometry.vertex_shader=moving_vs.Get();native_geometry.topology=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    for (uint32_t frame=1;frame<=3;++frame) {
+    D3D11_BUFFER_DESC indirect_desc{};indirect_desc.ByteWidth=48;indirect_desc.MiscFlags=D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+    ComPtr<ID3D11Buffer> indirect_args;check(SUCCEEDED(device->CreateBuffer(&indirect_desc,nullptr,&indirect_args)),"create native GPU indirect arguments");
+    D3D11_BUFFER_DESC index_desc{};index_desc.ByteWidth=6;index_desc.BindFlags=D3D11_BIND_INDEX_BUFFER;
+    const uint16_t indices[]{0,1,2};D3D11_SUBRESOURCE_DATA index_initial{indices,0,0};ComPtr<ID3D11Buffer> index_buffer;
+    check(SUCCEEDED(device->CreateBuffer(&index_desc,&index_initial,&index_buffer)),"create native indexed-indirect geometry");
+    for (uint32_t frame=1;frame<=4;++frame) {
         pass.native_frame=frame;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;
         if (frame==3) pass.flags|=RSF_GAME_RENDER_RESET;
+        pass.geometry_capacity=3;
+        uint32_t arguments[12]{};arguments[4]=3;arguments[5]=frame==4 ? 2u : 1u;
+        context->UpdateSubresource(indirect_args.Get(),0,nullptr,arguments,0,0);
+        native_geometry.kind=frame==2 ? 5u : frame==3 ? 0u : 6u;
+        native_geometry.count=frame==3 ? 3u : 0u;native_geometry.indirect_buffer=indirect_args.Get();native_geometry.indirect_offset=16;
+        context->IASetIndexBuffer(index_buffer.Get(),DXGI_FORMAT_R16_UINT,0);
         rsf_ac7_velocity_scope(&pass);
         const float offset[4]{float(frame-1)*.2f,0,0,0};context->UpdateSubresource(object_cb.Get(),0,nullptr,offset,0,0);
         context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
@@ -171,12 +183,71 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read committed native motion");
         if (mapped.pData) {
             uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
-            const float expected=32767.f/65535.f+(frame==2 ? .2f*.2495f : 0);
+            const float expected=frame==4 ? .7f : 32767.f/65535.f+(frame==2 ? .2f*.2495f : 0);
             std::fprintf(stderr,"frame %u motion %.6f,%.6f opaque %.6f expected %.6f\n",frame,
                 float(values[0])/65535.f,float(values[1])/65535.f,float(values[2])/65535.f,expected);
             check(std::fabs(float(values[0])/65535.f-expected)<5e-5f &&
                 std::fabs(float(values[2])/65535.f-.7f)<3e-5f,
-                "native input contains independent generated-geometry motion, resets on cuts and preserves clipped opaque motion");
+                "direct/indirect motion respects GPU arguments, camera cuts, clipped opacity and the native storage bound");
+        }
+        rsf_ac7_velocity_frame_end();
+    }
+    rsf_ac7_velocity_release();
+    // Particle counters and corners, rather than draw order or pooled vertex-factory addresses,
+    // identify the prior billboard. Reverse particle order while moving the foreground sprite.
+    auto particle_vertex=compile("float4 main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,"
+        "float4 size:ATTRIBUTE2,float2 corner:ATTRIBUTE4):SV_Position"
+        "{return float4(centre.xy+corner,centre.z,1);}","vs_5_0");
+    ComPtr<ID3D11VertexShader> particle_vs;
+    check(SUCCEEDED(device->CreateVertexShader(particle_vertex.data(),particle_vertex.size(),nullptr,&particle_vs)),"create native sprite VS");
+    rsf_ac7_velocity_shader_seen(particle_vs.Get(),0,particle_vertex.data(),uint32_t(particle_vertex.size()));
+    rsf_ac7_velocity_shader_seen(material_ps.Get(),1,material.data(),uint32_t(material.size()));
+    const D3D11_INPUT_ELEMENT_DESC particle_layout[]{
+        {"ATTRIBUTE",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",1,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",2,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",4,DXGI_FORMAT_R32G32_FLOAT,0,48,D3D11_INPUT_PER_VERTEX_DATA,0},
+    };
+    ComPtr<ID3D11InputLayout> sprite_layout;
+    check(SUCCEEDED(device->CreateInputLayout(particle_layout,4,particle_vertex.data(),particle_vertex.size(),&sprite_layout)),"create native sprite declaration");
+    struct Particle {float centre[4],old[4],size[4],corner[2];};
+    std::array<Particle,6> particles{};
+    D3D11_BUFFER_DESC sprite_desc{};sprite_desc.ByteWidth=sizeof(particles);sprite_desc.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+    ComPtr<ID3D11Buffer> sprite_buffer;check(SUCCEEDED(device->CreateBuffer(&sprite_desc,nullptr,&sprite_buffer)),"create native sprite stream");
+    pass.flags=RSF_GAME_RENDER_PRIMARY;pass.primitive_key=8;pass.material_key=9;
+    native_geometry.vertex_shader=particle_vs.Get();native_geometry.count=6;native_geometry.input_layout=sprite_layout.Get();
+    native_geometry.kind=0;native_geometry.indirect_buffer=nullptr;native_geometry.indirect_offset=0;
+    native_geometry.vertex_buffers[0]=sprite_buffer.Get();native_geometry.strides[0]=sizeof(Particle);
+    for (uint32_t frame=0;frame<2;++frame) {
+        const float corners[3][2]{{-1,-1},{3,-1},{-1,3}};
+        for (uint32_t p=0;p<2;++p) for (uint32_t vertex_index=0;vertex_index<3;++vertex_index) {
+            const uint32_t id=frame ? 1-p : p;auto& value=particles[p*3+vertex_index];
+            value={};value.centre[0]=(id==0 ? 1.f : -1.f)*float(frame)*.2f;
+            value.centre[2]=id==0 ? .75f : .5f;value.old[2]=value.centre[2];value.old[3]=float(id+1)/10000.f;
+            value.size[0]=value.size[1]=1;std::memcpy(value.corner,corners[vertex_index],sizeof(value.corner));
+        }
+        context->UpdateSubresource(sprite_buffer.Get(),0,nullptr,particles.data(),0,0);
+        pass.native_frame=frame+8;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;pass.vertex_factory_key=frame ? 900 : 6;
+        rsf_ac7_velocity_scope(&pass);
+        context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
+        const float clear[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),clear);
+        ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
+        context->VSSetShader(particle_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+        context->GSSetShader(nullptr,nullptr,0);context->IASetInputLayout(sprite_layout.Get());
+        ID3D11Buffer* vb=sprite_buffer.Get();UINT stride=sizeof(Particle),offset=0;context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
+        ID3D11ShaderResourceView* srv=input_view.Get();context->PSSetShaderResources(0,1,&srv);
+        rsf_ac7_velocity_geometry(&native_geometry);
+        pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
+        check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit sorted sprite motion");
+        context->OMSetRenderTargets(0,nullptr,nullptr);engine_motion->GetDesc(&engine_desc);
+        engine_desc.BindFlags=0;engine_desc.Usage=D3D11_USAGE_STAGING;engine_desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> readable;check(SUCCEEDED(device->CreateTexture2D(&engine_desc,nullptr,&readable)),"create sorted sprite readback");
+        context->CopyResource(readable.Get(),engine_motion.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+        check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read sorted sprite motion");
+        if (mapped.pData) {
+            uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
+            const float expected=32767.f/65535.f+(frame ? .2f*.2495f : 0);
+            check(std::fabs(float(values[0])/65535.f-expected)<5e-5f,"sorted sprite retains its own previous generated geometry after vertex-factory recycling");
         }
         rsf_ac7_velocity_frame_end();
     }

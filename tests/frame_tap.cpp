@@ -816,6 +816,24 @@ float4 ps() : SV_Target { return float4(1,0,0,1); }
     check(selected() != depth,
           "ExecuteCommandList without restore must invalidate and reseed the shadow.");
 
+    // An indirect observer must borrow the actual argument buffer/offset, not guess direct
+    // counts or collapse indexed and nonindexed GPU submissions into one unknown shape.
+    const uint32_t indirect_values[10]{0,0,0,0,3,1,1,1,0,0};
+    D3D11_BUFFER_DESC indirect_desc{};indirect_desc.ByteWidth=sizeof(indirect_values);
+    indirect_desc.MiscFlags=D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+    const D3D11_SUBRESOURCE_DATA indirect_initial{indirect_values,0,0};
+    ID3D11Buffer* indirect=nullptr;
+    check(SUCCEEDED(device->CreateBuffer(&indirect_desc,&indirect_initial,&indirect)),"Create real indirect draw arguments.");
+    if (indirect) {
+        context->DrawIndexedInstancedIndirect(indirect,16);
+        check(last_geometry.kind==5 && last_geometry.indirect_buffer==indirect && last_geometry.indirect_offset==16,
+              "Indexed indirect geometry retains its argument identity and byte offset.");
+        context->DrawInstancedIndirect(indirect,16);
+        check(last_geometry.kind==6 && last_geometry.indirect_buffer==indirect && last_geometry.indirect_offset==16,
+              "Nonindexed indirect geometry keeps its distinct replay contract.");
+        indirect->Release();
+    }
+
     context->ClearState();
     rsf_depth_replay_destroy(depth_fixture);
     depth_fixture = nullptr;

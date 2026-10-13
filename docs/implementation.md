@@ -846,6 +846,12 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+Indirect geometry now preserves GPU argument identity/offset, validates its copied native mesh
+capacity on the GPU and replays without CPU readback. The full producer and actual tap fixtures
+cover indexed/nonindexed submissions and bounds. Sorted sprites also pass independent-motion
+validation with reversed ordering and recycled vertex-factory identity. Native GS/tessellation
+and mesh-particle instance correspondence remain open; the goal is still active.
+
 Later 13 October increment: added and connected a dedicated material velocity/depth producer
 with opacity clipping, additive-opacity recovery, GPU generated-geometry history and a queued
 commit into native inputs before post-processing. ABI 15 carries per-mesh owner/material settings.

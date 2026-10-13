@@ -70,6 +70,9 @@ typedef struct rsf_game_render_pass {
     uint64_t mesh_element_mask;
     uint32_t material_blend;
     float material_opacity_clip;
+    /* Native mesh-element upper bound, in generated vertices before GS/tessellation expansion.
+       Supplies storage for GPU-written indirect arguments without a CPU/GPU readback. */
+    uint32_t geometry_capacity;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u

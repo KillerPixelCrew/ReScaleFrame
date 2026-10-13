@@ -1,5 +1,26 @@
 # AC7 temporal velocity, 13 October
 
+## Indirect arguments and sorted particle coverage
+
+The next source increment adds indexed and nonindexed indirect replay with the exact borrowed
+argument buffer and byte offset. Graphics ABI 15 preserves that draw contract; game ABI 16 carries
+a copied native mesh-element vertex bound. In matched 4.18.3 `MeshBatch.h`, and AC7's previously
+matched 0x60-byte element loop, NumPrimitives and NumInstances are at +0x34/+0x38. GPU-sprite
+submission in `ParticleGpuSimulation.cpp:2962-2963` supplies both. The producer sums selected
+elements with overflow checks rather than estimating capacity from a texture or draw order.
+
+Arguments are copied into private GPU indirect storage and validated there against the native
+bound. Both motion draws consume that same GPU snapshot; no CPU Map/readback or per-draw fence
+is introduced. An oversized submission produces no partial velocity writes. Direct and indirect
+history share vertex identity when their geometry corresponds.
+
+The complete WARP producer fixture now covers indexed/nonindexed indirect calls, a nonzero
+argument offset, capacity refusal, direct/indirect continuity and cuts. The actual frame-tap hook
+fixture verifies the borrowed buffer/offset and distinct indirect kinds. A two-particle fixture
+reverses draw order, moves the foreground particle and changes its pooled vertex-factory address;
+the prior billboard still matches by particle counter and corner. These are synthetic results,
+not new flight acceptance. GS/tessellation and mesh-particle instance correspondence remain open.
+
 ## Later source increment: dedicated material velocity/depth producer
 
 The separate pass is now implemented and wired to AC7's static/dynamic translucency DrawMesh

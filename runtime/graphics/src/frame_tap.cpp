@@ -18,6 +18,7 @@
 #include <cstring>
 #include <iterator>
 #include <mutex>
+#include <tuple>
 #include <unordered_map>
 
 namespace {
@@ -1971,7 +1972,8 @@ void seed_geometry(Tap& self, ID3D11DeviceContext* context)
 }
 
 void report_geometry(Tap& self, ID3D11DeviceContext* context, UINT kind, UINT count, UINT start,
-                     INT base, UINT instances = 1, UINT first_instance = 0)
+                     INT base, UINT instances = 1, UINT first_instance = 0,
+                     ID3D11Buffer* indirect = nullptr, UINT indirect_offset = 0)
 {
     if (!self.options.on_geometry || !self.geometry_depth || self.target_count != 1 ||
         !self.target_texture || self.target_substituted) {
@@ -1994,6 +1996,8 @@ void report_geometry(Tap& self, ID3D11DeviceContext* context, UINT kind, UINT co
     g.base_vertex = base;
     g.instances = instances;
     g.start_instance = first_instance;
+    g.indirect_buffer = indirect;
+    g.indirect_offset = indirect_offset;
     self.options.on_geometry(self.options.on_geometry_user, &g);
 }
 
@@ -2220,7 +2224,12 @@ void STDMETHODCALLTYPE indirect_draw(ID3D11DeviceContext* c, Arguments... argume
         return;
     }
     const ReentryGuard guard;
-    report_geometry(s, c, 4, 0, 0, 0);
+    if constexpr (Original == 12) report_geometry(s, c, 4, 0, 0, 0);
+    else {
+        const auto supplied = std::tuple<Arguments...>(arguments...);
+        report_geometry(s, c, Original == 10 ? 5u : 6u, 0, 0, 0, 1, 0,
+            std::get<0>(supplied), std::get<1>(supplied));
+    }
 }
 
 struct ExtraHook {

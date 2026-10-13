@@ -1455,6 +1455,25 @@ uint8_t hooked_translucency_mesh(void* list, void* view_object, void* context, v
                 scope.role = RSF_GAME_RENDER_TRANSLUCENT_MESH; scope.session_id = self->options.session_id;
                 scope.view_key = view; scope.native_frame = frame; scope.pass_key = uint64_t(uintptr_t(mesh));
                 scope.primitive_key = uint64_t(uintptr_t(proxy)); scope.material_key = material_proxy;
+                // FMeshBatch's inline element array is at +0, external storage +0x60, Num +0x68.
+                // AC7 element stride 0x60: NumPrimitives +0x34, NumInstances +0x38. Match the
+                // native DrawMesh element loop; copy a bound, never a CPU pointer, into RHI work.
+                uint64_t storage = 0; int32_t count = 0; uint64_t capacity = 0;
+                const auto address = uint64_t(uintptr_t(mesh));
+                if (read(address, 0x60, storage) && read(address, 0x68, count) && count > 0 && count <= 64) {
+                    if (!storage) storage = address;
+                    for (int32_t i = 0; i < count; ++i) {
+                        if (!(scope.mesh_element_mask & (uint64_t(1) << i))) continue;
+                        uint32_t primitives = 0, instances = 0;
+                        if (!read(storage + uint64_t(i) * 0x60, 0x34, primitives) ||
+                            !read(storage + uint64_t(i) * 0x60, 0x38, instances)) { capacity = 0; break; }
+                        const uint64_t vertices = uint64_t(primitives) * 3;
+                        if (vertices && instances > UINT32_MAX / vertices) { capacity = 0; break; }
+                        capacity += vertices * instances;
+                        if (capacity > UINT32_MAX) { capacity = 0; break; }
+                    }
+                }
+                scope.geometry_capacity = uint32_t(capacity);
                 scope.flags = RSF_GAME_RENDER_PRIMARY | (cut ? RSF_GAME_RENDER_RESET : 0u);
                 scope.camera.struct_size = sizeof(scope.camera); scope.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
                 scope.camera.render_width = camera.view_width; scope.camera.render_height = camera.view_height;

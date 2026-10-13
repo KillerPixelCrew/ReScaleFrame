@@ -74,7 +74,7 @@ extern "C" {
 /* 14: the role table moved out of the tap into `rsf_frame_tap_options::roles`, so a tap given none
    recognises no input set; `rsf_frame_tap_set_override_target` is gone, it had no caller; and the
    constant watch can say it never writes (`rsf_frame_tap_set_constant_watch_writable`). */
-#define RSF_FRAME_TAP_ABI_VERSION 14u
+#define RSF_FRAME_TAP_ABI_VERSION 15u
 #define RSF_FRAME_TAP_CONSTANT_SLOTS 70u
 
 /* Rules a role table handed to the tap may hold. The tap copies them, so the table may be freed
@@ -491,7 +491,8 @@ typedef struct rsf_frame_tap_plan {
 
 /* Synchronous geometry observation. Pointers and arrays are borrowed only during the callback.
    Replay must happen here: retaining a buffer does not preserve its contents across later uploads.
-   kind: 0 Draw, 1 DrawIndexed, 2 DrawInstanced, 3 DrawIndexedInstanced, 4 unsupported/indirect.
+   kind: 0 Draw, 1 DrawIndexed, 2 DrawInstanced, 3 DrawIndexedInstanced, 4 DrawAuto,
+   5 DrawIndexedInstancedIndirect, 6 DrawInstancedIndirect.
    Only draws with a depth view and one colour target are reported. */
 typedef struct rsf_frame_tap_geometry {
     void* context;
@@ -508,6 +509,9 @@ typedef struct rsf_frame_tap_geometry {
     uint32_t topology;
     void* vertex_shader;
     void* vertex_constants[14];
+    /* Borrowed at this exact draw; argument contents can be produced on the GPU. */
+    void* indirect_buffer;
+    uint32_t indirect_offset;
 } rsf_frame_tap_geometry;
 typedef void (*rsf_frame_tap_geometry_fn)(void* user, const rsf_frame_tap_geometry* draw);
 
