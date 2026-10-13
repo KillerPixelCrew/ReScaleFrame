@@ -352,34 +352,62 @@ rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,
             !read_signature(*input,inputs) || !read_signature(*out,outputs)) return rsf_ac7_velocity_shader_result::refused;
         uint32_t next_input=0,next_output=0;
         const Semantic *position=nullptr,*old=nullptr,*corner=nullptr;
+        bool mesh_rows[3]{};
         for (const auto& s:inputs) {
             next_input=std::max(next_input,s.reg+1);
             if (!_stricmp(s.name.c_str(),"ATTRIBUTE")) {
                 if (!s.index && s.mask==15) position=&s;
                 if (s.index==1 && s.mask==15) old=&s;
                 if (s.index==4 && s.mask==3) corner=&s;
+                if (s.index>=8 && s.index<=10 && s.mask==15) mesh_rows[s.index-8]=true;
             }
         }
-        info.particle=position && old && corner ? 1u : 0u;
+        info.particle=mesh_rows[0] && mesh_rows[1] && mesh_rows[2] ? 2u : position && old && corner ? 1u : 0u;
         bool has_position=false;
         for (const auto& s:outputs) {
             next_output=std::max(next_output,s.reg+1);
             if (s.system==1) { info.position_register=s.reg; has_position=true; }
             if (s.name.starts_with("RSF")) return rsf_ac7_velocity_shader_result::refused;
         }
-        if (!has_position || next_output+3>32) return rsf_ac7_velocity_shader_result::refused;
+        if (!has_position || next_output+4>32) return rsf_ac7_velocity_shader_result::refused;
         static constexpr char generic_source[]=R"(
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;};
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
 O main(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {O o;o.p=float4(0,0,0,1);
-o.key=float4(float(vertex),float(instance),0,0);o.centre=0;o.old=0;return o;})";
+o.key=float4(float(vertex),float(instance),0,0);o.lookup=o.key;o.centre=0;o.old=0;return o;})";
         static constexpr char particle_source[]=R"(
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;};
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
 O main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,float2 corner:ATTRIBUTE4) {
 O o;o.p=float4(0,0,0,1);o.key=float4(corner,old.w,1);o.centre=float4(centre.xyz,1);
-o.old=float4(old.xyz,1);return o;})";
+o.old=float4(old.xyz,1);o.lookup=o.key;return o;})";
+        static constexpr char mesh_source[]=R"(
+Buffer<float4> Previous:register(t127);
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+uint2 pose_hash(float4 a,float4 b,float4 c) {
+    uint2 value=uint2(2166136261,2246822519);
+    [unroll]for(uint row=0;row<3;row++) {
+        uint4 bits=asuint(row==0 ? a : row==1 ? b : c);
+        [unroll]for(uint i=0;i<4;i++) {value=(value^bits[i])*uint2(16777619,3266489917);}
+    }
+    return value;
+}
+O main(float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10,
+       uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    O o;o.p=float4(0,0,0,1);uint2 now=pose_hash(a,b,c);
+    o.key=float4(float(vertex),asfloat(now.x),asfloat(now.y),2);o.centre=float4(a.w,b.w,c.w,1);
+    uint count;Previous.GetDimensions(count);o.lookup=float4(float(vertex),0,0,3);o.old=o.centre;
+    if(instance<count/3) {
+        float4 pa=Previous[instance*3],pb=Previous[instance*3+1],pc=Previous[instance*3+2];
+        if(any(pa.xyz!=0) && any(pb.xyz!=0) && any(pc.xyz!=0)) {
+            uint2 old=pose_hash(pa,pb,pc);o.lookup=float4(float(vertex),asfloat(old.x),asfloat(old.y),2);
+            o.old=float4(pa.w,pb.w,pc.w,1);
+        }
+    }
+    return o;
+})";
         static const auto generic=[] {std::vector<uint8_t> code;rsf::compile_shader(generic_source,"ac7-geometry-key","main","vs_5_0",code);return code;}();
         static const auto particle=[] {std::vector<uint8_t> code;rsf::compile_shader(particle_source,"ac7-particle-key","main","vs_5_0",code);return code;}();
-        const auto& helper_bytes=info.particle ? particle : generic;
+        static const auto mesh=[] {std::vector<uint8_t> code;rsf::compile_shader(mesh_source,"ac7-mesh-particle-pose-key","main","vs_5_0",code);return code;}();
+        const auto& helper_bytes=info.particle==2 ? mesh : info.particle ? particle : generic;
         Container extra; if (!extra.read(helper_bytes.data(),helper_bytes.size())) return rsf_ac7_velocity_shader_result::refused;
         auto* helper_shader=extra.find("SHEX"); if (!helper_shader) helper_shader=extra.find("SHDR");
         auto* helper_input=extra.find("ISGN"); auto* helper_output=extra.find("OSGN");
@@ -465,7 +493,7 @@ bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
     bytecode.clear(); previous_register=current_register=0;
     try {
         std::ostringstream fields;
-        std::string position,key,old;
+        std::string position,key,old,lookup;
         uint32_t count=0;
         for (const auto& s:info.outputs) {
             if (!s.mask || s.mask>15 || s.reg>=32) return false;
@@ -477,9 +505,10 @@ bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
             if (s.system==1) position=field;
             if (s.name=="RSFKEY") key=field;
             if (s.name=="RSFOLD") old=field;
+            if (s.name=="RSFLOOKUP") lookup=field;
             previous_register=std::max(previous_register,s.reg+1);
         }
-        if (position.empty() || key.empty() || old.empty() || previous_register+1>=32) return false;
+        if (position.empty() || key.empty() || old.empty() || lookup.empty() || previous_register+1>=32) return false;
         current_register=previous_register++;
         std::ostringstream source;
         source << "struct V{" << fields.str() << "};struct O{" << fields.str()
@@ -498,7 +527,7 @@ uint key_hash(uint4 key) {
 float4 previous_position(float4 current,float4 key,float3 old) {
     float4 unjittered=current;unjittered.xy-=Jitter.xy*current.w;
     float4 fallback=mul(unjittered,ClipToPrevious);fallback.xy+=Jitter.zw*fallback.w;
-    if(HasHistory==0)return fallback;
+    if(HasHistory==0 || key.w==3)return fallback;
     uint4 bits=asuint(key);uint hash=key_hash(bits);
     bool found=false,ambiguous=false;float distance=3.402823e38;float4 selected=fallback;
     [loop]for(uint probe=0;probe<32;probe++) {
@@ -519,7 +548,7 @@ float4 previous_position(float4 current,float4 key,float3 old) {
     [unroll]for(uint j=0;j<3;j++) {O output;
 )";
         for (size_t i=0;i<info.outputs.size();++i) source << "output.f" << i << "=input[j].f" << i << ';';
-        source << "output.current=input[j]." << position << ";output.previous=previous_position(input[j]." << position << ",input[j]." << key
+        source << "output.current=input[j]." << position << ";output.previous=previous_position(input[j]." << position << ",input[j]." << lookup
             << ",input[j]." << old << ".xyz);stream.Append(output);}stream.RestartStrip();}";
         if (!rsf::compile_shader(source.str().c_str(),"ac7-previous-geometry","main","gs_5_0",bytecode)) return false;
         std::vector<Semantic> actual_inputs;

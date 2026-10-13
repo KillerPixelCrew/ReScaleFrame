@@ -8,6 +8,11 @@
 #include <cstdio>
 using Microsoft::WRL::ComPtr;
 namespace harness {
+uint32_t particle_slot=0;void* particle_shader=nullptr;void* particle_previous=nullptr;
+void particle_original(void*,void*,void*,void*,void*,void*) {}
+void particle_set(void*,void* shader,uint32_t slot,void* previous) {
+    particle_slot=slot;particle_shader=shader;particle_previous=previous;
+}
 bool passed = true;
 void check(bool ok, const char* why) { if (!ok) { passed = false; std::fprintf(stderr, "%s\n", why); } }
 struct Command { Command* next = nullptr; void(*execute)(void*, Command*) = nullptr; };
@@ -158,6 +163,41 @@ void original_context(void* raw_context, void* raw_root) {
 }
 int main() {
     using namespace harness;
+    {
+        // Exercise the actual native producer hook and its queued RHI command. References must
+        // survive producer return, then retire on the render owner, not while commands are pending.
+        struct Reference {uint64_t vtable=0;volatile LONG refs=1;uint32_t pad=0;} shader_ref,previous_ref;
+        std::array<unsigned char,0x50> shader{};
+        std::array<unsigned char,0x40> resource{};
+        std::array<unsigned char,0x4a8> factory{};
+        std::array<unsigned char,0x30> command_list{};
+        std::array<void*,0x1d8/8> context_table{};
+        void** context_pointer=context_table.data();
+        auto* context_address=&context_pointer;
+        context_table[0x1d0/8]=reinterpret_cast<void*>(&particle_set);
+        const uint64_t resource_pointer=uint64_t(uintptr_t(resource.data()));
+        const uint64_t vertex_pointer=uint64_t(uintptr_t(&shader_ref)),previous_pointer=uint64_t(uintptr_t(&previous_ref));
+        std::memcpy(shader.data()+0x48,&resource_pointer,8);std::memcpy(resource.data()+0x38,&vertex_pointer,8);
+        std::memcpy(factory.data()+0x4a0,&previous_pointer,8);
+        auto* root=reinterpret_cast<ParticleBindingCommand**>(command_list.data());
+        auto** tail=root;std::memcpy(command_list.data()+8,&tail,8);
+        const uint64_t context_value=uint64_t(uintptr_t(context_address));std::memcpy(command_list.data()+0x20,&context_value,8);
+        rsf_ac7_native_renderer owner;owner.active.store(true);installed.store(&owner);
+        sites[hook_mesh_particle_parameters].original=reinterpret_cast<void*>(&particle_original);
+        hooked_mesh_particle_parameters(nullptr,command_list.data(),shader.data(),factory.data(),nullptr,nullptr);
+        check(*root && owner.pending_particle_bindings==1 && shader_ref.refs==2 && previous_ref.refs==2,
+            "native mesh-particle history is retained through queued binding");
+        if (*root) (*root)->execute(command_list.data(),*root);
+        check(particle_slot==127 && particle_shader==&shader_ref && particle_previous==&previous_ref &&
+            owner.pending_particle_bindings==0 && owner.retired.load(),"native previous transforms bind on the RHI context with deferred retirement");
+        auto* retired=owner.retired.exchange(nullptr);
+        if (retired) {
+            for (auto value:retired->uniforms) InterlockedDecrement(reinterpret_cast<volatile LONG*>(uintptr_t(value)+8));
+            delete retired;
+        }
+        check(shader_ref.refs==1 && previous_ref.refs==1,"queued transform/shader references retire exactly once");
+        installed.store(nullptr);
+    }
     // A mismatched site must leave the entire group native; teardown restores only owned bytes.
     auto* patch_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x1190000,
         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));

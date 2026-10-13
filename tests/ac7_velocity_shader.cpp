@@ -252,6 +252,70 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         rsf_ac7_velocity_frame_end();
     }
     rsf_ac7_velocity_release();
+    // Native mesh-particle previous transforms follow the current sorted instance order. Equal
+    // translations with different rotation/scale must still be distinct history identities.
+    auto mesh_vertex=compile("float4 main(uint vertex:SV_VertexID,float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,"
+        "float4 c:ATTRIBUTE10):SV_Position {float4 p=float4(vertex==2?3:-1,vertex==1?3:-1,.75,1);"
+        "return float4(dot(p,a),dot(p,b),dot(p,c),1);}","vs_5_0");
+    ComPtr<ID3D11VertexShader> mesh_vs;
+    check(SUCCEEDED(device->CreateVertexShader(mesh_vertex.data(),mesh_vertex.size(),nullptr,&mesh_vs)),"create native mesh-particle shader");
+    rsf_ac7_velocity_shader_seen(mesh_vs.Get(),0,mesh_vertex.data(),uint32_t(mesh_vertex.size()));
+    rsf_ac7_velocity_shader_seen(material_ps.Get(),1,material.data(),uint32_t(material.size()));
+    const D3D11_INPUT_ELEMENT_DESC mesh_layout[]{
+        {"ATTRIBUTE",8,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_INSTANCE_DATA,1},
+        {"ATTRIBUTE",9,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,D3D11_INPUT_PER_INSTANCE_DATA,1},
+        {"ATTRIBUTE",10,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,D3D11_INPUT_PER_INSTANCE_DATA,1},
+    };
+    ComPtr<ID3D11InputLayout> mesh_declaration;
+    check(SUCCEEDED(device->CreateInputLayout(mesh_layout,3,mesh_vertex.data(),mesh_vertex.size(),&mesh_declaration)),"create sorted mesh-particle declaration");
+    using Transform=std::array<float,12>;std::array<Transform,2> transforms{},previous_transforms{};
+    D3D11_BUFFER_DESC instance_desc{};instance_desc.ByteWidth=sizeof(transforms);instance_desc.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+    ComPtr<ID3D11Buffer> instance_buffer,previous_buffer;
+    check(SUCCEEDED(device->CreateBuffer(&instance_desc,nullptr,&instance_buffer)),"create current instance transforms");
+    instance_desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+    check(SUCCEEDED(device->CreateBuffer(&instance_desc,nullptr,&previous_buffer)),"create native previous instance transforms");
+    D3D11_SHADER_RESOURCE_VIEW_DESC previous_desc{};previous_desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+    previous_desc.ViewDimension=D3D11_SRV_DIMENSION_BUFFER;previous_desc.Buffer.NumElements=6;
+    ComPtr<ID3D11ShaderResourceView> previous_view;
+    check(SUCCEEDED(device->CreateShaderResourceView(previous_buffer.Get(),&previous_desc,&previous_view)),"create native previous-transform SRV");
+    pass.primitive_key=50;pass.material_key=51;pass.flags=RSF_GAME_RENDER_PRIMARY;
+    native_geometry.vertex_shader=mesh_vs.Get();native_geometry.input_layout=mesh_declaration.Get();
+    native_geometry.kind=2;native_geometry.count=3;native_geometry.instances=2;
+    native_geometry.vertex_buffers[0]=instance_buffer.Get();native_geometry.strides[0]=sizeof(Transform);
+    for (uint32_t frame=0;frame<2;++frame) {
+        for (uint32_t slot=0;slot<2;++slot) {
+            const uint32_t id=frame ? 1-slot : slot;
+            Transform pose{1,0,0,0, 0,1,0,0, 0,0,1,id==0 ? 0.f : -.25f};
+            previous_transforms[slot]=pose;pose[3]=(id==0 ? 1.f : -1.f)*float(frame)*.2f;transforms[slot]=pose;
+        }
+        context->UpdateSubresource(instance_buffer.Get(),0,nullptr,transforms.data(),0,0);
+        context->UpdateSubresource(previous_buffer.Get(),0,nullptr,previous_transforms.data(),0,0);
+        pass.native_frame=20+frame;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;pass.vertex_factory_key=frame ? 777 : 6;
+        rsf_ac7_velocity_scope(&pass);
+        context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
+        const float clear[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),clear);
+        ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
+        context->VSSetShader(mesh_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+        context->GSSetShader(nullptr,nullptr,0);context->IASetInputLayout(mesh_declaration.Get());
+        ID3D11Buffer* vb=instance_buffer.Get();UINT stride=sizeof(Transform),offset=0;context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
+        ID3D11ShaderResourceView* history=previous_view.Get();context->VSSetShaderResources(127,1,&history);
+        ID3D11ShaderResourceView* texture=input_view.Get();context->PSSetShaderResources(0,1,&texture);
+        rsf_ac7_velocity_geometry(&native_geometry);
+        pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
+        check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit reordered mesh-particle history");
+        context->OMSetRenderTargets(0,nullptr,nullptr);engine_motion->GetDesc(&engine_desc);
+        engine_desc.BindFlags=0;engine_desc.Usage=D3D11_USAGE_STAGING;engine_desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> readable;check(SUCCEEDED(device->CreateTexture2D(&engine_desc,nullptr,&readable)),"create mesh-particle motion readback");
+        context->CopyResource(readable.Get(),engine_motion.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+        check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read reordered instance motion");
+        if (mapped.pData) {
+            uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
+            const float expected=32767.f/65535.f+(frame ? .2f*.2495f : 0);
+            check(std::fabs(float(values[0])/65535.f-expected)<5e-5f,"mesh-particle motion follows prior transforms despite instance sorting and factory recycling");
+        }
+        rsf_ac7_velocity_frame_end();
+    }
+    rsf_ac7_velocity_release();
     if (argc==2) for (const auto& entry:std::filesystem::directory_iterator(argv[1])) {
         const auto name=entry.path().filename().string();
         if ((!name.starts_with("1-") && !name.starts_with("0-")) || entry.path().extension()!=".dxbc") continue;

@@ -51,7 +51,7 @@ enum Hook : uint32_t {
     hook_sky_projection, hook_sky_render, hook_temporal_sample_index, hook_scene_colour_format,
     hook_render_family, hook_frame_task_construct, hook_frame_task_execute,
     hook_rhi_frame_begin, hook_rhi_frame_end, hook_frame_sync, hook_pump_messages, hook_engine_pacing,
-    hook_create_pixel_shader, hook_base_pass, hook_translucency_mesh,
+    hook_create_pixel_shader, hook_base_pass, hook_translucency_mesh, hook_mesh_particle_parameters,
     hook_count
 };
 static_assert(hook_process_tonemap == 0 && hook_process_output == 5);
@@ -121,6 +121,7 @@ Site sites[] = {
     {0xe31e90, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
     {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
     {0x1158250, 0, "\x4c\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x48"},
+    {0x188cfa0, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x20\x57"},
 };
 static_assert(sizeof(sites) / sizeof(sites[0]) == hook_count);
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
@@ -267,6 +268,7 @@ struct rsf_ac7_native_renderer {
     std::array<std::atomic<uint64_t>, 64> final_surface_hint{};
     std::array<UniformOwner, 4096> uniform_owners{};
     std::atomic<uint32_t> pending_uniforms{0};
+    std::atomic<uint32_t> pending_particle_bindings{0};
     std::mutex pixel_bindings_guard;
     std::array<PixelUniformBinding, 128> pixel_bindings{};
     uint64_t pixel_binding_sequence = 0;
@@ -1414,6 +1416,59 @@ void hooked_translucency_render(void* renderer, void* list, uint32_t pass)
 // primitive identity must travel with the queued draws, including parallel command recording.
 using TranslucencyMesh = uint8_t(*)(void*, void*, void*, void*, const uint64_t*, void*,
                                   uint8_t, void*, uint32_t);
+struct ParticleBindingCommand {
+    ParticleBindingCommand* next = nullptr;
+    void (*execute)(void*, ParticleBindingCommand*) = nullptr;
+    rsf_ac7_native_renderer* owner = nullptr;
+    PassLease* references = nullptr;
+    uint64_t shader = 0, previous = 0;
+};
+void execute_particle_binding(void* list, ParticleBindingCommand* command)
+{
+    const EntryGuard guard;
+    uint64_t context = 0;
+    if (read(uint64_t(uintptr_t(list)), 0x20, context)) {
+        const auto set = method(context, 0x1d0);
+        if (set) reinterpret_cast<void(*)(void*, void*, uint32_t, void*)>(uintptr_t(set))(
+            reinterpret_cast<void*>(uintptr_t(context)), reinterpret_cast<void*>(uintptr_t(command->shader)),
+            127, reinterpret_cast<void*>(uintptr_t(command->previous)));
+    }
+    release_pass(command->references);
+    --command->owner->pending_particle_bindings;
+    delete command;
+}
+// FMeshParticleVertexFactoryShaderParametersVS::SetMesh, matched through the parameter binder
+// vtable and PrevTransformBuffer string. The native factory owns the sorted instance history.
+void hooked_mesh_particle_parameters(void* parameters, void* list, void* shader, void* factory,
+    void* view, void* element)
+{
+    OuterGuard lifetime;
+    reinterpret_cast<void(*)(void*, void*, void*, void*, void*, void*)>(sites[hook_mesh_particle_parameters].original)(
+        parameters, list, shader, factory, view, element);
+    auto* self = installed.load();
+    if (!self || !self->active.load() || self->quiescing.load()) return;
+    uint64_t resource = 0, vertex = 0, previous = 0;
+    if (!read(uint64_t(uintptr_t(shader)), 0x48, resource) || !read(resource, 0x38, vertex) || !vertex ||
+        !read(uint64_t(uintptr_t(factory)), 0x4a0, previous)) return;
+    auto* command = new(std::nothrow) ParticleBindingCommand;
+    auto* references = new(std::nothrow) PassLease;
+    if (!command || !references) {delete command;delete references;return;}
+    references->owner = self;
+    try {references->uniforms.reserve(2);references->uniforms.push_back(vertex);if (previous) references->uniforms.push_back(previous);}
+    catch (...) {delete command;delete references;return;}
+    for (auto pointer : references->uniforms) InterlockedIncrement(reinterpret_cast<volatile LONG*>(uintptr_t(pointer)+8));
+    command->owner = self;command->references = references;command->shader = vertex;command->previous = previous;
+    command->execute = execute_particle_binding;
+    uint64_t tail = 0;uint32_t count = 0;uint8_t executing = 0;
+    const auto address = uint64_t(uintptr_t(list));uint64_t existing = 1;
+    if (read(address, 8, tail) && tail && read(tail, 0, existing) && !existing &&
+        read(address, 0x10, executing) && !executing && read(address, 0x14, count) && count != UINT32_MAX) {
+        ++self->pending_particle_bindings;
+        *reinterpret_cast<ParticleBindingCommand**>(uintptr_t(tail)) = command;
+        *reinterpret_cast<ParticleBindingCommand***>(uintptr_t(address+8)) = &command->next;
+        *reinterpret_cast<uint32_t*>(uintptr_t(address+0x14)) = count+1;
+    } else {release_pass(references);delete command;}
+}
 uint8_t hooked_translucency_mesh(void* list, void* view_object, void* context, void* mesh,
     const uint64_t* elements, void* state, uint8_t pre_fog, void* proxy, uint32_t hit)
 {
@@ -2678,6 +2733,7 @@ void bind_detours()
         {hook_create_pixel_shader, reinterpret_cast<void*>(&hooked_create_pixel_shader)},
         {hook_base_pass, reinterpret_cast<void*>(&hooked_base_pass)},
         {hook_translucency_mesh, reinterpret_cast<void*>(&hooked_translucency_mesh)},
+        {hook_mesh_particle_parameters, reinterpret_cast<void*>(&hooked_mesh_particle_parameters)},
     };
     for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
 }
@@ -2818,7 +2874,7 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     // Keep inactive CPU observers installed until their render-thread-only pool refs retire.
     // Disabling first would remove the only owner that can drain an asynchronous RHI release.
     drain_retired(*self);
-    if (guards_held(false) || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
+    if (guards_held(false) || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->pending_particle_bindings.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
     if (self->input_hook) {
         if (!UnhookWindowsHookEx(self->input_hook)) return 0;
         self->input_hook = nullptr;

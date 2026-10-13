@@ -1,5 +1,38 @@
 # AC7 temporal velocity, 13 October
 
+## Mesh-particle correspondence
+
+The instanced mesh-particle path now keys stored generated geometry by the complete instance
+transform and vertex ID. Lookup uses the native previous transform for that particle in the
+current sorted order. It does not assume that SV_InstanceID or a pooled factory address stays
+fixed across frames. Unavailable previous-transform data uses camera motion at the fragment's
+own depth, without selecting another particle's pose.
+
+Native/source matching located `FMeshParticleVertexFactoryShaderParametersVS::Bind` at RVA
+`0x1874330` through the `PrevTransformBuffer` and `PrevTransform0` UTF-16 references. Its vtable
+at RVA `0x2dac808` identifies `SetMesh` at `0x188cfa0`, entry bytes
+`48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 20 57`.
+Ghidra decompilation confirms the factory uniform at +`0x488`, previous-transform SRV at +`0x4a0`,
+and shader resource/+`0x48` -> native vertex shader/+`0x38`. The matching 4.18.3 source is
+`MeshParticleVertexFactory.cpp:50-88,269-271` and `MeshParticleVertexFactory.ush:185-205`.
+
+The guarded producer hook queues an extra reserved-slot binding. It copies and retains the RHI
+shader/SRV references; execution uses the actual RHI command-list context and its vertex SRV
+method at virtual offset `0x1d0`, corroborated by the native command executor at `0x120ccd0`.
+References retire through the renderer's existing owner-thread mechanism. Stop waits for pending
+bindings. The game-owned source resource remains native; no CPU/GPU transform readback is needed.
+
+The complete WARP test now reverses two mesh instances, moves them independently and replaces
+their factory address. The foreground motion still follows its own previous transform. The
+native graph fixture separately calls the actual producer hook, executes its queued binding and
+checks exact retention/retirement. These are source, queued-ABI and synthetic GPU checks; no new
+AC7 run was made. Native geometry/tessellation-stage input routes still remain unfinished.
+
+Release verification passed 45 native tests, with seven opt-in vendor skips, plus formatting and
+Clippy. A later deployment rebuild found Visual Studio 18.10.4 marked incomplete/reboot-required
+by the Installer. The existing build recovered through CMake's documented local instance
+specification using build number `18.10.12306.391`; no installation/global settings changed.
+
 ## Indirect arguments and sorted particle coverage
 
 The next source increment adds indexed and nonindexed indirect replay with the exact borrowed

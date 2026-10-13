@@ -846,6 +846,11 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+Instanced mesh-particle correspondence now uses the native sorted previous-transform buffer and
+full pose/vertex keys. Native queued-binding/lifetime and reordered-instance GPU fixtures pass.
+GS/tessellation remain unfinished; gameplay checks remain deferred. See the current research
+increment for exact native guards and ownership.
+
 Indirect geometry now preserves GPU argument identity/offset, validates its copied native mesh
 capacity on the GPU and replays without CPU readback. The full producer and actual tap fixtures
 cover indexed/nonindexed submissions and bounds. Sorted sprites also pass independent-motion
