@@ -9,6 +9,8 @@
 using Microsoft::WRL::ComPtr;
 namespace harness {
 uint32_t particle_slot=0;void* particle_shader=nullptr;void* particle_previous=nullptr;
+uint32_t beam_calls=0;
+uint64_t beam_original(void*,void*) {++beam_calls;return 0x1234;}
 void particle_original(void*,void*,void*,void*,void*,void*) {}
 void particle_set(void*,void* shader,uint32_t slot,void* previous) {
     particle_slot=slot;particle_shader=shader;particle_previous=previous;
@@ -163,6 +165,64 @@ void original_context(void* raw_context, void* raw_root) {
 }
 int main() {
     using namespace harness;
+    {
+        std::array<unsigned char,0x160> source{};
+        std::array<unsigned char,0xa0> fill{};
+        std::array<unsigned char,512> particles{};
+        std::array<unsigned char,1600> vertices{};
+        auto put=[](auto& bytes,size_t offset,const auto& value){std::memcpy(bytes.data()+offset,&value,sizeof(value));};
+        const int32_t active=2,particle_stride=256,payload=128,sheets=2,count=20,vertex_stride=80;
+        const uint64_t particle_pointer=uint64_t(uintptr_t(particles.data())),vertex_pointer=uint64_t(uintptr_t(vertices.data()));
+        put(source,0x44,active);put(source,0x48,particle_stride);put(source,0x60,particle_pointer);put(source,0x12c,payload);put(source,0x154,sheets);
+        put(fill,0x88,count);put(fill,0x8c,vertex_stride);put(fill,0x90,vertex_pointer);
+        const uint32_t first=(3u<<20)|55u,second=(12u<<20)|99u;const int32_t two=2,four=4;
+        put(particles,0x5c,first);put(particles,256+0x5c,second);put(particles,128+0x58,two);put(particles,256+128+0x58,four);
+        for (size_t i=0;i<vertices.size();++i) vertices[i]=static_cast<unsigned char>(i);
+        const auto native=vertices;
+        check(tag_beam_vertices(source.data(),fill.data()),"tag exact native beam ranges across particles and sheets");
+        for (uint32_t i=0;i<20;++i) {
+            const uint32_t beam=i<8 ? 0u : 1u,pairs=beam ? 3u : 2u,start=beam ? 8u : 0u;
+            const uint32_t point=(i-start)/2,sheet=point/pairs,sample=point%pairs,counter=beam ? second : first;
+            uint32_t a=0,b=0,c=0;
+            std::memcpy(&a,vertices.data()+i*80+12,4);std::memcpy(&b,vertices.data()+i*80+28,4);std::memcpy(&c,vertices.data()+i*80+44,4);
+            check(a==normal_tag(counter|((sheet&3)<<26)) && b==normal_tag(counter|((sheet>>2)<<26)) && c==normal_tag(sample|((pairs-1)<<12)),
+                "beam counter/sheet/sample tag follows producer ordering");
+            for (uint32_t byte=0;byte<80;++byte) if (byte<12 || byte>=16 && byte<28 || byte>=32 && byte<44 || byte>=48)
+                check(vertices[i*80+byte]==native[i*80+byte],"beam tagging preserves all native geometry/material fields");
+        }
+        const int32_t wrong=19;put(fill,0x88,wrong);
+        check(!tag_beam_vertices(source.data(),fill.data()),"mismatched native beam count refuses partial identity writes");
+        float invalid=1;std::memcpy(&invalid,vertices.data()+44,4);check(invalid==0,"refused beam fill invalidates stale pooled tags");
+        put(fill,0x88,count);rsf_ac7_native_renderer owner;owner.active=true;installed.store(&owner);
+        sites[hook_beam_no_noise].original=sites[hook_beam_noise].original=sites[hook_beam_interpolated_noise].original=reinterpret_cast<void*>(&beam_original);
+        check(hooked_beam_fill<hook_beam_no_noise>(source.data(),fill.data())==0x1234 &&
+            hooked_beam_fill<hook_beam_noise>(source.data(),fill.data())==0x1234 &&
+            hooked_beam_fill<hook_beam_interpolated_noise>(source.data(),fill.data())==0x1234 && beam_calls==3,
+            "all native beam producer detours preserve the original call and return");
+        installed.store(nullptr);
+        // A new trail head must not rename surviving points or segments. Follow the copied
+        // native linked-particle payload, including interpolation between two stable counters.
+        std::array<unsigned char,0x150> trail_source{};
+        const int32_t trail_count=8,trail_payload=128;const uint16_t particle_indices[]{0,1};
+        const uint64_t index_pointer=uint64_t(uintptr_t(particle_indices));
+        put(trail_source,0x64,active);put(trail_source,0x68,particle_stride);put(trail_source,0x80,particle_pointer);
+        put(trail_source,0x88,index_pointer);put(trail_source,0x138,trail_payload);put(fill,0x88,trail_count);
+        const uint32_t head=0x40000001u,tail=0x20003fffu;const int32_t three=3;
+        put(particles,128,head);put(particles,256+128,tail);put(particles,256+128+0x1c,three);
+        check(tag_trail_vertices(trail_source.data(),fill.data(),1),"tag linked trail endpoints and interpolated parent pairs");
+        uint32_t raw=0;std::memcpy(&raw,vertices.data()+2*80+12,4);
+        check(raw==normal_tag(second|(1u<<28)),"trail interpolated point retains current particle counter");
+        std::memcpy(&raw,vertices.data()+2*80+28,4);check(raw==normal_tag(first),"trail interpolation identifies its prior linked particle");
+        std::memcpy(&raw,vertices.data()+2*80+44,4);check(raw==normal_tag(2u|(3u<<12)),"trail sample fraction follows native reverse interpolation loop");
+        put(particles,256+128,head);
+        check(!tag_trail_vertices(trail_source.data(),fill.data(),2),"cyclic trail payload refuses identity production");
+        put(particles,256+128,tail);installed.store(&owner);
+        sites[hook_ribbon_fill].original=sites[hook_anim_trail_fill].original=reinterpret_cast<void*>(&beam_original);
+        check(hooked_beam_fill<hook_ribbon_fill>(trail_source.data(),fill.data())==0x1234 &&
+            hooked_beam_fill<hook_anim_trail_fill>(trail_source.data(),fill.data())==0x1234 && beam_calls==5,
+            "native ribbon/animated-trail detours preserve original calls and returns");
+        installed.store(nullptr);
+    }
     {
         // Exercise the actual native producer hook and its queued RHI command. References must
         // survive producer return, then retire on the render owner, not while commands are pending.

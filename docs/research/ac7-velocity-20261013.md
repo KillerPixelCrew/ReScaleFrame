@@ -1,5 +1,45 @@
 # AC7 temporal velocity, 13 October
 
+## Beam, ribbon and animated-trail producers, 14 October
+
+The correspondence defect was at CPU production: fills clear ParticleId and can duplicate
+current into OldPosition. Draw-index history then renames geometry when a trail grows or changes
+subdivision. Searches restricted to 80-byte increments found unrelated debug/physics/container
+code. Paired 160-byte writes and chained unwind owners located the beam fills; reads of the
+asynchronous header's vertex pointer located the trail fills. Ghidra control flow and layouts
+match 4.18.3 `ParticleSystemRender.cpp`, `ParticleHelper.h` and the beam/trail factory. The five
+functions are named in the existing database; the installed executable still matches the hash below.
+
+| Owner | RVA | Guarded first 16 bytes |
+| --- | --- | --- |
+| Beam no noise | `0x190e740` | `4c8bdc5553565741564157498dabd8fe` |
+| Beam noise | `0x1904d40` | `4c8bdc55498dabd8fcffff4881ec2004` |
+| Beam interpolated noise | `0x1907980` | `4055488dac24c0fbffff4881ec400500` |
+| Ribbon fill | `0x190d510` | `4055535741544157488dac2450feffff` |
+| Animated trail fill | `0x190ce60` | `48894c24085553574157488dac2438ff` |
+
+Hooks forward the original fill, then tag CPU-owned vertices before asynchronous upload. Header
+count/stride/pointer are +0x88/+0x8c/+0x90. Beam count/stride/data/payload/sheets are
++0x44/+0x48/+0x60/+0x12c/+0x154; payload triangle count +0x58 bounds `(triangles+2)*sheets`.
+Trail count/stride/data/indices/payload are +0x64/+0x68/+0x80/+0x88/+0x138; payload flags carry
+14-bit links and +0x1c gives interpolation count. Particle flags +0x5c carry the 26-bit counter.
+Complete ranges preflight; bad counts or cyclic links invalidate stale tags.
+
+Three unused fields in the matched 80-byte stream carry counter pairs, subtype, sheet and sample
+fraction as normal-float bit patterns. Used geometry/material fields remain native. A private
+layout widens old position to read its fourth word; the colour layout is restored unchanged.
+Descriptor/stride and shader use masks select this route. GPU history interpolates bracketing
+prior rendered samples and stores endpoint aliases, preserving existing segments under new heads.
+Triangle strips have a bounded SO expansion. Existing guards cover worker lifetime; no continuous
+readback or CPU pointer crosses the queued rendering boundary.
+
+Native fixtures check all five detours, exact tags, used-field preservation, bad counts and cycles.
+WARP checks curved resampling, new heads, order, factory reuse, clipping and cuts through the full
+pass. This is source and synthetic evidence; no new AC7 run or gameplay acceptance is claimed.
+
+MSVC Release `eng/verify.ps1 -Configuration Release -VS2026` passed: 45 native tests passed,
+seven opt-in vendor tests skipped, formatting and Clippy passed.
+
 ## Tessellated material velocity
 
 The dedicated material pass now handles native triangle tessellation, including the 12-input/

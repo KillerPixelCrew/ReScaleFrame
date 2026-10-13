@@ -846,6 +846,12 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+14 October: native beam, ribbon and animated-trail fills now supply stable counter/segment
+identity. The material pass interpolates prior rendered curves across subdivisions and retains
+surviving nodes when new heads appear. Native detour and WARP checks cover these paths, strips,
+ordering, factory reuse, clipping and cuts. Affected weapon/vehicle/kill-cam scenes still lack
+gameplay acceptance. [Evidence](research/ac7-velocity-20261013.md#beam-ribbon-and-animated-trail-producers-14-october).
+
 Current increment: triangle tessellation carries stable control-point keys, captures bounded
 native patch-corner history and preserves adaptive tessellation/material depth in the normal draw.
 WARP checks changing density, independent domain motion, cuts, 12-point indirect submission and

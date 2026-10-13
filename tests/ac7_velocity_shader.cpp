@@ -3,6 +3,7 @@
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/ac7_velocity_pass.h>
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/d3d11_observer.h>
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -423,6 +424,92 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
             uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
             const float expected=32767.f/65535.f+(frame ? .2f*.2495f : 0);
             check(std::fabs(float(values[0])/65535.f-expected)<5e-5f,"mesh-particle motion follows prior transforms despite instance sorting and factory recycling");
+        }
+        rsf_ac7_velocity_frame_end();
+    }
+    rsf_ac7_velocity_release();
+    // Beam identity survives changing subdivision and draw order. OldPosition deliberately
+    // equals current, matching the native noisy-beam fills rather than supplying fake history.
+    auto beam_code=compile("float4 main(float4 p:ATTRIBUTE0,float3 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,"
+        "float4 colour:ATTRIBUTE4,float4 uv:ATTRIBUTE3):SV_Position{return float4(p.xyz,1);}","vs_5_0");
+    ComPtr<ID3D11VertexShader> beam_vs;
+    check(SUCCEEDED(device->CreateVertexShader(beam_code.data(),beam_code.size(),nullptr,&beam_vs)),"create native beam VS");
+    rsf_ac7_velocity_shader_seen(beam_vs.Get(),0,beam_code.data(),uint32_t(beam_code.size()));
+    rsf_ac7_velocity_shader_seen(material_ps.Get(),1,material.data(),uint32_t(material.size()));
+    const D3D11_INPUT_ELEMENT_DESC beam_elements[]{
+        {"ATTRIBUTE",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",1,DXGI_FORMAT_R32G32B32_FLOAT,0,16,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",2,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",4,DXGI_FORMAT_R32G32B32A32_FLOAT,0,48,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"ATTRIBUTE",3,DXGI_FORMAT_R32G32B32A32_FLOAT,0,64,D3D11_INPUT_PER_VERTEX_DATA,0},
+    };
+    const rsf_observer_layout_element beam_facts[]{
+        {0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,0},{1,DXGI_FORMAT_R32G32B32_FLOAT,0,16,0},
+        {2,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,0},{4,DXGI_FORMAT_R32G32B32A32_FLOAT,0,48,0},
+        {3,DXGI_FORMAT_R32G32B32A32_FLOAT,0,64,0},
+    };
+    ComPtr<ID3D11InputLayout> beam_layout;
+    check(SUCCEEDED(device->CreateInputLayout(beam_elements,5,beam_code.data(),beam_code.size(),&beam_layout)),"create native float3-old-position beam layout");
+    rsf_ac7_velocity_layout_seen(beam_layout.Get(),beam_facts,5,5);
+    std::array<std::array<float,20>,10> beam_vertices{};
+    D3D11_BUFFER_DESC beam_desc{};beam_desc.ByteWidth=sizeof(beam_vertices);beam_desc.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+    ComPtr<ID3D11Buffer> beam_buffer;check(SUCCEEDED(device->CreateBuffer(&beam_desc,nullptr,&beam_buffer)),"create native 80-byte beam stream");
+    native_geometry.vertex_shader=beam_vs.Get();native_geometry.input_layout=beam_layout.Get();native_geometry.kind=0;
+    native_geometry.topology=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;native_geometry.strides[0]=80;native_geometry.vertex_buffers[0]=beam_buffer.Get();
+    pass.flags=RSF_GAME_RENDER_PRIMARY;pass.primitive_key=40;pass.material_key=41;pass.material_blend=2;
+    context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);context->GSSetShader(nullptr,nullptr,0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);context->IASetInputLayout(beam_layout.Get());
+    for (uint32_t kind=0;kind<3;++kind) for (uint32_t frame=0;frame<3;++frame) {
+        pass.primitive_key=40+kind;pass.native_frame=30+kind*10+frame;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;pass.vertex_factory_key=frame ? 998 : 997;
+        pass.flags=RSF_GAME_RENDER_PRIMARY|(frame==2 ? RSF_GAME_RENDER_RESET : 0u);
+        rsf_ac7_velocity_scope(&pass);context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
+        const float opaque[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),opaque);
+        for (uint32_t order=0;order<2;++order) {
+            const uint32_t id=frame ? 1-order : order,pairs=kind ? (frame ? 4u : 2u) : (frame ? 5u : 3u);
+            const uint32_t counter=0x00300000u|(id ? 66u : 55u);
+            const uint32_t low=0x20000000u|counter;
+            for (uint32_t sample=0;sample<pairs;++sample) for (uint32_t side=0;side<2;++side) {
+                auto& v=beam_vertices[sample*2+side];v={};
+                v[0]=(side ? 3.f : -1.f)+(id ? -.1f : .2f)*float(frame);
+                v[1]=-1+4*float(sample)/float(pairs-1);v[2]=id ? .5f : .75f;std::memcpy(&v[3],&low,4);
+                if (!kind) v[0]+=.1f*(1-std::fabs(2*float(sample)/float(pairs-1)-1));
+                v[4]=v[0];v[5]=v[1];v[6]=v[2];std::memcpy(&v[7],&low,4);
+                const uint32_t interval=0x20000000u|sample|((pairs-1)<<12);
+                v[8]=v[9]=1;std::memcpy(&v[11],&interval,4);v[12]=v[13]=v[14]=v[15]=1;v[17]=float(side);
+                if (kind) {
+                    auto encoded=[](uint32_t word){return 0x20000000u|(word&0x1fffffffu)|((word&0x20000000u)<<2);};
+                    uint32_t first=counter,second=counter,fraction=0,steps=1;
+                    if (!frame) {
+                        if (sample==0) v[1]=3;
+                        else {v[1]=-1;first=counter+1;}
+                    } else if (sample==0) {v[1]=4;first=second=counter-1;}
+                    else if (sample==1) {v[1]=3;second=counter-1;}
+                    else {v[1]=sample==2 ? 1.f : -1.f;first=counter+1;fraction=sample==2 ? 1u : 0u;steps=2;}
+                    const uint32_t a=encoded(first|(kind<<28)),b=encoded(second),c=encoded(fraction|(steps<<12));
+                    std::memcpy(&v[3],&a,4);std::memcpy(&v[7],&b,4);std::memcpy(&v[11],&c,4);v[5]=v[1];
+                }
+            }
+            context->UpdateSubresource(beam_buffer.Get(),0,nullptr,beam_vertices.data(),0,0);native_geometry.count=pairs*2;
+            ID3D11Buffer* vb=beam_buffer.Get();const UINT stride=80,offset=0;context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
+            context->VSSetShader(beam_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+            ID3D11ShaderResourceView* texture=input_view.Get();context->PSSetShaderResources(0,1,&texture);
+            ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
+            rsf_ac7_velocity_geometry(&native_geometry);
+            ComPtr<ID3D11InputLayout> restored;context->IAGetInputLayout(&restored);
+            check(restored.Get()==beam_layout.Get(),"beam identity layout remains private to velocity replay");
+        }
+        pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
+        check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit subdivided/reordered beam motion");
+        context->OMSetRenderTargets(0,nullptr,nullptr);engine_motion->GetDesc(&engine_desc);
+        engine_desc.BindFlags=0;engine_desc.Usage=D3D11_USAGE_STAGING;engine_desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> readable;check(SUCCEEDED(device->CreateTexture2D(&engine_desc,nullptr,&readable)),"create beam motion readback");
+        context->CopyResource(readable.Get(),engine_motion.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+        check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read subdivided beam motion");
+        if (mapped.pData) {
+            uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
+            const float expected=32767.f/65535.f+(frame==1 ? .2f*.2495f : 0);
+            check(std::fabs(float(values[0])/65535.f-expected)<5e-5f && std::fabs(float(values[2])/65535.f-.7f)<3e-5f,
+                "beam/ribbon/animated-trail motion survives subdivision, new heads, draw reorder, factory reuse and cuts");
         }
         rsf_ac7_velocity_frame_end();
     }

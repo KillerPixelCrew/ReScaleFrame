@@ -512,6 +512,7 @@ static void on_layout_created(void* user, void* layout, const rsf_observer_layou
                               uint32_t copied, uint32_t count)
 {
     rsf_ac7_motion_capture_layout(layout, elements, copied, count);
+    rsf_ac7_velocity_layout_seen(layout, elements, copied, count);
     rsf_ac7_layout_element facts[RSF_AC7_UI_MAX_LAYOUT_ELEMENTS];
     uint32_t index;
     (void)user;

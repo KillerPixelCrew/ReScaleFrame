@@ -1,5 +1,10 @@
 # UE4.18 source map for the AC7 plugin
 
+The 14 October beam/trail producer hooks are `0x190e740`, `0x1904d40`, `0x1907980`,
+`0x190d510` and `0x190ce60`. They tag native CPU fill output before asynchronous upload;
+complete expected bytes, matched layouts, lifetime and proof limits are in
+[the current velocity research](ac7-velocity-20261013.md#beam-ribbon-and-animated-trail-producers-14-october).
+
 Research history: findings, hook addresses and pending statuses below apply to their recorded
 experiments. Later increments can supersede earlier conclusions. See
 [current implementation and validation](../current-status.md) before using this as a feature list.

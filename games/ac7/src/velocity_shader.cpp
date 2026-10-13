@@ -351,7 +351,7 @@ bool rsf_ac7_velocity_signature(const void* bytes,size_t size,bool output,
     } catch (...) { semantics.clear(); return false; }
 }
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,size_t size,
-    std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info,bool tessellation) noexcept
+    std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info,bool tessellation,bool beam) noexcept
 {
     output.clear(); info={};
     try {
@@ -364,18 +364,22 @@ rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,
         if (!shader || !input || !out || !instructions(*shader,original,0x10050) ||
             !read_signature(*input,inputs) || !read_signature(*out,outputs)) return rsf_ac7_velocity_shader_result::refused;
         uint32_t next_input=0,next_output=0;
-        const Semantic *position=nullptr,*old=nullptr,*corner=nullptr;
+        const Semantic *position=nullptr,*old=nullptr,*corner=nullptr,*beam_old=nullptr,*beam_size=nullptr,*beam_uv=nullptr;
         bool mesh_rows[3]{};
         for (const auto& s:inputs) {
             next_input=std::max(next_input,s.reg+1);
             if (!_stricmp(s.name.c_str(),"ATTRIBUTE")) {
                 if (!s.index && s.mask==15) position=&s;
                 if (s.index==1 && s.mask==15) old=&s;
+                if (s.index==1 && s.mask==7) beam_old=&s;
+                if (s.index==2 && s.mask==15 && !(s.used&8)) beam_size=&s;
+                if (s.index==3 && s.mask==15) beam_uv=&s;
                 if (s.index==4 && s.mask==3) corner=&s;
                 if (s.index>=8 && s.index<=10 && s.mask==15) mesh_rows[s.index-8]=true;
             }
         }
-        info.particle=mesh_rows[0] && mesh_rows[1] && mesh_rows[2] ? 2u : position && old && corner ? 1u : 0u;
+        info.particle=mesh_rows[0] && mesh_rows[1] && mesh_rows[2] ? 2u : position && old && corner ? 1u :
+            beam && position && !(position->used&8) && beam_old && beam_size && beam_uv ? 3u : 0u;
         bool has_position=false;
         for (const auto& s:outputs) {
             next_output=std::max(next_output,s.reg+1);
@@ -420,10 +424,23 @@ O main(float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10,
     }
     return o;
 })";
+        static constexpr char beam_source[]=R"(
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+O main(float4 p:ATTRIBUTE0,float4 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float4 uv:ATTRIBUTE3) {
+ O o;o.p=float4(0,0,0,1);o.key=0;o.lookup=float4(0,0,0,3);o.centre=0;o.old=0;
+ uint3 bits=asuint(float3(p.w,old.w,size.w));
+ uint3 words=(bits&0x1fffffff)|((bits>>2)&0x20000000);uint sample=words.z&4095,intervals=(words.z>>12)&4095;
+ if(all((bits&0x60000000)==0x20000000) && words.x>>28<=2 && words.z>>24==0 && intervals!=0 && sample<=intervals && (uv.y==0 || uv.y==1)) {
+  float u=float(sample)/float(intervals);o.key=float4(p.w,old.w,floor(u*128),uv.y+4);
+  o.lookup=o.key;o.centre=float4(u,0,0,1);o.old=o.centre;
+ }
+ return o;
+})";
         static const auto generic=[] {std::vector<uint8_t> code;rsf::compile_shader(generic_source,"ac7-geometry-key","main","vs_5_0",code);return code;}();
         static const auto particle=[] {std::vector<uint8_t> code;rsf::compile_shader(particle_source,"ac7-particle-key","main","vs_5_0",code);return code;}();
         static const auto mesh=[] {std::vector<uint8_t> code;rsf::compile_shader(mesh_source,"ac7-mesh-particle-pose-key","main","vs_5_0",code);return code;}();
-        const auto& helper_bytes=info.particle==2 ? mesh : info.particle ? particle : generic;
+        static const auto beam_code=[] {std::vector<uint8_t> code;rsf::compile_shader(beam_source,"ac7-beam-sample-key","main","vs_5_0",code);return code;}();
+        const auto& helper_bytes=info.particle==3 ? beam_code : info.particle==2 ? mesh : info.particle ? particle : generic;
         Container extra; if (!extra.read(helper_bytes.data(),helper_bytes.size())) return rsf_ac7_velocity_shader_result::refused;
         auto* helper_shader=extra.find("SHEX"); if (!helper_shader) helper_shader=extra.find("SHDR");
         auto* helper_input=extra.find("ISGN"); auto* helper_output=extra.find("OSGN");
@@ -437,7 +454,7 @@ O main(float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10,
             auto found=std::find_if(inputs.begin(),inputs.end(),[&](const auto& native_input) {
                 return !_stricmp(native_input.name.c_str(),s.name.c_str()) && native_input.index==s.index;
             });
-            if (found!=inputs.end()) { input_map[s.reg]=found->reg; found->used|=s.used; }
+            if (found!=inputs.end()) { input_map[s.reg]=found->reg; found->used|=s.used;found->mask|=s.mask; }
             else {
                 if (!s.system || next_input>=32) return rsf_ac7_velocity_shader_result::refused;
                 auto appended=s; appended.reg=next_input++; input_map[s.reg]=appended.reg; inputs.push_back(std::move(appended));
@@ -540,10 +557,58 @@ uint key_hash(uint4 key) {
     [unroll]for(uint i=0;i<4;i++) {value=(value^key[i])*16777619;}
     value^=value>>16;return max(1,value&0x7fffffff);
 }
+uint decode_tag(float value) {uint bits=asuint(value);return (bits&0x1fffffff)|((bits>>2)&0x20000000);}
+float encode_tag(uint value) {return asfloat(0x20000000|(value&0x1fffffff)|((value&0x20000000)<<2));}
+bool endpoint(float4 key,out float4 position,out bool ambiguous) {
+    uint4 bits=asuint(key);uint hash=key_hash(bits);bool found=false;position=0;ambiguous=false;
+    [loop]for(uint probe=0;probe<32;probe++) {
+        uint address=((hash+probe)&HistoryMask)*64;uint marker=History.Load(address);
+        if(marker==0)break;if(marker!=hash || any(History.Load4(address+4)!=bits))continue;
+        float4 candidate=asfloat(History.Load4(address+20));if(!all(isfinite(candidate)) || candidate.w<=0)continue;
+        if(!found) {position=candidate;found=true;}
+        else if(any(asuint(position)!=asuint(candidate)))ambiguous=true;
+    }
+    return found;
+}
 float4 previous_position(float4 current,float4 key,float3 old) {
     float4 unjittered=current;unjittered.xy-=Jitter.xy*current.w;
     float4 fallback=mul(unjittered,ClipToPrevious);fallback.xy+=Jitter.zw*fallback.w;
     if(HasHistory==0 || key.w==3)return fallback;
+    if(key.w==4 || key.w==5) {
+        bool left=false,right=false,bad_left=false,bad_right=false;float low=-1,high=2;float4 a=fallback,b=fallback;
+        uint first=decode_tag(key.x),second=decode_tag(key.y);
+        if(first>>28!=0) {
+            float4 start=key;start.y=encode_tag((second&~0x3ffffff)|(first&0x3ffffff));start.z=0;
+            left=endpoint(start,a,bad_left);if(left)low=0;
+            float4 end=key;end.x=encode_tag((first&~0x3ffffff)|(second&0x3ffffff));end.z=0;
+            right=endpoint(end,b,bad_right);if(right)high=1;
+            if(old.x==0)return left && !bad_left ? a : fallback;
+            if(old.x==1)return right && !bad_right ? b : fallback;
+            // A head point has no prior segment. Its own rendered endpoint still has history.
+            if((first&0x3ffffff)==(second&0x3ffffff))return left && !bad_left ? a : fallback;
+        }
+        uint bin=uint(key.z);
+        [loop]for(uint distance=0;distance<=128;distance++) {
+            if(left && right && (first>>28==0 || (low>=float(int(bin)-int(distance))/128 && high<=float(bin+distance)/128)))break;
+            [unroll]for(uint side=0;side<2;side++) {
+                int target=int(bin)+(side==0 ? -int(distance) : int(distance));
+                if(target<0 || target>128 || (side==0 && left && low>=float(target+1)/128) || (side==1 && right && high<float(target)/128))continue;
+                float4 query=key;query.z=float(target);uint4 bits=asuint(query);uint hash=key_hash(bits);
+                [loop]for(uint probe=0;probe<32;probe++) {
+                    uint address=((hash+probe)&HistoryMask)*64;uint marker=History.Load(address);
+                    if(marker==0)break;if(marker!=hash || any(History.Load4(address+4)!=bits))continue;
+                    float4 clip=asfloat(History.Load4(address+20));float u=asfloat(History.Load(address+36));
+                    if(!all(isfinite(clip)) || clip.w<=0 || !isfinite(u))continue;
+                    if(u<=old.x && (!left || u>low)) {left=true;low=u;a=clip;bad_left=false;}
+                    else if(left && u==low && any(asuint(a)!=asuint(clip)))bad_left=true;
+                    if(u>=old.x && (!right || u<high)) {right=true;high=u;b=clip;bad_right=false;}
+                    else if(right && u==high && any(asuint(b)!=asuint(clip)))bad_right=true;
+                }
+            }
+        }
+        if(!left || !right || bad_left || bad_right)return fallback;
+        return high==low ? a : lerp(a,b,(old.x-low)/(high-low));
+    }
     uint4 bits=asuint(key);uint hash=key_hash(bits);
     bool found=false,ambiguous=false;float distance=3.402823e38;float4 selected=fallback;
     [loop]for(uint probe=0;probe<32;probe++) {

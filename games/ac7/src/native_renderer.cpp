@@ -52,6 +52,7 @@ enum Hook : uint32_t {
     hook_render_family, hook_frame_task_construct, hook_frame_task_execute,
     hook_rhi_frame_begin, hook_rhi_frame_end, hook_frame_sync, hook_pump_messages, hook_engine_pacing,
     hook_create_pixel_shader, hook_base_pass, hook_translucency_mesh, hook_mesh_particle_parameters,
+    hook_beam_no_noise, hook_beam_noise, hook_beam_interpolated_noise, hook_ribbon_fill, hook_anim_trail_fill,
     hook_count
 };
 static_assert(hook_process_tonemap == 0 && hook_process_output == 5);
@@ -122,6 +123,11 @@ Site sites[] = {
     {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
     {0x1158250, 0, "\x4c\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x48"},
     {0x188cfa0, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x20\x57"},
+    {0x190e740, 0, "\x4c\x8b\xdc\x55\x53\x56\x57\x41\x56\x41\x57\x49\x8d\xab\xd8\xfe"},
+    {0x1904d40, 0, "\x4c\x8b\xdc\x55\x49\x8d\xab\xd8\xfc\xff\xff\x48\x81\xec\x20\x04"},
+    {0x1907980, 0, "\x40\x55\x48\x8d\xac\x24\xc0\xfb\xff\xff\x48\x81\xec\x40\x05\x00"},
+    {0x190d510, 0, "\x40\x55\x53\x57\x41\x54\x41\x57\x48\x8d\xac\x24\x50\xfe\xff\xff"},
+    {0x190ce60, 0, "\x48\x89\x4c\x24\x08\x55\x53\x57\x41\x57\x48\x8d\xac\x24\x38\xff"},
 };
 static_assert(sizeof(sites) / sizeof(sites[0]) == hook_count);
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
@@ -1469,6 +1475,106 @@ void hooked_mesh_particle_parameters(void* parameters, void* list, void* shader,
         *reinterpret_cast<uint32_t*>(uintptr_t(address+0x14)) = count+1;
     } else {release_pass(references);delete command;}
 }
+
+// The matched beam fillers own these CPU vertices until their asynchronous upload completes.
+// Only unused factory fields are tagged; position, old position, width, rotation, colour and UV
+// stay native. The tag is self-describing and normal float values avoid denormal transport loss.
+uint32_t normal_tag(uint32_t word)
+{return 0x20000000u|(word&0x1fffffffu)|((word&0x20000000u)<<2);}
+void write_curve_tag(unsigned char* vertex,uint32_t first,uint32_t second,uint32_t kind,uint32_t sheet,uint32_t sample,uint32_t intervals)
+{
+    const uint32_t a=normal_tag(first|((sheet&3u)<<26)|(kind<<28));
+    const uint32_t b=normal_tag(second|((sheet>>2)<<26));
+    const uint32_t c=normal_tag(sample|(intervals<<12));
+    std::memcpy(vertex+12,&a,4);std::memcpy(vertex+28,&b,4);std::memcpy(vertex+44,&c,4);
+}
+bool tag_beam_vertices(const void* source,const void* fill) try
+{
+    uint64_t vertices=0,particles=0;int32_t count=0,stride=0,active=0,particle_stride=0,payload_offset=0,sheets=0;
+    if (!read(fill,0x88,count) || !read(fill,0x8c,stride) || !read(fill,0x90,vertices) ||
+        stride!=80 || count<=0 || count>1024*1024 || !vertices) return false;
+    MEMORY_BASIC_INFORMATION region{};
+    const uint64_t bytes=uint64_t(uint32_t(count))*80;
+    if (!VirtualQuery(reinterpret_cast<void*>(uintptr_t(vertices)),&region,sizeof(region)) || region.State!=MEM_COMMIT ||
+        (region.Protect&(PAGE_NOACCESS|PAGE_GUARD)) || !(region.Protect&(PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY)) ||
+        vertices<uint64_t(uintptr_t(region.BaseAddress)) || bytes>uint64_t(uintptr_t(region.BaseAddress))+region.RegionSize-vertices) return false;
+    auto* data=reinterpret_cast<unsigned char*>(uintptr_t(vertices));
+    // A rejected producer must not leave a tag from an earlier pooled buffer allocation.
+    for (int32_t i=0;i<count;++i) {const float invalid=0;std::memcpy(data+size_t(i)*80+44,&invalid,4);}
+    if (!read(source,0x44,active) || !read(source,0x48,particle_stride) || !read(source,0x60,particles) ||
+        !read(source,0x12c,payload_offset) || !read(source,0x154,sheets) || active<0 || active>65536 ||
+        particle_stride<96 || particle_stride>1024*1024 || !particles || payload_offset<96 ||
+        payload_offset>particle_stride-92 || sheets<1 || sheets>32) return false;
+    struct Beam {uint32_t counter,pairs,offset;};std::vector<Beam> beams;uint64_t total=0;
+    for (int32_t i=0;i<active;++i) {
+        const uint64_t particle=particles+uint64_t(uint32_t(i))*uint32_t(particle_stride);
+        int32_t triangles=0;uint32_t flags=0;
+        if (!read(particle,size_t(payload_offset)+0x58,triangles) || !read(particle,0x5c,flags) || triangles<0) return false;
+        if (!triangles) continue;
+        if (triangles%2 || triangles>8190) return false;
+        const uint32_t pairs=uint32_t(triangles/2)+1;
+        beams.push_back({flags&0x03ffffffu,pairs,uint32_t(total)});
+        total+=uint64_t(pairs)*2*uint32_t(sheets);if (total>uint32_t(count)) return false;
+    }
+    if (total!=uint32_t(count)) return false;
+    for (const auto& beam:beams) for (uint32_t sheet=0;sheet<uint32_t(sheets);++sheet) {
+        for (uint32_t sample=0;sample<beam.pairs;++sample) for (uint32_t side=0;side<2;++side) {
+            auto* vertex=data+size_t(beam.offset+(sheet*beam.pairs+sample)*2+side)*80;
+            write_curve_tag(vertex,beam.counter,beam.counter,0,sheet,sample,beam.pairs-1);
+        }
+    }
+    return true;
+} catch (...) {return false;}
+bool tag_trail_vertices(const void* source,const void* fill,uint32_t kind) try
+{
+    uint64_t vertices=0,particles=0,indices=0;int32_t count=0,stride=0,active=0,particle_stride=0,payload_offset=0;
+    if (!read(fill,0x88,count) || !read(fill,0x8c,stride) || !read(fill,0x90,vertices) || stride!=80 || count<=0 || count>1024*1024 || !vertices) return false;
+    MEMORY_BASIC_INFORMATION region{};const uint64_t bytes=uint64_t(uint32_t(count))*80;
+    if (!VirtualQuery(reinterpret_cast<void*>(uintptr_t(vertices)),&region,sizeof(region)) || region.State!=MEM_COMMIT ||
+        (region.Protect&(PAGE_NOACCESS|PAGE_GUARD)) || !(region.Protect&(PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY)) ||
+        vertices<uint64_t(uintptr_t(region.BaseAddress)) || bytes>uint64_t(uintptr_t(region.BaseAddress))+region.RegionSize-vertices) return false;
+    auto* data=reinterpret_cast<unsigned char*>(uintptr_t(vertices));
+    for (int32_t i=0;i<count;++i) {const float invalid=0;std::memcpy(data+size_t(i)*80+44,&invalid,4);}
+    if (!read(source,0x64,active) || !read(source,0x68,particle_stride) || !read(source,0x80,particles) || !read(source,0x88,indices) ||
+        !read(source,0x138,payload_offset) || active<0 || active>16384 || particle_stride<96 || particle_stride>1024*1024 ||
+        !particles || !indices || payload_offset<96 || payload_offset>particle_stride-32) return false;
+    struct Point {uint32_t first,second,sample,intervals;};std::vector<Point> points;
+    std::vector<uint16_t> visited;
+    for (int32_t i=0;i<active;++i) {
+        uint16_t index=0;uint32_t flags=0;
+        if (!read(indices,size_t(i)*2,index) || index>=16384 || !read(particles+uint64_t(index)*uint32_t(particle_stride),size_t(payload_offset),flags)) return false;
+        const uint32_t type=flags&0xf0000000u;
+        if ((type!=0x40000000u && type!=0x10000000u) || (flags&0x3fffu)==0x3fffu) continue;
+        visited.clear();uint32_t previous=0;bool first=true;
+        while (index!=0x3fff) {
+            if (visited.size()>=uint32_t(active) || std::find(visited.begin(),visited.end(),index)!=visited.end()) return false;
+            visited.push_back(index);const uint64_t particle=particles+uint64_t(index)*uint32_t(particle_stride);
+            uint32_t counter=0;int32_t subdivisions=0;
+            if (!read(particle,0x5c,counter) || !read(particle,size_t(payload_offset),flags) || !read(particle,size_t(payload_offset)+0x1c,subdivisions)) return false;
+            counter&=0x03ffffffu;
+            const uint32_t steps=first ? 1u : uint32_t(std::max(1,subdivisions));
+            if (steps>4095 || points.size()+steps>uint32_t(count)/2) return false;
+            for (uint32_t sample=steps;sample>0;--sample) points.push_back({counter,first ? counter : previous,sample-1,steps});
+            first=false;previous=counter;index=uint16_t(flags&0x3fffu);
+        }
+    }
+    if (points.size()*2!=uint32_t(count)) return false;
+    for (size_t i=0;i<points.size();++i) for (uint32_t side=0;side<2;++side) {
+        const auto& point=points[i];write_curve_tag(data+(i*2+side)*80,point.first,point.second,kind,0,point.sample,point.intervals);
+    }
+    return true;
+} catch (...) {return false;}
+template<Hook hook> uint64_t hooked_beam_fill(void* source,void* fill)
+{
+    OuterGuard lifetime;
+    const auto result=reinterpret_cast<uint64_t(*)(void*,void*)>(sites[hook].original)(source,fill);
+    auto* self=installed.load();
+    if (self && self->active.load() && !self->quiescing.load()) {
+        if constexpr (hook==hook_ribbon_fill || hook==hook_anim_trail_fill) (void)tag_trail_vertices(source,fill,hook==hook_ribbon_fill ? 1u : 2u);
+        else (void)tag_beam_vertices(source,fill);
+    }
+    return result;
+}
 uint8_t hooked_translucency_mesh(void* list, void* view_object, void* context, void* mesh,
     const uint64_t* elements, void* state, uint8_t pre_fog, void* proxy, uint32_t hit)
 {
@@ -2734,6 +2840,11 @@ void bind_detours()
         {hook_base_pass, reinterpret_cast<void*>(&hooked_base_pass)},
         {hook_translucency_mesh, reinterpret_cast<void*>(&hooked_translucency_mesh)},
         {hook_mesh_particle_parameters, reinterpret_cast<void*>(&hooked_mesh_particle_parameters)},
+        {hook_beam_no_noise,reinterpret_cast<void*>(&hooked_beam_fill<hook_beam_no_noise>)},
+        {hook_beam_noise,reinterpret_cast<void*>(&hooked_beam_fill<hook_beam_noise>)},
+        {hook_beam_interpolated_noise,reinterpret_cast<void*>(&hooked_beam_fill<hook_beam_interpolated_noise>)},
+        {hook_ribbon_fill,reinterpret_cast<void*>(&hooked_beam_fill<hook_ribbon_fill>)},
+        {hook_anim_trail_fill,reinterpret_cast<void*>(&hooked_beam_fill<hook_anim_trail_fill>)},
     };
     for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
 }

@@ -3,6 +3,7 @@
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>
+#include <rescaleframe/d3d11_observer.h>
 #include "velocity_shader.h"
 #include "contact_shadow.h"
 #include <d3d11.h>
@@ -20,6 +21,8 @@ namespace {
 struct Code {uint32_t stage=0,hash=0;std::vector<uint8_t> bytes;};
 std::mutex code_guard;
 std::map<void*,Code> sources;
+struct Layout {std::vector<rsf_observer_layout_element> elements;uint64_t serial=0;};
+std::map<void*,Layout> layouts;uint64_t layout_serial=0;
 size_t source_bytes=0;
 thread_local rsf_game_render_pass current{};
 void (*log_line)(void*,const char*)=nullptr;void* log_user=nullptr;
@@ -68,12 +71,7 @@ uint key_hash(uint4 key) {
     [unroll]for(uint i=0;i<4;i++)value=(value^key[i])*16777619;
     value^=value>>16;return max(1,value&0x7fffffff);
 }
-[numthreads(64,1,1)]void main(uint3 thread:SV_DispatchThreadID) {
-    if(thread.x>=Count)return;uint offset=thread.x*64;
-    if(Mode!=0 && Source.Load(offset)==0)return;
-    uint4 clip=Source.Load4(offset+(Mode==0 ? 0 : 20));
-    uint4 key=Source.Load4(offset+(Mode==0 ? 16 : 4));
-    uint3 centre=Source.Load3(offset+(Mode==0 ? 32 : 36));
+void insert(uint4 clip,uint4 key,uint3 centre) {
     float4 position=asfloat(clip);if(!all(isfinite(position)) || position.w<=0)return;
     uint hash=key_hash(key);
     [loop]for(uint probe=0;probe<32;probe++) {
@@ -86,6 +84,19 @@ uint key_hash(uint4 key) {
         }
         if(old==hash && all(Destination.Load4(address+4)==key) &&
            all(Destination.Load4(address+20)==clip) && all(Destination.Load3(address+36)==centre))return;
+    }
+}
+[numthreads(64,1,1)]void main(uint3 thread:SV_DispatchThreadID) {
+    if(thread.x>=Count)return;uint offset=thread.x*64;
+    if(Mode!=0 && Source.Load(offset)==0)return;
+    uint4 clip=Source.Load4(offset+(Mode==0 ? 0 : 20));
+    uint4 key=Source.Load4(offset+(Mode==0 ? 16 : 4));
+    uint3 centre=Source.Load3(offset+(Mode==0 ? 32 : 36));insert(clip,key,centre);
+    uint a=(key.x&0x1fffffff)|((key.x>>2)&0x20000000);
+    uint b=(key.y&0x1fffffff)|((key.y>>2)&0x20000000);
+    if((key.w==asuint(4.f) || key.w==asuint(5.f)) && key.z==0 && centre.x==0 && a>>28!=0) {
+        b=(b&~0x3ffffff)|(a&0x3ffffff);
+        key.y=0x20000000|(b&0x1fffffff)|((b&0x20000000)<<2);insert(clip,key,centre);
     }
 })";
 constexpr char merge_source[]=R"(
@@ -108,10 +119,11 @@ struct Variant {
     ComPtr<ID3D11VertexShader> vertex;ComPtr<ID3D11PixelShader> pixel;
     ComPtr<ID3D11GeometryShader> capture,geometry;
     ComPtr<ID3D11HullShader> hull,corners;ComPtr<ID3D11DomainShader> domain;
+    ComPtr<ID3D11InputLayout> layout;
     bool particle=false;
     uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0,input_points=0;
 };
-using VariantKey=std::tuple<void*,void*,void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
+using VariantKey=std::tuple<void*,void*,void*,void*,void*,void*,uint64_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
 using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t,uint32_t>;
 using ViewKey=std::tuple<uint64_t,uint64_t>;
 struct Model {
@@ -189,12 +201,13 @@ struct Renderer {
     }
     Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,void* native_geometry,void* native_hull,void* native_domain,
         Code& vertex_source,Code& pixel_source) {
-        Code geometry_source,hull_source,domain_source;
+        Code geometry_source,hull_source,domain_source;Layout declaration;
         {
             std::lock_guard<std::mutex> guard(code_guard);
             auto v=sources.find(g.vertex_shader),p=sources.find(pixel);
             if (v==sources.end() || p==sources.end() || v->second.stage!=0 || p->second.stage!=1) return nullptr;
             vertex_source=v->second;pixel_source=p->second;
+            if (const auto layout=layouts.find(g.input_layout);layout!=layouts.end()) declaration=layout->second;
             if (native_geometry) {
                 const auto gs=sources.find(native_geometry);
                 if (gs==sources.end() || gs->second.stage!=2) return nullptr;
@@ -206,11 +219,29 @@ struct Renderer {
                 hull_source=h->second;domain_source=d->second;
             }
         }
-        const VariantKey key{g.vertex_shader,pixel,native_geometry,native_hull,native_domain,
+        const VariantKey key{g.vertex_shader,pixel,native_geometry,native_hull,native_domain,g.input_layout,declaration.serial,
             vertex_source.hash,pixel_source.hash,geometry_source.hash,hull_source.hash,domain_source.hash,current.material_blend};
         if (auto found=variants.find(key);found!=variants.end()) return found->second.vertex ? &found->second : nullptr;
         Variant made;rsf_ac7_velocity_vertex_info info;std::vector<uint8_t> vertex,geometry,pixel_code;uint32_t previous=0,current_clip=0;
-        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info,native_hull!=nullptr)==rsf_ac7_velocity_shader_result::patched;
+        bool beam_layout=g.strides[0]==80 && declaration.elements.size()>=5 && declaration.elements.size()<=6;
+        bool seen_fields[5]{};const uint32_t beam_offsets[]{0,16,32,64,48,0};
+        for (const auto& e:declaration.elements) {
+            if (e.semantic_index>5 || e.per_instance || e.input_slot!=(e.semantic_index==5 ? 1u : 0u) ||
+                e.byte_offset!=beam_offsets[e.semantic_index] || e.format!=uint32_t(e.semantic_index==1 ? DXGI_FORMAT_R32G32B32_FLOAT : DXGI_FORMAT_R32G32B32A32_FLOAT)) {beam_layout=false;break;}
+            if (e.semantic_index<5) {if (seen_fields[e.semantic_index]) {beam_layout=false;break;}seen_fields[e.semantic_index]=true;}
+        }
+        for (bool field:seen_fields) beam_layout=beam_layout && field;
+        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info,native_hull!=nullptr,beam_layout)==rsf_ac7_velocity_shader_result::patched;
+        if (transformed && info.particle==3) {
+            // Beam/trail factories declare old position as float3. Only this independent layout
+            // widens it to read the producer's fourth-word identity; native colour uses its layout.
+            std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
+            transformed=!native_geometry && !native_hull;
+            for (const auto& e:declaration.elements) {
+                elements.push_back({"ATTRIBUTE",e.semantic_index,DXGI_FORMAT_R32G32B32A32_FLOAT,e.input_slot,e.byte_offset,D3D11_INPUT_PER_VERTEX_DATA,0});
+            }
+            if (transformed) transformed=SUCCEEDED(device->CreateInputLayout(elements.data(),UINT(elements.size()),vertex.data(),vertex.size(),&made.layout));
+        }
         if (transformed && native_hull) {
             rsf_ac7_velocity_vertex_info h,d;std::vector<uint8_t> normal,corners;
             transformed=rsf_ac7_velocity_hull_shader(hull_source.bytes.data(),hull_source.bytes.size(),info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
@@ -330,6 +361,12 @@ extern "C" void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const v
 } catch (...) {}
 extern "C" void rsf_ac7_velocity_set_log(void (*log)(void*,const char*),void* user)
 {log_line=log;log_user=user;refusal_reports=commit_reports=0;}
+extern "C" void rsf_ac7_velocity_layout_seen(void* layout,const rsf_observer_layout_element* elements,uint32_t copied,uint32_t count) try
+{
+    if (!layout) return;std::lock_guard<std::mutex> guard(code_guard);layouts.erase(layout);
+    if (!elements || copied!=count || count>16 || layouts.size()>=4096) return;
+    Layout record;record.elements.assign(elements,elements+count);record.serial=++layout_serial;layouts.emplace(layout,std::move(record));
+} catch (...) {}
 extern "C" void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope)
 {current=scope && scope->struct_size>=sizeof(current) ? *scope : rsf_game_render_pass{};}
 extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer) try
@@ -342,7 +379,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     ComPtr<ID3D11GeometryShader> existing;ComPtr<ID3D11HullShader> hull;ComPtr<ID3D11DomainShader> domain;
     c->GSGetShader(&existing,nullptr,nullptr);c->HSGetShader(&hull,nullptr,nullptr);c->DSGetShader(&domain,nullptr,nullptr);
     if ((hull && !domain) || (domain && !hull) || (hull && existing)) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
-    if (!hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) return;
+    if (!hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) return;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}renderer=std::move(made);
@@ -355,8 +392,9 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         uint64_t(g.count)*(g.kind>=2 ? g.instances : 1u);
     // A triangle strip can expand to three SO records per emitted vertex. Input vertex
     // capacity already includes three vertices per primitive, so this bound covers it.
-    if (!count64 || count64>uint64_t(UINT32_MAX/128)/variant->maximum_vertices) return;
-    const uint32_t count=uint32_t(count64*variant->maximum_vertices);
+    const uint32_t expansion=variant->maximum_vertices*(g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? 3u : 1u);
+    if (!count64 || count64>uint64_t(UINT32_MAX/128)/expansion) return;
+    const uint32_t count=uint32_t(count64*expansion);
     State saved(c);if (!saved.context) return;
     ComPtr<ID3D11Predicate> predicate;BOOL predicate_value=FALSE;c->GetPredication(&predicate,&predicate_value);
     c->SetPredication(nullptr,FALSE);
@@ -384,6 +422,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         c->DSSetConstantBuffers(13,1,&cb);c->DSSetShaderResources(127,1,&unavailable);
     }
     c->OMSetRenderTargets(0,nullptr,nullptr);c->VSSetShader(variant->vertex.Get(),nullptr,0);
+    if (variant->layout) c->IASetInputLayout(variant->layout.Get());
     if (hull) {c->HSSetShader(variant->corners.Get(),nullptr,0);c->DSSetShader(variant->domain.Get(),nullptr,0);}
     c->GSSetShader(variant->capture.Get(),nullptr,0);c->PSSetShader(nullptr,nullptr,0);
     ID3D11Buffer* stream=renderer->capture_buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
@@ -456,4 +495,4 @@ extern "C" void rsf_ac7_velocity_frame_end(void)
     std::erase_if(renderer->views,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
 }
 extern "C" void rsf_ac7_velocity_release(void)
-{renderer.reset();current={};std::lock_guard<std::mutex> guard(code_guard);sources.clear();source_bytes=0;}
+{renderer.reset();current={};std::lock_guard<std::mutex> guard(code_guard);sources.clear();layouts.clear();source_bytes=0;}
