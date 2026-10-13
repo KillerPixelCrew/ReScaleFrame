@@ -58,6 +58,48 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         "Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0"
         "{float4 c=data.Load(int3(int2(p.xy),0));float a=saturate(c.w);return float4(max(c.xyz,0)*a,0);}",
     };
+    {
+        auto tess_vertex=compile("struct V{float4 p:VS_To_DS_Position;};V main(uint i:SV_VertexID)"
+            "{V o;o.p=float4(i==2?3:-1,i==1?3:-1,.75,1);return o;}","vs_5_0");
+        auto tess_hull=compile("struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
+            "C constants(InputPatch<V,3> p){C o;o.e[0]=o.e[1]=o.e[2]=4;o.i=4;return o;}"
+            "[domain(\"tri\")][partitioning(\"integer\")][outputtopology(\"triangle_cw\")]"
+            "[outputcontrolpoints(3)][patchconstantfunc(\"constants\")]"
+            "V main(InputPatch<V,3> p,uint i:SV_OutputControlPointID){return p[i];}","hs_5_0");
+        auto tess_domain=compile("struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
+            "[domain(\"tri\")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position"
+            "{return p[0].p*d.x+p[1].p*d.y+p[2].p*d.z;}","ds_5_0");
+        std::vector<uint8_t> v,h,d,corners;rsf_ac7_velocity_vertex_info vi,hi,di;uint32_t points=0,previous=0,current_clip=0;
+        check(rsf_ac7_velocity_vertex_shader(tess_vertex.data(),tess_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched,"key tessellation VS world-position outputs");
+        check(rsf_ac7_velocity_hull_shader(tess_hull.data(),tess_hull.size(),vi,h,corners,hi,points)==rsf_ac7_velocity_shader_result::patched && points==3,"relay patch keys through native hull control phase");
+        check(rsf_ac7_velocity_domain_shader(tess_domain.data(),tess_domain.size(),hi,d,di,previous,current_clip)==rsf_ac7_velocity_shader_result::patched,"augment native domain evaluation with prior control motion");
+        ComPtr<ID3D11VertexShader> tv;ComPtr<ID3D11HullShader> th,tc;ComPtr<ID3D11DomainShader> td;
+        check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)),"create tessellation keyed VS");
+        check(SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)),"create normal/corner native HS variants");
+        check(SUCCEEDED(device->CreateDomainShader(d.data(),d.size(),nullptr,&td)),"create native domain motion shader");
+        if (argc==2) {
+            for (const auto& item:{std::pair{"tess-v",&v},std::pair{"tess-h",&h},std::pair{"tess-d",&d}}) {
+                std::ofstream file(std::filesystem::path(argv[1])/(std::string(item.first)+".dxbc"),std::ios::binary);
+                file.write(reinterpret_cast<const char*>(item.second->data()),std::streamsize(item.second->size()));
+            }
+            const auto native_h=std::filesystem::path(argv[1])/"native-tess-h.dxbc";
+            const auto native_d=std::filesystem::path(argv[1])/"native-tess-d.dxbc";
+            if (std::filesystem::exists(native_h) && std::filesystem::exists(native_d)) {
+                auto matched_vertex=compile("struct V{float4 a:TEXCOORD10;float4 b:TEXCOORD11;float4 c:TEXCOORD7;float3 n:TEXCOORD9;"
+                    "float4 p:VS_To_DS_Position;uint id:VS_To_DS_VertexID;};V main(uint i:SV_VertexID){V o;"
+                    "o.a=o.b=o.c=0;o.n=float3(0,0,1);o.p=float4(i,0,0,1);o.id=i;return o;}","vs_5_0");
+                std::ifstream hf(native_h,std::ios::binary),df(native_d,std::ios::binary);
+                std::vector<uint8_t> hb{std::istreambuf_iterator<char>(hf),std::istreambuf_iterator<char>()},db{std::istreambuf_iterator<char>(df),std::istreambuf_iterator<char>()};
+                check(rsf_ac7_velocity_vertex_shader(matched_vertex.data(),matched_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched &&
+                    rsf_ac7_velocity_hull_shader(hb.data(),hb.size(),vi,h,corners,hi,points)==rsf_ac7_velocity_shader_result::patched && points==12 &&
+                    rsf_ac7_velocity_domain_shader(db.data(),db.size(),hi,d,di,previous,current_clip)==rsf_ac7_velocity_shader_result::patched,
+                    "transform retained native 12-control-point PN hull/domain shaders with matching synthetic VS inputs");
+                th.Reset();tc.Reset();td.Reset();
+                check(SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)) &&
+                    SUCCEEDED(device->CreateDomainShader(d.data(),d.size(),nullptr,&td)),"create retained native PN tessellation variants");
+            }
+        }
+    }
     D3D11_TEXTURE2D_DESC desc{}; desc.Width=2; desc.Height=1; desc.MipLevels=desc.ArraySize=1;
     desc.SampleDesc.Count=1; desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
     desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
@@ -166,38 +208,80 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
     rsf_ac7_velocity_shader_seen(native_gs.Get(),2,generated_code.data(),uint32_t(generated_code.size()));
     ComPtr<ID3D11Buffer> generated_cb;
     check(SUCCEEDED(device->CreateBuffer(&object_desc,nullptr,&generated_cb)),"create native GS deformation constants");
-    for (uint32_t frame=1;frame<=7;++frame) {
+    auto patch_vertex=compile("cbuffer Object:register(b0){float4 offset;}struct V{float4 p:VS_To_DS_Position;};"
+        "V main(uint i:SV_VertexID){V o;o.p=float4(i==2?3:-1,i==1?3:-1,.75,1)+offset;return o;}","vs_5_0");
+    auto patch_hull=compile("cbuffer Tess:register(b1){float4 factor;}struct V{float4 p:VS_To_DS_Position;};"
+        "struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
+        "C constants(InputPatch<V,3> p){C o;o.e[0]=o.e[1]=o.e[2]=factor.x;o.i=factor.x;return o;}"
+        "[domain(\"tri\")][partitioning(\"fractional_even\")][outputtopology(\"triangle_cw\")]"
+        "[outputcontrolpoints(3)][patchconstantfunc(\"constants\")]V main(InputPatch<V,3> p,uint i:SV_OutputControlPointID){return p[i];}","hs_5_0");
+    auto patch_domain=compile("cbuffer Deform:register(b2){float4 shift;}struct V{float4 p:VS_To_DS_Position;};"
+        "struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
+        "[domain(\"tri\")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position"
+        "{float4 o=p[0].p*d.x+p[1].p*d.y+p[2].p*d.z+shift;o.z+=.1*d.x*d.y;return o;}","ds_5_0");
+    ComPtr<ID3D11VertexShader> patch_vs;ComPtr<ID3D11HullShader> patch_hs;ComPtr<ID3D11DomainShader> patch_ds;
+    check(SUCCEEDED(device->CreateVertexShader(patch_vertex.data(),patch_vertex.size(),nullptr,&patch_vs)) &&
+        SUCCEEDED(device->CreateHullShader(patch_hull.data(),patch_hull.size(),nullptr,&patch_hs)) &&
+        SUCCEEDED(device->CreateDomainShader(patch_domain.data(),patch_domain.size(),nullptr,&patch_ds)),"create native adaptive tessellation producer");
+    rsf_ac7_velocity_shader_seen(patch_vs.Get(),0,patch_vertex.data(),uint32_t(patch_vertex.size()));
+    rsf_ac7_velocity_shader_seen(patch_hs.Get(),3,patch_hull.data(),uint32_t(patch_hull.size()));
+    rsf_ac7_velocity_shader_seen(patch_ds.Get(),4,patch_domain.data(),uint32_t(patch_domain.size()));
+    auto patch_hull12=compile("cbuffer Tess:register(b1){float4 factor;}struct V{float4 p:VS_To_DS_Position;};"
+        "struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
+        "C constants(InputPatch<V,12> p){C o;o.e[0]=o.e[1]=o.e[2]=factor.x;o.i=factor.x;return o;}"
+        "[domain(\"tri\")][partitioning(\"fractional_even\")][outputtopology(\"triangle_cw\")]"
+        "[outputcontrolpoints(3)][patchconstantfunc(\"constants\")]V main(InputPatch<V,12> p,uint i:SV_OutputControlPointID)"
+        "{V o;o.p=p[i].p;o.p.z+=.001;return o;}","hs_5_0");
+    ComPtr<ID3D11HullShader> patch_hs12;
+    check(SUCCEEDED(device->CreateHullShader(patch_hull12.data(),patch_hull12.size(),nullptr,&patch_hs12)),"create 12-point native control phase");
+    rsf_ac7_velocity_shader_seen(patch_hs12.Get(),3,patch_hull12.data(),uint32_t(patch_hull12.size()));
+    ComPtr<ID3D11Buffer> tess_cb,deform_cb;
+    check(SUCCEEDED(device->CreateBuffer(&object_desc,nullptr,&tess_cb)) && SUCCEEDED(device->CreateBuffer(&object_desc,nullptr,&deform_cb)),"create native tessellation/domain constants");
+    for (uint32_t frame=1;frame<=13;++frame) {
         pass.native_frame=frame;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;
-        pass.flags=RSF_GAME_RENDER_PRIMARY|((frame==3 || frame==7) ? RSF_GAME_RENDER_RESET : 0u);
+        pass.flags=RSF_GAME_RENDER_PRIMARY|((frame==3 || frame==7 || frame==10 || frame==13) ? RSF_GAME_RENDER_RESET : 0u);
+        pass.material_blend=frame==13 ? 5u : 2u;
         pass.geometry_capacity=3;
         uint32_t arguments[12]{};arguments[4]=3;arguments[5]=frame==4 ? 2u : 1u;
+        if (frame==12) arguments[4]=12;
         context->UpdateSubresource(indirect_args.Get(),0,nullptr,arguments,0,0);
         native_geometry.kind=frame==2 ? 5u : frame==3 ? 0u : 6u;
         native_geometry.count=frame==3 ? 3u : 0u;native_geometry.indirect_buffer=indirect_args.Get();native_geometry.indirect_offset=16;
         if (frame>=5) {native_geometry.kind=0;native_geometry.count=3;}
+        if (frame>=11) native_geometry.count=12;
+        if (frame==12) {native_geometry.kind=6;native_geometry.count=0;}
         context->IASetIndexBuffer(index_buffer.Get(),DXGI_FORMAT_R16_UINT,0);
         rsf_ac7_velocity_scope(&pass);
-        const float offset[4]{frame>=5 ? float(frame-5)*.1f : float(frame-1)*.2f,0,0,0};context->UpdateSubresource(object_cb.Get(),0,nullptr,offset,0,0);
+        const float offset[4]{frame>=11 ? float(frame-11)*.1f : frame>=8 ? float(frame-8)*.1f : frame>=5 ? float(frame-5)*.1f : float(frame-1)*.2f,0,0,0};context->UpdateSubresource(object_cb.Get(),0,nullptr,offset,0,0);
         const float generated_offset[4]{frame>=5 ? float(frame-5)*.1f : 0,0,0,0};
         context->UpdateSubresource(generated_cb.Get(),0,nullptr,generated_offset,0,0);
         ID3D11Buffer* generated=generated_cb.Get();context->GSSetConstantBuffers(1,1,&generated);
-        context->GSSetShader(frame>=5 ? native_gs.Get() : nullptr,nullptr,0);
+        context->GSSetShader(frame>=5 && frame<8 ? native_gs.Get() : nullptr,nullptr,0);
+        context->HSSetShader(frame>=11 ? patch_hs12.Get() : frame>=8 ? patch_hs.Get() : nullptr,nullptr,0);context->DSSetShader(frame>=8 ? patch_ds.Get() : nullptr,nullptr,0);
+        const float tess_factor[4]{frame==8 ? 2.f : 6.f,0,0,0};context->UpdateSubresource(tess_cb.Get(),0,nullptr,tess_factor,0,0);
+        const float domain_shift[4]{frame>=11 ? float(frame-11)*.1f : frame>=8 ? float(frame-8)*.1f : 0,0,0,0};context->UpdateSubresource(deform_cb.Get(),0,nullptr,domain_shift,0,0);
+        ID3D11Buffer* tess=tess_cb.Get();ID3D11Buffer* deform=deform_cb.Get();context->HSSetConstantBuffers(1,1,&tess);context->DSSetConstantBuffers(2,1,&deform);
         context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
         const float opaque_motion[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),opaque_motion);
         ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
         context->OMSetDepthStencilState(depth_state.Get(),0);context->OMSetBlendState(nullptr,nullptr,UINT32_MAX);
-        context->VSSetShader(moving_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+        context->VSSetShader(frame>=8 ? patch_vs.Get() : moving_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+        native_geometry.vertex_shader=frame>=8 ? patch_vs.Get() : moving_vs.Get();
         ID3D11Buffer* object=object_cb.Get();context->VSSetConstantBuffers(0,1,&object);
         ID3D11ShaderResourceView* srv=input_view.Get();context->PSSetShaderResources(0,1,&srv);
         context->RSSetState(raster_state.Get());D3D11_VIEWPORT viewport{0,0,2,1,0,1};context->RSSetViewports(1,&viewport);
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        native_geometry.topology=frame>=11 ? D3D11_PRIMITIVE_TOPOLOGY_12_CONTROL_POINT_PATCHLIST : frame>=8 ? D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(native_geometry.topology));
         // The normal colour draw has a read-only depth contract; only the new pass writes depth.
         rsf_ac7_velocity_geometry(&native_geometry);
         ComPtr<ID3D11VertexShader> restored_vs;ComPtr<ID3D11PixelShader> restored_ps;
         context->VSGetShader(&restored_vs,nullptr,nullptr);context->PSGetShader(&restored_ps,nullptr,nullptr);
-        check(restored_vs.Get()==moving_vs.Get() && restored_ps.Get()==material_ps.Get(),"generated-geometry passes restore native shaders");
+        check(restored_vs.Get()==(frame>=8 ? patch_vs.Get() : moving_vs.Get()) && restored_ps.Get()==material_ps.Get(),"generated-geometry passes restore native shaders");
         ComPtr<ID3D11GeometryShader> restored_gs;context->GSGetShader(&restored_gs,nullptr,nullptr);
-        check(restored_gs.Get()==(frame>=5 ? native_gs.Get() : nullptr),"velocity replay restores native geometry stage");
+        check(restored_gs.Get()==(frame>=5 && frame<8 ? native_gs.Get() : nullptr),"velocity replay restores native geometry stage");
+        ComPtr<ID3D11HullShader> restored_hs;ComPtr<ID3D11DomainShader> restored_ds;
+        context->HSGetShader(&restored_hs,nullptr,nullptr);context->DSGetShader(&restored_ds,nullptr,nullptr);
+        check(restored_hs.Get()==(frame>=11 ? patch_hs12.Get() : frame>=8 ? patch_hs.Get() : nullptr) && restored_ds.Get()==(frame>=8 ? patch_ds.Get() : nullptr),"velocity replay restores native tessellation stages");
         pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
         check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit native translucent velocity/depth producer");
         context->OMSetRenderTargets(0,nullptr,nullptr);
@@ -207,16 +291,19 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read committed native motion");
         if (mapped.pData) {
             uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
-            const float expected=frame==4 ? .7f : 32767.f/65535.f+((frame==2 || frame==6) ? .2f*.2495f : 0);
+            const float expected=frame==4 ? .7f : 32767.f/65535.f+((frame==2 || frame==6 || frame==9 || frame==12) ? .2f*.2495f : 0);
             std::fprintf(stderr,"frame %u motion %.6f,%.6f opaque %.6f expected %.6f\n",frame,
                 float(values[0])/65535.f,float(values[1])/65535.f,float(values[2])/65535.f,expected);
             check(std::fabs(float(values[0])/65535.f-expected)<5e-5f &&
-                std::fabs(float(values[2])/65535.f-.7f)<3e-5f,
+                std::fabs(float(values[2])/65535.f-(frame==13 ? 32767.f/65535.f : .7f))<3e-5f,
                 "direct/indirect motion respects GPU arguments, camera cuts, clipped opacity and the native storage bound");
         }
         rsf_ac7_velocity_frame_end();
     }
     rsf_ac7_velocity_release();
+    pass.material_blend=2;
+    context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);native_geometry.topology=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     // Particle counters and corners, rather than draw order or pooled vertex-factory addresses,
     // identify the prior billboard. Reverse particle order while moving the foreground sprite.
     auto particle_vertex=compile("float4 main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,"

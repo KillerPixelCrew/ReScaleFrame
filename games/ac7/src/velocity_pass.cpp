@@ -107,10 +107,11 @@ cbuffer Parameters:register(b0) {uint Capacity;uint3 Padding;};
 struct Variant {
     ComPtr<ID3D11VertexShader> vertex;ComPtr<ID3D11PixelShader> pixel;
     ComPtr<ID3D11GeometryShader> capture,geometry;
+    ComPtr<ID3D11HullShader> hull,corners;ComPtr<ID3D11DomainShader> domain;
     bool particle=false;
-    uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0;
+    uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0,input_points=0;
 };
-using VariantKey=std::tuple<void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t>;
+using VariantKey=std::tuple<void*,void*,void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
 using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t,uint32_t>;
 using ViewKey=std::tuple<uint64_t,uint64_t>;
 struct Model {
@@ -186,8 +187,9 @@ struct Renderer {
         c->CSSetShader(validate_indirect.Get(),nullptr,0);c->Dispatch(1,1,1);
         uav=nullptr;c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);return true;
     }
-    Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,void* native_geometry,Code& vertex_source,Code& pixel_source) {
-        Code geometry_source;
+    Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,void* native_geometry,void* native_hull,void* native_domain,
+        Code& vertex_source,Code& pixel_source) {
+        Code geometry_source,hull_source,domain_source;
         {
             std::lock_guard<std::mutex> guard(code_guard);
             auto v=sources.find(g.vertex_shader),p=sources.find(pixel);
@@ -198,12 +200,27 @@ struct Renderer {
                 if (gs==sources.end() || gs->second.stage!=2) return nullptr;
                 geometry_source=gs->second;
             }
+            if (native_hull || native_domain) {
+                const auto h=sources.find(native_hull),d=sources.find(native_domain);
+                if (h==sources.end() || d==sources.end() || h->second.stage!=3 || d->second.stage!=4) return nullptr;
+                hull_source=h->second;domain_source=d->second;
+            }
         }
-        const VariantKey key{g.vertex_shader,pixel,native_geometry,vertex_source.hash,pixel_source.hash,geometry_source.hash,current.material_blend};
+        const VariantKey key{g.vertex_shader,pixel,native_geometry,native_hull,native_domain,
+            vertex_source.hash,pixel_source.hash,geometry_source.hash,hull_source.hash,domain_source.hash,current.material_blend};
         if (auto found=variants.find(key);found!=variants.end()) return found->second.vertex ? &found->second : nullptr;
         Variant made;rsf_ac7_velocity_vertex_info info;std::vector<uint8_t> vertex,geometry,pixel_code;uint32_t previous=0,current_clip=0;
-        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info)==rsf_ac7_velocity_shader_result::patched;
-        if (transformed && native_geometry) {
+        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info,native_hull!=nullptr)==rsf_ac7_velocity_shader_result::patched;
+        if (transformed && native_hull) {
+            rsf_ac7_velocity_vertex_info h,d;std::vector<uint8_t> normal,corners;
+            transformed=rsf_ac7_velocity_hull_shader(hull_source.bytes.data(),hull_source.bytes.size(),info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
+                rsf_ac7_velocity_domain_shader(domain_source.bytes.data(),domain_source.bytes.size(),h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched &&
+                SUCCEEDED(device->CreateHullShader(normal.data(),normal.size(),nullptr,&made.hull)) &&
+                SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&made.corners)) &&
+                SUCCEEDED(device->CreateDomainShader(geometry.data(),geometry.size(),nullptr,&made.domain));
+            info=std::move(d);made.history_slot=127;made.geometry_hash=hull_source.hash^(domain_source.hash<<1)^(domain_source.hash>>31);
+            made.maximum_vertices=made.input_points ? (3u+made.input_points-1)/made.input_points : 1u;
+        } else if (transformed && native_geometry) {
             rsf_ac7_velocity_vertex_info generated;
             transformed=rsf_ac7_velocity_native_geometry_shader(geometry_source.bytes.data(),geometry_source.bytes.size(),info,
                 geometry,generated,made.maximum_vertices,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
@@ -212,7 +229,7 @@ struct Renderer {
         if (!transformed ||
             rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,pixel_code,previous,current_clip)!=rsf_ac7_velocity_shader_result::patched ||
             FAILED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex)) ||
-            FAILED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry)) ||
+            (!native_hull && FAILED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) ||
             FAILED(device->CreatePixelShader(pixel_code.data(),pixel_code.size(),nullptr,&made.pixel))) {
             refused("native material/vertex shader transform or D3D11 variant creation failed");variants.emplace(key,Variant{});return nullptr;
         }
@@ -223,7 +240,7 @@ struct Renderer {
             {0,"RSFKEY",0,0,4,0},{0,"RSFCENTRE",0,0,4,0},{0,"RSFOLD",0,0,4,0},
         };
         const UINT stride=64;
-        const auto& capture_code=native_geometry ? geometry : vertex;
+        const auto& capture_code=native_geometry || native_hull ? geometry : vertex;
         if (FAILED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
             &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) {
             refused("stream-output signature creation failed");variants.emplace(key,Variant{});return nullptr;
@@ -321,18 +338,21 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         !(current.flags&RSF_GAME_RENDER_PRIMARY)) return;
     const auto& g=*pointer;auto* c=static_cast<ID3D11DeviceContext*>(g.context);
     if (!c || c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE || !g.depth_view || g.samples!=1 ||
-        g.kind>6 || (g.kind<4 && !g.count) || g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) return;
+        g.kind>6 || (g.kind<4 && !g.count)) return;
     ComPtr<ID3D11GeometryShader> existing;ComPtr<ID3D11HullShader> hull;ComPtr<ID3D11DomainShader> domain;
     c->GSGetShader(&existing,nullptr,nullptr);c->HSGetShader(&hull,nullptr,nullptr);c->DSGetShader(&domain,nullptr,nullptr);
-    if (hull || domain) {refused("native tessellation stages require their own previous-surface route");return;}
+    if ((hull && !domain) || (domain && !hull) || (hull && existing)) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
+    if (!hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) return;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}renderer=std::move(made);
     }
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
-    Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),vertex_code,pixel_code);
+    Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_code,pixel_code);
     if (!variant) return;
-    const uint64_t count64=g.kind>=4 ? current.geometry_capacity : uint64_t(g.count)*(g.kind>=2 ? g.instances : 1u);
+    if (hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST+variant->input_points-1) return;
+    const uint64_t count64=g.kind>=4 ? uint64_t(current.geometry_capacity)*(hull ? variant->input_points : 3u)/3u :
+        uint64_t(g.count)*(g.kind>=2 ? g.instances : 1u);
     // A triangle strip can expand to three SO records per emitted vertex. Input vertex
     // capacity already includes three vertices per primitive, so this bound covers it.
     if (!count64 || count64>uint64_t(UINT32_MAX/128)/variant->maximum_vertices) return;
@@ -357,12 +377,14 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     }
     const UINT zero[4]{};c->ClearUnorderedAccessViewUint(renderer->stream.write.Get(),zero);
     c->CopyResource(renderer->capture_buffer.Get(),renderer->stream.buffer.Get());
-    if (existing) {
+    if (existing || hull) {
         const Parameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
         ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);
         ID3D11ShaderResourceView* unavailable=nullptr;c->GSSetShaderResources(127,1,&unavailable);
+        c->DSSetConstantBuffers(13,1,&cb);c->DSSetShaderResources(127,1,&unavailable);
     }
     c->OMSetRenderTargets(0,nullptr,nullptr);c->VSSetShader(variant->vertex.Get(),nullptr,0);
+    if (hull) {c->HSSetShader(variant->corners.Get(),nullptr,0);c->DSSetShader(variant->domain.Get(),nullptr,0);}
     c->GSSetShader(variant->capture.Get(),nullptr,0);c->PSSetShader(nullptr,nullptr,0);
     ID3D11Buffer* stream=renderer->capture_buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);c->SOSetTargets(0,nullptr,nullptr);
@@ -375,18 +397,25 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     parameters.jitter[1]=current.camera.jitter_pixels[1]*-2/viewport.Height;
     parameters.jitter[2]=current.camera.previous_jitter_pixels[0]*2/viewport.Width;
     parameters.jitter[3]=current.camera.previous_jitter_pixels[1]*-2/viewport.Height;
-    parameters.cutoff=current.material_opacity_clip+1.f/255.f;
+    // UE4.27 clips translucent/additive/modulate opacity, while AlphaComposite has no
+    // opacity discard in GetMaterialClippingVelocity. Its native opacity is saturated.
+    parameters.cutoff=current.material_blend==5 ? -1.f : current.material_opacity_clip+1.f/255.f;
     parameters.history=model.usable && model.previous.buffer ? 1u : 0u;
     parameters.mask=model.previous.count ? model.previous.count-1 : 0;
     std::memcpy(parameters.matrix,current.camera.clip_to_previous_clip,sizeof(parameters.matrix));
     c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&parameters,0,0);
     ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);c->PSSetConstantBuffers(13,1,&cb);
     ID3D11ShaderResourceView* previous=model.previous.view.Get();c->GSSetShaderResources(variant->history_slot,1,&previous);
+    if (hull) {
+        c->HSSetShader(variant->hull.Get(),nullptr,0);c->DSSetShader(variant->domain.Get(),nullptr,0);
+        c->DSSetConstantBuffers(13,1,&cb);c->DSSetShaderResources(127,1,&previous);
+    }
     c->GSSetShader(variant->geometry.Get(),nullptr,0);c->PSSetShader(variant->pixel.Get(),nullptr,0);
     ID3D11RenderTargetView* rt=view.motion_target.Get();c->OMSetRenderTargets(1,&rt,view.depth_target.Get());
     c->OMSetDepthStencilState(renderer->depth_state.Get(),0);c->OMSetBlendState(renderer->blend.Get(),nullptr,UINT32_MAX);
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);view.written=true;
     previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
+    if (hull) c->DSSetShaderResources(127,1,&previous);
     renderer->build(c,renderer->stream,model.now,count,0);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try

@@ -846,6 +846,13 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+Current increment: triangle tessellation carries stable control-point keys, captures bounded
+native patch-corner history and preserves adaptive tessellation/material depth in the normal draw.
+WARP checks changing density, independent domain motion, cuts, 12-point indirect submission and
+state restoration. Retained native PN HS/DS variants create with matching synthetic VS inputs.
+AlphaComposite also retains the reference pass's opacity behavior. The affected-scene coverage
+audit and game checks remain open. [Evidence](research/ac7-velocity-20261013.md#tessellated-material-velocity).
+
 Current increment: single-stream triangle native GS draws retain their own final generated
 positions and material varyings. WARP checks combined VS/GS deformation, opacity clipping,
 camera cuts and native-state restoration. Tessellation, multiple GS streams and GS instancing

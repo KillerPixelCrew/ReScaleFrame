@@ -1,5 +1,43 @@
 # AC7 temporal velocity, 13 October
 
+## Tessellated material velocity
+
+The dedicated material pass now handles native triangle tessellation, including the 12-input/
+3-output control-point form retained from AC7. It appends stable primitive/particle keys to the
+VS output and relays them through the native hull control phase. Optimized identity hull shaders
+can omit that phase; the variant materializes it and copies fields by semantic, preserving native
+register packing. The domain variant retains the native material and final displaced depth.
+
+UE4.27.2 `VelocityShader.usf:35-99` interpolates current/prior control-point clip coordinates
+through tessellation. The new path follows that correspondence strategy: a private integer/factor-1
+hull variant captures three native patch-corner positions, and the normal domain variant evaluates
+those corners and interpolates their current/prior motion at its native domain sample. The normal
+draw retains its native tessellation factors and partitioning. Changing adaptive sampling therefore
+does not require the prior frame to have evaluated the same interior domain point. Interior-only
+displacement changes have no separate history; motion uses corner interpolation.
+
+Corner capture has a fixed bound independent of tessellation density. The engine mesh bound is
+three vertices per primitive; indirect patch validation converts it using the actual input control-
+point count. Capture, lookup and retirement remain on the immediate GPU stream without CPU
+readback. Domain bytecode supplies the SO signature through the documented
+[D3D11 previous-stage stream-output contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-creategeometryshaderwithstreamoutput).
+
+The WARP fixture passes changing fractional-even density, independent VS/domain deformation,
+opacity-qualified depth, camera cuts, 12-control-point direct/indirect continuity and native stage
+restoration. The retained PN HS/DS blobs also accept the variants with matching synthetic VS
+inputs; the retained capture has no matching native tessellation VS creation blob. Initial checks
+found subnormal corner identifiers being lost and implicit hull passthrough mapping added fields
+by register rather than semantic. Normal float corner identifiers and an explicit keyed control
+phase corrected those failures. Temporary GPU readbacks used to diagnose them were removed.
+
+The pass also preserves UE4.27's AlphaComposite behavior: its opacity is not clipped by the
+translucent/additive/modulate cutoff. A full producer fixture checks below-cutoff AlphaComposite
+coverage separately. Combined custom GS/tessellation, multiple GS streams and GS instancing
+remain refused. Gameplay acceptance and the broader affected-scene coverage audit remain open.
+
+MSVC Release `eng/verify.ps1 -Configuration Release -VS2026` passed with 45 native tests,
+seven opt-in vendor skips, formatting and Clippy. Retained shader validation also passed.
+
 ## Native geometry-shader producer
 
 The material pass now retains single-stream triangle geometry shaders and records their final

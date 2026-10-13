@@ -19,7 +19,13 @@ struct rsf_ac7_velocity_vertex_info {
 bool rsf_ac7_velocity_signature(const void* bytes,size_t size,bool output,
     std::vector<rsf_ac7_velocity_semantic>& semantics) noexcept;
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,size_t size,
-    std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info) noexcept;
+    std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info,bool tessellation=false) noexcept;
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_hull_shader(const void* bytes,size_t size,
+    const rsf_ac7_velocity_vertex_info& vertex,std::vector<uint8_t>& output,
+    std::vector<uint8_t>& corners,rsf_ac7_velocity_vertex_info& info,uint32_t& input_points) noexcept;
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_domain_shader(const void* bytes,size_t size,
+    const rsf_ac7_velocity_vertex_info& hull,std::vector<uint8_t>& output,
+    rsf_ac7_velocity_vertex_info& info,uint32_t& previous_register,uint32_t& current_register) noexcept;
 bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
     std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept;
 // Augment the native triangle GS at each emission, retaining its generated positions/varyings.
