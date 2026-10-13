@@ -846,6 +846,13 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+Current increment: single-stream triangle native GS draws retain their own final generated
+positions and material varyings. WARP checks combined VS/GS deformation, opacity clipping,
+camera cuts and native-state restoration. Tessellation, multiple GS streams and GS instancing
+still need their producer routes. Affected-game checks remain deferred; the goal is active.
+[Current evidence](research/ac7-velocity-20261013.md#native-geometry-shader-producer).
+The following dated paragraphs retain the status at each preceding increment.
+
 Instanced mesh-particle correspondence now uses the native sorted previous-transform buffer and
 full pose/vertex keys. Native queued-binding/lifetime and reordered-instance GPU fixtures pass.
 GS/tessellation remain unfinished; gameplay checks remain deferred. See the current research

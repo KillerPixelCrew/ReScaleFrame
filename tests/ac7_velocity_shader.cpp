@@ -42,6 +42,15 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip),"compile previous-generated-geometry GS");
         ComPtr<ID3D11GeometryShader> gs;
         check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create previous-generated-geometry GS");
+        auto native_gs=compile("struct V{float4 p:SV_Position;};"
+            "[maxvertexcount(3)]void main(triangle V v[3],inout TriangleStream<V> s)"
+            "{[unroll]for(uint i=0;i<3;i++){V o;o.p=v[i].p+float4(.1,0,0,0);s.Append(o);}}","gs_5_0");
+        rsf_ac7_velocity_vertex_info generated;uint32_t maximum=0;
+        check(rsf_ac7_velocity_native_geometry_shader(native_gs.data(),native_gs.size(),info,geometry,
+            generated,maximum,previous,current_clip)==rsf_ac7_velocity_shader_result::patched && maximum==3,
+            "augment native GS at emission preserving generated position");
+        gs.Reset();
+        check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create augmented native GS");
     }
     const char* materials[]{
         "Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0"
@@ -149,17 +158,30 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
     D3D11_BUFFER_DESC index_desc{};index_desc.ByteWidth=6;index_desc.BindFlags=D3D11_BIND_INDEX_BUFFER;
     const uint16_t indices[]{0,1,2};D3D11_SUBRESOURCE_DATA index_initial{indices,0,0};ComPtr<ID3D11Buffer> index_buffer;
     check(SUCCEEDED(device->CreateBuffer(&index_desc,&index_initial,&index_buffer)),"create native indexed-indirect geometry");
-    for (uint32_t frame=1;frame<=4;++frame) {
+    auto generated_code=compile("cbuffer Generated:register(b1){float4 shift;}struct V{float4 p:SV_Position;};"
+        "[maxvertexcount(3)]void main(triangle V input[3],inout TriangleStream<V> stream)"
+        "{[unroll]for(uint i=0;i<3;i++){V output;output.p=input[i].p+shift;stream.Append(output);}}","gs_5_0");
+    ComPtr<ID3D11GeometryShader> native_gs;
+    check(SUCCEEDED(device->CreateGeometryShader(generated_code.data(),generated_code.size(),nullptr,&native_gs)),"create native geometry producer");
+    rsf_ac7_velocity_shader_seen(native_gs.Get(),2,generated_code.data(),uint32_t(generated_code.size()));
+    ComPtr<ID3D11Buffer> generated_cb;
+    check(SUCCEEDED(device->CreateBuffer(&object_desc,nullptr,&generated_cb)),"create native GS deformation constants");
+    for (uint32_t frame=1;frame<=7;++frame) {
         pass.native_frame=frame;pass.role=RSF_GAME_RENDER_TRANSLUCENT_MESH;
-        if (frame==3) pass.flags|=RSF_GAME_RENDER_RESET;
+        pass.flags=RSF_GAME_RENDER_PRIMARY|((frame==3 || frame==7) ? RSF_GAME_RENDER_RESET : 0u);
         pass.geometry_capacity=3;
         uint32_t arguments[12]{};arguments[4]=3;arguments[5]=frame==4 ? 2u : 1u;
         context->UpdateSubresource(indirect_args.Get(),0,nullptr,arguments,0,0);
         native_geometry.kind=frame==2 ? 5u : frame==3 ? 0u : 6u;
         native_geometry.count=frame==3 ? 3u : 0u;native_geometry.indirect_buffer=indirect_args.Get();native_geometry.indirect_offset=16;
+        if (frame>=5) {native_geometry.kind=0;native_geometry.count=3;}
         context->IASetIndexBuffer(index_buffer.Get(),DXGI_FORMAT_R16_UINT,0);
         rsf_ac7_velocity_scope(&pass);
-        const float offset[4]{float(frame-1)*.2f,0,0,0};context->UpdateSubresource(object_cb.Get(),0,nullptr,offset,0,0);
+        const float offset[4]{frame>=5 ? float(frame-5)*.1f : float(frame-1)*.2f,0,0,0};context->UpdateSubresource(object_cb.Get(),0,nullptr,offset,0,0);
+        const float generated_offset[4]{frame>=5 ? float(frame-5)*.1f : 0,0,0,0};
+        context->UpdateSubresource(generated_cb.Get(),0,nullptr,generated_offset,0,0);
+        ID3D11Buffer* generated=generated_cb.Get();context->GSSetConstantBuffers(1,1,&generated);
+        context->GSSetShader(frame>=5 ? native_gs.Get() : nullptr,nullptr,0);
         context->ClearDepthStencilView(engine_dsv.Get(),D3D11_CLEAR_DEPTH,.1f,0);
         const float opaque_motion[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),opaque_motion);
         ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
@@ -174,6 +196,8 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         ComPtr<ID3D11VertexShader> restored_vs;ComPtr<ID3D11PixelShader> restored_ps;
         context->VSGetShader(&restored_vs,nullptr,nullptr);context->PSGetShader(&restored_ps,nullptr,nullptr);
         check(restored_vs.Get()==moving_vs.Get() && restored_ps.Get()==material_ps.Get(),"generated-geometry passes restore native shaders");
+        ComPtr<ID3D11GeometryShader> restored_gs;context->GSGetShader(&restored_gs,nullptr,nullptr);
+        check(restored_gs.Get()==(frame>=5 ? native_gs.Get() : nullptr),"velocity replay restores native geometry stage");
         pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
         check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit native translucent velocity/depth producer");
         context->OMSetRenderTargets(0,nullptr,nullptr);
@@ -183,7 +207,7 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read committed native motion");
         if (mapped.pData) {
             uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
-            const float expected=frame==4 ? .7f : 32767.f/65535.f+(frame==2 ? .2f*.2495f : 0);
+            const float expected=frame==4 ? .7f : 32767.f/65535.f+((frame==2 || frame==6) ? .2f*.2495f : 0);
             std::fprintf(stderr,"frame %u motion %.6f,%.6f opaque %.6f expected %.6f\n",frame,
                 float(values[0])/65535.f,float(values[1])/65535.f,float(values[2])/65535.f,expected);
             check(std::fabs(float(values[0])/65535.f-expected)<5e-5f &&

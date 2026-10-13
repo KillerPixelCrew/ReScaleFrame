@@ -22,6 +22,11 @@ rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,
     std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info) noexcept;
 bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
     std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept;
+// Augment the native triangle GS at each emission, retaining its generated positions/varyings.
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_native_geometry_shader(const void* bytes,size_t size,
+    const rsf_ac7_velocity_vertex_info& vertex,std::vector<uint8_t>& output,
+    rsf_ac7_velocity_vertex_info& info,uint32_t& maximum_vertices,
+    uint32_t& previous_register,uint32_t& current_register) noexcept;
 
 // Retain the native material evaluation/discards, recover additive opacity, and replace its
 // colour output with packed velocity. RSFPREV0 is the previous generated clip position.

@@ -1,5 +1,31 @@
 # AC7 temporal velocity, 13 October
 
+## Native geometry-shader producer
+
+The material pass now retains single-stream triangle geometry shaders and records their final
+emitted positions. Each emission carries a key formed from the complete upstream triangle keys
+and emission ordinal; native material varyings and strip boundaries remain intact. Mesh-particle
+lookup still uses previous-transform keys, and CPU sprites retain their particle/corner identity.
+The shader's declared output bound sizes stream-output storage, including strip expansion; GPU
+indirect argument validation continues to use the input mesh capacity. Native GS identity also
+separates model history. Multiple streams and GS instancing currently refuse.
+
+The retained 4 October capture contains one GS, HS and DS creation, with no recorded draws using
+them. Disassembly shows a triangle/array-slice forwarding GS and a PN-triangle domain shader.
+That inventory establishes shader presence, not gameplay coverage. The new WARP fixture changes
+both VS translation and independent GS deformation, checks their combined motion, opacity
+clipping, camera-cut invalidation and restoration of the native shader. Initial execution exposed
+an invalid read from a DXBC output register; retaining the native position in a temporary before
+emission fixed it. Shader creation alone had not caught that defect.
+
+MSVC Release `eng/verify.ps1 -Configuration Release -VS2026` passed: 45 native tests passed,
+seven opt-in vendor tests skipped, plus formatting and Clippy. This is build and synthetic GPU
+evidence, not AC7 gameplay acceptance.
+
+Tessellation still needs a previous-surface route, including correspondence when adaptive domain
+sampling changes. The pass continues to refuse it. Affected gameplay remains untested; the full
+motion goal is active. The sections below record preceding increments and their then-current gaps.
+
 ## Mesh-particle correspondence
 
 The instanced mesh-particle path now keys stored generated geometry by the complete instance

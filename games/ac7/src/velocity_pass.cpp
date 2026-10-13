@@ -108,9 +108,10 @@ struct Variant {
     ComPtr<ID3D11VertexShader> vertex;ComPtr<ID3D11PixelShader> pixel;
     ComPtr<ID3D11GeometryShader> capture,geometry;
     bool particle=false;
+    uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0;
 };
-using VariantKey=std::tuple<void*,void*,uint32_t,uint32_t,uint32_t>;
-using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t>;
+using VariantKey=std::tuple<void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t>;
+using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t,uint32_t>;
 using ViewKey=std::tuple<uint64_t,uint64_t>;
 struct Model {
     Buffer previous,now;uint32_t frame=UINT32_MAX,records=0;uint64_t epoch=0;bool usable=false;
@@ -185,18 +186,30 @@ struct Renderer {
         c->CSSetShader(validate_indirect.Get(),nullptr,0);c->Dispatch(1,1,1);
         uav=nullptr;c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);return true;
     }
-    Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,Code& vertex_source,Code& pixel_source) {
+    Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,void* native_geometry,Code& vertex_source,Code& pixel_source) {
+        Code geometry_source;
         {
             std::lock_guard<std::mutex> guard(code_guard);
             auto v=sources.find(g.vertex_shader),p=sources.find(pixel);
             if (v==sources.end() || p==sources.end() || v->second.stage!=0 || p->second.stage!=1) return nullptr;
             vertex_source=v->second;pixel_source=p->second;
+            if (native_geometry) {
+                const auto gs=sources.find(native_geometry);
+                if (gs==sources.end() || gs->second.stage!=2) return nullptr;
+                geometry_source=gs->second;
+            }
         }
-        const VariantKey key{g.vertex_shader,pixel,vertex_source.hash,pixel_source.hash,current.material_blend};
+        const VariantKey key{g.vertex_shader,pixel,native_geometry,vertex_source.hash,pixel_source.hash,geometry_source.hash,current.material_blend};
         if (auto found=variants.find(key);found!=variants.end()) return found->second.vertex ? &found->second : nullptr;
         Variant made;rsf_ac7_velocity_vertex_info info;std::vector<uint8_t> vertex,geometry,pixel_code;uint32_t previous=0,current_clip=0;
-        if (rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info)!=rsf_ac7_velocity_shader_result::patched ||
-            !rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip) ||
+        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info)==rsf_ac7_velocity_shader_result::patched;
+        if (transformed && native_geometry) {
+            rsf_ac7_velocity_vertex_info generated;
+            transformed=rsf_ac7_velocity_native_geometry_shader(geometry_source.bytes.data(),geometry_source.bytes.size(),info,
+                geometry,generated,made.maximum_vertices,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
+            info=std::move(generated);made.history_slot=127;made.geometry_hash=geometry_source.hash;
+        } else if (transformed) transformed=rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip);
+        if (!transformed ||
             rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,pixel_code,previous,current_clip)!=rsf_ac7_velocity_shader_result::patched ||
             FAILED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex)) ||
             FAILED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry)) ||
@@ -210,7 +223,8 @@ struct Renderer {
             {0,"RSFKEY",0,0,4,0},{0,"RSFCENTRE",0,0,4,0},{0,"RSFOLD",0,0,4,0},
         };
         const UINT stride=64;
-        if (FAILED(device->CreateGeometryShaderWithStreamOutput(vertex.data(),vertex.size(),declarations,4,
+        const auto& capture_code=native_geometry ? geometry : vertex;
+        if (FAILED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
             &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) {
             refused("stream-output signature creation failed");variants.emplace(key,Variant{});return nullptr;
         }
@@ -290,7 +304,7 @@ ViewKey view_key(const rsf_game_render_pass& p) {return {p.session_id,p.history_
 }
 extern "C" void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const void* bytes,uint32_t size) try
 {
-    if (!shader || !bytes || !size || stage>1 || size>1024*1024) return;
+    if (!shader || !bytes || !size || stage>4 || size>1024*1024) return;
     std::lock_guard<std::mutex> guard(code_guard);
     if (auto old=sources.find(shader);old!=sources.end()) {source_bytes-=old->second.bytes.size();sources.erase(old);}
     if (source_bytes+size>64*1024*1024) return;
@@ -310,24 +324,27 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         g.kind>6 || (g.kind<4 && !g.count) || g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) return;
     ComPtr<ID3D11GeometryShader> existing;ComPtr<ID3D11HullShader> hull;ComPtr<ID3D11DomainShader> domain;
     c->GSGetShader(&existing,nullptr,nullptr);c->HSGetShader(&hull,nullptr,nullptr);c->DSGetShader(&domain,nullptr,nullptr);
-    if (existing || hull || domain) {refused("native geometry/tessellation stages require their own previous-geometry route");return;}
+    if (hull || domain) {refused("native tessellation stages require their own previous-surface route");return;}
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}renderer=std::move(made);
     }
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
-    Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),vertex_code,pixel_code);
+    Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),vertex_code,pixel_code);
     if (!variant) return;
     const uint64_t count64=g.kind>=4 ? current.geometry_capacity : uint64_t(g.count)*(g.kind>=2 ? g.instances : 1u);
-    if (!count64 || count64>UINT32_MAX/128) return;const uint32_t count=uint32_t(count64);
+    // A triangle strip can expand to three SO records per emitted vertex. Input vertex
+    // capacity already includes three vertices per primitive, so this bound covers it.
+    if (!count64 || count64>uint64_t(UINT32_MAX/128)/variant->maximum_vertices) return;
+    const uint32_t count=uint32_t(count64*variant->maximum_vertices);
     State saved(c);if (!saved.context) return;
     ComPtr<ID3D11Predicate> predicate;BOOL predicate_value=FALSE;c->GetPredication(&predicate,&predicate_value);
     c->SetPredication(nullptr,FALSE);
-    if (g.kind>=5 && !renderer->prepare_indirect(c,g,count)) {refused("indirect argument buffer or native mesh capacity is invalid");return;}
+    if (g.kind>=5 && !renderer->prepare_indirect(c,g,uint32_t(count64))) {refused("indirect argument buffer or native mesh capacity is invalid");return;}
     auto& view=renderer->views[view_key(current)];if (!renderer->view(c,g,view)) {refused("native scene depth allocation/identity differs from the draw");return;}
     const ModelKey key{current.session_id,current.history_key ? current.history_key : current.view_key,
         current.primitive_key,current.material_key,vertex_code.hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
-        variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex};
+        variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex,variant->geometry_hash};
     auto& model=renderer->models[key];if (!renderer->model(c,model,count)) {refused("geometry-history allocation failed");return;}
     if (!renderer->capture_buffer || renderer->stream.count<count) {
         // Stream output and raw UAV storage have different D3D11 allocation contracts. Copy
@@ -340,6 +357,11 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     }
     const UINT zero[4]{};c->ClearUnorderedAccessViewUint(renderer->stream.write.Get(),zero);
     c->CopyResource(renderer->capture_buffer.Get(),renderer->stream.buffer.Get());
+    if (existing) {
+        const Parameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
+        ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);
+        ID3D11ShaderResourceView* unavailable=nullptr;c->GSSetShaderResources(127,1,&unavailable);
+    }
     c->OMSetRenderTargets(0,nullptr,nullptr);c->VSSetShader(variant->vertex.Get(),nullptr,0);
     c->GSSetShader(variant->capture.Get(),nullptr,0);c->PSSetShader(nullptr,nullptr,0);
     ID3D11Buffer* stream=renderer->capture_buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
@@ -359,12 +381,12 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     std::memcpy(parameters.matrix,current.camera.clip_to_previous_clip,sizeof(parameters.matrix));
     c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&parameters,0,0);
     ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);c->PSSetConstantBuffers(13,1,&cb);
-    ID3D11ShaderResourceView* previous=model.previous.view.Get();c->GSSetShaderResources(0,1,&previous);
+    ID3D11ShaderResourceView* previous=model.previous.view.Get();c->GSSetShaderResources(variant->history_slot,1,&previous);
     c->GSSetShader(variant->geometry.Get(),nullptr,0);c->PSSetShader(variant->pixel.Get(),nullptr,0);
     ID3D11RenderTargetView* rt=view.motion_target.Get();c->OMSetRenderTargets(1,&rt,view.depth_target.Get());
     c->OMSetDepthStencilState(renderer->depth_state.Get(),0);c->OMSetBlendState(renderer->blend.Get(),nullptr,UINT32_MAX);
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);view.written=true;
-    previous=nullptr;c->GSSetShaderResources(0,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
+    previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
     renderer->build(c,renderer->stream,model.now,count,0);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
