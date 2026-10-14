@@ -1,5 +1,36 @@
 # AC7 temporal velocity, 13 October
 
+## Coverage capture correction, 14 October
+
+The latest capture, `motion-20261014-201536-44500-1`, is a briefing screen. The earlier complete
+flight capture has four sampled mesh-particle draws with actual buffer SRVs bound at VS slot 127.
+That confirms the queued previous-transform binding reaches game draws, not the contents or
+accuracy of those transforms. The stride-8 draws were initially considered GPU sprites, but
+their retained input signatures have float4 position/old-position attributes and corner UVs:
+they are instanced CPU sprites already handled by counter/corner keys. Stride alone was misleading.
+
+The same flight capture has no particle geometry snapshots. The recorder shared 24 buffer reads
+across early translucency draws and copied every bound IA slot, including stale slots not used by
+the layout. Early generic geometry therefore hid later producers. Capture now reads declared
+slots only, reserves separate bounded budgets for generic geometry, sprites, mesh particles,
+curves and native RG16-UNORM velocity-target candidates, and avoids repeated particle shader/layout
+samples within each sampled interval. Every read remains capped at 16 KiB; at most 52 buffer reads
+are allowed per sampled interval. These categories select diagnostic candidates, not runtime
+rendering support. Native-role/frame/primitive/material identities accompany the snapshots.
+
+Mesh-particle samples also copy the actual VS 127 buffer view; native velocity candidates sample
+buffer views at VS 0/1/127 for bone/history inspection. SRV offsets and ranges are respected.
+Readback temporarily disables and restores predication, so a suppressed draw cannot leave a false
+empty staging sample. WARP checks exhaust generic reads before a late particle, exclude an unused
+slot, preserve predication, and compare a sliced previous-transform buffer byte for byte.
+The new recorder has not yet collected the affected gameplay data. Weapon/vehicle/kill-cam and
+particle visual coverage remain open; no speculative GPU-sprite producer change was added.
+
+MSVC Release verification passed: 45 native tests, seven opt-in skips, formatting and Clippy.
+The recorder update was deployed with proxy/overlay backup
+`.local/deploy-backups/ac7-pair-20261014-204634-162` and dependency backup
+`.local/deploy-backups/ac7-sr-20261014-204633-809`. No game launch or termination was performed.
+
 ## Ocean-cutscene dips and remaining work cost, 14 October
 
 Game acceptance: after testing deployed `0af8c9e`, the user replied "Fully fixed now" to the

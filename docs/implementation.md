@@ -846,6 +846,13 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+14 October capture correction: early translucency samples consumed the readback budget before
+flight particles, including unused IA slots. F9 now reserves per-producer budgets, reads declared
+streams and actual previous-transform/bone buffer views, and preserves predication. The prior
+flight capture proves VS 127 mesh-particle bindings but lacks their geometry samples. The newest
+capture is briefing; affected weapon/vehicle/kill-cam/particle data still needs collection.
+[Evidence](research/ac7-velocity-20261013.md#coverage-capture-correction-14-october).
+
 14 October ocean-cutscene follow-up: identical modified PS/HS/DS objects are now shared across
 material variants, alongside VS/GS/SO. A tessellated material-alias check causes zero additional
 device shader creations. Indirect history dispatch uses the validated GPU record count, and fixed

@@ -104,6 +104,26 @@ int main()
     D3D11_SUBRESOURCE_DATA particle_initial{particle_data,0,0};
     ComPtr<ID3D11Buffer> particle_buffer;
     check(SUCCEEDED(device->CreateBuffer(&particle_desc, &particle_initial, &particle_buffer)), "Create particle geometry history stream.");
+    ComPtr<ID3D11VertexShader> particle_vs;
+    check(SUCCEEDED(device->CreateVertexShader(particle_code->GetBufferPointer(),particle_code->GetBufferSize(),nullptr,&particle_vs)),"Create captured particle VS.");
+    const float previous_data[16]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+    D3D11_BUFFER_DESC previous_desc{};previous_desc.ByteWidth=sizeof(previous_data);
+    previous_desc.Usage=D3D11_USAGE_IMMUTABLE;previous_desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA previous_initial{previous_data,0,0};ComPtr<ID3D11Buffer> previous_buffer;
+    check(SUCCEEDED(device->CreateBuffer(&previous_desc,&previous_initial,&previous_buffer)),"Create previous-transform capture source.");
+    D3D11_SHADER_RESOURCE_VIEW_DESC previous_view_desc{};previous_view_desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+    previous_view_desc.ViewDimension=D3D11_SRV_DIMENSION_BUFFER;previous_view_desc.Buffer.FirstElement=1;previous_view_desc.Buffer.NumElements=2;
+    ComPtr<ID3D11ShaderResourceView> previous_view;
+    check(SUCCEEDED(device->CreateShaderResourceView(previous_buffer.Get(),&previous_view_desc,&previous_view)),"Create sliced previous-transform view.");
+    D3D11_QUERY_DESC predicate_desc{D3D11_QUERY_OCCLUSION_PREDICATE,0};ComPtr<ID3D11Predicate> hidden;
+    check(SUCCEEDED(device->CreatePredicate(&predicate_desc,&hidden)),"Create predicated capture fixture.");
+    context->Begin(hidden.Get());context->End(hidden.Get());
+    D3D11_TEXTURE2D_DESC velocity_depth_desc{};velocity_depth_desc.Width=velocity_depth_desc.Height=16;
+    velocity_depth_desc.MipLevels=velocity_depth_desc.ArraySize=1;velocity_depth_desc.SampleDesc.Count=1;
+    velocity_depth_desc.Format=DXGI_FORMAT_D32_FLOAT;velocity_depth_desc.BindFlags=D3D11_BIND_DEPTH_STENCIL;
+    ComPtr<ID3D11Texture2D> velocity_depth;ComPtr<ID3D11DepthStencilView> velocity_depth_view;
+    check(SUCCEEDED(device->CreateTexture2D(&velocity_depth_desc,nullptr,&velocity_depth)) &&
+        SUCCEEDED(device->CreateDepthStencilView(velocity_depth.Get(),nullptr,&velocity_depth_view)),"Create velocity-capture depth binding.");
     ComPtr<ID3D11VertexShader> vs; ComPtr<ID3D11PixelShader> ps; ComPtr<ID3D11ComputeShader> cs;
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     check(SUCCEEDED(device->CreateVertexShader(vs_code->GetBufferPointer(), vs_code->GetBufferSize(), nullptr, &vs)), "Create VS.");
@@ -147,7 +167,29 @@ int main()
             rsf_ac7_motion_capture_native_pass(&pass, 1);
             rsf_frame_tap_geometry geometry{}; geometry.context = context.Get();
             geometry.input_layout = particle_layout.Get(); geometry.vertex_buffers[0] = particle_buffer.Get();
+            geometry.vertex_buffers[31]=particle_buffer.Get(); // Bound stale slot absent from the layout.
             geometry.strides[0] = 32; geometry.count = 3;
+            const rsf_observer_layout_element generic_layout[]{ {0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,0} };
+            rsf_ac7_motion_capture_layout(particle_layout.Get(),generic_layout,1,1);
+            for (uint32_t i=0;i<12;++i) rsf_ac7_motion_capture_geometry(&geometry);
+            const rsf_observer_layout_element sprite_layout[]{
+                {0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,0},{1,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,0}};
+            rsf_ac7_motion_capture_layout(particle_layout.Get(),sprite_layout,2,2);
+            geometry.vertex_shader=particle_vs.Get();
+            rsf_ac7_motion_capture_geometry(&geometry);
+            const rsf_observer_layout_element mesh_layout[]{
+                {8,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,1},{9,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,1},
+                {10,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,1}};
+            rsf_ac7_motion_capture_layout(particle_layout.Get(),mesh_layout,3,3);
+            ID3D11ShaderResourceView* previous=previous_view.Get();context->VSSetShaderResources(127,1,&previous);
+            context->SetPredication(hidden.Get(),FALSE);
+            rsf_ac7_motion_capture_geometry(&geometry);
+            ComPtr<ID3D11Predicate> restored;BOOL predicate_value=TRUE;context->GetPredication(&restored,&predicate_value);
+            check(restored.Get()==hidden.Get() && !predicate_value,"Geometry capture must restore native predication.");
+            context->SetPredication(nullptr,FALSE);
+            pass.role=0;rsf_ac7_motion_capture_native_pass(&pass,1);
+            geometry.format=DXGI_FORMAT_R16G16_UNORM;geometry.depth_view=velocity_depth_view.Get();
+            context->VSSetShaderResources(0,1,&previous);context->VSSetShaderResources(1,1,&previous);
             rsf_ac7_motion_capture_geometry(&geometry);
             rsf_ac7_motion_capture_native_pass(nullptr, 0);
         }
@@ -168,6 +210,20 @@ int main()
           draws.find("\"attribute\":1") != std::string::npos &&
           draws.find("\"sample_bytes\":96") != std::string::npos,
           "Capture must retain actual particle attributes and bounded vertex bytes.");
+    check(draws.find("\"geometry_bucket\":1")!=std::string::npos && draws.find("\"geometry_bucket\":2")!=std::string::npos,
+        "Early generic geometry must not consume the sprite/mesh capture budgets.");
+    check(draws.find("\"slot\":31")==std::string::npos,"Unused IA slots must not consume geometry readbacks.");
+    check(draws.find("\"geometry_bucket\":4")!=std::string::npos && draws.find("\"vs_buffers\":[{\"slot\":0")!=std::string::npos,
+        "Native velocity candidates must retain their bone-buffer source views outside translucency scope.");
+    const auto previous_record=draws.find("\"vs_buffers\":[{\"slot\":127");
+    check(previous_record!=std::string::npos,"Mesh-particle previous-transform views must be sampled.");
+    if (previous_record!=std::string::npos) {
+        const auto blob_start=draws.find("\"blob\":",previous_record);
+        const auto blob=std::stoul(draws.substr(blob_start+7));
+        const auto data=read_file(captured/("cb_"+std::to_string(blob)+".bin"));
+        check(data.size()==32 && std::memcmp(data.data(),previous_data+4,32)==0,
+            "Capture must copy the SRV's actual slice even while native drawing is predicated out.");
+    }
 
     rsf_texture_dump_options dump{}; dump.struct_size = sizeof(dump); dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
     const std::string raw_prefix = (directory / "colour").string(); dump.output_prefix_utf8 = raw_prefix.c_str();
