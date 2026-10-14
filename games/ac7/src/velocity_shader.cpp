@@ -9,8 +9,10 @@
 #include <map>
 #include <sstream>
 #include <bit>
+#include <atomic>
 
 namespace {
+std::atomic<uint32_t> geometry_compiles{0};
 uint32_t word(const uint8_t* bytes, size_t offset)
 { uint32_t value = 0; std::memcpy(&value, bytes + offset, 4); return value; }
 void put(std::vector<uint8_t>& bytes, uint32_t value)
@@ -520,7 +522,7 @@ O main(float4 p:ATTRIBUTE0,float4 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float4 u
         return rsf_ac7_velocity_shader_result::patched;
     } catch (...) {output.clear();info={};return rsf_ac7_velocity_shader_result::refused;}
 }
-bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
+static bool compile_geometry_template(const rsf_ac7_velocity_vertex_info& info,
     std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept
 {
     bytecode.clear(); previous_register=current_register=0;
@@ -631,6 +633,7 @@ float4 previous_position(float4 current,float4 key,float3 old) {
         for (size_t i=0;i<info.outputs.size();++i) source << "output.f" << i << "=input[j].f" << i << ';';
         source << "output.current=input[j]." << position << ";output.previous=previous_position(input[j]." << position << ",input[j]." << lookup
             << ",input[j]." << old << ".xyz);stream.Append(output);}stream.RestartStrip();}";
+        ++geometry_compiles;
         if (!rsf::compile_shader(source.str().c_str(),"ac7-previous-geometry","main","gs_5_0",bytecode)) return false;
         std::vector<Semantic> actual_inputs;
         if (!rsf_ac7_velocity_signature(bytecode.data(),bytecode.size(),false,actual_inputs)) return false;
@@ -643,6 +646,83 @@ float4 previous_position(float4 current,float4 key,float3 old) {
         return true;
     } catch (...) {bytecode.clear();return false;}
 }
+
+bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
+    std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept
+{
+    bytecode.clear();previous_register=current_register=0;
+    try {
+        // Compile the history algorithm once, then link its DXBC interface to each native VS.
+        // Recompiling this unrolled GS for every VS/PS/layout pair stalled the RHI draw thread.
+        static const auto prototype=[] {
+            rsf_ac7_velocity_vertex_info minimal;
+            minimal.outputs={{"SV_Position",0,1,3,0,15,0},{"RSFKEY",0,0,3,1,15,0},
+                {"RSFCENTRE",0,0,3,2,15,0},{"RSFOLD",0,0,3,3,15,0},{"RSFLOOKUP",0,0,3,4,15,0}};
+            std::vector<uint8_t> code;uint32_t p=0,c=0;
+            compile_geometry_template(minimal,code,p,c);return code;
+        }();
+        Container shader;if (!shader.read(prototype.data(),prototype.size())) return false;
+        auto* code=shader.find("SHEX");if (!code) code=shader.find("SHDR");
+        auto* input=shader.find("ISGN");auto* output=shader.find("OSG5");if (!output) output=shader.find("OSGN");
+        std::vector<Instruction> original;std::vector<Semantic> ins,outs;
+        if (!code || !input || !output || !instructions(*code,original,0x20050) || !read_signature(*input,ins) || !read_signature(*output,outs)) return false;
+        uint32_t next=0;for (const auto& s:info.outputs) next=std::max(next,s.reg+1);
+        if (next+2>32) return false;current_register=next;previous_register=next+1;
+        std::map<uint32_t,uint32_t> input_map,output_map;
+        auto native=[&](const Semantic& s)->const Semantic* {
+            for (const auto& n:info.outputs) if ((s.system==1 && n.system==1) || (!_stricmp(s.name.c_str(),n.name.c_str()) && s.index==n.index)) return &n;
+            return nullptr;
+        };
+        for (const auto& s:ins) {const auto* n=native(s);if (!n || n->mask!=15 || n->type!=3) return false;input_map[s.reg]=n->reg;}
+        for (const auto& s:outs) {
+            if (s.name=="RSFCUR") output_map[s.reg]=current_register;
+            else if (s.name=="RSFPREV") output_map[s.reg]=previous_register;
+            else {const auto* n=native(s);if (!n) return false;output_map[s.reg]=n->reg;}
+        }
+        std::vector<Semantic> result=info.outputs;
+        result.push_back({"RSFCUR",0,0,3,current_register,15,0});result.push_back({"RSFPREV",0,0,3,previous_register,15,0});
+        std::vector<uint32_t> declarations,body;
+        auto append=[](auto& target,const auto& words){target.insert(target.end(),words.begin(),words.end());};
+        for (const auto& s:info.outputs) {
+            if (!s.mask || s.reg>=32) return false;
+            std::vector<uint32_t> d{(s.system ? 0x05000061u : 0x0400005fu),0x00201002u|(uint32_t(s.mask)<<4),3,s.reg};
+            if (s.system) d.push_back(s.system);append(declarations,d);
+        }
+        for (const auto& s:result) {
+            std::vector<uint32_t> d{(s.system ? 0x04000067u : 0x03000065u),0x00102002u|(uint32_t(s.mask)<<4),s.reg};
+            if (s.system) d.push_back(s.system);append(declarations,d);
+        }
+        uint32_t vertex=UINT32_MAX,emissions=0;
+        const auto pos=std::find_if(outs.begin(),outs.end(),[](const auto& s){return s.system==1;});
+        if (pos==outs.end()) return false;
+        for (auto i:original) {
+            if ((i.op>=95 && i.op<=103)) continue;
+            if (i.declaration() || i.op==143 || i.op==206 || i.op==161) {append(declarations,i.words);continue;}
+            if (i.op==53) {append(body,i.words);continue;}
+            std::vector<Operand> operands;if (!i.operands(operands)) return false;
+            if (i.op==54 && operands.size()==2 && operands[0].type==2 && operands[0].reg==pos->reg && operands[1].type==1)
+                vertex=i.words[operands[1].index];
+            if (i.op==19 || i.op==117) {
+                if (vertex>2) return false;++emissions;
+                // Copy all native varyings, including packed fields the fixed algorithm does not read.
+                for (const auto& s:info.outputs) append(body,std::vector<uint32_t>{0x06000036u,0x00102002u|(uint32_t(s.mask)<<4),s.reg,0x00201e46u,vertex,s.reg});
+            }
+            for (const auto& o:operands) {
+                if (o.type==2) i.words[o.index]=output_map.at(o.reg);
+                if (o.type==1) {
+                    if (((i.words[o.token]>>20)&3)!=2 || o.end!=o.index+2 || i.words[o.index]>2) return false;
+                    i.words[o.index+1]=input_map.at(i.words[o.index+1]);
+                }
+            }
+            append(body,i.words);
+        }
+        if (emissions!=3) return false;
+        std::vector<uint32_t> linked{0x20050,0};append(linked,declarations);append(linked,body);linked[1]=uint32_t(linked.size());
+        code->bytes.resize(linked.size()*4);std::memcpy(code->bytes.data(),linked.data(),code->bytes.size());
+        write_signature(*input,info.outputs);write_signature(*output,result);shader.write(bytecode);return true;
+    } catch (...) {bytecode.clear();return false;}
+}
+uint32_t rsf_ac7_velocity_geometry_compile_count() noexcept {return geometry_compiles.load();}
 
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_native_geometry_shader(const void* bytes,size_t size,
     const rsf_ac7_velocity_vertex_info& vertex,std::vector<uint8_t>& output,

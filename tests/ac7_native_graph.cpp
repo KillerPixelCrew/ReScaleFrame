@@ -166,6 +166,37 @@ void original_context(void* raw_context, void* raw_root) {
 int main() {
     using namespace harness;
     {
+        // Exercise the actual camera classifier through independent copies of its native ABI.
+        auto* module=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x3cd0000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+        check(module!=nullptr,"allocate native class-cache fixture");
+        if (module) {
+            std::array<unsigned char,0x728> engine_data{};std::array<unsigned char,0x90> client{};
+            std::array<unsigned char,0xf8> world{};std::array<unsigned char,0x48> instance{};std::array<unsigned char,0x38> player{};
+            std::array<unsigned char,0x408> controller{};std::array<unsigned char,0xe18> pawn{};std::array<unsigned char,0x1ca0> camera{};
+            std::array<unsigned char,0x308> level{};std::array<unsigned char,0x4f0> settings{};std::array<unsigned char,0x18> target_actor{};
+            std::array<unsigned char,0xa0> plane_class{},camera_class{};uint64_t plane_base=uint64_t(uintptr_t(plane_class.data()+0x88)),camera_base=uint64_t(uintptr_t(camera_class.data()+0x88));
+            auto put=[](auto* bytes,size_t offset,const auto& value){std::memcpy(bytes+offset,&value,sizeof(value));};
+            auto pointer=[](auto& bytes){return uint64_t(uintptr_t(bytes.data()));};
+            const uint64_t engine_pointer=pointer(engine_data),player_pointer=pointer(player);
+            put(module,0x3cbbc28,engine_pointer);put(module,0x3a84660,pointer(plane_class));put(module,0x3cc0150,pointer(camera_class));
+            put(plane_class.data(),0x88,uint64_t(uintptr_t(&plane_base)));put(camera_class.data(),0x88,uint64_t(uintptr_t(&camera_base)));
+            put(engine_data.data(),0x720,pointer(client));put(client.data(),0x80,pointer(world));put(client.data(),0x88,pointer(instance));
+            put(instance.data(),0x38,uint64_t(uintptr_t(&player_pointer)));const int32_t one=1;put(instance.data(),0x40,one);
+            put(player.data(),0x30,pointer(controller));put(controller.data(),0x370,pointer(pawn));put(controller.data(),0x400,pointer(camera));
+            put(world.data(),0x30,pointer(level));put(level.data(),0x300,pointer(settings));put(pawn.data(),0x10,pointer(plane_class));
+            pawn[0xe12]=1;put(camera.data(),0xfb0,pointer(pawn));test_module=module;
+            uint32_t reset=0,why=0;uint64_t owner=0;
+            check(render_screen(reset,why,owner)==RSF_SCREEN_FLIGHT,"normal possessed-plane view remains flight");
+            put(target_actor.data(),0x10,pointer(camera_class));put(camera.data(),0xfb0,pointer(target_actor));pawn[0xe12]=0;
+            check(render_screen(reset,why,owner)==RSF_SCREEN_REPLAY && owner==pointer(target_actor),"rendered cinematic camera is eligible without pawn camera input");
+            camera[0x1c99]=4;reset=0;check(render_screen(reset,why,owner)==RSF_SCREEN_REPLAY && reset==1,"native cinematic cuts retain temporal reset");
+            const uint64_t pending=pointer(target_actor);put(camera.data(),0x15a0,pending);check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"pending camera transition still refuses FG");
+            const uint64_t zero=0;put(camera.data(),0x15a0,zero);put(settings.data(),0x4e8,pointer(player));check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"paused cinematics still refuse FG");
+            put(settings.data(),0x4e8,zero);put(pawn.data(),0x10,zero);check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"generic camera without mission plane does not become gameplay");
+            test_module=nullptr;VirtualFree(module,0,MEM_RELEASE);
+        }
+    }
+    {
         std::array<unsigned char,0x160> source{};
         std::array<unsigned char,0xa0> fill{};
         std::array<unsigned char,512> particles{};

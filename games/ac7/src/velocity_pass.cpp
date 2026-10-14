@@ -151,6 +151,8 @@ struct Renderer {
     Buffer indirect;
     ComPtr<ID3D11Buffer> capture_buffer;
     std::map<VariantKey,Variant> variants;
+    std::map<std::vector<uint8_t>,ComPtr<ID3D11VertexShader>> vertex_shaders;
+    std::map<std::vector<uint8_t>,ComPtr<ID3D11GeometryShader>> geometry_shaders,capture_shaders;
     std::map<ModelKey,Model> models;
     std::map<ViewKey,View> views;
     uint64_t epoch=1;
@@ -257,10 +259,16 @@ struct Renderer {
                 geometry,generated,made.maximum_vertices,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
             info=std::move(generated);made.history_slot=127;made.geometry_hash=geometry_source.hash;
         } else if (transformed) transformed=rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip);
-        if (!transformed ||
+        if (transformed) {
+            if (const auto cached=vertex_shaders.find(vertex);cached!=vertex_shaders.end()) made.vertex=cached->second;
+            else if (SUCCEEDED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex))) vertex_shaders.emplace(vertex,made.vertex);
+            if (!native_hull) {
+                if (const auto cached=geometry_shaders.find(geometry);cached!=geometry_shaders.end()) made.geometry=cached->second;
+                else if (SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) geometry_shaders.emplace(geometry,made.geometry);
+            }
+        }
+        if (!transformed || !made.vertex || (!native_hull && !made.geometry) ||
             rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,pixel_code,previous,current_clip)!=rsf_ac7_velocity_shader_result::patched ||
-            FAILED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex)) ||
-            (!native_hull && FAILED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) ||
             FAILED(device->CreatePixelShader(pixel_code.data(),pixel_code.size(),nullptr,&made.pixel))) {
             refused("native material/vertex shader transform or D3D11 variant creation failed");variants.emplace(key,Variant{});return nullptr;
         }
@@ -272,8 +280,10 @@ struct Renderer {
         };
         const UINT stride=64;
         const auto& capture_code=native_geometry || native_hull ? geometry : vertex;
-        if (FAILED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
-            &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) {
+        if (const auto cached=capture_shaders.find(capture_code);cached!=capture_shaders.end()) made.capture=cached->second;
+        else if (SUCCEEDED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
+            &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) capture_shaders.emplace(capture_code,made.capture);
+        if (!made.capture) {
             refused("stream-output signature creation failed");variants.emplace(key,Variant{});return nullptr;
         }
         made.particle=info.particle!=0;

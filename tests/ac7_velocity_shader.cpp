@@ -547,5 +547,6 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
             std::fprintf(stderr,"retained shader creation refused: %s\n",name.c_str()); ok=false;
         }
     }
+    check(rsf_ac7_velocity_geometry_compile_count()==1,"native/material interface changes link DXBC without repeating history-GS HLSL compilation");
     return ok ? 0 : 1;
 }

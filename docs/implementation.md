@@ -846,6 +846,13 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+14 October follow-up: the new captures identify a rendered cinematic rejected as unknown despite
+a player plane and known camera actor. That combination now selects replay FG, preserving pause,
+transition and cut resets. Repeated per-material GS HLSL compilation is replaced by one fixed
+algorithm with DXBC interface linking and shared shader objects. Release/WARP checks pass;
+live FPS recovery and cinematic FG activation need the updated run.
+[Evidence](research/ac7-velocity-20261013.md#rendered-cutscenes-and-compilation-stalls-14-october-follow-up).
+
 14 October: native beam, ribbon and animated-trail fills now supply stable counter/segment
 identity. The material pass interpolates prior rendered curves across subdivisions and retains
 surviving nodes when new heads appear. Native detour and WARP checks cover these paths, strips,

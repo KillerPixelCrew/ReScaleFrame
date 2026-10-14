@@ -1,5 +1,28 @@
 # AC7 temporal velocity, 13 October
 
+## Rendered cutscenes and compilation stalls, 14 October follow-up
+
+The new run reported 1-2 FPS stalls around scene changes and no FG in rendered cutscenes.
+Extracted capture 5 is the hangar cinematic, 6 is the mission-opening cinematic, and 7 is flight.
+The same-run log rejects the mission cinematic with screen 0/detail `0x12006`: the possessed
+player plane and Engine CameraActor are recognized, but the classifier requires target == pawn.
+The adapter now classifies that exact known combination as a rendered replay. Pause, pending
+camera targets, camera-owner changes and native cut resets keep their existing behavior. An
+independent native-layout fixture calls the actual classifier across these transitions.
+
+The log also records multi-second gaps before Present while SDK evaluation remains near 1 ms.
+Source review found repeated `D3DCompile` in the velocity geometry callback: each VS/PS/layout
+variant compiled the same large unrolled history algorithm with a different varying declaration.
+The pass now compiles one fixed interface and links native inputs/outputs and packed varying
+copies directly into DXBC. A regression check proves material/interface changes cause one HLSL
+compilation per process, not one per variant. Identical vertex, raster GS and SO shader objects
+are also shared by bytecode within the owning device. Existing WARP motion/depth/opacity and
+retained-signature validation pass with the linked variants. No producer coverage is disabled.
+
+MSVC Release verification passed: 45 native tests and seven opt-in vendor skips, formatting
+and Clippy. These checks confirm the source correction, not restored game FPS; the updated
+build needs a new live run to measure residual GPU/replay cost and cinematic FG activation.
+
 ## Beam, ribbon and animated-trail producers, 14 October
 
 The correspondence defect was at CPU production: fills clear ParticleId and can duplicate

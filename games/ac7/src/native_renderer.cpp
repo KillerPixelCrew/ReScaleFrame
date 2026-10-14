@@ -174,8 +174,14 @@ struct EntryGuard {
     EntryGuard() { slot.entry.fetch_add(1, std::memory_order_relaxed); }
     ~EntryGuard() { slot.entry.fetch_sub(1, std::memory_order_release); }
 };
+#if defined(RSF_AC7_GRAPH_TEST)
+unsigned char* test_module = nullptr;
+#endif
 unsigned char* game_module()
 {
+#if defined(RSF_AC7_GRAPH_TEST)
+    if (test_module) return test_module;
+#endif
     static unsigned char* const module = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     return module;
 }
@@ -362,6 +368,10 @@ uint32_t render_screen(uint32_t& reset, uint32_t& why, uint64_t& view_target)
     // The hangar is a level with its own game mode. Its aircraft viewer hands the camera to an
     // actor that is none of the hangar classes, so the level decides, not the camera owner.
     if (found & 0x4f00u) return RSF_SCREEN_HANGAR;
+    // A rendered mission cinematic hands the view to CameraActor while the player plane
+    // remains possessed. It is a real scene, not a video; pending targets/pause still refuse
+    // above, and camera-owner changes and the native cut bit still reset temporal history.
+    if ((found&0x12000u)==0x12000u) return RSF_SCREEN_REPLAY;
     why = found | 6u;
     if (target != pawn || !object_has_class(pawn, 0x3a84660) ||
         !read(pawn, 0xe12, camera_input) || !camera_input || !read(pawn, 0xb52, vr) || vr) return RSF_SCREEN_UNKNOWN;
