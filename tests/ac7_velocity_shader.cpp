@@ -175,11 +175,13 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         "float4 main(uint id:SV_VertexID):SV_Position"
         "{return float4(id==2?3:-1,id==1?3:-1,.75,1)+offset;}","vs_5_0");
     auto material=compile(materials[0],"ps_5_0");
-    ComPtr<ID3D11VertexShader> moving_vs;ComPtr<ID3D11PixelShader> material_ps;
+    ComPtr<ID3D11VertexShader> moving_vs;ComPtr<ID3D11PixelShader> material_ps,alias_material_ps;
     check(SUCCEEDED(device->CreateVertexShader(moving_vertex.data(),moving_vertex.size(),nullptr,&moving_vs)) &&
         SUCCEEDED(device->CreatePixelShader(material.data(),material.size(),nullptr,&material_ps)),"create native moving material shaders");
     rsf_ac7_velocity_shader_seen(moving_vs.Get(),0,moving_vertex.data(),uint32_t(moving_vertex.size()));
     rsf_ac7_velocity_shader_seen(material_ps.Get(),1,material.data(),uint32_t(material.size()));
+    check(SUCCEEDED(device->CreatePixelShader(material.data(),material.size(),nullptr,&alias_material_ps)),"create identical native material shader object");
+    rsf_ac7_velocity_shader_seen(alias_material_ps.Get(),1,material.data(),uint32_t(material.size()));
     D3D11_BUFFER_DESC object_desc{};object_desc.ByteWidth=16;object_desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     ComPtr<ID3D11Buffer> object_cb;check(SUCCEEDED(device->CreateBuffer(&object_desc,nullptr,&object_cb)),"create native object constants");
     D3D11_TEXTURE2D_DESC engine_desc{};engine_desc.Width=2;engine_desc.Height=1;
@@ -272,7 +274,8 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         const float opaque_motion[4]{.7f,.6f,0,0};context->ClearRenderTargetView(motion_rt.Get(),opaque_motion);
         ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
         context->OMSetDepthStencilState(depth_state.Get(),0);context->OMSetBlendState(nullptr,nullptr,UINT32_MAX);
-        context->VSSetShader(frame>=8 ? patch_vs.Get() : moving_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
+        auto* selected_ps=frame==9 ? alias_material_ps.Get() : material_ps.Get();
+        context->VSSetShader(frame>=8 ? patch_vs.Get() : moving_vs.Get(),nullptr,0);context->PSSetShader(selected_ps,nullptr,0);
         native_geometry.vertex_shader=frame>=8 ? patch_vs.Get() : moving_vs.Get();
         ID3D11Buffer* object=object_cb.Get();context->VSSetConstantBuffers(0,1,&object);
         ID3D11ShaderResourceView* srv=input_view.Get();context->PSSetShaderResources(0,1,&srv);
@@ -280,10 +283,13 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         native_geometry.topology=frame>=11 ? D3D11_PRIMITIVE_TOPOLOGY_12_CONTROL_POINT_PATCHLIST : frame>=8 ? D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY(native_geometry.topology));
         // The normal colour draw has a read-only depth contract; only the new pass writes depth.
+        const uint32_t shader_objects=rsf_ac7_velocity_device_shader_creation_count();
         rsf_ac7_velocity_geometry(&native_geometry);
+        if (frame==9) check(rsf_ac7_velocity_device_shader_creation_count()==shader_objects,
+            "a new material object with identical code reuses VS/PS/HS/DS/SO objects without driver shader creation");
         ComPtr<ID3D11VertexShader> restored_vs;ComPtr<ID3D11PixelShader> restored_ps;
         context->VSGetShader(&restored_vs,nullptr,nullptr);context->PSGetShader(&restored_ps,nullptr,nullptr);
-        check(restored_vs.Get()==(frame>=8 ? patch_vs.Get() : moving_vs.Get()) && restored_ps.Get()==material_ps.Get(),"generated-geometry passes restore native shaders");
+        check(restored_vs.Get()==(frame>=8 ? patch_vs.Get() : moving_vs.Get()) && restored_ps.Get()==selected_ps,"generated-geometry passes restore native shaders");
         ComPtr<ID3D11GeometryShader> restored_gs;context->GSGetShader(&restored_gs,nullptr,nullptr);
         check(restored_gs.Get()==(frame>=5 && frame<8 ? native_gs.Get() : nullptr),"velocity replay restores native geometry stage");
         ComPtr<ID3D11HullShader> restored_hs;ComPtr<ID3D11DomainShader> restored_ds;
@@ -336,11 +342,14 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
     native_geometry.vertex_shader=particle_vs.Get();native_geometry.count=6;native_geometry.input_layout=sprite_layout.Get();
     native_geometry.kind=0;native_geometry.indirect_buffer=nullptr;native_geometry.indirect_offset=0;
     native_geometry.vertex_buffers[0]=sprite_buffer.Get();native_geometry.strides[0]=sizeof(Particle);
-    for (uint32_t frame=0;frame<2;++frame) {
+    D3D11_QUERY_DESC occlusion_desc{D3D11_QUERY_OCCLUSION_PREDICATE,0};ComPtr<ID3D11Predicate> occluded;
+    check(SUCCEEDED(device->CreatePredicate(&occlusion_desc,&occluded)),"create empty-draw predicate");
+    context->Begin(occluded.Get());context->End(occluded.Get());
+    for (uint32_t frame=0;frame<5;++frame) {
         const float corners[3][2]{{-1,-1},{3,-1},{-1,3}};
         for (uint32_t p=0;p<2;++p) for (uint32_t vertex_index=0;vertex_index<3;++vertex_index) {
             const uint32_t id=frame ? 1-p : p;auto& value=particles[p*3+vertex_index];
-            value={};value.centre[0]=(id==0 ? 1.f : -1.f)*float(frame)*.2f;
+            value={};value.centre[0]=(id==0 ? 1.f : -1.f)*float(frame)*.1f;
             value.centre[2]=id==0 ? .75f : .5f;value.old[2]=value.centre[2];value.old[3]=float(id+1)/10000.f;
             value.size[0]=value.size[1]=1;std::memcpy(value.corner,corners[vertex_index],sizeof(value.corner));
         }
@@ -354,7 +363,17 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         context->GSSetShader(nullptr,nullptr,0);context->IASetInputLayout(sprite_layout.Get());
         ID3D11Buffer* vb=sprite_buffer.Get();UINT stride=sizeof(Particle),offset=0;context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
         ID3D11ShaderResourceView* srv=input_view.Get();context->PSSetShaderResources(0,1,&srv);
+        native_geometry.kind=frame==1 ? 6u : 0u;
+        native_geometry.indirect_buffer=indirect_args.Get();pass.geometry_capacity=4096;
+        uint32_t sparse_arguments[12]{3,1,0,0};context->UpdateSubresource(indirect_args.Get(),0,nullptr,sparse_arguments,0,0);
+        rsf_ac7_velocity_scope(&pass);
+        if (frame==3) context->SetPredication(occluded.Get(),FALSE);
         rsf_ac7_velocity_geometry(&native_geometry);
+        if (frame==3) {
+            ComPtr<ID3D11Predicate> restored;BOOL value=TRUE;context->GetPredication(&restored,&value);
+            check(restored.Get()==occluded.Get() && !value,"velocity preserves native predication");
+            context->SetPredication(nullptr,FALSE);
+        }
         pass.role=RSF_GAME_RENDER_VELOCITY_FINALIZE;pass.motion=engine_motion.Get();pass.depth=engine_depth.Get();
         check(rsf_ac7_velocity_commit(context.Get(),&pass)!=0,"commit sorted sprite motion");
         context->OMSetRenderTargets(0,nullptr,nullptr);engine_motion->GetDesc(&engine_desc);
@@ -364,8 +383,9 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped)),"read sorted sprite motion");
         if (mapped.pData) {
             uint16_t values[4]{};std::memcpy(values,mapped.pData,sizeof(values));context->Unmap(readable.Get(),0);
-            const float expected=32767.f/65535.f+(frame ? .2f*.2495f : 0);
-            check(std::fabs(float(values[0])/65535.f-expected)<5e-5f,"sorted sprite retains its own previous generated geometry after vertex-factory recycling");
+            const float expected=frame==3 ? .7f : 32767.f/65535.f-(frame==1 ? .1f*.2495f : 0);
+            check(std::fabs(float(values[0])/65535.f-expected)<5e-5f,
+                "sorted sprite history excludes an indirect draw's unwritten tail and a predicated-out draw");
         }
         rsf_ac7_velocity_frame_end();
     }
@@ -510,6 +530,9 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
                 rsf_ac7_velocity_geometry(&native_geometry);
                 native_geometry=original_geometry;pass=original_pass;rsf_ac7_velocity_scope(&pass);
             }
+            native_geometry.kind=frame==1 ? 6u : 0u;native_geometry.indirect_buffer=indirect_args.Get();
+            native_geometry.indirect_offset=0;pass.geometry_capacity=4096;rsf_ac7_velocity_scope(&pass);
+            uint32_t strip_arguments[12]{pairs*2,1,0,0};context->UpdateSubresource(indirect_args.Get(),0,nullptr,strip_arguments,0,0);
             rsf_ac7_velocity_geometry(&native_geometry);
             ComPtr<ID3D11InputLayout> restored;context->IAGetInputLayout(&restored);
             check(restored.Get()==beam_layout.Get(),"beam identity layout remains private to velocity replay");

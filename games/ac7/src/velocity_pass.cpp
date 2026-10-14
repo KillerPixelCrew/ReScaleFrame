@@ -64,8 +64,9 @@ struct Parameters {
 };
 static_assert(sizeof(Parameters)==112);
 constexpr char hash_source[]=R"(
-ByteAddressBuffer Source:register(t0);RWByteAddressBuffer Destination:register(u0);
-cbuffer Parameters:register(b0) {uint Count;uint Mask;uint Mode;uint Padding;};
+ByteAddressBuffer Source:register(t0);ByteAddressBuffer Arguments:register(t1);
+RWByteAddressBuffer Destination:register(u0);
+cbuffer Parameters:register(b0) {uint Count;uint Mask;uint Mode;uint WorkWidth;};
 uint key_hash(uint4 key) {
     uint value=2166136261;
     [unroll]for(uint i=0;i<4;i++)value=(value^key[i])*16777619;
@@ -87,7 +88,10 @@ void insert(uint4 clip,uint4 key,uint3 centre) {
     }
 }
 [numthreads(64,1,1)]void main(uint3 thread:SV_DispatchThreadID) {
-    if(thread.x>=Count)return;uint offset=thread.x*64;
+    uint count=WorkWidth ? Count : min(Count,Arguments.Load(32));
+    uint width=WorkWidth ? WorkWidth : Arguments.Load(36);
+    uint index=thread.x+thread.y*width*64;
+    if(index>=count)return;uint offset=index*64;
     if(Mode!=0 && Source.Load(offset)==0)return;
     uint4 clip=Source.Load4(offset+(Mode==0 ? 0 : 20));
     uint4 key=Source.Load4(offset+(Mode==0 ? 16 : 4));
@@ -110,10 +114,18 @@ float4 main(uint id:SV_VertexID):SV_Position {return float4(id==2?3:-1,id==1?3:-
 )";
 constexpr char indirect_source[]=R"(
 RWByteAddressBuffer Arguments:register(u0);
-cbuffer Parameters:register(b0) {uint Capacity;uint3 Padding;};
+cbuffer Parameters:register(b0) {uint Capacity;uint OutputCapacity;uint Packing;uint Points;};
 [numthreads(1,1,1)]void main(uint3 id:SV_DispatchThreadID) {
     uint vertices=Arguments.Load(0),instances=Arguments.Load(4);
-    if(vertices==0 || instances>Capacity/vertices)Arguments.Store(4,0);
+    if(vertices==0 || instances>Capacity/vertices) {Arguments.Store(4,0);instances=0;}
+    uint records=0;
+    if(instances!=0) {
+        records=Packing==4 ? OutputCapacity : Packing==3 ? (vertices/max(Points,1))*3*instances :
+            Packing==2 ? (max(vertices,2)-2)*3*instances : vertices*instances;
+        if(records>OutputCapacity) {Arguments.Store(4,0);records=0;}
+    }
+    uint groups=(records+63)/64;
+    Arguments.Store(32,records);Arguments.Store3(36,uint3(min(groups,65535),(groups+65534)/65535,1));
 })";
 struct Variant {
     ComPtr<ID3D11VertexShader> vertex;ComPtr<ID3D11PixelShader> pixel;
@@ -152,10 +164,16 @@ struct Renderer {
     Buffer captured;
     std::map<VariantKey,Variant> variants;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11VertexShader>> vertex_shaders;
+    std::map<std::vector<uint8_t>,ComPtr<ID3D11PixelShader>> pixel_shaders;
+    std::map<std::vector<uint8_t>,ComPtr<ID3D11HullShader>> hull_shaders;
+    std::map<std::vector<uint8_t>,ComPtr<ID3D11DomainShader>> domain_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11GeometryShader>> geometry_shaders,capture_shaders;
     std::map<ModelKey,Model> models;
     std::map<ViewKey,View> views;
     uint64_t epoch=1;
+    double cpu_ms=0,shader_cpu_ms=0,resource_cpu_ms=0,peak_cpu_ms=0;
+    uint32_t profile_frame=0,profile_callbacks=0,largest_records=0;
+    uint32_t shader_objects=0;
     explicit Renderer(ID3D11Device* d):device(d) {}
     bool initialize() {
         std::vector<uint8_t> bytes;
@@ -178,6 +196,10 @@ struct Renderer {
         arguments_view.Buffer.Flags=D3D11_BUFFER_UAV_FLAG_RAW;
         if (FAILED(device->CreateBuffer(&arguments,nullptr,&indirect.buffer)) ||
             FAILED(device->CreateUnorderedAccessView(indirect.buffer.Get(),&arguments_view,&indirect.write))) return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC argument_source{};argument_source.Format=DXGI_FORMAT_R32_TYPELESS;
+        argument_source.ViewDimension=D3D11_SRV_DIMENSION_BUFFEREX;argument_source.BufferEx.NumElements=16;
+        argument_source.BufferEx.Flags=D3D11_BUFFEREX_SRV_FLAG_RAW;
+        if (FAILED(device->CreateShaderResourceView(indirect.buffer.Get(),&argument_source,&indirect.view))) return false;
         D3D11_DEPTH_STENCIL_DESC depth_desc{};depth_desc.DepthEnable=TRUE;
         depth_desc.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;depth_desc.DepthFunc=D3D11_COMPARISON_GREATER_EQUAL;
         D3D11_BLEND_DESC blend_desc{};blend_desc.RenderTarget[0].RenderTargetWriteMask=15;
@@ -186,7 +208,8 @@ struct Renderer {
         return SUCCEEDED(device->CreateDepthStencilState(&depth_desc,&depth_state)) &&
             SUCCEEDED(device->CreateBlendState(&blend_desc,&blend)) && SUCCEEDED(device->CreateRasterizerState(&raster_desc,&raster));
     }
-    bool prepare_indirect(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,uint32_t capacity) {
+    bool prepare_indirect(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,uint32_t capacity,
+        uint32_t output_capacity,uint32_t packing,uint32_t points) {
         auto* source=static_cast<ID3D11Buffer*>(g.indirect_buffer);
         if (!source || !capacity) return false;
         D3D11_BUFFER_DESC desc{};source->GetDesc(&desc);
@@ -195,7 +218,7 @@ struct Renderer {
         ComPtr<ID3D11Device> owner;source->GetDevice(&owner);if (owner.Get()!=device.Get()) return false;
         const D3D11_BOX box{g.indirect_offset,0,0,g.indirect_offset+bytes,1,1};
         c->CopySubresourceRegion(indirect.buffer.Get(),0,0,0,0,source,0,&box);
-        const uint32_t bounds[]{capacity,0,0,0};c->UpdateSubresource(hash_parameters.Get(),0,nullptr,bounds,0,0);
+        const uint32_t bounds[]{capacity,output_capacity,packing,points};c->UpdateSubresource(hash_parameters.Get(),0,nullptr,bounds,0,0);
         ID3D11Buffer* cb=hash_parameters.Get();c->CSSetConstantBuffers(0,1,&cb);
         ID3D11UnorderedAccessView* uav=indirect.write.Get();c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
         c->CSSetShader(validate_indirect.Get(),nullptr,0);c->Dispatch(1,1,1);
@@ -247,10 +270,16 @@ struct Renderer {
         if (transformed && native_hull) {
             rsf_ac7_velocity_vertex_info h,d;std::vector<uint8_t> normal,corners;
             transformed=rsf_ac7_velocity_hull_shader(hull_source.bytes.data(),hull_source.bytes.size(),info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
-                rsf_ac7_velocity_domain_shader(domain_source.bytes.data(),domain_source.bytes.size(),h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched &&
-                SUCCEEDED(device->CreateHullShader(normal.data(),normal.size(),nullptr,&made.hull)) &&
-                SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&made.corners)) &&
-                SUCCEEDED(device->CreateDomainShader(geometry.data(),geometry.size(),nullptr,&made.domain));
+                rsf_ac7_velocity_domain_shader(domain_source.bytes.data(),domain_source.bytes.size(),h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
+            if (transformed) {
+                if (const auto cached=hull_shaders.find(normal);cached!=hull_shaders.end()) made.hull=cached->second;
+                else if (SUCCEEDED(device->CreateHullShader(normal.data(),normal.size(),nullptr,&made.hull))) {hull_shaders.emplace(normal,made.hull);++shader_objects;}
+                if (const auto cached=hull_shaders.find(corners);cached!=hull_shaders.end()) made.corners=cached->second;
+                else if (SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&made.corners))) {hull_shaders.emplace(corners,made.corners);++shader_objects;}
+                if (const auto cached=domain_shaders.find(geometry);cached!=domain_shaders.end()) made.domain=cached->second;
+                else if (SUCCEEDED(device->CreateDomainShader(geometry.data(),geometry.size(),nullptr,&made.domain))) {domain_shaders.emplace(geometry,made.domain);++shader_objects;}
+                transformed=made.hull && made.corners && made.domain;
+            }
             info=std::move(d);made.history_slot=127;made.geometry_hash=hull_source.hash^(domain_source.hash<<1)^(domain_source.hash>>31);
             made.maximum_vertices=made.input_points ? (3u+made.input_points-1)/made.input_points : 1u;
         } else if (transformed && native_geometry) {
@@ -261,15 +290,18 @@ struct Renderer {
         } else if (transformed) transformed=rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip);
         if (transformed) {
             if (const auto cached=vertex_shaders.find(vertex);cached!=vertex_shaders.end()) made.vertex=cached->second;
-            else if (SUCCEEDED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex))) vertex_shaders.emplace(vertex,made.vertex);
+            else if (SUCCEEDED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&made.vertex))) {vertex_shaders.emplace(vertex,made.vertex);++shader_objects;}
             if (!native_hull) {
                 if (const auto cached=geometry_shaders.find(geometry);cached!=geometry_shaders.end()) made.geometry=cached->second;
-                else if (SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) geometry_shaders.emplace(geometry,made.geometry);
+                else if (SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) {geometry_shaders.emplace(geometry,made.geometry);++shader_objects;}
             }
         }
-        if (!transformed || !made.vertex || (!native_hull && !made.geometry) ||
-            rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,pixel_code,previous,current_clip)!=rsf_ac7_velocity_shader_result::patched ||
-            FAILED(device->CreatePixelShader(pixel_code.data(),pixel_code.size(),nullptr,&made.pixel))) {
+        if (transformed && rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,
+            pixel_code,previous,current_clip)==rsf_ac7_velocity_shader_result::patched) {
+            if (const auto cached=pixel_shaders.find(pixel_code);cached!=pixel_shaders.end()) made.pixel=cached->second;
+            else if (SUCCEEDED(device->CreatePixelShader(pixel_code.data(),pixel_code.size(),nullptr,&made.pixel))) {pixel_shaders.emplace(pixel_code,made.pixel);++shader_objects;}
+        }
+        if (!transformed || !made.vertex || (!native_hull && !made.geometry) || !made.pixel) {
             refused("native material/vertex shader transform or D3D11 variant creation failed");variants.emplace(key,Variant{});return nullptr;
         }
         const auto position=std::find_if(info.outputs.begin(),info.outputs.end(),[](const auto& s) {return s.system==1;});
@@ -282,21 +314,27 @@ struct Renderer {
         const auto& capture_code=native_geometry || native_hull ? geometry : vertex;
         if (const auto cached=capture_shaders.find(capture_code);cached!=capture_shaders.end()) made.capture=cached->second;
         else if (SUCCEEDED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
-            &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) capture_shaders.emplace(capture_code,made.capture);
+            &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) {capture_shaders.emplace(capture_code,made.capture);++shader_objects;}
         if (!made.capture) {
             refused("stream-output signature creation failed");variants.emplace(key,Variant{});return nullptr;
         }
         made.particle=info.particle!=0;
         return &variants.emplace(key,std::move(made)).first->second;
     }
-    void build(ID3D11DeviceContext* c,Buffer& source,Buffer& destination,uint32_t count,uint32_t mode) {
-        const uint32_t params[]{count,destination.count-1,mode,0};
+    void build(ID3D11DeviceContext* c,Buffer& source,Buffer& destination,uint32_t count,uint32_t mode,
+        bool dynamic=false,ID3D11Predicate* predicate=nullptr,BOOL predicate_value=FALSE) {
+        if (!count) return;
+        const uint32_t groups=(count+63)/64,width=std::min(groups,65535u);
+        const uint32_t params[]{count,destination.count-1,mode,dynamic ? 0u : width};
         c->UpdateSubresource(hash_parameters.Get(),0,nullptr,params,0,0);
         ID3D11Buffer* cb=hash_parameters.Get();c->CSSetConstantBuffers(0,1,&cb);
-        ID3D11ShaderResourceView* srv=source.view.Get();c->CSSetShaderResources(0,1,&srv);
+        ID3D11ShaderResourceView* bound_sources[]{source.view.Get(),dynamic ? indirect.view.Get() : nullptr};c->CSSetShaderResources(0,2,bound_sources);
         ID3D11UnorderedAccessView* uav=destination.write.Get();c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
-        c->CSSetShader(hash.Get(),nullptr,0);c->Dispatch((count+63)/64,1,1);
-        srv=nullptr;uav=nullptr;c->CSSetShaderResources(0,1,&srv);c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
+        c->CSSetShader(hash.Get(),nullptr,0);c->SetPredication(predicate,predicate_value);
+        if (dynamic) c->DispatchIndirect(indirect.buffer.Get(),36);
+        else c->Dispatch(width,(groups+width-1)/width,1);
+        c->SetPredication(nullptr,FALSE);
+        bound_sources[0]=bound_sources[1]=nullptr;uav=nullptr;c->CSSetShaderResources(0,2,bound_sources);c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
     }
     bool model(ID3D11DeviceContext* c,Model& model,uint32_t count) {
         const uint32_t frame=uint32_t(current.native_frame);
@@ -346,6 +384,20 @@ struct Renderer {
     }
 };
 std::unique_ptr<Renderer> renderer;
+double cpu_clock_ms() {
+    static const double scale=[] {LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);return 1000./double(frequency.QuadPart);}();
+    LARGE_INTEGER ticks{};QueryPerformanceCounter(&ticks);return double(ticks.QuadPart)*scale;
+}
+struct CpuSample {
+    Renderer& owner;double entered,phase,shader_ms=0,resource_ms=0;uint32_t records=0;
+    CpuSample(Renderer& r,double start):owner(r),entered(start),phase(start) {owner.profile_frame=uint32_t(current.native_frame);}
+    ~CpuSample() {
+        const double elapsed=cpu_clock_ms()-entered;
+        owner.cpu_ms+=elapsed;owner.shader_cpu_ms+=shader_ms;owner.resource_cpu_ms+=resource_ms;
+        owner.peak_cpu_ms=std::max(owner.peak_cpu_ms,elapsed);++owner.profile_callbacks;
+        owner.largest_records=std::max(owner.largest_records,records);
+    }
+};
 void draw(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,ID3D11Buffer* arguments=nullptr) {
     switch (g.kind) {
     case 0:c->Draw(g.count,g.start);break;
@@ -386,6 +438,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     const auto& g=*pointer;auto* c=static_cast<ID3D11DeviceContext*>(g.context);
     if (!c || c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE || !g.depth_view || g.samples!=1 ||
         g.kind>6 || (g.kind<4 && !g.count)) return;
+    const double entered_ms=cpu_clock_ms();
     ComPtr<ID3D11GeometryShader> existing;ComPtr<ID3D11HullShader> hull;ComPtr<ID3D11DomainShader> domain;
     c->GSGetShader(&existing,nullptr,nullptr);c->HSGetShader(&hull,nullptr,nullptr);c->DSGetShader(&domain,nullptr,nullptr);
     if ((hull && !domain) || (domain && !hull) || (hull && existing)) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
@@ -394,8 +447,10 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}renderer=std::move(made);
     }
+    CpuSample timing(*renderer,entered_ms);
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
     Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_code,pixel_code);
+    timing.phase=cpu_clock_ms();timing.shader_ms=timing.phase-entered_ms;
     if (!variant) return;
     if (hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST+variant->input_points-1) return;
     const uint64_t count64=g.kind>=4 ? uint64_t(current.geometry_capacity)*(hull ? variant->input_points : 3u)/3u :
@@ -405,40 +460,50 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     const uint32_t expansion=variant->maximum_vertices*(g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? 3u : 1u);
     if (!count64 || count64>uint64_t(UINT32_MAX/128)/expansion) return;
     const uint32_t count=uint32_t(count64*expansion);
+    timing.records=count;
     State saved(c);if (!saved.context) return;
     ComPtr<ID3D11Predicate> predicate;BOOL predicate_value=FALSE;c->GetPredication(&predicate,&predicate_value);
     c->SetPredication(nullptr,FALSE);
-    if (g.kind>=5 && !renderer->prepare_indirect(c,g,uint32_t(count64))) {refused("indirect argument buffer or native mesh capacity is invalid");return;}
+    const uint32_t packing=existing ? 4u : hull ? 3u : g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? 2u : 1u;
+    if (g.kind>=5 && !renderer->prepare_indirect(c,g,uint32_t(count64),count,packing,variant->input_points)) {
+        refused("indirect argument buffer or native mesh capacity is invalid");return;
+    }
     auto& view=renderer->views[view_key(current)];if (!renderer->view(c,g,view)) {refused("native scene depth allocation/identity differs from the draw");return;}
     const ModelKey key{current.session_id,current.history_key ? current.history_key : current.view_key,
         current.primitive_key,current.material_key,vertex_code.hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
         variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex,variant->geometry_hash};
     auto& model=renderer->models[key];if (!renderer->model(c,model,count)) {refused("geometry-history allocation failed");return;}
-    if (!renderer->captured.buffer || renderer->stream.count<count) {
+    if (!renderer->captured.buffer || renderer->captured.count<count) {
         // SO cannot share the raw UAV contract, but it can expose a raw read-only SRV.
         // Keep a separate zero source for variable emissions and read completed SO directly.
-        Buffer readable,captured;
+        Buffer captured;
         uint32_t capacity=1024;
         while (capacity<count) capacity*=2;
-        if (!raw_buffer(device.Get(),capacity,false,readable)) {refused("generated-geometry read allocation failed");return;}
-        D3D11_BUFFER_DESC capture{};capture.ByteWidth=readable.count*64;
+        D3D11_BUFFER_DESC capture{};capture.ByteWidth=capacity*64;
         capture.BindFlags=D3D11_BIND_STREAM_OUTPUT|D3D11_BIND_SHADER_RESOURCE;
         capture.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=DXGI_FORMAT_R32_TYPELESS;
-        srv.ViewDimension=D3D11_SRV_DIMENSION_BUFFEREX;srv.BufferEx.NumElements=readable.count*16;
+        srv.ViewDimension=D3D11_SRV_DIMENSION_BUFFEREX;srv.BufferEx.NumElements=capacity*16;
         srv.BufferEx.Flags=D3D11_BUFFEREX_SRV_FLAG_RAW;
         if (FAILED(device->CreateBuffer(&capture,nullptr,&captured.buffer)) ||
             FAILED(device->CreateShaderResourceView(captured.buffer.Get(),&srv,&captured.view))) {
             refused("shader-readable stream-output allocation failed");return;
         }
-        captured.count=readable.count;
-        const UINT zero[4]{};c->ClearUnorderedAccessViewUint(readable.write.Get(),zero);
-        renderer->stream=std::move(readable);renderer->captured=std::move(captured);
+        captured.count=capacity;renderer->captured=std::move(captured);
     }
-    // A large indirect effect can grow the shared scratch buffer. Later small draws need
-    // only their own bounded records, including zeroed capacity for suppressed GS output.
-    const D3D11_BOX capture_box{0,0,0,count*64,1,1};
-    c->CopySubresourceRegion(renderer->captured.buffer.Get(),0,0,0,0,renderer->stream.buffer.Get(),0,&capture_box);
+    // Native GS emission and DrawAuto have no readable record count. Fixed vertex/patch
+    // producers use the actual direct or validated GPU indirect count and need no tail clear.
+    if (existing || g.kind==4) {
+        if (renderer->stream.count<count) {
+            uint32_t capacity=1024;
+            while (capacity<count) capacity*=2;
+            if (!raw_buffer(device.Get(),capacity,false,renderer->stream)) {refused("generated-geometry zero allocation failed");return;}
+            const UINT zero[4]{};c->ClearUnorderedAccessViewUint(renderer->stream.write.Get(),zero);
+        }
+        const D3D11_BOX capture_box{0,0,0,count*64,1,1};
+        c->CopySubresourceRegion(renderer->captured.buffer.Get(),0,0,0,0,renderer->stream.buffer.Get(),0,&capture_box);
+    }
+    timing.resource_ms=cpu_clock_ms()-timing.phase;
     if (existing || hull) {
         const Parameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
         ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);
@@ -478,7 +543,13 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);view.written=true;
     previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
     if (hull) c->DSSetShaderResources(127,1,&previous);
-    renderer->build(c,renderer->captured,model.now,count,0);
+    uint32_t records=count;
+    if (!existing && g.kind<4) {
+        const uint32_t instances=g.kind>=2 ? g.instances : 1u;
+        records=hull ? (g.count/variant->input_points)*3*instances :
+            g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? (std::max(g.count,2u)-2)*3*instances : uint32_t(count64);
+    }
+    renderer->build(c,renderer->captured,model.now,records,0,g.kind>=5,predicate.Get(),predicate_value);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {
@@ -513,9 +584,20 @@ extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass*
 } catch (...) {return 0;}
 extern "C" void rsf_ac7_velocity_frame_end(void)
 {
-    if (!renderer) return;++renderer->epoch;
+    if (!renderer) return;
+    if (log_line && (renderer->cpu_ms>=8 || renderer->peak_cpu_ms>=4)) {
+        char message[320]{};std::snprintf(message,sizeof(message),
+            "AC7 velocity CPU frame=%u callbacks=%u total_ms=%.2f shader_ms=%.2f resource_ms=%.2f peak_ms=%.2f largest_records=%u models=%zu variants=%zu shader_objects=%u",
+            renderer->profile_frame,renderer->profile_callbacks,renderer->cpu_ms,renderer->shader_cpu_ms,
+            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,renderer->models.size(),renderer->variants.size(),renderer->shader_objects);
+        log_line(log_user,message);
+    }
+    renderer->cpu_ms=renderer->shader_cpu_ms=renderer->resource_cpu_ms=renderer->peak_cpu_ms=0;
+    renderer->profile_callbacks=renderer->largest_records=0;++renderer->epoch;
     std::erase_if(renderer->models,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
     std::erase_if(renderer->views,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
 }
 extern "C" void rsf_ac7_velocity_release(void)
 {renderer.reset();current={};std::lock_guard<std::mutex> guard(code_guard);sources.clear();layouts.clear();source_bytes=0;}
+uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept
+{return renderer ? renderer->shader_objects : 0;}

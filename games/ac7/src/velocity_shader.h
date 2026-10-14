@@ -29,6 +29,7 @@ rsf_ac7_velocity_shader_result rsf_ac7_velocity_domain_shader(const void* bytes,
 bool rsf_ac7_velocity_geometry_shader(const rsf_ac7_velocity_vertex_info& info,
     std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept;
 uint32_t rsf_ac7_velocity_geometry_compile_count() noexcept;
+uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept;
 // Augment the native triangle GS at each emission, retaining its generated positions/varyings.
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_native_geometry_shader(const void* bytes,size_t size,
     const rsf_ac7_velocity_vertex_info& vertex,std::vector<uint8_t>& output,

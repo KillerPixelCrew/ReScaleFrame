@@ -846,6 +846,14 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+14 October ocean-cutscene follow-up: identical modified PS/HS/DS objects are now shared across
+material variants, alongside VS/GS/SO. A tessellated material-alias check causes zero additional
+device shader creations. Indirect history dispatch uses the validated GPU record count, and fixed
+producers avoid zero-tail copies. Slow-frame CPU summaries identify shader/resource preparation.
+The user confirms substantial recovery from the prior buffer fix; the remaining port/ocean
+cutscene dips need a rerun of this update.
+[Evidence](research/ac7-velocity-20261013.md#ocean-cutscene-dips-and-remaining-work-cost-14-october).
+
 14 October performance correction: cinematic FG is user-confirmed. The remaining FPS regression
 exposed whole-allocation clears/copies for every small material draw after a large effect. Shared
 SO storage now grows geometrically, uses one bounded zero copy, and exposes its output directly

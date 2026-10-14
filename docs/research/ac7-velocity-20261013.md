@@ -1,5 +1,45 @@
 # AC7 temporal velocity, 13 October
 
+## Ocean-cutscene dips and remaining work cost, 14 October
+
+The user reports that the buffer-bandwidth build is much better, with remaining dips into the
+30s during the introductory camera pullback from the port to ocean, ships and approaching planes.
+The new log contains ordinary flight samples around 70-80 rendered FPS and cinematic samples
+above 80, with intermittent frame-time spikes. No new F9 capture covers the reported dip, so
+shader compilation remains a candidate, not a confirmed attribution of those frames.
+
+The material variant key includes native PS and layout identity. VS/GS/SO objects were shared,
+but identical PS/HS/DS code still caused fresh device shader creation for each variant. These
+stages now share exact-bytecode objects on the owning device too. A native tessellation fixture
+switches to a separate material shader object containing identical code; all motion/depth checks
+still pass and the count of actual variant shader creations stays unchanged. Genuinely new
+shader code still needs its first device creation. Slow-frame CPU summaries distinguish shader
+preparation, resource preparation and total callback cost, and report shader/model counts.
+
+Fixed-emission VS/patch draws now use actual SO record counts. Validated GPU indirect arguments
+also produce record and dispatch counts in the private argument buffer, without CPU readback.
+This avoids scanning unused indirect capacity and removes zero initialization/copies for these
+routes. Native variable GS emission and DrawAuto retain their bounded zero-tail route. Hash
+dispatch uses two dimensions when needed to respect the D3D11 per-dimension group limit.
+Native predication applies to history insertion as well as capture/raster, with state restored.
+Microsoft's [SetPredication contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-setpredication)
+covers Dispatch and DispatchIndirect as well as drawing.
+
+WARP fixtures cover an emitter shrinking through an indirect draw, a returning particle without
+history, a predicated-out draw, and active indirect beam/ribbon/animated-trail strips. The retained
+native shader/tessellation corpus passes. A separate RTX 4070 Laptop reproduction uses ten
+eight-vertex indirect draws with a 64,000-vertex bound. Across samples 20-49 the median GPU time
+is 6.08 ms for `a014d94` and 2.31 ms for the exact-count path. The new run also has a slow initial
+phase, including a 17.67 ms sample in that window; this benchmark does not establish elimination
+of cold-start or game cutscene dips. Raw logs are private under `.local/ac7-20261014/performance`.
+
+MSVC Release verification passed: 45 native checks, seven opt-in skips, formatting and Clippy.
+The complete producer fixture, including the material-alias creation count, also passes on the
+RTX 4070 Laptop GPU. The proxy and overlay were deployed with matching dependency backups:
+`.local/deploy-backups/ac7-pair-20261014-195939-253` and
+`.local/deploy-backups/ac7-sr-20261014-195938-743`. The game was not launched or closed; the
+reported ocean/approaching-aircraft scene still needs a live retest of this version.
+
 ## Per-draw buffer bandwidth regression, 14 October
 
 The user confirmed that cinematic FG works in the deployed compilation/classifier build, but
