@@ -85,18 +85,24 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
             }
             const auto native_h=std::filesystem::path(argv[1])/"native-tess-h.dxbc";
             const auto native_d=std::filesystem::path(argv[1])/"native-tess-d.dxbc";
+            const auto native_v=std::filesystem::path(argv[1])/"native-tess-v.dxbc";
             if (std::filesystem::exists(native_h) && std::filesystem::exists(native_d)) {
                 auto matched_vertex=compile("struct V{float4 a:TEXCOORD10;float4 b:TEXCOORD11;float4 c:TEXCOORD7;float3 n:TEXCOORD9;"
                     "float4 p:VS_To_DS_Position;uint id:VS_To_DS_VertexID;};V main(uint i:SV_VertexID){V o;"
                     "o.a=o.b=o.c=0;o.n=float3(0,0,1);o.p=float4(i,0,0,1);o.id=i;return o;}","vs_5_0");
+                if (std::filesystem::exists(native_v)) {
+                    std::ifstream vf(native_v,std::ios::binary);
+                    matched_vertex.assign(std::istreambuf_iterator<char>(vf),std::istreambuf_iterator<char>());
+                }
                 std::ifstream hf(native_h,std::ios::binary),df(native_d,std::ios::binary);
                 std::vector<uint8_t> hb{std::istreambuf_iterator<char>(hf),std::istreambuf_iterator<char>()},db{std::istreambuf_iterator<char>(df),std::istreambuf_iterator<char>()};
                 check(rsf_ac7_velocity_vertex_shader(matched_vertex.data(),matched_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched &&
                     rsf_ac7_velocity_hull_shader(hb.data(),hb.size(),vi,h,corners,hi,points)==rsf_ac7_velocity_shader_result::patched && points==12 &&
                     rsf_ac7_velocity_domain_shader(db.data(),db.size(),hi,d,di,previous,current_clip)==rsf_ac7_velocity_shader_result::patched,
-                    "transform retained native 12-control-point PN hull/domain shaders with matching synthetic VS inputs");
-                th.Reset();tc.Reset();td.Reset();
-                check(SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)) &&
+                    "transform retained native 12-control-point PN tessellation with matching VS inputs");
+                tv.Reset();th.Reset();tc.Reset();td.Reset();
+                check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)) &&
+                    SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)) &&
                     SUCCEEDED(device->CreateDomainShader(d.data(),d.size(),nullptr,&td)),"create retained native PN tessellation variants");
             }
         }

@@ -23,6 +23,22 @@ MSVC Release verification passed: 45 native tests and seven opt-in vendor skips,
 and Clippy. These checks confirm the source correction, not restored game FPS; the updated
 build needs a new live run to measure residual GPU/replay cost and cinematic FG activation.
 
+The seven new F9 captures are `motion-20261014-174422-38604-1` through
+`motion-20261014-174913-38604-7`. Capture 6 contains 34 accepted components whose retained
+current/previous transforms differ, and packed velocity has nonzero moving samples in all three
+sampled frames. Joining draw command scopes to native role 18 identifies 96 sampled material
+records and 11 VS/PS pairs in that capture. This proves producer selection and buffer writes,
+not correct motion on every visible object. Capture 4 shows stationary weapons in the hangar;
+it does not establish moving-vehicle coverage. Capture 7 ended without the CPU/draw JSONL files.
+
+The captured material corpus supplies 13 ordinary VS, 16 PS and a complete matching native
+12-input-control-point VS/HS/DS chain. WARP accepts their transformed shader objects. The
+retained-chain fixture now loads the actual native VS when supplied, replacing its earlier
+synthetic interface for this check. An initial ordinary-VS check refused that tessellation VS
+because it has world-position output; the matched tessellation route succeeds. No production
+fallback or coverage restriction was added. Private extraction/statistics are under
+`.local/ac7-20261014/coverage`; the original captures were read without modification.
+
 ## Beam, ribbon and animated-trail producers, 14 October
 
 The correspondence defect was at CPU production: fills clear ParticleId and can duplicate

@@ -853,6 +853,11 @@ algorithm with DXBC interface linking and shared shader objects. Release/WARP ch
 live FPS recovery and cinematic FG activation need the updated run.
 [Evidence](research/ac7-velocity-20261013.md#rendered-cutscenes-and-compilation-stalls-14-october-follow-up).
 
+The same-run corpus now validates the complete native PN VS/HS/DS chain and 29 ordinary
+material shaders on WARP. Capture 6 has changing native component histories and written motion;
+stationary hangar weapons and the incomplete flight capture leave affected-scene visual coverage
+open. These captures precede the deployed performance/cinematic correction.
+
 14 October: native beam, ribbon and animated-trail fills now supply stable counter/segment
 identity. The material pass interpolates prior rendered curves across subdivisions and retains
 surviving nodes when new heads appear. Native detour and WARP checks cover these paths, strips,
