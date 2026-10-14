@@ -1,5 +1,38 @@
 # AC7 temporal velocity, 13 October
 
+## Per-draw buffer bandwidth regression, 14 October
+
+The user confirmed that cinematic FG works in the deployed compilation/classifier build, but
+reported roughly 10 rendered FPS versus 70 before the velocity work. The new flight log spends
+about 60-70 ms in Present while SR evaluation remains below 1 ms. F9 sampling itself adds
+synchronous readback cost, so sampled native-scope durations cannot stand in for steady GPU time.
+
+Source inspection found that one large draw grows shared SO storage and every later small draw
+clears and copies the whole allocation in both directions. A private hardware reproduction warms
+storage with an empty indirect draw bounded to 64,000 input vertices, then submits 100 eight-vertex
+draws per frame. D3D11 disjoint/timestamp queries measure the work after shader/allocation warm-up.
+The first run used the default Intel UHD adapter: the old path took roughly 410 ms, versus 14 ms
+with bounded transfers. Selecting the high-performance adapter explicitly gives the RTX 4070
+Laptop GPU (`10de:2860`): the committed old pass takes 13.15-15.10 ms over frames 2-11, and the
+final corrected pass takes 3.34-3.49 ms. These are standalone workload measurements, not game FPS.
+Baseline source is `23c7236`; logs and reproduction sources are private under
+`.local/ac7-20261014/performance`.
+
+The correction grows scratch storage geometrically and initializes a zero source once per
+allocation. Each draw zeros only its bounded SO range with one GPU region copy. SO output now
+has a raw read-only SRV, so the history compute pass reads it directly. The earlier failed
+SO/UAV combination did not imply that SO/SRV was unsupported; both hardware and WARP accept the
+read-only binding and the complete producer checks pass. Native variable emissions, indirect
+bounds and predication keep their prior zero-tail behavior. No particle or material route is
+disabled. The regression fixture grows shared storage with an empty indirect draw before checking
+small moving, clipped and resampled curve draws. Live performance recovery still needs a rerun.
+
+MSVC Release verification passed: 45 native checks, seven opt-in skips, formatting and Clippy.
+The retained native material/tessellation corpus also passes. The corrected proxy and overlay
+were deployed to the established AC7 installation with backups under
+`.local/deploy-backups/ac7-pair-20261014-185941-827` and matching SR dependencies under
+`.local/deploy-backups/ac7-sr-20261014-185941-387`. The game was not launched or closed.
+
 ## Rendered cutscenes and compilation stalls, 14 October follow-up
 
 The new run reported 1-2 FPS stalls around scene changes and no FG in rendered cutscenes.

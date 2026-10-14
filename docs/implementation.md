@@ -846,6 +846,13 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 
 ## AC7 motion and velocity improvements
 
+14 October performance correction: cinematic FG is user-confirmed. The remaining FPS regression
+exposed whole-allocation clears/copies for every small material draw after a large effect. Shared
+SO storage now grows geometrically, uses one bounded zero copy, and exposes its output directly
+to history compute through a read-only SRV. The RTX 4070 Laptop reproduction falls from roughly
+14 ms to 3.4 ms for 100 tiny draws after large storage growth. Game FPS recovery remains unverified.
+[Evidence](research/ac7-velocity-20261013.md#per-draw-buffer-bandwidth-regression-14-october).
+
 14 October follow-up: the new captures identify a rendered cinematic rejected as unknown despite
 a player plane and known camera actor. That combination now selects replay FG, preserving pause,
 transition and cut resets. Repeated per-material GS HLSL compilation is replaced by one fixed

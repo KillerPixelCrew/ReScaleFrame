@@ -149,7 +149,7 @@ struct Renderer {
     ComPtr<ID3D11RasterizerState> raster;
     Buffer stream;
     Buffer indirect;
-    ComPtr<ID3D11Buffer> capture_buffer;
+    Buffer captured;
     std::map<VariantKey,Variant> variants;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11VertexShader>> vertex_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11GeometryShader>> geometry_shaders,capture_shaders;
@@ -414,17 +414,31 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         current.primitive_key,current.material_key,vertex_code.hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
         variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex,variant->geometry_hash};
     auto& model=renderer->models[key];if (!renderer->model(c,model,count)) {refused("geometry-history allocation failed");return;}
-    if (!renderer->capture_buffer || renderer->stream.count<count) {
-        // Stream output and raw UAV storage have different D3D11 allocation contracts. Copy
-        // completed generated vertices into shader-readable storage on the same GPU stream.
-        Buffer readable;ComPtr<ID3D11Buffer> capture_buffer;
-        if (!raw_buffer(device.Get(),count,false,readable)) {refused("generated-geometry read allocation failed");return;}
-        D3D11_BUFFER_DESC capture{};capture.ByteWidth=readable.count*64;capture.BindFlags=D3D11_BIND_STREAM_OUTPUT;
-        if (FAILED(device->CreateBuffer(&capture,nullptr,&capture_buffer))) {refused("stream-output allocation failed");return;}
-        renderer->stream=std::move(readable);renderer->capture_buffer=std::move(capture_buffer);
+    if (!renderer->captured.buffer || renderer->stream.count<count) {
+        // SO cannot share the raw UAV contract, but it can expose a raw read-only SRV.
+        // Keep a separate zero source for variable emissions and read completed SO directly.
+        Buffer readable,captured;
+        uint32_t capacity=1024;
+        while (capacity<count) capacity*=2;
+        if (!raw_buffer(device.Get(),capacity,false,readable)) {refused("generated-geometry read allocation failed");return;}
+        D3D11_BUFFER_DESC capture{};capture.ByteWidth=readable.count*64;
+        capture.BindFlags=D3D11_BIND_STREAM_OUTPUT|D3D11_BIND_SHADER_RESOURCE;
+        capture.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+        D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=DXGI_FORMAT_R32_TYPELESS;
+        srv.ViewDimension=D3D11_SRV_DIMENSION_BUFFEREX;srv.BufferEx.NumElements=readable.count*16;
+        srv.BufferEx.Flags=D3D11_BUFFEREX_SRV_FLAG_RAW;
+        if (FAILED(device->CreateBuffer(&capture,nullptr,&captured.buffer)) ||
+            FAILED(device->CreateShaderResourceView(captured.buffer.Get(),&srv,&captured.view))) {
+            refused("shader-readable stream-output allocation failed");return;
+        }
+        captured.count=readable.count;
+        const UINT zero[4]{};c->ClearUnorderedAccessViewUint(readable.write.Get(),zero);
+        renderer->stream=std::move(readable);renderer->captured=std::move(captured);
     }
-    const UINT zero[4]{};c->ClearUnorderedAccessViewUint(renderer->stream.write.Get(),zero);
-    c->CopyResource(renderer->capture_buffer.Get(),renderer->stream.buffer.Get());
+    // A large indirect effect can grow the shared scratch buffer. Later small draws need
+    // only their own bounded records, including zeroed capacity for suppressed GS output.
+    const D3D11_BOX capture_box{0,0,0,count*64,1,1};
+    c->CopySubresourceRegion(renderer->captured.buffer.Get(),0,0,0,0,renderer->stream.buffer.Get(),0,&capture_box);
     if (existing || hull) {
         const Parameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
         ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);
@@ -435,9 +449,8 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (variant->layout) c->IASetInputLayout(variant->layout.Get());
     if (hull) {c->HSSetShader(variant->corners.Get(),nullptr,0);c->DSSetShader(variant->domain.Get(),nullptr,0);}
     c->GSSetShader(variant->capture.Get(),nullptr,0);c->PSSetShader(nullptr,nullptr,0);
-    ID3D11Buffer* stream=renderer->capture_buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
+    ID3D11Buffer* stream=renderer->captured.buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);c->SOSetTargets(0,nullptr,nullptr);
-    c->CopyResource(renderer->stream.buffer.Get(),renderer->capture_buffer.Get());
     D3D11_VIEWPORT viewport{};UINT viewports=1;c->RSGetViewports(&viewports,&viewport);
     if (viewports!=1 || viewport.Width<=0 || viewport.Height<=0) return;
     Parameters parameters{};parameters.rect[0]=viewport.TopLeftX;parameters.rect[1]=viewport.TopLeftY;
@@ -465,7 +478,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);view.written=true;
     previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
     if (hull) c->DSSetShaderResources(127,1,&previous);
-    renderer->build(c,renderer->stream,model.now,count,0);
+    renderer->build(c,renderer->captured,model.now,count,0);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {

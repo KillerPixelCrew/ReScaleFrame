@@ -500,6 +500,16 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
             context->VSSetShader(beam_vs.Get(),nullptr,0);context->PSSetShader(material_ps.Get(),nullptr,0);
             ID3D11ShaderResourceView* texture=input_view.Get();context->PSSetShaderResources(0,1,&texture);
             ID3D11RenderTargetView* rt=target.Get();context->OMSetRenderTargets(1,&rt,engine_dsv.Get());
+            if (kind==0 && frame==0 && order==0) {
+                // Grow shared SO storage with an empty bounded indirect draw. The following
+                // small moving/clipped draws must not consume the large buffer's stale tail.
+                const auto original_geometry=native_geometry;const auto original_pass=pass;
+                uint32_t empty_arguments[12]{};context->UpdateSubresource(indirect_args.Get(),0,nullptr,empty_arguments,0,0);
+                pass.primitive_key=999;pass.geometry_capacity=4096;rsf_ac7_velocity_scope(&pass);
+                native_geometry.kind=6;native_geometry.indirect_buffer=indirect_args.Get();native_geometry.indirect_offset=0;
+                rsf_ac7_velocity_geometry(&native_geometry);
+                native_geometry=original_geometry;pass=original_pass;rsf_ac7_velocity_scope(&pass);
+            }
             rsf_ac7_velocity_geometry(&native_geometry);
             ComPtr<ID3D11InputLayout> restored;context->IAGetInputLayout(&restored);
             check(restored.Get()==beam_layout.Get(),"beam identity layout remains private to velocity replay");
