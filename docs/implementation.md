@@ -850,22 +850,23 @@ combined SR and MFG (M6 to M10). Still outside the plan:
 material variants, alongside VS/GS/SO. A tessellated material-alias check causes zero additional
 device shader creations. Indirect history dispatch uses the validated GPU record count, and fixed
 producers avoid zero-tail copies. Slow-frame CPU summaries identify shader/resource preparation.
-The user confirms substantial recovery from the prior buffer fix; the remaining port/ocean
-cutscene dips need a rerun of this update.
+The user confirms the port/ocean cutscene regression is fully fixed in deployed `0af8c9e`;
+cinematic FG is also game-confirmed. Affected-object visual motion coverage remains open.
 [Evidence](research/ac7-velocity-20261013.md#ocean-cutscene-dips-and-remaining-work-cost-14-october).
 
 14 October performance correction: cinematic FG is user-confirmed. The remaining FPS regression
 exposed whole-allocation clears/copies for every small material draw after a large effect. Shared
 SO storage now grows geometrically, uses one bounded zero copy, and exposes its output directly
 to history compute through a read-only SRV. The RTX 4070 Laptop reproduction falls from roughly
-14 ms to 3.4 ms for 100 tiny draws after large storage growth. Game FPS recovery remains unverified.
+14 ms to 3.4 ms for 100 tiny draws after large storage growth. The later ocean-cutscene follow-up
+above records game-confirmed performance recovery.
 [Evidence](research/ac7-velocity-20261013.md#per-draw-buffer-bandwidth-regression-14-october).
 
 14 October follow-up: the new captures identify a rendered cinematic rejected as unknown despite
 a player plane and known camera actor. That combination now selects replay FG, preserving pause,
 transition and cut resets. Repeated per-material GS HLSL compilation is replaced by one fixed
 algorithm with DXBC interface linking and shared shader objects. Release/WARP checks pass;
-live FPS recovery and cinematic FG activation need the updated run.
+the later follow-up above records game-confirmed FPS recovery and cinematic FG activation.
 [Evidence](research/ac7-velocity-20261013.md#rendered-cutscenes-and-compilation-stalls-14-october-follow-up).
 
 The same-run corpus now validates the complete native PN VS/HS/DS chain and 29 ordinary

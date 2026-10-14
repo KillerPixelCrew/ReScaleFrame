@@ -2,6 +2,11 @@
 
 ## Ocean-cutscene dips and remaining work cost, 14 October
 
+Game acceptance: after testing deployed `0af8c9e`, the user replied "Fully fixed now" to the
+same port-to-ocean cutscene retest. This closes the reported cutscene performance regression;
+cinematic FG had already been confirmed working. It does not establish visual velocity coverage
+for carrier/refuelling weapons, moving vehicles, kill-cam or every particle/translucent producer.
+
 The user reports that the buffer-bandwidth build is much better, with remaining dips into the
 30s during the introductory camera pullback from the port to ocean, ships and approaching planes.
 The new log contains ordinary flight samples around 70-80 rendered FPS and cinematic samples
@@ -38,7 +43,7 @@ The complete producer fixture, including the material-alias creation count, also
 RTX 4070 Laptop GPU. The proxy and overlay were deployed with matching dependency backups:
 `.local/deploy-backups/ac7-pair-20261014-195939-253` and
 `.local/deploy-backups/ac7-sr-20261014-195938-743`. The game was not launched or closed; the
-reported ocean/approaching-aircraft scene still needs a live retest of this version.
+ocean/approaching-aircraft scene was subsequently confirmed fixed in the user-run retest above.
 
 ## Per-draw buffer bandwidth regression, 14 October
 
