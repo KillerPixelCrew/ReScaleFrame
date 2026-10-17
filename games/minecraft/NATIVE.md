@@ -129,3 +129,6 @@ Keyboard and controller counters remained zero; Controlify reported no attached 
 The game then shut down normally for deployment of the final build, which also accepts
 SDK thread-targeted pings. Final jar SHA256:
 `d7440db2dc82eef826cce1182d3d107dea1164d3a51cad1ebdd0ee9d0a82eabd`.
+Final payload `43fb8ab6d3ca21c21897` completed startup in 109.672 seconds and remained
+responsive. Its source frame 1910 reports 167 genuine PCL pings with valid advancing timings;
+keyboard and controller input still need manual acceptance.
