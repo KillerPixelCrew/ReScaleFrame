@@ -19,14 +19,14 @@
 #define RSF_DLSS_H
 
 #include <stdint.h>
+#include <rescaleframe/dlss_preset.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* 3: a frame names its viewport, may ask for alpha to be carried, and may pin its frame index so
-   two viewports evaluated in one frame share it. */
-#define RSF_DLSS_ABI_VERSION 4u
+/* 5: setup and frame structures append a requested model preset. */
+#define RSF_DLSS_ABI_VERSION 5u
 
 /* Which engine the host is. Streamline wants an identity before it will start NGX, and NGX is what
    DLSS runs on, so this is not optional decoration: with none of it supplied the DLSS plugin loads
@@ -88,6 +88,9 @@ typedef struct rsf_dlss_setup {
     uint32_t require_signature;
     rsf_dlss_log_fn log;
     void* log_user;
+    /* Native D3D12 model request; legacy evaluation uses rsf_dlss_frame.preset.
+       Zero lets the SDK choose. */
+    uint32_t preset;
 } rsf_dlss_setup;
 
 /* Load and initialise Streamline. Manual hooking is used, which is what allows the device to
@@ -239,6 +242,7 @@ typedef struct rsf_dlss_frame {
        linear HDR: DLSS then runs with HDR input off and ignores the exposure texture. The caller
        decodes color_out afterwards. */
     uint32_t color_encoded;
+    uint32_t preset;
 } rsf_dlss_frame;
 
 /* Run DLSS for this frame. `d3d11_context` is the `ID3D11DeviceContext*` the game renders with,

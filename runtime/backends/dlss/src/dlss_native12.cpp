@@ -22,6 +22,7 @@ struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
     bool sdr = false;
+    uint32_t preset = 0;
     rsf_streamline_host* shared_host = nullptr;
     rsf_quality quality = RSF_QUALITY_QUALITY;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
@@ -43,6 +44,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     if (!device || !setup || setup->struct_size < sizeof(*setup) || !setup->interposer_path_utf8 ||
         !setup->plugin_directory_utf8 || !setup->engine_version_utf8 || !setup->project_id_utf8)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!rsf_dlss_preset_valid(setup->preset)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_DLSS_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if RSF_HAVE_STREAMLINE
     // Shared SR borrows the presentation host; standalone SR owns one registration.
@@ -52,6 +54,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     if (!rsf::widen_utf8(setup->interposer_path_utf8, path) || !rsf::widen_utf8(setup->plugin_directory_utf8, directory))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     context->shared_host = shared;
+    context->preset = setup->preset;
     if (shared) {
         if (setup->require_signature && !rsf_dlss_verify_runtime_signature(path.c_str()))
             return RSF_BACKEND_ERROR_LOAD_FAILED;
@@ -182,6 +185,9 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     constants.reset = frame->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     if (context->constants(constants, *token, viewport) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     sl::DLSSOptions options{}; options.mode = rsf::dlss_mode(context->quality);
+    const auto preset = static_cast<sl::DLSSPreset>(context->preset);
+    options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
+    options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
     options.outputWidth = record.output_width; options.outputHeight = record.output_height;
     options.colorBuffersHDR = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     options.useAutoExposure = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;

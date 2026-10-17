@@ -33,6 +33,8 @@ struct Host {
     std::array<void*, 3> command_lists{};
     uint32_t backend = RSF_SR_DLSS, quality = 1;
     uint32_t requested_backend = RSF_SR_DLSS, requested_quality = 1;
+    uint32_t preset = 0;
+    std::wstring preferences;
     int (*policy)(uint32_t, uint32_t) = nullptr;
     bool dirty = false, enabled = true, show_performance = false;
     bool automatic = true;
@@ -114,6 +116,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         stats.backend_name = sr_name(self.backend); stats.backend = self.backend;
         stats.sr_backend_choices = kSrChoices;
         stats.requested_backend = self.requested_backend; stats.quality = self.quality;
+        stats.dlss_preset = self.preset; stats.dlss_preset_available = 1;
         stats.enabled = self.enabled; stats.last_result = self.last_result;
         stats.last_switch_result = self.last_result;
         stats.refusal_reason = self.dirty ? "Applying requested configuration after GPU completion" :
@@ -162,6 +165,14 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
 #if RSF_OVERLAY_ABI_VERSION >= 7
             if (intent.performance_hud_changed) self.show_performance = intent.performance_hud != 0;
 #endif
+            if (intent.dlss_preset_changed && rsf_dlss_preset_valid(intent.dlss_preset)) {
+                self.preset = intent.dlss_preset;
+                self.dirty = true; self.plan.enabled = 0;
+                const auto text = std::to_wstring(self.preset);
+                if (!WritePrivateProfileStringW(L"Rendering", L"DlssPreset", text.c_str(), self.preferences.c_str()))
+                    log(&self, "Could not save requested DLSS model preset.");
+                log(&self, "DLSS model change requested; draining previous GPU work.");
+            }
             if (intent.backend_changed || intent.quality_changed || intent.enabled_changed || intent.start_requested) {
                 const auto requested_backend = intent.backend_changed ? intent.backend : self.requested_backend;
                 const auto requested_quality = intent.quality_changed ? intent.quality : self.requested_quality;
@@ -232,6 +243,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         setup.dlss.interposer_path_utf8 = interposer.c_str(); setup.dlss.plugin_directory_utf8 = self.streamline.c_str();
         setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = RSF_UNITY_ENGINE_VERSION;
         setup.dlss.project_id_utf8 = RSF_UNITY_PROJECT_ID;
+        setup.dlss.preset = self.preset;
         setup.dlss.require_signature = 1; setup.dlss.log = log; setup.dlss.log_user = &self;
         const auto created = rsf_sr12_create(&setup, &self.sr);
         self.last_result = created;
@@ -302,6 +314,10 @@ extern "C" uint32_t __stdcall rsf_unity_sr_start(const wchar_t* path) try
     next->backend = GetPrivateProfileIntW(L"UnitySR", L"Backend", RSF_SR_AUTO, path);
     next->automatic = next->backend == RSF_SR_AUTO;
     if (next->automatic) next->backend = 0;
+    next->preferences = rsf::unity_config::preferences_path(path);
+    next->preset = GetPrivateProfileIntW(L"Rendering", L"DlssPreset",
+        GetPrivateProfileIntW(L"UnitySR", L"DlssPreset", 0, path), next->preferences.c_str());
+    if (!rsf_dlss_preset_valid(next->preset)) next->preset = 0;
     next->quality = GetPrivateProfileIntW(L"UnitySR", L"Quality", 1, path);
     next->requested_backend = next->backend; next->requested_quality = next->quality;
     if (next->backend > RSF_SR_SPATIAL || next->quality > 5 || (next->backend == RSF_SR_DLSS && next->quality > 4)) return 2;

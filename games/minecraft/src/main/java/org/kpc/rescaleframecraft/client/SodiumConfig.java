@@ -25,6 +25,9 @@ public final class SodiumConfig implements ConfigEntryPoint {
                 .addOption(choice(b,"upscaler","Upscaler",TaaSettings.Upscaler.class,TaaSettings.Upscaler.OFF,
                     value->TaaSettings.current.upscaler=value,()->TaaSettings.current.upscaler,
                     "Reconstructs a smaller world image at display resolution. Native uses temporal AA at full resolution. Applies without restarting. F3 shows the actual backend and errors."))
+                .addOption(choice(b,"dlss_preset","DLSS model preset",TaaSettings.DlssPreset.class,TaaSettings.DlssPreset.DEFAULT,
+                    value->TaaSettings.current.dlssPreset=value,()->TaaSettings.current.dlssPreset,
+                    "DLSS model selection, independent of Quality. Default lets the SDK choose; E/F are legacy models. Applies without restarting. NVIDIA driver overrides may replace this request."))
                 .addOption(choice(b,"quality","Quality",TaaSettings.Quality.class,TaaSettings.Quality.QUALITY,
                     value->TaaSettings.current.quality=value,()->TaaSettings.current.quality,
                     "The selected SDK chooses the render size. Native is full resolution; Performance renders fewer pixels.")))

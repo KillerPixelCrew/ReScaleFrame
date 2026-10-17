@@ -760,6 +760,32 @@ mod tests {
     }
 
     #[test]
+    fn dlss_model_selection_is_independent_of_quality_and_disabled_for_other_backends() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.dlss_preset_available = true;
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().dlss_preset[6].expect("Preset M is offered");
+        let [_, chosen] = click(&mut overlay, &stats, target);
+        assert!(chosen.dlss_preset_changed);
+        assert_eq!(chosen.dlss_preset, 13);
+        assert!(!chosen.quality_changed);
+        assert!(!idle_frame(&mut overlay, &stats).dlss_preset_changed);
+        stats.dlss_preset = 13;
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().dlss_preset[0].expect("Default restores SDK choice");
+        let [_, chosen] = click(&mut overlay, &stats, target);
+        assert!(chosen.dlss_preset_changed);
+        assert_eq!(chosen.dlss_preset, 0);
+        stats.backend = 3;
+        settle(&mut overlay, &stats);
+        let target =
+            overlay.controls().dlss_preset[4].expect("DLSS control stays visible but disabled");
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.dlss_preset_changed && !release.dlss_preset_changed);
+    }
+
+    #[test]
     fn a_click_on_a_quality_level_changes_the_intent_exactly_once() {
         let mut overlay = Overlay::new();
         let stats = stats_with_backend();

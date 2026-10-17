@@ -105,6 +105,8 @@ pub struct Controls {
     /// One rectangle per quality level, in [`Quality::ALL`] order. `None` when the panel was not
     /// laid out this frame, or the window was collapsed.
     pub quality: [Option<Rect>; 5],
+    /// Default, E, F, J, K, L and M model selectors.
+    pub dlss_preset: [Option<Rect>; 7],
     /// The enable toggle.
     pub enabled: Option<Rect>,
     /// One control per SR backend, in `SR_BACKENDS` order.
@@ -409,6 +411,41 @@ fn controls_section(
                 generation.last_result
             ))
             .color(WARN),
+        );
+    }
+
+    if stats.dlss_preset_available {
+        let mut preset = stats.dlss_preset;
+        ui.add_enabled_ui(stats.backend == 1, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("DLSS model preset");
+                for (index, (id, label)) in [
+                    (0, "Default"),
+                    (5, "E"),
+                    (6, "F"),
+                    (10, "J"),
+                    (11, "K"),
+                    (12, "L"),
+                    (13, "M"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let response = ui.radio_value(&mut preset, id, label);
+                    controls.dlss_preset[index] = Some(response.rect);
+                }
+            });
+        });
+        if preset != stats.dlss_preset {
+            intent.dlss_preset = preset;
+            intent.dlss_preset_changed = true;
+        }
+        ui.label(
+            RichText::new(
+                "Requested model; NVIDIA driver overrides may apply. E/F are legacy presets.",
+            )
+            .small()
+            .color(MUTED),
         );
     }
 

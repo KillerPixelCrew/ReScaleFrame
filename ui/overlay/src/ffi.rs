@@ -223,6 +223,8 @@ unsafe fn frame_inner(
     if let Some(out) = unsafe { intent.as_mut() } {
         *out = RsfOverlayIntent {
             struct_size: size_of::<RsfOverlayIntent>() as u32,
+            dlss_preset_changed: u32::from(produced.dlss_preset_changed),
+            dlss_preset: produced.dlss_preset,
             quality_changed: u32::from(produced.quality_changed),
             quality: produced.quality.to_abi(),
             enabled_changed: u32::from(produced.enabled_changed),
@@ -304,6 +306,8 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         quality_raw: stats.quality,
         enabled: stats.enabled != 0,
         backend: stats.backend,
+        dlss_preset: stats.dlss_preset,
+        dlss_preset_available: stats.dlss_preset_available != 0,
         backend_choices: stats.sr_backend_choices,
         last_switch_result: stats.last_switch_result,
         generation: crate::model::GenerationStats {
@@ -450,6 +454,8 @@ mod tests {
             fg_backend_choices: 0,
             fg_selection_result: 0,
             sr_backend_choices: 0,
+            dlss_preset: 0,
+            dlss_preset_available: 0,
         }
     }
 
@@ -611,7 +617,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 10);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 11);
     }
 
     #[test]

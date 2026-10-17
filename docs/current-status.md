@@ -64,6 +64,11 @@ is not established for every provider.
 One physical presentation provider owns the chain at a time. Live replacement drains the old
 owner and preserves engine buffers; unsupported requests retain the working provider. Insert
 offers independent SR and FG choices, SDK-limited multipliers, Reflex and FPS controls.
+AC7 and Unity also offer a persistent DLSS model request: Default, E, F, J, K, L or M.
+Minecraft exposes the same selection in Sodium/Reese's options and its F8 screen. These controls
+apply through existing runtime transitions. All seven requests passed a headless RTX 4070
+device fixture; live game switching and visual acceptance remain pending. Driver overrides may
+replace the requested model.
 FG provider preferences are saved separately from deployment defaults. Other controls' persistence
 depends on the host; do not assume every setting survives restart.
 

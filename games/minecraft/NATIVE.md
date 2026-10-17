@@ -1,5 +1,13 @@
 # ReScaleFrameCraft native integration
 
+### DLSS model selection
+
+Sodium/Reese's ReScaleFrame options and the F8 screen offer Default, E, F, J, K, L and M.
+The `dlssPreset` JSON setting is independent of quality and applies through the existing drained
+native reconfiguration path. Default preserves SDK defaults; E/F are legacy models. NVIDIA driver
+overrides can replace the requested model. The Java configuration identity includes the preset,
+and JNI forwards its SDK ID into the shared D3D12 SR setup.
+
 ### Cleanup, 1.1.6-dev
 
 The render path now reuses camera matrices and writes them directly into the retained metadata

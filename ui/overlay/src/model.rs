@@ -134,6 +134,10 @@ pub struct Stats<'a> {
     pub quality: Option<Quality>,
     /// The raw quality value, kept so an unknown one can be shown as the number it was.
     pub quality_raw: abi::RsfOverlayQuality,
+    /// Requested DLSS model.
+    pub dlss_preset: u32,
+    /// The runtime implements DLSS model selection.
+    pub dlss_preset_available: bool,
     /// Whether reconstruction is currently enabled.
     pub enabled: bool,
     /// Effective SR backend.
@@ -163,6 +167,8 @@ impl Default for Stats<'_> {
             refusal_reason: None,
             quality: Some(Quality::Native),
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
+            dlss_preset: 0,
+            dlss_preset_available: false,
             enabled: false,
             backend: 1,
             backend_choices: 0,
@@ -195,6 +201,10 @@ pub struct Intent {
     pub quality: Quality,
     /// Whether the quality changed in this frame.
     pub quality_changed: bool,
+    /// The requested DLSS model changed.
+    pub dlss_preset_changed: bool,
+    /// Requested DLSS model ID.
+    pub dlss_preset: u32,
     /// The enable state the panel shows.
     pub enabled: bool,
     /// Whether the enable state changed in this frame.
@@ -231,7 +241,8 @@ impl Intent {
     /// Whether the user did anything at all this frame.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        !self.quality_changed
+        !self.dlss_preset_changed
+            && !self.quality_changed
             && !self.enabled_changed
             && !self.backend_changed
             && !self.fg_changed

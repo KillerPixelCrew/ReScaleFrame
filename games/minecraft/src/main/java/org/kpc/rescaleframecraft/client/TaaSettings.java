@@ -22,6 +22,11 @@ public final class TaaSettings {
         OFF(0),AUTO(7),DLSS(1),FSR_3(3),FSR_4(4),XESS(5);
         public final int id;FrameGeneration(int id) {this.id=id;}
     }
+    public enum DlssPreset {
+        DEFAULT(0),E(5),F(6),J(10),K(11),L(12),M(13);
+        public final int id;DlssPreset(int id) {this.id=id;}
+    }
+    public DlssPreset dlssPreset=DlssPreset.DEFAULT;
     public enum Reflex { OFF,ON,BOOST }
     public Upscaler upscaler=Upscaler.OFF;
     public Quality quality=Quality.QUALITY;
@@ -36,6 +41,7 @@ public final class TaaSettings {
                 if(loaded!=null) {
                     current=loaded;
                     if(current.upscaler==null)current.upscaler=Upscaler.OFF;
+                    if(current.dlssPreset==null)current.dlssPreset=DlssPreset.DEFAULT;
                     if(current.quality==null)current.quality=Quality.QUALITY;
                     if(current.frameGeneration==null)current.frameGeneration=FrameGeneration.OFF;
                     if(current.reflex==null)current.reflex=Reflex.ON;

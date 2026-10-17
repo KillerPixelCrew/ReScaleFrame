@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 10;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 11;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -164,6 +164,10 @@ pub struct RsfOverlayStats {
     /// ABI 10. Super-resolution backend IDs the host can switch to, as bits (bit n is backend ID
     /// n). Zero means no mask was supplied and the default list applies.
     pub sr_backend_choices: u32,
+    /// Requested DLSS model; driver overrides can replace it.
+    pub dlss_preset: u32,
+    /// This host implements model selection.
+    pub dlss_preset_available: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -228,12 +232,18 @@ pub struct RsfOverlayIntent {
     pub fg_backend_changed: u32,
     /// Provider ID; zero selects Off.
     pub fg_backend: u32,
+    /// The requested DLSS model changed.
+    pub dlss_preset_changed: u32,
+    /// Requested model ID.
+    pub dlss_preset: u32,
 }
 
 impl Default for RsfOverlayIntent {
     fn default() -> Self {
         Self {
             struct_size: size_of::<Self>() as u32,
+            dlss_preset_changed: 0,
+            dlss_preset: 0,
             quality_changed: 0,
             quality: RSF_OVERLAY_QUALITY_NATIVE,
             enabled_changed: 0,
@@ -398,7 +408,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 264);
+        assert_eq!(size_of::<RsfOverlayStats>(), 272);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -432,11 +442,15 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, fg_selection_result), 252);
         // Appended in ABI 10.
         assert_eq!(offset_of!(RsfOverlayStats, sr_backend_choices), 256);
+        assert_eq!(offset_of!(RsfOverlayStats, dlss_preset), 260);
+        assert_eq!(offset_of!(RsfOverlayStats, dlss_preset_available), 264);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 116);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 124);
+        assert_eq!(offset_of!(RsfOverlayIntent, dlss_preset_changed), 116);
+        assert_eq!(offset_of!(RsfOverlayIntent, dlss_preset), 120);
         assert_eq!(offset_of!(RsfOverlayIntent, fg_backend_changed), 108);
         assert_eq!(offset_of!(RsfOverlayIntent, frame_limit_changed), 100);
         assert_eq!(offset_of!(RsfOverlayIntent, fg_changed), 72);

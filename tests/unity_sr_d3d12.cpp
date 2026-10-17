@@ -94,6 +94,13 @@ int main(int argc, char** argv)
     setup.dlss.interposer_path_utf8 = interposer.c_str(); setup.dlss.plugin_directory_utf8 = argv[2];
     setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = RSF_UNITY_ENGINE_VERSION;
     setup.dlss.project_id_utf8 = RSF_UNITY_PROJECT_ID; setup.dlss.require_signature = 1;
+    if (const auto* preset = std::getenv("RSF_DLSS_TEST_PRESET")) {
+        char* end = nullptr;
+        const auto value = std::strtoul(preset, &end, 10);
+        if (!end || *end || value > UINT32_MAX || !rsf_dlss_preset_valid(static_cast<uint32_t>(value))) return 2;
+        setup.dlss.preset = static_cast<uint32_t>(value);
+        std::fprintf(stderr, "Requested DLSS model preset %u\n", setup.dlss.preset);
+    }
     setup.log = setup.dlss.log = logger;
     rsf_streamline_host* shared = nullptr;
     if (argc == 7) {

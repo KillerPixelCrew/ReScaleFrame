@@ -109,6 +109,7 @@ struct Pipeline {
     uint32_t render_height_min = 0;
     uint32_t render_width_max = 0;
     uint32_t render_height_max = 0;
+    uint32_t preset = 0;
     rsf_dlss_quality quality = RSF_DLSS_QUALITY_NATIVE;
     // Frames that reached a successful evaluate and frames that did not, for the scene and for the
     // layer feature.
@@ -719,6 +720,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     dlss_frame.struct_size = uint32_t(sizeof(dlss_frame));
     const rsf_frame_assembly_result assembled =
         rsf_assemble_dlss_frame(&camera, &resources, &dlss_frame);
+    { std::lock_guard<std::mutex> lock(self.guard); dlss_frame.preset = self.preset; }
     if (assembled != RSF_FRAME_ASSEMBLY_OK) {
         // Worth naming once, and only once: a frame refused for want of jitter is the expected
         // state of Ace Combat 7 until the anti-aliasing gate is patched, so it is not a
@@ -1130,6 +1132,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_layer(void* context_poi
     dlss_frame.struct_size = uint32_t(sizeof(dlss_frame));
     const rsf_frame_assembly_result assembled =
         rsf_assemble_dlss_frame(&camera, &resources, &dlss_frame);
+    { std::lock_guard<std::mutex> lock(self.guard); dlss_frame.preset = self.preset; }
     if (assembled != RSF_FRAME_ASSEMBLY_OK) {
         if (worth_saying(self.layer_reported, RSF_DLSS_PIPELINE_ERROR_FRAME_REFUSED)) {
             say(self, "the layer frame was refused before DLSS saw it (result %d)",
@@ -1180,6 +1183,21 @@ extern "C" void rsf_dlss_pipeline_set_colour_correction(uint32_t enabled)
 extern "C" void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled)
 {
     colour_transport.store(enabled != 0, std::memory_order_release);
+}
+
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_preset(uint32_t preset)
+{
+    if (!rsf_dlss_preset_valid(preset)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    auto& self = pipeline();
+    std::lock_guard<std::mutex> lock(self.guard);
+    if (self.preset != preset) {
+        self.preset = preset;
+        self.reset_pending = true;
+        self.evaluate_given_up = false;
+        self.consecutive_evaluate_failures = 0;
+        say(self, "DLSS model preset requested: %u (driver overrides may apply)", preset);
+    }
+    return RSF_DLSS_PIPELINE_OK;
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,

@@ -6,6 +6,9 @@
 RSF_DLSS_ENABLE=1
 # 0 Native (DLAA), 1 Quality, 2 Balanced, 3 Performance, 4 Ultra Performance.
 RSF_DLSS_QUALITY=3
+# DLSS model, independent of quality: 0 Default, 5 E, 6 F, 10 J, 11 K, 12 L, 13 M.
+# E/F are legacy. The Insert overlay saves this choice; NVIDIA driver overrides may apply.
+RSF_DLSS_PRESET=0
 
 # DLSS-only colour correction after evaluation. It pulls the output toward the current
 # jittered frame and adds edge shimmer in the hangar. 0 off (default), 1 on for comparison.

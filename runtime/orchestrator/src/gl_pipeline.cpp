@@ -77,7 +77,7 @@ rsf_backend_result create_sr(rsf_gl_pipeline& self,uint32_t backend,uint32_t wid
     setup.fsr4_directory_utf8=self.fsr4.c_str();setup.xess_directory_utf8=self.xess.c_str();
     setup.streamline_host=rsf_d3d11_present_host();setup.input_sdr=1;setup.log=log;setup.user=&self;
     setup.dlss={sizeof(setup.dlss),RSF_DLSS_ABI_VERSION,self.interposer.c_str(),self.streamline.c_str(),self.root.c_str(),
-        0,RSF_DLSS_ENGINE_CUSTOM,self.version.c_str(),self.project.c_str(),1,log,&self};
+        0,RSF_DLSS_ENGINE_CUSTOM,self.version.c_str(),self.project.c_str(),1,log,&self,self.options.dlss_preset};
     return rsf_sr12_create(&setup,out);
 }
 }
@@ -129,8 +129,8 @@ extern "C" rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup* 
 } catch(...) {return RSF_BACKEND_ERROR_INIT_FAILED;}
 extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,const rsf_gl_pipeline_options* options,uint32_t width,uint32_t height) try {
     if(!self||!options||options->struct_size<sizeof(*options)||!width||!height||options->sr_backend>RSF_SR_AUTO||
-        options->sr_backend==RSF_SR_SPATIAL||options->quality>5||options->generation.struct_size<sizeof(options->generation))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const bool rebuild=self->width!=width||self->height!=height||self->options.sr_backend!=options->sr_backend||self->options.quality!=options->quality||!self->sr;
+        options->sr_backend==RSF_SR_SPATIAL||options->quality>5||!rsf_dlss_preset_valid(options->dlss_preset)||options->generation.struct_size<sizeof(options->generation))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const bool rebuild=self->width!=width||self->height!=height||self->options.sr_backend!=options->sr_backend||self->options.quality!=options->quality||self->options.dlss_preset!=options->dlss_preset||!self->sr;
     self->options=*options;self->status.requested_sr=options->sr_backend;self->status.requested_fg=options->fg_backend;
     rsf_fg12_options(&options->generation);
     uint32_t requested_fg=options->fg_backend;

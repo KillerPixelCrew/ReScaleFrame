@@ -27,7 +27,7 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 10u
+#define RSF_OVERLAY_ABI_VERSION 11u
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -132,6 +132,8 @@ typedef struct rsf_overlay_stats {
        matching `backend`). Zero means the host supplied no mask and the panel keeps its default
        list, so a host that zero-initialises the struct is unaffected. */
     uint32_t sr_backend_choices;
+    /* ABI 11. Requested DLSS model, and whether this host implements selection. */
+    uint32_t dlss_preset, dlss_preset_available;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -171,6 +173,7 @@ typedef struct rsf_overlay_intent {
     /* ABI 8. */
     uint32_t frame_limit_changed, frame_limit_us;
     uint32_t fg_backend_changed, fg_backend;
+    uint32_t dlss_preset_changed, dlss_preset;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */
