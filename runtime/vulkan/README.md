@@ -3,7 +3,7 @@
 ReScaleFrame owns the native Vulkan provider bridges migrated from VulkanStory-Rewrite:
 NGX SR, FidelityFX Vulkan SR/FG, FidelityFX DX12 SR interop, XeSS-FG interop and
 Streamline Vulkan FG/Reflex/PCL. Their existing DLL and export names are retained
-while the host migrates. These names are compatibility ABI, not a second source tree.
+as compatibility ABI, not a second source tree.
 
 VulkanStory consumes this repository through its pinned `sdk/rescaleframe` submodule.
 Its build scripts pass the host's pinned SDK and MinHook paths explicitly. The
@@ -25,4 +25,5 @@ queue and presentation operations through the module's host interfaces.
 `ReScaleFrame.Contracts` retains the previous public contract names through host
 type forwarding. The host packages both managed assemblies and the native
 bridges. Migrated managed sources retain their original notices under
-`runtime/managed/notices`. Source migration does not establish runtime acceptance.
+`runtime/managed/notices`. Recorded host build and live switching results, including
+their hardware scope, are in [the implementation tracker](../../docs/implementation.md#vulkanstory-host-integration).

@@ -10,17 +10,21 @@ from the pinned host checkout. The clean no-SDK gate exposed an unused `shared` 
 in the DLSS fallback; the corrected gate now passes 44 native checks with eight optional
 GPU checks skipped, followed by Rust formatting and Clippy.
 
-`runtime/managed` now contains the SR/FG controllers, Vulkan SDK wrappers, latency scheduling
+`runtime/managed` contains the SR/FG controllers, Vulkan SDK wrappers, latency scheduling
 and generated-present pacing. VulkanStory keeps game input production and renderer resource
-operations behind host interfaces. Public contract type names are forwarded, and bootstrap
-resolution plus staging include both ReScaleFrame assemblies. The production managed build,
-native bundle and complete VulkanStory staging pass. The managed build retains existing
-documentation/nullability warnings. Deployment hashes match the staged managed modules.
-The first game check switched DLSS, FSR3, FSR4 and XeSS SR, then returned to native TAA in
-one process, with 480 successful SR frames. DLSS-G prepared 90 frames and reported 89 SDK
-presents. The visible window never obtained focus, so its focus assertion stopped the run;
-FSR/XeSS FG, latency-mode changes and world reload were not reached. Foreground FG acceptance
-is still open; no second game launch was authorized by that single-run approval.
+operations behind host interfaces. Public contract names are forwarded; bootstrap resolution
+and staging include both ReScaleFrame assemblies. Production build, native bundle, staging
+and deployment pass, with installed module hashes matching the tested package.
+
+On the RTX 4070 Laptop, the game switched DLSS, FSR3, FSR4 and XeSS SR, then returned to TAA
+in one process, with 480 successful SR frames. The initial run stopped at its focus assertion.
+An explicitly authorized follow-up used the opt-in one-request focus gate and passed all 57
+remaining actions: DLSS/FSR/XeSS FG switching with advancing presentation counters, multiplier
+request/clamping, latency Off/On/Boost, world reload and clean exit. DLSS reported one generated
+frame maximum on this device. The trace has 2,967 successful Reflex sleeps, once per frame,
+including all three latency modes, with no duplicate calls. Checked logs show no Vulkan,
+frame-token or teardown failures. Captures show the scene and HUD through the transitions;
+these checks do not measure input-to-display latency or establish every GPU's MFG limits.
 
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
