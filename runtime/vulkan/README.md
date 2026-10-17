@@ -16,6 +16,13 @@ both the existing DX12 backend and the Vulkan interop bridge. The Vulkan bridge
 passes the adapter it already matched to the physical device; the DX12 backend
 resolves its own device's adapter before entering the same compatibility code.
 
-This is the provider-source migration. VulkanStory's managed SR, FG and latency
-controllers still need migration to ReScaleFrame; moving these bridges alone does
-not finish orchestration integration or establish runtime acceptance.
+The managed Vulkan host module is in `runtime/managed/ReScaleFrame.Vulkan`.
+It owns SR planning/evaluation, FG eligibility and live provider transitions,
+vendor SDK wrappers, latency frame tokens/markers and generated-present pacing.
+VulkanStory supplies scene/camera/motion/HUD inputs and implements resource,
+queue and presentation operations through the module's host interfaces.
+
+`ReScaleFrame.Contracts` retains the previous public contract names through host
+type forwarding. The host packages both managed assemblies and the native
+bridges. Migrated managed sources retain their original notices under
+`runtime/managed/notices`. Source migration does not establish runtime acceptance.
