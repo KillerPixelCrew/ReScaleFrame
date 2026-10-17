@@ -51,9 +51,8 @@ public final class TemporalCamera {
         jitter.set(halton(phase,2)-0.5f,halton(phase,3)-0.5f);
         if(!jitterEnabled)jitter.zero();
         jitteredProjection.identity().translate(2*jitter.x/width,2*jitter.y/height,0).mul(projection);
-        Matrix4f remap=canonicalDepth(reversed,z01);
-        remap.mul(projection).mul(view,viewProjection);
-        canonicalDepth(reversed,z01).mul(jitteredProjection).mul(view,jitteredViewProjection);
+        canonicalDepth(reversed,z01,viewProjection).mul(projection).mul(view);
+        canonicalDepth(reversed,z01,jitteredViewProjection).mul(jitteredProjection).mul(view);
         inverseJitteredViewProjection.set(jitteredViewProjection).invert();
         if(reset) {
             previousViewProjection.set(viewProjection);
@@ -69,10 +68,14 @@ public final class TemporalCamera {
     public int height() { return height; }
 
     public static Matrix4f canonicalDepth(boolean reversed, boolean zeroToOne) {
+        return canonicalDepth(reversed,zeroToOne,new Matrix4f());
+    }
+
+    public static Matrix4f canonicalDepth(boolean reversed, boolean zeroToOne, Matrix4f destination) {
         float scale=zeroToOne?2:1;
         float bias=zeroToOne?-1:0;
         if(reversed) { scale=-scale; bias=-bias; }
-        return new Matrix4f().m22(scale).m32(bias);
+        return destination.identity().m22(scale).m32(bias);
     }
 
     public static float halton(int index,int radix) {

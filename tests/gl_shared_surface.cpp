@@ -163,15 +163,14 @@ int main() try {
                 require(rsf_gl_pipeline_input(pipeline,frame,4,0)==RSF_BACKEND_OK,"multiple polls retain one controller sample marker");
                 if(const auto ping=rsf_gl_pipeline_pcl_message(pipeline))
                     require(rsf_gl_pipeline_input(pipeline,frame,0,ping)==RSF_BACKEND_OK,"SDK registered latency ping uses the consuming input frame");
-                for(uint32_t stage:{1u,2u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+                for(uint32_t stage:{1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)!=nullptr,"menu frame must acquire a real SDK token");
                 require(rsf_gl_pipeline_present(pipeline,frame,0)==RSF_BACKEND_OK,"menu present closes its real CPU frame without a scene");
                 if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)==nullptr,"menu present must release its SDK token");
                 require(rsf_gl_pipeline_input(pipeline,frame,1,0)!=RSF_BACKEND_OK,"post-present input must never reuse the closed SDK token");
-                rsf_gl_pipeline_cpu(pipeline,frame,4);
             }
             ++frame;
-            for(uint32_t stage:{0u,6u,1u,2u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+            for(uint32_t stage:{0u,6u,1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
             require(rsf_gl_pipeline_abort(pipeline,frame)==RSF_BACKEND_OK,"incomplete resized frame closes its CPU ownership");
             if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)==nullptr,"aborted resize frame must release its SDK token");
             rsf_game_render_pass pass{};pass.struct_size=sizeof(pass);pass.history_key=pass.view_key=1;pass.camera_valid=1;pass.screen=RSF_SCREEN_FLIGHT;
@@ -182,11 +181,10 @@ int main() try {
             pass.motion_to_uv[0]=1.0f/surfaces.render_width;pass.motion_to_uv[1]=1.0f/surfaces.render_height;
             for(uint32_t iteration=0;iteration<(generation_backend?16u:3u);++iteration) {
                 pass.native_frame=pass.source_frame_id=++frame;pass.flags=iteration?0:RSF_GAME_RENDER_RESET;
-                for(uint32_t stage:{0u,6u,1u,2u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+                for(uint32_t stage:{0u,6u,1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 require(rsf_gl_pipeline_evaluate(pipeline,&pass)==RSF_BACKEND_OK,"real vendor SR evaluate from GL shared inputs");
                 require(rsf_gl_pipeline_hudless(pipeline,&pass)==RSF_BACKEND_OK,"capture actual HUDless surface");
                 require(rsf_gl_pipeline_present(pipeline,frame,0)==RSF_BACKEND_OK,"present composed OpenGL image through native DXGI owner");
-                rsf_gl_pipeline_cpu(pipeline,frame,4);
             }
             if(backend) {
                 bind(0x8d40,fbo);attach(0x8d40,0x8ce0,GL_TEXTURE_2D,surfaces.output,0);

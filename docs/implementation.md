@@ -31,25 +31,18 @@ through native FG. Reese's Sodium Options uses Sodium's public Config API for ru
 The packaged retail dependencies are extracted by verified content hash, without overwriting
 loaded modules. Work is isolated from unrelated Wingman edits in the primary checkout.
 
-Windows Release verification: 44 native checks passed, eight opt-in GPU checks skipped;
-Rust formatting/Clippy passed. The separate RTX4070 harness passed four SR backends, independent
-three-provider FG switching, actual input preparation, pixel checks and WGL-before-DXGI startup.
-Twenty Java checks passed, including production-shader/metadata regressions, actual Sodium page registration and input-frame association.
-The first modpack startup exposed missing slider formatters and WGL ownership; both have
-reproductions and fixes. The next run reached the menu but its child was created on Ixeris's
-separate render thread, leaving window messages unserviced. A thread dump established the actual
-event/render ownership; 1.1.2 creates the child through the public Ixeris main-thread API and
-passes a separate-thread GPU/hit-test/resize/shutdown regression. A live resize then exposed a
-prior GL error misattributed to import and premature retirement of published surfaces. Build 1.1.3
-prepares replacements transactionally, restores only live GL resource names and excludes nested
-or incomplete window updates from presentation. Four output sizes with FG configured and a forced
-allocation refusal pass the GPU harness. Build 1.1.4 also closes real menu-frame tokens instead of
-leaking them through frame-zero presents. Live DLSS reconstruction and the world image were
-accepted. Build 1.1.5 adds keyboard/mouse and optional Controlify/Controllable sampling, correctly
-defers Ixeris post-present input, and observes PCL tool messages on the GLFW owner. Real SDK
-input/ping and closed-token GPU checks pass. Physical controller, displayed generated
-presentation and frame pacing acceptance remain pending. FSR4 and previous geometry for GPU-only
-instance animation remain unverified/incomplete. [Implementation and build](../games/minecraft/NATIVE.md).
+Live DLSS reconstruction/world image acceptance and genuine PCL/mouse reports are recorded for
+1.1.5. The native regression covers four SR backends, independent three-provider FG switching,
+menu/abort token lifetime, threaded window ownership, resizing and pixel checks. Historical
+startup/resize corrections and input research remain in [NATIVE.md](../games/minecraft/NATIVE.md).
+
+The 1.1.6-dev cleanup reuses camera matrices/JNI status storage, compares typed settings,
+formats diagnostics on demand, removes unused CPU notifications and repeated attachment arrays,
+and releases native-renderer GL objects on shutdown. Twenty-two Java checks pass, including
+moving-camera metadata and a real staged-JNI contract check. Windows Release verification passes
+44 native checks with eight opt-in skips plus Rust format/Clippy; the separate RTX4070 GL/SDK
+regression also passes. Physical controller, displayed FG cadence, frame pacing, shader packs,
+FSR4 hardware and dedicated motion for GPU-only animation remain separate acceptance gaps.
 
 ## Wingman native observation, 11 October 2026
 

@@ -65,8 +65,8 @@ public final class TemporalRenderer {
             // Publish the owned resolve output, never the main target which is
             // about to receive first-person hand, HUD, menus and overlays.
             sceneFrame=nativeScene?NativeRenderer.sceneFrame(++completedFrames):new SceneFrame(++completedFrames,target.viewWidth,target.viewHeight,history.sceneColor(),false);
-            status=(nativeSr?"Native SR":"TAA raw ring, 8 samples")+" "+target.viewWidth+"x"+target.viewHeight;
             if(loggedWidth!=target.viewWidth||loggedHeight!=target.viewHeight) {
+                status=(nativeSr?"Native SR":"TAA raw ring, 8 samples")+" "+target.viewWidth+"x"+target.viewHeight;
                 ReScaleFrameCraft.LOGGER.info("Temporal world prepared: mode={}, {}x{}, jitter={}px, reverseDepth={}, zeroToOne={}, HUD/hand after resolve",
                     nativeSr?"native SDK":"raw-ring TAA",target.viewWidth,target.viewHeight,CAMERA.jitter,CAMERA.reversedDepth,CAMERA.zeroToOne);
                 loggedWidth=target.viewWidth;loggedHeight=target.viewHeight;

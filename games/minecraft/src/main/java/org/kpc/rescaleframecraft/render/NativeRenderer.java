@@ -11,16 +11,17 @@ import org.joml.Matrix4f;
 import org.kpc.rescaleframecraft.ReScaleFrameCraft;
 import org.kpc.rescaleframecraft.client.TaaSettings;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFWNativeWin32;
 import org.lwjgl.opengl.*;
-import org.lwjgl.system.MemoryUtil;
 
 /** Game ownership, render resolution, input conventions and HUD boundaries live here. */
 public final class NativeRenderer {
     private static long handle,surfaceWindow,frame,closedFrame,lastFrameTime,lastPacing;
-    private static String settingsKey="",failedKey="",status="native processing off";
+    private static Configuration applied,failed;
+    private static String status="native processing off";
     private static int[] surfaces;
-    private static long[] nativeStatus;
+    private static final long[] nativeStatus=new long[14];
     private static RenderTarget display;
     private static TextureTarget world;
     private static boolean worldRendering;
@@ -28,9 +29,27 @@ public final class NativeRenderer {
     private static int framebuffer,readFramebuffer,vao;
     private static int displayDepth,frameDisplayWidth,frameDisplayHeight;
     private static int acceptedWidth,lastResult,refusedFrames;
-    private static final FloatBuffer cameraData=MemoryUtil.memAllocFloat(88);
+    private static final FloatBuffer cameraData=BufferUtils.createFloatBuffer(88);
+    private static final int[] GUIDE_ATTACHMENTS={GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2};
+    private static final Matrix4f remap=new Matrix4f().m11(-1).m22(.5f).m32(.5f);
+    private static final Matrix4f inverseRemap=new Matrix4f(remap).invert();
+    private static final Matrix4f projection=new Matrix4f(),inverseProjection=new Matrix4f();
+    private static final Matrix4f viewToWorld=new Matrix4f(),worldToView=new Matrix4f();
+    private static final Matrix4f currentInverse=new Matrix4f(),previousClip=new Matrix4f(),depthRemap=new Matrix4f();
     private static float frameTime=.016f;
     private static final InputFrames inputs=new InputFrames((id,kinds)->NativeBridge.input(handle,id,kinds));
+    private record Configuration(int width,int height,TaaSettings.Upscaler upscaler,TaaSettings.Quality quality,
+        TaaSettings.FrameGeneration generation,int count,TaaSettings.Reflex reflex,int limit,boolean debug) {
+        Configuration(int width,int height,TaaSettings settings) {
+            this(width,height,settings.upscaler,settings.quality,settings.frameGeneration,settings.generatedFrames,
+                settings.reflex,settings.frameLimit,settings.nativeDebug);
+        }
+        boolean matches(int width,int height,TaaSettings settings) {
+            return this.width==width&&this.height==height&&upscaler==settings.upscaler&&quality==settings.quality&&
+                generation==settings.frameGeneration&&count==settings.generatedFrames&&reflex==settings.reflex&&
+                limit==settings.frameLimit&&debug==settings.nativeDebug;
+        }
+    }
     private NativeRenderer() {}
     public static void beginFrame() {
         inputs.end();
@@ -42,14 +61,25 @@ public final class NativeRenderer {
             now=System.nanoTime();
         }
         lastPacing=now;frameTime=lastFrameTime==0?.016f:Math.clamp((now-lastFrameTime)*1e-9f,.001f,1f);lastFrameTime=now;
-        if(handle!=0&&frame>closedFrame) {NativeBridge.abort(handle,frame);closedFrame=frame;}
+        if(handle!=0&&frame>closedFrame)abortFrame();
         ++frame;worldRendering=false;
         if(!GL.getCapabilities().OpenGL33)return;
         display=game.getMainRenderTarget();
         frameDisplayWidth=display.viewWidth;frameDisplayHeight=display.viewHeight;
-        String key=display.viewWidth+"x"+display.viewHeight+":"+s.upscaler+":"+s.quality+":"+s.frameGeneration+":"+s.generatedFrames+":"+s.reflex+":"+s.frameLimit+":"+s.nativeDebug;
         if(handle==0&&s.upscaler==TaaSettings.Upscaler.OFF&&s.frameGeneration==TaaSettings.FrameGeneration.OFF)return;
-        if(!key.equals(settingsKey)&&!key.equals(failedKey)) {
+        configure(game,s);
+        if(handle!=0&&surfaces!=null) {
+            NativeBridge.cpu(handle,frame,NativeBridge.FRAME_BEGIN);NativeBridge.cpu(handle,frame,NativeBridge.PACING);
+            inputs.begin(frame);
+            NativeBridge.cpu(handle,frame,NativeBridge.INPUT_SAMPLE);
+            NativeBridge.status(handle,nativeStatus);
+            status=null;
+        }
+    }
+    private static void configure(Minecraft game,TaaSettings s) {
+        if((applied==null||!applied.matches(display.viewWidth,display.viewHeight,s))&&
+           (failed==null||!failed.matches(display.viewWidth,display.viewHeight,s))) {
+            var configuration=new Configuration(display.viewWidth,display.viewHeight,s);
             try(var saved=new GlState(true)) {
                 if(handle==0) {
                     var root=NativeBridge.load();
@@ -69,20 +99,11 @@ public final class NativeRenderer {
                     if(world!=null)world.destroyBuffers();
                     world=new TextureTarget(surfaces[0],surfaces[1],true,Minecraft.ON_OSX);
                 }
-                settingsKey=key;failedKey="";acceptedWidth=0;TemporalRenderer.reset();
-                ReScaleFrameCraft.LOGGER.info("ReScaleFrame native settings applied: {}, world {}x{}, display {}x{}",key,surfaces[0],surfaces[1],surfaces[2],surfaces[3]);
+                applied=configuration;failed=null;acceptedWidth=0;TemporalRenderer.reset();
+                ReScaleFrameCraft.LOGGER.info("ReScaleFrame native settings applied: {}, world {}x{}, display {}x{}",configuration,surfaces[0],surfaces[1],surfaces[2],surfaces[3]);
             } catch(Exception|LinkageError error) {
-                failedKey=key;status=error.getMessage();ReScaleFrameCraft.LOGGER.error("ReScaleFrame native configuration failed",error);
+                failed=configuration;status=error.getMessage();ReScaleFrameCraft.LOGGER.error("ReScaleFrame native configuration failed",error);
             }
-        }
-        if(handle!=0&&surfaces!=null) {
-            NativeBridge.cpu(handle,frame,0);NativeBridge.cpu(handle,frame,6);
-            inputs.begin(frame);
-            NativeBridge.cpu(handle,frame,1);NativeBridge.cpu(handle,frame,2);
-            nativeStatus=NativeBridge.status(handle);
-            status="SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+", frames="+nativeStatus[6]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
-                ", active="+(nativeStatus[12]!=0)+", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", generated presented="+
-                ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8];
         }
     }
     private static <T> T windowThread(Supplier<T> work) throws Exception {
@@ -97,21 +118,21 @@ public final class NativeRenderer {
     }
     private static String name(long id) {return switch((int)id) {case 0->"Off";case 1->"DLSS";case 2->"FSR2";case 3->"FSR3";case 4->"FSR4";case 5->"XeSS";case 7->"Auto";default->"Unknown";};}
     public static void input(int kinds) {if(handle!=0)inputs.sample(kinds);}
-    public static void simulationEnd() {inputs.end();if(handle!=0)NativeBridge.cpu(handle,frame,3);}
+    public static void simulationEnd() {inputs.end();if(handle!=0)NativeBridge.cpu(handle,frame,NativeBridge.SIMULATION_END);}
     public static void beginWorld() {
         if(handle==0||surfaces==null||world==null||closedFrame==frame)return;
         worldRendering=true;world.setClearColor(0,0,0,0);world.clear(Minecraft.ON_OSX);world.bindWrite(true);
     }
     public static RenderTarget worldTarget() {return worldRendering?world:null;}
     public static boolean processing() {return worldRendering&&surfaces!=null;}
-    public static boolean upscaling() {return processing()&&nativeStatus!=null&&nativeStatus[1]!=0;}
+    public static boolean upscaling() {return processing()&&nativeStatus[1]!=0;}
     public static int phaseCount() {return upscaling()?Math.max(8,Math.round(8f*surfaces[2]*surfaces[3]/surfaces[0]/surfaces[1])):8;}
     static void finishWorld(RenderTarget source,TemporalCamera camera,int depth,int motion) {
         if(!processing())return;
         // Three shared MRTs carry scene colour, canonical depth and dense unjittered motion.
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,framebuffer);
         for(int i=0;i<3;i++)GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0+i,GL11.GL_TEXTURE_2D,surfaces[4+i],0);
-        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
+        GL20.glDrawBuffers(GUIDE_ATTACHMENTS);
         if(GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)throw new IllegalStateException("Native guide framebuffer is incomplete");
         RenderSystem.viewport(0,0,surfaces[0],surfaces[1]);
         if(GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control)GL45.glClipControl(GL45.GL_LOWER_LEFT,GL45.GL_NEGATIVE_ONE_TO_ONE);
@@ -127,7 +148,7 @@ public final class NativeRenderer {
         int screen=game.screen!=null||game.getOverlay()!=null||game.isPaused()?1:4;
         int result=NativeBridge.evaluate(handle,frame,cameraData,camera.reset,screen);
         worldRendering=false;
-        if(result==0&&nativeStatus!=null&&nativeStatus[1]!=0)copyTexture(surfaces[7],display,true);
+        if(result==0&&nativeStatus[1]!=0)copyTexture(surfaces[7],display,true);
         else blit(source,display,GL11.GL_COLOR_BUFFER_BIT,GL11.GL_LINEAR);
         blit(source,display,GL11.GL_DEPTH_BUFFER_BIT,GL11.GL_NEAREST);
         if(result!=0) {
@@ -142,25 +163,27 @@ public final class NativeRenderer {
     }
     static FloatBuffer cameraMetadata(TemporalCamera c,float seconds) {
         // JOML column-major arrays are the row-major row-vector matrices used by the C ABI.
-        Matrix4f remap=new Matrix4f().m11(-1).m22(.5f).m32(.5f);
-        Matrix4f projection=new Matrix4f(remap).mul(TemporalCamera.canonicalDepth(c.reversedDepth,c.zeroToOne)).mul(c.projection);
-        Matrix4f inverse=new Matrix4f(projection).invert();
-        Matrix4f viewToWorld=new Matrix4f(c.view).invert().setTranslation((float)c.position.x,(float)c.position.y,(float)c.position.z);
-        Matrix4f currentInverse=new Matrix4f(c.viewProjection).invert();
-        Matrix4f previous=new Matrix4f(c.previousViewProjection).translate(c.cameraDelta);
-        Matrix4f previousClip=new Matrix4f(remap).mul(previous).mul(currentInverse).mul(new Matrix4f(remap).invert());
-        cameraData.clear();put(projection);put(inverse);put(viewToWorld);put(new Matrix4f(viewToWorld).invert());put(previousClip);
+        projection.set(remap).mul(TemporalCamera.canonicalDepth(c.reversedDepth,c.zeroToOne,depthRemap)).mul(c.projection);
+        inverseProjection.set(projection).invert();
+        viewToWorld.set(c.view).invert().setTranslation((float)c.position.x,(float)c.position.y,(float)c.position.z);
+        worldToView.set(viewToWorld).invert();
+        currentInverse.set(c.viewProjection).invert();
+        previousClip.set(c.previousViewProjection).translate(c.cameraDelta);
+        previousClip.mulLocal(remap).mul(currentInverse).mul(inverseRemap);
+        cameraData.clear();put(projection);put(inverseProjection);put(viewToWorld);put(worldToView);put(previousClip);
         cameraData.put(c.jitter.x).put(-c.jitter.y).put(c.previousJitter.x).put(-c.previousJitter.y);
         float a=projection.m22(),b=projection.m32();
         float far=Math.abs(b/(a+1));
         cameraData.put(Math.abs(b/a)).put(Float.isFinite(far)?far:0).put(2*(float)Math.atan(1/Math.abs(projection.m11()))).put(seconds);cameraData.flip();
         return cameraData;
     }
-    private static void put(Matrix4f matrix) {float[] values=new float[16];matrix.get(values);cameraData.put(values);}
+    private static void put(Matrix4f matrix) {
+        int offset=cameraData.position();matrix.get(offset,cameraData);cameraData.position(offset+16);
+    }
     private static void attach(int texture) {
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,readFramebuffer);
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,texture,0);
-        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0});GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
     }
     private static void copyTexture(int texture,RenderTarget destination,boolean flip) {
         attach(texture);GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,destination.frameBufferId);
@@ -180,23 +203,36 @@ public final class NativeRenderer {
         // GLFW can recursively updateDisplay while dispatching a resize. Neither
         // that nested call nor a reallocated, unfinished main target is a frame.
         if(displayDepth>1||closedFrame==frame)return true;
-        if(display.viewWidth!=frameDisplayWidth||display.viewHeight!=frameDisplayHeight) {NativeBridge.abort(handle,frame);closedFrame=frame;return true;}
+        if(display.viewWidth!=frameDisplayWidth||display.viewHeight!=frameDisplayHeight) {abortFrame();return true;}
         try(var state=new GlState()) {
             state.fullscreen();copyToShared(display,surfaces[9]);
             // A menu still closes its real CPU frame. Absence of matching world
             // capture disables interpolation without leaking Streamline tokens.
             int result=NativeBridge.present(handle,frame,Minecraft.getInstance().options.enableVsync().get());
             if(result!=0)throw new IllegalStateException("Native presentation failed: "+result);
-            NativeBridge.cpu(handle,frame,4);closedFrame=frame;return true;
+            closedFrame=frame;return true;
         }
     }
     public static void beginDisplay() {++displayDepth;}
     public static void endDisplay() {--displayDepth;}
-    public static String status() {return status;}
+    public static String status() {
+        if(status!=null)return status;
+        return "SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+", frames="+nativeStatus[6]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
+            ", active="+(nativeStatus[12]!=0)+", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", generated presented="+
+            ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8];
+    }
+    private static void abortFrame() {NativeBridge.abort(handle,frame);closedFrame=frame;}
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}
     public static void shutdown() {
         inputs.end();
         if(handle!=0) {NativeBridge.close(handle);handle=0;surfaces=null;worldRendering=false;}
         if(surfaceWindow!=0) {NativeBridge.destroySurface(surfaceWindow);surfaceWindow=0;}
+        if(world!=null) {world.destroyBuffers();world=null;}
+        if(guides!=null) {guides.close();guides=null;}
+        if(framebuffer!=0)GL30.glDeleteFramebuffers(framebuffer);
+        if(readFramebuffer!=0)GL30.glDeleteFramebuffers(readFramebuffer);
+        if(vao!=0)GL30.glDeleteVertexArrays(vao);
+        framebuffer=readFramebuffer=vao=0;
+        applied=failed=null;display=null;status="native processing off";
     }
 }

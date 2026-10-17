@@ -106,6 +106,28 @@ class TemporalGpuTest {
             for(int i=0;i<16;i++)assertEquals(i%5==0?1:0,metadata.get(64+i),.0001,"reset clip transform is identity");
         }
     }
+    @Test void movingCameraMetadataDoesNotRetainPreviousScratchValues() {
+        var camera=new TemporalCamera();var world=new Object();
+        var projection=new Matrix4f().perspective(1.1f,1.7f,.05f,1024);
+        var remap=new Matrix4f().m11(-1).m22(.5f).m32(.5f);
+        for(int frame=0;frame<6;frame++) {
+            camera.begin(new Matrix4f().rotateX(frame*.04f).rotateY(frame*.08f),projection,
+                1234+frame*.1,80+frame*.03,-5678+frame*.2,64,64,world,false,false);
+            var expectedProjection=new Matrix4f(remap).mul(camera.projection);
+            var expectedViewToWorld=new Matrix4f(camera.view).invert().setTranslation(
+                (float)camera.position.x,(float)camera.position.y,(float)camera.position.z);
+            var expectedPrevious=new Matrix4f(remap).mul(new Matrix4f(camera.previousViewProjection).translate(camera.cameraDelta))
+                .mul(new Matrix4f(camera.viewProjection).invert()).mul(new Matrix4f(remap).invert());
+            var expected=new Matrix4f[]{expectedProjection,new Matrix4f(expectedProjection).invert(),expectedViewToWorld,
+                new Matrix4f(expectedViewToWorld).invert(),expectedPrevious};
+            var metadata=NativeRenderer.cameraMetadata(camera,.016f);
+            for(int matrix=0;matrix<expected.length;matrix++) {
+                float[] values=new float[16];expected[matrix].get(values);
+                for(int element=0;element<16;element++)assertEquals(values[element],metadata.get(matrix*16+element),.00001,
+                    "frame "+frame+", matrix "+matrix+", element "+element);
+            }
+        }
+    }
     @Test void nativeGuidesFlipRowsAndConvertMotionWithoutJitter() {
         var target=new TextureTarget(64,64,true,false);
         var camera=new TemporalCamera();var world=new Object();

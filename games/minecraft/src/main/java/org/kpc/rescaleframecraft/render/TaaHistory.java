@@ -29,6 +29,7 @@ public final class TaaHistory implements AutoCloseable {
     private final int vao=GL30.glGenVertexArrays(),fbo=GL30.glGenFramebuffers(),copyFbo=GL30.glGenFramebuffers();
     private final Frame[] frames=new Frame[8];
     private final int[] sums=new int[2],coordinates=new int[2];
+    private static final int[] DRAW_PAIR={GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1};
     private int width,height,head,available,result;
     /** Hand and HUD are composed on the main target, never on this owned texture. */
     int sceneColor() { return result; }
@@ -81,7 +82,7 @@ public final class TaaHistory implements AutoCloseable {
         output.vector2("jitterPx",current.jitter.x,current.jitter.y);
         bind(output,"accumulation",0,sums[bank]);bind(output,"currentColor",1,current.color);
         bind(output,"currentDepth",2,current.depth);bind(output,"currentMotion",3,current.motion);
-        attachments(result);draw();
+        attachments(result,0);draw();
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,fbo);GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,target.frameBufferId);
         GL30.glBlitFramebuffer(0,0,width,height,0,0,width,height,GL11.GL_COLOR_BUFFER_BIT,GL11.GL_NEAREST);
@@ -103,15 +104,11 @@ public final class TaaHistory implements AutoCloseable {
         RenderSystem.viewport(0,0,width,height);GL30.glBindVertexArray(vao);
         GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
     }
-    private void attachments(int... targets) {
+    private void attachments(int color,int coordinates) {
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
-        int[] draw=new int[targets.length];
-        for(int i=0;i<2;i++) {
-            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0+i,
-                GL11.GL_TEXTURE_2D,i<targets.length?targets[i]:0,0);
-            if(i<targets.length)draw[i]=GL30.GL_COLOR_ATTACHMENT0+i;
-        }
-        GL20.glDrawBuffers(draw);
+        GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,color,0);
+        GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT1,GL11.GL_TEXTURE_2D,coordinates,0);
+        if(coordinates==0)GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);else GL20.glDrawBuffers(DRAW_PAIR);
         if(GL30.glCheckFramebufferStatus(GL30.GL_DRAW_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)
             throw new IllegalStateException("Incomplete raw TAA framebuffer");
     }

@@ -1,5 +1,23 @@
 # ReScaleFrameCraft native integration
 
+### Cleanup, 1.1.6-dev
+
+The render path now reuses camera matrices and writes them directly into the retained metadata
+buffer. TemporalCamera also builds canonical projections in existing matrices. JNI fills a
+caller-owned status array; configuration comparisons use a retained typed snapshot, and F3
+text is formatted when requested. TAA/frame-guide draw attachments no longer allocate arrays
+per pass. Configuration work is separated from frame progression, and shader-construction
+failure/shutdown paths release their owned GL objects. The native extraction root is cached.
+Two JNI CPU notifications were removed because the shared FG CPU consumer ignores them:
+SIMULATION_BEGIN (2) and FRAME_END (4). Actual simulation, render and Present markers remain.
+
+Twenty-two Java checks pass, including moving-camera metadata equivalence over repeated reuse
+and actual staged-DLL status-buffer binding. Release verify passes 44 native checks, eight opt-in
+skips and Rust formatting/Clippy. The separately enabled RTX4070 GL test follows the simplified
+CPU sequence and passes SR/FG preparation, input/ping/token ownership, pixel and resize checks.
+This establishes removed allocation sites and preserved tested behavior, not a measured FPS gain.
+Build 1.1.6-dev is deployed to N1GHT; its new startup/world acceptance is recorded separately.
+
 This module imports the accepted `rescaleframecraft` 1.0.2-dev source at `4e45c46`.
 The original standalone checkout remains available as a reference. Native vendor execution,
 interoperability and presentation use the shared C++ runtime; the Java adapter owns Minecraft's

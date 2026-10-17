@@ -14,14 +14,20 @@ final class GlProgram implements AutoCloseable {
 
     GlProgram(String vertex,String fragment) {
         int vs=compile(GL20.GL_VERTEX_SHADER,read(vertex));
-        int fs=compile(GL20.GL_FRAGMENT_SHADER,read(fragment));
-        program=GL20.glCreateProgram();
-        GL20.glAttachShader(program,vs);GL20.glAttachShader(program,fs);
-        GL20.glLinkProgram(program);
-        GL20.glDeleteShader(vs);GL20.glDeleteShader(fs);
-        if(GL20.glGetProgrami(program,GL20.GL_LINK_STATUS)==0) {
-            String error=GL20.glGetProgramInfoLog(program);GL20.glDeleteProgram(program);
-            throw new IllegalStateException("Shader link failed: "+fragment+"\n"+error);
+        int fs=0,linked=0;
+        try {
+            fs=compile(GL20.GL_FRAGMENT_SHADER,read(fragment));
+            linked=GL20.glCreateProgram();
+            GL20.glAttachShader(linked,vs);GL20.glAttachShader(linked,fs);
+            GL20.glLinkProgram(linked);
+            if(GL20.glGetProgrami(linked,GL20.GL_LINK_STATUS)==0)
+                throw new IllegalStateException("Shader link failed: "+fragment+"\n"+GL20.glGetProgramInfoLog(linked));
+            program=linked;
+        } catch(RuntimeException error) {
+            if(linked!=0)GL20.glDeleteProgram(linked);
+            throw error;
+        } finally {
+            GL20.glDeleteShader(vs);if(fs!=0)GL20.glDeleteShader(fs);
         }
     }
     private static String read(String name) {
