@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ReScaleFrame.Contracts/ReScaleFrame.Contracts.csproj" />
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+    <InternalsVisibleTo Include="VulkanStory.Render.Vulkan" />
+    <InternalsVisibleTo Include="VulkanStory.Game" />
+    <InternalsVisibleTo Include="VulkanStory.Render.Vulkan.Tests" />
+  </ItemGroup>
+</Project>

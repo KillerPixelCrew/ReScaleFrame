@@ -108,6 +108,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     if (setup->log) setup->log(setup->log_user, "DLSS SR registered on the caller's native D3D12 device.");
     *out = context.release(); return RSF_BACKEND_OK;
 #else
+    (void)shared;
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }

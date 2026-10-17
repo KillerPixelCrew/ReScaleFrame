@@ -5,8 +5,15 @@
 The Vulkan provider bridges and guarded FidelityFX/Streamline SDK corrections now live in
 `runtime/vulkan`, consumed through VulkanStory-Rewrite's pinned ReScaleFrame dependency.
 FSR4 compatibility is shared with the existing DX12 backend instead of maintaining a port.
-This source increment has not been built or deployed. Shared SR selection, FG/presentation
-and latency-controller migration remain in progress; existing ABI names are retained.
+The native Vulkan bridges, corrected SDK binaries and shared FSR4 target built successfully
+from the pinned host checkout. The clean no-SDK gate exposed an unused `shared` parameter
+in the DLSS fallback; the source fix is applied and awaits the next native gate.
+
+`runtime/managed` now contains the SR/FG controllers, Vulkan SDK wrappers, latency scheduling
+and generated-present pacing. VulkanStory keeps game input production and renderer resource
+operations behind host interfaces. Public contract type names are forwarded, and bootstrap
+resolution plus staging include both ReScaleFrame assemblies. This managed increment has
+not been compiled or deployed; live switching and game acceptance are not yet established.
 
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
