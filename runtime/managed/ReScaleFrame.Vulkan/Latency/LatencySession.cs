@@ -46,6 +46,29 @@ internal sealed class LatencySession(ILatencyHost host)
     }
 
     internal FrameTimingRecorder Latency { get; set; } = new();
+    /// <summary>Stops competing pacing before the renderer activates a different presentation owner.</summary>
+    internal void PresentationProviderChanged()
+    {
+        if (XessSelected)
+        {
+            _vendorLatency?.SetMode(0);
+            if (_streamlineReflexReady && host.Streamline is { } streamline)
+                RequireLatencyProtocol("Streamline", streamline.SetReflex(0, 0), "Reflex off for XeSS pacing handoff");
+        }
+        _appliedLatencyMode = -1;
+    }
+
+    /// <summary>Starts a newly created XeSS presenter in pass-through mode until the next input boundary.</summary>
+    internal void XessPresenterCreated()
+    {
+        _xessProtocolReady = false;
+        _xellAppliedFrameCap = -1;
+        IXessLatencyPresenter presenter = host.XessPresenter ??
+            throw new InvalidOperationException("XeSS presenter was released during latency setup.");
+        RequireLatencyProtocol("XeLL", presenter.Runtime.SetLatencyMode(0, false), "initial pass-through options");
+        _appliedLatencyMode = -1;
+    }
+
     internal bool _xessProtocolReady;
     internal int _xellAppliedFrameCap = -1;
     internal VendorLatency? _vendorLatency;

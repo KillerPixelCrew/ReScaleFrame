@@ -29,4 +29,3 @@ internal unsafe struct XessPresentationFrame
     public ulong ReadyFenceValue;
     public ulong DoneFenceValue;
 }
-
