@@ -15,8 +15,12 @@ and generated-present pacing. VulkanStory keeps game input production and render
 operations behind host interfaces. Public contract type names are forwarded, and bootstrap
 resolution plus staging include both ReScaleFrame assemblies. The production managed build,
 native bundle and complete VulkanStory staging pass. The managed build retains existing
-documentation/nullability warnings. Deployment and the authorized bounded game check follow;
-live switching and game acceptance are not yet established.
+documentation/nullability warnings. Deployment hashes match the staged managed modules.
+The first game check switched DLSS, FSR3, FSR4 and XeSS SR, then returned to native TAA in
+one process, with 480 successful SR frames. DLSS-G prepared 90 frames and reported 89 SDK
+presents. The visible window never obtained focus, so its focus assertion stopped the run;
+FSR/XeSS FG, latency-mode changes and world reload were not reached. Foreground FG acceptance
+is still open; no second game launch was authorized by that single-run approval.
 
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
