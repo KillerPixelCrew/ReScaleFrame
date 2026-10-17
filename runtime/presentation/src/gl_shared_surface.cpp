@@ -69,6 +69,11 @@ void message(rsf_gl_context& self,const char* text) { if(self.log)self.log(self.
 void failure(rsf_gl_context& self,const char* operation,uint32_t code) {
     char text[192];std::snprintf(text,sizeof(text),"OpenGL sharing: %s failed (0x%08x)",operation,code);message(self,text);
 }
+void prior_errors(rsf_gl_context& self) {
+    // The game owns the context too. A sticky error from its previous frame must
+    // be reported separately rather than attributed to the next interop import.
+    for(GLenum error=glGetError();error!=GL_NO_ERROR;error=glGetError())failure(self,"pre-existing GL operation before interop",error);
+}
 bool wait_cpu(rsf_gl_context& self,uint64_t value) {
     if(self.fence->GetCompletedValue()>=value)return true;
     return SUCCEEDED(self.fence->SetEventOnCompletion(value,self.event))&&WaitForSingleObject(self.event,10000)==WAIT_OBJECT_0;
@@ -130,6 +135,7 @@ extern "C" rsf_backend_result rsf_gl_texture_create(rsf_gl_context* self,uint32_
     if(!out)return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out=nullptr;
     if(!owner(self)||!width||!height)return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    prior_errors(*self);
     DXGI_FORMAT native;GLenum internal;
     switch(format) {
     case RSF_GL_RGBA16F:native=DXGI_FORMAT_R16G16B16A16_FLOAT;internal=0x881a;break;

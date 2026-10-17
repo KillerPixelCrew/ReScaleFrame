@@ -26,6 +26,7 @@ public final class NativeRenderer {
     private static boolean worldRendering,worldFinished;
     private static GlProgram guides;
     private static int framebuffer,readFramebuffer,vao;
+    private static int displayDepth,frameDisplayWidth,frameDisplayHeight;
     private static final FloatBuffer cameraData=MemoryUtil.memAllocFloat(88);
     private static float frameTime=.016f;
     private NativeRenderer() {}
@@ -41,10 +42,11 @@ public final class NativeRenderer {
         ++frame;worldFinished=false;worldRendering=false;
         if(!GL.getCapabilities().OpenGL33)return;
         display=game.getMainRenderTarget();
+        frameDisplayWidth=display.viewWidth;frameDisplayHeight=display.viewHeight;
         String key=display.viewWidth+"x"+display.viewHeight+":"+s.upscaler+":"+s.quality+":"+s.frameGeneration+":"+s.generatedFrames+":"+s.reflex+":"+s.frameLimit+":"+s.nativeDebug;
         if(handle==0&&s.upscaler==TaaSettings.Upscaler.OFF&&s.frameGeneration==TaaSettings.FrameGeneration.OFF)return;
         if(!key.equals(settingsKey)&&!key.equals(failedKey)) {
-            try(var saved=new GlState()) {
+            try(var saved=new GlState(true)) {
                 if(handle==0) {
                     var root=NativeBridge.load();
                     long parent=GLFWNativeWin32.glfwGetWin32Window(game.getWindow().getWindow());
@@ -158,6 +160,9 @@ public final class NativeRenderer {
     public static void restoreDisplay() {if(display!=null&&handle!=0&&surfaces!=null) {worldRendering=false;display.bindWrite(true);}}
     public static boolean present() {
         if(handle==0||surfaces==null)return false;
+        // GLFW can recursively updateDisplay while dispatching a resize. Neither
+        // that nested call nor a reallocated, unfinished main target is a frame.
+        if(displayDepth>1||display.viewWidth!=frameDisplayWidth||display.viewHeight!=frameDisplayHeight)return true;
         try(var state=new GlState()) {
             state.fullscreen();copyToShared(display,surfaces[9]);
             // No matching world capture means menus/loading; frame 0 forbids interpolation.
@@ -166,6 +171,8 @@ public final class NativeRenderer {
             NativeBridge.cpu(handle,frame,4);return true;
         }
     }
+    public static void beginDisplay() {++displayDepth;}
+    public static void endDisplay() {--displayDepth;}
     public static String status() {return status;}
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}
     public static void shutdown() {

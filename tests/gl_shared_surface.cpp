@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/gl_pipeline.h>
+#include <rescaleframe/sr_session.h>
 #include <windows.h>
 #include <GL/gl.h>
 #include <d3d12.h>
@@ -120,13 +121,17 @@ int main() try {
         rsf_gl_pipeline_setup pipeline_setup{sizeof(pipeline_setup),window.window,runtime,log,nullptr,"Minecraft 1.21.1","11e3ed7f-06c6-4863-a54d-2b790f2176f2",child};
         rsf_gl_pipeline* pipeline=nullptr;require(rsf_gl_pipeline_open(&pipeline_setup,&pipeline)==RSF_BACKEND_OK,"GL window must accept framework DXGI presentation");
         uint64_t frame=0;
-        const uint32_t scenarios[][2]={{0,0},{2,0},{3,0},{5,0},{1,0},{0,3},{3,5},{1,1},{0,0}};
+        GLuint held_framebuffer=0;gen(1,&held_framebuffer);
+        const uint32_t scenarios[][4]={{0,0,1280,720},{2,0,1280,720},{3,0,1280,720},{5,0,1280,720},{1,0,1280,720},
+            {0,3,1280,720},{3,5,1280,720},{1,1,1280,720},{1,1,854,480},{1,1,1920,1080},{1,1,2560,1494},{1,1,1280,720},{0,0,1280,720}};
         for(const auto& scenario:scenarios) {
-            const uint32_t backend=scenario[0],generation_backend=scenario[1];
+            const uint32_t backend=scenario[0],generation_backend=scenario[1],width=scenario[2],height=scenario[3];
             rsf_gl_pipeline_options options{};options.struct_size=sizeof(options);options.sr_backend=backend;options.quality=1;
             options.fg_backend=generation_backend;
             options.generation={sizeof(options.generation),generation_backend?RSF_FG_FIXED:RSF_FG_OFF,1,RSF_REFLEX_ON,0,0};
-            require(rsf_gl_pipeline_configure(pipeline,&options,1280,720)==RSF_BACKEND_OK,"configure native GL pipeline");
+            // Another renderer's sticky error must not be called an import failure.
+            glEnable(0xdeadbeef);
+            require(rsf_gl_pipeline_configure(pipeline,&options,width,height)==RSF_BACKEND_OK,"configure native GL pipeline");
             rsf_gl_pipeline_surfaces surfaces{};surfaces.struct_size=sizeof(surfaces);
             require(rsf_gl_pipeline_get_surfaces(pipeline,&surfaces)==RSF_BACKEND_OK,"get native GL surfaces");
             rsf_gl_pipeline_status status{};status.struct_size=sizeof(status);rsf_gl_pipeline_status_get(pipeline,&status);
@@ -134,12 +139,12 @@ int main() try {
             GLuint fbo=0;gen(1,&fbo);bind(0x8d40,fbo);
             for(uint32_t surface: {surfaces.scene,surfaces.depth,surfaces.motion,surfaces.hudless,surfaces.composed}) {
                 attach(0x8d40,0x8ce0,GL_TEXTURE_2D,surface,0);require(check(0x8d40)==0x8cd5,"native pipeline surface FBO");
-                glViewport(0,0,1280,720);glClearColor(.25f,.5f,.75f,1);glClear(GL_COLOR_BUFFER_BIT);
+                glViewport(0,0,static_cast<GLsizei>(width),static_cast<GLsizei>(height));glClearColor(.25f,.5f,.75f,1);glClear(GL_COLOR_BUFFER_BIT);
             }
             rsf_game_render_pass pass{};pass.struct_size=sizeof(pass);pass.history_key=pass.view_key=1;pass.camera_valid=1;pass.screen=RSF_SCREEN_FLIGHT;
             auto& camera=pass.camera;camera.struct_size=sizeof(camera);camera.abi_version=RSF_GAME_FRAME_ABI_VERSION;
             for(size_t i=0;i<16;i+=5)camera.view_to_clip[i]=camera.clip_to_view[i]=camera.view_to_world[i]=camera.world_to_view[i]=camera.clip_to_previous_clip[i]=1;
-            camera.render_width=surfaces.render_width;camera.render_height=surfaces.render_height;camera.output_width=1280;camera.output_height=720;
+            camera.render_width=surfaces.render_width;camera.render_height=surfaces.render_height;camera.output_width=width;camera.output_height=height;
             camera.near_plane=.05f;camera.far_plane=1024;camera.vertical_fov_radians=1;camera.frame_time_seconds=.016f;
             pass.motion_to_uv[0]=1.0f/surfaces.render_width;pass.motion_to_uv[1]=1.0f/surfaces.render_height;
             for(uint32_t iteration=0;iteration<(generation_backend?16u:3u);++iteration) {
@@ -152,7 +157,8 @@ int main() try {
             }
             if(backend) {
                 bind(0x8d40,fbo);attach(0x8d40,0x8ce0,GL_TEXTURE_2D,surfaces.output,0);
-                const GLint locations[][2]={{0,0},{1279,0},{0,719},{1279,719},{640,360}};
+                const auto right=static_cast<GLint>(width-1),top=static_cast<GLint>(height-1);
+                const GLint locations[][2]={{0,0},{right,0},{0,top},{right,top},{right/2,top/2}};
                 for(const auto& location:locations) {
                     float color_pixel[4]{};glReadPixels(location[0],location[1],1,1,GL_RGBA,GL_FLOAT,color_pixel);
                     require(std::isfinite(color_pixel[0])&&std::abs(color_pixel[0]-.25f)<.03f&&
@@ -168,9 +174,18 @@ int main() try {
                 require(status.effective_fg==generation_backend&&status.generation.last_result==RSF_BACKEND_OK&&status.generation.reason==0&&status.generation.tagged_frames>0,
                     "real generation provider must prepare valid input/simulation/world/HUDless frames");
             }
+            // Force a real unsupported allocation extent and retain a reference
+            // to the last published surface, as Minecraft's FBO does at resize.
+            bind(0x8d40,held_framebuffer);attach(0x8d40,0x8ce0,GL_TEXTURE_2D,surfaces.composed,0);
+            if(backend==RSF_SR_DLSS) {
+                require(rsf_gl_pipeline_configure(pipeline,&options,32768,64)!=RSF_BACKEND_OK,"reject unsupported allocation dimensions");
+                rsf_gl_pipeline_surfaces retained{};retained.struct_size=sizeof(retained);rsf_gl_pipeline_get_surfaces(pipeline,&retained);
+                require(retained.output==surfaces.output&&retained.composed==surfaces.composed&&glIsTexture(retained.composed),"refused resize must preserve every published resource");
+            }
             bind(0x8d40,0);remove(1,&fbo);
-            std::printf("PASS: native SR backend %u, plan %ux%u -> 1280x720, runtime switch and DXGI presentation\n",backend,surfaces.render_width,surfaces.render_height);
+            std::printf("PASS: native SR backend %u, plan %ux%u -> %ux%u, runtime switch and DXGI presentation\n",backend,surfaces.render_width,surfaces.render_height,width,height);
         }
+        bind(0x8d40,0);remove(1,&held_framebuffer);
         require(rsf_gl_pipeline_close(pipeline)==RSF_BACKEND_OK,"close GL native pipeline");
         } catch(...) {render_error=std::current_exception();}
         wglMakeCurrent(nullptr,nullptr);done.store(true,std::memory_order_release);

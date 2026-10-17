@@ -8,6 +8,7 @@ import org.lwjgl.system.MemoryStack;
 
 /** Restores the Minecraft state disturbed by the complete off-screen temporal pass. */
 final class GlState implements AutoCloseable {
+    private final boolean retiringResources;
     private final int program=GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
     private final int vao=GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
     private final int array=GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
@@ -31,7 +32,9 @@ final class GlState implements AutoCloseable {
     private final int srcAlpha=GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA),dstAlpha=GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
     private final int origin,clipDepth;
     private final boolean clipControl=GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control;
-    GlState() {
+    GlState() {this(false);}
+    GlState(boolean retiringResources) {
+        this.retiringResources=retiringResources;
         try(var stack=MemoryStack.stackPush()) {
             var mask=stack.malloc(4);GL11.glGetBooleanv(GL11.GL_COLOR_WRITEMASK,mask);
             for(int i=0;i<4;i++)colorMask[i]=mask.get(i)!=0;
@@ -61,8 +64,8 @@ final class GlState implements AutoCloseable {
         RenderSystem.blendFuncSeparate(srcRgb,dstRgb,srcAlpha,dstAlpha);
         if(clipControl)GL45.glClipControl(origin,clipDepth);
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,array);
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,read);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,draw);
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,retiringResources&&read!=0&&!GL30.glIsFramebuffer(read)?0:read);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,retiringResources&&draw!=0&&!GL30.glIsFramebuffer(draw)?0:draw);
         RenderSystem.viewport(viewport[0],viewport[1],viewport[2],viewport[3]);
         if(depth)RenderSystem.enableDepthTest();else RenderSystem.disableDepthTest();
         if(blend)RenderSystem.enableBlend();else RenderSystem.disableBlend();
@@ -71,8 +74,16 @@ final class GlState implements AutoCloseable {
         RenderSystem.colorMask(colorMask[0],colorMask[1],colorMask[2],colorMask[3]);
         if(scissor)GL11.glEnable(GL11.GL_SCISSOR_TEST);else GL11.glDisable(GL11.GL_SCISSOR_TEST);
         for(int i=0;i<16;i++) {
-            RenderSystem.setShaderTexture(i,shaderTextures[i]);
-            TextureUnits.bind(i,textures[i]);
+            // Reconfiguration may retire a texture captured on entry. New names
+            // are allocated before old names are released, so a retired snapshot
+            // cannot accidentally alias the replacement.
+            int shaderTexture=shaderTextures[i],texture=textures[i];
+            if(retiringResources) {
+                if(shaderTexture!=0&&!GL11.glIsTexture(shaderTexture))shaderTexture=0;
+                if(texture!=0&&!GL11.glIsTexture(texture))texture=0;
+            }
+            RenderSystem.setShaderTexture(i,shaderTexture);
+            TextureUnits.bind(i,texture);
             GL33.glBindSampler(i,samplers[i]);
         }
         RenderSystem.activeTexture(active);

@@ -12,13 +12,16 @@ loaded modules. Work is isolated from unrelated Wingman edits in the primary che
 Windows Release verification: 44 native checks passed, eight opt-in GPU checks skipped;
 Rust formatting/Clippy passed. The separate RTX4070 harness passed four SR backends, independent
 three-provider FG switching, actual input preparation, pixel checks and WGL-before-DXGI startup.
-Sixteen Java checks passed: 15 production-shader GPU regressions and actual Sodium page registration.
+Seventeen Java checks passed: 16 production-shader GPU regressions and actual Sodium page registration.
 The first modpack startup exposed missing slider formatters and WGL ownership; both have
 reproductions and fixes. The next run reached the menu but its child was created on Ixeris's
 separate render thread, leaving window messages unserviced. A thread dump established the actual
 event/render ownership; 1.1.2 creates the child through the public Ixeris main-thread API and
-passes a separate-thread GPU/hit-test/resize/shutdown regression. Corrected modpack input/world,
-visible quality, generated
+passes a separate-thread GPU/hit-test/resize/shutdown regression. A live resize then exposed a
+prior GL error misattributed to import and premature retirement of published surfaces. Build 1.1.3
+prepares replacements transactionally, restores only live GL resource names and excludes nested
+or incomplete window updates from presentation. Four output sizes with FG configured and a forced
+allocation refusal pass the GPU harness. Corrected live resize/world, visible quality, generated
 presentation and frame pacing acceptance remain pending. FSR4 and previous geometry for GPU-only
 instance animation remain unverified/incomplete. [Implementation and build](../games/minecraft/NATIVE.md).
 

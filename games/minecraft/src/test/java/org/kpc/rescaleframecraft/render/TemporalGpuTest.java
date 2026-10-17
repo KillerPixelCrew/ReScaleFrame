@@ -73,6 +73,24 @@ class TemporalGpuTest {
             assertEquals(.9,pixel[0],.006,"reset must reject all old color");
         } finally { target.destroyBuffers(); }
     }
+    @Test void resourceRetirementMustNotRestoreDeletedTextureOrFramebufferNames() {
+        try(var original=new GlState()) {
+            int retired=GL11.glGenTextures(),replacement=GL11.glGenTextures(),fbo=GL30.glGenFramebuffers();
+            TextureUnits.bind(0,retired);RenderSystem.setShaderTexture(0,retired);
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,fbo);
+            try(var resize=new GlState(true)) {
+                // Native allocation changes raw GL bindings; it does not update
+                // Minecraft's texture cache. Both names exist until commit.
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D,replacement);
+                GL11.glDeleteTextures(retired);GL30.glDeleteFramebuffers(fbo);
+            }
+            assertEquals(0,GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D));
+            assertEquals(0,RenderSystem.getShaderTexture(0));
+            assertEquals(0,GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING));
+            assertEquals(GL11.GL_NO_ERROR,GL11.glGetError(),"resize restoration must not bind a retired resource name");
+            GL11.glDeleteTextures(replacement);
+        }
+    }
     @Test void nativeGuidesFlipRowsAndConvertMotionWithoutJitter() {
         var target=new TextureTarget(64,64,true,false);
         var camera=new TemporalCamera();var world=new Object();

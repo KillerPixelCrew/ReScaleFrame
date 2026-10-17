@@ -11,6 +11,7 @@
 #include <string>
 #include <memory>
 #include <cstdio>
+#include <utility>
 using Microsoft::WRL::ComPtr;
 struct rsf_gl_pipeline {
     HWND parent=nullptr,window=nullptr;
@@ -62,9 +63,15 @@ void release_surfaces(rsf_gl_pipeline& self) {
     for(auto*& texture:self.surfaces) {rsf_gl_texture_destroy(texture);texture=nullptr;}
     self.textures={};
 }
-rsf_backend_result create_sr(rsf_gl_pipeline& self,uint32_t backend,rsf_sr12** out) {
+struct PreparedSurfaces {
+    rsf_sr12* sr=nullptr;
+    std::array<rsf_gl_texture*,6> surfaces{};
+    std::array<rsf_gl_texture_info,6> textures{};
+    ~PreparedSurfaces() {rsf_sr12_destroy(sr);for(auto* surface:surfaces)rsf_gl_texture_destroy(surface);}
+};
+rsf_backend_result create_sr(rsf_gl_pipeline& self,uint32_t backend,uint32_t width,uint32_t height,rsf_sr12** out) {
     rsf_sr12_setup setup{};setup.struct_size=sizeof(setup);setup.abi_version=1;setup.device=self.device;
-    setup.backend=backend;setup.quality=self.options.quality;setup.output_width=self.width;setup.output_height=self.height;
+    setup.backend=backend;setup.quality=self.options.quality;setup.output_width=width;setup.output_height=height;
     setup.fsr2_directory_utf8=self.fsr2.c_str();setup.fsr3_directory_utf8=self.fsr3.c_str();
     setup.fsr4_directory_utf8=self.fsr4.c_str();setup.xess_directory_utf8=self.xess.c_str();
     setup.streamline_host=rsf_d3d11_present_host();setup.input_sdr=1;setup.log=log;setup.user=&self;
@@ -135,26 +142,33 @@ extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,co
     if(requested_fg!=rsf_d3d11_present_backend())self->status.fg_switch_result=rsf_d3d11_present_request(requested_fg);
     if(!rebuild)return RSF_BACKEND_OK;
     auto result=rsf_gl_drain(self->sharing);if(result!=RSF_BACKEND_OK)return result;
-    release_surfaces(*self);self->width=width;self->height=height;
-    if(!surface_message(self->window,surface_resize,width,height))return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if(FAILED(self->chain->ResizeBuffers(3,width,height,DXGI_FORMAT_R8G8B8A8_UNORM,0)))return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    // Prepare the complete replacement while the published GL names remain alive.
+    // A rejected resize cannot leave Java holding deleted surfaces or a null SR session.
+    PreparedSurfaces pending;
     uint32_t selected=options->sr_backend;
     if(selected==RSF_SR_AUTO) {
         // Query actual backends, retaining the first usable session and its SDK plan.
         for(uint32_t candidate:{RSF_SR_DLSS,RSF_SR_FSR4,RSF_SR_XESS,RSF_SR_FSR3,RSF_SR_FSR2}) {
-            result=create_sr(*self,candidate,&self->sr);if(result==RSF_BACKEND_OK) {selected=candidate;break;}
+            result=create_sr(*self,candidate,width,height,&pending.sr);if(result==RSF_BACKEND_OK) {selected=candidate;break;}
         }
-    } else result=create_sr(*self,selected,&self->sr);
+    } else result=create_sr(*self,selected,width,height,&pending.sr);
     self->status.sr_result=result;
-    if(!self->sr) {selected=RSF_SR_NONE;result=create_sr(*self,selected,&self->sr);}
+    if(!pending.sr) {selected=RSF_SR_NONE;result=create_sr(*self,selected,width,height,&pending.sr);}
     if(result!=RSF_BACKEND_OK)return result;
-    self->status.effective_sr=selected;rsf_sr12_plan(self->sr,&self->render_width,&self->render_height);
-    for(size_t i=0;i<self->surfaces.size();++i) {
+    uint32_t render_width=0,render_height=0;rsf_sr12_plan(pending.sr,&render_width,&render_height);
+    for(size_t i=0;i<pending.surfaces.size();++i) {
         const uint32_t format=i==1?RSF_GL_R32F:i==2?RSF_GL_RG16F:i>=4?RSF_GL_RGBA8:RSF_GL_RGBA16F;
-        result=rsf_gl_texture_create(self->sharing,i<3?self->render_width:width,i<3?self->render_height:height,format,&self->surfaces[i]);
-        if(result!=RSF_BACKEND_OK) {release_surfaces(*self);return result;}
-        auto& info=self->textures[i];info.struct_size=sizeof(info);rsf_gl_texture_get(self->surfaces[i],&info);
+        result=rsf_gl_texture_create(self->sharing,i<3?render_width:width,i<3?render_height:height,format,&pending.surfaces[i]);
+        if(result!=RSF_BACKEND_OK)return result;
+        auto& info=pending.textures[i];info.struct_size=sizeof(info);rsf_gl_texture_get(pending.surfaces[i],&info);
     }
+    if(self->width!=width||self->height!=height) {
+        if(!surface_message(self->window,surface_resize,width,height)) {log(self,"OpenGL: event-thread window resize refused.");return RSF_BACKEND_ERROR_FEATURE_FAILED;}
+        const auto resized=self->chain->ResizeBuffers(3,width,height,DXGI_FORMAT_R8G8B8A8_UNORM,0);
+        if(FAILED(resized)) {char message[128];std::snprintf(message,sizeof(message),"OpenGL: DXGI resize %ux%u failed (0x%08x)",width,height,static_cast<uint32_t>(resized));log(self,message);return RSF_BACKEND_ERROR_FEATURE_FAILED;}
+    }
+    std::swap(self->sr,pending.sr);std::swap(self->surfaces,pending.surfaces);std::swap(self->textures,pending.textures);
+    self->width=width;self->height=height;self->render_width=render_width;self->render_height=render_height;self->status.effective_sr=selected;
     ++self->generation;return RSF_BACKEND_OK;
 } catch(...) {return RSF_BACKEND_ERROR_FEATURE_FAILED;}
 extern "C" rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline* self,rsf_gl_pipeline_surfaces* out) {

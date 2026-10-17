@@ -46,8 +46,16 @@ Passed on RTX 4070 Laptop, driver 616.92: Off/FSR2/FSR3/XeSS/DLSS SR evaluation,
 colour checks at all four corners and centre, FG Off/FSR3/XeSS/DLSS
 switching, input preparation and HUDless tagging. A hidden window does not prove displayed
 generated frames, visual quality, frame pacing or live modpack acceptance. The 14 inherited GPU
-TAA regressions plus the new dense-guide test passed independently on Intel UHD770. The actual
+TAA regressions plus dense-guide and resource-retirement tests passed independently on Intel UHD770. The actual
 Sodium builder regression accepts the complete settings page, including required slider formatters
 whose initial omission caused a startup crash. Flywheel GPU instance animation and other
 shader-driven deformation still need dedicated previous-geometry producers; camera motion alone
 does not establish their motion coverage. FSR4 requires supported hardware and remains unverified.
+
+The first live resize exposed a sticky prior GL error misattributed to memory import and a
+nontransactional replacement that invalidated published Java handles. Reconfiguration now prepares
+the new SR session and all six surfaces before replacing the old set. Pre-existing context errors
+are logged separately; retired texture/framebuffer snapshots are not rebound. Nested window-update
+callbacks do not present an unfinished resized target. The GPU harness covers 854x480, 1920x1080,
+2560x1494 and 1280x720 with DLSS FG configured, plus a forced unsupported allocation that must
+preserve every published resource. Live resize/world acceptance of 1.1.3 remains pending.
