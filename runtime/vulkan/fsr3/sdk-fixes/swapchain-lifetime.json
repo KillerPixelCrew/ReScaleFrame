@@ -1,0 +1,66 @@
+{
+  "id": "fsr3-swapchain-lifetime-and-nv-creation",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "replacements": [
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "                            toSignal.add(presenter->frameRenderedSemaphores[imageIndex]);  // frame ready for present. Not a timeline semaphore\n",
+      "after": "                            // An acquire failure must not leave a binary present semaphore signaled.\n"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "                                toWait.add(imageAvailableSemaphore);  // swapchain image to be available\n",
+      "after": "                                toWait.add(imageAvailableSemaphore);  // swapchain image to be available\n                                toSignal.add(presenter->frameRenderedSemaphores[imageIndex]);\n"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "                            toSignal.add(presenter->frameRenderedSemaphores[0]);  // not a timeline semaphore\n",
+      "after": "                            // Signal a present semaphore only after acquiring its owning image.\n"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "                                toWait.add(acquireSemaphore);\n\n                                res = compositeSwapChainFrame(presenter,",
+      "after": "                                toWait.add(acquireSemaphore);\n                                toSignal.add(presenter->frameRenderedSemaphores[realSwapchainImageIndex]);\n\n                                res = compositeSwapChainFrame(presenter,"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "                                res = presentToSwapChain(presenter, realSwapchainImageIndex);",
+      "after": "                                res = presentToSwapChain(presenter, realSwapchainImageIndex, realSwapchainImageIndex);"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    VkSwapchainPresentModesCreateInfoEXT     swapchainPresentModes;",
+      "after": "    VkSwapchainPresentModesCreateInfoEXT     swapchainPresentModes;\n    VkSwapchainLatencyCreateInfoNV           swapchainLatency;"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "        case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT:",
+      "after": "        case VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV:\n            FFX_USE_PNEXT_AS_IS(swapchainLatency, VkSwapchainLatencyCreateInfoNV);\n            break;\n        case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT:"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    // create the semaphore for each image to wait on\n    for (uint32_t i = 0; i < presentInfo.realSwapchainImageCount; ++i)\n    {\n        res = createSemaphoreFormat(presentInfo.frameRenderedSemaphores[i], \"AMD swapchain image semaphore %d\", i);\n        EXIT_ON_VKRESULT_NOT_SUCCESS(res);\n    }\n\n",
+      "after": "    // frameRenderedSemaphores were allocated above for the full buffer capacity.\n    // Reallocating these handles here leaked the original semaphores.\n\n"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp",
+      "before": "void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator)\n{\n    for (uint32_t i = 0; i < _countof(s_uiCompositionDescriptorSets); ++i)\n    {\n        vkFreeDescriptorSets(s_uiCompositionDevice, s_uiCompositionDescriptorPool, 1, &s_uiCompositionDescriptorSets[i]);\n        s_uiCompositionDescriptorSets[i] = VK_NULL_HANDLE;\n    }\n\n    vkDestroyDescriptorPool(s_uiCompositionDevice, s_uiCompositionDescriptorPool, pAllocator);\n    s_uiCompositionDescriptorPool = VK_NULL_HANDLE;\n\n    vkDestroyPipeline(s_uiCompositionDevice, s_uiCompositionPipeline, pAllocator);\n    s_uiCompositionPipeline = VK_NULL_HANDLE;\n    vkDestroyPipeline(s_uiCompositionDevice, s_uiCompositionPremulPipeline, pAllocator);\n    s_uiCompositionPremulPipeline = VK_NULL_HANDLE;\n\n    vkDestroyPipelineLayout(s_uiCompositionDevice, s_uiCompositionPipelineLayout, pAllocator);\n    s_uiCompositionPipelineLayout = VK_NULL_HANDLE;\n\n    vkDestroyDescriptorSetLayout(s_uiCompositionDevice, s_uiCompositionDescriptorSetLayout, pAllocator);\n    s_uiCompositionDescriptorSetLayout = VK_NULL_HANDLE;\n\n    vkDestroyRenderPass(s_uiCompositionDevice, s_uiCompositionRenderPass, pAllocator);\n    s_uiCompositionRenderPass = nullptr;\n\n    for (uint32_t i = 0; i < _countof(s_uiCompositionImageViews); ++i)\n    {\n        vkDestroyImageView(s_uiCompositionDevice, s_uiCompositionImageViews[i], pAllocator);\n        s_uiCompositionImageViews[i] = VK_NULL_HANDLE;\n    }\n    for (uint32_t i = 0; i < _countof(s_uiCompositionFramebuffers); ++i)\n    {\n        vkDestroyFramebuffer(s_uiCompositionDevice, s_uiCompositionFramebuffers[i], pAllocator);\n        s_uiCompositionFramebuffers[i] = VK_NULL_HANDLE;\n    }\n}\n",
+      "after": "void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator)\n{\n    if (s_uiCompositionDevice == VK_NULL_HANDLE) return;\n    // Framebuffers must release their image-view references first. Destroying\n    // the descriptor pool releases every successfully allocated descriptor set.\n    for (auto& framebuffer : s_uiCompositionFramebuffers) {\n        vkDestroyFramebuffer(s_uiCompositionDevice, framebuffer, pAllocator);\n        framebuffer = VK_NULL_HANDLE;\n    }\n    for (auto& view : s_uiCompositionImageViews) {\n        vkDestroyImageView(s_uiCompositionDevice, view, pAllocator);\n        view = VK_NULL_HANDLE;\n    }\n    vkDestroyDescriptorPool(s_uiCompositionDevice, s_uiCompositionDescriptorPool, pAllocator);\n    s_uiCompositionDescriptorPool = VK_NULL_HANDLE;\n    for (auto& set : s_uiCompositionDescriptorSets) set = VK_NULL_HANDLE;\n    vkDestroyPipeline(s_uiCompositionDevice, s_uiCompositionPipeline, pAllocator);\n    s_uiCompositionPipeline = VK_NULL_HANDLE;\n    vkDestroyPipeline(s_uiCompositionDevice, s_uiCompositionPremulPipeline, pAllocator);\n    s_uiCompositionPremulPipeline = VK_NULL_HANDLE;\n    vkDestroyPipelineLayout(s_uiCompositionDevice, s_uiCompositionPipelineLayout, pAllocator);\n    s_uiCompositionPipelineLayout = VK_NULL_HANDLE;\n    vkDestroyDescriptorSetLayout(s_uiCompositionDevice, s_uiCompositionDescriptorSetLayout, pAllocator);\n    s_uiCompositionDescriptorSetLayout = VK_NULL_HANDLE;\n    vkDestroyRenderPass(s_uiCompositionDevice, s_uiCompositionRenderPass, pAllocator);\n    s_uiCompositionRenderPass = VK_NULL_HANDLE;\n    s_uiCompositionAttachmentFormat = VK_FORMAT_UNDEFINED;\n    s_uiCompositionDevice = VK_NULL_HANDLE;\n}\n\nvoid ffxReleaseFrameInterpolationUiComposition(VkDevice device, const VkAllocationCallbacks* pAllocator)\n{\n    if (s_uiCompositionDevice == device) releaseUiBlitGpuResources(pAllocator);\n}\n"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp",
+      "before": "        else\n        {\n            s_uiCompositionDevice = device;\n        }",
+      "after": "        s_uiCompositionDevice = device;"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.h",
+      "before": "VkAccessFlags getVKAccessFlagsFromResourceState(FfxResourceStates state);",
+      "after": "void ffxReleaseFrameInterpolationUiComposition(VkDevice device, const VkAllocationCallbacks* pAllocator);\n\nVkAccessFlags getVKAccessFlagsFromResourceState(FfxResourceStates state);"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    // reset queue information\n",
+      "after": "    // Presents and presenter threads have drained; release cached UI GPU objects\n    // before the owning Vulkan device can be destroyed.\n    ffxReleaseFrameInterpolationUiComposition(device, pAllocator);\n\n    // reset queue information\n"
+    }
+  ]
+}

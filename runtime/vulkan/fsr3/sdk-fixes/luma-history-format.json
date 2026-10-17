@@ -1,0 +1,8 @@
+{
+  "id": "fsr3-luma-history-rgba16f",
+  "upstream": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/161",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "file": "sdk/include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h",
+  "before": "layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba8) uniform image2D  rw_luma_history;",
+  "after": "layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba16f) uniform image2D  rw_luma_history;"
+}

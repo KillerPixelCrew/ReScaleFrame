@@ -1,5 +1,13 @@
 # Implementation tracker
 
+## VulkanStory host integration
+
+The Vulkan provider bridges and guarded FidelityFX/Streamline SDK corrections now live in
+`runtime/vulkan`, consumed through VulkanStory-Rewrite's pinned ReScaleFrame dependency.
+FSR4 compatibility is shared with the existing DX12 backend instead of maintaining a port.
+This source increment has not been built or deployed. Shared SR selection, FG/presentation
+and latency-controller migration remain in progress; existing ABI names are retained.
+
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
