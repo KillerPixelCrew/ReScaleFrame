@@ -1,6 +1,7 @@
 /build/
 /target/
 **/obj/
+/runtime/managed/**/bin/
 /.vs/
 /CMakeUserPresets.json
 *.user

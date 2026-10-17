@@ -7,13 +7,16 @@ The Vulkan provider bridges and guarded FidelityFX/Streamline SDK corrections no
 FSR4 compatibility is shared with the existing DX12 backend instead of maintaining a port.
 The native Vulkan bridges, corrected SDK binaries and shared FSR4 target built successfully
 from the pinned host checkout. The clean no-SDK gate exposed an unused `shared` parameter
-in the DLSS fallback; the source fix is applied and awaits the next native gate.
+in the DLSS fallback; the corrected gate now passes 44 native checks with eight optional
+GPU checks skipped, followed by Rust formatting and Clippy.
 
 `runtime/managed` now contains the SR/FG controllers, Vulkan SDK wrappers, latency scheduling
 and generated-present pacing. VulkanStory keeps game input production and renderer resource
 operations behind host interfaces. Public contract type names are forwarded, and bootstrap
-resolution plus staging include both ReScaleFrame assemblies. This managed increment has
-not been compiled or deployed; live switching and game acceptance are not yet established.
+resolution plus staging include both ReScaleFrame assemblies. The production managed build,
+native bundle and complete VulkanStory staging pass. The managed build retains existing
+documentation/nullability warnings. Deployment and the authorized bounded game check follow;
+live switching and game acceptance are not yet established.
 
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
