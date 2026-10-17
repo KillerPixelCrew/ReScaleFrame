@@ -96,8 +96,8 @@ public final class NativeRenderer {
                 if(replacement==null)throw new IllegalStateException("Native reconfiguration failed; see minecraft-native.log");
                 boolean resize=surfaces==null||surfaces[0]!=replacement[0]||surfaces[1]!=replacement[1];surfaces=replacement;
                 if(resize) {
-                    if(world!=null)world.destroyBuffers();
-                    world=new TextureTarget(surfaces[0],surfaces[1],true,Minecraft.ON_OSX);
+                    if(world==null)world=new TextureTarget(surfaces[0],surfaces[1],true,Minecraft.ON_OSX);
+                    else world.resize(surfaces[0],surfaces[1],Minecraft.ON_OSX);
                 }
                 applied=configuration;failed=null;acceptedWidth=0;TemporalRenderer.reset();
                 ReScaleFrameCraft.LOGGER.info("ReScaleFrame native settings applied: {}, world {}x{}, display {}x{}",configuration,surfaces[0],surfaces[1],surfaces[2],surfaces[3]);

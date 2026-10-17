@@ -29,6 +29,7 @@ repositories {
     mavenCentral()
     maven { url = 'https://api.modrinth.com/maven' }
     maven { url = 'https://maven.caffeinemc.net/releases' }
+    maven { url = 'https://maven.createmod.net' }
 }
 
 base {
@@ -108,6 +109,12 @@ dependencies {
     implementation "maven.modrinth:sodium:${sodium_version}"
     compileOnly 'net.caffeinemc:sodium-neoforge-mod:0.8.13+mc1.21.1'
     testImplementation 'net.caffeinemc:sodium-neoforge-mod:0.8.13+mc1.21.1'
+    compileOnly('dev.engine-room.flywheel:flywheel-neoforge-1.21.1:1.0.6') { transitive = false }
+    testImplementation('dev.engine-room.flywheel:flywheel-neoforge-1.21.1:1.0.6') { transitive = false }
+    compileOnly('maven.modrinth:colorwheel:8rq5KP4U') { transitive = false }
+    testImplementation('maven.modrinth:colorwheel:8rq5KP4U') { transitive = false }
+    compileOnly('maven.modrinth:iris:KduFYu4t') { transitive = false }
+    testImplementation('maven.modrinth:iris:KduFYu4t') { transitive = false }
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

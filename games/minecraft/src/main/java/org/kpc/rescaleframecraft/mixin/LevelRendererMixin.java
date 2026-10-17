@@ -16,7 +16,7 @@ import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-@Mixin(LevelRenderer.class)
+@Mixin(value=LevelRenderer.class,priority=1100)
 public abstract class LevelRendererMixin {
     @Unique private final Object rfc$weather=new Object();
     @Inject(method="renderLevel",at=@At("HEAD"))

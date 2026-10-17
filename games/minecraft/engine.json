@@ -8,7 +8,7 @@
   "device": "D3D12 on the OpenGL context's exact adapter LUID",
   "transfer": "EXT_memory_object_win32 resources and EXT_semaphore_win32 GPU timeline fence",
   "presentation": "Framework-owned DXGI chain on an input-transparent child of the GLFW HWND, replacing the GL buffer swap",
-  "motion": "Dense unjittered camera motion plus existing geometry, particle, weather and Sodium cloud replay",
+  "motion": "Dense unjittered camera motion plus CPU geometry, particle, weather and Sodium cloud replay; Flywheel/Colorwheel final GPU vertex history, pending live acceptance",
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",

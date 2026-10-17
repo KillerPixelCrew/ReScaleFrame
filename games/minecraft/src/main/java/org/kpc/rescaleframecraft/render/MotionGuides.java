@@ -8,12 +8,14 @@ import java.util.List;
 import org.kpc.rescaleframecraft.temporal.GeometryHistory;
 import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
+import org.kpc.rescaleframecraft.render.flywheel.FlywheelMotion;
 import org.kpc.rescaleframecraft.mixin.ShaderInstanceAccessor;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryUtil;
 
 final class MotionGuides implements AutoCloseable {
     private final GlProgram normalize=new GlProgram("fullscreen.vert","normalize-depth.frag");
+    private final GlProgram mergeFlywheel=new GlProgram("fullscreen.vert","merge-flywheel.frag");
     private final GlProgram geometry=new GlProgram("geometry-motion.vert","geometry-motion.frag");
     private final GlProgram clouds=new GlProgram("cloud-motion.vert","geometry-motion.frag");
     private final GlProgram sodiumClouds=new GlProgram("cloud-position-color.vert","geometry-motion.frag");
@@ -45,6 +47,13 @@ final class MotionGuides implements AutoCloseable {
         GL30.glBindVertexArray(vao);GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
         if(GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control)
             GL45.glClipControl(GL45.GL_LOWER_LEFT,GL45.GL_NEGATIVE_ONE_TO_ONE);
+        if(TemporalRenderer.flywheelAvailable()&&FlywheelMotion.present()) {
+            RenderSystem.depthFunc(GL11.GL_LEQUAL);
+            mergeFlywheel.use();mergeFlywheel.integer("capturedMotion",0);mergeFlywheel.integer("capturedDepth",1);
+            TextureUnits.bind(0,FlywheelMotion.motion());TextureUnits.bind(1,FlywheelMotion.depth());
+            GL33.glBindSampler(0,0);GL33.glBindSampler(1,0);GL30.glBindVertexArray(vao);
+            GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
+        }
         for(GeometryHistory.Batch batch:draws)render(batch,camera);
         if(cloud.present(camera.frame)) {
             bind();RenderSystem.enableDepthTest();RenderSystem.depthFunc(GL11.GL_LEQUAL);RenderSystem.depthMask(true);
@@ -131,7 +140,7 @@ final class MotionGuides implements AutoCloseable {
     }
     private void deleteTextures() { com.mojang.blaze3d.platform.GlStateManager._deleteTexture(motion);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(depth);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(testDepth); }
     @Override public void close() {
-        deleteTextures();normalize.close();geometry.close();clouds.close();sodiumClouds.close();GL30.glDeleteFramebuffers(fbo);GL30.glDeleteVertexArrays(vao);
+        deleteTextures();normalize.close();mergeFlywheel.close();geometry.close();clouds.close();sodiumClouds.close();GL30.glDeleteFramebuffers(fbo);GL30.glDeleteVertexArrays(vao);
         GL15.glDeleteBuffers(vbo);MemoryUtil.memFree(vertices);
     }
 }

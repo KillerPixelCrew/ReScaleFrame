@@ -10,6 +10,9 @@ import org.kpc.rescaleframecraft.client.TaaSettings;
 import org.kpc.rescaleframecraft.temporal.GeometryHistory;
 import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
+import org.kpc.rescaleframecraft.render.flywheel.FlywheelMotion;
+import org.kpc.rescaleframecraft.render.flywheel.IrisState;
+import net.neoforged.fml.ModList;
 import org.lwjgl.opengl.*;
 
 public final class TemporalRenderer {
@@ -19,10 +22,10 @@ public final class TemporalRenderer {
     private static TaaHistory history;
     private static MotionGuides motion;
     private static Matrix4f sceneProjection;
-    private static boolean active,failed;
+    private static boolean active,failed,irisFrame;
     private static String status="waiting for world";
     private static int loggedWidth,loggedHeight;
-    /** Valid until the next begin/release; no hand or HUD is ever drawn into this texture. */
+    /** Valid until the next begin/release; excludes the HUD. Iris keeps shader-pack hands in the scene. */
     public record SceneFrame(long frameId,int width,int height,int colorTexture,boolean topLeftOrigin) {}
     private static SceneFrame sceneFrame;
     private static long completedFrames;
@@ -34,6 +37,7 @@ public final class TemporalRenderer {
         var minecraft=Minecraft.getInstance();
         if((!TaaSettings.current.enabled&&!NativeRenderer.processing())||failed||minecraft.level==null) { CAMERA.invalidate();return; }
         var target=minecraft.getMainRenderTarget();
+        irisFrame=IrisState.packActive();
         boolean clip=GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control;
         boolean zeroToOne=clip&&GL11.glGetInteger(GL45.GL_CLIP_DEPTH_MODE)==GL45.GL_ZERO_TO_ONE;
         boolean reversed=GL11.glGetDouble(GL11.GL_DEPTH_CLEAR_VALUE)<0.5;
@@ -46,6 +50,7 @@ public final class TemporalRenderer {
         projection.set(CAMERA.jitteredProjection);
         RenderSystem.setProjectionMatrix(projection,VertexSorting.DISTANCE_TO_ORIGIN);
         GEOMETRY.begin(CAMERA.frame);active=true;
+        if(flywheelAvailable())FlywheelMotion.begin(CAMERA,target.getDepthTextureId());
     }
     public static void finish() {
         if(!active)return;
@@ -54,6 +59,7 @@ public final class TemporalRenderer {
         try(var state=new GlState()) {
             state.fullscreen();
             initialize();
+            if(flywheelAvailable())FlywheelMotion.end();
             if(!nativeSr&&TaaSettings.current.enabled)history.resize(target.viewWidth,target.viewHeight);
             motion.resize(target.viewWidth,target.viewHeight);
             motion.produce(target,CAMERA,GEOMETRY.finish(),CLOUDS);
@@ -67,7 +73,7 @@ public final class TemporalRenderer {
             sceneFrame=nativeScene?NativeRenderer.sceneFrame(++completedFrames):new SceneFrame(++completedFrames,target.viewWidth,target.viewHeight,history.sceneColor(),false);
             if(loggedWidth!=target.viewWidth||loggedHeight!=target.viewHeight) {
                 status=(nativeSr?"Native SR":"TAA raw ring, 8 samples")+" "+target.viewWidth+"x"+target.viewHeight;
-                ReScaleFrameCraft.LOGGER.info("Temporal world prepared: mode={}, {}x{}, jitter={}px, reverseDepth={}, zeroToOne={}, HUD/hand after resolve",
+                ReScaleFrameCraft.LOGGER.info("Temporal world prepared: mode={}, {}x{}, jitter={}px, reverseDepth={}, zeroToOne={}, HUD excluded",
                     nativeSr?"native SDK":"raw-ring TAA",target.viewWidth,target.viewHeight,CAMERA.jitter,CAMERA.reversedDepth,CAMERA.zeroToOne);
                 loggedWidth=target.viewWidth;loggedHeight=target.viewHeight;
             }
@@ -77,13 +83,16 @@ public final class TemporalRenderer {
             ReScaleFrameCraft.LOGGER.error("Temporal resolve failed; native rendering restored",e);
             CAMERA.invalidate();GEOMETRY.clear();
         } finally {
+            if(flywheelAvailable())FlywheelMotion.end();
             active=false;
             if(sceneProjection!=null)sceneProjection.set(CAMERA.projection);
             RenderSystem.setProjectionMatrix(CAMERA.projection,VertexSorting.DISTANCE_TO_ORIGIN);
             NativeRenderer.restoreDisplay();
         }
     }
-    public static boolean capturing() { return active; }
+    public static boolean capturing() { return active&&!IrisState.shadowPass(); }
+    public static boolean irisFrame() {return active&&irisFrame;}
+    static boolean flywheelAvailable() {return ModList.get()!=null&&ModList.get().isLoaded("flywheel");}
     public static SceneFrame sceneFrame() { return sceneFrame; }
     private static void initialize() {
         if(history==null)history=new TaaHistory();
@@ -106,6 +115,7 @@ public final class TemporalRenderer {
         active=false;reset();
         if(history!=null) { history.close();history=null; }
         if(motion!=null) { motion.close();motion=null; }
+        if(flywheelAvailable())FlywheelMotion.release();
         status="waiting for world";
     }
 }

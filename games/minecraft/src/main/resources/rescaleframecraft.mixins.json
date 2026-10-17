@@ -5,6 +5,14 @@
   "client": [
     "LevelRendererMixin", "GameRendererMixin", "BufferSourceMixin", "MinecraftMixin", "RenderSystemMixin",
     "KeyboardHandlerMixin", "MouseHandlerMixin", "ControlifyInputMixin", "ControllableInputMixin",
+    "flywheel.IndirectGroupAccessor", "flywheel.IndirectInstancerAccessor", "flywheel.InstancePageAccessor",
+    "flywheel.BaseInstancerAccessor", "flywheel.InstancedDrawAccessor", "flywheel.IndirectDrawAccessor",
+    "flywheel.ColorwheelGroupAccessor", "flywheel.ColorwheelInstancedDrawAccessor", "flywheel.ColorwheelIndirectDrawAccessor",
+    "flywheel.ColorwheelGroupMixin", "flywheel.ColorwheelInstancedDrawMixin",
+    "flywheel.FlywheelGroupMixin", "flywheel.FlywheelInstancedDrawMixin", "flywheel.FlywheelIndirectDrawMixin",
+    "flywheel.FlywheelMeshDrawMixin", "flywheel.FlywheelProgramMixin",
+    "flywheel.FlywheelCrumblingMixin", "flywheel.FlywheelCrumblingDrawMixin", "flywheel.FlywheelViewportMixin",
+    "flywheel.IrisPipelineMixin", "flywheel.IrisOptionsMixin",
     "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",
     "ParticleEngineMixin", "ShaderInstanceAccessor", "SodiumCloudRendererMixin", "VertexBufferMixin"
   ],

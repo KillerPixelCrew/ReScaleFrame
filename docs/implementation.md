@@ -28,6 +28,12 @@ these checks do not measure input-to-display latency or establish every GPU's MF
 
 ## Minecraft OpenGL SR and FG, 17 October 2026
 
+The next motion increment adds final GPU vertex history for Flywheel 1.0.6 and Colorwheel 1.3.0,
+including indirect, instanced and crumbling draws. Iris integration preserves shader-pack hands,
+excludes shadow history and coordinates effective TAA ownership. Java compilation and 26 checks
+pass, including a real offscreen OpenGL deformation/cutout test. Live shader-pack acceptance and
+other missing motion producers remain open. [Source contracts and proof limits](../games/minecraft/MOTION.md).
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity
