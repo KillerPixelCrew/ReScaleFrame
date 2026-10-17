@@ -21,6 +21,8 @@ typedef struct rsf_sr12_setup {
     /* Backend zero normalizes inputs only. These extents may differ from output (FSR1). */
     uint32_t render_width, render_height;
     void* streamline_host;
+    /* Zero preserves the existing HDR contract; OpenGL SDR scenes set this to one. */
+    uint32_t input_sdr;
 } rsf_sr12_setup;
 
 #ifdef __cplusplus

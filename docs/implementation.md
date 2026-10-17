@@ -1,5 +1,27 @@
 # Implementation tracker
 
+## Minecraft OpenGL SR and FG, 17 October 2026
+
+Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
+and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
+motion, scales the world render target, resolves before hand/HUD and carries input frame identity
+through native FG. Reese's Sodium Options uses Sodium's public Config API for runtime settings.
+The packaged retail dependencies are extracted by verified content hash, without overwriting
+loaded modules. Work is isolated from unrelated Wingman edits in the primary checkout.
+
+Windows Release verification: 44 native checks passed, eight opt-in GPU checks skipped;
+Rust formatting/Clippy passed. The separate RTX4070 harness passed four SR backends, independent
+three-provider FG switching, actual input preparation, pixel checks and WGL-before-DXGI startup.
+Sixteen Java checks passed: 15 production-shader GPU regressions and actual Sodium page registration.
+The first modpack startup exposed missing slider formatters and WGL ownership; both have
+reproductions and fixes. The next run reached the menu but its child was created on Ixeris's
+separate render thread, leaving window messages unserviced. A thread dump established the actual
+event/render ownership; 1.1.2 creates the child through the public Ixeris main-thread API and
+passes a separate-thread GPU/hit-test/resize/shutdown regression. Corrected modpack input/world,
+visible quality, generated
+presentation and frame pacing acceptance remain pending. FSR4 and previous geometry for GPU-only
+instance animation remain unverified/incomplete. [Implementation and build](../games/minecraft/NATIVE.md).
+
 ## Wingman native observation, 11 October 2026
 
 Built and deployed a dedicated XInput carrier and guarded native temporal-upscaler observer,

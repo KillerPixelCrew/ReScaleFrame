@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "package": "org.kpc.rescaleframecraft.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "LevelRendererMixin", "GameRendererMixin", "BufferSourceMixin", "MinecraftMixin", "RenderSystemMixin",
+    "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",
+    "ParticleEngineMixin", "ShaderInstanceAccessor", "SodiumCloudRendererMixin", "VertexBufferMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

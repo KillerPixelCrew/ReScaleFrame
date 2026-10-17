@@ -1,0 +1,12 @@
+The TAA cache and resolve shaders are derived from VulkanStory-Rewrite:
+https://github.com/KillerPixelCrew/VulkanStory/tree/rewrite/shaders/native
+Pinned revision: 0bbcf237ba583e3c02aa19824f3440df145bcaab
+
+Historical Optimum terms: GPL-3.0-only with Commons Clause v1.0,
+licensor Zaldaryon, subject to the original upstream exceptions.
+The complete preserved license follows in LICENSE-OPTIMUM-LEGACY-GPL-COMMONS.
+The original source hashes and mechanical port are in taa-upstream.json and
+eng/port-taa-shaders.py in the project source.
+
+The project metadata's All Rights Reserved designation does not replace the
+terms governing these derived shaders.

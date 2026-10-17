@@ -14,6 +14,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_sr.cpp
     src/native_translucency.cpp
     src/native_sr_d3d12.cpp
+    src/gl_pipeline.cpp
     src/gpu_policy.cpp
     src/unity_sr_host.cpp
     src/unity_config.cpp

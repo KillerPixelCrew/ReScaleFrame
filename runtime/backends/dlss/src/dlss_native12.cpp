@@ -21,6 +21,7 @@
 struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
+    bool sdr = false;
     rsf_streamline_host* shared_host = nullptr;
     rsf_quality quality = RSF_QUALITY_QUALITY;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
@@ -174,13 +175,15 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     constants.cameraAspectRatio = static_cast<float>(record.output_width) / record.output_height;
     constants.depthInverted = camera.depth_inverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     constants.cameraMotionIncluded = sl::Boolean::eTrue;
+    constants.motionVectors3D = sl::Boolean::eFalse;
     constants.motionVectorsJittered = sl::Boolean::eFalse;
     constants.motionVectorsInvalidValue = std::numeric_limits<float>::max();
     constants.reset = frame->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     if (context->constants(constants, *token, viewport) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     sl::DLSSOptions options{}; options.mode = rsf::dlss_mode(context->quality);
     options.outputWidth = record.output_width; options.outputHeight = record.output_height;
-    options.colorBuffersHDR = sl::Boolean::eTrue; options.useAutoExposure = sl::Boolean::eTrue;
+    options.colorBuffersHDR = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
+    options.useAutoExposure = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     if (context->options(viewport, options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     sl::Resource input(sl::ResourceType::eTex2d, frame->color.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     sl::Resource depth(sl::ResourceType::eTex2d, frame->depth.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -210,4 +213,8 @@ void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 #endif
     if (context->module && !context->shared_host) FreeLibrary(context->module);
     delete context;
+}
+void rsf_dlss_native12_set_sdr(rsf_dlss_native12* context, uint32_t sdr)
+{
+    if (context) context->sdr = sdr != 0;
 }

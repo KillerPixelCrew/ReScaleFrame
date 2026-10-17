@@ -13,3 +13,4 @@ rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t w
 // before destroy. This context uses the supplied device and never creates/upgrades another one.
 rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* command_list, const rsf_sr_frame* frame);
 void rsf_dlss_native12_destroy(rsf_dlss_native12* context);
+void rsf_dlss_native12_set_sdr(rsf_dlss_native12* context, uint32_t sdr);

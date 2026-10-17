@@ -1,0 +1,15 @@
+{
+  "id": "minecraft",
+  "engine": "Minecraft Java 1.21.1",
+  "loader": "NeoForge 21.1.262",
+  "renderer": "OpenGL, Sodium 0.8.13",
+  "settings": "Sodium Config API through Reese's Sodium Options 2.2.4",
+  "native_adapter": "ReScaleFrame.Minecraft.dll",
+  "device": "D3D12 on the OpenGL context's exact adapter LUID",
+  "transfer": "EXT_memory_object_win32 resources and EXT_semaphore_win32 GPU timeline fence",
+  "presentation": "Framework-owned DXGI chain on an input-transparent child of the GLFW HWND, replacing the GL buffer swap",
+  "motion": "Dense unjittered camera motion plus existing geometry, particle, weather and Sodium cloud replay",
+  "units_to_meters": 1,
+  "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
+  "evidence": "Native GPU SR evaluation and FG input preparation passed on RTX 4070. Minecraft world acceptance pending."
+}

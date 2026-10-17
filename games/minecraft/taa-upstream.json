@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/KillerPixelCrew/VulkanStory",
+  "revision": "0bbcf237ba583e3c02aa19824f3440df145bcaab",
+  "files": {
+    "shaders\\native\\taa-cache.glsl": "f7e790add4ffa0e15212ef9795c05e1c771c7b0b3aa2866dbc375399737bcb4d",
+    "shaders\\native\\taa-resolve.glsl": "52de5e231eb0b890ffec4e487a26c71cece313d642728e509cdf604c189607a0"
+  }
+}

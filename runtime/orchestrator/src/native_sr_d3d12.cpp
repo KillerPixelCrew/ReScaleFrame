@@ -27,6 +27,8 @@ struct rsf_sr12 {
     std::array<ComPtr<ID3D12DescriptorHeap>, 3> heaps;
     std::array<ComPtr<ID3D12Resource>, 3> normalized;
     ComPtr<ID3D12Resource> output;
+    ComPtr<ID3D12Resource> exposure, exposure_upload;
+    bool exposure_initialized = false;
     uint32_t width = 0, height = 0, output_width = 0, output_height = 0;
     uint32_t backend = 0, quality = 0;
     uint64_t last_frame = 0, last_view = 0, last_session = 0;
@@ -204,12 +206,13 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
             static_cast<rsf_streamline_host*>(setup->streamline_host), &self->dlss) : rsf_dlss_native12_create(setup->device, &setup->dlss, &self->dlss);
         if (result == RSF_BACKEND_OK) result = rsf_dlss_native12_plan(self->dlss, self->output_width, self->output_height,
             self->quality, &self->width, &self->height);
+        if (result == RSF_BACKEND_OK) rsf_dlss_native12_set_sdr(self->dlss, setup->input_sdr);
     } else {
         rsf_sr_session_setup alternate{}; alternate.struct_size = sizeof(alternate); alternate.abi_version = RSF_SR_SESSION_ABI_VERSION;
         alternate.open.struct_size = sizeof(alternate.open); alternate.open.abi_version = RSF_BACKEND_ABI_VERSION;
         alternate.open.api = RSF_API_D3D12; alternate.open.device = setup->device;
         alternate.open.output_width = self->output_width; alternate.open.output_height = self->output_height;
-        alternate.open.dynamic_resolution = 1; alternate.open.hdr = 1; alternate.open.auto_exposure = 1;
+        alternate.open.dynamic_resolution = 1; alternate.open.hdr = !setup->input_sdr; alternate.open.auto_exposure = !setup->input_sdr;
         alternate.open.inverted_depth = setup->inverted_depth; alternate.open.depth_infinite = 0;
         alternate.open.log = setup->log; alternate.open.log_user = setup->user;
         alternate.fsr2_directory_utf8 = setup->fsr2_directory_utf8; alternate.fsr3_directory_utf8 = setup->fsr3_directory_utf8;
@@ -228,6 +231,23 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16_FLOAT, self->normalized[2]) ||
         (self->backend && !texture(*self, self->output_width, self->output_height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->output)))
         return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (setup->input_sdr && self->backend && self->backend != RSF_SR_DLSS) {
+        // SDR has no changing pre-exposure. XeSS requires an exposure texture when
+        // auto exposure is disabled; feed the actual constant scale, not HDR adaptation.
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = 1; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+        desc.Format = DXGI_FORMAT_R32_FLOAT;
+        if (FAILED(self->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&self->exposure)))) return RSF_BACKEND_ERROR_INIT_FAILED;
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = 256; desc.Format = DXGI_FORMAT_UNKNOWN; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(self->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&self->exposure_upload)))) return RSF_BACKEND_ERROR_INIT_FAILED;
+        void* mapped = nullptr; D3D12_RANGE read{0, 0};
+        if (FAILED(self->exposure_upload->Map(0, &read, &mapped))) return RSF_BACKEND_ERROR_INIT_FAILED;
+        *static_cast<float*>(mapped) = 1.0f; D3D12_RANGE written{0, sizeof(float)}; self->exposure_upload->Unmap(0, &written);
+    }
     *out = self.release(); return RSF_BACKEND_OK;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -285,6 +305,19 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         self->last_view != pass->history_key || self->last_session != pass->session_id || self->last_generation != pass->resource_generation;
     record.flags = reset ? RSF_FRAME_FLAG_RESET : 0;
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
+    if (self->exposure) {
+        if (!self->exposure_initialized) {
+            D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->exposure_upload.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            source.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, 1, 1, 1, 256};
+            D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = self->exposure.Get(); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            list->CopyTextureRegion(&target, 0, 0, 0, &source, nullptr);
+            transition(list, self->exposure.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            self->exposure_initialized = true;
+        }
+        frame.exposure.struct_size = sizeof(frame.exposure); frame.exposure.resource = self->exposure.Get();
+        frame.exposure.width = frame.exposure.height = 1; frame.exposure.generation = record.resource_generation;
+        frame.exposure.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
     rsf_backend_resource* resources[] = {&frame.color, &frame.depth, &frame.motion, &frame.output};
     void* textures[] = {self->normalized[0].Get(), self->normalized[1].Get(), self->normalized[2].Get(), self->output.Get()};
     for (size_t i = 0; i < 4; ++i) {

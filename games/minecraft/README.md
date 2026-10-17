@@ -1,0 +1,52 @@
+
+# ReScaleFrameCraft
+
+Minecraft 1.21.1 / NeoForge 21.1.262 / Sodium 0.8.13.
+
+VulkanStory-Rewrite's eight-sample raw-history TAA, including its homogeneous
+sky reprojection fix. The HUD and first-person hand render after the resolve.
+F8 opens settings; TAA can be toggled and history reset while playing. F3
+reports the actual status. Settings persist in `config/rescaleframecraft.json`.
+
+The retained resolve texture contains the world alone. `TemporalRenderer.sceneFrame()`
+publishes that owned texture with its frame ID and dimensions for future processing;
+it is valid until the next world frame starts. Hand, HUD and menus are composited
+onto Minecraft's main target afterwards and cannot modify the retained texture.
+
+Eight raw scene/depth/motion snapshots remain unchanged in a ring. Reprojection
+transports coordinates while retaining the selected surface through older
+frames, then samples each original colour once. Repeatedly filtering colour
+between cache ages spreads thin foliage into a trail, so this port avoids that
+feedback. Available raw samples are averaged; resolved output never enters history.
+
+Camera reprojection covers static terrain and celestial sky. Previous CPU
+vertices supply entity, block-entity and particle motion; vanilla and Sodium
+clouds use their actual cached mesh transforms, and rain/snow use their submitted
+vertices. Re-uploading a cloud mesh invalidates its previous geometry even when
+Sodium reuses the same vertex buffer. Replay matches the source depth precision.
+Custom GPU deformation and Flywheel/Create instanced geometry still need their
+own previous-frame producers. Shader-pack temporal effects need coordinated
+ownership; Iris being installed alone does not establish shader-pack support.
+
+## Build and test
+
+Use JDK 21 and `./gradlew test jar`, or run `./eng/test-temporal.ps1` with the
+Prism JDK. The harness creates an invisible OpenGL
+context and runs the shipped shaders and temporal pipeline. It requires an
+OpenGL driver and desktop session, opens no visible window, and does not launch
+Minecraft. Results are in `build/reports/tests/test`.
+
+Run `./eng/deploy-prism.ps1` to install in the N1GHT Prism instance. Deployment
+refuses to replace a running game, backs up earlier jars, disables Metal
+Upscaler and verifies the copied hash. The full modpack is the integration-test
+environment; a successful harness does not prove world rendering or visual
+quality.
+
+## Upstream
+
+`taa-upstream.json` pins the revision and source hashes.
+`eng/port-taa-shaders.py` exports the native shaders with OpenGL bindings into
+ignored reference files for comparison. Active shaders are `taa-accumulate.frag`
+and `taa-output.frag`.
+Original attribution and license are preserved under `META-INF`.
+DLSS/upscaling/frame generation are later work; this build implements TAA.

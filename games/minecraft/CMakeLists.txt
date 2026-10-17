@@ -1,0 +1,7 @@
+set(RSF_JAVA_HOME "$ENV{JAVA_HOME}" CACHE PATH "JDK providing JNI headers for Minecraft")
+if(EXISTS "${RSF_JAVA_HOME}/include/jni.h")
+    add_library(rsf_minecraft SHARED native/jni.cpp)
+    target_include_directories(rsf_minecraft PRIVATE "${RSF_JAVA_HOME}/include" "${RSF_JAVA_HOME}/include/win32")
+    target_link_libraries(rsf_minecraft PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+    set_target_properties(rsf_minecraft PROPERTIES OUTPUT_NAME "ReScaleFrame.Minecraft")
+endif()
