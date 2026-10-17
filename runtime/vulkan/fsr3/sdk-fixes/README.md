@@ -15,10 +15,10 @@ not signal a binary semaphore that no present will consume. The exact replacemen
 pinned staged sources; the vendor submodule stays unchanged. Runtime receipts
 and packaging verify both correction manifests.
 
-Build from the repository root:
+Build from the ReScaleFrame repository root, passing the VulkanStory host checkout:
 
 ```powershell
-& ./native/fsr3/build-sdk.ps1 -VulkanSdkRoot C:/VulkanSDK/1.4.357.0
+& ./runtime/vulkan/fsr3/build-sdk.ps1 -HostRoot <host> -VulkanSdkRoot <VulkanSDK>
 ```
 
 The script requires Windows x64, CMake, Visual Studio 2022/2026 x64 C++ tools,
@@ -30,11 +30,11 @@ limited to four jobs and each shader compiler to one worker by default. Only
 staged build scheduling is adjusted; shader flags/permutations remain unchanged.
 It does not edit the
 vendor submodule or launch the game. A failed build produces no runtime receipt.
-The ordinary Windows `scripts/build-runtime.ps1` invokes this build. A cached
+The host's ordinary Windows `scripts/build-runtime.ps1` invokes this build. A cached
 runtime is reused only when its pinned source, correction, build recipe and binary
 hashes match the receipt.
 
-The default output is `artifacts/native-fsr3-sdk/Release/win-x64/runtime`.
+The default output is `artifacts/rescaleframe/fsr3-sdk/Release/win-x64/runtime`.
 `scripts/prepare-native-bundle.ps1` requires that corrected runtime by default.
 For another fresh build directory, pass its `runtime/` subdirectory explicitly
 with `-Fsr3RuntimeDirectory`. Every selected runtime requires the build
