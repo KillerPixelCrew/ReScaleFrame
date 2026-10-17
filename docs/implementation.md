@@ -1,5 +1,39 @@
 # Implementation tracker
 
+## Shared DLSS model selection, 18 October 2026
+
+AC7 and Unity's Insert overlay and Minecraft's Sodium/Reese's options and F8 screen now select
+Default, E, F, J, K, L or M independently of quality/render scale. AC7 saves `Rendering/DlssPreset`
+in its existing per-user AC7.ini. Unity saves it in ReScaleFrame/preferences.ini, with
+`UnitySR/DlssPreset` as the installation default. Minecraft saves `dlssPreset` in its JSON config.
+Invalid saved values fall back to Default. Driver overrides can replace this request, so the
+controls do not claim to report the effective driver model.
+
+Source rationale: the bundled Streamline 2.14.1 `sl_dlss.h` defines the supported model IDs;
+its [DLSS plugin](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/source/plugins/sl.dlss/dlssEntry.cpp)
+compares the per-quality preset fields before evaluation and recreates the NGX feature on change,
+resetting history and delaying the old feature's release. The shared SR implementations set all
+quality fields together. AC7 includes the preset in its cached option comparison and both scene
+and auxiliary frames. Unity and Minecraft use their existing GPU-drained reconfiguration paths.
+DLSS ABI 5 and overlay ABI 11 require matched rebuilt components.
+
+Validation: `eng/verify.ps1 -Configuration Release -VS2026` passed from isolated main baseline
+`6e70ab7` plus this change: 44 native passes, eight opt-in skips, formatting and Clippy clean.
+`cargo test --workspace --locked` passed 58 checks, including preset clicks, Default restoration,
+quality independence, backend gating and ABI offsets. Minecraft `test jar` passed 22 checks,
+including the preset-bearing JNI signature and actual Sodium option registration.
+
+The headless native D3D12 fixture evaluated all seven preset requests on an RTX 4070 Laptop,
+using a shared SR/FG host, Quality mode, 427x240 input and 640x360 output. All evaluations returned
+success and finite nonzero pixel readback. Each request used a fresh fixture process; this does
+not prove live switching or effective model identity under driver overrides. Use
+`RSF_DLSS_TEST_PRESET=<numeric ID>` with `rsf_unity_sr_d3d12_test` to select the fixture request.
+
+The isolated AC7 proxy, Unity runtime and matched overlay are deployed with backups and matching
+installed hashes. Minecraft's rebuilt `rescaleframecraft-1.1.6-dev.jar` is deployed to N1GHT;
+its embedded JNI DLL matches the isolated build. No games were launched. Live game preset
+switching and visual quality remain user-run acceptance.
+
 ## VulkanStory host integration
 
 The Vulkan provider bridges and guarded FidelityFX/Streamline SDK corrections now live in

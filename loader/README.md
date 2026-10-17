@@ -100,6 +100,7 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
 | `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
 | `RSF_SCREEN_PERCENTAGE` | Legacy diagnostic setting; consumer startup uses the selected DLSS preset |
+| `RSF_DLSS_PRESET` | DLSS model request: 0 Default, 5 E, 6 F, 10 J, 11 K, 12 L, 13 M. Separate from quality/render scale. Insert saves this in the user's AC7 preferences. Driver overrides may replace the request. |
 | `RSF_CONSOLE_SINGLETON_RVA` | Default address `0x3a8b290` |
 | `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
 | `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |

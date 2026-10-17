@@ -173,7 +173,7 @@ bool same_options(const sl::DLSSOptions& a, const sl::DLSSOptions& b)
 {
     return a.mode == b.mode && a.outputWidth == b.outputWidth && a.outputHeight == b.outputHeight &&
            a.colorBuffersHDR == b.colorBuffersHDR && a.useAutoExposure == b.useAutoExposure &&
-           a.alphaUpscalingEnabled == b.alphaUpscalingEnabled;
+           a.alphaUpscalingEnabled == b.alphaUpscalingEnabled && a.dlaaPreset == b.dlaaPreset;
 }
 
 } // namespace
@@ -472,6 +472,10 @@ static rsf_dlss_result evaluate(void* d3d11_context, const rsf_dlss_frame* frame
     }
 
     sl::DLSSOptions options{};
+    if (!rsf_dlss_preset_valid(frame->preset)) return RSF_DLSS_ERROR_INVALID_ARGUMENT;
+    const auto preset = static_cast<sl::DLSSPreset>(frame->preset);
+    options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
+    options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
     options.mode = rsf::dlss_mode(frame->quality);
     options.outputWidth = frame->output_width;
     options.outputHeight = frame->output_height;

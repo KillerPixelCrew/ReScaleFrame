@@ -13,11 +13,17 @@ public final class TaaScreen extends Screen {
         addRenderableWidget(Button.builder(label(),button->{
             TaaSettings.current.enabled=!TaaSettings.current.enabled;TaaSettings.save();button.setMessage(label());
         }).bounds(width/2-110,height/2-25,220,20).build());
+        addRenderableWidget(Button.builder(presetLabel(),button->{
+            var values=TaaSettings.DlssPreset.values();
+            TaaSettings.current.dlssPreset=values[(TaaSettings.current.dlssPreset.ordinal()+1)%values.length];
+            TaaSettings.save();button.setMessage(presetLabel());
+        }).bounds(width/2-110,height/2-50,220,20).build());
         addRenderableWidget(Button.builder(Component.literal("Reset temporal history"),button->TemporalRenderer.reset())
             .bounds(width/2-110,height/2,220,20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.done"),button->onClose())
             .bounds(width/2-110,height/2+50,220,20).build());
     }
+    private Component presetLabel() {return Component.literal("DLSS model preset: "+TaaSettings.current.dlssPreset.name());}
     private Component label() { return Component.literal("Temporal antialiasing: "+(TaaSettings.current.enabled?"On":"Off")); }
     @Override public void render(GuiGraphics graphics,int mouseX,int mouseY,float partial) {
         super.render(graphics,mouseX,mouseY,partial);

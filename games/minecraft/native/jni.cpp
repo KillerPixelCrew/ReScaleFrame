@@ -54,8 +54,8 @@ JNI_METHOD(jlong) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_ope
     if(result!=RSF_BACKEND_OK) {char message[96];std::snprintf(message,sizeof(message),"Minecraft native open failed: %d",result);log(nullptr,message);}
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(self));
 }
-JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_configure(JNIEnv* env,jclass,jlong pointer,jint width,jint height,jint sr,jint quality,jint fg,jint count,jint reflex,jint limit,jboolean debug) {
-    rsf_gl_pipeline_options options{};options.struct_size=sizeof(options);options.sr_backend=sr;options.quality=quality;options.fg_backend=fg;
+JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_configure(JNIEnv* env,jclass,jlong pointer,jint width,jint height,jint sr,jint quality,jint preset,jint fg,jint count,jint reflex,jint limit,jboolean debug) {
+    rsf_gl_pipeline_options options{};options.struct_size=sizeof(options);options.sr_backend=sr;options.quality=quality;options.dlss_preset=preset;options.fg_backend=fg;
     options.generation={sizeof(options.generation),fg?RSF_FG_FIXED:RSF_FG_OFF,static_cast<uint32_t>(count),static_cast<uint32_t>(reflex),limit>0?1000000u/static_cast<uint32_t>(limit):0u,debug?1u:0u};
     const auto result=rsf_gl_pipeline_configure(pipeline(pointer),&options,width,height);
     rsf_gl_pipeline_surfaces surfaces{};surfaces.struct_size=sizeof(surfaces);

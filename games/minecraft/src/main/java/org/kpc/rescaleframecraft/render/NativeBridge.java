@@ -44,7 +44,7 @@ final class NativeBridge {
     static native void input(long pointer,long frame,int kinds);
     static native void destroySurface(long window);
     static native long open(long hwnd,long surface,String root);
-    static native int[] configure(long handle,int width,int height,int sr,int quality,int fg,int count,int reflex,int limit,boolean debug);
+    static native int[] configure(long handle,int width,int height,int sr,int quality,int preset,int fg,int count,int reflex,int limit,boolean debug);
     static native void cpu(long handle,long frame,int stage);
     static native void abort(long handle,long frame);
     static native int evaluate(long handle,long frame,FloatBuffer camera,boolean reset,int screen);

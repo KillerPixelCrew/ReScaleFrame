@@ -415,6 +415,7 @@ static struct {
     /* The DLSS quality level in effect, for the panel, and whether the panel chose one before the
        backend started. */
     unsigned long quality;
+    unsigned long dlss_preset;
     int quality_chosen;
     unsigned long reinsert_frames;
     unsigned long gate_evaluates;
@@ -2799,6 +2800,8 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         }
     }
     stats->quality = (rsf_overlay_quality)bridge.quality;
+    stats->dlss_preset = (uint32_t)bridge.dlss_preset;
+    stats->dlss_preset_available = 1;
     if (rsf_bridge_native_owned()) {
         rsf_game_render_config config = {0}; config.struct_size = sizeof(config);
         stats->render_scale_percent = rsf_native_sr_render_config(NULL, &config) && config.output_width ?
@@ -2828,6 +2831,14 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
    from the message thread to the render thread at a defined point, which is the open review finding
    about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
    and leaves the hotkeys as the way to ask. */
+int rsf_bridge_select_dlss_preset(unsigned long preset)
+{
+    if (rsf_dlss_pipeline_set_preset((uint32_t)preset) != RSF_DLSS_PIPELINE_OK) return 0;
+    bridge.dlss_preset = preset;
+    if (bridge.actions.save_dlss_preset) bridge.actions.save_dlss_preset(preset);
+    return 1;
+}
+
 int rsf_bridge_select_quality(unsigned long quality)
 {
     uint32_t width = 0, height = 0;
@@ -3016,6 +3027,7 @@ static void overlay_tick(void* swapchain)
             bridge.setting_error = "Game render resolution refused; previous backend restored";
         }
     }
+    if (intent.dlss_preset_changed) rsf_bridge_select_dlss_preset(intent.dlss_preset);
     if (intent.quality_changed) {
         rsf_bridge_select_quality((unsigned long)intent.quality);
     }

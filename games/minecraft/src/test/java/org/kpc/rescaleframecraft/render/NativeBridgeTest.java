@@ -15,5 +15,7 @@ class NativeBridgeTest {
         var status=new long[14];Arrays.fill(status,-1);
         NativeBridge.status(0,status);
         assertArrayEquals(new long[14],status,"JNI signature and output layout match the staged DLL");
+        assertNull(NativeBridge.configure(0,1920,1080,1,1,13,0,1,1,0,false),
+            "Preset-bearing JNI signature rejects an absent native session");
     }
 }

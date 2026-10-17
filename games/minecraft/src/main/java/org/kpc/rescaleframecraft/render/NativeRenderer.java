@@ -39,14 +39,14 @@ public final class NativeRenderer {
     private static float frameTime=.016f;
     private static final InputFrames inputs=new InputFrames((id,kinds)->NativeBridge.input(handle,id,kinds));
     private record Configuration(int width,int height,TaaSettings.Upscaler upscaler,TaaSettings.Quality quality,
-        TaaSettings.FrameGeneration generation,int count,TaaSettings.Reflex reflex,int limit,boolean debug) {
+        TaaSettings.DlssPreset preset,TaaSettings.FrameGeneration generation,int count,TaaSettings.Reflex reflex,int limit,boolean debug) {
         Configuration(int width,int height,TaaSettings settings) {
-            this(width,height,settings.upscaler,settings.quality,settings.frameGeneration,settings.generatedFrames,
+            this(width,height,settings.upscaler,settings.quality,settings.dlssPreset,settings.frameGeneration,settings.generatedFrames,
                 settings.reflex,settings.frameLimit,settings.nativeDebug);
         }
         boolean matches(int width,int height,TaaSettings settings) {
             return this.width==width&&this.height==height&&upscaler==settings.upscaler&&quality==settings.quality&&
-                generation==settings.frameGeneration&&count==settings.generatedFrames&&reflex==settings.reflex&&
+                preset==settings.dlssPreset&&generation==settings.frameGeneration&&count==settings.generatedFrames&&reflex==settings.reflex&&
                 limit==settings.frameLimit&&debug==settings.nativeDebug;
         }
     }
@@ -91,7 +91,7 @@ public final class NativeRenderer {
                     guides=new GlProgram("fullscreen.vert","native-guides.frag");
                     framebuffer=GL30.glGenFramebuffers();readFramebuffer=GL30.glGenFramebuffers();vao=GL30.glGenVertexArrays();
                 }
-                var replacement=NativeBridge.configure(handle,display.viewWidth,display.viewHeight,s.upscaler.id,s.quality.ordinal(),s.frameGeneration.id,
+                var replacement=NativeBridge.configure(handle,display.viewWidth,display.viewHeight,s.upscaler.id,s.quality.ordinal(),s.dlssPreset.id,s.frameGeneration.id,
                     s.generatedFrames,s.reflex.ordinal(),s.frameLimit,s.nativeDebug);
                 if(replacement==null)throw new IllegalStateException("Native reconfiguration failed; see minecraft-native.log");
                 boolean resize=surfaces==null||surfaces[0]!=replacement[0]||surfaces[1]!=replacement[1];surfaces=replacement;
