@@ -17,20 +17,23 @@ import org.lwjgl.system.MemoryUtil;
 
 /** Game ownership, render resolution, input conventions and HUD boundaries live here. */
 public final class NativeRenderer {
-    private static long handle,surfaceWindow,frame,lastFrameTime,lastPacing;
+    private static long handle,surfaceWindow,frame,closedFrame,lastFrameTime,lastPacing;
     private static String settingsKey="",failedKey="",status="native processing off";
     private static int[] surfaces;
     private static long[] nativeStatus;
     private static RenderTarget display;
     private static TextureTarget world;
-    private static boolean worldRendering,worldFinished;
+    private static boolean worldRendering;
     private static GlProgram guides;
     private static int framebuffer,readFramebuffer,vao;
     private static int displayDepth,frameDisplayWidth,frameDisplayHeight;
+    private static int acceptedWidth,lastResult,refusedFrames;
     private static final FloatBuffer cameraData=MemoryUtil.memAllocFloat(88);
     private static float frameTime=.016f;
+    private static final InputFrames inputs=new InputFrames((id,kinds)->NativeBridge.input(handle,id,kinds));
     private NativeRenderer() {}
     public static void beginFrame() {
+        inputs.end();
         var game=Minecraft.getInstance();var s=TaaSettings.current;
         long now=System.nanoTime();
         if(handle!=0&&s.frameLimit>0&&lastPacing!=0) {
@@ -39,7 +42,8 @@ public final class NativeRenderer {
             now=System.nanoTime();
         }
         lastPacing=now;frameTime=lastFrameTime==0?.016f:Math.clamp((now-lastFrameTime)*1e-9f,.001f,1f);lastFrameTime=now;
-        ++frame;worldFinished=false;worldRendering=false;
+        if(handle!=0&&frame>closedFrame) {NativeBridge.abort(handle,frame);closedFrame=frame;}
+        ++frame;worldRendering=false;
         if(!GL.getCapabilities().OpenGL33)return;
         display=game.getMainRenderTarget();
         frameDisplayWidth=display.viewWidth;frameDisplayHeight=display.viewHeight;
@@ -65,17 +69,20 @@ public final class NativeRenderer {
                     if(world!=null)world.destroyBuffers();
                     world=new TextureTarget(surfaces[0],surfaces[1],true,Minecraft.ON_OSX);
                 }
-                settingsKey=key;failedKey="";TemporalRenderer.reset();
+                settingsKey=key;failedKey="";acceptedWidth=0;TemporalRenderer.reset();
                 ReScaleFrameCraft.LOGGER.info("ReScaleFrame native settings applied: {}, world {}x{}, display {}x{}",key,surfaces[0],surfaces[1],surfaces[2],surfaces[3]);
             } catch(Exception|LinkageError error) {
                 failedKey=key;status=error.getMessage();ReScaleFrameCraft.LOGGER.error("ReScaleFrame native configuration failed",error);
             }
         }
         if(handle!=0&&surfaces!=null) {
-            NativeBridge.cpu(handle,frame,0);NativeBridge.cpu(handle,frame,6);NativeBridge.cpu(handle,frame,1);NativeBridge.cpu(handle,frame,2);
+            NativeBridge.cpu(handle,frame,0);NativeBridge.cpu(handle,frame,6);
+            inputs.begin(frame);
+            NativeBridge.cpu(handle,frame,1);NativeBridge.cpu(handle,frame,2);
             nativeStatus=NativeBridge.status(handle);
-            status="SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
-                ", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", presented="+nativeStatus[11]+", reason="+nativeStatus[7]+", result="+nativeStatus[8];
+            status="SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+", frames="+nativeStatus[6]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
+                ", active="+(nativeStatus[12]!=0)+", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", generated presented="+
+                ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8];
         }
     }
     private static <T> T windowThread(Supplier<T> work) throws Exception {
@@ -89,9 +96,10 @@ public final class NativeRenderer {
         return result;
     }
     private static String name(long id) {return switch((int)id) {case 0->"Off";case 1->"DLSS";case 2->"FSR2";case 3->"FSR3";case 4->"FSR4";case 5->"XeSS";case 7->"Auto";default->"Unknown";};}
-    public static void simulationEnd() {if(handle!=0)NativeBridge.cpu(handle,frame,3);}
+    public static void input(int kinds) {if(handle!=0)inputs.sample(kinds);}
+    public static void simulationEnd() {inputs.end();if(handle!=0)NativeBridge.cpu(handle,frame,3);}
     public static void beginWorld() {
-        if(handle==0||surfaces==null||world==null)return;
+        if(handle==0||surfaces==null||world==null||closedFrame==frame)return;
         worldRendering=true;world.setClearColor(0,0,0,0);world.clear(Minecraft.ON_OSX);world.bindWrite(true);
     }
     public static RenderTarget worldTarget() {return worldRendering?world:null;}
@@ -114,18 +122,25 @@ public final class NativeRenderer {
         guides.vector3("cameraDelta",camera.cameraDelta.x,camera.cameraDelta.y,camera.cameraDelta.z);
         guides.vector2("renderSize",surfaces[0],surfaces[1]);guides.vector2("jitterPx",camera.jitter.x,camera.jitter.y);
         guides.integer("resetHistory",camera.reset?1:0);GL30.glBindVertexArray(vao);GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
-        packCamera(camera);
-        int screen=Minecraft.getInstance().screen!=null||Minecraft.getInstance().isPaused()?1:4;
+        cameraMetadata(camera,frameTime);
+        var game=Minecraft.getInstance();
+        int screen=game.screen!=null||game.getOverlay()!=null||game.isPaused()?1:4;
         int result=NativeBridge.evaluate(handle,frame,cameraData,camera.reset,screen);
         worldRendering=false;
         if(result==0&&nativeStatus!=null&&nativeStatus[1]!=0)copyTexture(surfaces[7],display,true);
         else blit(source,display,GL11.GL_COLOR_BUFFER_BIT,GL11.GL_LINEAR);
         blit(source,display,GL11.GL_DEPTH_BUFFER_BIT,GL11.GL_NEAREST);
-        if(result!=0) {status="Native evaluate failed: "+result;ReScaleFrameCraft.LOGGER.error("Native evaluate refused frame {}: {}",frame,result);}
+        if(result!=0) {
+            status="Native evaluate failed: "+result;
+            if(result!=lastResult||refusedFrames++<4||refusedFrames%600==0)ReScaleFrameCraft.LOGGER.error("Native evaluate refused frame {}: {}, near={}, far={}, fov={}, dt={}",frame,result,cameraData.get(84),cameraData.get(85),cameraData.get(86),cameraData.get(87));
+        } else if(acceptedWidth!=source.viewWidth) {
+            acceptedWidth=source.viewWidth;ReScaleFrameCraft.LOGGER.info("Native scene processed frame {}: {}x{} -> {}x{}, SR backend={}",frame,source.viewWidth,source.viewHeight,surfaces[2],surfaces[3],nativeStatus[1]);
+        }
+        lastResult=result;
         // Preserve a display-sized completed scene before hand/HUD writes. Native owns its copy.
-        copyToShared(display,surfaces[8]);NativeBridge.hudless(handle,frame,cameraData);worldFinished=true;
+        copyToShared(display,surfaces[8]);NativeBridge.hudless(handle,frame,cameraData);
     }
-    private static void packCamera(TemporalCamera c) {
+    static FloatBuffer cameraMetadata(TemporalCamera c,float seconds) {
         // JOML column-major arrays are the row-major row-vector matrices used by the C ABI.
         Matrix4f remap=new Matrix4f().m11(-1).m22(.5f).m32(.5f);
         Matrix4f projection=new Matrix4f(remap).mul(TemporalCamera.canonicalDepth(c.reversedDepth,c.zeroToOne)).mul(c.projection);
@@ -137,7 +152,9 @@ public final class NativeRenderer {
         cameraData.clear();put(projection);put(inverse);put(viewToWorld);put(new Matrix4f(viewToWorld).invert());put(previousClip);
         cameraData.put(c.jitter.x).put(-c.jitter.y).put(c.previousJitter.x).put(-c.previousJitter.y);
         float a=projection.m22(),b=projection.m32();
-        cameraData.put(Math.abs(b/a)).put(Math.abs(b/(a+1))).put(2*(float)Math.atan(1/Math.abs(projection.m11()))).put(frameTime);cameraData.flip();
+        float far=Math.abs(b/(a+1));
+        cameraData.put(Math.abs(b/a)).put(Float.isFinite(far)?far:0).put(2*(float)Math.atan(1/Math.abs(projection.m11()))).put(seconds);cameraData.flip();
+        return cameraData;
     }
     private static void put(Matrix4f matrix) {float[] values=new float[16];matrix.get(values);cameraData.put(values);}
     private static void attach(int texture) {
@@ -162,13 +179,15 @@ public final class NativeRenderer {
         if(handle==0||surfaces==null)return false;
         // GLFW can recursively updateDisplay while dispatching a resize. Neither
         // that nested call nor a reallocated, unfinished main target is a frame.
-        if(displayDepth>1||display.viewWidth!=frameDisplayWidth||display.viewHeight!=frameDisplayHeight)return true;
+        if(displayDepth>1||closedFrame==frame)return true;
+        if(display.viewWidth!=frameDisplayWidth||display.viewHeight!=frameDisplayHeight) {NativeBridge.abort(handle,frame);closedFrame=frame;return true;}
         try(var state=new GlState()) {
             state.fullscreen();copyToShared(display,surfaces[9]);
-            // No matching world capture means menus/loading; frame 0 forbids interpolation.
-            int result=NativeBridge.present(handle,worldFinished?frame:0,Minecraft.getInstance().options.enableVsync().get());
+            // A menu still closes its real CPU frame. Absence of matching world
+            // capture disables interpolation without leaking Streamline tokens.
+            int result=NativeBridge.present(handle,frame,Minecraft.getInstance().options.enableVsync().get());
             if(result!=0)throw new IllegalStateException("Native presentation failed: "+result);
-            NativeBridge.cpu(handle,frame,4);return true;
+            NativeBridge.cpu(handle,frame,4);closedFrame=frame;return true;
         }
     }
     public static void beginDisplay() {++displayDepth;}
@@ -176,6 +195,7 @@ public final class NativeRenderer {
     public static String status() {return status;}
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}
     public static void shutdown() {
+        inputs.end();
         if(handle!=0) {NativeBridge.close(handle);handle=0;surfaces=null;worldRendering=false;}
         if(surfaceWindow!=0) {NativeBridge.destroySurface(surfaceWindow);surfaceWindow=0;}
     }

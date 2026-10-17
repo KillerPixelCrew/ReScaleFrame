@@ -41,9 +41,14 @@ RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_se
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline*, const rsf_gl_pipeline_options*, uint32_t width, uint32_t height);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline*, rsf_gl_pipeline_surfaces*);
 RSF_RUNTIME_API void rsf_gl_pipeline_cpu(rsf_gl_pipeline*, uint64_t frame, uint32_t stage);
+/* Input consumer on the CPU frame owner, after acquisition/pacing and before simulation ends. */
+RSF_RUNTIME_API int32_t rsf_gl_pipeline_input(rsf_gl_pipeline*, uint64_t frame, uint32_t kinds, uint32_t message);
+RSF_RUNTIME_API uint32_t rsf_gl_pipeline_pcl_message(rsf_gl_pipeline*);
+RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_abort(rsf_gl_pipeline*, uint64_t frame);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline*, const rsf_game_render_pass*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline*, const rsf_game_render_pass*);
-/* Returns OK only after the native DXGI owner consumed the composed texture. */
+/* Every present carries its nonzero CPU frame ID, including menus. Missing scene
+   captures disable FG; zero is never a substitute for the input frame identity. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_present(rsf_gl_pipeline*, uint64_t frame, uint32_t vsync);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_status_get(rsf_gl_pipeline*, rsf_gl_pipeline_status*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_close(rsf_gl_pipeline*);

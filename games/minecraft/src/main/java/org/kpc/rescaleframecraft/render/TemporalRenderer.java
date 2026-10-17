@@ -67,8 +67,8 @@ public final class TemporalRenderer {
             sceneFrame=nativeScene?NativeRenderer.sceneFrame(++completedFrames):new SceneFrame(++completedFrames,target.viewWidth,target.viewHeight,history.sceneColor(),false);
             status=(nativeSr?"Native SR":"TAA raw ring, 8 samples")+" "+target.viewWidth+"x"+target.viewHeight;
             if(loggedWidth!=target.viewWidth||loggedHeight!=target.viewHeight) {
-                ReScaleFrameCraft.LOGGER.info("TAA active (raw-ring): {}x{}, eight raw snapshots, jitter={}px, reverseDepth={}, zeroToOne={}, HUD/hand after resolve",
-                    target.viewWidth,target.viewHeight,CAMERA.jitter,CAMERA.reversedDepth,CAMERA.zeroToOne);
+                ReScaleFrameCraft.LOGGER.info("Temporal world prepared: mode={}, {}x{}, jitter={}px, reverseDepth={}, zeroToOne={}, HUD/hand after resolve",
+                    nativeSr?"native SDK":"raw-ring TAA",target.viewWidth,target.viewHeight,CAMERA.jitter,CAMERA.reversedDepth,CAMERA.zeroToOne);
                 loggedWidth=target.viewWidth;loggedHeight=target.viewHeight;
             }
         } catch(Exception e) {

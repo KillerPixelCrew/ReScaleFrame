@@ -4,6 +4,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "LevelRendererMixin", "GameRendererMixin", "BufferSourceMixin", "MinecraftMixin", "RenderSystemMixin",
+    "KeyboardHandlerMixin", "MouseHandlerMixin", "ControlifyInputMixin", "ControllableInputMixin",
     "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",
     "ParticleEngineMixin", "ShaderInstanceAccessor", "SodiumCloudRendererMixin", "VertexBufferMixin"
   ],

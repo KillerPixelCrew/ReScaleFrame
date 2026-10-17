@@ -3,6 +3,7 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/fg_choice.h>
+#include <rescaleframe/streamline_host.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -168,7 +169,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,co
         if(FAILED(resized)) {char message[128];std::snprintf(message,sizeof(message),"OpenGL: DXGI resize %ux%u failed (0x%08x)",width,height,static_cast<uint32_t>(resized));log(self,message);return RSF_BACKEND_ERROR_FEATURE_FAILED;}
     }
     std::swap(self->sr,pending.sr);std::swap(self->surfaces,pending.surfaces);std::swap(self->textures,pending.textures);
-    self->width=width;self->height=height;self->render_width=render_width;self->render_height=render_height;self->status.effective_sr=selected;
+    self->width=width;self->height=height;self->render_width=render_width;self->render_height=render_height;self->status.effective_sr=selected;self->status.evaluated=0;
     ++self->generation;return RSF_BACKEND_OK;
 } catch(...) {return RSF_BACKEND_ERROR_FEATURE_FAILED;}
 extern "C" rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline* self,rsf_gl_pipeline_surfaces* out) {
@@ -179,6 +180,18 @@ extern "C" rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline* self
 extern "C" void rsf_gl_pipeline_cpu(rsf_gl_pipeline* self,uint64_t frame,uint32_t stage) {
     if(!self)return;LARGE_INTEGER now{},frequency{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{sizeof(event),stage,self->session,frame,static_cast<uint64_t>(now.QuadPart),static_cast<uint64_t>(frequency.QuadPart),0,0,0};rsf_fg12_cpu(&event);
+}
+extern "C" rsf_backend_result rsf_gl_pipeline_abort(rsf_gl_pipeline* self,uint64_t frame) {
+    return self&&frame?rsf_d3d11_present_abort(frame):RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+}
+extern "C" int32_t rsf_gl_pipeline_input(rsf_gl_pipeline* self,uint64_t frame,uint32_t kinds,uint32_t message) {
+    if(!self||!frame||(kinds&~7u)||(!kinds&&message<0xc000u))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return rsf_d3d11_present_input(frame,kinds,message);
+}
+extern "C" uint32_t rsf_gl_pipeline_pcl_message(rsf_gl_pipeline* self) {
+    if(!self)return 0;
+    rsf_streamline_latency_status status{};status.struct_size=sizeof(status);
+    return rsf_streamline_host_latency_status(rsf_d3d11_present_host(),&status)==RSF_BACKEND_OK?status.pcl_message_id:0;
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline* self,const rsf_game_render_pass* input) {
     if(!self||!self->sr||!input||input->struct_size<sizeof(*input))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -191,7 +204,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline* self,con
     for(size_t i=0;i<4;++i)barrier(list,self->textures[i].resource,i==3?D3D12_RESOURCE_STATE_COPY_DEST:D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COMMON);
     const auto submitted=rsf_gl_submit(self->sharing,4,self->surfaces.data());
     if(submitted!=RSF_BACKEND_OK)return submitted;rsf_fg12_submitted(self->session,pass.source_frame_id);
-    self->status.sr_result=result;if(result==RSF_BACKEND_OK)++self->status.evaluated;return result;
+    self->status.sr_result=result;if(result==RSF_BACKEND_OK&&self->status.effective_sr)++self->status.evaluated;return result;
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline* self,const rsf_game_render_pass* input) {
     if(!self||!self->sr||!input||input->struct_size<sizeof(*input))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -202,7 +215,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline* self,cons
     result=rsf_gl_submit(self->sharing,1,&self->surfaces[4]);if(result==RSF_BACKEND_OK)rsf_fg12_submitted(self->session,pass.source_frame_id);return result;
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_present(rsf_gl_pipeline* self,uint64_t frame,uint32_t vsync) {
-    if(!self||!self->sr)return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if(!self||!self->sr||!frame)return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     ComPtr<ID3D12Resource> buffer;if(FAILED(self->chain->GetBuffer(self->chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer))))return RSF_BACKEND_ERROR_FEATURE_FAILED;
     void* commands=nullptr;uint32_t slot=0;auto result=rsf_gl_begin(self->sharing,1,&self->surfaces[5],&commands,&slot);if(result!=RSF_BACKEND_OK)return result;
     auto* list=static_cast<ID3D12GraphicsCommandList*>(commands);

@@ -58,4 +58,74 @@ the new SR session and all six surfaces before replacing the old set. Pre-existi
 are logged separately; retired texture/framebuffer snapshots are not rebound. Nested window-update
 callbacks do not present an unfinished resized target. The GPU harness covers 854x480, 1920x1080,
 2560x1494 and 1280x720 with DLSS FG configured, plus a forced unsupported allocation that must
-preserve every published resource. Live resize/world acceptance of 1.1.3 remains pending.
+preserve every published resource.
+
+Build 1.1.4 corrected a separate frame-lifetime defect: menu presents used frame zero and leaked
+Streamline tokens. World evaluation then returned NOT_READY and displayed the raw scaled image.
+Every menu present now closes its actual acquired frame; skipped resize frames explicitly abort.
+The GPU regression presents 32 menu frames per scenario before real vendor evaluation. Live
+world logs show successful DLSS reconstruction after loading and live FG-provider changes. The
+human accepted the resulting image. This does not establish displayed generated-frame cadence.
+
+### Input and PCL, 1.1.5
+
+KeyboardHandler.keyPress and MouseHandler.onMove/onPress/onScroll notify the CPU input owner.
+After-present callbacks, including Ixeris 4.6.8's queued replay, are retained for the next simulation;
+they never reuse the just-presented token. Calls from another thread are also queued. The sequence
+is acquire, provider pacing, pending input, SimulationStart, actual tick/controller sampling,
+SimulationEnd after render-pre listeners, render submission and Present. A controller sample marker
+may occur within simulation when that mod actually polls. Ordinary keyboard/mouse InputSample=6
+is deprecated in the installed SDK; keyboard/mouse latency uses the registered PCL ping instead.
+
+The JNI adapter observes PM_REMOVE on the GLFW owner's WH_GETMESSAGE hook, including parent,
+child and thread-targeted registered messages. It never replaces GLFW callbacks or injects input.
+Only a pending flag crosses threads. The render thread emits PCLatencyPing with the next acquired
+simulation token. Input observation remains independent of the chosen SR/FG provider; availability
+follows the existing shared SDK host. ControllerInputSample is deduplicated by that host per token.
+
+The installed Controlify jar SHA256 is
+`0c8b8d6e57599b516a16f2df2a7314ee96228c94f145f5d7bea2e2ec7b2f90e7`.
+REA artifact evidence `ev_0d6ebbe832f69dda4ea91a2f0a18fceb146cd48c72480caeef041c71e0895f37`
+identified the package. Matching LTS source and shipped javap bytecode confirm
+`tickActiveController(ControllerEntity,boolean)` reads the driver-published state before bindings,
+movement and gyro handling. The optional hook runs there; controller input is not inferred from
+keyboard emulation. No controller was attached in the inspected live startup.
+
+Online comparison and selected adapters:
+
+| Mod and pinned source | Acquisition / consumption | Adapter |
+| --- | --- | --- |
+| [Controlify 3.0.1 LTS, fd81677](https://github.com/isXander/Controlify/tree/fd816773a67cc41d4fa242911eae4cc6e36bca12) | SDL3 event/driver or GLFW state on client ticks; active controller consumes published state; per-frame look uses cached tick deltas | Optional tickActiveController hook |
+| [Controllable 0.25.4, 95a8a81](https://github.com/MrCrayfish/Controllable/tree/95a8a81597afe8218670607efd2ac7da088083f7) | SDL2/GLFW polls at render/tick boundaries; button snapshots drain only at START_CLIENT; camera turns at START_RENDER | Optional hook before accessible Controller.captureButtonStates; INPUT/BUTTON event declarations are never posted in this revision |
+| [MidnightControls 1.10.0.1 beta, e022fd1](https://github.com/TeamMidnightDust/MidnightControls/tree/e022fd1827da0805a0e0a72ccabb3ef4371d04bd) | Tick-time GLFW/bindings plus a separate 1 ms camera Timer writing player angles | Research only; Fabric/Architectury adapter not shipped in this NeoForge mod |
+
+Both controller integrations are optional pseudo mixins. Controlify's shipped method is verified;
+Controllable is source-grounded and is not installed in this pack. Neither adapter starts another
+controller polling loop. Counters describe callback/sample categories, with queued categories
+coalesced per consuming frame; they are not physical event totals or measured latency.
+
+Validation: 20 Java checks pass, including post-present and worker-thread frame association.
+Release verify passes 44 native checks plus Rust format/Clippy, with eight opt-in skips. The
+separately enabled RTX4070 GL test passes real SDK keyboard/mouse/controller/ping submission,
+closed-token rejection, menu-to-world lifetime, cross-thread presentation, resize and pixel checks.
+The native observer test proves PM_NOREMOVE does not consume a ping and PM_REMOVE consumes
+window/thread pings once. Synthetic hidden-window messages are not a physical controller test.
+The standalone latency fixture passes Off/On/Boost when invoked with the absolute staged Streamline
+path, vendor `0x10de`, profile `1`: 12 frames, 12 sleeps, 72 lifecycle markers, fresh 64-bit IDs and
+Reflex/latency-report availability. Profile `2` passes PCL-only: zero Reflex sleeps and the same
+72 lifecycle markers. An initial relative-path invocation refused initialization; the absolute-path
+invocation succeeded without a source change. All four required Streamline DLLs are packaged.
+Build/run commands are `eng/verify.ps1 -Configuration Release -VS2026`, Gradle `test jar`,
+`RSF_RUN_GL_INTEROP_TESTS=1` with `RSF_GL_TEST_RUNTIME=<staged root>` for
+`rsf_gl_shared_surface_test.exe`, and `rsf_latency_host_test.exe <absolute staged root>/streamline
+0x10de 1` (or `2`). In-game Off/On/Boost use the Low latency selector on the ReScaleFrame page;
+they are runtime settings, without a restart. These fixtures do not change live game settings.
+The PCL tool must enable its sampler for natural tool pings. No ETW/physical latency or performance
+measurement is claimed; fullscreen, missing-runtime and other-GPU cases were not rerun here.
+
+Live first 1.1.5 run: the native report reached source frame 3374 with `mouse=93`,
+`pcl_ping=58`, a valid Reflex latency report and advancing simulation/render/present/GPU timings.
+Keyboard and controller counters remained zero; Controlify reported no attached controllers.
+The game then shut down normally for deployment of the final build, which also accepts
+SDK thread-targeted pings. Final jar SHA256:
+`d7440db2dc82eef826cce1182d3d107dea1164d3a51cad1ebdd0ee9d0a82eabd`.

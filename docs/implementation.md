@@ -20,7 +20,7 @@ loaded modules. Work is isolated from unrelated Wingman edits in the primary che
 Windows Release verification: 44 native checks passed, eight opt-in GPU checks skipped;
 Rust formatting/Clippy passed. The separate RTX4070 harness passed four SR backends, independent
 three-provider FG switching, actual input preparation, pixel checks and WGL-before-DXGI startup.
-Seventeen Java checks passed: 16 production-shader GPU regressions and actual Sodium page registration.
+Twenty Java checks passed, including production-shader/metadata regressions, actual Sodium page registration and input-frame association.
 The first modpack startup exposed missing slider formatters and WGL ownership; both have
 reproductions and fixes. The next run reached the menu but its child was created on Ixeris's
 separate render thread, leaving window messages unserviced. A thread dump established the actual
@@ -29,7 +29,11 @@ passes a separate-thread GPU/hit-test/resize/shutdown regression. A live resize 
 prior GL error misattributed to import and premature retirement of published surfaces. Build 1.1.3
 prepares replacements transactionally, restores only live GL resource names and excludes nested
 or incomplete window updates from presentation. Four output sizes with FG configured and a forced
-allocation refusal pass the GPU harness. Corrected live resize/world, visible quality, generated
+allocation refusal pass the GPU harness. Build 1.1.4 also closes real menu-frame tokens instead of
+leaking them through frame-zero presents. Live DLSS reconstruction and the world image were
+accepted. Build 1.1.5 adds keyboard/mouse and optional Controlify/Controllable sampling, correctly
+defers Ixeris post-present input, and observes PCL tool messages on the GLFW owner. Real SDK
+input/ping and closed-token GPU checks pass. Physical controller, displayed generated
 presentation and frame pacing acceptance remain pending. FSR4 and previous geometry for GPU-only
 instance animation remain unverified/incomplete. [Implementation and build](../games/minecraft/NATIVE.md).
 

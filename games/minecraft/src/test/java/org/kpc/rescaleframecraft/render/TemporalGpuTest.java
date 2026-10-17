@@ -91,6 +91,21 @@ class TemporalGpuTest {
             GL11.glDeleteTextures(replacement);
         }
     }
+    @Test void nativeCameraMetadataPreservesFiniteAndInfiniteProjectionConventions() {
+        for(boolean reversed:new boolean[]{false,true})for(boolean z01:new boolean[]{false,true})for(boolean infinite:new boolean[]{false,true}) {
+            var canonical=new Matrix4f().perspective(1,1,.05f,1024);
+            if(infinite)canonical.m22(-1).m32(-.1f);
+            var engine=TemporalCamera.canonicalDepth(reversed,z01).invert().mul(canonical);
+            var camera=new TemporalCamera();camera.begin(new Matrix4f(),engine,1234,80,-5678,64,64,new Object(),reversed,z01);
+            var metadata=NativeRenderer.cameraMetadata(camera,.016f);
+            for(int i=0;i<88;i++)assertTrue(Float.isFinite(metadata.get(i)),"finite native metadata at "+i);
+            assertEquals(.05,metadata.get(84),.00001);
+            if(infinite)assertEquals(0,metadata.get(85));else assertEquals(1024,metadata.get(85),1);
+            assertEquals(1,metadata.get(86),.00001);assertEquals(.016,metadata.get(87),.00001);
+            assertEquals(1234,metadata.get(32+12));assertEquals(80,metadata.get(32+13));assertEquals(-5678,metadata.get(32+14));
+            for(int i=0;i<16;i++)assertEquals(i%5==0?1:0,metadata.get(64+i),.0001,"reset clip transform is identity");
+        }
+    }
     @Test void nativeGuidesFlipRowsAndConvertMotionWithoutJitter() {
         var target=new TextureTarget(64,64,true,false);
         var camera=new TemporalCamera();var world=new Object();
