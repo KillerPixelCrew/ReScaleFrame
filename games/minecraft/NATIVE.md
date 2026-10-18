@@ -28,8 +28,12 @@ establish displayed DLSS generation or Minecraft UI acceptance.
 
 Candidate JAR SHA256: `637644b45d051eb185a88f5b87b3cbf3ff33b9b8f504760f1a0e30827f1660f3`.
 Native DLL SHA256: `fe4332b37569480ccb811f11e13be4e3e40831ec63c4c10967022a497f79299e`.
-The JAR includes the pending hand/terrain producers. Deployment remains held by Prism's pending
-1.1.11-dev launch and its Low free memory dialog; no files in that installation were replaced.
+The JAR includes the pending hand/terrain producers and is installed with the matching hash.
+Minecraft was confirmed closed and Prism still at its Low free memory dialog before staging and
+again before the atomic replacement. The existing rescaleframecraft-1.1.11-dev.jar filename is
+temporarily retained so Prism's cached launch path remains valid; its internal version is
+1.1.14-dev. The previous JAR is backed up under rescaleframecraft-backups/20261018-101612-pending-path.
+Live startup/UI acceptance still awaits acknowledgement of the launcher dialog.
 
 ### DLSS model selection
 

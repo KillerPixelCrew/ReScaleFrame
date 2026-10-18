@@ -141,8 +141,10 @@ limits and total-output multiplier labels. Sodium ranges, pending selections and
 clamp per backend; Auto follows its resolved provider. JNI carries the native maximum/support
 flag, and shared status excludes retired-provider capabilities during a switch. All 41 Java/GPU
 checks, the native gate (44 passed, eight opt-in skips), Rust checks and an explicitly enabled
-hidden GPU provider-switch fixture pass. The JAR is built; deployment/UI acceptance remain held
-by Prism's pending launch dialog. [Details](../games/minecraft/NATIVE.md).
+hidden GPU provider-switch fixture pass. The JAR is built and atomically installed while the
+game is closed, preserving Prism's cached 1.1.11-dev filename and backing up the old bytes;
+the internal version is 1.1.14-dev. Live/UI acceptance remains held by the launcher dialog.
+[Details](../games/minecraft/NATIVE.md).
 
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry

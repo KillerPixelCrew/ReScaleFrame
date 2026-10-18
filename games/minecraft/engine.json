@@ -13,5 +13,5 @@
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",
-  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 41 Java/GPU checks pass. 1.1.11 particle/item visibility is installed but not launched; 1.1.14 includes Iris hand/terrain producers and runtime FG slider limits and awaits deployment. Physical controller, displayed FG and complete GPU motion coverage remain separate."
+  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 41 Java/GPU checks pass. 1.1.14 with particle/item visibility, Iris hand/terrain producers and runtime FG slider limits is installed under the cached 1.1.11-dev filename; launcher acknowledgement and live acceptance remain pending. Physical controller, displayed FG and complete GPU motion coverage remain separate."
 }
