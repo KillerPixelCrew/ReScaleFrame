@@ -14,6 +14,7 @@ import org.lwjgl.system.MemoryStack;
 /** Replays the real bound shaders and uniforms; no second color pass or CPU vertex reconstruction. */
 final class MotionProgram implements AutoCloseable {
     final int source,program,storageBinding;
+    final boolean immediate;
     final int[] textureUnits=new int[3];
     private final List<Uniform> uniforms=new ArrayList<>();
     private final Map<String,Integer> locations=new HashMap<>();
@@ -30,10 +31,11 @@ final class MotionProgram implements AutoCloseable {
             else throw new IllegalArgumentException("Flywheel motion requires a vertex/fragment pipeline; stage "+type+" was present");
         }
         if(vertex==null||fragment==null)throw new IllegalArgumentException("Flywheel shader sources unavailable");
-        int vs=compile(GL20.GL_VERTEX_SHADER,FlywheelShaders.vertex(vertex,storageBinding)),fs=0,linked=0;
+        immediate=!vertex.contains("_flw_unpackInstance");
+        int vs=compile(GL20.GL_VERTEX_SHADER,immediate?FlywheelShaders.immediateVertex(vertex,storageBinding,attribute(source,true),attribute(source,false)):FlywheelShaders.vertex(vertex,storageBinding)),fs=0,linked=0;
         try {
             fs=compile(GL20.GL_FRAGMENT_SHADER,FlywheelShaders.fragment(fragment,
-                fragment.contains("_clrwl_shader_main")?outputAlpha(source):"flw_fragColor.a"));
+                immediate||fragment.contains("_clrwl_shader_main")?outputAlpha(source):"flw_fragColor.a"));
             linked=GL20.glCreateProgram();GL20.glAttachShader(linked,vs);GL20.glAttachShader(linked,fs);
             try(var stack=MemoryStack.stackPush()) {
                 var size=stack.mallocInt(1);var type=stack.mallocInt(1);
@@ -120,6 +122,18 @@ final class MotionProgram implements AutoCloseable {
             if(values[0]==0&&values[1]==GL20.GL_FLOAT_VEC4)return GL43.glGetProgramResourceName(source,GL43.GL_PROGRAM_OUTPUT,i)+".a";
         }
         return "1.0";
+    }
+    private static String attribute(int source,boolean uv) {
+        try(var stack=MemoryStack.stackPush()) {
+            var size=stack.mallocInt(1);var type=stack.mallocInt(1);
+            for(int i=0;i<GL20.glGetProgrami(source,GL20.GL_ACTIVE_ATTRIBUTES);i++) {
+                String name=GL20.glGetActiveAttrib(source,i,size,type),lower=name.toLowerCase(java.util.Locale.ROOT);
+                if(uv&&(lower.equals("uv0")||lower.endsWith("_uv0")||lower.equals("vauv0")))return "vec2("+name+".xy)";
+                if(!uv&&(lower.equals("color")||lower.endsWith("_color")||lower.equals("vacolor")))
+                    return type.get(0)==GL20.GL_FLOAT_VEC3?"vec4("+name+",1.0)":"vec4("+name+")";
+            }
+        }
+        return uv?"vec2(0.0)":"vec4(1.0)";
     }
     private static final class Uniform {
         final int from,to,type,components;

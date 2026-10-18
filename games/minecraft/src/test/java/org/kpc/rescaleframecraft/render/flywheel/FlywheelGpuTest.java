@@ -31,7 +31,71 @@ class FlywheelGpuTest {
     @Test void colorwheelUsesActualPackOutputAlphaAndKeepsConservativeDepthDeclaration() {
         checkDeformation(true);
     }
+    @Test void irisHandRetainsDeformationAndDecodesItsScaledClipDepthInSceneSpace() {
+        checkDeformation(false,true);
+    }
+    @Test void immediateProductionDrawRestoresStateAndDropsHistoryAfterMissingFrame() {
+        int source=link("""
+            #version 430 core
+            layout(location=0) in vec2 Position;
+            uniform float translation;
+            void main() {gl_Position=vec4(Position+vec2(translation,0.0),0.0,1.0);}
+            ""","""
+            #version 430 core
+            layout(location=0) out vec4 color;
+            void main() {color=vec4(0.2,0.4,0.6,1.0);}
+            """);
+        int vao=GL30.glGenVertexArrays(),vbo=GL15.glGenBuffers(),fbo=GL30.glGenFramebuffers();
+        int color=texture(GL30.GL_RGBA32F),sceneDepth=GL11.glGenTextures();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D,sceneDepth);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_DEPTH_COMPONENT32F,64,64,0,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,0L);
+        GL30.glBindVertexArray(vao);GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,vbo);
+        GL15.glBufferData(GL15.GL_ARRAY_BUFFER,new float[]{-.5f,-.5f,.5f,-.5f,0,.5f},GL15.GL_STATIC_DRAW);
+        GL20.glEnableVertexAttribArray(0);GL20.glVertexAttribPointer(0,2,GL11.GL_FLOAT,false,8,0);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,fbo);
+        GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,color,0);
+        GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,sceneDepth,0);
+        assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE,GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
+        var camera=new org.kpc.rescaleframecraft.temporal.TemporalCamera();camera.jitterEnabled=false;
+        var projection=new org.joml.Matrix4f().perspective(1,1,.1f,100);
+        Object owner=new Object(),topology=new Object(),world=new Object();
+        try {
+            GL11.glViewport(0,0,64,64);GL11.glDisable(GL11.GL_DEPTH_TEST);GL11.glDepthMask(false);GL11.glDepthFunc(GL11.GL_LESS);
+            for(int frame=1;frame<=4;frame++) {
+                camera.begin(new org.joml.Matrix4f(),projection,0,0,0,64,64,world,false,false);
+                GL20.glUseProgram(source);GL20.glUniform1f(GL20.glGetUniformLocation(source,"translation"),frame==1?0:.125f);
+                GpuMotion.begin(camera,sceneDepth);
+                if(frame!=3) {
+                    int[] calls={0};
+                    GpuMotion.immediate(owner,topology,3,()->GpuMotion.drawImmediate(()->{calls[0]++;GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);}));
+                    assertEquals(2,calls[0],"One color draw and one motion draw");
+                }
+                GpuMotion.end();
+                assertEquals(source,GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
+                assertEquals(fbo,GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING));
+                assertFalse(GL11.glIsEnabled(GL11.GL_DEPTH_TEST));assertFalse(GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK));
+                assertEquals(GL11.GL_LESS,GL11.glGetInteger(GL11.GL_DEPTH_FUNC));
+                assertEquals(frame!=3,GpuMotion.present());
+                if(frame!=3) {
+                    FloatBuffer pixel=BufferUtils.createFloatBuffer(64*64*4);
+                    GL11.glBindTexture(GL11.GL_TEXTURE_2D,GpuMotion.motion());GL11.glGetTexImage(GL11.GL_TEXTURE_2D,0,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
+                    int at=(32*64+36)*4;
+                    assertEquals(frame==2?-4:0,pixel.get(at),.01);
+                    assertEquals(frame==2?0:1,pixel.get(at+2),.01,"An absent frame must not retain old correspondence");
+                }
+                assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+            }
+            GpuMotion.forget(source);
+        } finally {
+            GpuMotion.release();GL20.glUseProgram(0);GL20.glDeleteProgram(source);GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,0);
+            GL30.glDeleteFramebuffers(fbo);GL11.glDeleteTextures(color);GL11.glDeleteTextures(sceneDepth);
+            GL15.glDeleteBuffers(vbo);GL30.glDeleteVertexArrays(vao);GL11.glDepthMask(true);
+        }
+    }
     private void checkDeformation(boolean colorwheel) {
+        checkDeformation(colorwheel,false);
+    }
+    private void checkDeformation(boolean colorwheel,boolean hand) {
         String vertex="""
             #version 430 core
             layout(location=0) in vec2 Position;
@@ -71,12 +135,36 @@ class FlywheelGpuTest {
             """;
         if(colorwheel)fragment=fragment.replace("void main()","void _clrwl_shader_main()")
             .replace("flw_fragColor=flw_vertexColor;","")+"\nvoid main() { _clrwl_shader_main(); }\n";
+        var projection=new org.joml.Matrix4f().perspective(1,1,.1f,100);
+        if(hand) {
+            vertex="""
+                #version 430 core
+                layout(location=0) in vec2 Position;
+                layout(location=1) in vec2 UV0;
+                layout(location=2) in vec4 Color;
+                uniform float translation;
+                uniform float animation;
+                uniform vec2 jitter;
+                uniform vec2 sceneDepth;
+                out vec2 flw_vertexTexCoord;
+                out vec4 flw_vertexColor;
+                void main() {
+                    flw_vertexTexCoord=UV0+vec2(0.5);
+                    flw_vertexColor=Color;
+                    // Iris applies hand depth scaling before the final shader result.
+                    gl_Position=vec4((Position+vec2(translation,0.0))*2.0,0.125*(-2.0*sceneDepth.x+sceneDepth.y),2.0);
+                    gl_Position.x+=2.0*animation;
+                    gl_Position.xy+=jitter/32.0*gl_Position.w;
+                }
+                """;
+        }
         int source=link(vertex,fragment);
         int vao=GL30.glGenVertexArrays(),vbo=GL15.glGenBuffers(),ebo=GL15.glGenBuffers(),fbo=GL30.glGenFramebuffers();
         int motion=texture(GL30.GL_RGBA32F),depth=texture(GL30.GL_R32F);
         GL30.glBindVertexArray(vao);GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,vbo);
         GL15.glBufferData(GL15.GL_ARRAY_BUFFER,new float[]{-.5f,-.5f,.5f,-.5f,.5f,.5f,-.5f,.5f},GL15.GL_STATIC_DRAW);
         GL20.glEnableVertexAttribArray(0);GL20.glVertexAttribPointer(0,2,GL11.GL_FLOAT,false,8,0);
+        if(hand) {GL20.glEnableVertexAttribArray(1);GL20.glVertexAttribPointer(1,2,GL11.GL_FLOAT,false,8,0);GL20.glVertexAttrib4f(2,1,1,1,1);}
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER,ebo);GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER,new int[]{0,1,2,2,3,0},GL15.GL_STATIC_DRAW);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,fbo);
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,motion,0);
@@ -93,6 +181,7 @@ class FlywheelGpuTest {
                 GL20.glUseProgram(source);GL20.glUniform1f(GL20.glGetUniformLocation(source,"translation"),frame==1?0:.25f);
                 GL20.glUniform1f(GL20.glGetUniformLocation(source,"animation"),frame==1?0:.125f);
                 GL20.glUniform2f(GL20.glGetUniformLocation(source,"jitter"),frame==1?-.25f:.5f,0);
+                if(hand)GL20.glUniform2f(GL20.glGetUniformLocation(source,"sceneDepth"),projection.m22(),projection.m32());
                 indices.upload(BufferUtils.createIntBuffer(2).put(frame==1?0:1).put(0).flip());
                 program.bind();int[] textures={frame==1?second.texture():first.texture(),indices.texture(),meshes.texture()};
                 for(int i=0;i<3;i++) {GL13.glActiveTexture(GL13.GL_TEXTURE0+program.textureUnits[i]);GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER,textures[i]);}
@@ -100,6 +189,8 @@ class FlywheelGpuTest {
                 program.unsigned("_rfc_frame",frame);program.unsigned("_rfc_previousFrame",frame-1);
                 program.vector("_rfc_renderSize",64,64);program.vector("_rfc_currentJitter",frame==1?-.25f:.5f,0);
                 program.vector("_rfc_previousJitter",-.25f,0);
+                program.integer("_rfc_useDepthDecode",hand?1:0);
+                program.vector("_rfc_depthDecode",1/projection.m32(),projection.m22()/projection.m32());
                 GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{0,0,1,-1});
                 GL11.glDrawElements(GL11.GL_TRIANGLES,6,GL11.GL_UNSIGNED_INT,0L);
                 GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT|GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
@@ -108,6 +199,12 @@ class FlywheelGpuTest {
             GL11.glReadPixels(48,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
             assertEquals(-12,pixel.get(0),.01,"Retain both instance translation and later shader deformation, excluding jitter");
             assertEquals(0,pixel.get(2),.01,"Consecutive visible geometry has valid history");
+            if(hand) {
+                float rawNdc=.125f*(-2*projection.m22()+projection.m32())/2;
+                assertEquals((rawNdc+projection.m22())/projection.m32(),pixel.get(3),.0001,
+                    "Compare hand history in scene depth, rather than its unscaled clip w");
+                assertNotEquals(.5f,pixel.get(3),.1f,"Iris's hand depth scaling changes the scene depth interpretation");
+            }
             GL11.glReadPixels(27,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
             assertEquals(-1,pixel.get(3),"Original alpha discard remains a hole in the motion target");
             assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());

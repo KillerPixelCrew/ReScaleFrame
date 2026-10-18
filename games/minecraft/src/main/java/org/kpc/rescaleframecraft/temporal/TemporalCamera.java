@@ -19,6 +19,8 @@ public final class TemporalCamera {
     public final Vector3f cameraDelta = new Vector3f();
     public final Vector2f jitter = new Vector2f();
     public final Vector2f previousJitter = new Vector2f();
+    /** Converts a previous raw clip z/w into the inverse view depth stored by scene history. */
+    public final Vector2f previousDepthDecode = new Vector2f();
     public boolean reset = true;
     public boolean reversedDepth;
     public boolean zeroToOne;
@@ -38,6 +40,8 @@ public final class TemporalCamera {
             || Math.abs(previousProjection.m00() - worldProjection.m00()) > 0.01f
             || Math.abs(previousProjection.m11() - worldProjection.m11()) > 0.01f;
         previousViewProjection.set(viewProjection);
+        Matrix4f depthProjection=reset?worldProjection:previousProjection;
+        previousDepthDecode.set(1/depthProjection.m32(),depthProjection.m22()/depthProjection.m32());
         previousJitter.set(jitter);
         cameraDelta.set((float)(x-position.x), (float)(y-position.y), (float)(z-position.z));
         position.set(x,y,z);

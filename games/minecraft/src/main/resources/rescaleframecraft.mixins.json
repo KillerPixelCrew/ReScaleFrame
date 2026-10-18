@@ -14,11 +14,11 @@
     "flywheel.FlywheelCrumblingMixin", "flywheel.FlywheelCrumblingDrawMixin", "flywheel.FlywheelViewportMixin",
     "flywheel.IrisPipelineMixin", "flywheel.IrisOptionsMixin",
     "flywheel.IrisRenderTargetsMixin", "flywheel.IrisFramebufferMixin",
-    "flywheel.IrisBufferSourceMixin",
+    "flywheel.IrisBufferSourceMixin", "flywheel.IrisHandMixin",
     "flywheel.DistantHorizonsInitMixin", "flywheel.DistantHorizonsProjectionMixin", "flywheel.DistantHorizonsFramebufferMixin",
     "flywheel.DistantHorizonsTaaMixin", "flywheel.DistantHorizonsJitterMixin",
     "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",
-    "ParticleEngineMixin", "ShaderInstanceAccessor", "SodiumCloudRendererMixin", "VertexBufferMixin"
+    "ParticleEngineMixin", "ShaderInstanceAccessor", "ShaderInstanceMixin", "RenderTypeMixin", "SodiumCloudRendererMixin", "VertexBufferMixin"
   ],
   "injectors": {
     "defaultRequire": 1

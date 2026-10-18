@@ -9,7 +9,7 @@ import org.joml.Matrix4f;
 import org.kpc.rescaleframecraft.temporal.GeometryHistory;
 import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
-import org.kpc.rescaleframecraft.render.flywheel.FlywheelMotion;
+import org.kpc.rescaleframecraft.render.flywheel.GpuMotion;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryUtil;
@@ -55,11 +55,11 @@ final class MotionGuides implements AutoCloseable {
         GL30.glBindVertexArray(vao);GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
         if(GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control)
             GL45.glClipControl(GL45.GL_LOWER_LEFT,GL45.GL_NEGATIVE_ONE_TO_ONE);
-        if(TemporalRenderer.flywheelAvailable()&&FlywheelMotion.present()) {
+        if(GpuMotion.present()) {
             RenderSystem.depthFunc(GL11.GL_LEQUAL);
             mergeFlywheel.use();mergeFlywheel.integer("capturedMotion",0);mergeFlywheel.integer("capturedDepth",1);mergeFlywheel.integer("capturedPlane",2);
-            TextureUnits.bind(0,FlywheelMotion.motion());TextureUnits.bind(1,FlywheelMotion.depth());
-            TextureUnits.bind(2,FlywheelMotion.plane());GL33.glBindSampler(2,0);
+            TextureUnits.bind(0,GpuMotion.motion());TextureUnits.bind(1,GpuMotion.depth());
+            TextureUnits.bind(2,GpuMotion.plane());GL33.glBindSampler(2,0);
             GL33.glBindSampler(0,0);GL33.glBindSampler(1,0);GL30.glBindVertexArray(vao);
             GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
         }

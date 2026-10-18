@@ -67,8 +67,9 @@ discard and GL error state. Identity tests cover physical slot migration/reuse, 
 resets and model/topology changes. This is synthetic GPU evidence, not modpack visual acceptance.
 
 Live mixin binding, Complementary shader compilation, moving Create machines, runtime pack/provider
-switches and resizing still require the modpack run. General Iris waving terrain/water, independent
-hand motion and shader-deformed entities/particles need further producers. Geometry/tessellation
+switches and resizing still require the modpack run. General Iris waving terrain/water and
+shader-deformed entities/particles need further producers. Independent Iris hand motion is
+implemented below but awaits its live run. Geometry/tessellation
 shader pipelines are not implemented by this vertex/fragment replay. No claim of full shader-pack
 motion coverage is made.
 
@@ -170,3 +171,37 @@ Installed 1.1.11-dev SHA256:
 Prism has not started this build because its Low free memory dialog awaits acknowledgement. The
 existing 9 GB maximum heap is unchanged; the idle owned Gradle daemon was stopped to free memory.
 Live particle/item acceptance, Iris hand motion and general shader deformation remain open.
+
+## Iris hand GPU motion, 18 October 2026
+
+The 1.1.12-dev producer wraps Iris HandRenderer's solid/translucent scopes and the actual
+RenderType.draw -> VertexBuffer.draw -> RenderSystem.drawElements submission. Hand meshes
+retain separate identities by pass, stable material and segment ordinal. Held-item/component
+changes, player changes, vertex-count changes and missed frames invalidate correspondence.
+The shared GPU replay core no longer depends on Flywheel being installed; Flywheel/Colorwheel
+retain their typed instance adapters. ShaderInstance.close retires ordinary shader clones.
+
+Iris setupGlState applies scale(1,1,0.125) before the hand projection. The producer adds the
+world sample's xy jitter while preserving that depth compression and the shader's final position.
+The previous raw clip z/w is decoded through the previous world projection, rather than treating
+hand clip w as scene depth. This matches the depth convention read by the existing TAA history.
+The shader pack still renders the hands and its effects; the 2D HUD remains outside the scene.
+
+Reference HandRenderer at the Iris revision recorded above establishes the scopes and projection.
+The generated NeoForge 21.1.262 sources confirm the draw call chain and shader-close lifetime.
+All 37 Java/GPU checks and the JAR build pass. New checks cover hand depth compression, retained
+final deformation, cutout discard, previous depth across GL depth conventions, and the production
+GPU replay's caller-state restoration and invalidation after a missing frame. The GPU checks use
+an invisible real GL context, not the game. No new native binary or vendor ABI is required.
+
+Prism still has a pending 1.1.11-dev launch behind its Low free memory dialog. The new JAR is
+built but not installed over that pending launch. Live hook binding, hand appearance and the
+previous particle/item correction remain unverified. Terrain/water and shader-deformed actor
+coverage remain part of the active motion goal.
+
+During this increment the installed 1.1.11-dev JAR was externally updated to SHA256
+`920a230bb4f8fabbcc06705630282c2d3b1ca01a515d9f22bc432a21be17ddbb`. Its Java classes
+are unchanged; its native DLL and manifest changed and MFG-Unlocker-LICENSE.txt was added.
+The candidate preserves every native entry byte for byte after verifying the installed manifest.
+No native rebuild or runtime acceptance is claimed here. Candidate 1.1.12-dev SHA256:
+`a7e360158e94e7ae79a1e8110d97e84b365ce900cccf1b1d10cc7d49ad1600df`.

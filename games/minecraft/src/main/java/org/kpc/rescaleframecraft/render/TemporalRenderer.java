@@ -10,7 +10,8 @@ import org.kpc.rescaleframecraft.client.TaaSettings;
 import org.kpc.rescaleframecraft.temporal.GeometryHistory;
 import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
-import org.kpc.rescaleframecraft.render.flywheel.FlywheelMotion;
+import org.kpc.rescaleframecraft.render.flywheel.GpuMotion;
+import org.kpc.rescaleframecraft.render.flywheel.HandMotion;
 import org.kpc.rescaleframecraft.render.flywheel.IrisState;
 import net.neoforged.fml.ModList;
 import org.lwjgl.opengl.*;
@@ -65,7 +66,7 @@ public final class TemporalRenderer {
         projection.set(CAMERA.jitteredProjection);
         RenderSystem.setProjectionMatrix(projection,VertexSorting.DISTANCE_TO_ORIGIN);
         GEOMETRY.begin(CAMERA.frame);active=true;
-        if(flywheelAvailable())FlywheelMotion.begin(CAMERA,target.getDepthTextureId());
+        HandMotion.beginFrame();GpuMotion.begin(CAMERA,target.getDepthTextureId());
     }
     public static void finish() {
         if(!active)return;
@@ -74,7 +75,7 @@ public final class TemporalRenderer {
         try(var state=new GlState()) {
             state.fullscreen();
             initialize();
-            if(flywheelAvailable())FlywheelMotion.end();
+            GpuMotion.end();HandMotion.endFrame();
             if(!nativeSr&&TaaSettings.current.enabled)history.resize(target.viewWidth,target.viewHeight);
             motion.resize(target.viewWidth,target.viewHeight);
             motion.produce(target,CAMERA,GEOMETRY.finish(),CLOUDS);
@@ -99,7 +100,7 @@ public final class TemporalRenderer {
             ReScaleFrameCraft.LOGGER.error("Temporal resolve failed; native rendering restored",e);
             CAMERA.invalidate();GEOMETRY.clear();
         } finally {
-            if(flywheelAvailable())FlywheelMotion.end();
+            GpuMotion.end();
             active=false;
             if(sceneProjection!=null)sceneProjection.set(CAMERA.projection);
             RenderSystem.setProjectionMatrix(CAMERA.projection,VertexSorting.DISTANCE_TO_ORIGIN);
@@ -108,7 +109,6 @@ public final class TemporalRenderer {
     }
     public static boolean capturing() { return active&&!IrisState.shadowPass(); }
     public static boolean irisFrame() {return active&&irisFrame;}
-    static boolean flywheelAvailable() {return ModList.get()!=null&&ModList.get().isLoaded("flywheel");}
     static boolean distantHorizonsAvailable() {return ModList.get()!=null&&ModList.get().isLoaded("distanthorizons")&&ModList.get().isLoaded("iris");}
     public static SceneFrame sceneFrame() { return sceneFrame; }
     private static void initialize() {
@@ -132,7 +132,7 @@ public final class TemporalRenderer {
         active=false;reset();
         if(history!=null) { history.close();history=null; }
         if(motion!=null) { motion.close();motion=null; }
-        if(flywheelAvailable())FlywheelMotion.release();
+        GpuMotion.release();HandMotion.clear();
         status="waiting for world";
     }
 }

@@ -96,6 +96,13 @@ surface depth/slope visibility for raw TAA. All 34 checks pass, including occlud
 valid sloped history. The JAR is installed; Prism's memory dialog blocks the live test. RTSS OSD
 routing is a separate pending per-app profile proposal. The full motion goal remains active.
 
+Minecraft 1.1.12-dev adds final GPU vertex history for Iris's solid/translucent hand draws,
+shares the existing GPU replay core independently of Flywheel, and decodes compressed hand
+depth through the previous scene projection. All 37 Java/GPU checks and packaging pass, including
+production draw-state restoration and missed-frame invalidation. The JAR awaits deployment:
+Prism's pending 1.1.11-dev launch is still blocked by its low-memory dialog. Live hand/particle
+acceptance, terrain/water deformation and shader-deformed actors remain open.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity
