@@ -5,7 +5,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_FG_ABI_VERSION 1u
+#define RSF_FG_ABI_VERSION 2u
+#define RSF_MFG_UNLOCK_NOT_APPLICABLE 0u
+#define RSF_MFG_UNLOCK_READY 1u
+#define RSF_MFG_UNLOCK_REFUSED 2u
 #define RSF_FG_BACKEND_DLSS 1u
 #define RSF_FG_BACKEND_FSR3 3u
 #define RSF_FG_BACKEND_FSR4 4u
@@ -106,6 +109,8 @@ typedef struct rsf_fg_status {
     /* FFX image-finalization callbacks are not confirmed/displayed Present counts. */
     uint64_t present_callbacks;
     uint64_t generated_callbacks;
+    /* RTX 40 unlock admission, separate from observed interpolation activity. */
+    uint32_t mfg_unlock_status;
 } rsf_fg_status;
 
 typedef struct rsf_fg_retirement {

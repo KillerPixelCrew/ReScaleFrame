@@ -35,7 +35,8 @@ $taskExpected = @(
     'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll',
     'ReScaleFrame/fidelityfx/license.md', 'ReScaleFrame/fidelityfx/3rdpartynotice.md',
     'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/libxess_fg.dll', 'ReScaleFrame/xess/libxell.dll',
-    'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt'
+    'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt',
+    'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
 )
 $taskFiles = @($taskDeployment.files)
 if ($taskFiles.Count -ne $taskExpected.Count -or @($taskFiles.path | Select-Object -Unique).Count -ne $taskExpected.Count) {

@@ -51,7 +51,8 @@ try {
     $files = @(
         @{ Name = 'dinput8.dll'; Source = $ac7Proxy },
         @{ Name = 'ReScaleFrame.Game.AC7.dll'; Source = (Join-Path $nativeBin 'ReScaleFrame.Game.AC7.dll') },
-        @{ Name = 'rescaleframe_overlay.dll'; Source = $panel }
+        @{ Name = 'rescaleframe_overlay.dll'; Source = $panel },
+        @{ Name = 'MFG-Unlocker-LICENSE.txt'; Source = (Join-Path $repoRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE') }
     )
     foreach ($file in $files) {
         $destination = Join-Path $gameRoot $file.Name

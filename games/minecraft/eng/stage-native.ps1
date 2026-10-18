@@ -28,6 +28,7 @@ Add-Payload "$sdk/vendor/fidelityfx/3rdpartynotice.md" 'fidelityfx/3rdpartynotic
 foreach($leaf in @('libxess.dll','libxess_fg.dll','libxell.dll')) {Add-Payload "$sdk/vendor/xess/bin/$leaf" "xess/$leaf"}
 foreach($leaf in @('LICENSE.txt','third-party-programs.txt')) {Add-Payload "$sdk/vendor/xess/$leaf" "xess/$leaf"}
 Add-Payload "$repo/LICENSE" 'ReScaleFrame-LICENSE.txt'
+Add-Payload "$repo/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'MFG-Unlocker-LICENSE.txt'
 Add-Payload "$repo/build/windows-x64/_deps/minhook-src/LICENSE.txt" 'MinHook-LICENSE.txt'
 $manifest=[Collections.Generic.List[string]]::new()
 foreach($copy in $copies) {

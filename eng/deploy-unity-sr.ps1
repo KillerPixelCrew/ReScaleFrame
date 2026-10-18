@@ -34,6 +34,7 @@ function Add-UnityCopy([string]$Source, [string]$Relative) {
     $taskCopies.Add(@{ source=$Source; path=$Relative })
 }
 Add-UnityCopy "$taskBin/ReScaleFrame.Loader.dll" 'version.dll'
+Add-UnityCopy "$taskRoot/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
 foreach ($taskLeaf in @('ReScaleFrame.Runtime.dll','ReScaleFrame.Game.UnityMono.dll','ReScaleFrame.Unity.Managed.dll','rescaleframe_overlay.dll','0Harmony.dll','Harmony-LICENSE.txt')) {
     Add-UnityCopy "$taskBin/$taskLeaf" "ReScaleFrame/$taskLeaf"
 }

@@ -4,5 +4,6 @@
 #include <rescaleframe/frame_sequencer.h>
 #include <rescaleframe/render_links.h>
 #include <rescaleframe/streamline_host.h>
-_Static_assert(RSF_FG_ABI_VERSION == 1u, "Update the C contract fixture for an ABI change");
+_Static_assert(RSF_FG_ABI_VERSION == 2u, "Update the C contract fixture for an ABI change");
+_Static_assert(sizeof(((rsf_fg_status*)0)->mfg_unlock_status) == 4, "C ABI unlock admission");
 _Static_assert(sizeof(((rsf_fg_options*)0)->generated_frames) == 4, "C ABI generated count");

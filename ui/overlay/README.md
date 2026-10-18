@@ -2,7 +2,7 @@
 
 Rust/egui behind the C ABI in [overlay.h](include/rescaleframe/overlay.h). It produces meshes, texture updates, and settings intents. The C++ D3D11 renderer in `runtime/graphics` handles GPU work.
 
-Current overlay ABI is **9**. AC7's proxy host and Unity's shared runtime host load the matched
+Current overlay ABI is **12**. AC7's proxy host and Unity's shared runtime host load the matched
 Rust DLL; D3D11 and the D3D11-on-12 overlay route handle GPU drawing. **Insert** toggles the panel.
 The AC7 startup hint lasts eight seconds and fades during the last second; opening Insert dismisses it.
 The old F5 action and ABI 3 plan are historical. Planned inspection/capture views remain in
@@ -13,8 +13,9 @@ The old F5 action and ABI 3 plan are historical. Planned inspection/capture view
 | Safe core | `model.rs`, `panel.rs`, `overlay.rs` | Status, layout, input, intents, meshes |
 | C boundary | `abi.rs`, `ffi.rs` | ABI layouts, argument checks, panic handling, five exports |
 
-The panel exposes SR enable/backend/quality, independent FG provider and SDK-limited multiplier,
-Reflex, frame-limit and Show FPS controls when the host supports them. It reports requested,
+The panel exposes SR enable/backend/quality, independent FG provider and admitted multiplier,
+Reflex, frame-limit and Show FPS controls when the host supports them. RTX 40 MFG uses the
+verified runtime capacity and reports its ready/refused status separately. It reports requested,
 effective and active state plus refusals and input/evaluation facts. Live FG switching is requested
 through a host capability bit; unsupported choices retain the provider. AC7 and Unity save the FG
 provider in their own preference paths. Other settings may be session-only.

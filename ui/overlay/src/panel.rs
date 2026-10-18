@@ -255,6 +255,16 @@ fn controls_section(
             intent.fg_changed = true;
         }
         let maximum = generation.max_generated.saturating_add(1).max(2);
+        if generation.backend == 1 {
+            let label = match generation.mfg_unlock_status {
+                1 => Some("RTX 40 MFG unlock ready"),
+                2 => Some("RTX 40 MFG unlock unavailable for the loaded runtime"),
+                _ => None,
+            };
+            if let Some(label) = label {
+                ui.label(RichText::new(label).small().color(MUTED));
+            }
+        }
         let mut multiplier = count.saturating_add(1).clamp(2, maximum);
         let response = ui.add_enabled(
             generation.max_generated > 1,
