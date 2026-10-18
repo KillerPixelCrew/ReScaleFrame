@@ -1,5 +1,15 @@
 # Implementation tracker
 
+## Windows 0.1.1 preview packaging, 18 October 2026
+
+Prepared separate AC7 and Project Wingman observer prereleases, retaining the
+stable AC7 SR-only assets. Component versions and Cargo lock entries are 0.1.1.
+Fixed VS2022 C4127 template conditions with `if constexpr`; added Wingman's
+allowlisted observer packager and restored the AMD loader/MFG notice to AC7's
+payload. Local SDK-enabled Windows Release verification passes 44 native
+checks with eight skips, formatting/Clippy and all 59 Rust tests. No fresh game
+or VR acceptance is claimed. [Rationale and checks](releases/v0.1.1-windows.md).
+
 ## RTX 40 MFG unlock, 18 October 2026
 
 Integrated MFG-Unlocker's guarded RTX 40 temporal transform, provider gate and early
