@@ -9,7 +9,7 @@ int main(int argc, char** argv)
     if (argc != 2) return 2;
     const auto carrier = LoadLibraryExA(argv[1], nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!carrier) return 1;
+    if (!carrier) { std::fprintf(stderr, "Carrier load failed: Win32 error %lu\n", GetLastError()); return 1; }
     const char* names[] = {"DllMain", "XInputGetState", "XInputSetState", "XInputGetCapabilities",
         "XInputEnable", "XInputGetDSoundAudioDeviceGuids", "XInputGetBatteryInformation", "XInputGetKeystroke"};
     for (WORD i = 0; i < 8; ++i) {
@@ -22,7 +22,12 @@ int main(int argc, char** argv)
     if (!length || length + 15 >= MAX_PATH) return 1;
     wcscat_s(system, L"\\xinput1_3.dll");
     const auto original = LoadLibraryExW(system, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!original) return 1;
+    if (!original) {
+        const auto error = GetLastError();
+        std::fprintf(stderr, "System XInput 1.3 unavailable: Win32 error %lu; carrier exports checked.\n", error);
+        FreeLibrary(carrier);
+        return error == ERROR_MOD_NOT_FOUND || error == ERROR_FILE_NOT_FOUND ? 77 : 1;
+    }
     using GetState = DWORD (WINAPI*)(DWORD, XINPUT_STATE*);
     using SetState = DWORD (WINAPI*)(DWORD, XINPUT_VIBRATION*);
     const auto state = reinterpret_cast<GetState>(reinterpret_cast<void*>(GetProcAddress(carrier, MAKEINTRESOURCEA(2))));

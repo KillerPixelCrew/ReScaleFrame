@@ -54,7 +54,10 @@ rsf_result transition(Check check, Work work, Finish finish) noexcept
             std::lock_guard<std::mutex> lock(lifecycle_guard);
             if (transitioning) return RSF_ERROR_BUSY;
             const rsf_result refused = check();
-            if (refused != RSF_OK) return refused;
+            switch (refused) {
+            case RSF_OK: break;
+            default: return refused;
+            }
             transitioning = true; current = renderer;
         }
         const bool succeeded = work(current);
