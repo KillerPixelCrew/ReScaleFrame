@@ -10,6 +10,7 @@ import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import org.kpc.rescaleframecraft.render.TemporalRenderer;
 import org.kpc.rescaleframecraft.render.IrisIntegration;
+import org.kpc.rescaleframecraft.render.DistantHorizonsIntegration;
 import net.neoforged.fml.ModList;
 import org.lwjgl.glfw.GLFW;
 
@@ -20,6 +21,7 @@ public final class ClientEvents {
     public static void frame(RenderFrameEvent.Post event) {
         TemporalRenderer.preflight();
         if(ModList.get().isLoaded("iris"))IrisIntegration.frame();
+        if(ModList.get().isLoaded("distanthorizons")&&ModList.get().isLoaded("iris"))DistantHorizonsIntegration.frame();
     }
     public static void tick(ClientTickEvent.Post event) {
         while(OPTIONS.consumeClick()) {

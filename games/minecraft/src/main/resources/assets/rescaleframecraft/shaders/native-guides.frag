@@ -13,7 +13,7 @@ void main() {
     float depth=texelFetch(sceneDepth,p,0).r;
     vec4 motion=texelFetch(sceneMotion,p,0);
     vec4 h=inverseCurrent*vec4(ndc,depth*2.0-1.0,1.0),previous;
-    if(depth>=0.999999) {
+    if(depth>=1.0) {
         vec4 nearH=inverseCurrent*vec4(ndc,-1.0,1.0);
         vec3 direction=h.xyz*nearH.w-nearH.xyz*h.w;
         if((h.w<0.0)!=(nearH.w<0.0))direction=-direction;

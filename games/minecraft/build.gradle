@@ -115,6 +115,8 @@ dependencies {
     testImplementation('maven.modrinth:colorwheel:8rq5KP4U') { transitive = false }
     compileOnly('maven.modrinth:iris:KduFYu4t') { transitive = false }
     testImplementation('maven.modrinth:iris:KduFYu4t') { transitive = false }
+    compileOnly('maven.modrinth:distanthorizons:9w34y8ai') { transitive = false }
+    testImplementation('maven.modrinth:distanthorizons:9w34y8ai') { transitive = false }
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

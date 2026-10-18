@@ -85,6 +85,11 @@ The human accepts the 1.1.9-dev world/cloud correction and requests its release 
 depth-format mismatch messages. Release packaging changes version metadata/documentation only;
 runtime classes and bundled native files are compared against the accepted development JAR.
 
+The next Minecraft increment installs DH 3.3.3 and adds Iris initialization/resize fixes, shared
+jitter ownership and a separate projection for unified distant depth/motion guides. All 32 Java/
+GPU checks pass. Real modpack startup binds DH/Iris callbacks; world/transition acceptance remains
+open. [Source contracts and evidence](../games/minecraft/DISTANT-HORIZONS.md).
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

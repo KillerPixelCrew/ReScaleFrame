@@ -41,6 +41,40 @@ class TemporalGpuTest {
             assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
         }
     }
+    @Test void distantDepthConvertsBetweenProjectionsAndKeepsNearOccluders() {
+        var source=new TextureTarget(64,64,true,false);var destination=new TextureTarget(64,64,true,false);
+        int distant=GL11.glGenTextures(),vertexArray=GL30.glGenVertexArrays();
+        var lodProjection=new Matrix4f().perspective(1,1,16,16384);
+        var sceneProjection=new Matrix4f().perspective(1,1,.05f,16384);
+        var sourceProjection=new Matrix4f().perspective(1,1,.05f,1024);
+        var sourceToGuide=new Matrix4f(sceneProjection).mul(new Matrix4f(sourceProjection).invert());
+        var point=new Vector4f(0,0,-4096,1);
+        var lodClip=lodProjection.transform(new Vector4f(point));
+        float lodDepth=lodClip.z/lodClip.w*.5f+.5f;
+        var expected=sceneProjection.transform(new Vector4f(point));
+        float expectedDepth=expected.z/expected.w*.5f+.5f;
+        try(var state=new GlState();var program=new GlProgram("fullscreen.vert","resolve-distant-depth.frag")) {
+            state.fullscreen();TextureUnits.bind(1,distant);
+            float[] image=new float[64*64];java.util.Arrays.fill(image,lodDepth);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_DEPTH_COMPONENT32F,64,64,0,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,image);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D,GL11.GL_TEXTURE_MIN_FILTER,GL11.GL_NEAREST);
+            program.use();program.integer("sourceDepth",0);program.integer("distantDepth",1);program.integer("useDistantDepth",1);program.integer("sourceMotion",2);
+            program.matrix("sourceToGuide",sourceToGuide);program.matrix("distantToGuide",new Matrix4f(sceneProjection).mul(new Matrix4f(lodProjection).invert()));
+            for(float near:new float[]{1,.6f,.99999f}) {
+                source.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(near);GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+                destination.bindWrite(true);GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+                TextureUnits.bind(0,source.getDepthTextureId());TextureUnits.bind(1,distant);TextureUnits.bind(2,source.getColorTextureId());GL33.glBindSampler(0,0);GL33.glBindSampler(1,0);GL33.glBindSampler(2,0);
+                GL30.glBindVertexArray(vertexArray);GL11.glEnable(GL11.GL_DEPTH_TEST);GL11.glDepthFunc(GL11.GL_ALWAYS);GL11.glDepthMask(true);
+                GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
+                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,destination.frameBufferId);
+                float[] actual=new float[1];GL11.glReadPixels(32,32,1,1,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,actual);
+                var mapped=sourceToGuide.transform(new Vector4f(0,0,near*2-1,1));
+                float sourceGuide=near==1?1:mapped.z/mapped.w*.5f+.5f;
+                assertEquals(Math.min(sourceGuide,expectedDepth),actual[0],.0000003);
+            }
+            assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+        } finally {source.destroyBuffers();destination.destroyBuffers();GL11.glDeleteTextures(distant);GL30.glDeleteVertexArrays(vertexArray);}
+    }
     @Test void depthCopyConvertsPackedFormatsWithoutTouchingColorOrStencil() {
         var source=new TextureTarget(16,16,true,false);var destination=new TextureTarget(64,64,true,false);
         int vertexArray=GL30.glGenVertexArrays();
@@ -175,13 +209,15 @@ class TemporalGpuTest {
             GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
             assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE,GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
             motion.resize(64,64);
-            for(int frame=0;frame<8;frame++) {
-                camera.begin(new Matrix4f(),new Matrix4f().perspective(1,1,.05f,1024),frame,0,0,64,64,world,false,false);
-                target.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(frame<4?1:.5);
+            for(int frame=0;frame<12;frame++) {
+                boolean distant=frame>=8;
+                float sourceDepth=distant?.9999995f:frame<4?1:.5f;
+                camera.begin(new Matrix4f(),new Matrix4f().perspective(1,1,.05f,distant?1000000:1024),distant?7+(frame-7)*7:frame,0,0,64,64,world,false,false);
+                target.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(sourceDepth);
                 GL11.glClearColor(.1f,.2f,.8f,1);GL11.glClear(GL11.GL_COLOR_BUFFER_BIT|GL11.GL_DEPTH_BUFFER_BIT);
                 GL11.glEnable(GL11.GL_SCISSOR_TEST);GL11.glScissor(0,0,64,32);GL11.glClearColor(.8f,.2f,.1f,1);GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);GL11.glDisable(GL11.GL_SCISSOR_TEST);
                 saved.fullscreen();motion.produce(target,camera,List.of(),new CloudHistory());
-                if(frame>=4)GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{2,3,0,.5f});
+                if(frame>=4&&!distant)GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{2,3,0,.5f});
                 saved.fullscreen();GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,fbo);RenderSystem.viewport(0,0,64,64);
                 shader.use();shader.integer("sceneColor",0);shader.integer("sceneDepth",1);shader.integer("sceneMotion",2);
                 TextureUnits.bind(0,target.getColorTextureId());TextureUnits.bind(1,motion.depth());TextureUnits.bind(2,motion.motion());
@@ -193,6 +229,15 @@ class TemporalGpuTest {
                 GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);float[] pixel=new float[4];GL11.glReadPixels(32,8,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
                 assertEquals(.1,pixel[0],.006,"DX first rows must contain GL upper image");assertEquals(.8,pixel[2],.006);
                 GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT2);GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
+                if(distant) {
+                    var h=camera.inverseJitteredViewProjection.transform(new Vector4f(32.5f/32-1,31.5f/32-1,sourceDepth*2-1,1));
+                    var previous=camera.previousViewProjection.transform(new Vector4f(h.x/h.w+camera.cameraDelta.x,h.y/h.w,h.z/h.w,1));
+                    float expectedX=-((previous.x/previous.w*.5f+.5f)*64-(32.5f-camera.jitter.x));
+                    assertTrue(Math.abs(expectedX)>.0001f);
+                    assertTrue(Math.abs(pixel[0])>.0001f,"Distant geometry must not receive sky's zero-translation vector");
+                    assertEquals(expectedX,pixel[0],.001,"Sub-millipixel agreement despite far-depth float cancellation");
+                    assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());continue;
+                }
                 assertEquals(frame<4?0:-2,pixel[0],.003,"stationary sky excludes eye translation and raster jitter; object X changes sign");
                 assertEquals(frame<4?0:3,pixel[1],.003,"DX row flip and temporal direction cancel for object Y");
                 assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());

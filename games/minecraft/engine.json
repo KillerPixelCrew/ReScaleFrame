@@ -4,6 +4,7 @@
   "loader": "NeoForge 21.1.262",
   "renderer": "OpenGL, Sodium 0.8.13",
   "settings": "Sodium Config API through Reese's Sodium Options 2.2.4",
+  "distant_terrain": "Distant Horizons 3.3.3 / Iris 1.8.14-beta.1; original render projection plus unified temporal depth guides, pending world acceptance",
   "native_adapter": "ReScaleFrame.Minecraft.dll",
   "device": "D3D12 on the OpenGL context's exact adapter LUID",
   "transfer": "EXT_memory_object_win32 resources and EXT_semaphore_win32 GPU timeline fence",

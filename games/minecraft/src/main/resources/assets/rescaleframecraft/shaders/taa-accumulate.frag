@@ -39,8 +39,8 @@ bool historyColorVisible(vec2 raster,bool sky,float expectedDepth) {
         // The depth that validated the motion is not necessarily the depth of
         // the colour taps. Never import a nearer occluder's RGB into a cloud or
         // sky history just because the right surface exists beside it.
-        if(sky) { if(depth<0.999999)return false; }
-        else if(depth<0.999999&&previousLinearDepth(tap,depth)<expectedDepth-(0.5+0.08*abs(expectedDepth)))return false;
+        if(sky) { if(depth<1.0)return false; }
+        else if(depth<1.0&&previousLinearDepth(tap,depth)<expectedDepth-(0.5+0.08*abs(expectedDepth)))return false;
     }
     return true;
 }
@@ -61,7 +61,7 @@ void main() {
             float depth=texelFetch(currentDepth,tap,0).r;
             if(depth<nearest) { nearest=depth;closest=tap; }
         }
-        outCoordinate=vec4(centre,1.0,nearest>=0.999999?0.0:currentLinearDepth(closest,nearest));return;
+        outCoordinate=vec4(centre,1.0,nearest>=1.0?0.0:currentLinearDepth(closest,nearest));return;
     }
     outAccumulation=texelFetch(accumulation,pixel,0);
     vec4 coordinate=texelFetch(coordinateMap,pixel,0);outCoordinate=vec4(coordinate.xy,0.0,0.0);
@@ -71,7 +71,7 @@ void main() {
     bool sky=coordinate.w==0.0;
     float closestDepth=texelFetch(currentDepth,currentPixel,0).r;
     if(sky) {
-        if(closestDepth<0.999999)return;
+        if(closestDepth<1.0)return;
     } else {
         float best=1e30;bool found=false;
         ivec2 minimum=supportMin(raster),maximum=supportMax(raster);
@@ -79,7 +79,7 @@ void main() {
             ivec2 candidate=minimum+ivec2(x,y);if(any(greaterThan(candidate,maximum)))continue;
             ivec2 tap=clamp(candidate,ivec2(0),ivec2(renderSize)-1);
             float depth=texelFetch(currentDepth,tap,0).r;
-            if(depth>=0.999999)continue;
+            if(depth>=1.0)continue;
             float error=abs(currentLinearDepth(tap,depth)-coordinate.w);
             float tolerance=0.5+0.08*abs(coordinate.w);
             if(error>tolerance)continue;
@@ -125,7 +125,7 @@ void main() {
         for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
             float weight=(x==0?1.0-f.x:f.x)*(y==0?1.0-f.y:f.y);
             ivec2 tap=clamp(base+ivec2(x,y),ivec2(0),ivec2(renderSize)-1);
-            if(weight>0.0&&texelFetch(previousDepth,tap,0).r<0.999999)return;
+            if(weight>0.0&&texelFetch(previousDepth,tap,0).r<1.0)return;
         }
     } else {
         float error=1e30;
@@ -135,7 +135,7 @@ void main() {
             ivec2 candidate=minimum+ivec2(x,y);if(any(greaterThan(candidate,maximum)))continue;
             ivec2 tap=clamp(candidate,ivec2(0),ivec2(renderSize)-1);
             float depth=texelFetch(previousDepth,tap,0).r;
-            if(depth<0.999999) {
+            if(depth<1.0) {
                 float linear=previousLinearDepth(tap,depth),difference=abs(linear-expectedDepth);
                 if(difference<error) { error=difference;matchedDepth=linear; }
             }

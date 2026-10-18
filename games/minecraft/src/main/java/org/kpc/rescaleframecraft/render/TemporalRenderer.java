@@ -17,6 +17,10 @@ import org.lwjgl.opengl.*;
 
 public final class TemporalRenderer {
     public static final TemporalCamera CAMERA=new TemporalCamera();
+    private static final TemporalCamera distantCamera=new TemporalCamera();
+    private static final Matrix4f distantProjection=new Matrix4f();
+    private static TemporalCamera resolveCamera=CAMERA;
+    private static boolean distantActive;
     public static final GeometryHistory GEOMETRY=new GeometryHistory();
     public static final CloudHistory CLOUDS=new CloudHistory();
     private static TaaHistory history;
@@ -41,10 +45,21 @@ public final class TemporalRenderer {
         boolean clip=GL.getCapabilities().OpenGL45||GL.getCapabilities().GL_ARB_clip_control;
         boolean zeroToOne=clip&&GL11.glGetInteger(GL45.GL_CLIP_DEPTH_MODE)==GL45.GL_ZERO_TO_ONE;
         boolean reversed=GL11.glGetDouble(GL11.GL_DEPTH_CLEAR_VALUE)<0.5;
+        boolean distant=distantHorizonsAvailable()&&DistantHorizonsIntegration.enabled();
+        if(distantHorizonsAvailable())DistantHorizonsIntegration.beginFrame();
+        if(distant!=distantActive) {CAMERA.invalidate();distantCamera.invalidate();distantActive=distant;}
         var pos=camera.getPosition();
         CAMERA.phaseCount=NativeRenderer.phaseCount();
         CAMERA.jitterEnabled=TaaSettings.current.enabled||NativeRenderer.upscaling();
         CAMERA.begin(view,projection,pos.x,pos.y,pos.z,target.viewWidth,target.viewHeight,minecraft.level,reversed,zeroToOne);
+        resolveCamera=CAMERA;
+        if(distant) {
+            distantProjection.set(projection);DistantHorizonsIntegration.extendProjection(distantProjection,reversed,zeroToOne);
+            distantCamera.phaseCount=CAMERA.phaseCount;distantCamera.jitterEnabled=CAMERA.jitterEnabled;
+            if(CAMERA.reset)distantCamera.invalidate();
+            distantCamera.begin(view,distantProjection,pos.x,pos.y,pos.z,target.viewWidth,target.viewHeight,minecraft.level,reversed,zeroToOne);
+            resolveCamera=distantCamera;
+        }
         if(CAMERA.reset) { GEOMETRY.clear();CLOUDS.clear(); }
         sceneProjection=projection;
         projection.set(CAMERA.jitteredProjection);
@@ -63,10 +78,11 @@ public final class TemporalRenderer {
             if(!nativeSr&&TaaSettings.current.enabled)history.resize(target.viewWidth,target.viewHeight);
             motion.resize(target.viewWidth,target.viewHeight);
             motion.produce(target,CAMERA,GEOMETRY.finish(),CLOUDS);
+            if(resolveCamera!=CAMERA)motion.resolveDistantDepth(CAMERA,resolveCamera);
             state.fullscreen();
-            if(!nativeSr&&TaaSettings.current.enabled)history.resolve(target,CAMERA,motion.depth(),motion.motion());
+            if(!nativeSr&&TaaSettings.current.enabled)history.resolve(target,resolveCamera,motion.depth(),motion.motion());
             if(NativeRenderer.processing()) {
-                state.fullscreen();NativeRenderer.finishWorld(target,CAMERA,motion.depth(),motion.motion());
+                state.fullscreen();NativeRenderer.finishWorld(target,resolveCamera,motion.depth(),motion.motion());
             }
             // Publish the owned resolve output, never the main target which is
             // about to receive first-person hand, HUD, menus and overlays.
@@ -93,6 +109,7 @@ public final class TemporalRenderer {
     public static boolean capturing() { return active&&!IrisState.shadowPass(); }
     public static boolean irisFrame() {return active&&irisFrame;}
     static boolean flywheelAvailable() {return ModList.get()!=null&&ModList.get().isLoaded("flywheel");}
+    static boolean distantHorizonsAvailable() {return ModList.get()!=null&&ModList.get().isLoaded("distanthorizons")&&ModList.get().isLoaded("iris");}
     public static SceneFrame sceneFrame() { return sceneFrame; }
     private static void initialize() {
         if(history==null)history=new TaaHistory();
@@ -109,7 +126,7 @@ public final class TemporalRenderer {
         }
     }
     public static String status() { return (!TaaSettings.current.enabled?"TAA off":status)+" | "+NativeRenderer.status(); }
-    public static void reset() { CAMERA.invalidate();GEOMETRY.clear();CLOUDS.clear();failed=false;loggedWidth=loggedHeight=0; }
+    public static void reset() { CAMERA.invalidate();distantCamera.invalidate();GEOMETRY.clear();CLOUDS.clear();failed=false;loggedWidth=loggedHeight=0; }
     public static void release() {
         sceneFrame=null;
         active=false;reset();
