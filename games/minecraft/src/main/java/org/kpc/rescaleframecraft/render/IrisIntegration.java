@@ -2,9 +2,12 @@ package org.kpc.rescaleframecraft.render;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.List;
+import java.util.HashSet;
 import java.util.WeakHashMap;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.shaderpack.option.values.OptionValues;
+import net.irisshaders.iris.shaderpack.transform.line.LineTransform;
 import org.kpc.rescaleframecraft.ReScaleFrameCraft;
 import org.kpc.rescaleframecraft.client.TaaSettings;
 import org.kpc.rescaleframecraft.render.flywheel.IrisState;
@@ -29,6 +32,26 @@ public final class IrisIntegration {
                 if(options.getOptionSet().getBooleanOptions().containsKey(name))result.addAll(Map.of(name,"false"));
             return result;
         });
+    }
+    public static LineTransform runtimeSampling(LineTransform original,List<String> lines,OptionValues options) {
+        return runtimeSampling(original,lines,ownsTemporal()&&options.getOptionSet().getStringOptions().containsKey("TAA_DEFINE"));
+    }
+    static LineTransform runtimeSampling(LineTransform original,List<String> lines,boolean owner) {
+        if(!owner)return original;
+        var samplingConditions=new HashSet<Integer>();
+        for(int i=0;i+1<lines.size();i++) {
+            String condition=lines.get(i).replaceAll("\\s+","");
+            if(!condition.equals("#ifdefTAA")&&!condition.equals("#ifdefinedTAA||definedPBR_REFLECTIONS"))continue;
+            String sample=lines.get(i+1).replaceAll("\\s+","");
+            // Complementary gates stochastic atmospheric sampling on its TAA
+            // switch. Preserve that producer for the external temporal resolver;
+            // unrelated TAA branches (projection jitter and resolve) stay off.
+            if(sample.equals("dither=fract(dither+goldenRatio*mod(float(frameCounter),3600.0));")||
+                sample.equals("returnfract(n+goldenRatio*mod(float(frameCounter),3600.0));"))samplingConditions.add(i);
+        }
+        if(samplingConditions.isEmpty())return original;
+        ReScaleFrameCraft.LOGGER.debug("Preserving {} Complementary temporal sampling branches",samplingConditions.size());
+        return (index,line)->samplingConditions.contains(index)?"#if 1 // ReScaleFrame temporal sampling":original.transform(index,line);
     }
     public static void frame() {
         boolean owner=ownsTemporal();

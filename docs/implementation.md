@@ -74,6 +74,12 @@ retires stale stencil attachments and converts world/display depth through a sha
 All 29 Java/GPU checks pass, including D32F-to-D24S8 depth copying with color/stencil preservation.
 The corrected JAR is deployed with a matching hash; live world acceptance remains pending.
 
+The human confirms world geometry is restored in 1.1.8-dev; incomplete-framebuffer errors stop.
+The 1.1.9-dev follow-up gives the owned scene an explicit D32F allocation for Iris depth copies
+and preserves Complementary's frame-varying atmospheric sampling while its TAA/jitter remain off.
+All 30 checks pass and the JAR is deployed. Static-cloud convergence and the remaining depth
+error are awaiting the new live run. The general motion goal remains paused.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

@@ -1,7 +1,6 @@
 package org.kpc.rescaleframecraft.render;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.nio.FloatBuffer;
 import java.util.concurrent.locks.LockSupport;
@@ -23,7 +22,7 @@ public final class NativeRenderer {
     private static int[] surfaces;
     private static final long[] nativeStatus=new long[14];
     private static RenderTarget display;
-    private static TextureTarget world;
+    private static WorldRenderTarget world;
     private static boolean worldRendering;
     private static GlProgram guides,copyDepth;
     private static int framebuffer,readFramebuffer,vao;
@@ -97,7 +96,7 @@ public final class NativeRenderer {
                 if(replacement==null)throw new IllegalStateException("Native reconfiguration failed; see minecraft-native.log");
                 boolean resize=surfaces==null||surfaces[0]!=replacement[0]||surfaces[1]!=replacement[1];surfaces=replacement;
                 if(resize) {
-                    if(world==null)world=new TextureTarget(surfaces[0],surfaces[1],true,Minecraft.ON_OSX);
+                    if(world==null)world=new WorldRenderTarget(surfaces[0],surfaces[1],Minecraft.ON_OSX);
                     else world.resize(surfaces[0],surfaces[1],Minecraft.ON_OSX);
                 }
                 applied=configuration;failed=null;acceptedWidth=0;TemporalRenderer.reset();

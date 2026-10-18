@@ -61,7 +61,7 @@ Stored shader preferences remain intact and runtime ownership changes reload the
 
 ## Validation and open coverage
 
-The Java build and 29 checks pass, including invisible real OpenGL tests on Intel UHD 770.
+The Java build and 30 checks pass, including invisible real OpenGL tests on Intel UHD 770.
 It verifies instance translation plus subsequent shader deformation, changing jitter, cutout
 discard and GL error state. Identity tests cover physical slot migration/reuse, missed frames,
 resets and model/topology changes. This is synthetic GPU evidence, not modpack visual acceptance.
@@ -97,3 +97,33 @@ The Colorwheel fixture checks the actual pack output alpha and conservative-dept
 All 29 checks and the 1.1.8-dev JAR build pass. Installed SHA256:
 `a7077cd894ab6e87b7811014316baa3d0400ecfc10379add07663f09ac08cca6`.
 World geometry, shader switching and resizing still require the corrected modpack run.
+
+The 1.1.8-dev run confirms the attachment hook changing texture 7 to 36, from display
+DEPTH32F_STENCIL8 to world DEPTH, at 853x498. Incomplete-framebuffer errors stop and the human
+confirms terrain rendering is restored. A remaining once-per-frame depth-format error requires
+the world allocation correction below; this is not described as a clean GL run.
+
+## Static cloud grain and explicit scene depth, 18 October 2026
+
+The restored-world run uses Complementary Unbound r5.9.3 + EuphoriaPatches 1.10.5. The human
+reports smooth clouds during camera movement and visible grain while stationary. Source review
+shows deferred1.glsl gates the frameCounter-based atmospheric dither sequence on TAA. Disabling
+the pack's TAA therefore freezes that sampling pattern, even though RFC supplies a temporal resolve.
+mainClouds.glsl gates its interleaved-gradient noise sequence the same way. Source SHA256:
+
+- deferred1.glsl: `f9ebf6b11481019c15558e674f5982233688843e9c20f44fd7e70757c114df0a`
+- mainClouds.glsl: `77fc21a4b1a2d34eb6c2d06282d24054fa6eea38dac823386ac24f39f4cf7159`
+
+The 1.1.9-dev source adapter preserves only the recognized sampling branches during Iris's
+existing line transform. Pack projection jitter and full-scene TAA remain disabled. Shader-pack
+files and saved preferences stay unchanged. A regression checks sampling preservation, inactive
+ownership, unchanged source and continued exclusion of pack jitter/resolve.
+
+The owned WorldRenderTarget now requests DEPTH_COMPONENT32F at the original Minecraft allocation
+through a scoped mixin. Iris records this sized format through its ordinary texture metadata hook.
+This removes the ambiguous unsized DEPTH allocation: Minecraft supplies FLOAT, whereas Iris uses
+UNSIGNED_SHORT for unsized depth copies, which can choose different storage formats. Packed
+stencil allocations remain explicitly packed. The native depth conversion still handles differing
+display formats. All 30 checks and the 1.1.9-dev JAR build pass. Installed SHA256:
+`38bf7b6131b7f850714031c26bee374a0fe6bac02a53ea0a4853a29610c1d5da`.
+Static-cloud convergence and the remaining depth error require the corrected live run.
