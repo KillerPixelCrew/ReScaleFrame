@@ -1750,10 +1750,10 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
         read(uint64_t(uintptr_t(parameter)), 6, bound) && bound &&
         read(uint64_t(uintptr_t(parameter)), 4, slot) && slot == 1;
     uint64_t uniform = uint64_t(uintptr_t(input));
-    if (Index == hook_pixel_enqueue_b) read(uint64_t(uintptr_t(input)), 0x38, uniform);
-    if (Index == hook_pixel_enqueue_c) read(uint64_t(uintptr_t(input)), 0, uniform);
+    if constexpr (Index == hook_pixel_enqueue_b) read(uint64_t(uintptr_t(input)), 0x38, uniform);
+    if constexpr (Index == hook_pixel_enqueue_c) read(uint64_t(uintptr_t(input)), 0, uniform);
     auto original = reinterpret_cast<void(*)(void*, void*, void*, void*)>(sites[Index].original);
-    if (Index == hook_pixel_enqueue_d) {
+    if constexpr (Index == hook_pixel_enqueue_d) {
         original(list, shader, parameter, input);
         uint64_t command = 0;
         if (!selected || !read(uint64_t(uintptr_t(list)), 8, command) || !read(command, 0x20, uniform)) return;
@@ -1777,7 +1777,7 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
             }
         }
     }
-    if (Index != hook_pixel_enqueue_d) original(list, shader, parameter, input);
+    if constexpr (Index != hook_pixel_enqueue_d) original(list, shader, parameter, input);
 }
 void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
 {
