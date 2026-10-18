@@ -1,5 +1,13 @@
 # Implementation tracker
 
+## Release target correction, 18 October 2026
+
+Withdrew the Project Wingman observer preview to draft and removed its public
+download links. Wingman remains renderer research, without SR/FG/latency/VR
+processing. The requested next package is Drag'n Wash with the latest shared
+runtime, Unity helper and overlay. Its managed build requires the researched
+player's five Unity/URP assembly references; those are not distributed.
+
 ## Windows 0.1.1 preview packaging, 18 October 2026
 
 Prepared separate AC7 and Project Wingman observer prereleases, retaining the

@@ -34,15 +34,15 @@ between integrations.
 | **Minecraft / ReScaleFrameCraft** | Minecraft 1.21.1, NeoForge and Sodium; temporal antialiasing, native reconstruction and independent frame-generation selection | [1.1.9 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/minecraft-v1.1.9) · [Installation and controls](games/minecraft/RELEASE.md) |
 | **Ace Combat 7** | Stable SR release; 0.1.1 preview adds current FG/latency code | [0.1.1 preview](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1) · [Stable 0.1.0](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0) · [AC7 guide](games/ac7/README.md) |
 | **Drag'n Wash / Unity Mono** | SR, shared overlay and FG switching in source and local test builds | [Game guide](games/drag-n-wash/README.md) · [Unity adapter](games/unity-mono/README.md) |
-| **Project Wingman** | Temporal-graph observer preview; GPU processing remains unimplemented | [0.1.1 observer preview](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/project-wingman-v0.1.1) · [Guide](games/project-wingman/README.md) |
+| **Project Wingman** | Renderer research only; GPU processing remains unimplemented | [Research and status](games/project-wingman/README.md) |
 
 **A source feature is not necessarily included in a published package.** AC7's published
 0.1.0 ZIP is SR-only and excludes the later FG/Reflex work on `main`. Unity packages remain
 local test builds. For Minecraft, the release guide describes 1.1.9; development notes also
 cover later changes.
 
-The 0.1.1 AC7 and Project Wingman downloads are prereleases without fresh gameplay acceptance.
-AC7 includes current SR/FG/latency code; Wingman records graph facts only. See the
+The 0.1.1 AC7 download is a prerelease without fresh gameplay acceptance.
+It includes current SR/FG/latency code. Project Wingman has no published package. See the
 [build evidence and package limits](docs/releases/v0.1.1-windows.md).
 
 ### Minecraft

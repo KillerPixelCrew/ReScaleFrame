@@ -19,11 +19,11 @@ This is a source/documentation audit. No new game, GPU or Windows build was run 
 
 ## Downloads and source builds
 
-18 October 2026: separate [AC7 0.1.1](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
-and [Project Wingman observer 0.1.1](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/project-wingman-v0.1.1)
-prereleases package the current Windows source. These packages have build and
-fixture checks, not fresh game acceptance. AC7 includes FG/latency dependencies;
-Wingman has observation only. [Release evidence](releases/v0.1.1-windows.md).
+18 October 2026: the [AC7 0.1.1 prerelease](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
+packages the current Windows source with FG/latency dependencies. It has build
+and fixture checks, not fresh game acceptance. The Project Wingman observer
+preview was withdrawn; Wingman remains research only, without a published
+package. [Release evidence](releases/v0.1.1-windows.md).
 
 The published [v0.1.0 AC7 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0)
 contains DLSS/DLAA, FSR 2/3/4 and XeSS SR, the AC7 plugin and Insert overlay. Its replacement
