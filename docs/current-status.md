@@ -74,7 +74,7 @@ depends on the host; do not assume every setting survives restart.
 
 | FG provider | Capability in current source | Evidence limit |
 | --- | --- | --- |
-| DLSS-G | Fixed count and capability-gated Dynamic MFG in the runtime; SDK maximum queried; active generation requires effective Reflex at least On | Recorded RTX 4070 path generates one frame per source (2x). Higher counts and Dynamic MFG lack live acceptance. |
+| DLSS-G | Fixed count, guarded RTX 40 MFG unlock and capability-gated Dynamic MFG; SDK/verified allocation limits; effective Reflex at least On | RTX 4070 Laptop synthetic device run confirmed 2x/3x/4x/6x, count changes and provider switching. Higher-count game image quality and Dynamic MFG remain unaccepted. [Evidence](research/rtx40-mfg-unlock.md). |
 | FSR3 / FSR4 | Exact provider family requested; pinned swapchain API exposes one generated frame (2x) | FSR3 device activity and Unity user acceptance recorded. FSR4 FG refused the tested NVIDIA adapter; FSR4 SR INT8 success does not establish FSR4 FG support. |
 | XeSS FG | XeLL pacing and SDK-queried interpolation maximum; count changes through the SDK | Device activity and Unity user acceptance recorded at 2x. Higher Intel MFG counts and Claw operation remain untested. |
 
@@ -90,8 +90,8 @@ physical scanout, a latency reduction, or an in-game performance gain.
 | Game plugin lifecycle and renderer callbacks | 13 | `sdk/game/include/rescaleframe/game_api.h`, `game_renderer.h` |
 | Frame/camera record | 1 | `sdk/game/include/rescaleframe/game_frame.h` |
 | Vendor-neutral backend | 3 | `runtime/contract/include/rescaleframe/backend.h` |
-| FG provider | 1 | `runtime/contract/include/rescaleframe/frame_generation.h` |
-| Overlay | 9 | `ui/overlay/include/rescaleframe/overlay.h` |
+| FG provider | 2 | `runtime/contract/include/rescaleframe/frame_generation.h` |
+| Overlay | 12 | `ui/overlay/include/rescaleframe/overlay.h` |
 
 `VERSION` and the Cargo workspace both specify 0.1.0. Equal component versions do not imply equal
 builds or ABI compatibility; deploy matched artifacts. SDK headers are optional, and absent headers

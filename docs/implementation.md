@@ -1,5 +1,30 @@
 # Implementation tracker
 
+## RTX 40 MFG unlock, 18 October 2026
+
+Integrated MFG-Unlocker's guarded RTX 40 temporal transform, provider gate and early
+Streamline wrapper publication into the existing DLSS-G host. The Insert overlay uses
+its existing multiplier control up to the admitted runtime capacity and reports unlock
+admission separately from active generation. FG ABI 2 and overlay ABI 12 require matched
+components. Other GPU architectures keep their native SDK path. [Source, lifecycle,
+failed approaches and evidence](research/rtx40-mfg-unlock.md).
+
+The explicit focused RTX 4070 Laptop fixture passed 2x, 3x, 4x and 6x with SDK-confirmed
+presentation deltas, count changes, generation Off/On and repeated provider transitions.
+FSR and XeSS remained active during their stages; engine buffer identities survived.
+Production MSVC Release verification passed 44 native tests with eight opt-in skips,
+formatting and Clippy; 59 Rust tests passed. The real overlay ABI/input/render/resize
+preflight passed. The focused device run used logging instrumentation; the production
+rebuild removes only that instrumentation and passed the full native gate.
+
+The isolated build at main baseline `3cc6af2` is deployed to AC7 and Drag'n Wash, and the
+rebuilt `rescaleframecraft-1.1.11-dev.jar` is deployed to N1GHT. Installed hashes match;
+the upstream MIT notice is included. Backup:
+`.local/deploy-backups/rtx40-mfg-20261018-094106-547`. Game settings were preserved, and
+all 277 original Drag'n Wash files verified unchanged. No game was launched. Actual game
+image quality, pacing, latency and other-device acceptance remain separate from the
+synthetic device result.
+
 ## Shared DLSS model selection, 18 October 2026
 
 AC7 and Unity's Insert overlay and Minecraft's Sodium/Reese's options and F8 screen now select

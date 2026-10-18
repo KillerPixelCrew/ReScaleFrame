@@ -760,6 +760,43 @@ mod tests {
     }
 
     #[test]
+    fn unlocked_rtx40_uses_the_existing_multiplier_control() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.available = true;
+        stats.generation.backend = 1;
+        stats.generation.requested_backend = 1;
+        stats.generation.requested_mode = 1;
+        stats.generation.requested_generated = 1;
+        stats.generation.max_generated = 5;
+        stats.generation.mfg_unlock_status = 1;
+        settle(&mut overlay, &stats);
+        let track = overlay
+            .controls()
+            .fg_multiplier
+            .expect("RTX 40 MFG control");
+        let target = egui::Rect::from_center_size(
+            egui::pos2(track.right() - 2.0, track.center().y),
+            egui::vec2(1.0, 1.0),
+        );
+        let [press, release] = click(&mut overlay, &stats, target);
+        let chosen = if press.fg_changed { press } else { release };
+        assert!(chosen.fg_changed);
+        assert_eq!(chosen.fg_generated, 5);
+        assert!(!chosen.fg_backend_changed);
+        // A refusal still leaves ordinary 2x available, with higher counts disabled.
+        stats.generation.mfg_unlock_status = 2;
+        stats.generation.max_generated = 1;
+        settle(&mut overlay, &stats);
+        let track = overlay
+            .controls()
+            .fg_multiplier
+            .expect("Disabled multiplier control");
+        let [press, release] = click(&mut overlay, &stats, track);
+        assert!(!press.fg_changed && !release.fg_changed);
+    }
+
+    #[test]
     fn dlss_model_selection_is_independent_of_quality_and_disabled_for_other_backends() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();

@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 11;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 12;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -168,6 +168,8 @@ pub struct RsfOverlayStats {
     pub dlss_preset: u32,
     /// This host implements model selection.
     pub dlss_preset_available: u32,
+    /// RTX 40 MFG unlock: 0 not applicable, 1 ready, 2 refused.
+    pub fg_mfg_unlock_status: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -444,6 +446,7 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, sr_backend_choices), 256);
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset), 260);
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset_available), 264);
+        assert_eq!(offset_of!(RsfOverlayStats, fg_mfg_unlock_status), 268);
     }
 
     #[test]

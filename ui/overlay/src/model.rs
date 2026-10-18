@@ -100,8 +100,10 @@ pub struct GenerationStats {
     pub effective_generated: u32,
     /// SDK-observed generation activity.
     pub active: bool,
-    /// SDK-supported maximum generated count.
+    /// Admitted maximum generated count, including a verified RTX 40 unlock.
     pub max_generated: u32,
+    /// RTX 40 MFG unlock admission, independent of observed activity.
+    pub mfg_unlock_status: u32,
     /// SDK-reported Reflex availability.
     pub reflex_available: bool,
     /// Requested Reflex mode.

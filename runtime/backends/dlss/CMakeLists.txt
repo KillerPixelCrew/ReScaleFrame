@@ -1,7 +1,12 @@
 set(RSF_STREAMLINE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/streamline/include" CACHE PATH
     "Directory holding Streamline's sl.h")
 
-add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp src/dlss_native12.cpp src/reflex_audit.cpp)
+add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp src/dlss_native12.cpp src/reflex_audit.cpp src/mfg_unlock.cpp)
+if(MSVC)
+    target_sources(rsf_dlss PRIVATE third_party/mfg_unlocker/midpoint_fix.cpp
+        third_party/mfg_unlocker/dlssg_provider_policy.cpp)
+    target_link_libraries(rsf_dlss PRIVATE bcrypt version)
+endif()
 target_compile_definitions(rsf_dlss PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_include_directories(rsf_dlss PUBLIC include)
 target_link_libraries(rsf_dlss PRIVATE rsf_build_options)

@@ -31,6 +31,19 @@ bool hot = false;
 bool mixed = false;
 bool overlay = false;
 bool legacy_hot = false;
+bool mfg_test = false;
+struct FocusTest {
+    HWND previous = nullptr, window = nullptr;
+    ULONGLONG started = 0;
+    std::jthread watchdog;
+    ~FocusTest() {
+        watchdog.request_stop();
+        if (watchdog.joinable()) watchdog.join();
+        // A human focus change ends the lease. Never pull focus back from them.
+        if (previous && GetForegroundWindow() == window) SetForegroundWindow(previous);
+        if (window) DestroyWindow(window);
+    }
+};
 ComPtr<ID3D12DescriptorHeap> color_heap;
 void log(void*, const char* message) { std::printf("SDK: %s\n", message); }
 int accept(void*, void*) { return 1; }
@@ -84,6 +97,21 @@ void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_hos
         barrier(list, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const float scene[]{0.2f, 0.4f, 0.6f, 1};
         list->ClearRenderTargetView(color_heap->GetCPUDescriptorHandleForHeapStart(), scene, 0, nullptr);
+        if (mfg_test) {
+            // Solid identical frames can be classified as menus by DLSS-G. Supply actual
+            // changing spatial detail when checking generated presentation, without a game.
+            const LONG width = static_cast<LONG>(record.output_width);
+            const LONG shift = static_cast<LONG>((frame_id * 3) % 64);
+            for (LONG y = 0; y < static_cast<LONG>(record.output_height); y += 64) {
+                for (LONG x = shift - 64; x < width; x += 64) {
+                    D3D12_RECT tile{std::max(0L, x), y, std::min(width, x + 32),
+                        std::min(static_cast<LONG>(record.output_height), y + 32)};
+                    if (tile.right <= tile.left) continue;
+                    const float detail[]{0.7f, 0.25f + float((y / 64) % 3) * 0.15f, 0.15f, 1};
+                    list->ClearRenderTargetView(color_heap->GetCPUDescriptorHandleForHeapStart(), detail, 1, &tile);
+                }
+            }
+        }
         rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
         pass.source_frame_id = record.frame_id; pass.view_key = 1; pass.color_input = back;
         rsf_fg12_hudless(commands, &pass);
@@ -125,7 +153,8 @@ int main(int argc, char** argv) {
     }
     overlay = std::strcmp(argv[4], "12-overlay") == 0;
     mixed = std::strcmp(argv[4], "12-mixed") == 0 || overlay;
-    hot = std::strcmp(argv[4], "12-hot") == 0 || mixed;
+    mfg_test = std::strcmp(argv[4], "12-mfg") == 0;
+    hot = std::strcmp(argv[4], "12-hot") == 0 || mixed || mfg_test;
     legacy_hot = std::strcmp(argv[4], "11-hot") == 0;
     service = hot || std::strcmp(argv[4], "12-service") == 0;
     const bool native = std::strcmp(argv[4], "11") != 0 && !legacy_hot;
@@ -139,11 +168,13 @@ int main(int argc, char** argv) {
     if (!adapter) return 77;
     WNDCLASSW wc{}; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"RSFSharedFG";
     if (!RegisterClassW(&wc)) return 1;
+    const bool focus_test = mfg_test && std::getenv("RSF_MFG_FOCUS_TEST") != nullptr;
     HWND window = CreateWindowW(wc.lpszClassName, L"Shared generation fixture", WS_OVERLAPPEDWINDOW,
         0, 0, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
     if (!window) return 1;
+    FocusTest focus;
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup); setup.runtime_directory_utf8 = argv[2];
-    setup.backend = backend; setup.max_generated_frames = 3; setup.log = log; setup.accept_window = accept;
+    setup.backend = backend; setup.max_generated_frames = mfg_test ? 5u : 3u; setup.log = log; setup.accept_window = accept;
     setup.prepare = prepare; setup.latency_event = latency; setup.retire = retire;
     // The fixture's engines: native D3D12 stands in for Unity, D3D11 for AC7.
     setup.depth_inverted = 1; setup.depth_infinite = native ? 0u : 1u; setup.units_to_meters = native ? 1.0f : 0.01f;
@@ -156,7 +187,7 @@ int main(int argc, char** argv) {
     }
     if (service) {
         rsf_fg12_setup request{}; request.struct_size = sizeof(request); request.backend = backend;
-        request.runtime_directory_utf8 = argv[2]; request.max_generated_frames = 3;
+        request.runtime_directory_utf8 = argv[2]; request.max_generated_frames = mfg_test ? 5u : 3u;
         request.options = {sizeof(request.options), RSF_FG_FIXED, 1, RSF_REFLEX_OFF, 0, 0};
         request.depth_inverted = 1; request.units_to_meters = 1; request.log = log; request.accept_window = accept;
         request.engine_type = setup.engine_type; request.engine_version_utf8 = setup.engine_version_utf8;
@@ -269,7 +300,40 @@ int main(int argc, char** argv) {
             ++query_count; std::this_thread::yield();
         }
     });
-    for (frame_id = 1; frame_id <= 40; ++frame_id) {
+    uint32_t mfg_active[6]{};
+    uint64_t previous_total = 0;
+    if (focus_test) {
+        focus.previous = GetForegroundWindow(); focus.window = window; focus.started = GetTickCount64();
+        ShowWindow(window, SW_SHOW);
+        if (!SetForegroundWindow(window) || GetForegroundWindow() != window) {
+            std::puts("FAIL: the explicitly authorized focus request was refused by Windows");
+            return 1;
+        }
+        focus.watchdog = std::jthread([previous = focus.previous, window](std::stop_token stop) {
+            const auto deadline = GetTickCount64() + 20000;
+            while (!stop.stop_requested() && GetTickCount64() < deadline) Sleep(25);
+            if (!stop.stop_requested()) {
+                if (GetForegroundWindow() == window && previous) SetForegroundWindow(previous);
+                ShowWindow(window, SW_HIDE);
+                std::puts("FAIL: 20-second focus deadline reached; stopping this fixture");
+                TerminateProcess(GetCurrentProcess(), 2);
+            }
+        });
+    }
+    for (frame_id = 1; frame_id <= (mfg_test ? 130u : 40u); ++frame_id) {
+        if (focus_test && (GetTickCount64() - focus.started >= 20000 || GetForegroundWindow() != window)) {
+            std::puts("FAIL: focus test ended at its time limit or after a human focus change");
+            accepted = false; break;
+        }
+        if (mfg_test) {
+            MSG message{};
+            while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+        }
+        if (mfg_test && (frame_id == 45 || frame_id == 60 || frame_id == 75 || frame_id == 90 || frame_id == 100)) {
+            const uint32_t generated = frame_id == 45 ? 2u : frame_id == 60 || frame_id == 100 ? 3u : frame_id == 75 ? 5u : 1u;
+            rsf_native_fg_options changed{sizeof(changed), frame_id == 90 ? RSF_FG_OFF : RSF_FG_FIXED, generated, RSF_REFLEX_ON, 0, 0};
+            rsf_fg12_options(&changed);
+        }
         const auto current_backend = rsf_d3d11_present_backend();
         session = rsf_d3d11_present_session();
         if (service) {
@@ -338,6 +402,18 @@ int main(int argc, char** argv) {
             rsf_native_fg_status result{}; result.struct_size = sizeof(result); rsf_fg12_status(&result);
             if (hot ? current_backend != 0 && frame_id != 7 : frame_id != 10 && frame_id != 11) ++expected_tagged;
             observed_active += result.vendor.active; accepted &= result.last_result == RSF_BACKEND_OK && result.tagged_frames == expected_tagged;
+            if (mfg_test && current_backend == 1) {
+                const auto& vendor_state = result.vendor;
+                const uint64_t delta = vendor_state.total_presented >= previous_total ? vendor_state.total_presented - previous_total : 0;
+                if (vendor_state.active && vendor_state.effective_generated_frames < 6 &&
+                    delta >= vendor_state.effective_generated_frames + 1u)
+                    ++mfg_active[vendor_state.effective_generated_frames];
+                previous_total = vendor_state.total_presented;
+                accepted &= vendor_state.mfg_unlock_status == RSF_MFG_UNLOCK_READY && vendor_state.max_generated_frames >= 5;
+                std::printf("MFG frame=%llu admission=%u max=%u configured=%u active=%u presented_delta=%llu\n",
+                    static_cast<unsigned long long>(frame_id), vendor_state.mfg_unlock_status, vendor_state.max_generated_frames,
+                    vendor_state.effective_generated_frames, vendor_state.active, static_cast<unsigned long long>(delta));
+            }
             if (!hot && (frame_id == 10 || frame_id == 11)) accepted &= result.reason != 0;
             if (hot) {
                 if (current_backend == 3) active_fsr += result.vendor.active;
@@ -352,6 +428,8 @@ int main(int argc, char** argv) {
                 if (frame_id == 35 && vendor == 0x10de) accepted &= rsf_d3d11_present_backend() == 3 && rsf_d3d11_present_switch_result() == RSF_BACKEND_ERROR_NOT_SUPPORTED;
                 if (frame_id == 35 && argc == 7) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
                 if (frame_id == 36 && argc == 7) accepted &= rsf_d3d11_present_backend() == 1;
+                if (mfg_test && frame_id == 110) accepted &= rsf_d3d11_present_request(0) == RSF_BACKEND_OK;
+                if (mfg_test && frame_id == 114) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
             }
         }
         auto* native_queue = static_cast<ID3D12CommandQueue*>(graphics.queue);
@@ -359,6 +437,10 @@ int main(int argc, char** argv) {
             WaitForSingleObject(done, 10000) != WAIT_OBJECT_0) return 1;
     }
     rsf_fg_status status{}; status.struct_size = sizeof(status);
+    if (mfg_test) {
+        std::printf("MFG confirmed samples 2x=%u 3x=%u 4x=%u 6x=%u\n", mfg_active[1], mfg_active[2], mfg_active[3], mfg_active[5]);
+        accepted &= mfg_active[1] && mfg_active[2] && mfg_active[3] && mfg_active[5];
+    }
     if (hot) {
         queries.request_stop(); queries.join();
         std::printf("concurrent engine queries=%u failures=%u\n", query_count.load(), bad_queries.load());

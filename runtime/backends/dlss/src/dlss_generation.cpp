@@ -3,6 +3,7 @@
 #include "streamline_frame.h"
 #include "reflex_audit.h"
 #include "streamline_load.h"
+#include "mfg_unlock.h"
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
 #include <wrl/client.h>
@@ -72,6 +73,7 @@ struct rsf_streamline_host {
     uint64_t input_counts[4]{};
     std::chrono::steady_clock::time_point last_report{}, last_slow_log{};
     rsf_fg_status cached_capability{};
+    rsf::MfgUnlock mfg;
     std::mutex marker_guard;
     std::mutex reflex_guard;
 };
@@ -155,6 +157,7 @@ void dispose(rsf_streamline_host* host)
     host->queue.Reset(); host->native_queue.Reset(); host->factory.Reset();
     host->device.Reset(); host->native_device.Reset();
     if (host->initialized) host->shutdown();
+    host->mfg.release();
     if (logging_host.load() == host) logging_host = nullptr;
     if (host->module) FreeLibrary(host->module);
     delete host;
@@ -197,7 +200,14 @@ rsf_backend_result poll(DlssSession& self)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     auto& state = self.state;
     state.max_generated_frames = self.sdk_state.numFramesToGenerateMax;
+    state.mfg_unlock_status = self.host->mfg.status;
+    // Both the initialized SDK limit and the verified compiled allocation must agree.
+    if (state.mfg_unlock_status == RSF_MFG_UNLOCK_READY)
+        state.max_generated_frames = std::min(state.max_generated_frames, self.host->mfg.maximum);
+    else if (state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED)
+        state.max_generated_frames = std::min(state.max_generated_frames, 1u);
     state.dynamic_supported = self.sdk_state.bIsDynamicMFGSupported == sl::eTrue;
+    if (state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED) state.dynamic_supported = 0;
     state.vsync_supported = self.sdk_state.bIsVsyncSupportAvailable == sl::eTrue;
     state.min_dimension = self.sdk_state.minWidthOrHeight;
     state.vendor_status = static_cast<int32_t>(self.sdk_state.status);
@@ -323,6 +333,8 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
         self.options.reflex_mode == options->reflex_mode && self.options.frame_limit_us == options->frame_limit_us)
         return RSF_BACKEND_OK;
     if (options->mode == RSF_FG_DYNAMIC && !self.state.dynamic_supported) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (options->mode == RSF_FG_AUTO && self.state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED)
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (options->mode == RSF_FG_FIXED && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (options->mode != RSF_FG_OFF && !self.state.low_latency_available) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     // Active DLSS-G needs Reflex's runtime frame tracking. Preserve the requested
@@ -697,6 +709,8 @@ static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, vo
     } else if (FAILED(D3D12CreateDevice(static_cast<IUnknown*>(setup->dxgi_adapter), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
         dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED;
     }
+    if (host->profile == RSF_SL_PROFILE_DLSS_FG)
+        host->mfg.prime(device, host->directory, host->signature_verified, host->log, host->log_user);
     void* upgraded = device;
     if (host->upgrade(&upgraded) != sl::Result::eOk) { device->Release(); dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
     host->device.Attach(static_cast<ID3D12Device*>(upgraded));
@@ -718,6 +732,7 @@ static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, vo
     if (host->profile == RSF_SL_PROFILE_DLSS_FG) {
         feature(*host, sl::kFeatureDLSS_G, "slDLSSGGetState", host->get_state);
         feature(*host, sl::kFeatureDLSS_G, "slDLSSGSetOptions", host->set_options);
+        host->mfg.prepare(host->native_device.Get(), reinterpret_cast<void*>(host->get_state), host->log, host->log_user);
     }
     if (host->profile != RSF_SL_PROFILE_PCL) {
         feature(*host, sl::kFeatureReflex, "slReflexSetOptions", host->reflex_options);
@@ -777,10 +792,12 @@ extern "C" const rsf_generation_provider* rsf_generation_dlss() { return &provid
 extern "C" rsf_backend_result rsf_streamline_host_generation_load(rsf_streamline_host* host, uint32_t enabled) {
     if (!host || !host->loaded || host->borrowers) return RSF_BACKEND_ERROR_NOT_READY;
     if (host->generation_loaded == bool(enabled)) return RSF_BACKEND_OK;
+    if (enabled) host->mfg.prime(host->native_device.Get(), host->directory, host->signature_verified, host->log, host->log_user);
     if (host->loaded(sl::kFeatureDLSS_G, enabled != 0) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     host->generation_loaded = enabled != 0; host->get_state = nullptr; host->set_options = nullptr;
     if (enabled && (!feature(*host, sl::kFeatureDLSS_G, "slDLSSGGetState", host->get_state) ||
         !feature(*host, sl::kFeatureDLSS_G, "slDLSSGSetOptions", host->set_options))) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    if (enabled) host->mfg.prepare(host->native_device.Get(), reinterpret_cast<void*>(host->get_state), host->log, host->log_user);
     return RSF_BACKEND_OK;
 }
 extern "C" void* rsf_streamline_host_native(rsf_streamline_host* host, void* proxy) {
