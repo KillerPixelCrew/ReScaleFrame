@@ -128,6 +128,14 @@ production draw-state restoration and missed-frame invalidation. The JAR awaits 
 Prism's pending 1.1.11-dev launch is still blocked by its low-memory dialog. Live hand/particle
 acceptance, terrain/water deformation and shader-deformed actors remain open.
 
+Minecraft 1.1.13-dev adds final GPU motion for Sodium/Iris terrain and water. Section mesh
+generations distinguish rebuilds from arena moves; section-local indexing survives translucent
+sorting. The real-GL regression exercises the production adapter, retained deformation, changed
+base offsets, reversed draw order, cutout holes and selective rebuild invalidation. Iris pipeline
+retirement releases the shared motion resources. Live binding/appearance and deployment still
+await Prism's pending launch dialog; shader-deformed actors remain unimplemented. All 38
+Java/GPU checks and packaging pass; the installed native payload is preserved byte for byte.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

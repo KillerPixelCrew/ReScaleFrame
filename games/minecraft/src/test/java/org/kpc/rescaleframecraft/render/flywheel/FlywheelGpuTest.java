@@ -92,6 +92,104 @@ class FlywheelGpuTest {
             GL15.glDeleteBuffers(vbo);GL30.glDeleteVertexArrays(vao);GL11.glDepthMask(true);
         }
     }
+    @Test void terrainMultiDrawTracksDeformationAcrossArenaMovesSortingAndRebuilds() {
+        int source=link("""
+            #version 430 core
+            layout(location=0) in vec2 Position;
+            layout(location=1) in uint Section;
+            uniform float animation;
+            uniform vec2 sceneDepth;
+            uint _draw_id;
+            vec2 _vert_tex_diffuse_coord;
+            vec4 _vert_color;
+            out vec2 texCoord;
+            void _vert_init() {
+                _draw_id=Section;
+                _vert_tex_diffuse_coord=Position+vec2(0.5);
+                _vert_color=vec4(1.0);
+            }
+            void main() {
+                _vert_init();texCoord=_vert_tex_diffuse_coord;
+                gl_Position=vec4(Position+vec2(_draw_id==7u?-0.4:0.3,0.0),-sceneDepth.x+sceneDepth.y,1.0);
+                gl_Position.x+=animation*(Position.y+1.0);
+            }
+            ""","""
+            #version 430 core
+            in vec2 texCoord;
+            layout(location=0) out vec4 color;
+            void main() {if(texCoord.x<0.4)discard;color=vec4(1.0);}
+            """);
+        int vao=GL30.glGenVertexArrays(),vbo=GL15.glGenBuffers(),ebo=GL15.glGenBuffers(),fbo=GL30.glGenFramebuffers();
+        int color=texture(GL30.GL_RGBA32F),sceneDepth=GL11.glGenTextures();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D,sceneDepth);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_DEPTH_COMPONENT32F,64,64,0,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,0L);
+        GL30.glBindVertexArray(vao);GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,vbo);
+        GL20.glEnableVertexAttribArray(0);GL20.glVertexAttribPointer(0,2,GL11.GL_FLOAT,false,12,0);
+        GL20.glEnableVertexAttribArray(1);GL30.glVertexAttribIPointer(1,1,GL11.GL_UNSIGNED_INT,12,8);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER,ebo);GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER,new int[]{0,1,2,2,3,0},GL15.GL_STATIC_DRAW);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,fbo);
+        GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,color,0);
+        GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,sceneDepth,0);
+        assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE,GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
+        var camera=new org.kpc.rescaleframecraft.temporal.TemporalCamera();camera.jitterEnabled=false;
+        var projection=new org.joml.Matrix4f().perspective(1,1,.1f,100);
+        Object a=new Object(),b=new Object(),world=new Object();
+        var storage=new TerrainStorage();
+        var list=new net.caffeinemc.mods.sodium.client.render.chunk.lists.ChunkRenderList(null);
+        var vertices=BufferUtils.createByteBuffer(32*12);
+        var counts=BufferUtils.createIntBuffer(2).put(new int[]{6,6}).flip();
+        var offsets=BufferUtils.createPointerBuffer(2).put(0L).put(0L).flip();
+        try {
+            GL11.glViewport(0,0,64,64);GL11.glDisable(GL11.GL_DEPTH_TEST);GL11.glDisable(GL11.GL_BLEND);
+            for(int frame=1;frame<=3;frame++) {
+                int baseA=frame==1?8:frame==2?20:12,baseB=frame==1?16:frame==2?4:24;
+                if(frame==3)a=new Object();
+                for(int section:new int[]{7,12}) {
+                    int base=section==7?baseA:baseB;
+                    for(int i=0;i<4;i++) {
+                        int at=(base+i)*12;
+                        vertices.putFloat(at,i==0||i==3?-.2f:.2f).putFloat(at+4,i<2?-.2f:.2f).putInt(at+8,section);
+                    }
+                }
+                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,vbo);GL15.glBufferData(GL15.GL_ARRAY_BUFFER,vertices,GL15.GL_STREAM_DRAW);
+                camera.begin(new org.joml.Matrix4f(),projection,0,0,0,64,64,world,false,false);
+                GL20.glUseProgram(source);GL20.glUniform1f(GL20.glGetUniformLocation(source,"animation"),frame==1?0:.125f);
+                GL20.glUniform2f(GL20.glGetUniformLocation(source,"sceneDepth"),projection.m22(),projection.m32());
+                storage.allocations[7]=new net.caffeinemc.mods.sodium.client.gl.arena.GlBufferSegment(null,baseA,4);
+                storage.allocations[12]=new net.caffeinemc.mods.sodium.client.gl.arena.GlBufferSegment(null,baseB,4);
+                storage.generations[7]=a;storage.generations[12]=b;
+                list.reset(frame,true);
+                // Change compact history order independently of the real arena offsets.
+                list.add(frame==2?12:7,1);list.add(frame==2?7:12,1);
+                GpuMotion.begin(camera,sceneDepth);
+                // Reverse native draw order like translucent section sorting.
+                var bases=BufferUtils.createIntBuffer(2).put(frame==2?baseB:baseA).put(frame==2?baseA:baseB).flip();
+                TerrainMotion.render(storage,list,()->GpuMotion.drawImmediate(()->GL32.glMultiDrawElementsBaseVertex(GL11.GL_TRIANGLES,counts,GL11.GL_UNSIGNED_INT,offsets,bases)));
+                GpuMotion.end();
+                FloatBuffer pixels=BufferUtils.createFloatBuffer(64*64*4);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D,GpuMotion.motion());GL11.glGetTexImage(GL11.GL_TEXTURE_2D,0,GL11.GL_RGBA,GL11.GL_FLOAT,pixels);
+                for(int x:new int[]{frame==1?20:24,frame==1?42:48}) {
+                    int at=(32*64+x)*4;
+                    assertEquals(frame==2?-4.0625:0,pixels.get(at),.01,"Final GPU deformation must survive arena relocation and draw sorting");
+                    assertEquals(frame==1||frame==3&&x==24?1:0,pixels.get(at+2),.01,"Only the rebuilt section loses correspondence");
+                    assertEquals(1,pixels.get(at+3),.001,"Ordinary terrain retains perspective reciprocal depth");
+                }
+                assertEquals(-1,pixels.get((32*64+(frame==1?14:18))*4+3),"Cutout holes survive multi-draw replay");
+                assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+            }
+        } finally {
+            storage.delete();GpuMotion.release();GL20.glUseProgram(0);GL20.glDeleteProgram(source);GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,0);
+            GL30.glDeleteFramebuffers(fbo);GL11.glDeleteTextures(color);GL11.glDeleteTextures(sceneDepth);
+            GL15.glDeleteBuffers(vbo);GL15.glDeleteBuffers(ebo);GL30.glDeleteVertexArrays(vao);
+        }
+    }
+    private static final class TerrainStorage extends net.caffeinemc.mods.sodium.client.render.chunk.data.SectionRenderDataStorage implements TerrainMotion.Meshes {
+        final net.caffeinemc.mods.sodium.client.gl.arena.GlBufferSegment[] allocations=new net.caffeinemc.mods.sodium.client.gl.arena.GlBufferSegment[256];
+        final Object[] generations=new Object[256];
+        TerrainStorage() {super(false);}
+        @Override public net.caffeinemc.mods.sodium.client.gl.arena.GlBufferSegment[] rfc$allocations() {return allocations;}
+        @Override public Object rfc$generation(int section) {return generations[section];}
+    }
     private void checkDeformation(boolean colorwheel) {
         checkDeformation(colorwheel,false);
     }

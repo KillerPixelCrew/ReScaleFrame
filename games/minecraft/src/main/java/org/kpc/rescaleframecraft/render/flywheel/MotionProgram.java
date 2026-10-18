@@ -14,7 +14,7 @@ import org.lwjgl.system.MemoryStack;
 /** Replays the real bound shaders and uniforms; no second color pass or CPU vertex reconstruction. */
 final class MotionProgram implements AutoCloseable {
     final int source,program,storageBinding;
-    final boolean immediate;
+    final boolean immediate,terrain;
     final int[] textureUnits=new int[3];
     private final List<Uniform> uniforms=new ArrayList<>();
     private final Map<String,Integer> locations=new HashMap<>();
@@ -32,7 +32,8 @@ final class MotionProgram implements AutoCloseable {
         }
         if(vertex==null||fragment==null)throw new IllegalArgumentException("Flywheel shader sources unavailable");
         immediate=!vertex.contains("_flw_unpackInstance");
-        int vs=compile(GL20.GL_VERTEX_SHADER,immediate?FlywheelShaders.immediateVertex(vertex,storageBinding,attribute(source,true),attribute(source,false)):FlywheelShaders.vertex(vertex,storageBinding)),fs=0,linked=0;
+        terrain=immediate&&vertex.contains("_draw_id")&&vertex.contains("_vert_init");
+        int vs=compile(GL20.GL_VERTEX_SHADER,terrain?FlywheelShaders.terrainVertex(vertex,storageBinding):immediate?FlywheelShaders.immediateVertex(vertex,storageBinding,attribute(source,true),attribute(source,false)):FlywheelShaders.vertex(vertex,storageBinding)),fs=0,linked=0;
         try {
             fs=compile(GL20.GL_FRAGMENT_SHADER,FlywheelShaders.fragment(fragment,
                 immediate||fragment.contains("_clrwl_shader_main")?outputAlpha(source):"flw_fragColor.a"));

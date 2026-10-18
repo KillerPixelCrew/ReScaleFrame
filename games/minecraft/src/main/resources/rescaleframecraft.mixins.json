@@ -15,6 +15,7 @@
     "flywheel.IrisPipelineMixin", "flywheel.IrisOptionsMixin",
     "flywheel.IrisRenderTargetsMixin", "flywheel.IrisFramebufferMixin",
     "flywheel.IrisBufferSourceMixin", "flywheel.IrisHandMixin",
+    "flywheel.SodiumSectionStorageMixin", "flywheel.SodiumTerrainMixin", "flywheel.SodiumProgramMixin",
     "flywheel.DistantHorizonsInitMixin", "flywheel.DistantHorizonsProjectionMixin", "flywheel.DistantHorizonsFramebufferMixin",
     "flywheel.DistantHorizonsTaaMixin", "flywheel.DistantHorizonsJitterMixin",
     "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",

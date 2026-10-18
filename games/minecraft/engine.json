@@ -9,9 +9,9 @@
   "device": "D3D12 on the OpenGL context's exact adapter LUID",
   "transfer": "EXT_memory_object_win32 resources and EXT_semaphore_win32 GPU timeline fence",
   "presentation": "Framework-owned DXGI chain on an input-transparent child of the GLFW HWND, replacing the GL buffer swap",
-  "motion": "Dense unjittered camera motion plus CPU geometry, particle, weather and Sodium cloud replay; Flywheel/Colorwheel and Iris hand final GPU vertex history, pending live acceptance",
+  "motion": "Dense unjittered camera motion plus CPU geometry, particle, weather and Sodium cloud replay; Flywheel/Colorwheel, Iris hands and Sodium/Iris terrain-water final GPU vertex history, pending live acceptance",
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",
-  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. 37 Java/GPU checks pass. 1.1.11 particle/item visibility is installed but not launched; 1.1.12 Iris hands is built and awaits deployment. Physical controller, displayed FG and complete GPU motion coverage remain separate."
+  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 38 Java/GPU checks pass. 1.1.11 particle/item visibility is installed but not launched; 1.1.13 includes Iris hand and Sodium terrain producers and awaits deployment. Physical controller, displayed FG and complete GPU motion coverage remain separate."
 }

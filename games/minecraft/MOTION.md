@@ -67,9 +67,9 @@ discard and GL error state. Identity tests cover physical slot migration/reuse, 
 resets and model/topology changes. This is synthetic GPU evidence, not modpack visual acceptance.
 
 Live mixin binding, Complementary shader compilation, moving Create machines, runtime pack/provider
-switches and resizing still require the modpack run. General Iris waving terrain/water and
-shader-deformed entities/particles need further producers. Independent Iris hand motion is
-implemented below but awaits its live run. Geometry/tessellation
+switches and resizing still require the modpack run. Shader-deformed entities/particles need
+further producers. Iris hands and Sodium terrain/water are implemented below but await their
+live run. Geometry/tessellation
 shader pipelines are not implemented by this vertex/fragment replay. No claim of full shader-pack
 motion coverage is made.
 
@@ -205,3 +205,36 @@ are unchanged; its native DLL and manifest changed and MFG-Unlocker-LICENSE.txt 
 The candidate preserves every native entry byte for byte after verifying the installed manifest.
 No native rebuild or runtime acceptance is claimed here. Candidate 1.1.12-dev SHA256:
 `a7e360158e94e7ae79a1e8110d97e84b365ce900cccf1b1d10cc7d49ad1600df`.
+
+## Sodium terrain and water GPU motion, 18 October 2026
+
+The 1.1.13-dev adapter wraps DefaultChunkRenderer's real region draw submission and replays
+DrawCommandList.multiDrawElementsBaseVertex with the active vanilla Sodium or Iris program.
+The reference is the official Sodium mc1.21.1-0.8.13 tag at
+[`dae4167`](https://github.com/CaffeineMC/sodium/tree/dae4167e7d32a7812556a02d8be73cd5aba459c0).
+The compile/test dependency SHA256 is
+`575d187b15328d7bddd8a9b1bee64333c22c14735f5780ec49eac0cd5503c08d`.
+Iris's SodiumTransformer supplies the same decoded section ID, UV and color contract.
+
+Vertex history is indexed by section-local vertex number, not arena offset or draw order.
+SectionRenderDataStorage.setVertexData creates a new mesh-generation identity on every rebuild.
+Arena compaction updates the current base offset without changing that identity. Translucent
+index sorting changes submission order without changing vertex correspondence. Each pass has
+its own storage/history. The source vertex/fragment shaders still supply final deformation and
+material discard; opaque, cutout and translucent passes use the same producer. Shadow draws are
+excluded. Ordinary terrain keeps reciprocal clip w, avoiding far-depth cancellation in the
+compressed-hand decoder. Sodium program deletion and Iris pipeline retirement release clones.
+
+The real-GL multi-draw regression runs through TerrainMotion with two sections, nonzero and
+changing base offsets, reversed section/draw order, a vertex deformation, cutout holes and a
+same-count mesh rebuild. It verifies retained motion for relocated meshes and invalidation of
+only the rebuilt section. This is synthetic producer evidence; it does not prove live mixin
+binding or arbitrary shader-pack behavior. The first run caught overlapping shader-template
+placeholder names; replacement order is corrected before acceptance of the GPU check.
+
+All 38 Java/GPU checks and JAR packaging pass. Every declared mixin class is packaged, and
+all 27 native entries match the current installed JAR byte for byte. Candidate SHA256:
+`ff7aea110c4552c20dce53be7057887bb3814e2a26146de33ee3140a65711b32`.
+Deployment still awaits the
+pending Prism launch dialog. Hand/particle acceptance and shader-deformed actor coverage remain
+open; geometry/tessellation stages are still outside the current replay implementation.

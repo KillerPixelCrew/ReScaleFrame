@@ -7,12 +7,15 @@ import java.util.regex.Pattern;
 public final class FlywheelShaders {
     private FlywheelShaders() {}
     public static String vertex(String source,int storageBinding) {
-        return vertex(source,storageBinding,false,"flw_vertexTexCoord","flw_vertexColor");
+        return vertex(source,storageBinding,false,false,"flw_vertexTexCoord","flw_vertexColor");
     }
     static String immediateVertex(String source,int storageBinding,String uv,String color) {
-        return vertex(source,storageBinding,true,uv,color);
+        return vertex(source,storageBinding,true,false,uv,color);
     }
-    private static String vertex(String source,int storageBinding,boolean immediate,String uv,String color) {
+    static String terrainVertex(String source,int storageBinding) {
+        return vertex(source,storageBinding,true,true,"_vert_tex_diffuse_coord","_vert_color");
+    }
+    private static String vertex(String source,int storageBinding,boolean immediate,boolean terrain,String uv,String color) {
         boolean indirect=!immediate&&source.contains("uint _flw_instances[]");
         if(!immediate) {
         int[] unpack=function(source,"_flw_unpackInstance");
@@ -32,6 +35,7 @@ public final class FlywheelShaders {
             void main() {
                 VERTEX_SETUP
                 _rfc_originalMain();
+                POST_VERTEX_SETUP
                 _rfc_currentUv=CURRENT_UV;
                 _rfc_currentColor=CURRENT_COLOR;
                 _rfc_historyValid=0.0;
@@ -66,8 +70,10 @@ public final class FlywheelShaders {
                 atomicExchange(_rfc_vertices[current+6u],packUnorm4x8(_rfc_currentColor));
                 atomicExchange(_rfc_vertices[current+7u],_rfc_frame);
             }
-            """.replace("VERTEX_SETUP",immediate?"_rfc_instanceIndex=0u;_rfc_meshOffset=0u;":indirect?"":"_rfc_meshOffset=_rfc_instancedMeshOffset;")
-                .replace("CURRENT_UV",uv).replace("CURRENT_COLOR",color).replace("VERTEX_ID",immediate?"uint(gl_VertexID)":"flw_vertexId")+source.substring(main[1]);
+            """.replace("POST_VERTEX_SETUP",terrain?"_rfc_instanceIndex=_draw_id;":"")
+                .replace("VERTEX_SETUP",immediate?"_rfc_instanceIndex=0u;_rfc_meshOffset=0u;":indirect?"":"_rfc_meshOffset=_rfc_instancedMeshOffset;")
+                .replace("CURRENT_UV",uv).replace("CURRENT_COLOR",color)
+                .replace("VERTEX_ID",terrain?"(uint(gl_VertexID)-texelFetch(_rfc_drawMeshes,int(_draw_id)).r)":immediate?"uint(gl_VertexID)":"flw_vertexId")+source.substring(main[1]);
         String header="""
             #extension GL_ARB_shader_storage_buffer_object : require
             #extension GL_ARB_shading_language_packing : require

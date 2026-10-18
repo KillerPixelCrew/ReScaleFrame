@@ -76,12 +76,15 @@ public final class GpuMotion {
     static void overrideMesh(int offset) {meshOverride=offset;}
     static void immediate(Object owner,Object topology,int vertices,Runnable original) {
         if(!capturing()) {original.run();return;}
-        Group saved=current;int savedOffset=meshOffset,savedOverride=meshOverride;boolean savedImmediate=immediate;
         var group=group(owner);
         if(group.begin(1)) {
             group.record(owner,topology,0,vertices);
             group.meshData.clear().put(0).flip();group.meshes.upload(group.meshData);group.ready();
         }
+        scoped(group,original);
+    }
+    static void scoped(Group group,Runnable original) {
+        Group saved=current;int savedOffset=meshOffset,savedOverride=meshOverride;boolean savedImmediate=immediate;
         select(group,0,-1);immediate=true;
         try {original.run();} finally {select(saved,savedOffset,savedOverride);immediate=savedImmediate;}
     }
@@ -120,7 +123,7 @@ public final class GpuMotion {
                 program.unsigned("_rfc_instancedMeshOffset",meshOffset);program.integer("_rfc_meshOverride",meshOverride);
                 program.vector("_rfc_renderSize",width,height);program.vector("_rfc_currentJitter",camera.jitter.x,camera.jitter.y);
                 program.integer("_rfc_reversedDepth",camera.reversedDepth?1:0);
-                program.integer("_rfc_useDepthDecode",program.immediate?1:0);
+                program.integer("_rfc_useDepthDecode",program.immediate&&!program.terrain?1:0);
                 program.vector("_rfc_depthDecode",camera.previousDepthDecode.x,camera.previousDepthDecode.y);
                 GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
                 GL11.glEnable(GL11.GL_DEPTH_TEST);GL11.glDepthFunc(camera.reversedDepth?GL11.GL_GEQUAL:GL11.GL_LEQUAL);
