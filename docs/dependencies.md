@@ -22,18 +22,26 @@ retain their commercial licenses and are not copied into Git or runtime packages
 
 The managed helper uses Harmony 2.4.2 (MIT), pinned by its NuGet lockfile, with the executable
 net472 Harmony assembly for the shipped Mono runtime. The RSF helper targets netstandard2.1.
-Unity assemblies are build references supplied
-by the local game installation and are never included in the mod ZIP. The native adapter uses
+Unity assemblies are compile references from the public Unity SDK or a prepared reference
+cache; a game installation is not required and these assemblies are never included in the ZIP.
+`eng/prepare-unity-references.ps1` gathers engine modules from Unity 6000.3.14f1 and URP
+assemblies from an SDK template cache or a separately supplied URP reference directory.
+Its ignored `references.json` records the engine revision, URP reference version and hashes.
+Use a provisioned SDK/reference cache in CI; running the Unity Editor to compile a public
+URP project requires a valid Unity license. The native adapter uses
 the public Unity rendering interfaces from NativeRenderingPlugin revision
 `522254181faf188efa8b50c3e3bf6fce720b26e4` under `vendor/unity-native/include`; those headers
 carry Unity's Companion License and stay untracked. Preserve that notice with distributed
-Unity-dependent artifacts. Build scripts require the headers and the researched player's
-Managed directory; they do not install tools or rewrite game assemblies.
+Unity-dependent artifacts. Build scripts require these headers and compile references;
+they do not install tools or rewrite game assemblies. See the
+[0.1.1 build record](releases/v0.1.1-drag-n-wash.md) for this release's actual reference versions
+and the distinction between compilation and target-player contract validation.
 
-The test package includes Streamline/DLSS, FidelityFX and XeSS runtime notices, Harmony's
-license, the first-party GPL license and MinHook's license. Its payload comes from a verified
-deployment manifest, with an explicit allowlist that excludes game binaries, game assemblies,
-decompiles, logs, backups and machine-specific original-file baselines.
+The package includes Streamline/DLSS, FidelityFX and XeSS runtime notices, Harmony's
+license, the first-party GPL license, Game SDK MIT license, Rust notices and MinHook's license.
+Its payload comes from Release artifacts and vendor SDKs, with an explicit allowlist that
+excludes game binaries, game assemblies, decompiles, logs, backups and machine-specific
+original-file baselines. The older verified-deployment input remains an optional mode.
 
 The native build needs the Windows/C++ toolchain. Rust dependencies are pinned in `Cargo.toml` and `Cargo.lock`. MinGW-w64 and Wine support the optional Linux cross-build.
 
@@ -108,9 +116,9 @@ FG uses `libxess_fg.dll` and `libxell.dll`. Keep each SDK's notices with its run
 FSR4 SR INT8 compatibility does not establish FSR4 FG support.
 
 `eng/deploy-unity-sr.ps1` copies all three SR/FG families even when its `-FrameGeneration` default
-is Off. `eng/package-unity-sr.ps1` includes that allowlisted deployed vendor payload and local
-Release first-party artifacts, with notices and file hashes. It preserves the deployed FG default,
-while setting package SR Backend/Quality. Preference files are excluded. The generated README
-therefore describes FG configuration independently of package defaults. This is a local test ZIP,
-not a published or universally validated release. See [Unity guide](../games/unity-mono/README.md)
+is Off. `eng/package-unity-sr.ps1` packages local Release artifacts and the allowlisted vendor
+SDK payload without reading a game directory. It defaults SR and FG independently to Auto,
+sets SR Quality, excludes preference files and verifies every archived file hash. Optional
+`-GameDirectory` input verifies an existing deployment before replacing its first-party files
+with the Release artifacts. See [Unity guide](../games/unity-mono/README.md)
 and [current status](current-status.md).

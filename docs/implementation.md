@@ -1,12 +1,24 @@
 # Implementation tracker
 
+## Drag'n Wash 0.1.1 SDK build and packaging, 18 October 2026
+
+Removed the installed-game requirement from the Unity build/package path. Public Unity
+SDK references compile the unchanged helper; Release artifacts and allowlisted vendor
+runtimes produce the package without deployment. Compile references are excluded from
+the download, and dependency notices and every archived file hash are checked.
+Windows Release verification passed 44 native checks with eight skips and clean Rust
+formatting/Clippy. The available newer URP reference cache fails the target-specific
+metadata preflight; this is recorded separately from compilation, not reported as a
+target-player pass. No fresh game session is claimed.
+[Inputs, failed approaches and checks](releases/v0.1.1-drag-n-wash.md).
+
 ## Release target correction, 18 October 2026
 
 Withdrew the Project Wingman observer preview to draft and removed its public
 download links. Wingman remains renderer research, without SR/FG/latency/VR
 processing. The requested next package is Drag'n Wash with the latest shared
-runtime, Unity helper and overlay. Its managed build requires the researched
-player's five Unity/URP assembly references; those are not distributed.
+runtime, Unity helper and overlay. The initial assumption that its managed build
+needed game assemblies was corrected by the SDK build above.
 
 ## Windows 0.1.1 preview packaging, 18 October 2026
 

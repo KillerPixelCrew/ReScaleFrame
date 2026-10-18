@@ -1,11 +1,20 @@
 param(
-    [Parameter(Mandatory)][string]$UnityManagedDirectory,
+    [Alias('UnityReferenceDirectory')][string]$UnityManagedDirectory,
+    [string]$UnityEditorDirectory,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [switch]$VS2026
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+if ($UnityEditorDirectory) {
+    & "$PSScriptRoot/prepare-unity-references.ps1" -UnityEditorDirectory $UnityEditorDirectory
+    if (!$UnityManagedDirectory) { $UnityManagedDirectory = Join-Path $taskRoot '.local/unity-references/6000.3.14f1' }
+}
+if (!$UnityManagedDirectory) { $UnityManagedDirectory = Join-Path $taskRoot '.local/unity-references/6000.3.14f1' }
+if (!(Test-Path -LiteralPath $UnityManagedDirectory)) {
+    throw 'Prepare public Unity SDK references with eng/prepare-unity-references.ps1, or supply UnityReferenceDirectory.'
+}
 $taskManaged = (Resolve-Path -LiteralPath $UnityManagedDirectory).Path
 $taskSuffix = if ($VS2026) { '-vs18' } else { '' }
 function Invoke-UnityChecked([string]$Program, [string[]]$Arguments) {
