@@ -1,5 +1,10 @@
 # Project Wingman
 
+[Download the 0.1.1 observer preview](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/project-wingman-v0.1.1).
+Read the [installation guide](../../docs/releases/wingman-observer-install.md)
+and [build evidence](../../docs/releases/v0.1.1-windows.md). This package records
+temporal graph facts only and has no fresh gameplay or VR acceptance.
+
 The Windows x64 plugin recognizes the researched executable, exposes game-plugin ABI 13 and
 observes the native temporal graph. Its dedicated XInput carrier is deployed and the desktop
 observer is game-tested. GPU resource leases, upscaling, HUD separation, frame generation,

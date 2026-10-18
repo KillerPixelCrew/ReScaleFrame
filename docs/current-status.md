@@ -19,6 +19,12 @@ This is a source/documentation audit. No new game, GPU or Windows build was run 
 
 ## Downloads and source builds
 
+18 October 2026: separate [AC7 0.1.1](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
+and [Project Wingman observer 0.1.1](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/project-wingman-v0.1.1)
+prereleases package the current Windows source. These packages have build and
+fixture checks, not fresh game acceptance. AC7 includes FG/latency dependencies;
+Wingman has observation only. [Release evidence](releases/v0.1.1-windows.md).
+
 The published [v0.1.0 AC7 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0)
 contains DLSS/DLAA, FSR 2/3/4 and XeSS SR, the AC7 plugin and Insert overlay. Its replacement
 assets were uploaded on 2 October. FG and Reflex are absent from that package. Updating `main`
@@ -93,7 +99,7 @@ physical scanout, a latency reduction, or an in-game performance gain.
 | FG provider | 2 | `runtime/contract/include/rescaleframe/frame_generation.h` |
 | Overlay | 12 | `ui/overlay/include/rescaleframe/overlay.h` |
 
-`VERSION` and the Cargo workspace both specify 0.1.0. Equal component versions do not imply equal
+`VERSION` and the Cargo workspace both specify 0.1.1. Equal component versions do not imply equal
 builds or ABI compatibility; deploy matched artifacts. SDK headers are optional, and absent headers
 produce explicit unavailable stubs. Unity managed builds additionally require .NET, the researched
 player's Managed assemblies, Harmony and Unity native headers. Those game assemblies are build
