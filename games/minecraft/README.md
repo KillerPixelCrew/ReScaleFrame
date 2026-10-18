@@ -7,6 +7,8 @@ Native DLSS, FSR2/3/4 and XeSS reconstruction and independent DLSS/FSR/XeSS fram
 use ReScaleFrame's shared runtime. Video Settings exposes a ReScaleFrame page through Reese's
 Sodium Options. Provider, quality, frame count and latency settings apply without restarting.
 Actual availability depends on the GPU and SDK; F3 shows requested and effective providers.
+The FG multiplier follows the selected frame-generation backend's reported limit. The range
+updates after enabling a provider and clamps when switching to one with a lower limit.
 [Native implementation, build steps and validation limits](NATIVE.md).
 
 VulkanStory-Rewrite's eight-sample raw-history TAA, including its homogeneous

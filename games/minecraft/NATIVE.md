@@ -1,5 +1,36 @@
 # ReScaleFrameCraft native integration
 
+### Frame-generation multiplier limits, 1.1.14-dev
+
+Sodium/Reese's multiplier uses the selected FG backend's reported capacity, independently of
+the SR provider. The displayed value includes the real frame: generated count 1 is 2x, count
+3 is 4x. JNI appends the provider's maximum and support flag to the status buffer while retaining
+14-field caller compatibility. The limits cache is scoped to the native session and backend;
+Auto follows the resolved provider. The range updates in an open screen, backend changes clamp
+the pending value, and saving or receiving a lower capability also clamps persisted settings.
+Off and single-generation/unknown-capacity controls are disabled. Applying a new backend at 2x
+allows its real capability report to enable the available MFG range without restarting.
+
+The source of truth is each provider's max_generated_frames. For DLSS this comes from the local
+Streamline 2.14.1 sl_dlss_g.h and ProgrammingGuideDLSS_G.md numFramesToGenerateMax contract,
+including the admitted RTX 40 unlock capacity. FSR/XeSS retain their own reported limits.
+The shared D3D12 status getter withholds cached vendor data after a provider generation changes
+until that provider reaches prepare; old limits cannot be labelled with the replacement backend.
+
+All 41 Java/GPU checks pass, including actual Sodium Config transitions, changing native limits,
+clamping and the staged JNI status layout. Release verify passes 44 native checks, eight opt-in
+skips, Rust formatting and Clippy. The separately enabled hidden RTX4070 provider-switch fixture
+passes Off/FSR/XeSS/DLSS transitions, validates reported capacities against the current provider,
+and permits an unavailable snapshot only on the switch frame. Its initial assertion incorrectly
+required a fresh report on that intentionally deferred frame; the corrected assertion requires
+matching capabilities on subsequent frames. FSR/XeSS active samples were 13/8; this run does not
+establish displayed DLSS generation or Minecraft UI acceptance.
+
+Candidate JAR SHA256: `637644b45d051eb185a88f5b87b3cbf3ff33b9b8f504760f1a0e30827f1660f3`.
+Native DLL SHA256: `fe4332b37569480ccb811f11e13be4e3e40831ec63c4c10967022a497f79299e`.
+The JAR includes the pending hand/terrain producers. Deployment remains held by Prism's pending
+1.1.11-dev launch and its Low free memory dialog; no files in that installation were replaced.
+
 ### DLSS model selection
 
 Sodium/Reese's ReScaleFrame options and the F8 screen offer Default, E, F, J, K, L and M.

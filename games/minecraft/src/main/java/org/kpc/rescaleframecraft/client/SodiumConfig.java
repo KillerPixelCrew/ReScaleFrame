@@ -3,6 +3,8 @@ package org.kpc.rescaleframecraft.client;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import net.caffeinemc.mods.sodium.api.config.ConfigEntryPoint;
+import net.caffeinemc.mods.sodium.api.config.ConfigState;
+import net.caffeinemc.mods.sodium.client.config.ConfigManager;
 import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
 import net.caffeinemc.mods.sodium.api.config.structure.EnumOptionBuilder;
 import net.minecraft.network.chat.Component;
@@ -10,6 +12,9 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Sodium's supported config API supplies the entry in Reese's Sodium Options. */
 public final class SodiumConfig implements ConfigEntryPoint {
+    public static void capabilitiesChanged() {
+        if(ConfigManager.CONFIG!=null)ConfigManager.CONFIG.invalidateGlobalRebuildDependents();
+    }
     private static ResourceLocation id(String path) {return ResourceLocation.fromNamespaceAndPath("rescaleframecraft",path);}
     private static Component text(String value) {return Component.literal(value);}
     private <E extends Enum<E>> EnumOptionBuilder<E> choice(ConfigBuilder b,String id,String name,Class<E> type,E initial,Consumer<E> set,Supplier<E> get,String tip) {
@@ -35,9 +40,11 @@ public final class SodiumConfig implements ConfigEntryPoint {
                 .addOption(choice(b,"generation","Frame generation",TaaSettings.FrameGeneration.class,TaaSettings.FrameGeneration.OFF,
                     value->TaaSettings.current.frameGeneration=value,()->TaaSettings.current.frameGeneration,
                     "Independent of the upscaler. Requires VSync off. Menus, loading and reset frames suspend interpolation. Unsupported hardware or runtimes are reported in F3."))
-                .addOption(b.createIntegerOption(id("generated_frames")).setName(text("Generated frames per rendered frame")).setDefaultValue(1).setRange(1,15,1)
-                    .setValueFormatter(value->text(Integer.toString(value)))
-                    .setTooltip(text("Clamped to the active provider and GPU capability. One generated frame doubles the requested output rate."))
+                .addOption(b.createIntegerOption(id("generated_frames")).setName(text("Frame generation multiplier")).setDefaultValue(1)
+                    .setRangeProvider(state->FrameGenerationLimits.INSTANCE.range(state.readEnumOption(id("generation"),TaaSettings.FrameGeneration.class)),id("generation"),ConfigState.UPDATE_ON_REBUILD)
+                    .setEnabledProvider(state->{var fg=state.readEnumOption(id("generation"),TaaSettings.FrameGeneration.class);return fg!=TaaSettings.FrameGeneration.OFF&&FrameGenerationLimits.INSTANCE.maximum(fg)>1;},id("generation"),ConfigState.UPDATE_ON_REBUILD)
+                    .setControlHiddenWhenDisabled(false).setValueFormatter(value->text((value+1)+"x"))
+                    .setTooltip(text("Total output multiplier, including the rendered frame. Available values depend on the selected frame-generation technology and GPU. Apply the selected technology once to detect its supported range."))
                     .setBinding(value->TaaSettings.current.generatedFrames=value,()->TaaSettings.current.generatedFrames).setStorageHandler(TaaSettings::save))
                 .addOption(choice(b,"reflex","Low latency",TaaSettings.Reflex.class,TaaSettings.Reflex.ON,
                     value->TaaSettings.current.reflex=value,()->TaaSettings.current.reflex,

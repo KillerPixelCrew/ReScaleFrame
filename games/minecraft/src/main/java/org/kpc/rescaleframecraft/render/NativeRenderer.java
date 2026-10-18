@@ -9,6 +9,8 @@ import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.kpc.rescaleframecraft.ReScaleFrameCraft;
 import org.kpc.rescaleframecraft.client.TaaSettings;
+import org.kpc.rescaleframecraft.client.FrameGenerationLimits;
+import org.kpc.rescaleframecraft.client.SodiumConfig;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFWNativeWin32;
@@ -20,7 +22,7 @@ public final class NativeRenderer {
     private static Configuration applied,failed;
     private static String status="native processing off";
     private static int[] surfaces;
-    private static final long[] nativeStatus=new long[14];
+    private static final long[] nativeStatus=new long[16];
     private static RenderTarget display;
     private static WorldRenderTarget world;
     private static boolean worldRendering;
@@ -72,6 +74,12 @@ public final class NativeRenderer {
             inputs.begin(frame);
             NativeBridge.cpu(handle,frame,NativeBridge.INPUT_SAMPLE);
             NativeBridge.status(handle,nativeStatus);
+            var limits=FrameGenerationLimits.INSTANCE;
+            if(limits.record((int)nativeStatus[2],(int)nativeStatus[3],(int)nativeStatus[14],nativeStatus[15]!=0)) {
+                SodiumConfig.capabilitiesChanged();
+                int count=limits.clamp(s.frameGeneration,s.generatedFrames);
+                if(s.frameGeneration!=TaaSettings.FrameGeneration.OFF&&count!=s.generatedFrames) {s.generatedFrames=count;TaaSettings.save();}
+            }
             status=null;
         }
     }
@@ -248,5 +256,6 @@ public final class NativeRenderer {
         if(vao!=0)GL30.glDeleteVertexArrays(vao);
         framebuffer=readFramebuffer=vao=0;
         applied=failed=null;display=null;status="native processing off";
+        FrameGenerationLimits.INSTANCE.reset();SodiumConfig.capabilitiesChanged();
     }
 }

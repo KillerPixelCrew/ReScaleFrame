@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <array>
+#include <algorithm>
 #include "input_observer.h"
 namespace {
 using Pipeline=rsf_gl_pipeline;
@@ -89,8 +90,9 @@ JNI_METHOD(void) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_stat
     if(!destination||env->GetArrayLength(destination)<14)return;
     rsf_gl_pipeline_status status{};status.struct_size=sizeof(status);rsf_gl_pipeline_status_get(pipeline(pointer),&status);
     const auto& fg=status.generation;
-    const std::array<jlong,14> values{status.requested_sr,status.effective_sr,status.requested_fg,status.effective_fg,status.sr_result,status.fg_switch_result,
-        static_cast<jlong>(status.evaluated),fg.reason,fg.last_result,fg.vendor.effective_generated_frames,static_cast<jlong>(fg.tagged_frames),static_cast<jlong>(fg.vendor.generated_presented),fg.vendor.active,fg.vendor.valid_statistics};
-    env->SetLongArrayRegion(destination,0,static_cast<jsize>(values.size()),values.data());
+    const std::array<jlong,16> values{status.requested_sr,status.effective_sr,status.requested_fg,status.effective_fg,status.sr_result,status.fg_switch_result,
+        static_cast<jlong>(status.evaluated),fg.reason,fg.last_result,fg.vendor.effective_generated_frames,static_cast<jlong>(fg.tagged_frames),static_cast<jlong>(fg.vendor.generated_presented),fg.vendor.active,fg.vendor.valid_statistics,
+        fg.vendor.max_generated_frames,fg.vendor.supported};
+    env->SetLongArrayRegion(destination,0,std::min(env->GetArrayLength(destination),static_cast<jsize>(values.size())),values.data());
 }
 JNI_METHOD(jint) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_close(JNIEnv*,jclass,jlong pointer) {return rsf_gl_pipeline_close(pipeline(pointer));}

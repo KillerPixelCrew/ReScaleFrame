@@ -136,6 +136,14 @@ retirement releases the shared motion resources. Live binding/appearance and dep
 await Prism's pending launch dialog; shader-deformed actors remain unimplemented. All 38
 Java/GPU checks and packaging pass; the installed native payload is preserved byte for byte.
 
+Minecraft 1.1.14-dev replaces the fixed 1-15 generated-frame slider with runtime FG capability
+limits and total-output multiplier labels. Sodium ranges, pending selections and saved values
+clamp per backend; Auto follows its resolved provider. JNI carries the native maximum/support
+flag, and shared status excludes retired-provider capabilities during a switch. All 41 Java/GPU
+checks, the native gate (44 passed, eight opt-in skips), Rust checks and an explicitly enabled
+hidden GPU provider-switch fixture pass. The JAR is built; deployment/UI acceptance remain held
+by Prism's pending launch dialog. [Details](../games/minecraft/NATIVE.md).
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

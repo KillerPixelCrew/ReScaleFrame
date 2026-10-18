@@ -3,7 +3,7 @@
   "engine": "Minecraft Java 1.21.1",
   "loader": "NeoForge 21.1.262",
   "renderer": "OpenGL, Sodium 0.8.13",
-  "settings": "Sodium Config API through Reese's Sodium Options 2.2.4",
+  "settings": "Sodium Config API through Reese's Sodium Options 2.2.4; FG multiplier range follows native per-provider capacity",
   "distant_terrain": "Distant Horizons 3.3.3 / Iris 1.8.14-beta.1; original render projection plus unified temporal depth guides, appearance accepted by the human",
   "native_adapter": "ReScaleFrame.Minecraft.dll",
   "device": "D3D12 on the OpenGL context's exact adapter LUID",
@@ -13,5 +13,5 @@
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",
-  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 38 Java/GPU checks pass. 1.1.11 particle/item visibility is installed but not launched; 1.1.13 includes Iris hand and Sodium terrain producers and awaits deployment. Physical controller, displayed FG and complete GPU motion coverage remain separate."
+  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 41 Java/GPU checks pass. 1.1.11 particle/item visibility is installed but not launched; 1.1.14 includes Iris hand/terrain producers and runtime FG slider limits and awaits deployment. Physical controller, displayed FG and complete GPU motion coverage remain separate."
 }

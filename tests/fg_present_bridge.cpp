@@ -335,6 +335,7 @@ int main(int argc, char** argv) {
             rsf_fg12_options(&changed);
         }
         const auto current_backend = rsf_d3d11_present_backend();
+        const auto capability_epoch = rsf_d3d11_present_generation();
         session = rsf_d3d11_present_session();
         if (service) {
             for (auto stage : {RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_PACING, RSF_GAME_CPU_INPUT_SAMPLE,
@@ -400,6 +401,20 @@ int main(int argc, char** argv) {
         }
         if (service) {
             rsf_native_fg_status result{}; result.struct_size = sizeof(result); rsf_fg12_status(&result);
+            if (const auto* current = rsf_d3d11_present_provider()) {
+                rsf_fg_status capability{}; capability.struct_size = sizeof(capability);
+                if (auto* current_session = rsf_d3d11_present_session(); current_session && current->status(current_session, &capability) == RSF_BACKEND_OK) {
+                    const bool deferred = !result.vendor.supported && !result.vendor.max_generated_frames &&
+                        capability_epoch != rsf_d3d11_present_generation();
+                    const bool same = deferred || (result.vendor.max_generated_frames == capability.max_generated_frames && result.vendor.supported == capability.supported);
+                    if (deferred) std::printf("Capability report deferred after provider switch frame=%llu backend=%u\n",
+                        static_cast<unsigned long long>(frame_id), rsf_d3d11_present_backend());
+                    if (!same) std::printf("Capability mismatch frame=%llu backend=%u cached=%u/%u current=%u/%u\n",
+                        static_cast<unsigned long long>(frame_id), rsf_d3d11_present_backend(), result.vendor.supported, result.vendor.max_generated_frames,
+                        capability.supported, capability.max_generated_frames);
+                    accepted &= same;
+                }
+            }
             if (hot ? current_backend != 0 && frame_id != 7 : frame_id != 10 && frame_id != 11) ++expected_tagged;
             observed_active += result.vendor.active; accepted &= result.last_result == RSF_BACKEND_OK && result.tagged_frames == expected_tagged;
             if (mfg_test && current_backend == 1) {

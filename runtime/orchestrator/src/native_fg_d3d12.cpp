@@ -473,7 +473,11 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_submitted(uint64_t session, uint64_t id
 extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) {
     if (!output || output->struct_size < sizeof(*output)) return 0;
     std::lock_guard<std::mutex> lock(guard); *output = state; output->struct_size = sizeof(*output);
-    output->requested = options; output->available = rsf_d3d11_present_has_owner() && rsf_d3d11_present_backend() != 0; return 1;
+    output->requested = options; output->available = rsf_d3d11_present_has_owner() && rsf_d3d11_present_backend() != 0;
+    // A drained provider switch can precede its first prepare. Never label the
+    // retired provider's cached capabilities with the replacement backend.
+    if (status_generation != rsf_d3d11_present_generation()) output->vendor = {};
+    return 1;
 }
 extern "C" RSF_RUNTIME_API void rsf_fg12_options(const rsf_native_fg_options* request) {
     if (!request || request->struct_size < sizeof(*request) || request->mode > RSF_FG_FIXED ||

@@ -10,7 +10,7 @@ import org.kpc.rescaleframecraft.render.TemporalRenderer;
 
 public final class TaaSettings {
     private static final Gson GSON=new GsonBuilder().setPrettyPrinting().create();
-    private static final Path FILE=FMLPaths.CONFIGDIR.get().resolve("rescaleframecraft.json");
+    private static Path file() {return FMLPaths.CONFIGDIR.get().resolve("rescaleframecraft.json");}
     public static TaaSettings current=new TaaSettings();
     public boolean enabled=true;
     public enum Upscaler {
@@ -35,6 +35,7 @@ public final class TaaSettings {
     public int generatedFrames=1,frameLimit=0;
     public boolean nativeDebug=false;
     public static void load() {
+        Path FILE=file();
         if(Files.exists(FILE)) {
             try(var reader=Files.newBufferedReader(FILE)) {
                 var loaded=GSON.fromJson(reader,TaaSettings.class);
@@ -52,6 +53,8 @@ public final class TaaSettings {
         }
     }
     public static void save() {
+        current.generatedFrames=FrameGenerationLimits.INSTANCE.clamp(current.frameGeneration,current.generatedFrames);
+        Path FILE=file();
         try { Files.createDirectories(FILE.getParent());Files.writeString(FILE,GSON.toJson(current)); }
         catch(Exception e) { ReScaleFrameCraft.LOGGER.error("Unable to save TAA settings",e); }
         TemporalRenderer.reset();
