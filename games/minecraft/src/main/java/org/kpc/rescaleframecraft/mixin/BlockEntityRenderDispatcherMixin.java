@@ -9,13 +9,16 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 
 @Mixin(BlockEntityRenderDispatcher.class)
 public abstract class BlockEntityRenderDispatcherMixin {
-    @Inject(method="render",at=@At("HEAD"))
-    private void rfc$begin(BlockEntity entity,float tick,PoseStack pose,MultiBufferSource buffers,CallbackInfo ci) {
-        TemporalRenderer.GEOMETRY.push(entity);
+    @WrapMethod(method="render")
+    private void rfc$actor(BlockEntity entity,float tick,PoseStack pose,MultiBufferSource buffers,Operation<Void> original) {
+        boolean capture=TemporalRenderer.capturing();
+        if(capture)TemporalRenderer.GEOMETRY.push(entity);
+        try {original.call(entity,tick,pose,buffers);}
+        finally {if(capture)TemporalRenderer.GEOMETRY.pop();}
     }
-    @Inject(method="render",at=@At("RETURN"))
-    private void rfc$end(CallbackInfo ci) { TemporalRenderer.GEOMETRY.pop(); }
 }

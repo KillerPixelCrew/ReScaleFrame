@@ -121,7 +121,7 @@ class TemporalGpuTest {
                 GL11.glClearColor(value,value*.5f,.1f,1);GL11.glClearDepth(1);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT|GL11.GL_DEPTH_BUFFER_BIT);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
                 float[] pixel=new float[4];GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
                 int first=Math.max(0,frame-7);
@@ -132,11 +132,63 @@ class TemporalGpuTest {
             camera.invalidate();camera.begin(new Matrix4f(),projection,0,0,0,64,64,world,false,false);
             target.bindWrite(true);RenderSystem.colorMask(true,true,true,true);GL11.glClearColor(.9f,.2f,.1f,1);GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
             state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-            state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+            state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
             float[] pixel=new float[4];GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
             assertEquals(.9,pixel[0],.006,"reset must reject all old color");
         } finally { target.destroyBuffers(); }
+    }
+    @Test void movingSurfaceVisibilityRejectsOldOccludersAndRetainsSlopedHistory() {
+        var projection=new Matrix4f().perspective(1.2f,1,.05f,1024);
+        for(boolean slope:new boolean[]{false,true}) {
+            var target=new TextureTarget(64,64,true,false);var camera=new TemporalCamera();camera.jitterEnabled=false;var world=new Object();
+            float[] colors=new float[64*64*4],depths=new float[64*64],motions=new float[64*64*4],planes=new float[64*64*2];
+            try(var state=new GlState();var history=new TaaHistory();var guides=new MotionGuides()) {
+                history.resize(64,64);guides.resize(64,64);
+                for(int frame=0;frame<18;frame++) {
+                    camera.begin(new Matrix4f(),projection,0,0,0,64,64,world,false,false);
+                    boolean oldOccluder=!slope&&frame<8;
+                    for(int y=0;y<64;y++)for(int x=0;x<64;x++) {
+                        int pixel=y*64+x;float inverse=slope?1f/3+(x+.5f-32)*.005f:oldOccluder?1f/2.8f:1f/3;
+                        depths[pixel]=(-projection.m22()+projection.m32()*inverse)*.5f+.5f;
+                        colors[pixel*4]=oldOccluder?1:0;colors[pixel*4+1]=0;
+                        colors[pixel*4+2]=slope?(frame%2==0?.2f:.8f):oldOccluder?0:1;colors[pixel*4+3]=1;
+                        motions[pixel*4]=slope?.25f:0;motions[pixel*4+1]=motions[pixel*4+2]=0;
+                        motions[pixel*4+3]=slope?inverse+.25f*.005f:inverse;
+                        planes[pixel*2]=slope?.005f:0;planes[pixel*2+1]=0;
+                    }
+                    TextureUnits.bind(0,target.getColorTextureId());GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,colors);
+                    TextureUnits.bind(0,target.getDepthTextureId());GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,depths);
+                    state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
+                    TextureUnits.bind(0,guides.motion());GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,motions);
+                    TextureUnits.bind(0,guides.plane());GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL30.GL_RG,GL11.GL_FLOAT,planes);
+                    state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
+                    GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);float[] pixel=new float[4];
+                    GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
+                    if(!slope&&frame>=8) {assertEquals(0,pixel[0],.008,"Newly uncovered blue surface must not inherit red occluder history");assertEquals(1,pixel[2],.008);}
+                    if(slope&&frame>=12)assertEquals(.5,pixel[2],.015,"Depth slope must preserve the eight raw samples, not reject all history");
+                    assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+                }
+            } finally {target.destroyBuffers();}
+        }
+    }
+    @Test void distantDepthDomainPreservesMovingSurfaceDepthAndSlope() {
+        var target=new TextureTarget(64,64,true,false);var source=new TemporalCamera();var destination=new TemporalCamera();var world=new Object();
+        source.jitterEnabled=destination.jitterEnabled=false;
+        source.begin(new Matrix4f(),new Matrix4f().perspective(1,1,.05f,1024),0,0,0,64,64,world,false,false);
+        destination.begin(new Matrix4f(),new Matrix4f().perspective(1,1,.05f,16384),0,0,0,64,64,world,false,false);
+        try(var state=new GlState();var guides=new MotionGuides()) {
+            target.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(.6);GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+            guides.resize(64,64);state.fullscreen();guides.produce(target,source,List.of(),new CloudHistory());
+            GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{2,-1,0,1f/3});
+            GL30.glClearBufferfv(GL11.GL_COLOR,2,new float[]{.005f,.001f,0,0});
+            guides.resolveDistantDepth(source,destination);
+            float[] value=new float[4];GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,value);
+            assertEquals(2,value[0],.001);assertEquals(-1,value[1],.001);assertEquals(1f/3,value[3],.0002,"Previous reciprocal view depth is invariant under the guide projection change");
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT2);GL11.glReadPixels(32,32,1,1,GL30.GL_RG,GL11.GL_FLOAT,value);
+            assertEquals(.005,value[0],.00001);assertEquals(.001,value[1],.00001);
+            assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+        } finally {target.destroyBuffers();}
     }
     @Test void resourceRetirementMustNotRestoreDeletedTextureOrFramebufferNames() {
         try(var original=new GlState()) {
@@ -312,10 +364,31 @@ class TemporalGpuTest {
             float[] pixel=new float[4];GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
             // Raster interpolation has driver-dependent subpixel precision.
             assertEquals(-3.2,pixel[0],.002,"previous minus current in unjittered pixels");
-            assertEquals(0,pixel[1],.0001);assertEquals(0,pixel[2],.0001);assertEquals(.5,pixel[3],.0001);
+            assertEquals(0,pixel[1],.0001);assertEquals(0,pixel[2],.0001);assertEquals(1,pixel[3],.0001,"Reciprocal previous clip W, not current hardware depth");
+            int plane=GL11.glGenTextures();TextureUnits.bind(0,plane);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_RG32F,64,64,0,GL30.GL_RG,GL11.GL_FLOAT,0L);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT2,GL11.GL_TEXTURE_2D,plane,0);
+            GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL11.GL_NONE,GL30.GL_COLOR_ATTACHMENT2});
+            var sloped=MemoryUtil.memAllocFloat(30);
+            try {
+                for(int i=0;i<3;i++)sloped.put(points[i*2]).put(points[i*2+1]).put(-4)
+                    .put(points[i*2]).put(points[i*2+1]).put(-4+.2f*points[i*2]).put(0).put(0).put(1).put(0);
+                sloped.flip();GL15.glBufferData(GL15.GL_ARRAY_BUFFER,sloped,GL15.GL_STATIC_DRAW);
+            } finally {MemoryUtil.memFree(sloped);}
+            var perspective=new Matrix4f().perspective(1,1,.05f,1024);
+            program.matrix("currentViewProjection",perspective);program.matrix("previousViewProjection",perspective);program.vector2("jitterPx",0,0);
+            GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT2);float[] gradient=new float[2];
+            GL11.glReadPixels(32,32,1,1,GL30.GL_RG,GL11.GL_FLOAT,gradient);
+            assertEquals(.05f/(32*perspective.m00()),gradient[0],.000002,"Previous inverse-depth plane in previous screen pixels");
+            assertEquals(0,gradient[1],.000002);
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
+            float oldX=(32.5f/32-1)*4/perspective.m00();
+            assertEquals(1/(4-.2f*oldX),pixel[3],.00001,"Moving depth follows the old vertex pose");
             assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
             GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,target.getColorTextureId(),0);
             com.mojang.blaze3d.platform.GlStateManager._deleteTexture(motion);
+            com.mojang.blaze3d.platform.GlStateManager._deleteTexture(plane);
         } finally { GL30.glDeleteVertexArrays(vao);GL15.glDeleteBuffers(vbo);target.destroyBuffers(); }
     }
     @Test void cameraCutsResizeAndWorldChangesResetHistory() {
@@ -347,7 +420,7 @@ class TemporalGpuTest {
                 GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,input);
                 target.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(1);GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
                 float[] pixels=new float[64*64*4];GL11.glReadPixels(0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,pixels);
                 for(int y=8;y<56;y+=7)for(int x=8;x<56;x+=7)
@@ -382,7 +455,7 @@ class TemporalGpuTest {
                 TextureUnits.bind(0,target.getDepthTextureId());
                 GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,depth);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
                 float[] pixels=new float[64*64*4];GL11.glReadPixels(0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,pixels);
                 if(frame>=24)for(int y=8;y<56;y++)for(int x=8;x<56;x++) {
@@ -413,7 +486,7 @@ class TemporalGpuTest {
                 GL11.glClearColor(color,color,color,1);GL11.glClearDepth(revealed?1:objectDepth);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT|GL11.GL_DEPTH_BUFFER_BIT);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
                 float[] pixel=new float[4];GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,pixel);
                 assertEquals(color,pixel[0],.006,"old foreground must not trail into newly revealed sky, frame "+frame);
@@ -433,7 +506,7 @@ class TemporalGpuTest {
                 GL11.glDisable(GL11.GL_SCISSOR_TEST);GL11.glClearColor(.2f,.4f,.6f,1);GL11.glClearDepth(1);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT|GL11.GL_DEPTH_BUFFER_BIT);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 assertNotEquals(target.getColorTextureId(),history.sceneColor(),"scene output must have separate ownership");
                 // An ordinary overlay is drawn after the production resolve and blit.
                 target.bindWrite(true);GL11.glEnable(GL11.GL_SCISSOR_TEST);GL11.glScissor(0,0,8,8);
@@ -471,7 +544,7 @@ class TemporalGpuTest {
                     boolean vine=u>=28.1f&&u<29.35f||u>=43.2f&&u<49.45f;
                     float bg=clouds?cloudPattern(x+.5f-camera.jitter.x+shift*.2f+frame*.2f):.8f;
                     input.put(vine?.05f:bg).put(vine?.4f:.7f).put(vine?.1f:.95f).put(1);depth.put(vine?foliageDepth:clouds?cloudDepth:1);
-                    cloudMotion.put(vine?0:.2f+(frame>12?.14f:0)).put(0).put(vine?0:.2f).put(vine?0:cloudDepth);
+                    cloudMotion.put(vine?0:.2f+(frame>12?.14f:0)).put(0).put(vine?0:.2f).put(vine?0:1f/150);
                 }
                 input.flip();depth.flip();TextureUnits.bind(0,target.getColorTextureId());
                 GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,input);
@@ -482,7 +555,7 @@ class TemporalGpuTest {
                     cloudMotion.flip();TextureUnits.bind(0,guides.motion());
                     GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,cloudMotion);
                 }
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
                 float[] pixels=new float[64*64*4];GL11.glReadPixels(0,0,64,64,GL11.GL_RGBA,GL11.GL_FLOAT,pixels);
                 if(frame>=13)for(int x=8;x<56;x++) {
@@ -528,7 +601,7 @@ class TemporalGpuTest {
                 TextureUnits.bind(0,target.getDepthTextureId());
                 GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,0,0,0,64,64,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,depth);
                 state.fullscreen();guides.produce(target,camera,List.of(),new CloudHistory());
-                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion());
+                state.fullscreen();history.resolve(target,camera,guides.depth(),guides.motion(),guides.plane());
                 float[] projected=new float[4];
                 for(int i=0;i<4;i++) {
                     var h=camera.viewProjection.transform(new Vector4f((edges[i]-32)*30/(32*projection.m00()),0,-30,1));

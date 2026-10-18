@@ -80,7 +80,7 @@ public final class TemporalRenderer {
             motion.produce(target,CAMERA,GEOMETRY.finish(),CLOUDS);
             if(resolveCamera!=CAMERA)motion.resolveDistantDepth(CAMERA,resolveCamera);
             state.fullscreen();
-            if(!nativeSr&&TaaSettings.current.enabled)history.resolve(target,resolveCamera,motion.depth(),motion.motion());
+            if(!nativeSr&&TaaSettings.current.enabled)history.resolve(target,resolveCamera,motion.depth(),motion.motion(),motion.plane());
             if(NativeRenderer.processing()) {
                 state.fullscreen();NativeRenderer.finishWorld(target,resolveCamera,motion.depth(),motion.motion());
             }

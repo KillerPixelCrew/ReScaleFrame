@@ -10,7 +10,7 @@ import org.kpc.rescaleframecraft.temporal.GeometryHistory;
 import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
 import org.kpc.rescaleframecraft.render.flywheel.FlywheelMotion;
-import org.kpc.rescaleframecraft.mixin.ShaderInstanceAccessor;
+import com.mojang.blaze3d.vertex.VertexFormatElement;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryUtil;
 
@@ -22,24 +22,26 @@ final class MotionGuides implements AutoCloseable {
     private final GlProgram clouds=new GlProgram("cloud-motion.vert","geometry-motion.frag");
     private final GlProgram sodiumClouds=new GlProgram("cloud-position-color.vert","geometry-motion.frag");
     private final int fbo=GL30.glGenFramebuffers(),vao=GL30.glGenVertexArrays(),vbo=GL15.glGenBuffers();
-    private int width,height,motion,depth,testDepth;
-    private int resolvedFbo,resolvedMotion,resolvedDepth;
+    private int width,height,motion,depth,plane,testDepth;
+    private int resolvedFbo,resolvedMotion,resolvedDepth,resolvedPlane;
     private boolean resolved;
     private int sourceDepthId=-1,testDepthFormat=GL30.GL_DEPTH_COMPONENT32F;
     private FloatBuffer vertices=MemoryUtil.memAllocFloat(65536);
     private final Matrix4f distantInverse=new Matrix4f(),sceneProjection=new Matrix4f(),sourceInverse=new Matrix4f();
     int motion() { return resolved?resolvedMotion:motion; }
     int depth() { return resolved?resolvedDepth:depth; }
+    int plane() { return resolved?resolvedPlane:plane; }
     void resize(int w,int h) {
         if(w==width&&h==height)return;
         deleteTextures();width=w;height=h;sourceDepthId=-1;testDepthFormat=GL30.GL_DEPTH_COMPONENT32F;
-        motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);depth=texture(GL30.GL_R32F,GL11.GL_RED);
+        motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);depth=texture(GL30.GL_R32F,GL11.GL_RED);plane=texture(GL30.GL_RG16F,GL30.GL_RG);
         testDepth=texture(GL30.GL_DEPTH_COMPONENT32F,GL11.GL_DEPTH_COMPONENT);
         bind();
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,motion,0);
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT1,GL11.GL_TEXTURE_2D,depth,0);
+        GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT2,GL11.GL_TEXTURE_2D,plane,0);
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,testDepth,0);
-        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1});
+        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
         if(GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)
             throw new IllegalStateException("Incomplete temporal motion framebuffer");
     }
@@ -55,8 +57,9 @@ final class MotionGuides implements AutoCloseable {
             GL45.glClipControl(GL45.GL_LOWER_LEFT,GL45.GL_NEGATIVE_ONE_TO_ONE);
         if(TemporalRenderer.flywheelAvailable()&&FlywheelMotion.present()) {
             RenderSystem.depthFunc(GL11.GL_LEQUAL);
-            mergeFlywheel.use();mergeFlywheel.integer("capturedMotion",0);mergeFlywheel.integer("capturedDepth",1);
+            mergeFlywheel.use();mergeFlywheel.integer("capturedMotion",0);mergeFlywheel.integer("capturedDepth",1);mergeFlywheel.integer("capturedPlane",2);
             TextureUnits.bind(0,FlywheelMotion.motion());TextureUnits.bind(1,FlywheelMotion.depth());
+            TextureUnits.bind(2,FlywheelMotion.plane());GL33.glBindSampler(2,0);
             GL33.glBindSampler(0,0);GL33.glBindSampler(1,0);GL30.glBindVertexArray(vao);
             GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
         }
@@ -79,23 +82,25 @@ final class MotionGuides implements AutoCloseable {
     void resolveDistantDepth(TemporalCamera source,TemporalCamera destination) {
         if(resolvedFbo==0) {
             resolvedFbo=GL30.glGenFramebuffers();GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,resolvedFbo);
-            resolvedMotion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);resolvedDepth=texture(GL30.GL_R32F,GL11.GL_RED);
+            resolvedMotion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);resolvedDepth=texture(GL30.GL_R32F,GL11.GL_RED);resolvedPlane=texture(GL30.GL_RG16F,GL30.GL_RG);
             GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,resolvedMotion,0);
             GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT1,GL11.GL_TEXTURE_2D,resolvedDepth,0);
-            GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1});
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT2,GL11.GL_TEXTURE_2D,resolvedPlane,0);
+            GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
             if(GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)throw new IllegalStateException("Incomplete distant depth resolve framebuffer");
         }
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,resolvedFbo);RenderSystem.viewport(0,0,width,height);
         RenderSystem.disableDepthTest();RenderSystem.depthMask(false);RenderSystem.disableBlend();RenderSystem.disableCull();RenderSystem.colorMask(true,true,true,true);
         int distant=DistantHorizonsIntegration.depth();
         resolveDepth.use();resolveDepth.integer("sourceDepth",0);resolveDepth.integer("sourceMotion",1);
+        resolveDepth.integer("sourcePlane",3);
         resolveDepth.integer("distantDepth",2);resolveDepth.integer("useDistantDepth",distant!=0?1:0);
         TemporalCamera.canonicalDepth(destination.reversedDepth,destination.zeroToOne,sceneProjection).mul(destination.jitteredProjection);
         TemporalCamera.canonicalDepth(source.reversedDepth,source.zeroToOne,sourceInverse).mul(source.jitteredProjection).invert();
         resolveDepth.matrix("sourceToGuide",distantInverse.set(sceneProjection).mul(sourceInverse));
         if(distant!=0) {DistantHorizonsIntegration.inverseProjection(distantInverse);resolveDepth.matrix("distantToGuide",distantInverse.mulLocal(sceneProjection));}
-        TextureUnits.bind(0,depth);TextureUnits.bind(1,motion);TextureUnits.bind(2,distant);
-        for(int i=0;i<3;i++)GL33.glBindSampler(i,0);
+        TextureUnits.bind(0,depth);TextureUnits.bind(1,motion);TextureUnits.bind(2,distant);TextureUnits.bind(3,plane);
+        for(int i=0;i<4;i++)GL33.glBindSampler(i,0);
         GL30.glBindVertexArray(vao);GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);resolved=true;
     }
     private void render(GeometryHistory.Batch batch,TemporalCamera camera) {
@@ -113,7 +118,9 @@ final class MotionGuides implements AutoCloseable {
         geometry.vector2("renderSize",width,height);geometry.vector2("jitterPx",camera.jitter.x,camera.jitter.y);
         geometry.integer("colorTexture",0);
         geometry.matrix("textureMatrix",RenderSystem.getTextureMatrix());
-        geometry.integer("textured",original!=null&&((ShaderInstanceAccessor)original).rfc$samplerNames().contains("Sampler0")?1:0);
+        // Iris binds material textures through its own sampler table. Vanilla's
+        // Sampler0 name is not a material-coverage contract under shader packs.
+        geometry.integer("textured",batch.type.format().getOffset(VertexFormatElement.UV0)>=0?1:0);
         RenderSystem.activeTexture(GL13.GL_TEXTURE0);GL33.glBindSampler(0,0);
         RenderSystem.bindTexture(RenderSystem.getShaderTexture(0));
         boolean previous=batch.hasPrevious(camera.frame)&&!camera.reset;
@@ -168,8 +175,9 @@ final class MotionGuides implements AutoCloseable {
     }
     private void deleteTextures() {
         com.mojang.blaze3d.platform.GlStateManager._deleteTexture(motion);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(depth);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(testDepth);
+        com.mojang.blaze3d.platform.GlStateManager._deleteTexture(plane);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(resolvedPlane);
         com.mojang.blaze3d.platform.GlStateManager._deleteTexture(resolvedMotion);com.mojang.blaze3d.platform.GlStateManager._deleteTexture(resolvedDepth);
-        if(resolvedFbo!=0)GL30.glDeleteFramebuffers(resolvedFbo);resolvedFbo=resolvedMotion=resolvedDepth=0;resolved=false;
+        if(resolvedFbo!=0)GL30.glDeleteFramebuffers(resolvedFbo);resolvedFbo=resolvedMotion=resolvedDepth=resolvedPlane=0;resolved=false;
     }
     @Override public void close() {
         deleteTextures();normalize.close();resolveDepth.close();mergeFlywheel.close();geometry.close();clouds.close();sodiumClouds.close();GL30.glDeleteFramebuffers(fbo);GL30.glDeleteVertexArrays(vao);

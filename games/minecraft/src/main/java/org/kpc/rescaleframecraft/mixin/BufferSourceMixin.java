@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class BufferSourceMixin {
     @Inject(method="getBuffer",at=@At("RETURN"),cancellable=true)
     private void rfc$capture(RenderType type,CallbackInfoReturnable<VertexConsumer> cir) {
+        if(!TemporalRenderer.capturing())return;
         cir.setReturnValue(TemporalRenderer.GEOMETRY.wrap(cir.getReturnValue(),type));
     }
 }

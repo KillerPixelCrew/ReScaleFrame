@@ -134,3 +134,39 @@ DEPTH32F_STENCIL8 and later resizing. No incomplete-framebuffer or depth-format 
 occur in that run. This establishes the reported world/cloud correction, not complete motion
 coverage for arbitrary shader packs or Create machinery. The release changes version metadata
 and documentation; runtime classes and native payload must match the accepted development JAR.
+
+## Moving entity/particle visibility in TAA, 18 October 2026
+
+The human reports severe trails on breaking particles and rotating dropped blocks in TAA-only
+mode, while DLSS looks normal. The current exported ParticleEngine contains RFC's wrap operation
+around Particle.render, so the particle hook is not assumed absent.
+
+Three input contracts are corrected in 1.1.11-dev:
+
+- Iris FullyBufferedMultiBufferSource overrides getBuffer without invoking the vanilla method.
+  It now captures actor vertices and uses the unwrapped material as a stable identity across
+  Iris's recreated wrapper types. Actor scopes are exception-safe and exclude shadow passes.
+- Vanilla's Sampler0 name does not describe Iris's material sampler table. Textured geometry is
+  identified by UV0 format data, preserving sprite alpha holes during motion replay.
+- Current depth cannot establish where a moving surface was visible. Motion A carries reciprocal
+  previous view depth, with previous screen-space inverse-depth slopes in an RG16F guide. CPU
+  geometry, clouds and Flywheel/Colorwheel share this contract; the DH conversion preserves it.
+
+Raw TAA validates each weighted historical color tap against the previous surface plane. Its
+error bound accounts for half-float depth/slope/motion rounding and float unprojection, rather
+than accepting a fixed world-distance neighborhood. Singular, flipped or unrepresentable previous
+planes invalidate history. This preserves valid sloped history while rejecting old occluder
+color. Raw scene snapshots remain unmodified in the ring. Vendor SDK execution is unchanged.
+
+All 34 Java/GPU checks pass. The new visibility regression rejects a nearby red occluder when
+a blue surface becomes visible, while retaining the eight-sample mean on a sloped surface. The
+production motion shader is checked against prior-pose depth and analytic plane slope; the DH
+pass preserves motion, reciprocal depth and slope. Existing sky, cloud, foliage, JNI/input and
+Flywheel checks pass. Manually supplied cloud motion fixtures now use reciprocal depth, and the
+old current-depth assertion was updated to that contract. Synthetic evidence is not live acceptance.
+
+Installed 1.1.11-dev SHA256:
+`d2b4de7d6285adaf1be8343f9a8bf70cccffe3e745ceaf11a10687827b719a74`.
+Prism has not started this build because its Low free memory dialog awaits acknowledgement. The
+existing 9 GB maximum heap is unchanged; the idle owned Gradle daemon was stopped to free memory.
+Live particle/item acceptance, Iris hand motion and general shader deformation remain open.

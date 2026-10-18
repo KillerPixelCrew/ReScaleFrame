@@ -20,6 +20,7 @@ public abstract class ParticleEngineMixin {
     // A bare overloaded name excludes AsyncParticles' @Overwrite replacement.
     @WrapOperation(method="render(Lnet/minecraft/client/renderer/LightTexture;Lnet/minecraft/client/Camera;FLnet/minecraft/client/renderer/culling/Frustum;Ljava/util/function/Predicate;)V",at=@At(value="INVOKE",target="Lnet/minecraft/client/particle/Particle;render(Lcom/mojang/blaze3d/vertex/VertexConsumer;Lnet/minecraft/client/Camera;F)V"))
     private void rfc$particle(Particle particle,VertexConsumer consumer,Camera camera,float tick,Operation<Void> original) {
+        if(!TemporalRenderer.capturing()) {original.call(particle,consumer,camera,tick);return;}
         int blocks=Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getId();
         var texture=RenderSystem.getShaderTexture(0)==blocks?TextureAtlas.LOCATION_BLOCKS:TextureAtlas.LOCATION_PARTICLES;
         var history=TemporalRenderer.GEOMETRY;

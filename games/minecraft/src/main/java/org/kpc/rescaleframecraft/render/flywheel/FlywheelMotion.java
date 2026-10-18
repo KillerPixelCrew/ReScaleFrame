@@ -20,7 +20,7 @@ public final class FlywheelMotion {
     private static Group current;
     private static long serial;
     private static boolean active;
-    private static int fbo,motion,depth,testDepth,width,height,depthFormat,draws,meshOffset,meshOverride=-1;
+    private static int fbo,motion,depth,plane,testDepth,width,height,depthFormat,draws,meshOffset,meshOverride=-1;
     private FlywheelMotion() {}
 
     private static final class Group implements AutoCloseable {
@@ -58,13 +58,15 @@ public final class FlywheelMotion {
         int oldDraw=GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         boolean scissor=GL11.glIsEnabled(GL11.GL_SCISSOR_TEST),write=GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         try(var stack=MemoryStack.stackPush()) {
-            var mask=stack.malloc(4);GL11.glGetBooleanv(GL11.GL_COLOR_WRITEMASK,mask);
+            var mask=stack.malloc(12);
+            for(int i=0;i<3;i++) {mask.position(i*4);GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,i,mask);}
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            GL11.glColorMask(true,true,true,true);GL11.glDepthMask(true);
+            for(int i=0;i<3;i++)GL30.glColorMaski(i,true,true,true,true);GL11.glDepthMask(true);
             GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{0,0,1,-1});
             GL30.glClearBufferfv(GL11.GL_COLOR,1,new float[]{1,0,0,0});
+            GL30.glClearBufferfv(GL11.GL_COLOR,2,new float[]{0,0,0,0});
             GL30.glClearBufferfv(GL11.GL_DEPTH,0,new float[]{view.reversedDepth?0:1});
-            GL11.glColorMask(mask.get(0)!=0,mask.get(1)!=0,mask.get(2)!=0,mask.get(3)!=0);
+            for(int i=0;i<3;i++)GL30.glColorMaski(i,mask.get(i*4)!=0,mask.get(i*4+1)!=0,mask.get(i*4+2)!=0,mask.get(i*4+3)!=0);
         } finally {
             GL11.glDepthMask(write);if(scissor)GL11.glEnable(GL11.GL_SCISSOR_TEST);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,oldDraw);
@@ -173,9 +175,11 @@ public final class FlywheelMotion {
         int func=GL11.glGetInteger(GL11.GL_DEPTH_FUNC);boolean test=GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean write=GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         try(var stack=MemoryStack.stackPush()) {
-            var mask0=stack.malloc(4);var mask1=stack.malloc(4);var oldTextures=stack.mallocInt(3);
+            var mask0=stack.malloc(4);var mask1=stack.malloc(4);var mask2=stack.malloc(4);var oldTextures=stack.mallocInt(3);
             GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,0,mask0);GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,1,mask1);
+            GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,2,mask2);
             boolean blend0=GL30.glIsEnabledi(GL11.GL_BLEND,0),blend1=GL30.glIsEnabledi(GL11.GL_BLEND,1);
+            boolean blend2=GL30.glIsEnabledi(GL11.GL_BLEND,2);
             int bound=0;
             try {
                 program.bind();
@@ -191,12 +195,15 @@ public final class FlywheelMotion {
                 GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
                 GL11.glEnable(GL11.GL_DEPTH_TEST);GL11.glDepthFunc(camera.reversedDepth?GL11.GL_GEQUAL:GL11.GL_LEQUAL);
                 GL11.glDepthMask(true);GL30.glDisablei(GL11.GL_BLEND,0);GL30.glDisablei(GL11.GL_BLEND,1);
+                GL30.glDisablei(GL11.GL_BLEND,2);GL30.glColorMaski(2,true,true,true,true);
                 GL30.glColorMaski(0,true,true,true,true);GL30.glColorMaski(1,true,true,true,true);
                 original.run();draws++;
             } finally {
                 GL30.glColorMaski(0,mask0.get(0)!=0,mask0.get(1)!=0,mask0.get(2)!=0,mask0.get(3)!=0);
                 GL30.glColorMaski(1,mask1.get(0)!=0,mask1.get(1)!=0,mask1.get(2)!=0,mask1.get(3)!=0);
+                GL30.glColorMaski(2,mask2.get(0)!=0,mask2.get(1)!=0,mask2.get(2)!=0,mask2.get(3)!=0);
                 if(blend0)GL30.glEnablei(GL11.GL_BLEND,0);if(blend1)GL30.glEnablei(GL11.GL_BLEND,1);
+                if(blend2)GL30.glEnablei(GL11.GL_BLEND,2);
                 for(int i=0;i<bound;i++) {GL13.glActiveTexture(GL13.GL_TEXTURE0+program.textureUnits[i]);GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER,oldTextures.get(i));}
                 GL13.glActiveTexture(activeTexture);
                 if(storage!=0&&storageSize>0)GL30.glBindBufferRange(GL43.GL_SHADER_STORAGE_BUFFER,program.storageBinding,storage,storageStart,storageSize);
@@ -216,6 +223,7 @@ public final class FlywheelMotion {
     }
     public static int motion() {return motion;}
     public static int depth() {return depth;}
+    public static int plane() {return plane;}
     public static boolean present() {return draws>0;}
     public static void forget(int source) {var program=programs.remove(source);if(program!=null)program.close();}
     public static void release() {
@@ -236,11 +244,12 @@ public final class FlywheelMotion {
         int old=GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),texture=GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         deleteTargets();width=camera.width();height=camera.height();depthFormat=format;
         fbo=GL30.glGenFramebuffers();GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
-        motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);depth=texture(GL30.GL_R32F,GL11.GL_RED);testDepth=texture(format,GL11.GL_DEPTH_COMPONENT);
+        motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);depth=texture(GL30.GL_R32F,GL11.GL_RED);plane=texture(GL30.GL_RG16F,GL30.GL_RG);testDepth=texture(format,GL11.GL_DEPTH_COMPONENT);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,motion,0);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT1,GL11.GL_TEXTURE_2D,depth,0);
+        GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT2,GL11.GL_TEXTURE_2D,plane,0);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,testDepth,0);
-        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1});
+        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
         if(GL30.glCheckFramebufferStatus(GL30.GL_DRAW_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)throw new IllegalStateException("Incomplete Flywheel motion framebuffer");
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,old);GL11.glBindTexture(GL11.GL_TEXTURE_2D,texture);
     }
@@ -251,7 +260,7 @@ public final class FlywheelMotion {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D,GL11.GL_TEXTURE_MAG_FILTER,GL11.GL_NEAREST);return texture;
     }
     private static void deleteTargets() {
-        GL11.glDeleteTextures(motion);GL11.glDeleteTextures(depth);GL11.glDeleteTextures(testDepth);if(fbo!=0)GL30.glDeleteFramebuffers(fbo);
-        motion=depth=testDepth=fbo=width=height=0;
+        GL11.glDeleteTextures(motion);GL11.glDeleteTextures(depth);GL11.glDeleteTextures(plane);GL11.glDeleteTextures(testDepth);if(fbo!=0)GL30.glDeleteFramebuffers(fbo);
+        motion=depth=plane=testDepth=fbo=width=height=0;
     }
 }

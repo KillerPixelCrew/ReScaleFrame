@@ -4,6 +4,7 @@
 // Retain raw raster snapshots; transport coordinates, never resampled colour.
 in vec2 texCoord;
 uniform sampler2D accumulation,coordinateMap,currentColor,currentDepth,currentMotion,previousColor,previousDepth;
+uniform sampler2D currentPlane;
 uniform mat4 inverseCurrent,currentView,previousViewProjection,inversePrevious,previousView;
 uniform vec2 renderSize,currentJitter,previousJitter;
 uniform vec3 cameraDelta;
@@ -41,6 +42,26 @@ bool historyColorVisible(vec2 raster,bool sky,float expectedDepth) {
         // sky history just because the right surface exists beside it.
         if(sky) { if(depth<1.0)return false; }
         else if(depth<1.0&&previousLinearDepth(tap,depth)<expectedDepth-(0.5+0.08*abs(expectedDepth)))return false;
+    }
+    return true;
+}
+float halfUnit(float value) {return max(exp2(floor(log2(max(abs(value),5.96046448e-8)))-10.0),5.96046448e-8);}
+bool movingSurfaceVisible(vec2 raster,vec2 reference,vec4 motion,vec2 plane) {
+    if(any(isnan(plane))||any(isinf(plane)))return false;
+    vec2 p=raster-0.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
+    for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
+        float weight=(x==0?1.0-f.x:f.x)*(y==0?1.0-f.y:f.y);if(weight==0.0)continue;
+        ivec2 tap=clamp(base+ivec2(x,y),ivec2(0),ivec2(renderSize)-1);
+        float depth=texelFetch(previousDepth,tap,0).r;if(depth>=1.0)return false;
+        vec2 offset=vec2(tap)+0.5-reference;
+        float expected=motion.a+dot(plane,offset);if(expected<=0.0)return false;
+        float linear=previousLinearDepth(tap,depth);if(linear<=0.0)return false;
+        // Half-float depth/slope/motion rounding plus float depth unprojection.
+        // This is a storage error bound, not a fixed world-distance acceptance radius.
+        float error=halfUnit(motion.a)+dot(vec2(halfUnit(plane.x),halfUnit(plane.y)),abs(offset))+
+            dot(abs(plane),vec2(halfUnit(motion.x),halfUnit(motion.y)))+
+            (abs(inversePrevious[2].w)+abs(inversePrevious[3].w))*4.76837158e-7;
+        if(abs(1.0/linear-expected)>error)return false;
     }
     return true;
 }
@@ -111,8 +132,8 @@ void main() {
     }
     if(!finite4(projected)||projected.w<=1e-6||!finite4(motion))return;
     vec2 delta=(projected.xy/projected.w*0.5+0.5)*renderSize-(closestCentre-currentJitter);
-    bool written=motion.a>0.0&&abs(motion.a-closestDepth)<=max(2e-4,8e-4*closestDepth);
-    if(written)delta=motion.rg;
+    bool written=motion.a>0.0;
+    if(written) {delta=motion.rg;if(!sky)expectedDepth=1.0/motion.a;}
     vec2 previousCentre=coordinate.xy+delta;
     vec2 previousRaster=previousCentre+previousJitter;
     if(any(lessThan(previousRaster,vec2(0.5)))||any(greaterThan(previousRaster,renderSize-0.5)))return;
@@ -143,7 +164,9 @@ void main() {
         if(error>0.5+0.08*abs(expectedDepth))return;
         expectedDepth=matchedDepth;
     }
-    if(!historyColorVisible(previousRaster,sky,expectedDepth))return;
+    if(written&&!sky) {
+        if(!movingSurfaceVisible(previousRaster,previousClosest,motion,texelFetch(currentPlane,closest,0).rg))return;
+    } else if(!historyColorVisible(previousRaster,sky,expectedDepth))return;
     vec4 color=rawSample(previousColor,previousRaster);
     if(!finite4(color))return;
     outAccumulation+=vec4(max(color.rgb,vec3(0.0)),1.0);

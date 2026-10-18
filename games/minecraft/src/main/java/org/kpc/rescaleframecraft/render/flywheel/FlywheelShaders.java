@@ -95,12 +95,21 @@ public final class FlywheelShaders {
         String original=identifier(source.substring(main[0],main[1]),"main","_rfc_originalMain");
         source=source.substring(0,main[0])+original+"\n"+"""
             void main() {
+                vec2 oldPixel=(_rfc_previousClip.xy/max(_rfc_previousClip.w,1e-6)*0.5+0.5)*_rfc_renderSize;
+                float oldInverse=1.0/max(_rfc_previousClip.w,1e-6);
+                vec2 dx=dFdx(oldPixel),dy=dFdy(oldPixel);
+                vec2 dz=vec2(dFdx(oldInverse),dFdy(oldInverse));
+                float determinant=dx.x*dy.y-dx.y*dy.x;
+                bool invertible=determinant>1e-8;
+                _rfc_plane=invertible?vec2(dz.x*dy.y-dz.y*dx.y,dx.x*dz.y-dy.x*dz.x)/determinant:vec2(0.0);
+                if(any(isnan(_rfc_plane))||any(isinf(_rfc_plane))||any(greaterThan(abs(_rfc_plane),vec2(65504.0)))) {_rfc_plane=vec2(0.0);invertible=false;}
                 _rfc_originalMain();
                 float alpha=ALPHA_EXPRESSION;
                 if (alpha<0.01) discard;
                 float windowDepth=WINDOW_DEPTH;
                 float depth=_rfc_reversedDepth ? 1.0-windowDepth : windowDepth;
                 float reactive=max(1.0-_rfc_historyValid,1.0-alpha);
+                if(!invertible)reactive=1.0;
                 if (any(greaterThan(abs(_rfc_previousUv-flw_vertexTexCoord),vec2(0.000001))) ||
                     any(greaterThan(abs(_rfc_previousColor-flw_vertexColor),vec4(0.004)))) reactive=1.0;
                 vec2 delta=vec2(0.0);
@@ -108,7 +117,7 @@ public final class FlywheelShaders {
                     vec2 oldPixel=(_rfc_previousClip.xy/_rfc_previousClip.w*0.5+0.5)*_rfc_renderSize;
                     delta=oldPixel-(gl_FragCoord.xy-_rfc_currentJitter);
                 } else reactive=1.0;
-                _rfc_motion=vec4(delta,reactive,depth);
+                _rfc_motion=vec4(delta,reactive,_rfc_previousClip.w>0.000001 ? 1.0/_rfc_previousClip.w : 0.0);
                 _rfc_depth=depth;
             }
             """.replace("WINDOW_DEPTH",writesDepth?"gl_FragDepth":"gl_FragCoord.z")
@@ -125,6 +134,7 @@ public final class FlywheelShaders {
             in float _rfc_historyValid;
             layout(location=0) out vec4 _rfc_motion;
             layout(location=1) out float _rfc_depth;
+            layout(location=2) out vec2 _rfc_plane;
             """);
     }
     private static String identifier(String source,String from,String to) {return source.replaceAll("\\b"+Pattern.quote(from)+"\\b",to);}

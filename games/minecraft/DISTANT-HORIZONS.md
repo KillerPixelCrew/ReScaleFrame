@@ -58,3 +58,6 @@ JAR and DH are installed in N1GHT with previous JARs backed up. Iris has bound D
 the real modpack without the reported initialization failure. World LOD rendering, seams,
 shader/provider transitions, resizing and visible temporal stability remain live acceptance.
 The general missing-motion goal remains active, including Iris hands and shader deformation.
+
+The human reports the installed DH profile looks good. Particle/rotating-item ghosting is
+subsequently isolated to TAA-only mode and tracked separately in [MOTION.md](MOTION.md).

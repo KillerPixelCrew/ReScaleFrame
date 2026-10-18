@@ -90,6 +90,12 @@ jitter ownership and a separate projection for unified distant depth/motion guid
 GPU checks pass. Real modpack startup binds DH/Iris callbacks; world/transition acceptance remains
 open. [Source contracts and evidence](../games/minecraft/DISTANT-HORIZONS.md).
 
+The human accepts the DH appearance, then identifies TAA-only particle/item trails. The
+1.1.11-dev correction captures Iris-batched entities, respects sprite coverage, and adds previous
+surface depth/slope visibility for raw TAA. All 34 checks pass, including occluder rejection and
+valid sloped history. The JAR is installed; Prism's memory dialog blocks the live test. RTSS OSD
+routing is a separate pending per-app profile proposal. The full motion goal remains active.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

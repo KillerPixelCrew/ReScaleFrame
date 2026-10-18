@@ -21,7 +21,7 @@ void main() {
     } else previous=previousViewProjection*vec4(h.xyz/h.w+cameraDelta,1.0);
     vec2 delta=vec2(0.0);
     if(previous.w>1e-6)delta=(previous.xy/previous.w*0.5+0.5)*renderSize-(centre-jitterPx);
-    if(motion.a>0.0&&abs(motion.a-depth)<=max(2e-4,8e-4*depth))delta=motion.rg;
+    if(motion.a>0.0)delta=motion.rg;
     if(resetHistory!=0||any(isnan(delta))||any(isinf(delta)))delta=vec2(0.0);
     // Framework input: current minus previous UV, DX top-left origin, unjittered.
     // The native normalizer converts this to vendor previous-minus-current pixels.

@@ -14,7 +14,7 @@ import org.lwjgl.opengl.*;
 /** Eight unique raw frames. Only coordinates travel through history, never filtered colour. */
 public final class TaaHistory implements AutoCloseable {
     private static final class Frame {
-        int color,depth,motion;
+        int color,depth,motion,plane;
         final Matrix4f vp=new Matrix4f(),inverse=new Matrix4f(),view=new Matrix4f();
         final Vector2f jitter=new Vector2f();
         final Vector3d position=new Vector3d();
@@ -41,6 +41,7 @@ public final class TaaHistory implements AutoCloseable {
             frame.color=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);
             frame.depth=texture(GL30.GL_R32F,GL11.GL_RED);
             frame.motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);
+            frame.plane=texture(GL30.GL_RG16F,GL30.GL_RG);
         }
         for(int i=0;i<2;i++) {
             sums[i]=texture(GL30.GL_RGBA32F,GL11.GL_RGBA);
@@ -48,12 +49,12 @@ public final class TaaHistory implements AutoCloseable {
         }
         result=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);
     }
-    public void resolve(RenderTarget target,TemporalCamera camera,int sceneDepth,int motion) {
+    public void resolve(RenderTarget target,TemporalCamera camera,int sceneDepth,int motion,int plane) {
         if(camera.reset)available=0;
         Frame current=frames[head];current.capture(camera);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,target.frameBufferId);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);copy(current.color);
-        copyTexture(sceneDepth,current.depth);copyTexture(motion,current.motion);
+        copyTexture(sceneDepth,current.depth);copyTexture(motion,current.motion);copyTexture(plane,current.plane);
         available=Math.min(available+1,8);
         accumulate.use();accumulate.vector2("renderSize",width,height);
         bind(accumulate,"currentColor",2,current.color);
@@ -68,6 +69,7 @@ public final class TaaHistory implements AutoCloseable {
             accumulate.integer("stage",1);
             bind(accumulate,"accumulation",0,sums[bank]);bind(accumulate,"coordinateMap",1,coordinates[bank]);
             bind(accumulate,"currentDepth",3,from.depth);bind(accumulate,"currentMotion",4,from.motion);
+            bind(accumulate,"currentPlane",7,from.plane);
             bind(accumulate,"previousColor",5,previous.color);bind(accumulate,"previousDepth",6,previous.depth);
             accumulate.matrix("inverseCurrent",from.inverse);accumulate.matrix("previousViewProjection",previous.vp);
             accumulate.matrix("currentView",from.view);
