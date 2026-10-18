@@ -1,0 +1,7 @@
+{
+  "name": "ReScaleFrame.Unity",
+  "rootNamespace": "ReScaleFrame",
+  "references": ["Unity.RenderPipelines.Core.Runtime", "Unity.RenderPipelines.Universal.Runtime"],
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

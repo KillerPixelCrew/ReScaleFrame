@@ -32,7 +32,7 @@ bool installed = false;
 rsf_backend_log_fn logger = nullptr;
 void* logger_user = nullptr;
 struct Cpu {
-    uint64_t id = 0, input = 0, generation = 0;
+    uint64_t id = 0, input = 0, generation = 0, session = 0;
     bool begun = false, simulation = false, failed = false, render_started = false, completed = false;
 };
 std::array<Cpu, 128> cpu;
@@ -403,7 +403,7 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event* event) {
     const auto slept = event->stage == RSF_GAME_CPU_PACING ? rsf_d3d11_present_begin(event->source_frame_id, &generation) : RSF_BACKEND_OK;
     std::lock_guard<std::mutex> lock(guard);
     auto& frame = cpu[event->source_frame_id % cpu.size()];
-    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) { frame = {}; frame.id = event->source_frame_id; frame.failed = acquired != RSF_BACKEND_OK; }
+    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) { frame = {}; frame.id = event->source_frame_id; frame.session = event->session_id; frame.failed = acquired != RSF_BACKEND_OK; }
     if (frame.id != event->source_frame_id) return;
     if (event->stage == RSF_GAME_CPU_PACING) { frame.generation = generation; frame.begun = slept == RSF_BACKEND_OK; frame.failed |= !frame.begun; }
     if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE) {
@@ -469,6 +469,20 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_submitted(uint64_t session, uint64_t id
         slot.submitted = true;
         if (slot.hudless_ready) slot.hudless_submitted = true;
     }
+}
+extern "C" RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session) {
+    if (!session) return 0;
+    std::lock_guard<std::mutex> lock(guard);
+    for (auto& slot : slots)
+        if (slot.record.session_id == session && !finished(slot)) return 0;
+    auto* host = rsf_d3d11_present_host();
+    for (auto& frame : cpu) if (frame.session == session) {
+        if (host && frame.id && !frame.completed) rsf_streamline_host_abort(host, frame.id);
+        frame = {};
+    }
+    for (auto& slot : slots) if (slot.record.session_id == session) slot.ready = false;
+    for (auto& window : windows) if (window.session == session) window = {};
+    return 1;
 }
 extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) {
     if (!output || output->struct_size < sizeof(*output)) return 0;

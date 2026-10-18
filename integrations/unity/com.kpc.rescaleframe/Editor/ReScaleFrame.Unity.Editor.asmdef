@@ -1,0 +1,5 @@
+{
+  "name": "ReScaleFrame.Unity.Editor",
+  "references": ["ReScaleFrame.Unity", "Unity.RenderPipelines.Core.Runtime", "Unity.RenderPipelines.Universal.Runtime"],
+  "includePlatforms": ["Editor"]
+}

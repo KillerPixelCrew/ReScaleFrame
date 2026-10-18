@@ -29,6 +29,35 @@ allowlisted observer packager and restored the AMD loader/MFG notice to AC7's
 payload. Local SDK-enabled Windows Release verification passes 44 native
 checks with eight skips, formatting/Clippy and all 59 Rust tests. No fresh game
 or VR acceptance is claimed. [Rationale and checks](releases/v0.1.1-windows.md).
+## Reusable Unity URP package, 18 October 2026
+
+RTSS compatibility is a hard requirement for every supported API, including active FG
+and provider changes. Disabling or excluding RTSS does not satisfy this integration.
+
+The new `integrations/unity/com.kpc.rescaleframe` package supplies URP scene colour,
+depth, object/camera motion, jitter and completed-frame inputs to shared SR, FG and
+PCL. It includes DX11/DX12/Vulkan bridges, Editor Game-view presentation, runtime
+quality/model/provider controls, SDK-limited MFG and actual Base/output FPS counters.
+The full target remains Editor Play and Windows players across all three APIs.
+[Source contracts, failures and current evidence](research/unity-urp-package.md).
+
+The current-main Release gate passed 44 native checks with eight optional skips and
+clean formatting/Clippy. Unity 6000.6.6f1 / URP 17.6 built the validation player.
+RTSS-enabled Unity runs executed DLSS SR with active FSR3 FG and PCL markers on all
+three APIs. Follow-up runs also executed XeSS SR with active XeSS FG and FSR2 SR with
+active FSR3 FG. Repeated Editor Play and runtime provider changes resumed rendering.
+
+Corrections cover the shared Streamline owner, Play-session cleanup, RTSS's nested
+creation queue association, a stable engine latency handle, DX11's cached buffer-zero
+view and presentation queue, Vulkan window-thread coordination, and XeSS's 32-bit SDK
+frame counters. Explicit GPU checks passed 40 DX11 physical-copy pixels through
+provider changes and retained one latency handle across a wide-ID/session-epoch test.
+
+The UPM archive is built. The latest native DLL still awaits deployment to the open
+editor; it must close before its loaded file is replaced. Foreground DLSS-G/MFG,
+visible RTSS OSD and broad image-quality acceptance remain open. Stock URP reproduces
+the DX12 reduced-scale depth-backbuffer validation errors tracked as UUM-136054.
+This integration is in progress until the remaining live acceptance is completed.
 
 ## RTX 40 MFG unlock, 18 October 2026
 

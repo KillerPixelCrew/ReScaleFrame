@@ -31,7 +31,12 @@ bool hot = false;
 bool mixed = false;
 bool overlay = false;
 bool legacy_hot = false;
+bool flip11 = false;
+ComPtr<ID3D12Resource> flip_readback;
+uint64_t flip_capture_frame = 0;
 bool mfg_test = false;
+// Retain the provider through a Unity-style session epoch change as well as ids >32 bits.
+uint64_t source_frame() { return hot ? ((frame_id < 21 ? 1ull : 2ull) << 32) | frame_id : frame_id; }
 struct FocusTest {
     HWND previous = nullptr, window = nullptr;
     ULONGLONG started = 0;
@@ -53,8 +58,28 @@ void barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, D3D12_RES
 }
 void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_host*, void* session, uint32_t) {
     const auto* api = rsf_d3d11_present_provider();
-    if (!service && (!api || !session)) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
+    if (flip11) {
+        flip_capture_frame = frame_id;
+        auto* color = static_cast<ID3D12Resource*>(back);
+        if (!flip_readback) {
+            ComPtr<ID3D12Device> owner; color->GetDevice(IID_PPV_ARGS(&owner));
+            D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
+            D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = 256; desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if (FAILED(owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flip_readback)))) { accepted = false; return; }
+        }
+        D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = color; source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = flip_readback.Get(); target.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        target.PlacedFootprint.Footprint = {DXGI_FORMAT_R8G8B8A8_UNORM, 1, 1, 1, 256};
+        D3D12_BOX pixel{0, 0, 0, 1, 1, 1};
+        barrier(list, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->CopyTextureRegion(&target, 0, 0, 0, &source, &pixel);
+        barrier(list, color, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+    }
+    if (!service && (!api || !session)) return;
     rsf_fg_options options{sizeof(options), RSF_FG_ABI_VERSION, RSF_FG_FIXED, 1, 0, RSF_REFLEX_OFF, 0};
     if (!service) accepted &= api->configure(session, &options) == RSF_BACKEND_OK;
     auto* heap = gpu_heap.Get(); list->SetDescriptorHeaps(1, &heap);
@@ -67,7 +92,7 @@ void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_hos
         gpu.ptr += stride; cpu.ptr += stride;
     }
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = 1; record.frame_id = frame_id; record.resource_generation = 1;
+    record.session_id = 1; record.frame_id = source_frame(); record.resource_generation = 1;
     record.view_id = 1;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now); record.input_qpc = uint64_t(now.QuadPart);
     record.phase = RSF_PHASE_UI_COMPLETE; record.screen = RSF_SCREEN_FLIGHT;
@@ -127,9 +152,9 @@ void latency(void*, const rsf_observer_present_event* event) {
     const auto* api = rsf_d3d11_present_provider(); auto* session = rsf_d3d11_present_session();
     if (!api || !session) return;
     if (!event->completed) {
-        accepted &= api->marker(session, RSF_LATENCY_RENDER_SUBMIT_END, frame_id, 0) == RSF_BACKEND_OK;
-        accepted &= api->marker(session, RSF_LATENCY_PRESENT_START, frame_id, 0) == RSF_BACKEND_OK;
-    } else accepted &= api->marker(session, RSF_LATENCY_PRESENT_END, frame_id, 0) == RSF_BACKEND_OK;
+        accepted &= api->marker(session, RSF_LATENCY_RENDER_SUBMIT_END, source_frame(), 0) == RSF_BACKEND_OK;
+        accepted &= api->marker(session, RSF_LATENCY_PRESENT_START, source_frame(), 0) == RSF_BACKEND_OK;
+    } else accepted &= api->marker(session, RSF_LATENCY_PRESENT_END, source_frame(), 0) == RSF_BACKEND_OK;
 }
 void retire(void*, void* session) {
     const auto* api = rsf_d3d11_present_provider(); rsf_fg_status status{}; status.struct_size = sizeof(status);
@@ -155,7 +180,8 @@ int main(int argc, char** argv) {
     mixed = std::strcmp(argv[4], "12-mixed") == 0 || overlay;
     mfg_test = std::strcmp(argv[4], "12-mfg") == 0;
     hot = std::strcmp(argv[4], "12-hot") == 0 || mixed || mfg_test;
-    legacy_hot = std::strcmp(argv[4], "11-hot") == 0;
+    flip11 = std::strcmp(argv[4], "11-flip") == 0;
+    legacy_hot = std::strcmp(argv[4], "11-hot") == 0 || flip11;
     service = hot || std::strcmp(argv[4], "12-service") == 0;
     const bool native = std::strcmp(argv[4], "11") != 0 && !legacy_hot;
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter;
@@ -215,11 +241,29 @@ int main(int argc, char** argv) {
     }
     DXGI_SWAP_CHAIN_DESC desc{}; desc.BufferDesc.Width = mixed ? 2560u : 1280u; desc.BufferDesc.Height = mixed ? 1600u : 720u;
     desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.SampleDesc.Count = 1;
-    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.BufferCount = native ? 3u : 1u;
-    desc.OutputWindow = window; desc.Windowed = TRUE; desc.SwapEffect = native ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_DISCARD;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.BufferCount = native || flip11 ? 3u : 1u;
+    desc.OutputWindow = window; desc.Windowed = TRUE; desc.SwapEffect = native || flip11 ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_DISCARD;
+    if (hot && native) desc.Flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     ComPtr<IDXGISwapChain> chain;
     if (FAILED(factory->CreateSwapChain(producer, &desc, &chain))) return 1;
     if (!rsf_d3d11_present_has_owner()) { std::puts("SKIP: provider refused, original engine chain retained"); return 77; }
+    // The first engine query prepares the deferred provider outside the factory callback.
+    ComPtr<IDXGISwapChain2> latency_chain;
+    if (FAILED(chain.As(&latency_chain))) return 1;
+    DXGI_SWAP_CHAIN_DESC1 created{};
+    if (FAILED(latency_chain->GetDesc1(&created))) return 1;
+    ComPtr<ID3D11RenderTargetView> cached_rtv;
+    if (flip11) {
+        ComPtr<ID3D11Texture2D> back;
+        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&back))) ||
+            FAILED(device11->CreateRenderTargetView(back.Get(), nullptr, &cached_rtv))) return 1;
+    }
+    HANDLE application_wait = nullptr;
+    if (hot && native) {
+        if (FAILED(latency_chain->SetMaximumFrameLatency(1))) return 1;
+        application_wait = latency_chain->GetFrameLatencyWaitableObject();
+        if (!application_wait) return 1;
+    }
     if (backend == RSF_FG_BACKEND_AUTO) {
         const auto expected = rsf_fg_default_backend(vendor, 0);
         if (rsf_d3d11_present_backend() != expected || (expected && !rsf_d3d11_present_session())) {
@@ -334,6 +378,10 @@ int main(int argc, char** argv) {
             rsf_native_fg_options changed{sizeof(changed), frame_id == 90 ? RSF_FG_OFF : RSF_FG_FIXED, generated, RSF_REFLEX_ON, 0, 0};
             rsf_fg12_options(&changed);
         }
+        // Keep exactly the same engine handle across Off, FSR, XeSS and DLSS replacement.
+        if (application_wait && WaitForSingleObject(application_wait, 10000) != WAIT_OBJECT_0) {
+            std::printf("FAIL: retained application latency handle stalled at frame %llu\n", static_cast<unsigned long long>(frame_id)); return 1;
+        }
         const auto current_backend = rsf_d3d11_present_backend();
         const auto capability_epoch = rsf_d3d11_present_generation();
         session = rsf_d3d11_present_session();
@@ -341,7 +389,7 @@ int main(int argc, char** argv) {
             for (auto stage : {RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_PACING, RSF_GAME_CPU_INPUT_SAMPLE,
                 RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END}) {
                 LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-                rsf_game_cpu_event event{sizeof(event), stage, 1, frame_id, uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, 0, 0};
+                rsf_game_cpu_event event{sizeof(event), stage, 1, source_frame(), uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, 0, 0};
                 rsf_fg12_cpu(&event);
             }
             ComPtr<IDXGISwapChain3> chain3; if (FAILED(chain.As(&chain3))) return 1;
@@ -353,9 +401,9 @@ int main(int argc, char** argv) {
             if (overlay) barrier(source_list.Get(), back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
             if (FAILED(source_list->Close())) return 1;
             ID3D12CommandList* commands[]{source_list.Get()}; queue->ExecuteCommandLists(1, commands);
-            if (hot || frame_id != 11) rsf_fg12_submitted(1, frame_id);
+            if (hot || frame_id != 11) rsf_fg12_submitted(1, source_frame());
             rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
-            pass.native_frame = pass.source_frame_id = frame_id; pass.view_key = !hot && frame_id == 10 ? 2u : 1u; pass.swapchain = chain.Get();
+            pass.native_frame = pass.source_frame_id = source_frame(); pass.view_key = !hot && frame_id == 10 ? 2u : 1u; pass.swapchain = chain.Get();
             std::thread render_callback([&pass] { rsf_fg12_window(&pass); });
             render_callback.join();
             if (overlay) {
@@ -378,6 +426,11 @@ int main(int argc, char** argv) {
             for (auto marker : {RSF_LATENCY_SIMULATION_START, RSF_LATENCY_SIMULATION_END, RSF_LATENCY_RENDER_SUBMIT_START})
                 accepted &= legacy_hot ? rsf_d3d11_present_marker(rsf_d3d11_present_generation(), frame_id, marker, 0) == RSF_BACKEND_OK :
                     api->marker(session, marker, frame_id, 0) == RSF_BACKEND_OK;
+        }
+        if (flip11) {
+            // DX11 keeps this view across Present; it does not select a DX12-style index.
+            const float color[]{float(frame_id % 2), 0.5f, 0.25f, 1};
+            context11->ClearRenderTargetView(cached_rtv.Get(), color);
         }
         const auto presented = chain->Present(0, 0);
         if (FAILED(presented)) {
@@ -447,9 +500,34 @@ int main(int argc, char** argv) {
                 if (mfg_test && frame_id == 114) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
             }
         }
-        auto* native_queue = static_cast<ID3D12CommandQueue*>(graphics.queue);
+        auto* native_queue = static_cast<ID3D12CommandQueue*>(flip11 ? rsf_d3d11_present_queue() : graphics.queue);
         if (FAILED(native_queue->Signal(fence.Get(), frame_id)) || FAILED(fence->SetEventOnCompletion(frame_id, done)) ||
             WaitForSingleObject(done, 10000) != WAIT_OBJECT_0) return 1;
+        if (flip11) {
+            unsigned char* pixel = nullptr; D3D12_RANGE read{0, 4};
+            if (!flip_readback || FAILED(flip_readback->Map(0, &read, reinterpret_cast<void**>(&pixel)))) return 1;
+            const bool matches = pixel[0] == (frame_id % 2 ? 255 : 0) && pixel[1] >= 127 && pixel[1] <= 128 &&
+                pixel[2] >= 63 && pixel[2] <= 64 && pixel[3] == 255;
+            if (!matches) std::printf("FAIL: DX11 cached-view frame %llu presented RGBA=%u,%u,%u,%u\n",
+                static_cast<unsigned long long>(frame_id), pixel[0], pixel[1], pixel[2], pixel[3]);
+            D3D12_RANGE written{0, 0}; flip_readback->Unmap(0, &written);
+            if (!matches) {
+                ComPtr<ID3D11Resource> resource; cached_rtv->GetResource(&resource);
+                ComPtr<ID3D11Texture2D> source; resource.As(&source);
+                D3D11_TEXTURE2D_DESC staging_desc{}; source->GetDesc(&staging_desc);
+                staging_desc.Usage = D3D11_USAGE_STAGING; staging_desc.BindFlags = staging_desc.MiscFlags = 0; staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                ComPtr<ID3D11Texture2D> staging;
+                if (SUCCEEDED(device11->CreateTexture2D(&staging_desc, nullptr, &staging))) {
+                    context11->CopyResource(staging.Get(), source.Get()); D3D11_MAPPED_SUBRESOURCE mapped{};
+                    if (SUCCEEDED(context11->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                        const auto* input = static_cast<const unsigned char*>(mapped.pData);
+                        std::printf("source RGBA=%u,%u,%u,%u callback=%llu\n", input[0], input[1], input[2], input[3],
+                            static_cast<unsigned long long>(flip_capture_frame)); context11->Unmap(staging.Get(), 0);
+                    }
+                }
+                return 1;
+            }
+        }
     }
     rsf_fg_status status{}; status.struct_size = sizeof(status);
     if (mfg_test) {
@@ -471,6 +549,8 @@ int main(int argc, char** argv) {
         backend, native ? 12u : 11u, status.version_name, accepted, static_cast<unsigned long long>(observed_active),
         static_cast<unsigned long long>(status.generated_callbacks), static_cast<unsigned long long>(status.total_presented));
     CloseHandle(done);
+    if (flip11) std::puts("PASS: DX11 cached buffer-zero view reached every physical presentation");
+    if (application_wait) { CloseHandle(application_wait); std::puts("PASS: one application latency handle survived provider transitions"); }
     rsf_sr12_destroy(dlss_sr);
     if (overlay) rsf_overlay_d3d12_stop();
     if (debug) {

@@ -4,6 +4,7 @@
 #include <new>
 #include <mutex>
 #include <cstring>
+#include <array>
 #if defined(RSF_HAVE_XESS_FG)
 #include <xess_fg/xefg_swapchain_d3d12.h>
 #include <xell/xell_d3d12.h>
@@ -38,6 +39,9 @@ struct XegSession {
     rsf_fg_status state{};
     rsf_fg_options options{};
     uint64_t last_begin = 0;
+    struct FrameId { uint64_t source = 0; uint32_t sdk = 0; };
+    std::array<FrameId, 128> frame_ids;
+    uint32_t sdk_frame = 0;
     uint32_t reserved = 0;
     bool history_valid = false;
     uint64_t last_prepare = 0;
@@ -147,20 +151,25 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 rsf_backend_result begin(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (id > UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto& self = *static_cast<XegSession*>(pointer);
     std::lock_guard<std::mutex> lock(self.latency_guard);
     if (id <= self.last_begin) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto result = self.sleep(self.xell, static_cast<uint32_t>(id));
-    if (result == XELL_RESULT_SUCCESS) self.last_begin = id;
+    // Engine identities include session epochs. XeLL and XeFG share a 32-bit local
+    // counter, so translate at the provider boundary instead of truncating epochs.
+    if (self.sdk_frame == UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
+    const uint32_t sdk = ++self.sdk_frame;
+    const auto result = self.sleep(self.xell, sdk);
+    if (result == XELL_RESULT_SUCCESS) { self.last_begin = id; self.frame_ids[id % self.frame_ids.size()] = {id, sdk}; }
     return result == XELL_RESULT_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t)
 {
-    if (!pointer || !id || id > UINT32_MAX || marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!pointer || !id || marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<XegSession*>(pointer);
     std::lock_guard<std::mutex> lock(self.latency_guard);
-    return self.marker(self.xell, static_cast<uint32_t>(id), static_cast<xell_latency_marker_type_t>(marker)) == XELL_RESULT_SUCCESS ?
+    const auto frame = self.frame_ids[id % self.frame_ids.size()];
+    if (frame.source != id) return RSF_BACKEND_ERROR_NOT_READY;
+    return self.marker(self.xell, frame.sdk, static_cast<xell_latency_marker_type_t>(marker)) == XELL_RESULT_SUCCESS ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
@@ -169,9 +178,13 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
     auto& self = *static_cast<XegSession*>(pointer);
     auto result = rsf::fg_frame(frame, self.device.Get()); if (result != 0) return result;
     const uint64_t id = frame->record->frame_id;
-    if (id > UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     if (!self.chain || id <= self.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
-    if (self.present_id(self.context, static_cast<uint32_t>(id)) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+    uint32_t sdk = 0;
+    { std::lock_guard<std::mutex> lock(self.latency_guard);
+      const auto mapped = self.frame_ids[id % self.frame_ids.size()];
+      if (mapped.source != id) return RSF_BACKEND_ERROR_NOT_READY;
+      sdk = mapped.sdk; }
+    if (self.present_id(self.context, sdk) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (!frame->interpolate || self.options.mode == RSF_FG_OFF) {
         self.state.active = 0;
@@ -201,10 +214,10 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
         data.resourceBase = {resources[i]->x, resources[i]->y}; data.resourceSize = {resources[i]->width, resources[i]->height};
         data.pResource = static_cast<ID3D12Resource*>(resources[i]->resource);
         data.incomingState = static_cast<D3D12_RESOURCE_STATES>(resources[i]->state);
-        if (self.tag(self.context, static_cast<ID3D12CommandList*>(list), static_cast<uint32_t>(id), &data) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        if (self.tag(self.context, static_cast<ID3D12CommandList*>(list), sdk, &data) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
-    if (self.constants(self.context, static_cast<uint32_t>(id), &constants) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
+    if (self.constants(self.context, sdk, &constants) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
         self.enabled(self.context, self.options.mode != RSF_FG_OFF) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     self.last_prepare = id; self.history_valid = true; self.state.active = 0;

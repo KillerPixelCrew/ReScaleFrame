@@ -1,0 +1,12 @@
+{
+  "name": "com.kpc.rescaleframe",
+  "version": "0.1.0",
+  "displayName": "ReScaleFrame",
+  "description": "Shared super resolution, frame generation and latency integration for Unity projects.",
+  "unity": "6000.6",
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "17.6.0"
+  },
+  "license": "GPL-3.0-only",
+  "samples": [{"displayName": "Temporal Demo", "description": "Animated URP scene and runtime SR, FG and latency controls.", "path": "Samples~/TemporalDemo"}]
+}

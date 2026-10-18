@@ -216,6 +216,10 @@ void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 {
     if (!context) return;
 #if RSF_HAVE_STREAMLINE
+    if (context->free_resources && context->module) {
+        const sl::ViewportHandle viewport(context->shared_host ? 1u : 0u);
+        (void)context->free_resources(sl::kFeatureDLSS, viewport);
+    }
     if (context->initialized && context->shutdown) context->shutdown();
 #endif
     if (context->module && !context->shared_host) FreeLibrary(context->module);
