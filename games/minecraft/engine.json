@@ -12,5 +12,5 @@
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",
-  "evidence": "1.1.4 reconstruction and 1.1.8 Iris world-geometry restoration accepted by the human. 1.1.9 depth allocation and Complementary temporal cloud sampling built, 30 checks passed and deployed; live acceptance pending. Physical controller, displayed FG and complete GPU motion coverage remain separate."
+  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry and 1.1.9 Complementary stationary-cloud correction accepted by the human. 30 Java/GPU checks pass. Physical controller, displayed FG and complete GPU motion coverage remain separate."
 }

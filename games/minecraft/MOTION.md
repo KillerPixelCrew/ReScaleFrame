@@ -127,3 +127,10 @@ stencil allocations remain explicitly packed. The native depth conversion still 
 display formats. All 30 checks and the 1.1.9-dev JAR build pass. Installed SHA256:
 `38bf7b6131b7f850714031c26bee374a0fe6bac02a53ea0a4853a29610c1d5da`.
 Static-cloud convergence and the remaining depth error require the corrected live run.
+
+The human confirms the 1.1.9-dev correction works and authorizes release as 1.1.9. The latest
+modpack log records the owned world depth as DEPTH32F, including the switch from the display's
+DEPTH32F_STENCIL8 and later resizing. No incomplete-framebuffer or depth-format mismatch messages
+occur in that run. This establishes the reported world/cloud correction, not complete motion
+coverage for arbitrary shader packs or Create machinery. The release changes version metadata
+and documentation; runtime classes and native payload must match the accepted development JAR.

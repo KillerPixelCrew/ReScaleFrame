@@ -80,6 +80,11 @@ and preserves Complementary's frame-varying atmospheric sampling while its TAA/j
 All 30 checks pass and the JAR is deployed. Static-cloud convergence and the remaining depth
 error are awaiting the new live run. The general motion goal remains paused.
 
+The human accepts the 1.1.9-dev world/cloud correction and requests its release as Minecraft
+1.1.9. The accepted log shows explicit DEPTH32F world storage and no incomplete-framebuffer or
+depth-format mismatch messages. Release packaging changes version metadata/documentation only;
+runtime classes and bundled native files are compared against the accepted development JAR.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity
