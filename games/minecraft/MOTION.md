@@ -67,9 +67,8 @@ discard and GL error state. Identity tests cover physical slot migration/reuse, 
 resets and model/topology changes. This is synthetic GPU evidence, not modpack visual acceptance.
 
 Live mixin binding, Complementary shader compilation, moving Create machines, runtime pack/provider
-switches and resizing still require the modpack run. Shader-deformed entities/particles need
-further producers. Iris hands and Sodium terrain/water are implemented below but await their
-live run. Geometry/tessellation
+switches and resizing still require the modpack run. Iris hands, Sodium terrain/water and buffered
+actors/particles have GPU producers below but await their live run. Geometry/tessellation
 shader pipelines are not implemented by this vertex/fragment replay. No claim of full shader-pack
 motion coverage is made.
 
@@ -238,3 +237,44 @@ all 27 native entries match the current installed JAR byte for byte. Candidate S
 Deployment still awaits the
 pending Prism launch dialog. Hand/particle acceptance and shader-deformed actor coverage remain
 open; geometry/tessellation stages are still outside the current replay implementation.
+
+## Buffered actor and particle GPU motion, 18 October 2026
+
+The 1.1.15-dev producer carries the existing object/material identity through BufferBuilder's
+real vertex slots into MeshData. CapturingConsumer establishes a thread-local emission context;
+the builder hook records physical vertex ordinals and logical ownership, including duplicated
+line/strip vertices. Sorting index buffers leaves this parallel identity map intact. Metadata
+belongs to that frame and mesh, is consumed at BufferUploader's real draw scope, and is removed
+on mesh close. Shader IDs separate histories for different programs drawing the same object.
+
+The existing GPU replay retains final deformed clip positions, UV, color and frame tags. A shared
+actor vertex buffer grows through an ordered GPU copy so early-flushed draws survive later
+submissions. Current/previous addresses follow object-local ordinals rather than buffer position
+or draw order. The merge reads integer per-pixel object IDs and a final per-object validity table:
+late changes to logical/physical vertex counts or submitted vertex membership invalidate earlier
+draws of that object too. Invalid correspondence emits reactive current data and zero object motion.
+CPU replay is skipped only when all logical vertices have GPU coverage. Uncaptured submissions
+retain the existing CPU path. Actor buffers, maps and shader records retire with their owners.
+
+The contracts come from the generated NeoForge 21.1.262 BufferBuilder/MeshData/BufferUploader
+sources, Iris SegmentedBufferBuilder and its strip-duplication mixin at the revision above.
+This is a parallel identity map; the source vertex format and normal color shaders are unchanged.
+The private motion framebuffer gains an R32UI object-ID attachment. Texture-buffer bindings and
+Minecraft's active-unit cache are restored alongside the existing GL state.
+
+All 43 Java/GPU checks and JAR packaging pass. The new real-GL test exercises the production
+emission/mesh/draw/merge helpers with object order and index order changes, post-transform shader
+animation, a topology change after an early flush, and subsequent history-buffer growth. It
+checks retained motion in the next frame and avoids CPU replay over fully captured GPU geometry.
+A separate check covers low/high texture-buffer bindings and cached active-unit restoration.
+The fixture supplies builder callbacks explicitly; it does not prove live mixin binding.
+
+Candidate SHA256: `dd97b8d0277a6a08dc7d84aee72ea278186a0c551752104917d3b5d201c29694`.
+The candidate is installed with the matching hash, retaining the cached 1.1.11-dev filename
+while Prism remains at its Low free memory dialog. Minecraft was confirmed closed before and
+after staging; the atomic replacement backed up 1.1.14-dev under
+rescaleframecraft-backups/20261018-104335-pending-path. The native payload is unchanged from
+1.1.14-dev. Live particle/item appearance, all new mixin
+bindings, Create machinery and shader transitions still need the modpack run. Custom renderers
+that bypass these buffered submissions need separate producers. Geometry/tessellation stages
+and shader programs with external storage side effects are outside this replay contract.

@@ -28,8 +28,9 @@ frames, then samples each original colour once. Repeatedly filtering colour
 between cache ages spreads thin foliage into a trail, so this port avoids that
 feedback. Available raw samples are averaged; resolved output never enters history.
 
-Camera reprojection covers static terrain and celestial sky. Previous CPU
-vertices supply entity, block-entity and particle motion; vanilla and Sodium
+Camera reprojection covers static terrain and celestial sky. Buffered entities, block entities
+and particles have final GPU vertex history, with CPU replay retained for uncaptured submissions.
+Vanilla and Sodium
 clouds use their actual cached mesh transforms, and rain/snow use their submitted
 vertices. Re-uploading a cloud mesh invalidates its previous geometry even when
 Sodium reuses the same vertex buffer. Replay matches the source depth precision.

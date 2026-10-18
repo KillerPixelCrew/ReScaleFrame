@@ -17,8 +17,9 @@ public final class GpuMotion {
     private static TemporalCamera camera;
     private static Group current;
     private static long serial;
-    private static boolean active,immediate;
-    private static int fbo,motion,depth,plane,testDepth,width,height,depthFormat,draws,meshOffset,meshOverride=-1;
+    private static boolean active,immediate,actor;
+    private static GpuHistoryBuffer validity;
+    private static int fbo,motion,depth,plane,actorIds,testDepth,width,height,depthFormat,draws,meshOffset,meshOverride=-1;
     private GpuMotion() {}
 
     static final class Group implements AutoCloseable {
@@ -47,7 +48,7 @@ public final class GpuMotion {
     }
     public static void begin(TemporalCamera view,int sourceDepth) {
         camera=view;serial++;if((int)serial==0) {release();serial++;}
-        active=GL.getCapabilities().OpenGL43;draws=0;current=null;immediate=false;
+        active=GL.getCapabilities().OpenGL43;draws=0;current=null;immediate=false;actor=false;
         if(!active)return;
         if(camera.reset)for(var group:groups.values()) {group.identities.clear();group.frame=-1;}
         int format=sourceDepthFormat(sourceDepth);
@@ -55,15 +56,16 @@ public final class GpuMotion {
         int oldDraw=GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         boolean scissor=GL11.glIsEnabled(GL11.GL_SCISSOR_TEST),write=GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         try(var stack=MemoryStack.stackPush()) {
-            var mask=stack.malloc(12);
-            for(int i=0;i<3;i++) {mask.position(i*4);GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,i,mask);}
+            var mask=stack.malloc(16);
+            for(int i=0;i<4;i++) {mask.position(i*4);GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,i,mask);}
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            for(int i=0;i<3;i++)GL30.glColorMaski(i,true,true,true,true);GL11.glDepthMask(true);
+            for(int i=0;i<4;i++)GL30.glColorMaski(i,true,true,true,true);GL11.glDepthMask(true);
             GL30.glClearBufferfv(GL11.GL_COLOR,0,new float[]{0,0,1,-1});
             GL30.glClearBufferfv(GL11.GL_COLOR,1,new float[]{1,0,0,0});
             GL30.glClearBufferfv(GL11.GL_COLOR,2,new float[]{0,0,0,0});
+            GL30.glClearBufferuiv(GL11.GL_COLOR,3,new int[]{0,0,0,0});
             GL30.glClearBufferfv(GL11.GL_DEPTH,0,new float[]{view.reversedDepth?0:1});
-            for(int i=0;i<3;i++)GL30.glColorMaski(i,mask.get(i*4)!=0,mask.get(i*4+1)!=0,mask.get(i*4+2)!=0,mask.get(i*4+3)!=0);
+            for(int i=0;i<4;i++)GL30.glColorMaski(i,mask.get(i*4)!=0,mask.get(i*4+1)!=0,mask.get(i*4+2)!=0,mask.get(i*4+3)!=0);
         } finally {
             GL11.glDepthMask(write);if(scissor)GL11.glEnable(GL11.GL_SCISSOR_TEST);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,oldDraw);
@@ -84,11 +86,14 @@ public final class GpuMotion {
         scoped(group,original);
     }
     static void scoped(Group group,Runnable original) {
-        Group saved=current;int savedOffset=meshOffset,savedOverride=meshOverride;boolean savedImmediate=immediate;
-        select(group,0,-1);immediate=true;
-        try {original.run();} finally {select(saved,savedOffset,savedOverride);immediate=savedImmediate;}
+        scoped(group,false,original);
     }
-    public static void drawImmediate(Runnable original) {if(immediate)draw(original);else original.run();}
+    static void scoped(Group group,boolean actors,Runnable original) {
+        Group saved=current;int savedOffset=meshOffset,savedOverride=meshOverride;boolean savedImmediate=immediate,savedActor=actor;
+        select(group,0,-1);immediate=true;actor=actors;
+        try {original.run();} finally {select(saved,savedOffset,savedOverride);immediate=savedImmediate;actor=savedActor;}
+    }
+    public static void drawImmediate(Runnable original) {if(ActorMotion.drawing())ActorMotion.draw(original);else if(immediate)draw(original);else original.run();}
     public static void draw(Runnable original) {
         original.run();
         if(!active||current==null||current.vertexCount==0||IrisState.shadowPass())return;
@@ -106,11 +111,13 @@ public final class GpuMotion {
         int func=GL11.glGetInteger(GL11.GL_DEPTH_FUNC);boolean test=GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean write=GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         try(var stack=MemoryStack.stackPush()) {
-            var mask0=stack.malloc(4);var mask1=stack.malloc(4);var mask2=stack.malloc(4);var oldTextures=stack.mallocInt(3);
+            var mask0=stack.malloc(4);var mask1=stack.malloc(4);var mask2=stack.malloc(4);var mask3=stack.malloc(4);var oldTextures=stack.mallocInt(3);
             GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,0,mask0);GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,1,mask1);
             GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,2,mask2);
+            GL30.glGetBooleani_v(GL11.GL_COLOR_WRITEMASK,3,mask3);
             boolean blend0=GL30.glIsEnabledi(GL11.GL_BLEND,0),blend1=GL30.glIsEnabledi(GL11.GL_BLEND,1);
             boolean blend2=GL30.glIsEnabledi(GL11.GL_BLEND,2);
+            boolean blend3=GL30.glIsEnabledi(GL11.GL_BLEND,3);
             int bound=0;
             try {
                 program.bind();
@@ -123,20 +130,24 @@ public final class GpuMotion {
                 program.unsigned("_rfc_instancedMeshOffset",meshOffset);program.integer("_rfc_meshOverride",meshOverride);
                 program.vector("_rfc_renderSize",width,height);program.vector("_rfc_currentJitter",camera.jitter.x,camera.jitter.y);
                 program.integer("_rfc_reversedDepth",camera.reversedDepth?1:0);
-                program.integer("_rfc_useDepthDecode",program.immediate&&!program.terrain?1:0);
+                program.integer("_rfc_actorVertices",actor?1:0);
+                program.integer("_rfc_useDepthDecode",program.immediate&&!program.terrain&&!actor?1:0);
                 program.vector("_rfc_depthDecode",camera.previousDepthDecode.x,camera.previousDepthDecode.y);
                 GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
                 GL11.glEnable(GL11.GL_DEPTH_TEST);GL11.glDepthFunc(camera.reversedDepth?GL11.GL_GEQUAL:GL11.GL_LEQUAL);
                 GL11.glDepthMask(true);GL30.glDisablei(GL11.GL_BLEND,0);GL30.glDisablei(GL11.GL_BLEND,1);
                 GL30.glDisablei(GL11.GL_BLEND,2);GL30.glColorMaski(2,true,true,true,true);
+                GL30.glDisablei(GL11.GL_BLEND,3);GL30.glColorMaski(3,true,true,true,true);
                 GL30.glColorMaski(0,true,true,true,true);GL30.glColorMaski(1,true,true,true,true);
                 original.run();draws++;
             } finally {
                 GL30.glColorMaski(0,mask0.get(0)!=0,mask0.get(1)!=0,mask0.get(2)!=0,mask0.get(3)!=0);
                 GL30.glColorMaski(1,mask1.get(0)!=0,mask1.get(1)!=0,mask1.get(2)!=0,mask1.get(3)!=0);
                 GL30.glColorMaski(2,mask2.get(0)!=0,mask2.get(1)!=0,mask2.get(2)!=0,mask2.get(3)!=0);
+                GL30.glColorMaski(3,mask3.get(0)!=0,mask3.get(1)!=0,mask3.get(2)!=0,mask3.get(3)!=0);
                 if(blend0)GL30.glEnablei(GL11.GL_BLEND,0);if(blend1)GL30.glEnablei(GL11.GL_BLEND,1);
                 if(blend2)GL30.glEnablei(GL11.GL_BLEND,2);
+                if(blend3)GL30.glEnablei(GL11.GL_BLEND,3);
                 for(int i=0;i<bound;i++) {GL13.glActiveTexture(GL13.GL_TEXTURE0+program.textureUnits[i]);GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER,oldTextures.get(i));}
                 GL13.glActiveTexture(activeTexture);
                 if(storage!=0&&storageSize>0)GL30.glBindBufferRange(GL43.GL_SHADER_STORAGE_BUFFER,program.storageBinding,storage,storageStart,storageSize);
@@ -157,11 +168,15 @@ public final class GpuMotion {
     public static int motion() {return motion;}
     public static int depth() {return depth;}
     public static int plane() {return plane;}
+    public static int actorIds() {return actorIds;}
+    public static int actorValidity() {return validity==null?0:validity.texture();}
+    static void actorValidity(IntBuffer flags) {if(validity==null)validity=new GpuHistoryBuffer(GL30.GL_R32UI);validity.upload(flags);}
     public static boolean present() {return draws>0;}
-    public static void forget(int source) {var program=programs.remove(source);if(program!=null)program.close();}
+    public static void forget(int source) {var program=programs.remove(source);if(program!=null)program.close();ActorMotion.forget(source);}
     public static void release() {
         active=false;current=null;draws=0;
         groups.values().forEach(Group::close);groups.clear();programs.values().forEach(MotionProgram::close);programs.clear();deleteTargets();
+        if(validity!=null) {validity.close();validity=null;}ActorMotion.clear();
     }
     private static int sourceDepthFormat(int sourceDepth) {
         int texture=GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
@@ -176,22 +191,24 @@ public final class GpuMotion {
         deleteTargets();width=camera.width();height=camera.height();depthFormat=format;
         fbo=GL30.glGenFramebuffers();GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,fbo);
         motion=texture(GL30.GL_RGBA16F,GL11.GL_RGBA);depth=texture(GL30.GL_R32F,GL11.GL_RED);plane=texture(GL30.GL_RG16F,GL30.GL_RG);testDepth=texture(format,GL11.GL_DEPTH_COMPONENT);
+        actorIds=texture(GL30.GL_R32UI,GL30.GL_RED_INTEGER);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,motion,0);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT1,GL11.GL_TEXTURE_2D,depth,0);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT2,GL11.GL_TEXTURE_2D,plane,0);
+        GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT3,GL11.GL_TEXTURE_2D,actorIds,0);
         GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,testDepth,0);
-        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2});
+        GL20.glDrawBuffers(new int[]{GL30.GL_COLOR_ATTACHMENT0,GL30.GL_COLOR_ATTACHMENT1,GL30.GL_COLOR_ATTACHMENT2,GL30.GL_COLOR_ATTACHMENT3});
         if(GL30.glCheckFramebufferStatus(GL30.GL_DRAW_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE)throw new IllegalStateException("Incomplete GPU motion framebuffer");
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,old);GL11.glBindTexture(GL11.GL_TEXTURE_2D,texture);
     }
     private static int texture(int format,int external) {
         int texture=GL11.glGenTextures();GL11.glBindTexture(GL11.GL_TEXTURE_2D,texture);
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,format,width,height,0,external,GL11.GL_FLOAT,0L);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,format,width,height,0,external,format==GL30.GL_R32UI?GL11.GL_UNSIGNED_INT:GL11.GL_FLOAT,0L);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D,GL11.GL_TEXTURE_MIN_FILTER,GL11.GL_NEAREST);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D,GL11.GL_TEXTURE_MAG_FILTER,GL11.GL_NEAREST);return texture;
     }
     private static void deleteTargets() {
-        GL11.glDeleteTextures(motion);GL11.glDeleteTextures(depth);GL11.glDeleteTextures(plane);GL11.glDeleteTextures(testDepth);if(fbo!=0)GL30.glDeleteFramebuffers(fbo);
-        motion=depth=plane=testDepth=fbo=width=height=0;
+        GL11.glDeleteTextures(motion);GL11.glDeleteTextures(depth);GL11.glDeleteTextures(plane);GL11.glDeleteTextures(actorIds);GL11.glDeleteTextures(testDepth);if(fbo!=0)GL30.glDeleteFramebuffers(fbo);
+        motion=depth=plane=actorIds=testDepth=fbo=width=height=0;
     }
 }

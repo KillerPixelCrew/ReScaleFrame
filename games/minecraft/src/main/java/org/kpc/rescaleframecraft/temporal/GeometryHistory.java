@@ -6,6 +6,8 @@ import com.mojang.blaze3d.vertex.VertexFormatElement;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
+import org.kpc.rescaleframecraft.render.flywheel.ActorMotion;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,12 +20,15 @@ public final class GeometryHistory {
         public final RenderType type;
         public float[] current=new float[1024], previous=new float[1024];
         public int size,previousSize;
+        public int gpuVertices;
+        public final BitSet gpuDrawn=new BitSet();
+        public boolean gpuCaptured;
         public long frame=-1,previousFrame=-1;
         Batch(RenderType type) { this.type=type; }
         void begin(long nextFrame) {
             if(frame==nextFrame)return;
             float[] old=previous;previous=current;current=old;
-            previousSize=size;previousFrame=frame;size=0;frame=nextFrame;
+            previousSize=size;previousFrame=frame;size=0;frame=nextFrame;gpuVertices=0;gpuDrawn.clear();gpuCaptured=false;
         }
         int vertex(float x,float y,float z) {
             if(size+STRIDE>current.length)current=Arrays.copyOf(current,current.length*2);
@@ -82,7 +87,7 @@ public final class GeometryHistory {
         private int vertex=-1;
         CapturingConsumer(VertexConsumer delegate,Batch batch) { this.delegate=delegate;this.batch=batch; }
         @Override public VertexConsumer addVertex(float x,float y,float z) {
-            delegate.addVertex(x,y,z);vertex=batch.vertex(x,y,z);return this;
+            ActorMotion.emit(batch,batch.vertices(),delegate,x,y,z);vertex=batch.vertex(x,y,z);return this;
         }
         @Override public VertexConsumer setColor(int r,int g,int b,int a) {
             delegate.setColor(r,g,b,a);

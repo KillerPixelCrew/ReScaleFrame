@@ -24,7 +24,7 @@ final class GlState implements AutoCloseable {
     private final boolean[] colorMask=new boolean[4];
     private final int depthFunc=GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
     private final int[] viewport=new int[4];
-    private final int[] textures=new int[16],samplers=new int[16];
+    private final int[] textures=new int[16],buffers=new int[16],samplers=new int[16];
     private final int[] shaderTextures=new int[16];
     private final ShaderInstance shader=RenderSystem.getShader();
     private final Matrix4f textureMatrix=new Matrix4f(RenderSystem.getTextureMatrix());
@@ -46,6 +46,7 @@ final class GlState implements AutoCloseable {
         for(int i=0;i<16;i++) {
             GL13.glActiveTexture(GL13.GL_TEXTURE0+i);
             textures[i]=GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            buffers[i]=GL11.glGetInteger(GL31.GL_TEXTURE_BINDING_BUFFER);
             samplers[i]=GL30.glGetIntegeri(GL33.GL_SAMPLER_BINDING,i);
             shaderTextures[i]=RenderSystem.getShaderTexture(i);
         }
@@ -80,13 +81,15 @@ final class GlState implements AutoCloseable {
             // Reconfiguration may retire a texture captured on entry. New names
             // are allocated before old names are released, so a retired snapshot
             // cannot accidentally alias the replacement.
-            int shaderTexture=shaderTextures[i],texture=textures[i];
+            int shaderTexture=shaderTextures[i],texture=textures[i],buffer=buffers[i];
             if(retiringResources) {
                 if(shaderTexture!=0&&!GL11.glIsTexture(shaderTexture))shaderTexture=0;
                 if(texture!=0&&!GL11.glIsTexture(texture))texture=0;
+                if(buffer!=0&&!GL11.glIsTexture(buffer))buffer=0;
             }
             RenderSystem.setShaderTexture(i,shaderTexture);
             TextureUnits.bind(i,texture);
+            TextureUnits.buffer(i,buffer);
             GL33.glBindSampler(i,samplers[i]);
         }
         RenderSystem.activeTexture(active);

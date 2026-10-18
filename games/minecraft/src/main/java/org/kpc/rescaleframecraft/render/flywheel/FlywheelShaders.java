@@ -36,6 +36,8 @@ public final class FlywheelShaders {
                 VERTEX_SETUP
                 _rfc_originalMain();
                 POST_VERTEX_SETUP
+                _rfc_actorBatch=0u;
+                if(_rfc_actorVertices) _rfc_instanceIndex=uint(gl_VertexID);
                 _rfc_currentUv=CURRENT_UV;
                 _rfc_currentColor=CURRENT_COLOR;
                 _rfc_historyValid=0.0;
@@ -44,7 +46,11 @@ public final class FlywheelShaders {
                 _rfc_previousColor=_rfc_currentColor;
                 if (_rfc_instanceIndex>=uint(textureSize(_rfc_instanceMap))) return;
                 uvec2 addresses=texelFetch(_rfc_instanceMap,int(_rfc_instanceIndex)).rg;
-                uint vertex=_rfc_meshOffset+VERTEX_ID;
+                if(_rfc_actorVertices) {
+                    if(addresses.y==0xffffffffu)return;
+                    _rfc_actorBatch=texelFetch(_rfc_drawMeshes,gl_VertexID).r;
+                }
+                uint vertex=_rfc_actorVertices?0u:_rfc_meshOffset+VERTEX_ID;
                 if (addresses.x!=0u) {
                     int previous=int(addresses.x-1u+vertex)*2;
                     uvec4 state=previous>=0 && previous+1<textureSize(_rfc_previousVertices)
@@ -86,6 +92,7 @@ public final class FlywheelShaders {
             uniform uint _rfc_instancedMeshOffset;
             uniform vec2 _rfc_currentJitter;
             uniform vec2 _rfc_renderSize;
+            uniform bool _rfc_actorVertices;
             uint _rfc_instanceIndex;
             uint _rfc_meshOffset;
             out vec4 _rfc_previousClip;
@@ -94,6 +101,7 @@ public final class FlywheelShaders {
             out vec2 _rfc_currentUv;
             out vec4 _rfc_currentColor;
             out float _rfc_historyValid;
+            flat out uint _rfc_actorBatch;
             layout(std430,binding=STORAGE_BINDING) coherent buffer RfcVertexHistory { uint _rfc_vertices[]; };
             """.replace("STORAGE_BINDING",Integer.toString(storageBinding));
         return insertHeader(source,header);
@@ -123,6 +131,7 @@ public final class FlywheelShaders {
                 _rfc_plane=invertible?vec2(dz.x*dy.y-dz.y*dx.y,dx.x*dz.y-dy.x*dz.x)/determinant:vec2(0.0);
                 if(any(isnan(_rfc_plane))||any(isinf(_rfc_plane))||any(greaterThan(abs(_rfc_plane),vec2(65504.0)))) {_rfc_plane=vec2(0.0);invertible=false;}
                 _rfc_originalMain();
+                if(_rfc_actorVertices&&_rfc_actorBatch==0u)discard;
                 float alpha=ALPHA_EXPRESSION;
                 if (alpha<0.01) discard;
                 float windowDepth=WINDOW_DEPTH;
@@ -138,6 +147,7 @@ public final class FlywheelShaders {
                 } else reactive=1.0;
                 _rfc_motion=vec4(delta,reactive,_rfc_previousClip.w>0.000001 ? max(oldInverse,0.0) : 0.0);
                 _rfc_depth=depth;
+                _rfc_actorId=_rfc_actorBatch;
             }
             """.replace("WINDOW_DEPTH",writesDepth?"gl_FragDepth":"gl_FragCoord.z")
                 .replace("ALPHA_EXPRESSION",alphaExpression.replace("gl_FragData","_rfc_originalFragData").replace("gl_FragColor","_rfc_originalFragColor"))+source.substring(main[1]);
@@ -148,6 +158,7 @@ public final class FlywheelShaders {
             uniform vec2 _rfc_currentJitter;
             uniform bool _rfc_reversedDepth;
             uniform bool _rfc_useDepthDecode;
+            uniform bool _rfc_actorVertices;
             uniform vec2 _rfc_depthDecode;
             in vec4 _rfc_previousClip;
             in vec2 _rfc_previousUv;
@@ -155,9 +166,11 @@ public final class FlywheelShaders {
             in vec2 _rfc_currentUv;
             in vec4 _rfc_currentColor;
             in float _rfc_historyValid;
+            flat in uint _rfc_actorBatch;
             layout(location=0) out vec4 _rfc_motion;
             layout(location=1) out float _rfc_depth;
             layout(location=2) out vec2 _rfc_plane;
+            layout(location=3) out uint _rfc_actorId;
             """);
     }
     private static String identifier(String source,String from,String to) {return source.replaceAll("\\b"+Pattern.quote(from)+"\\b",to);}

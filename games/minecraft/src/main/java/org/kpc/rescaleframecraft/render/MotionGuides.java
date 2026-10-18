@@ -60,10 +60,13 @@ final class MotionGuides implements AutoCloseable {
             mergeFlywheel.use();mergeFlywheel.integer("capturedMotion",0);mergeFlywheel.integer("capturedDepth",1);mergeFlywheel.integer("capturedPlane",2);
             TextureUnits.bind(0,GpuMotion.motion());TextureUnits.bind(1,GpuMotion.depth());
             TextureUnits.bind(2,GpuMotion.plane());GL33.glBindSampler(2,0);
+            mergeFlywheel.integer("capturedActors",3);mergeFlywheel.integer("actorValidity",4);
+            TextureUnits.bind(3,GpuMotion.actorIds());TextureUnits.buffer(4,GpuMotion.actorValidity());
+            GL33.glBindSampler(3,0);GL33.glBindSampler(4,0);
             GL33.glBindSampler(0,0);GL33.glBindSampler(1,0);GL30.glBindVertexArray(vao);
             GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
         }
-        for(GeometryHistory.Batch batch:draws)render(batch,camera);
+        for(GeometryHistory.Batch batch:draws)if(!batch.gpuCaptured)render(batch,camera);
         if(cloud.present(camera.frame)) {
             bind();RenderSystem.enableDepthTest();RenderSystem.depthFunc(GL11.GL_LEQUAL);RenderSystem.depthMask(true);
             RenderSystem.disableCull();RenderSystem.disableBlend();RenderSystem.colorMask(true,true,true,true);

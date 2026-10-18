@@ -30,6 +30,17 @@ class TemporalGpuTest {
         System.out.println("Production-shader GPU harness: "+GL11.glGetString(GL11.GL_RENDERER)+" / "+GL11.glGetString(GL11.GL_VERSION));
     }
     @AfterAll void close() { GLFW.glfwDestroyWindow(window);GLFW.glfwTerminate(); }
+    @Test void bufferTexturesAndCachedActiveUnitSurviveTheTemporalPass() {
+        int low=GL11.glGenTextures(),high=GL11.glGenTextures(),temporary=GL11.glGenTextures();
+        try(var original=new GlState()) {
+            TextureUnits.buffer(11,low);TextureUnits.buffer(15,high);RenderSystem.activeTexture(GL13.GL_TEXTURE11);
+            try(var state=new GlState()) {TextureUnits.buffer(11,temporary);TextureUnits.buffer(15,temporary);TextureUnits.buffer(4,temporary);}
+            assertEquals(GL13.GL_TEXTURE11,GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
+            assertEquals(low,GL11.glGetInteger(GL31.GL_TEXTURE_BINDING_BUFFER));
+            GL13.glActiveTexture(GL13.GL_TEXTURE15);assertEquals(high,GL11.glGetInteger(GL31.GL_TEXTURE_BINDING_BUFFER));GL13.glActiveTexture(GL13.GL_TEXTURE11);
+            assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+        } finally {GL11.glDeleteTextures(low);GL11.glDeleteTextures(high);GL11.glDeleteTextures(temporary);}
+    }
     @Test void allShippedProgramsLink() {
         try(var cache=new GlProgram("fullscreen.vert","taa-accumulate.frag");
             var resolve=new GlProgram("fullscreen.vert","taa-output.frag");

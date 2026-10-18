@@ -146,6 +146,15 @@ game is closed, preserving Prism's cached 1.1.11-dev filename and backing up the
 the internal version is 1.1.14-dev. Live/UI acceptance remains held by the launcher dialog.
 [Details](../games/minecraft/NATIVE.md).
 
+Minecraft 1.1.15-dev adds final GPU vertex history for buffered entities, block entities and
+particles. Per-vertex object identities survive batch/index ordering; GPU growth preserves early
+submissions, and final topology checks invalidate an object's earlier draws when necessary.
+Complete GPU coverage suppresses the corresponding CPU replay. All 43 Java/GPU checks and JAR
+packaging pass; the native payload is unchanged. Live mixin/visual acceptance remains open.
+The candidate is atomically installed in the closed instance with its hash verified, preserving
+Prism's cached filename and backing up 1.1.14-dev. Its low-memory dialog still awaits acknowledgement.
+[Producer contracts and limitations](../games/minecraft/MOTION.md).
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

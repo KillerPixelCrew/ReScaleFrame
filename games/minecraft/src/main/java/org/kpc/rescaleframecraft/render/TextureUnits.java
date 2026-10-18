@@ -6,6 +6,11 @@ import org.lwjgl.opengl.*;
 
 final class TextureUnits {
     private TextureUnits() {}
+    static void buffer(int unit,int texture) {
+        if(unit<12)RenderSystem.activeTexture(GL13.GL_TEXTURE0+unit);else GL13.glActiveTexture(GL13.GL_TEXTURE0+unit);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER,texture);
+        if(unit>=12)GL13.glActiveTexture(GlStateManager._getActiveTexture());
+    }
     static void bind(int unit,int texture) {
         if(unit<12) {
             RenderSystem.activeTexture(GL13.GL_TEXTURE0+unit);RenderSystem.bindTexture(texture);

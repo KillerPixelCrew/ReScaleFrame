@@ -12,6 +12,7 @@ import org.kpc.rescaleframecraft.temporal.CloudHistory;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
 import org.kpc.rescaleframecraft.render.flywheel.GpuMotion;
 import org.kpc.rescaleframecraft.render.flywheel.HandMotion;
+import org.kpc.rescaleframecraft.render.flywheel.ActorMotion;
 import org.kpc.rescaleframecraft.render.flywheel.IrisState;
 import net.neoforged.fml.ModList;
 import org.lwjgl.opengl.*;
@@ -67,6 +68,7 @@ public final class TemporalRenderer {
         RenderSystem.setProjectionMatrix(projection,VertexSorting.DISTANCE_TO_ORIGIN);
         GEOMETRY.begin(CAMERA.frame);active=true;
         HandMotion.beginFrame();GpuMotion.begin(CAMERA,target.getDepthTextureId());
+        ActorMotion.begin(CAMERA.reset);
     }
     public static void finish() {
         if(!active)return;
@@ -75,7 +77,7 @@ public final class TemporalRenderer {
         try(var state=new GlState()) {
             state.fullscreen();
             initialize();
-            GpuMotion.end();HandMotion.endFrame();
+            ActorMotion.end();GpuMotion.end();HandMotion.endFrame();
             if(!nativeSr&&TaaSettings.current.enabled)history.resize(target.viewWidth,target.viewHeight);
             motion.resize(target.viewWidth,target.viewHeight);
             motion.produce(target,CAMERA,GEOMETRY.finish(),CLOUDS);

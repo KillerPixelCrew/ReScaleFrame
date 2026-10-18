@@ -9,9 +9,9 @@
   "device": "D3D12 on the OpenGL context's exact adapter LUID",
   "transfer": "EXT_memory_object_win32 resources and EXT_semaphore_win32 GPU timeline fence",
   "presentation": "Framework-owned DXGI chain on an input-transparent child of the GLFW HWND, replacing the GL buffer swap",
-  "motion": "Dense unjittered camera motion plus CPU geometry, particle, weather and Sodium cloud replay; Flywheel/Colorwheel, Iris hands and Sodium/Iris terrain-water final GPU vertex history, pending live acceptance",
+  "motion": "Dense unjittered camera motion, weather/cloud replay and CPU replay for uncaptured draws; final GPU vertex histories for Flywheel/Colorwheel, Iris hands, Sodium terrain/water and buffered actors/particles, pending live acceptance",
   "units_to_meters": 1,
   "project_id": "11e3ed7f-06c6-4863-a54d-2b790f2176f2",
   "input": "Minecraft keyboard/mouse callbacks, optional Controlify 3.0.1 LTS and Controllable 0.25.4 sampling hooks; GLFW-owner PCL message observation",
-  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 41 Java/GPU checks pass. 1.1.14 with particle/item visibility, Iris hand/terrain producers and runtime FG slider limits is installed under the cached 1.1.11-dev filename; launcher acknowledgement and live acceptance remain pending. Physical controller, displayed FG and complete GPU motion coverage remain separate."
+  "evidence": "1.1.4 reconstruction, 1.1.8 Iris world geometry, 1.1.9 Complementary stationary clouds and 1.1.10 DH appearance accepted by the human. All 43 Java/GPU checks pass. 1.1.15 with buffered actor/particle GPU motion is installed under the cached 1.1.11-dev filename; launcher acknowledgement and live acceptance remain pending. Physical controller, displayed FG and complete GPU motion coverage remain separate."
 }
