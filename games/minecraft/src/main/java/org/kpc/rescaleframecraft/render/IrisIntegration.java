@@ -18,8 +18,9 @@ public final class IrisIntegration {
         var settings=TaaSettings.current;
         return settings.enabled||settings.upscaler!=TaaSettings.Upscaler.OFF||settings.frameGeneration!=TaaSettings.FrameGeneration.OFF;
     }
-    public static synchronized OptionValues runtimeOptions(OptionValues original) {
-        if(!ownsTemporal())return original;
+    public static OptionValues runtimeOptions(OptionValues original) {return runtimeOptions(original,ownsTemporal());}
+    static synchronized OptionValues runtimeOptions(OptionValues original,boolean owner) {
+        if(!owner)return original;
         return effective.computeIfAbsent(original,options->{
             var result=options.mutableCopy();
             // Complementary exposes TAA_DEFINE; other named boolean options are changed only if declared.

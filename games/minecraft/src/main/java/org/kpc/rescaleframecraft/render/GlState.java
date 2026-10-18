@@ -19,6 +19,7 @@ final class GlState implements AutoCloseable {
     private final boolean blend=GL11.glIsEnabled(GL11.GL_BLEND);
     private final boolean cull=GL11.glIsEnabled(GL11.GL_CULL_FACE);
     private final boolean scissor=GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
+    private final boolean stencil=GL11.glIsEnabled(GL11.GL_STENCIL_TEST);
     private final boolean depthMask=GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
     private final boolean[] colorMask=new boolean[4];
     private final int depthFunc=GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
@@ -55,6 +56,7 @@ final class GlState implements AutoCloseable {
         RenderSystem.disableBlend();RenderSystem.disableCull();
         RenderSystem.colorMask(true,true,true,true);
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_STENCIL_TEST);
     }
     @Override public void close() {
         GL20.glUseProgram(program);GL30.glBindVertexArray(vao);
@@ -73,6 +75,7 @@ final class GlState implements AutoCloseable {
         RenderSystem.depthMask(depthMask);RenderSystem.depthFunc(depthFunc);
         RenderSystem.colorMask(colorMask[0],colorMask[1],colorMask[2],colorMask[3]);
         if(scissor)GL11.glEnable(GL11.GL_SCISSOR_TEST);else GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        if(stencil)GL11.glEnable(GL11.GL_STENCIL_TEST);else GL11.glDisable(GL11.GL_STENCIL_TEST);
         for(int i=0;i<16;i++) {
             // Reconfiguration may retire a texture captured on entry. New names
             // are allocated before old names are released, so a retired snapshot

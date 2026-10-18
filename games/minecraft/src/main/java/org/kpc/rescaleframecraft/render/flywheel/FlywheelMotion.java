@@ -209,7 +209,8 @@ public final class FlywheelMotion {
         }
     }
     public static void end() {
-        if(active)GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT|GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+        if(!active)return;
+        GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT|GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
         active=false;current=null;
         groups.entrySet().removeIf(entry->{if(entry.getValue().frame==serial)return false;entry.getValue().close();return true;});
     }

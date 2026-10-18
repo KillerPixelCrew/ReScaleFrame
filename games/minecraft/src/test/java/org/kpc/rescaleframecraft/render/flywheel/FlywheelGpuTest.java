@@ -26,7 +26,13 @@ class FlywheelGpuTest {
     }
     @AfterAll void close() {GL43.glDebugMessageCallback(null,0);debug.free();GLFW.glfwDestroyWindow(window);GLFW.glfwTerminate();}
     @Test void finalShaderDeformationUsesCapturedVerticesAndPreservesCutout() {
-        int source=link("""
+        checkDeformation(false);
+    }
+    @Test void colorwheelUsesActualPackOutputAlphaAndKeepsConservativeDepthDeclaration() {
+        checkDeformation(true);
+    }
+    private void checkDeformation(boolean colorwheel) {
+        String vertex="""
             #version 430 core
             layout(location=0) in vec2 Position;
             uniform float translation;
@@ -47,11 +53,13 @@ class FlywheelGpuTest {
                 gl_Position.x+=animation;
                 gl_Position.xy+=jitter/32.0;
             }
-            ""","""
+            """;
+        String fragment="""
             #version 430 core
             in vec2 flw_vertexTexCoord;
             in vec4 flw_vertexColor;
-            vec4 flw_fragColor;
+            vec4 flw_fragColor=vec4(0.0);
+            layout(depth_greater) out float gl_FragDepth;
             layout(location=0) out vec4 originalColor;
             layout(location=1) out vec4 auxiliaryColor;
             void main() {
@@ -60,7 +68,10 @@ class FlywheelGpuTest {
                 originalColor=vec4(0.2,0.4,0.6,1.0);
                 auxiliaryColor=vec4(1.0);
             }
-            """);
+            """;
+        if(colorwheel)fragment=fragment.replace("void main()","void _clrwl_shader_main()")
+            .replace("flw_fragColor=flw_vertexColor;","")+"\nvoid main() { _clrwl_shader_main(); }\n";
+        int source=link(vertex,fragment);
         int vao=GL30.glGenVertexArrays(),vbo=GL15.glGenBuffers(),ebo=GL15.glGenBuffers(),fbo=GL30.glGenFramebuffers();
         int motion=texture(GL30.GL_RGBA32F),depth=texture(GL30.GL_R32F);
         GL30.glBindVertexArray(vao);GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER,vbo);

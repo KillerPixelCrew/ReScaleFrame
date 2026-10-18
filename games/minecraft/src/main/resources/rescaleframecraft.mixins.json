@@ -13,6 +13,7 @@
     "flywheel.FlywheelMeshDrawMixin", "flywheel.FlywheelProgramMixin",
     "flywheel.FlywheelCrumblingMixin", "flywheel.FlywheelCrumblingDrawMixin", "flywheel.FlywheelViewportMixin",
     "flywheel.IrisPipelineMixin", "flywheel.IrisOptionsMixin",
+    "flywheel.IrisRenderTargetsMixin", "flywheel.IrisFramebufferMixin",
     "EntityRenderDispatcherMixin", "BlockEntityRenderDispatcherMixin",
     "ParticleEngineMixin", "ShaderInstanceAccessor", "SodiumCloudRendererMixin", "VertexBufferMixin"
   ],

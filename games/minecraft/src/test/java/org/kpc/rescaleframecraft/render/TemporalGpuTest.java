@@ -41,6 +41,37 @@ class TemporalGpuTest {
             assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
         }
     }
+    @Test void depthCopyConvertsPackedFormatsWithoutTouchingColorOrStencil() {
+        var source=new TextureTarget(16,16,true,false);var destination=new TextureTarget(64,64,true,false);
+        int vertexArray=GL30.glGenVertexArrays();
+        try(var state=new GlState();var program=new GlProgram("fullscreen.vert","copy-depth.frag")) {
+            state.fullscreen();
+            TextureUnits.bind(0,source.getDepthTextureId());
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_DEPTH_COMPONENT32F,16,16,0,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,0L);
+            source.bindWrite(true);RenderSystem.depthMask(true);GL11.glClearDepth(.375);GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+            TextureUnits.bind(0,destination.getDepthTextureId());
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D,0,GL30.GL_DEPTH24_STENCIL8,64,64,0,GL30.GL_DEPTH_STENCIL,GL30.GL_UNSIGNED_INT_24_8,0L);
+            destination.bindWrite(true);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_DEPTH_STENCIL_ATTACHMENT,GL11.GL_TEXTURE_2D,destination.getDepthTextureId(),0);
+            assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE,GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
+            RenderSystem.colorMask(true,true,true,true);GL11.glClearColor(.25f,.5f,.75f,1);GL11.glClearStencil(37);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT|GL11.GL_DEPTH_BUFFER_BIT|GL11.GL_STENCIL_BUFFER_BIT);
+            NativeRenderer.copyDepth(source,destination,program,vertexArray);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,destination.frameBufferId);
+            float[] depth=new float[1],color=new float[4];int[] stencil=new int[1];
+            GL11.glReadPixels(32,32,1,1,GL11.GL_DEPTH_COMPONENT,GL11.GL_FLOAT,depth);
+            GL11.glReadPixels(32,32,1,1,GL11.GL_RGBA,GL11.GL_FLOAT,color);
+            GL11.glReadPixels(32,32,1,1,GL11.GL_STENCIL_INDEX,GL11.GL_UNSIGNED_INT,stencil);
+            assertEquals(.375,depth[0],.000001);assertEquals(.25,color[0],.005);assertEquals(37,stencil[0]);
+            // Match the Iris attachment transition: a pure-depth replacement must
+            // retire the preceding packed stencil image before it is attached.
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER,destination.frameBufferId);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_STENCIL_ATTACHMENT,GL11.GL_TEXTURE_2D,0,0);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER,GL30.GL_DEPTH_ATTACHMENT,GL11.GL_TEXTURE_2D,source.getDepthTextureId(),0);
+            assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE,GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
+            assertEquals(GL11.GL_NO_ERROR,GL11.glGetError());
+        } finally {source.destroyBuffers();destination.destroyBuffers();GL30.glDeleteVertexArrays(vertexArray);}
+    }
     @Test void rawEightFrameWindowAndReset() {
         var target=new TextureTarget(64,64,true,false);
         var camera=new TemporalCamera();var world=new Object();

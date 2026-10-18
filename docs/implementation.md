@@ -68,6 +68,12 @@ excludes shadow history and coordinates effective TAA ownership. Java compilatio
 pass, including a real offscreen OpenGL deformation/cutout test. Live shader-pack acceptance and
 other missing motion producers remain open. [Source contracts and proof limits](../games/minecraft/MOTION.md).
 
+The 1.1.7-dev live shader run exposed missing world geometry, incomplete Iris framebuffers and
+depth-format mismatches. The 1.1.8-dev correction reattaches depth by image identity and format,
+retires stale stencil attachments and converts world/display depth through a shader pass.
+All 29 Java/GPU checks pass, including D32F-to-D24S8 depth copying with color/stencil preservation.
+The corrected JAR is deployed with a matching hash; live world acceptance remains pending.
+
 Imported the accepted local mod into `games/minecraft`; native texture sharing, vendor execution
 and DXGI presentation use the shared runtime. The game adapter produces dense camera/geometry
 motion, scales the world render target, resolves before hand/HUD and carries input frame identity

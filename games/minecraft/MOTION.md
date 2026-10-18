@@ -61,7 +61,7 @@ Stored shader preferences remain intact and runtime ownership changes reload the
 
 ## Validation and open coverage
 
-The Java build and 26 checks pass, including an invisible real OpenGL 4.3 test on Intel UHD 770.
+The Java build and 29 checks pass, including invisible real OpenGL tests on Intel UHD 770.
 It verifies instance translation plus subsequent shader deformation, changing jitter, cutout
 discard and GL error state. Identity tests cover physical slot migration/reuse, missed frames,
 resets and model/topology changes. This is synthetic GPU evidence, not modpack visual acceptance.
@@ -71,3 +71,29 @@ switches and resizing still require the modpack run. General Iris waving terrain
 hand motion and shader-deformed entities/particles need further producers. Geometry/tessellation
 shader pipelines are not implemented by this vertex/fragment replay. No claim of full shader-pack
 motion coverage is made.
+
+## Missing shader-world geometry correction, 18 October 2026
+
+The 1.1.7-dev modpack run reached the world but showed only shader sky and HUD. Its log reports
+GL_INVALID_FRAMEBUFFER_OPERATION and depth-format mismatches. Startup, linking and synthetic
+motion evidence did not establish a working Iris scene and are not treated as acceptance.
+
+The installed Iris bytecode confirms RenderTargets.resizeIfNeeded compares only its cached
+per-RenderTarget depth version before replacing the depth texture. The native adapter alternates
+display and world RenderTarget objects; equal local versions can identify different depth images.
+The 1.1.8-dev hook also checks texture identity and format, forcing Iris's existing reattachment
+path on a change. Iris framebuffers clear a preceding packed stencil attachment before installing
+the next depth attachment. This avoids leaving incompatible depth and stencil images together.
+FinalPassRenderer already checks both color ID and version and requires no corresponding patch.
+
+Native world-to-display depth transfer now draws sampled depth through the destination format
+instead of using a GL depth blit, which requires identical depth formats. Temporal fullscreen
+passes disable and restore inherited stencil testing. Pack retirement invalidates temporal history.
+
+The production depth-copy GPU regression transfers D32F depth into a larger D24S8 target, verifies
+the expected depth and unchanged color/stencil, then checks packed-to-pure attachment completeness.
+Iris-option tests verify effective TAA overrides, unchanged preferences and numeric/boolean types.
+The Colorwheel fixture checks the actual pack output alpha and conservative-depth declarations.
+All 29 checks and the 1.1.8-dev JAR build pass. Installed SHA256:
+`a7077cd894ab6e87b7811014316baa3d0400ecfc10379add07663f09ac08cca6`.
+World geometry, shader switching and resizing still require the corrected modpack run.

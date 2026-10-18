@@ -25,7 +25,7 @@ public final class NativeRenderer {
     private static RenderTarget display;
     private static TextureTarget world;
     private static boolean worldRendering;
-    private static GlProgram guides;
+    private static GlProgram guides,copyDepth;
     private static int framebuffer,readFramebuffer,vao;
     private static int displayDepth,frameDisplayWidth,frameDisplayHeight;
     private static int acceptedWidth,lastResult,refusedFrames;
@@ -89,6 +89,7 @@ public final class NativeRenderer {
                     handle=NativeBridge.open(parent,surfaceWindow,root.toString());
                     if(handle==0)throw new IllegalStateException("Native device/presentation initialization refused; see minecraft-native.log");
                     guides=new GlProgram("fullscreen.vert","native-guides.frag");
+                    copyDepth=new GlProgram("fullscreen.vert","copy-depth.frag");
                     framebuffer=GL30.glGenFramebuffers();readFramebuffer=GL30.glGenFramebuffers();vao=GL30.glGenVertexArrays();
                 }
                 var replacement=NativeBridge.configure(handle,display.viewWidth,display.viewHeight,s.upscaler.id,s.quality.ordinal(),s.dlssPreset.id,s.frameGeneration.id,
@@ -150,7 +151,7 @@ public final class NativeRenderer {
         worldRendering=false;
         if(result==0&&nativeStatus[1]!=0)copyTexture(surfaces[7],display,true);
         else blit(source,display,GL11.GL_COLOR_BUFFER_BIT,GL11.GL_LINEAR);
-        blit(source,display,GL11.GL_DEPTH_BUFFER_BIT,GL11.GL_NEAREST);
+        copyDepth(source,display,copyDepth,vao);
         if(result!=0) {
             status="Native evaluate failed: "+result;
             if(result!=lastResult||refusedFrames++<4||refusedFrames%600==0)ReScaleFrameCraft.LOGGER.error("Native evaluate refused frame {}: {}, near={}, far={}, fov={}, dt={}",frame,result,cameraData.get(84),cameraData.get(85),cameraData.get(86),cameraData.get(87));
@@ -197,6 +198,19 @@ public final class NativeRenderer {
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,source.frameBufferId);GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,target.frameBufferId);
         GL30.glBlitFramebuffer(0,0,source.viewWidth,source.viewHeight,0,0,target.viewWidth,target.viewHeight,mask,filter);
     }
+    static void copyDepth(RenderTarget source,RenderTarget destination,GlProgram program,int vertexArray) {
+        // Iris/other mods can enable packed stencil on the display target while
+        // the scaled world target has depth only. GL depth blits require identical
+        // formats; a depth draw converts through the destination's actual format.
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER,destination.frameBufferId);
+        RenderSystem.viewport(0,0,destination.viewWidth,destination.viewHeight);
+        RenderSystem.enableDepthTest();RenderSystem.depthFunc(GL11.GL_ALWAYS);RenderSystem.depthMask(true);
+        RenderSystem.colorMask(false,false,false,false);
+        program.use();program.integer("sourceDepth",0);program.vector2("destinationSize",destination.viewWidth,destination.viewHeight);
+        TextureUnits.bind(0,source.getDepthTextureId());GL33.glBindSampler(0,0);GL30.glBindVertexArray(vertexArray);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
+        RenderSystem.colorMask(true,true,true,true);RenderSystem.disableDepthTest();RenderSystem.depthMask(false);
+    }
     public static void restoreDisplay() {if(display!=null&&handle!=0&&surfaces!=null) {worldRendering=false;display.bindWrite(true);}}
     public static boolean present() {
         if(handle==0||surfaces==null)return false;
@@ -229,6 +243,7 @@ public final class NativeRenderer {
         if(surfaceWindow!=0) {NativeBridge.destroySurface(surfaceWindow);surfaceWindow=0;}
         if(world!=null) {world.destroyBuffers();world=null;}
         if(guides!=null) {guides.close();guides=null;}
+        if(copyDepth!=null) {copyDepth.close();copyDepth=null;}
         if(framebuffer!=0)GL30.glDeleteFramebuffers(framebuffer);
         if(readFramebuffer!=0)GL30.glDeleteFramebuffers(readFramebuffer);
         if(vao!=0)GL30.glDeleteVertexArrays(vao);
