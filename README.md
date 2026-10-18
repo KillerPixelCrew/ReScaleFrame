@@ -1,96 +1,123 @@
-# ReScaleFrame
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/ReScaleFrame-logo-transparent.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/branding/ReScaleFrame-logo-black-transparent.svg">
+    <img src="assets/branding/ReScaleFrame-logo.svg" alt="ReScaleFrame" width="600">
+  </picture>
+</p>
 
-**A framework for engine-aware upscaling, frame generation and latency integration.**
+<h1 align="center">ReScaleFrame</h1>
 
-ReScaleFrame connects game-specific rendering hooks to a shared native runtime. Each game
-integration finds the right scene data and puts the processed result back into the engine's frame.
-The runtime handles the vendor SDKs, graphics resources, settings and presentation.
+<p align="center"><strong>Engine-aware upscaling, frame generation and latency integration.</strong></p>
 
-The goal is to share that infrastructure across games and GPU vendors while keeping each game's
-rendering rules in its own integration. A [KillerPixelCrew](https://github.com/KillerPixelCrew) project.
+<p align="center">
+  <a href="https://github.com/KillerPixelCrew/ReScaleFrame/releases">Downloads</a> ·
+  <a href="#games-and-downloads">Games</a> ·
+  <a href="#build-and-contribute">Build and contribute</a> ·
+  <a href="https://github.com/KillerPixelCrew/ReScaleFrame/issues">Report an issue</a>
+</p>
 
-## Current status
+ReScaleFrame brings DLSS, FSR and XeSS into games through integrations that understand the
+engine's rendering pipeline. Each integration supplies scene colour, depth, motion and the
+right composition boundaries. A shared native runtime handles vendor SDKs, graphics resources,
+settings and presentation.
 
-**Ace Combat 7 is the first working integration.** Its engine-owned upscaling path and corrected
-wing/cloud rendering are accepted in game, with full-resolution UI and the in-game settings overlay.
-The AC7 proxy loads the game plugin and shared runtime services.
+A [KillerPixelCrew](https://github.com/KillerPixelCrew) project.
 
-| Area | Status |
-| --- | --- |
-| DLSS Super Resolution / DLAA | Working in AC7 |
-| Game detection and native SDK | Game ABI 13 with lifecycle, CPU events and renderer callbacks; AC7 and Unity Mono paths implemented; Project Wingman has a native temporal graph observer |
-| Frame generation and latency | Current source implements DLSS-G, FSR3/4 FG, XeSS FG, Reflex/XeLL and live provider switching; AC7 DLSS-G and Unity corrections have user acceptance; broader hardware/scene and measured latency validation remain open |
-| FSR and XeSS | FSR 2/3/4 and XeSS SR available in AC7; optimized D3D11/D3D12 transfer; FSR 4 INT8 compatibility device-tested on RTX 4070 |
-| Standalone launcher and WSGM | Scaffolding and planned integration |
+## Games and downloads
 
-The published v0.1.0 AC7 ZIP provides SR and the overlay; it does not contain the later FG/Reflex
-work on `main`. Unity currently has local test packages, not a published release.
-See [current implementation and validation](docs/current-status.md) for evidence and remaining limits.
+Choose your game's package and guide. Requirements, available features and validation differ
+between integrations.
 
-For downloads, supported builds, installation and controls, see the relevant game's README:
-
-| Game | Availability | Guide |
+| Game | Available now | Download and guide |
 | --- | --- | --- |
-| Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
-| Project Wingman | Native carrier and desktop-tested temporal observer; GPU processing unsupported | [Project Wingman README](games/project-wingman/README.md) |
-| Drag'n Wash | Unity Mono DX12 SR, shared overlay and runtime FG switching in source/local test builds; Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
+| **Minecraft / ReScaleFrameCraft** | Minecraft 1.21.1, NeoForge and Sodium; temporal antialiasing, native reconstruction and independent frame-generation selection | [1.1.9 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/minecraft-v1.1.9) · [Installation and controls](games/minecraft/RELEASE.md) |
+| **Ace Combat 7** | Windows x64 SR release with DLSS/DLAA, FSR 2/3/4, XeSS and an in-game overlay | [0.1.0 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0) · [AC7 guide](games/ac7/README.md) |
+| **Drag'n Wash / Unity Mono** | SR, shared overlay and FG switching in source and local test builds | [Game guide](games/drag-n-wash/README.md) · [Unity adapter](games/unity-mono/README.md) |
+| **Project Wingman** | Game-tested desktop temporal-graph observer; GPU processing remains unimplemented | [Research and status](games/project-wingman/README.md) |
 
-[Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
-· [Implementation tracker](docs/implementation.md)
-· [Issues](https://github.com/KillerPixelCrew/ReScaleFrame/issues)
+**A source feature is not necessarily included in a published package.** AC7's published
+0.1.0 ZIP is SR-only and excludes the later FG/Reflex work on `main`. Unity packages remain
+local test builds. For Minecraft, the release guide describes 1.1.9; development notes also
+cover later changes.
 
-## How the framework is divided
+### Minecraft
 
-A game integration owns engine knowledge: executable fingerprints, hooks, camera data, motion-vector
-conventions, render resolution and composition boundaries. Vendor SDK code and presentation belong
-to the shared runtime. Loading that runtime is separate from activating a rendering pipeline.
+Install **Minecraft 1.21.1**, **NeoForge 21.1.262 or newer in the 21.1 line**, and
+**Sodium 0.8.13**. Java 21 or newer is required. Native reconstruction and FG need Windows x64,
+compatible OpenGL external Win32 memory/semaphore support and D3D12 on the same GPU.
 
-| Component | Responsibility |
-| --- | --- |
-| Bootstrap | Load the runtime into the game process |
-| Orchestrator | Select and prepare the game integration; own settings, vendor SDKs and shared graphics services |
-| Game integration | Detect the game, prepare the renderer, collect frame data and reinsert the result |
-| Game SDK | Keep the plugin/runtime boundary versioned and explicit through a C ABI |
-| Frontends | Configure sessions and show status through bounded IPC |
+1. Close Minecraft, remove older ReScaleFrameCraft JARs and disable MetalUpscaler.
+2. Download `rescaleframecraft-1.1.9.jar` from the release above and place it in the instance's `mods` folder.
+3. Launch normally. Native runtimes and their notices extract automatically.
+4. Open **Video Settings > ReScaleFrame**. **F8** opens temporal settings; **F3** shows processing status.
 
-The AC7 DirectInput carrier prepares the game plugin and links shared runtime objects into its
-proxy. The Unity version shim loads the runtime DLL and shared Mono plugin. Bootstrap and launcher
-remain scaffolds; frontend IPC is intended architecture rather than an implemented control route.
+SR provider, quality, FG provider/count and low-latency settings apply while running.
+Settings persist in `config/rescaleframecraft.json`. Reese's Sodium Options 2.2.4 is supported.
 
-Super resolution consumes scene colour before tonemapping. Frame generation needs a completed
-HUD-less image later in the frame. ReScaleFrame treats those as separate inputs and keeps frame/view
-identity, resource lifetime, colour space, motion and jitter conventions with the data. UI and
-translucency can keep their own resolution and composition paths.
+Version 1.1.9 adds Iris/Colorwheel improvements, Flywheel/Create motion history and DLSS model
+presets. Shader-pack behaviour and motion coverage still vary. This is a client mod.
+See the [release guide](games/minecraft/RELEASE.md), [native integration](games/minecraft/NATIVE.md)
+and [motion coverage](games/minecraft/MOTION.md).
 
-The standalone frontend is intended to work independently of WSGM. Neither frontend receives GPU
-textures or runs the game's graphics loop.
+### Ace Combat 7
 
-See the [design](docs/design.md), [architecture research](docs/research/architecture.md) and
-[vendor contracts](docs/research/vendor-fg-contracts.md) for the detailed boundaries and remaining work.
+The published package targets Steam AC7 on Windows 10/11 x64, tested executable build
+**9855922**.
 
-## Repository
+1. Close AC7 and download `ReScaleFrame-0.1.0-AC7-Windows-x64.zip`.
+2. Find `Ace7Game.exe` through Steam's **Manage > Browse local files**.
+3. Extract the complete package beside the executable.
+4. Launch normally and press **Insert** to choose the upscaler and quality preset.
 
-All first-party components live in this monorepo and share one release version.
+Menus, HUD and briefing render at output resolution. Native quality uses DLAA with DLSS.
+If another mod uses `dinput8.dll`, follow the [installation guide](docs/releases/ac7-install.md)
+before changing files; proxy chaining is unsupported.
 
-| Directory | Contents |
-| --- | --- |
-| [`loader/`](loader/) | Bootstrap, AC7 proxy and loading diagnostics |
-| [`runtime/orchestrator/`](runtime/orchestrator/) | Shared lifecycle and frame-processing coordination |
-| [`runtime/backends/`](runtime/backends/) | Vendor adapters and upscaling contracts |
-| [`runtime/graphics/`](runtime/graphics/) | Resource handling, observation, state restoration and composition |
-| [`runtime/presentation/`](runtime/presentation/) | Shared surfaces, synchronization and presentation work |
-| [`games/`](games/) | Game-specific integrations and their evidence |
-| [`sdk/game/`](sdk/game/) | Public native C ABI |
-| [`ui/overlay/`](ui/overlay/) | In-game settings overlay |
-| [`apps/launcher/`](apps/launcher/), [`integrations/wsgm/`](integrations/wsgm/) | Frontend work |
-| [`tests/`](tests/), [`tools/`](tools/), [`docs/`](docs/) | Verification, analysis tools and documentation |
+## Features and hardware
 
-## Build and verify
+- **Super resolution and antialiasing:** DLSS/DLAA, FSR and XeSS, with quality modes supplied by the selected SDK.
+- **Frame generation:** independent DLSS-G, FSR3/4 and XeSS FG selection in current integrations, with provider-specific limits and live replacement.
+- **Latency integration:** Reflex/PCL and XeLL services where supported by the host and provider.
+- **Engine-aware composition:** scene reconstruction and HUD-less FG inputs have separate boundaries, preserving UI composition.
+- **Runtime controls:** the shared Insert overlay for AC7/Unity and native Minecraft settings.
 
-Windows/MSVC is the reference platform. You need Visual Studio C++ tools, a Windows SDK, CMake,
-PowerShell and the Rust toolchain pinned in `rust-toolchain.toml`. Unity managed builds additionally
-need .NET, Unity native headers and the researched player's Managed assemblies; see
-[the Unity guide](games/unity-mono/README.md).
+DLSS requires supported NVIDIA RTX hardware. Other providers and generated-frame counts depend
+on the GPU, driver, SDK and game integration. FSR4 SR compatibility does not establish FSR4 FG
+support. Unsupported requests report their status; check the effective provider in the game's UI.
+
+Recorded acceptance covers particular builds, hardware and rendering paths. Higher presented FPS
+does not by itself establish lower latency or better frame pacing. AC7 has remaining lighting and
+motion-coverage work; Unity needs broader scene and hardware coverage; Minecraft has incomplete
+motion coverage for some shader-driven geometry. Project Wingman has no SR, FG, latency or VR
+processing.
+
+See [AC7/Unity runtime status and evidence](docs/current-status.md) and the game guides above.
+The native game-plugin APIs retain conservative `rendering_ready = 0` flags despite acceptance
+of individual AC7 and Unity paths.
+
+## How it works
+
+Game integrations own executable detection, hooks, camera and motion conventions, render
+resolution and output reinsertion. The shared runtime owns vendor contexts, plugin lifecycle,
+graphics interoperability and presentation. The [MIT Game SDK](sdk/game/) defines the versioned
+native C ABI between them.
+
+SR uses scene data before tonemapping or other integration-specific post-processing boundaries.
+FG uses a completed display-size frame and matching temporal inputs. Keeping those inputs
+separate lets UI and translucent effects retain their own composition paths.
+
+AC7 enters through a DirectInput carrier, Unity through a version shim, and Minecraft through
+its Java/native adapter. The standalone launcher and bootstrap remain scaffolds; WSGM and
+frontend IPC remain planned.
+
+[Design](docs/design.md) · [Architecture research](docs/research/architecture.md) ·
+[Vendor FG contracts](docs/research/vendor-fg-contracts.md)
+
+## Build and contribute
+
+Windows/MSVC is the reference native platform. Install Visual Studio C++ tools, a Windows SDK,
+CMake, PowerShell and the Rust toolchain pinned in `rust-toolchain.toml`.
 
 ```powershell
 ./eng/verify.ps1 -Configuration Release
@@ -98,38 +125,62 @@ cargo test --workspace --locked
 cargo build --release --locked -p rescaleframe-overlay
 ```
 
-Use `-VS2026` on the verification command if you have Visual Studio 2026 instead of 2022.
-Shared native outputs are written to `build/windows-x64/bin/Release`; the dedicated AC7 carrier is
-`build/windows-x64/ac7/bin/Release/dinput8.dll`. The Rust overlay is in `target/release`.
+Add `-VS2026` to the verification command for Visual Studio 2026; the default uses 2022.
+The gate builds and tests native code, checks version alignment and runs Rust formatting and
+Clippy. Rust tests run separately. Verification does not launch or modify a game.
 
-The verification gate builds and tests the native tree, checks Rust formatting and runs Clippy.
-Rust tests use the separate command above. Verification never launches a game or changes an
-installation.
+Shared native outputs land in `build/windows-x64/bin/Release`; the dedicated AC7 carrier is
+`build/windows-x64/ac7/bin/Release/dinput8.dll`. Rust outputs land in `target/release`.
 
-Vendor SDKs are optional local dependencies. A backend built without its SDK reports that it is
-unavailable. See [dependencies and packaging](docs/dependencies.md) and [tool setup](docs/tooling.md)
-for the expected versions and paths. A MinGW/Wine development route is also documented in
-[AGENTS.md](AGENTS.md); it does not replace Windows verification.
+Vendor SDKs are optional local dependencies. Builds without the relevant headers report that
+backend as unavailable. Unity also needs .NET, Unity native headers and the researched player's
+Managed assemblies. Minecraft requires its native staging and Gradle steps.
 
-## Development approach
+- [Repository instructions and cross-build route](AGENTS.md)
+- [Dependencies and packaging](docs/dependencies.md)
+- [Development tools](docs/tooling.md)
+- [Minecraft build instructions](games/minecraft/NATIVE.md)
+- [Unity build instructions](games/unity-mono/README.md)
+- [Implementation tracker](docs/implementation.md)
 
-Rendering support is established from engine behaviour and captures. A matching executable hash
-only identifies a build; it does not prove that its hooks or rendering path work.
+Contributions should name the problem, explain the change and record checks or rendering evidence.
+Distinguish source review, automated tests, device execution and live game acceptance.
+Executable recognition alone does not prove rendering support. Keep licensed engine/game source,
+vendor binaries and raw captures outside Git.
 
-Research notes record the question, method, evidence, failed approaches and remaining uncertainty.
-Tests and status distinguish built, synthetic-tested, game-tested and device-tested results. Engine
-patches check their expected bytes before writing and report when they cannot apply.
+### Repository map
 
-Start with [AGENTS.md](AGENTS.md), the [render-analysis method](docs/research/methodology.md) and
-the [implementation tracker](docs/implementation.md). Game-specific findings belong with the
-integration and its research notes. Licensed engine/game source, vendor binaries and raw captures
-stay outside Git.
+| Directory | Purpose |
+| --- | --- |
+| [`games/`](games/) | Game integrations, build guides and evidence |
+| [`runtime/`](runtime/) | Shared orchestration, vendor backends, graphics and presentation |
+| [`loader/`](loader/) | Carriers, bootstrap and loading diagnostics |
+| [`sdk/game/`](sdk/game/) | Public native Game SDK |
+| [`ui/overlay/`](ui/overlay/) | Shared in-game settings overlay |
+| [`apps/launcher/`](apps/launcher/), [`integrations/wsgm/`](integrations/wsgm/) | Frontend scaffolding |
+| [`tests/`](tests/), [`tools/`](tools/), [`docs/`](docs/) | Verification, analysis and documentation |
+
+## Troubleshooting
+
+Start with your game's guide. Include the package version or source commit, GPU and driver,
+chosen SR/FG providers, quality preset, output resolution and steps to reproduce in
+[an issue](https://github.com/KillerPixelCrew/ReScaleFrame/issues).
+
+For Minecraft, include `logs/latest.log` and the active payload's
+`rescaleframe/native/<payload>/minecraft-native.log`. AC7 logs are under
+`%LOCALAPPDATA%\ReScaleFrame\AC7\`. Installation, update and removal details belong to each
+game's guide.
+
+## Brand assets
+
+Original SVGs: [graphite background](assets/branding/ReScaleFrame-logo.svg) ·
+[off-white on transparent](assets/branding/ReScaleFrame-logo-transparent.svg) ·
+[black on transparent](assets/branding/ReScaleFrame-logo-black-transparent.svg).
+
+The header selects the transparent variant for GitHub's light or dark theme.
 
 ## License
 
-First-party code and documentation are [GPL-3.0-only](LICENSE), except the
-[MIT-licensed Game SDK](sdk/game/LICENSE).
-
-Third-party libraries and vendor runtimes retain their own licenses. Game release packages include
-the applicable notices; bundled NVIDIA runtime files are unmodified and are not relicensed under
-GPL. Game binaries and licensed engine source are not distributed with ReScaleFrame.
+First-party code and documentation use [GPL-3.0-only](LICENSE), except the
+[MIT-licensed Game SDK](sdk/game/LICENSE). Third-party components and vendor runtimes retain
+their own licenses and notices. Game binaries and licensed engine source are not distributed.
