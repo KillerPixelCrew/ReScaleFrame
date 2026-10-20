@@ -20,6 +20,12 @@ retain their commercial licenses and are not copied into Git or runtime packages
 
 ## Unity Mono DX12 adapter
 
+The local character-shader patch builder pins UnityPy 1.25.0 through its inline uv
+metadata. It also requires a caller-supplied 3DMigoto-compatible shader decompiler and
+the installed Windows D3DCompiler 47. These are development tools, not runtime payloads.
+Original and derived game shader data stays in ignored local output; no game shader
+source or binary is committed. [Patch evidence and limits](research/drag-n-wash-character-motion-20261020.md).
+
 The managed helper uses Harmony 2.4.2 (MIT), pinned by its NuGet lockfile, with the executable
 net472 Harmony assembly for the shipped Mono runtime. The RSF helper targets netstandard2.1.
 Unity assemblies are compile references from the public Unity SDK or a prepared reference

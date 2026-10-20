@@ -63,7 +63,7 @@ internal static class Program
                 Marshal.OffsetOf<Packet>(nameof(Packet.Camera)).ToInt32() != 72)
                 throw new InvalidOperationException("Managed/native packet layout differs.");
             var methods = UrpAdapter.Contracts();
-            if (methods.Length != 12) throw new InvalidOperationException("Incomplete URP contract.");
+            if (methods.Length != 13) throw new InvalidOperationException("Incomplete URP contract.");
             foreach (var method in methods) Console.WriteLine("Matched " + method.DeclaringType.FullName + "." + method.Name);
             ImportedBackbufferSnapshot();
             // Invalid graph targets cannot queue a native capture callback. Imported targets

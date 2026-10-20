@@ -31,7 +31,7 @@ namespace ReScaleFrame.Unity
         {
             UpdateResolution, InitializeStackedCamera, InitializeAdditionalCamera, JitterMatrix, RenderStp,
             PostProcessing, CreateCameraData, AfterRendering, AdaptivePerformance, ScreenSpaceUi,
-            RecordRenderGraph, RenderPassInputs, Count
+            RecordRenderGraph, RenderPassInputs, CharacterMotion, Count
         }
         private static readonly Dictionary<int, ViewState> views = new Dictionary<int, ViewState>();
         private static FieldInfo filter, scaling, antialiasing;
@@ -69,6 +69,7 @@ namespace ReScaleFrame.Unity
             Patch(methods[(int)Site.ScreenSpaceUi], prefix: nameof(Hudless));
             Patch(methods[(int)Site.RecordRenderGraph], prefix: nameof(InputScope), finalizer: nameof(RestoreInputScope));
             Patch(methods[(int)Site.RenderPassInputs], prefix: nameof(RequireMotion));
+            Bootstrap.Harmony.Patch(methods[(int)Site.CharacterMotion], postfix: new HarmonyMethod(typeof(CharacterMotion), nameof(CharacterMotion.Record)));
         }
 
         // Pure metadata preflight. Resolve the complete contract before installing any patch.
@@ -106,6 +107,8 @@ namespace ReScaleFrame.Unity
             methods[(int)Site.RecordRenderGraph] = RequireMethod(typeof(UniversalRenderer), "OnRecordRenderGraph", typeof(RenderGraph), typeof(ScriptableRenderContext));
             methods[(int)Site.RenderPassInputs] = RequireMethod(typeof(UniversalRenderer), "GetRenderPassInputs", typeof(bool), typeof(bool), typeof(bool), typeof(bool),
                 typeof(List<ScriptableRenderPass>), pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.MotionVectorRenderPass", true));
+            methods[(int)Site.CharacterMotion] = RequireMethod(pipeline.Assembly.GetType("UnityEngine.Rendering.Universal.MotionVectorRenderPass", true),
+                "Render", typeof(RenderGraph), typeof(ContextContainer), typeof(TextureHandle), typeof(TextureHandle), typeof(TextureHandle));
             return methods;
         }
 
@@ -128,7 +131,8 @@ namespace ReScaleFrame.Unity
             Bootstrap.Harmony.Patch(original, prefix: p, postfix: q, finalizer: f);
             Native.Log("URP method matched: " + original.DeclaringType.FullName + "." + original.Name);
         }
-        private static bool Eligible(Camera camera, UniversalAdditionalCameraData additional = null)
+        internal static Matrix4x4 RawProjection(UniversalCameraData data) => rawProjection(data);
+        internal static bool Eligible(Camera camera, UniversalAdditionalCameraData additional = null)
         {
             return Bootstrap.OnMainThread && camera != null && camera == Camera.main &&
                 camera.cameraType == CameraType.Game && camera.targetTexture == null &&
@@ -437,6 +441,7 @@ namespace ReScaleFrame.Unity
         }
         internal static void Clear()
         {
+            CharacterMotion.Clear();
             views.Clear(); failures = jitterReports = 0; overlayFrame = hudlessFrame = -1;
             Native.ResetConfiguration();
         }
