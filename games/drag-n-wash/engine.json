@@ -1,4 +1,16 @@
 {
+  "character_motion_20261020": {
+    "reported": "Moving character and texture trails with XeSS SR plus FG on MSI Claw 8 A2VM Arc",
+    "finding": "WalkNWashLit has 127 skinned-material references and no native MotionVectors pass",
+    "implementation": "Fingerprint-guarded private pass retaining actual deformed world positions per renderer/submesh; graph producer writes existing URP motion/depth",
+    "built": "64 shader variants and Release managed adapter",
+    "checked": "Asset object isolation, CoreCLR/shipped Mono contracts, D3D12 moving-geometry shader fixture on RTX 4070 Laptop",
+    "deployed_local": true,
+    "game_acceptance": false,
+    "claw_acceptance": false,
+    "limits": "Unity Editor fixture blocked by license; actual player resource binding and character-scene checks pending; separate particle/fluid/procedural coverage gaps remain",
+    "research": "../../docs/research/drag-n-wash-character-motion-20261020.md"
+  },
   "ui_regression_20261010": {
     "baseline": "843966947af4c62563ec231c1309eceb8fa13f3b",
     "reported": "UI and overlay flicker on both PCs; opening-overlay crash; touch input missing",

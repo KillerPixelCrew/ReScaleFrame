@@ -87,11 +87,28 @@ foreach ($taskCopy in $taskCopies) {
 }
 foreach ($taskFile in $taskOriginal) {
     $taskPath = Join-Path $taskGame $taskFile.path
-    if (!(Test-Path -LiteralPath $taskPath) -or (Get-FileHash -LiteralPath $taskPath).Hash -ne $taskFile.sha256) {
+    $taskExpectedOriginal = $taskFile.sha256
+    if ($taskOld -and $taskOld.PSObject.Properties.Name -contains 'game_patches') {
+        foreach ($taskPatch in $taskOld.game_patches) {
+            if ($taskPatch.path.Replace('\','/') -eq $taskFile.path.Replace('\','/') -and $taskPatch.original_sha256 -eq $taskFile.sha256) {
+                $taskExpectedOriginal = $taskPatch.patched_sha256
+            }
+        }
+    }
+    if (!(Test-Path -LiteralPath $taskPath) -or (Get-FileHash -LiteralPath $taskPath).Hash -ne $taskExpectedOriginal) {
         throw "An original game file changed: $taskPath"
     }
 }
 $taskDeployment = @{ loader='shared-rsf-shim'; carrier='version.dll'; game='drag-n-wash'; backend=$Backend;
     files=$taskFiles; original_files=$taskOriginal; original_files_unchanged=$true }
+if ($taskOld -and $taskOld.PSObject.Properties.Name -contains 'game_patches') {
+    $taskDeployment.game_patches = @($taskOld.game_patches)
+    $taskDeployment.original_files_unchanged = @($taskOld.game_patches).Count -eq 0
+}
 [IO.File]::WriteAllText($taskManifest, ($taskDeployment | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
-Write-Output "Deployed $($taskFiles.Count) RSF files alongside the game. Verified $($taskOriginal.Count) original files unchanged. Launch normally."
+if ($taskDeployment.original_files_unchanged) {
+    Write-Output "Deployed $($taskFiles.Count) RSF files. Verified $($taskOriginal.Count) original files unchanged. Launch normally."
+}
+else {
+    Write-Output "Deployed $($taskFiles.Count) RSF files. Verified $($taskOriginal.Count) original-file hashes with $(@($taskDeployment.game_patches).Count) recorded game patches. Launch normally."
+}

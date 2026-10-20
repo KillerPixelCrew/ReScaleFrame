@@ -10,6 +10,7 @@
     <UnityManagedDirectory Condition="'$(UnityManagedDirectory)' == ''">$(RSF_UNITY_MANAGED_DIRECTORY)</UnityManagedDirectory>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../drag-n-wash/managed/CharacterMotion.cs" Link="CharacterMotion.cs" />
     <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
     <Reference Include="0Harmony"><HintPath>$(PkgLib_Harmony)/lib/net472/0Harmony.dll</HintPath><Private>true</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>

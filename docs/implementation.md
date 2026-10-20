@@ -1,5 +1,17 @@
 # Implementation tracker
 
+## Drag'n Wash character motion, 20 October 2026
+
+Added a fingerprint-guarded character shader patch and its game-specific URP motion
+producer. It retains actual deformed vertex positions per renderer/submesh and writes
+the existing temporal motion target for SR and FG. The original colour/depth/shadow
+passes remain intact. All 64 generated variants compile; Release managed builds,
+CoreCLR/shipped Mono contracts and a D3D12 moving-geometry fixture pass. The patch is
+deployed locally with backups. Unity player binding and Claw visual acceptance remain
+pending; the Editor fixture is blocked by a missing license. The shader audit also
+identifies separate procedural mesh, skinned particle-material, VFX and fluid coverage
+gaps. [Evidence, implementation and limits](research/drag-n-wash-character-motion-20261020.md).
+
 ## RTX 40 MFG unlock, 18 October 2026
 
 Integrated MFG-Unlocker's guarded RTX 40 temporal transform, provider gate and early
