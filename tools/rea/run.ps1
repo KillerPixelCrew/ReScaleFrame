@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $entryPoint)) {
 $environmentFile = Join-Path $repoRoot '.local/rea/environment.json'
 if (Test-Path -LiteralPath $environmentFile) {
     $providerEnvironment = Get-Content -LiteralPath $environmentFile -Raw | ConvertFrom-Json
-    foreach ($name in @('REA_ANALYSIS_PROVIDER', 'REA_IDA_MCP_CONFIG', 'REA_GHIDRA_STARTUP_TIMEOUT_MS', 'GHIDRA_INSTALL_DIR', 'JAVA_HOME')) {
+    foreach ($name in @('REA_NODE_EXE', 'REA_ANALYSIS_PROVIDER', 'REA_IDA_MCP_CONFIG', 'REA_GHIDRA_STARTUP_TIMEOUT_MS', 'GHIDRA_INSTALL_DIR', 'JAVA_HOME')) {
         $value = $providerEnvironment.$name
         if ($value) {
             [Environment]::SetEnvironmentVariable($name, $value, 'Process')
@@ -17,5 +17,6 @@ if (Test-Path -LiteralPath $environmentFile) {
     }
 }
 
-& node $entryPoint @args
+$nodeExecutable = if ($env:REA_NODE_EXE) { $env:REA_NODE_EXE } else { 'node' }
+& $nodeExecutable $entryPoint @args
 exit $LASTEXITCODE
