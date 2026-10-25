@@ -45,10 +45,12 @@ record the actual setup instead of claiming an attachment succeeded. F9 usage is
 
 ### REA for Codex and Claude Code
 
-[REA](https://github.com/morluto/rea) 6.4.0 is a repository-local development tool,
+[REA](https://github.com/morluto/rea/releases/tag/rea-agents-6.8.0) 6.8.0 is a repository-local development tool,
 pinned with its transitive dependencies in `tools/rea/package-lock.json`. Install with
 `npm ci --prefix tools/rea`, then run `powershell.exe -NoProfile -File tools/rea/run.ps1 --help`.
-It requires Node.js 22.19+, 24.11+, or 26+ within the supported release lines.
+This release requires Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`. The launcher uses
+`node` from PATH by default. Set `REA_NODE_EXE` in the ignored environment file below
+to select a compatible private runtime for REA.
 It is not a game/runtime dependency.
 
 Claude Code reads the `rea` registration in `.mcp.json`; Codex reads
@@ -67,7 +69,7 @@ command = "powershell.exe"
 args = ["-NoProfile", "-File", "D:/Coding/ReScaleFrame/tools/rea/run.ps1", "mcp"]
 cwd = "D:/Coding/ReScaleFrame"
 startup_timeout_sec = 30
-tool_timeout_sec = 360
+tool_timeout_sec = 1800
 ```
 
 Claude Code requires its normal one-time project-server approval before connecting.
@@ -89,7 +91,7 @@ the inherited environment. Check the provider with
 REA's client doctor currently checks user-wide registration paths, so verify these
 project registrations with `codex mcp get rea` and `claude mcp get rea` instead.
 
-The release's unchanged workflow and references are installed under
+The separately installed workflow and references are under
 `.agents/skills/reverse-engineer-anything`, with its MIT license. Claude Code uses
 one ignored directory junction to that shared skill. To create it on another checkout:
 
@@ -103,6 +105,15 @@ Windows Ghidra support is experimental and read-only. It uses an existing Ghidra
 12.1.x/full JDK installation and private headless projects; it does not attach to
 the existing GUI analysis database. Keep the original Ghidra bridge for that workflow.
 Provider readiness and MCP connection checks do not establish real-game analysis.
+
+Update checks on 25 October 2026: repository and user-wide REA packages report 6.8.0.
+The two repository registrations and four existing user-wide registrations passed
+production stdio initialization, exact 229-tool/six-prompt catalog checks and a
+target-free `binary_session` request. The global doctor passed Codex, Claude Code,
+Claude Desktop and OpenCode registration checks plus Ghidra/IDA provider readiness.
+The private Node 26.12.1 archive matched its published SHA-256; the system Node stayed
+at 26.7.0. Existing separately installed skill copies remain at version 37. Clients
+must reconnect to replace their loaded 6.4.0 server; no game or analysis target was run.
 
 Installation checks on 8 October 2026: `npm ci` installed the locked package,
 the launcher reported 6.0.0, and both clients resolved their project registration.
