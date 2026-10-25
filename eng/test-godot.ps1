@@ -4,8 +4,11 @@ param(
     [switch]$EngineBridge,
     [switch]$Exported,
     [ValidateSet('debug','release')][string]$ExportConfiguration = 'release',
-    [ValidateSet('runtime','controller','pcl')][string]$Scenario = 'runtime',
-    [switch]$NoCSharp
+    [ValidateSet('runtime','controller','pcl','sr')][string]$Scenario = 'runtime',
+    [switch]$NoCSharp,
+    [switch]$GpuValidation,
+    [switch]$CaptureFrames,
+    [ValidateSet(2,3)][int]$SrBackend = 2
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -18,10 +21,12 @@ $taskPackage = Join-Path $taskLocal 'package/addons/rescaleframe'
 $taskRunStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
 $taskRunResults = @()
 if ($EngineBridge -and !$PSBoundParameters.ContainsKey('GraphicsApi')) { $GraphicsApi = @('d3d12') }
-if ($EngineBridge -and $GraphicsApi -contains 'vulkan') { throw 'Godot Vulkan runtime support is unfinished. Use d3d12 for runtime tests, or omit -EngineBridge for Vulkan renderer probes.' }
+if ($EngineBridge -and $GraphicsApi -contains 'vulkan' -and $Scenario -ne 'sr') { throw 'Godot Vulkan FG/PCL support is unfinished. Use -Scenario sr for native Vulkan SR, or omit -EngineBridge for renderer probes.' }
 if ($Exported -and !$EngineBridge) { throw 'Exported runtime validation requires -EngineBridge.' }
 if ($Scenario -eq 'controller' -and !$EngineBridge) { throw 'Controller validation requires -EngineBridge.' }
 if ($Scenario -eq 'pcl' -and (!$EngineBridge -or !$NoCSharp)) { throw 'The camera-free PCL fixture requires -EngineBridge -NoCSharp. C# is covered by the runtime/controller fixtures.' }
+if ($GpuValidation -and ($GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'GPU validation currently requires an explicit Vulkan-only test.' }
+if ($CaptureFrames -and (!$EngineBridge -or $Scenario -ne 'sr' -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Raw SR readback requires -EngineBridge -GraphicsApi vulkan -Scenario sr.' }
 if (!(Test-Path -LiteralPath (Join-Path $taskPackage 'bin/ReScaleFrame.Godot.Native.dll'))) {
     throw 'Run eng/build-godot.ps1 before validation.'
 }
@@ -38,6 +43,15 @@ function Invoke-BoundedGodot([string]$Executable, [string[]]$Arguments, [string]
     if ($Foreground) {
         try { Set-RsfGodotForeground $taskProcess }
         catch { if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }; throw }
+        if ($GpuValidation) {
+            $taskLayer = @($taskProcess.Modules | Where-Object ModuleName -eq 'VkLayer_khronos_validation.dll')
+            if ($taskLayer.Count -ne 1) {
+                if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }
+                throw 'Requested Vulkan validation layer was not loaded in the test process.'
+            }
+            @{path=$taskLayer[0].FileName; sha256=(Get-FileHash -LiteralPath $taskLayer[0].FileName).Hash} |
+                ConvertTo-Json | Set-Content -LiteralPath ($Log + '.validation-layer.json') -Encoding utf8
+        }
     }
     while (!$taskProcess.WaitForExit(1000)) {
         if ($taskTimer.Elapsed.TotalSeconds -gt $TimeoutSeconds) {
@@ -52,6 +66,9 @@ function Invoke-BoundedGodot([string]$Executable, [string[]]$Arguments, [string]
     $taskErrors = Get-Content -Raw -LiteralPath ($Log + '.stderr')
     if ($taskErrors -match '(?m)^(SCRIPT ERROR|ERROR):') {
         throw "Godot emitted errors despite a successful exit: $Log.stderr"
+    }
+    if ($GpuValidation -and ((Get-Content -Raw -LiteralPath $Log) + $taskErrors) -match 'VUID-|SYNC-HAZARD|Validation Error|will produce undefined values') {
+        throw "Vulkan validation reported API errors: $Log"
     }
 }
 
@@ -133,16 +150,24 @@ application/modify_resources=false
         $taskResult = Join-Path $taskProject "$taskApi.json"
         if (Test-Path -LiteralPath $taskResult) { Remove-Item -LiteralPath $taskResult }
         $taskRunArguments = @('--rendering-method','forward_plus','--rendering-driver',$taskApi,'--resolution','640x360')
+        if ($GpuValidation) { $taskRunArguments += '--gpu-validation' }
         if (!$Exported) { $taskRunArguments = @('--path',$taskProject) + $taskRunArguments }
         if ($EngineBridge) { $taskRunArguments += @('--position','100,100','--quit-after','1200') }
         else { $taskRunArguments += @('--position','-2000,-2000','--no-focus','--fixed-fps','60','--quit-after','240') }
         $taskRunArguments += @('--',"--result=$taskResult")
+        if ($Scenario -eq 'sr') { $taskRunArguments += "--initial-sr=$SrBackend" }
         $taskCaptureSaved = @{}
         if ($Scenario -eq 'controller') {
             foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT')) { $taskCaptureSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
             $env:RSF_FRAME_CAPTURE_DIR = Join-Path $taskProject 'frames'
             $env:RSF_FRAME_CAPTURE_FIRST = '95'
             $env:RSF_FRAME_CAPTURE_COUNT = '8'
+        }
+        if ($CaptureFrames) {
+            foreach ($taskKey in @('RSF_VULKAN_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT')) { $taskCaptureSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
+            $env:RSF_VULKAN_FRAME_CAPTURE_DIR = Join-Path $taskProject 'frames'
+            $env:RSF_FRAME_CAPTURE_FIRST = '30'
+            $env:RSF_FRAME_CAPTURE_COUNT = '4'
         }
         try { Invoke-BoundedGodot $taskExe $taskRunArguments (Join-Path $taskProject "$taskApi.log") $EngineBridge.IsPresent }
         finally { foreach ($taskKey in $taskCaptureSaved.Keys) { [Environment]::SetEnvironmentVariable($taskKey, $taskCaptureSaved[$taskKey]) } }
@@ -181,16 +206,22 @@ application/modify_resources=false
         if (!(Test-Path -LiteralPath $taskResult)) { throw "Godot did not produce a report: $taskResult" }
         $taskReport = Get-Content -Raw -LiteralPath $taskResult | ConvertFrom-Json
         if (!$taskReport.passed) { throw "Godot validation failed: $taskResult" }
+        if ($CaptureFrames) {
+            & (Join-Path $taskLocal 'build-env/Scripts/python.exe') (Join-Path $taskRoot 'tools/analyze-godot-vulkan-sr.py') (Join-Path $taskProject 'frames') --report $taskResult
+            if ($LASTEXITCODE) { throw "Vulkan raw frame checks failed: $taskProject/frames/decoded/report.html" }
+        }
         if ($taskEdition -eq 'mono' -and !$NoCSharp -and !$taskReport.mono.passed) { throw "Godot C# validation failed: $taskResult" }
-        $taskRunResults += @{edition=$taskEdition; api=$taskApi; scenario=$Scenario; exported=$Exported.IsPresent;
+        $taskRunResults += @{edition=$taskEdition; api=$taskApi; scenario=$Scenario; exported=$Exported.IsPresent; gpu_validation=$GpuValidation.IsPresent; raw_frames=$CaptureFrames.IsPresent;
             csharp=($taskEdition -eq 'mono' -and !$NoCSharp); result=$taskResult; executable=$taskExe;
-            sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash}
+            sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash;
+            native_sha256=(Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll')).Hash;
+            payload_manifest_sha256=if (Test-Path -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/runtime-manifest.json')) { (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/runtime-manifest.json')).Hash } else { $null }}
         if ($Exported) {
             @{passed=$true; edition=$taskEdition; configuration=$ExportConfiguration; executable=$taskExe;
                 sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash; result=$taskResult} |
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskExportRoot 'validation.json') -Encoding utf8
         }
-        $taskScope = if ($Scenario -eq 'pcl') { 'PCL from startup without a camera or compositor' } elseif ($Scenario -eq 'controller') { 'settings, pause/cut, Off/resume, controller replacement and PCL' } elseif ($EngineBridge) { 'SR/FG/MFG switching, resize, PCL and input markers' } else { 'object/camera motion, resize, disable/resume' }
+        $taskScope = if ($Scenario -eq 'sr') { 'FSR2/FSR3 SR, resize, reset and actual player PNGs; no FG/PCL claim' } elseif ($Scenario -eq 'pcl') { 'PCL from startup without a camera or compositor' } elseif ($Scenario -eq 'controller') { 'settings, pause/cut, Off/resume, controller replacement and PCL' } elseif ($EngineBridge) { 'SR/FG/MFG switching, resize, PCL and input markers' } else { 'object/camera motion, resize, disable/resume' }
         Write-Output "PASS: Godot $taskEdition / $taskApi ($taskScope)"
     }
 }

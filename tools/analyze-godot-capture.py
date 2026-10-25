@@ -14,9 +14,11 @@ def load_image(path):
     formats = {9: (np.float16, 4), 10: (np.float16, 4), 33: (np.float16, 2),
                34: (np.float16, 2), 41: (np.float32, 1), 27: (np.uint8, 4), 28: (np.uint8, 4),
                29: (np.uint8, 4), 87: (np.uint8, 4), 90: (np.uint8, 4), 91: (np.uint8, 4)}
-    if meta["dxgi_format"] not in formats:
-        raise ValueError(f"Unsupported capture format: {path}: {meta['dxgi_format']}")
-    dtype, channels = formats[meta["dxgi_format"]]
+    vk_formats = {97: (np.float16, 4), 83: (np.float16, 2), 100: (np.float32, 1), 126: (np.float32, 1)}
+    source_formats, format_key = (vk_formats, "vk_format") if "vk_format" in meta else (formats, "dxgi_format")
+    if meta[format_key] not in source_formats:
+        raise ValueError(f"Unsupported capture format: {path}: {format_key}={meta[format_key]}")
+    dtype, channels = source_formats[meta[format_key]]
     width, height = meta["width"], meta["height"]
     data = np.fromfile(path.with_suffix(".raw"), np.uint8)
     expected = meta["offset"] + (height - 1) * meta["row_pitch"] + width * channels * np.dtype(dtype).itemsize
@@ -27,7 +29,7 @@ def load_image(path):
     image = rows.view(dtype).reshape(height, width, channels).astype(np.float64)
     if dtype == np.uint8:
         image /= 255.0
-    if meta["dxgi_format"] in (87, 90, 91):
+    if format_key == "dxgi_format" and meta[format_key] in (87, 90, 91):
         image = image[..., [2, 1, 0, 3]]
     return meta, image
 
@@ -56,7 +58,12 @@ def projection(pose, width, height):
         gl = np.asarray(pose["projection"]).reshape(4, 4)
         correction = np.eye(4)
         correction[2, 2], correction[3, 2] = -0.5, 0.5
-        return gl @ correction
+        result = gl @ correction
+        # This fixture uses a perspective camera with KEEP_HEIGHT. Camera3D's
+        # script projection uses the output viewport, while RendererSceneCull
+        # builds its raster projection from the rounded internal extent.
+        result[0, 0] = result[1, 1] * height / width
+        return result
     # Legacy capture from the same fixed validation scene. New captures record the
     # actual Camera3D projection, rather than relying on these pinned defaults.
     near, far = 0.05, 4000.0
@@ -80,6 +87,42 @@ def material_centroid(image, roi):
         return None
     y, x = np.indices(weights.shape)
     return np.array([(x * weights).sum(), (y * weights).sum()]) / total
+
+
+def fit_raster_jitter(meta, depth, linear_color, pose):
+    """Infer raster jitter from known box planes, independently of SDK matrices."""
+    height, width = depth.shape[:2]
+    if linear_color.shape[:2] != (height, width):
+        return None
+    y, x = np.mgrid[:height, :width]
+    camera = np.asarray(pose["camera"]).reshape(4, 4)
+    box_inverse = np.linalg.inv(np.asarray(pose["box_world"]).reshape(4, 4))
+    clip_to_local = np.linalg.inv(projection(pose, width, height)) @ camera @ box_inverse
+    def local(jx, jy):
+        clip = np.stack(((x + 0.5 - jx) / width * 2 - 1, 1 - (y + 0.5 - jy) / height * 2,
+                         depth[..., 0], np.ones((height, width))), axis=-1)
+        value = clip @ clip_to_local
+        return (value / value[..., 3:4])[..., :3]
+    base = local(0, 0)
+    dx, dy = local(1, 0) - base, local(0, 1) - base
+    visible_planes = np.sign((camera[3] @ box_inverse)[:3]) * 0.5
+    distance = np.abs(base - visible_planes)
+    face = distance.argmin(axis=-1)
+    # Exclude seams where a small raster offset changes which face is nearest.
+    mask = ((linear_color[..., 2] > linear_color[..., 0] * 2) & (linear_color[..., 2] > 0.3)
+            & (np.partition(distance, 1, axis=-1)[..., 1] > 0.07) & (distance.min(axis=-1) < 0.03))
+    axes = face[mask]
+    if axes.size < 100:
+        return None
+    index = np.arange(axes.size)
+    coefficients = np.stack((dx[mask][index, axes], dy[mask][index, axes]), axis=1)
+    target = visible_planes[axes] - base[mask][index, axes]
+    fitted, _, rank, _ = np.linalg.lstsq(coefficients, target, rcond=None)
+    if rank != 2 or np.linalg.cond(coefficients) > 1e5:
+        return None
+    return {"pixels": int(axes.size), "fitted_pixels": fitted.tolist(),
+            "metadata_error_pixels": float(np.linalg.norm(fitted - meta["jitter_pixels"])),
+            "plane_residual_p95": float(np.percentile(np.abs(coefficients @ fitted - target), 95))}
 
 
 def measure_motion(meta, depth, motion, color, current, previous):
@@ -118,6 +161,8 @@ def measure_motion(meta, depth, motion, color, current, previous):
                 "zero_motion_fraction": float((np.linalg.norm(motion[..., :2], axis=-1)[mask] < 1e-5).mean()),
                 "ground_truth_error_p50": float(np.median(error[mask])),
                 "ground_truth_error_p95": float(np.percentile(error[mask], 95)),
+                "ground_truth_error_p99": float(np.percentile(error[mask], 99)),
+                "ground_truth_error_max": float(error[mask].max()),
                 "camera_metadata_error_p95": float(np.percentile(camera_metadata_error[mask], 95)),
                 "native_camera_reprojection_error_p50": float(np.median(native_error[mask]))}
 
@@ -218,6 +263,10 @@ def main():
         motion = resources["fg-motion-pixels"][1]
         color = resources["fg-hudless-color"][1]
         metrics = measure_motion(meta, depth, motion, color, poses[frame], poses[frame - 1])
+        if "sr-linear-color" in resources:
+            jitter = fit_raster_jitter(meta, depth, resources["sr-linear-color"][1], poses[frame])
+            if jitter is not None:
+                metrics["raster_jitter_fit"] = jitter
         metrics["frame"] = frame
         if "fg-generated-before-ui" in resources:
             generated = resources["fg-generated-before-ui"][1]
@@ -308,6 +357,8 @@ def main():
                 failures.append(f"Frame {frame}: {region} camera reprojection metadata is incorrect")
         if metrics["camera_translation_error"] > 1e-4:
             failures.append(f"Frame {frame}: camera transform serialization is incorrect")
+        if metrics.get("raster_jitter_fit", {}).get("metadata_error_pixels", 0) > 0.02:
+            failures.append(f"Frame {frame}: jitter disagrees with the rendered box planes")
         if not report.get("reference") and not metrics.get("actual_generated_frame_captured"):
             failures.append(f"Frame {frame}: actual generated output is missing")
         if args.reference and "generated_midpoint_edge_rgb_error_mean" not in metrics:
@@ -320,11 +371,14 @@ def main():
         failures.append("Fewer than four complete matching guide/output frames")
     if report.get("probe", {}).get("capture_moving_pixels", 0):
         failures.append("The raw probe forced GPU submission; this run cannot validate ordinary scheduling")
+    info_path = args.capture / "capture-info.json"
+    capture_info = json.loads(info_path.read_text(encoding="utf-8-sig")) if info_path.exists() else {}
+    if capture_info.get("reset_sr_history"):
+        failures.append("Forced SR history resets are a diagnostic, not ordinary temporal-path acceptance")
     summary = {"capture": str(args.capture), "reference": str(args.reference) if args.reference else None,
                "passed": not failures, "failures": failures, "frames": findings}
     (output / "analysis.json").write_text(json.dumps(summary, indent=2) + "\n")
-    info_path = args.capture / "capture-info.json"
-    write_report(output, summary, json.loads(info_path.read_text(encoding="utf-8-sig")) if info_path.exists() else {})
+    write_report(output, summary, capture_info)
     print(json.dumps(summary, indent=2))
     if args.check and failures:
         raise SystemExit(1)

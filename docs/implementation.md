@@ -32,6 +32,17 @@ cases and 120 actual generated frames: all vector/camera gates passed, while
 fails overall and preserves the images. Most FSR2 displacement is already in the
 SR source; a same-motion warmup experiment did not remove it. PCL from startup
 without any camera/compositor also passed on both editions and Release exports.
+Native Vulkan FSR2/FSR3 SR is now implemented as a reusable runtime service and
+a Godot adapter, with same-device image leases and engine command-buffer recording.
+Both editions exercise provider switching, resize/reset and actual player images.
+The opt-in raw readback harness checks depth, motion and raster jitter against
+scene geometry and preserves actual SR output. Validation found and corrected
+FSR2 storage-format mismatches in the pinned SDK and Godot fallback, a missing
+copy-destination usage flag and a null Windows surface instance. Vulkan FG/PCL
+and other SR providers remain unfinished. The SR-only readback checks do not
+establish Vulkan image-quality acceptance. For DX12, resetting only selected
+FSR2 history frames removes most measured source displacement; this diagnostic
+does not fix the normal temporal path. The 30-case image suite still fails.
 These engine/device runs
 do not establish broad visual acceptance or measured latency.
 [Evidence and corrections](research/godot-engine-integration.md),

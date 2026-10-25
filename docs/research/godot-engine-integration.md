@@ -419,11 +419,149 @@ XeSS samples, with backbuffer identity and one application latency handle retain
 through provider transitions. These real device checks cover the shared changes
 without claiming Unity or shipped-game deployment acceptance.
 
+## FSR2 history and raster-jitter controls, 25 October 2026
+
+Question: does the remaining DX12 FSR2 source displacement come from missing
+vectors, incorrect raster jitter or history reconstruction? The bounded control
+keeps the same object poses, source frames and MSAA reference, and changes only
+the SDK's reset flag on the selected capture frames. This is preferable to a
+permanent reset workaround, which would discard the temporal feature being tested.
+
+`linear-normal-fsr2-object` retains the ordinary FSR2 history; its midpoint errors
+against `linear-reset-reference-object` are 0.516, 0.546, 0.578 and 0.454 output
+pixels. `linear-reset-fsr2-object` supplies the same four inputs with SR history
+reset and gives 0.193, 0.162, 0.110 and 0.253 pixels. The SDK reset flags and
+actual linear inputs/output are captured, rather than inferred from settings.
+The native DLL for these runs is
+`3B3455B79534039B9B34DF29AE7ECF716C83899BE71FF7BD7FC4D1F00E31ADAE`.
+The analyzer refuses to count forced-reset runs as normal temporal acceptance.
+This implicates history/reconstruction, but does not establish its root cause
+or repair the ordinary FSR2 path. It also does not establish a vendor defect.
+
+The analyzer now estimates raster jitter from box planes and raw depth,
+independently of SDK camera matrices. Source review corrected an assumption:
+Camera3D's script projection uses output aspect, while RendererSceneCull builds
+the raster projection using rounded internal dimensions. The fixture uses
+KEEP_HEIGHT, so the independent reconstruction now accounts for that aspect.
+On the FSR2 control, fitted jitter differs from supplied jitter by at most
+0.00122 render pixels, with maximum object-vector error below 0.0026 pixels and
+no zero moving-object vectors. This evidence rejects a large missing-vector or
+raster-jitter error in these frames; it does not cover arbitrary scene geometry.
+
+The primary 30-case matrix was reanalyzed into separate `decoded-jitter-fit`
+directories. `.local/godot/reanalysis-jitter-fit-20261025.json` still reports
+26 passes and the same four image failures. Maximum fitted-jitter error across
+all 120 source frames is 0.008311 render pixels, below the 0.02-pixel gate.
+Original captures, primary reports, thresholds and failures remain intact.
+
+## Native Vulkan SR and raw image validation, 25 October 2026
+
+Question: can the developer integration use Godot's native Vulkan images and
+command buffers without routing SR through D3D12? A reusable C ABI service now
+lives in `runtime/orchestrator`, while the engine adapter owns Godot formats,
+motion conventions and render graph placement. It supports actual FSR2 and FSR3
+providers only. Requested DLSS/XeSS/FSR4, Vulkan FG and Vulkan PCL are refused;
+Auto currently selects FSR3. This replaces the earlier Vulkan probe-only status
+for this specific SR subset.
+
+The service loads the pinned Vulkan FidelityFX SDK 1.1.4, revision
+`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`, selects and verifies the exact provider
+version, and records into the engine-owned command buffer. It submits no queue.
+Images carry device, format, extent, layout and optional copy-source capability.
+The callback lease lasts through GPU completion. The SDK writes a private output;
+only an accepted dispatch copies it into Godot's fallback output. The owner drains
+GPU work before context replacement or destruction, including settings, device
+and output-size changes. Camera cuts, frame gaps, view/session changes and resource
+generations invalidate history. No borrowed image handle survives in runtime state.
+
+The first Godot run refused D32-plus-stencil input (Vulkan format 130) instead of
+guessing a compatible format. The adapter now resolves depth to owned R32F while
+producing dense RG16F UV motion. Source review also found that Godot's upscaled
+output lacked transfer-destination usage. The guarded engine patch adds it, plus
+transfer-source usage for scene colour and normalized motion diagnostics. These
+are allocation contracts, not image-layout workarounds.
+
+The first Khronos validation run failed even though player PNGs existed. It found
+a null Win32 surface HINSTANCE and two storage-image format mismatches in both
+Godot's FSR2 fallback and the pinned Vulkan SDK: dilated depth was declared `r16f`
+but allocated R32F; prepared colour was declared `rgba16` (UNORM) but allocated
+RGBA16F. Guarded patches match the declarations to the reviewed allocations.
+Godot's surface creation now uses the same GetModuleHandle fallback as its window
+class registration. Preserve the failed evidence in
+`validation/standard/sr-20261025-135424-170`; do not relabel that run as validated.
+The existing FSR3 luma-history and swapchain-lifetime corrections remain applied
+only to the staged SDK sources. The reference checkout stays clean.
+
+`eng/build-godot-vulkan.ps1` now reproduces the local SDK build. It uses Godot's
+pinned Vulkan-Headers, the installed Windows Vulkan loader, a locally generated
+MSVC import library and installed Visual Studio tools. No global SDK is installed.
+Default and staged-copy shader compiler launches failed; explicitly selecting the
+original pinned glslang executable succeeded with the same command/permutations.
+The original and staged executable hashes matched. The reason for the location
+dependent failure remains unknown; path length, antivirus and DrivePool were not
+established causes. Failed SDK logs remain under `.local/godot`. The recipe pins
+the successful compiler location and records its hash
+`8106440BE591596425D7EF401E62B8E21CE778BE7A4AA8D240D319B614691A8C`.
+The completed reproducible runtime is
+`2955CC3513B0843FB1C41A9793506AEA408434D21FF2D85EAC331077C15A0F98`;
+`fsr3-sdk-build.json` records source, patch, compiler and runtime fingerprints.
+
+Khronos ValidationLayers was absent initially. The portable official Windows
+nightly archive published 25 October was downloaded and verified without registry
+or global environment changes. Its source revision is
+`8fa483ff4e2706601f4b1a1f5a4666b42673ba85`, archive SHA256
+`0693DCA1739EE70FBD8A1ACA1C59DBEF4EB2DE95785BC49DB4FCD062E50199D4`,
+and loaded DLL SHA256
+`E86FA4F70676A120F00A32BEAC6979CEB3CAFCE70DE42FA9107C89F587AB206E`.
+Each validation run checks actual process module loading and preserves its receipt.
+Errors, VUIDs, synchronization hazards and undefined storage-format warnings fail
+the harness. Loader naming warnings for unrelated installed overlays remain visible.
+
+Final editor fingerprints:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Standard editor | `BFDCE691DBB4407587DA4E49EE931174361086413A819D061726CF4570FC3617` |
+| .NET editor | `DD4EA65C4EC6C5D1F431D530FBDCFABBC4C6BD428343261C974A2B0605D723BA` |
+| Native extension | `6CD1E97EB0BF1D655B958BE57FB257505CA830B95A313FC1CB65B3DDED15D815` |
+
+Validation manifests `validation-20261025-140919-328.json` and
+`validation-20261025-140941-594.json` cover both editions, initial FSR2/FSR3,
+provider replacement, resize, history reset and C# calls. Both ran with the loaded
+validation layer and passed. They retain actual player PNGs, 64 raw guide/output
+images across 16 source frames, and browsable `frames/decoded/report.html` files.
+Readbacks are recorded beside SDK use, retain owned host-coherent buffers through
+submission, and flush only after the owner's GPU-drained context retirement.
+Metadata records Vulkan formats, actual provider ID, frame/view/generation,
+SDK reset and camera/jitter values. Capture is opt-in and capped at 16 frames.
+It changes timing and therefore provides no performance or latency evidence.
+
+The independent geometry checks passed: maximum motion p95 error is 0.000338
+render pixels, camera metadata error 0.000038 pixels and fitted jitter error
+0.001325 pixels. All images are finite. A preserved negative-control copy with
+zero motion fails all object/floor vector gates; a second copy with one-pixel
+jitter corruption fails all raster-jitter gates
+(`validation-controls/vulkan-20261025-141059/controls.json`). These copies do not
+modify the original captures. SR output previews were opened and inspected.
+This suite has no independent Vulkan SR image-quality reference, so input and
+readback passes must not be described as broad SR visual acceptance.
+
+The real device fixture separately passed 24 Vulkan FSR2/FSR3 GPU dispatches and
+pixel readbacks, known-colour replacement/reset and foreign-device guards
+(`test-vulkan-device-final.log`). The Release MSVC native gate passed 45 executed
+tests, nine opt-in skips, formatting and Clippy
+(`verify-vulkan-readback-final.log`). Both editions passed the DX12 six-phase
+SR/FG/MFG/PCL regression on the new binaries
+(`validation-20261025-141020-597.json`). No export templates were rebuilt for this
+Vulkan increment; earlier export acceptance belongs to the recorded DX12 builds.
+
 ## Remaining work and validation limits
 
-Vulkan has renderer-probe evidence only. It still needs graph-owned submission
-splits, same-adapter external memory/fences and a completed-frame presentation
-owner. The Unity Vulkan queue-access API cannot be assumed to exist in Godot.
+Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan
+FG and PCL still need a completed-frame presentation owner and real submission
+identity; other SR providers remain unfinished. Any interop route needs
+same-adapter external memory/fences and graph-owned submission splits. The Unity
+Vulkan queue-access API cannot be assumed to exist in Godot.
 
 The expanded SR-enabled image matrix completed against the final staged
 binaries; its FSR2/FSR3 object-motion failures remain unresolved. Earlier passing

@@ -1,6 +1,7 @@
 # ReScaleFrame for Godot
 
-Developer integration for Godot 4.7.2, Forward+, Windows x64 and Direct3D 12.
+Developer integration for Godot 4.7.2, Forward+ and Windows x64. Direct3D 12 has
+SR/FG/PCL implementations; native Vulkan currently implements FSR2/FSR3 SR.
 It combines a GDExtension add-on with a small module and guarded patches against
 the pinned engine source. Both standard Godot and Godot .NET use the same native
 runtime. Official GodotSharp assemblies remain unchanged.
@@ -9,8 +10,9 @@ This is an implementation in progress. The standard DX12 runtime has exercised
 DLSS, FSR3 and XeSS SR, FSR3/XeSS/DLSS frame generation, DLSS MFG, and PCL/Reflex.
 The visual harness now captures actual FSR-generated images and checks temporal
 inputs against scene geometry. It does not establish broad image-quality,
-physical scanout or latency acceptance. Vulkan currently has renderer-probe
-coverage only. Standard/.NET Debug and Release exported players have passed the
+physical scanout or latency acceptance. Vulkan FSR2/FSR3 SR now has real GPU
+readback and validation-layer coverage on both editions; Vulkan FG/PCL and other
+SR providers remain unfinished. Standard/.NET Debug and Release exported players have passed the
 runtime and lifecycle fixtures, including C# on .NET. A GDScript-only .NET
 Release export also passed.
 See [research and corrections](../../docs/research/godot-engine-integration.md).
@@ -28,6 +30,7 @@ engine binaries, vendor binaries and captures remain ignored.
 
 ```powershell
 ./eng/prepare-godot.ps1
+./eng/build-godot-vulkan.ps1 # Optional native Vulkan FSR2/FSR3 payload
 ./eng/build-godot.ps1 -VS2026 -StageRuntime
 ./eng/build-godot-engine.ps1
 ./eng/build-godot-engine.ps1 -Mono
@@ -39,6 +42,28 @@ engine archive hashes are pinned in [dependencies.json](dependencies.json).
 `eng/patch-godot.py` refuses unexpected revisions or unrelated source changes.
 The scripts verify downloaded archives, reference revisions and copied binaries.
 Build manifests select immutable engine paths beneath `builds/<hash>/`.
+The Vulkan builder uses the pinned Godot Vulkan headers, installed Windows
+Vulkan loader and Visual Studio tools. It builds a local import library and
+the corrected pinned FidelityFX SDK without installing a global Vulkan SDK.
+`-StageOnly -StageRuntime` on `build-godot.ps1` repackages already built binaries.
+
+For Vulkan SR readbacks on standard and .NET editors:
+
+```powershell
+./eng/test-godot.ps1 -EngineBridge -GraphicsApi vulkan -Scenario sr -CaptureFrames
+./eng/test-godot.ps1 -EngineBridge -GraphicsApi vulkan -Scenario sr -CaptureFrames -SrBackend 3
+```
+
+`-GpuValidation` additionally requires an available Khronos validation layer.
+The harness verifies that the layer DLL actually loaded and records its hash.
+For a portable layer, set `VK_LAYER_PATH` to its manifest directory and
+`VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation` in the test process environment.
+Validation errors and storage-format warnings fail the run. Raw images flush
+after GPU-drained context retirement, with Vulkan formats, frame/view/history
+identity, provider ID and camera metadata. Each run includes actual player PNGs,
+raw SR input/output images and `frames/decoded/report.html`. Geometry-derived
+motion and jitter are checked independently. This SR readback suite has no
+independent SR image-quality reference and makes no Vulkan FG or latency claim.
 
 ## Project setup
 

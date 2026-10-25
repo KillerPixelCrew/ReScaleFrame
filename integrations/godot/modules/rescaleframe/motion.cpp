@@ -2,15 +2,20 @@
 #include "rsf_godot_engine.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
+#include "servers/rendering/rendering_server.h"
 
 namespace {
 RID shader, pipeline, sampler;
+bool normalized_depth = false;
 constexpr char source[] = R"(
 #version 450
 layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
 layout(set=0,binding=0) uniform sampler2D source_motion;
 layout(set=0,binding=1) uniform sampler2D source_depth;
 layout(set=0,binding=2,rg16f) uniform restrict writeonly image2D resolved_motion;
+#ifdef RSF_NORMALIZE_DEPTH
+layout(set=0,binding=3,r32f) uniform restrict writeonly image2D resolved_depth;
+#endif
 layout(push_constant,std430) uniform Constants {
     mat4 clip_to_previous_clip;
     vec2 jitter_uv;
@@ -20,11 +25,19 @@ void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, params.size))) return;
     vec2 motion = texelFetch(source_motion, ivec2(pixel), 0).xy;
+#ifdef RSF_NORMALIZE_DEPTH
+    float sampled_depth = texelFetch(source_depth, ivec2(pixel), 0).x;
+    imageStore(resolved_depth, ivec2(pixel), vec4(sampled_depth));
+#endif
     // Godot skips static geometry in its temporal motion pass. (-1,-1) means
     // derive camera motion from depth, rather than a real UV displacement.
     if (all(lessThanEqual(motion, vec2(-1.0)))) {
         vec2 uv = (vec2(pixel) + 0.5) / vec2(params.size) - params.jitter_uv;
+#ifdef RSF_NORMALIZE_DEPTH
+        float depth = sampled_depth;
+#else
         float depth = texelFetch(source_depth, ivec2(pixel), 0).x;
+#endif
         vec4 previous = params.clip_to_previous_clip * vec4(uv.x*2.0-1.0, 1.0-uv.y*2.0, depth, 1.0);
         motion = vec2(previous.x, -previous.y) / previous.w * 0.5 + 0.5 - uv;
     }
@@ -36,7 +49,10 @@ bool prepare(RD *rd) {
     String error;
     RD::ShaderStageSPIRVData stage;
     stage.shader_stage = RD::SHADER_STAGE_COMPUTE;
-    stage.spirv = rd->shader_compile_spirv_from_source(stage.shader_stage, source, RD::SHADER_LANGUAGE_GLSL, &error);
+    normalized_depth = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan";
+    String shader_source(source);
+    if (normalized_depth) shader_source = shader_source.replace("#version 450", "#version 450\n#define RSF_NORMALIZE_DEPTH");
+    stage.spirv = rd->shader_compile_spirv_from_source(stage.shader_stage, shader_source, RD::SHADER_LANGUAGE_GLSL, &error);
     if (stage.spirv.is_empty()) { ERR_PRINT("ReScaleFrame motion decoder: " + error); return false; }
     shader = rd->shader_create_from_spirv(Vector<RD::ShaderStageSPIRVData>({stage}), "ReScaleFrame Godot motion decoder");
     if (!shader.is_valid()) return false;
@@ -54,14 +70,27 @@ RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID moti
     const StringName scope("rescaleframe"), name("motion_uv");
     if (!buffers->has_texture(scope, name)) {
         buffers->create_texture(scope, name, RD::DATA_FORMAT_R16G16_SFLOAT,
-            RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT);
+            RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
     }
     const RID output = buffers->get_texture(scope, name);
     if (!output.is_valid()) return RID();
     RD::Uniform velocity(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({sampler, motion}));
     RD::Uniform scene_depth(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({sampler, depth}));
     RD::Uniform result(RD::UNIFORM_TYPE_IMAGE, 2, Vector<RID>({output}));
-    const RID uniforms = UniformSetCacheRD::get_singleton()->get_cache(shader, 0, velocity, scene_depth, result);
+    RID uniforms;
+    if (normalized_depth) {
+        const StringName depth_name("depth_r32");
+        if (!buffers->has_texture(scope, depth_name)) {
+            buffers->create_texture(scope, depth_name, RD::DATA_FORMAT_R32_SFLOAT,
+                RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
+        }
+        const RID normalized = buffers->get_texture(scope, depth_name);
+        if (!normalized.is_valid()) return RID();
+        RD::Uniform depth_output(RD::UNIFORM_TYPE_IMAGE, 3, Vector<RID>({normalized}));
+        uniforms = UniformSetCacheRD::get_singleton()->get_cache(shader, 0, velocity, scene_depth, result, depth_output);
+    } else {
+        uniforms = UniformSetCacheRD::get_singleton()->get_cache(shader, 0, velocity, scene_depth, result);
+    }
     struct Constants { float matrix[16], jitter[2]; uint32_t size[2]; } constants{};
     for (int column = 0; column < 4; ++column)
         for (int row = 0; row < 4; ++row) constants.matrix[column * 4 + row] = to_previous.columns[column][row];

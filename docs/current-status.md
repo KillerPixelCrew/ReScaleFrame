@@ -10,7 +10,9 @@ unwritten-motion sentinel. The expanded matrix passed vector/camera checks on
 120 generated frames, but four of 30 end-to-end image cases still fail for
 FSR2/FSR3 object motion. Standard/.NET Debug and Release
 exports passed runtime/controller fixtures, with C# on .NET and a separate
-GDScript-only .NET export. Vulkan runtime and broad scene-quality acceptance
+GDScript-only .NET export. Native Vulkan FSR2/FSR3 SR now runs on standard/.NET
+editors with resize, C# calls, raw GPU readbacks and validation-layer checks.
+Vulkan FG/PCL, other Vulkan SR providers and broad scene-quality acceptance
 remain pending. This does not change game-plugin readiness flags.
 [Evidence and limits](research/godot-engine-integration.md).
 

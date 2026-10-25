@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "api.h"
+#include "vulkan_control.h"
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/gpu_policy.h>
@@ -101,11 +102,11 @@ extern "C" int rsfg_attach_engine(const rsf_godot_engine_services* services)
 }
 extern "C" int rsfg_configure_engine(const rsf_godot_settings* input, uint64_t viewport_id)
 {
-    return booted && engine_services.configure ? engine_services.configure(input, viewport_id) : 0;
+    return (booted || rsf::godot_vk::booted()) && engine_services.configure ? engine_services.configure(input, viewport_id) : 0;
 }
 extern "C" void rsfg_reset_history()
 {
-    if (booted && engine_services.reset_history) engine_services.reset_history();
+    if ((booted || rsf::godot_vk::booted()) && engine_services.reset_history) engine_services.reset_history();
 }
 
 extern "C" int rsfg_boot(const rsf_godot_setup* setup) try
@@ -146,6 +147,7 @@ extern "C" int rsfg_configure(const rsf_godot_settings* input) try
         !input->generated_frames || input->generated_frames > 15 || input->gameplay > 1 ||
         !(rsf_fg_backend_known(input->fg_backend) || input->fg_backend == RSF_FG_BACKEND_AUTO) ||
         (input->sr_backend == RSF_SR_DLSS && input->quality == 5)) return 0;
+    if (rsf::godot_vk::booted()) return rsf::godot_vk::configure(input);
     {
         std::lock_guard lock(guard);
         if (settings.sr_backend != input->sr_backend || settings.quality != input->quality || settings.dlss_preset != input->dlss_preset)
@@ -352,7 +354,9 @@ extern "C" void rsfg_present(void* chain)
 
 extern "C" int rsfg_status(rsf_godot_status* output) try
 {
-    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_ABI_VERSION || !booted) return 0;
+    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_ABI_VERSION) return 0;
+    if (rsf::godot_vk::booted()) return rsf::godot_vk::status(output);
+    if (!booted) return 0;
     rsf_godot_status value;
     { std::lock_guard lock(guard); value = status; }
     rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg); rsf_fg12_status(&fg);
@@ -388,6 +392,7 @@ extern "C" int rsfg_status(rsf_godot_status* output) try
 extern "C" int rsfg_settings(rsf_godot_settings* output) try
 {
     if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_ABI_VERSION) return 0;
+    if (rsf::godot_vk::booted()) return rsf::godot_vk::settings(output);
     std::lock_guard lock(guard);
     *output = settings;
     return 1;
@@ -401,6 +406,7 @@ extern "C" int rsfg_request_latency_ping(void)
 
 extern "C" int rsfg_shutdown(void) try
 {
+    if (rsf::godot_vk::booted()) return rsf::godot_vk::shutdown();
     const HWND window = input_window.load();
     if (window && previous_proc && reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == input_proc)
         SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous_proc));

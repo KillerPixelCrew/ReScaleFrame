@@ -20,6 +20,10 @@
       "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
       "revision": "60f4ea81909200d8542eca14dccb2628b763a9a3"
     },
+    "fidelityfx_vulkan": {
+      "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
+      "revision": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55"
+    },
     "xess": {
       "repository": "https://github.com/intel/xess.git",
       "revision": "8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0"

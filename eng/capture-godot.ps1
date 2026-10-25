@@ -4,6 +4,7 @@ param(
     [ValidateSet('object','camera','combined')][string]$Mode = 'combined',
     [switch]$Reference,
     [switch]$ReferenceMsaa,
+    [switch]$ResetSrHistory,
     [ValidateRange(4,70)][int]$FirstFrame = 12,
     [ValidateRange(0,60)][int]$AnimationOffset = 0,
     [switch]$RawProbe,
@@ -33,7 +34,8 @@ $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash
 $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll') -Algorithm SHA256).Hash
 @{engine=$taskExe; engine_sha256=$taskEngineHash; native_sha256=$taskNativeHash;
     first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; sr_backend=$SrBackend; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
-    reference_msaa=$ReferenceMsaa.IsPresent; captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
+    reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent;
+    captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
 if ($Mono) {
     Copy-Item -Path (Join-Path $taskSource 'demo/mono/*') -Destination $taskProject -Force
     $taskNuget = [Security.SecurityElement]::Escape((Join-Path (Split-Path -Parent $taskExe) 'GodotSharp/Tools/nupkgs'))
@@ -56,11 +58,12 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
 }
 Run-Capture @('--headless','--editor','--import','--path',$taskProject,'--quit-after','30') 'import'
 $taskSaved = @{}
-foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT')) { $taskSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
+foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT','RSF_FRAME_CAPTURE_RESET_SR')) { $taskSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
 try {
     $env:RSF_FRAME_CAPTURE_DIR = $taskCapture
     $env:RSF_FRAME_CAPTURE_FIRST = if ($Reference) { [string]($FirstFrame * 2 - 1) } else { [string]$FirstFrame }
     $env:RSF_FRAME_CAPTURE_COUNT = if ($Reference) { '8' } else { '4' }
+    $env:RSF_FRAME_CAPTURE_RESET_SR = if ($ResetSrHistory) { '1' } else { $null }
     $taskRunArgs = @('--path',$taskProject,'--rendering-method','forward_plus','--rendering-driver','d3d12','--position','100,100','--quit-after','120','--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset")
     if ($Reference) { $taskRunArgs += '--reference' }
     if ($ReferenceMsaa) { $taskRunArgs += '--reference-msaa' }

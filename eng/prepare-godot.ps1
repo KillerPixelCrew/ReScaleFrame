@@ -43,6 +43,7 @@ New-Item -ItemType Directory -Force -Path $taskLocal,(Join-Path $taskRoot 'refer
 Get-PinnedCheckout $taskLock.engine.repository $taskLock.engine.revision (Join-Path $taskRoot 'references/godot/engine') $true
 Get-PinnedCheckout $taskLock.bindings.repository $taskLock.bindings.revision (Join-Path $taskRoot 'references/godot/godot-cpp')
 Get-PinnedCheckout $taskLock.vendor.fidelityfx.repository $taskLock.vendor.fidelityfx.revision (Join-Path $taskRoot 'vendor/fidelityfx')
+Get-PinnedCheckout $taskLock.vendor.fidelityfx_vulkan.repository $taskLock.vendor.fidelityfx_vulkan.revision (Join-Path $taskRoot 'references/godot/fidelityfx-vulkan')
 Get-PinnedCheckout $taskLock.vendor.xess.repository $taskLock.vendor.xess.revision (Join-Path $taskRoot 'vendor/xess')
 function Get-PinnedArchive([string]$Url, [string]$Sha512, [string]$Archive, [string]$Destination, [string]$Marker) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Archive) | Out-Null

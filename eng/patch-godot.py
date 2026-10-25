@@ -17,9 +17,12 @@ FILES = (
     "platform/windows/display_server_windows.cpp",
     "drivers/d3d12/rendering_device_driver_d3d12.cpp",
     "drivers/d3d12/rendering_device_driver_d3d12.h",
+    "drivers/vulkan/rendering_device_driver_vulkan.h",
     "servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp",
+    "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp",
     "servers/rendering/renderer_viewport.cpp",
     "servers/rendering/rendering_device_graph.cpp",
+    "thirdparty/amd-fsr2/shaders/ffx_fsr2_callbacks_glsl.h",
 )
 original = {
     path: subprocess.check_output(["git", "-C", str(ENGINE), "show", f"HEAD:{path}"], text=True, encoding="utf-8")
@@ -103,13 +106,42 @@ replace("platform/windows/display_server_windows.cpp", '\t\t\t\t_THREAD_SAFE_UNL
         '\t\t\t\t_THREAD_SAFE_UNLOCK_\n#ifdef MODULE_RESCALEFRAME_ENABLED\n'
         '\t\t\t\tif (!Main::is_iterating()) RSFGodot::cpu_begin();\n#endif\n\t\t\t\t_process_key_events();')
 replace("main/main.cpp", '\tRSFGodot::cpu_begin();', '\tRSFGodot::cpu_begin();\n\tRSFGodot::cpu_simulation_begin();')
+previous_vulkan_plan = planned.copy()
+replace("drivers/vulkan/rendering_device_driver_vulkan.h", '\tvirtual void command_buffer_end(CommandBufferID p_cmd_buffer) override final;',
+        '\tvoid *rescaleframe_begin(CommandBufferID id);\n'
+        '\tstatic uint64_t rescaleframe_instance_proc();\n\tstatic uint64_t rescaleframe_device_proc();\n'
+        '\tvirtual void command_buffer_end(CommandBufferID p_cmd_buffer) override final;')
+previous_copy_usage_plan = planned.copy()
+path = "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp"
+at = planned[path].index("#include ")
+planned[path] = planned[path][:at] + '#include "modules/modules_enabled.gen.h"\n\n' + planned[path][at:]
+replace(path, '\t\tusage_bits |= RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;\n\t\tcreate_texture(RB_SCOPE_BUFFERS, RB_TEX_COLOR_UPSCALED',
+        '\t\tusage_bits |= RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;\n#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\t// The native SR callback reinserts its accepted output by GPU copy.\n'
+        '\t\tusage_bits |= RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;\n#endif\n'
+        '\t\tcreate_texture(RB_SCOPE_BUFFERS, RB_TEX_COLOR_UPSCALED')
+previous_validation_plan = planned.copy()
+# The Windows command-line entry can leave OS_Windows::hInstance null. Match
+# Godot's window-class registration fallback when creating the Vulkan surface.
+replace("platform/windows/display_server_windows.cpp", '\t\twpd.vulkan.instance = hInstance;',
+        '\t\twpd.vulkan.instance = hInstance ? hInstance : GetModuleHandle(nullptr);')
+# Match the formats allocated by Godot's vendored FSR2 resource descriptions.
+path = "thirdparty/amd-fsr2/shaders/ffx_fsr2_callbacks_glsl.h"
+replace(path, 'FSR2_BIND_UAV_DILATED_DEPTH, r16f)', 'FSR2_BIND_UAV_DILATED_DEPTH, r32f)')
+replace(path, 'FSR2_BIND_UAV_PREPARED_INPUT_COLOR, rgba16)', 'FSR2_BIND_UAV_PREPARED_INPUT_COLOR, rgba16f)')
+previous_capture_plan = planned.copy()
+replace("servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp",
+        '\tuint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;',
+        '\tuint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n\t// Bounded native diagnostics read linear scene colour after its producer.\n'
+        '\tusage_bits |= RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;\n#endif')
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

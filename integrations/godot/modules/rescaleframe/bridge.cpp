@@ -16,6 +16,7 @@
 #include "servers/rendering/renderer_viewport.h"
 #include "servers/rendering/rendering_server.h"
 #include "drivers/d3d12/rendering_device_driver_d3d12.h"
+#include "drivers/vulkan/rendering_device_driver_vulkan.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
 #include "servers/display/display_server.h"
@@ -25,6 +26,8 @@
 
 namespace {
 decltype(&rsfg_boot) native_boot = nullptr;
+decltype(&rsfg_boot_vulkan) native_boot_vulkan = nullptr;
+decltype(&rsfg_render_vulkan) native_render_vulkan = nullptr;
 decltype(&rsfg_create_swapchain) native_create_swapchain = nullptr;
 decltype(&rsfg_configure) native_configure = nullptr;
 decltype(&rsfg_status) native_status = nullptr;
@@ -111,26 +114,35 @@ struct Packet {
     rsf_game_render_pass pass{};
     void *device = nullptr;
     void *queue = nullptr;
+    bool vulkan = false;
+    rsf_godot_vk_packet vk{};
 };
 void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBufferID commands, void *userdata) {
     Packet *packet = static_cast<Packet *>(userdata);
-    auto *d3d = static_cast<RenderingDeviceDriverD3D12 *>(driver);
-    void *list = d3d->rescaleframe_begin(commands);
-    native_render(packet->device, packet->queue, list, &packet->pass);
-    d3d->rescaleframe_end(commands);
+    if (packet->vulkan) {
+        auto *vk = static_cast<RenderingDeviceDriverVulkan *>(driver);
+        if (void *list = vk->rescaleframe_begin(commands)) native_render_vulkan(list, &packet->vk);
+    } else {
+        auto *d3d = static_cast<RenderingDeviceDriverD3D12 *>(driver);
+        void *list = d3d->rescaleframe_begin(commands);
+        native_render(packet->device, packet->queue, list, &packet->pass);
+        d3d->rescaleframe_end(commands);
+    }
     memdelete(packet);
 }
 bool admit(const RenderDataRD *data) {
     return ready && enabled.load() && render_frame && data && data->render_buffers.is_valid() &&
         data->render_buffers->get_render_target() == primary_target && data->render_buffers->get_view_count() == 1 &&
-        RenderingServer::get_singleton()->get_current_rendering_driver_name() == "d3d12";
+        (RenderingServer::get_singleton()->get_current_rendering_driver_name() == "d3d12" ||
+        RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan");
 }
 Packet *packet_for(const rsf_game_render_pass &pass) {
     RD *rd = RD::get_singleton();
     Packet *packet = memnew(Packet);
     packet->pass = pass;
+    packet->vulkan = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan";
     packet->device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
-    packet->queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
+    if (!packet->vulkan) packet->queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
     return packet;
 }
 }
@@ -200,12 +212,13 @@ void boot() {
     HMODULE module = LoadLibraryW(reinterpret_cast<const wchar_t *>(library.utf16().get_data()));
     if (!module) { ERR_PRINT("Cannot load ReScaleFrame's native library: " + library + " (Windows error " + itos(GetLastError()) + ")"); return; }
 #define RSF_RESOLVE(name) native_##name = reinterpret_cast<decltype(native_##name)>(GetProcAddress(module, "rsfg_" #name)); if (!native_##name) return
-    RSF_RESOLVE(boot); RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
+    RSF_RESOLVE(boot); RSF_RESOLVE(boot_vulkan); RSF_RESOLVE(render_vulkan);
+    RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
 #undef RSF_RESOLVE
     const CharString path_utf8 = runtime.utf8(), id_utf8 = id.utf8();
     const rsf_godot_setup setup{sizeof(setup), RSF_GODOT_ABI_VERSION, path_utf8.get_data(), "4.7.2", id_utf8.get_data(), log, nullptr};
-    ready = native_boot(&setup) != 0;
+    ready = (OS::get_singleton()->get_current_rendering_driver_name() == "vulkan" ? native_boot_vulkan(&setup) : native_boot(&setup)) != 0;
     if (!ready) ERR_PRINT("ReScaleFrame native host rejected startup; inspect its dependency and initialization diagnostics.");
     if (ready) {
         auto attach = reinterpret_cast<decltype(&rsfg_attach_engine)>(GetProcAddress(module, "rsfg_attach_engine"));
@@ -320,6 +333,10 @@ void upscale(const RenderDataRD *data, double) {
     matrix(pass.previous_clip_to_clip, to_previous.inverse());
     const RID resolved_motion = resolve_motion(rb, depth, motion, to_previous, scene->taa_jitter);
     if (!resolved_motion.is_valid()) return;
+    const RID resolved_depth = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan" ?
+        rb->get_texture(StringName("rescaleframe"), StringName("depth_r32")) : depth;
+    if (!resolved_depth.is_valid()) return;
+    pass.depth = native(resolved_depth);
     pass.motion = native(resolved_motion);
     previous_projection = projection; previous_camera = scene->cam_transform; previous_size = rb->get_internal_size();
     previous_color = color.get_id(); last_frame = render_frame;
@@ -328,13 +345,32 @@ void upscale(const RenderDataRD *data, double) {
     last_pass.color_output_readable = last_pass.ui_input = last_pass.swapchain = last_pass.scene_surface = last_pass.sampled_texture = nullptr;
     RD::CallbackResource resources[] = {
         {color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
-        {depth, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
+        {resolved_depth, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {resolved_motion, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {output, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_COPY_TO}};
-    rd->driver_callback_add(execute, packet_for(pass), VectorView<RD::CallbackResource>(resources, 4));
+    Packet *packet = packet_for(pass);
+    if (packet->vulkan) {
+        auto &vk = packet->vk;
+        vk.struct_size = sizeof(vk); vk.abi_version = RSF_GODOT_ABI_VERSION; vk.pass = pass;
+        vk.pass.color_input = vk.pass.color_output = vk.pass.depth = vk.pass.motion = nullptr;
+        vk.instance = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT));
+        vk.physical_device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE));
+        vk.device = packet->device;
+        vk.instance_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
+        vk.device_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
+        auto describe = [rd](RID texture, const Size2i &size) {
+            return rsf_godot_vk_image{rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture),
+                uint32_t(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, texture)), uint32_t(size.x), uint32_t(size.y),
+                uint32_t((rd->texture_get_format(texture).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT) != 0)};
+        };
+        vk.color = describe(color, rb->get_internal_size()); vk.depth = describe(resolved_depth, rb->get_internal_size());
+        vk.motion = describe(resolved_motion, rb->get_internal_size()); vk.output = describe(output, rb->get_target_size());
+    }
+    rd->driver_callback_add(execute, packet, VectorView<RD::CallbackResource>(resources, 4));
 }
 void hudless(const RenderDataRD *data) {
     if (!admit(data) || last_pass.source_frame_id != render_frame) return;
+    if (RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan") return;
     RD *rd = RD::get_singleton();
     RID color = RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture_slice(primary_target, 0);
     if (!color.is_valid()) return;

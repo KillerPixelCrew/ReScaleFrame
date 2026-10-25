@@ -17,7 +17,8 @@ bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
 {
     if (!viewport.is_valid()) return false;
     auto* rendering = RenderingServer::get_singleton();
-    if (!rendering || rendering->get_current_rendering_driver_name() != "d3d12" ||
+    if (!rendering || (rendering->get_current_rendering_driver_name() != "d3d12" &&
+        !(rendering->get_current_rendering_driver_name() == "vulkan" && rsfg_vulkan_supported())) ||
         rendering->get_current_rendering_method() != "forward_plus") return false;
     const char* fields[] = {"sr_backend", "quality", "dlss_preset", "fg_backend", "fg_mode", "generated_frames", "latency_mode", "frame_limit_us", "gameplay"};
     for (const auto* name : fields) if (options.has(name)) {
@@ -45,7 +46,8 @@ Dictionary ReScaleFrameRuntime::get_status() const
     auto* rendering = RenderingServer::get_singleton();
     result["graphics_driver"] = rendering ? rendering->get_current_rendering_driver_name() : String();
     result["renderer"] = rendering ? rendering->get_current_rendering_method() : String();
-    result["graphics_driver_supported"] = rendering && rendering->get_current_rendering_driver_name() == "d3d12";
+    result["graphics_driver_supported"] = rendering && (rendering->get_current_rendering_driver_name() == "d3d12" ||
+        (rendering->get_current_rendering_driver_name() == "vulkan" && rsfg_vulkan_supported()));
     result["renderer_supported"] = rendering && rendering->get_current_rendering_method() == "forward_plus";
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
     const bool available = rsfg_status(&status) && status.session_id != 0;

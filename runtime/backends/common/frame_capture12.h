@@ -27,6 +27,7 @@ class FrameCapture12 {
     };
     std::filesystem::path directory;
     uint64_t first = 30, count = 4;
+    bool reset_sr = false;
     mutable std::mutex guard;
     std::vector<std::unique_ptr<Image>> images;
 
@@ -39,11 +40,13 @@ public:
         wchar_t value[32]{};
         if (GetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_FIRST", value, 32)) first = std::wcstoull(value, nullptr, 10);
         if (GetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_COUNT", value, 32)) count = (std::min)(uint64_t(16), std::wcstoull(value, nullptr, 10));
+        if (GetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_RESET_SR", value, 32)) reset_sr = std::wcscmp(value, L"1") == 0;
         std::filesystem::create_directories(directory);
     } catch (...) { directory.clear(); }
 
     bool enabled() const noexcept { return !directory.empty() && count; }
     bool wants(uint64_t frame) const noexcept { return enabled() && frame >= first && frame - first < count; }
+    bool force_sr_history_reset(uint64_t frame) const noexcept { return reset_sr && wants(frame); }
     bool pending() const { std::lock_guard lock(guard); return !images.empty(); }
 
     bool event(const rsf_frame_record& identity, const char* name, uint64_t sequence, bool reset, int32_t result) noexcept try {

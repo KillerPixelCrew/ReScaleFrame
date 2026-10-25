@@ -33,6 +33,17 @@ and bundled NuGet packages, without changing their generated public API.
 Read the [build and validation record](research/godot-engine-integration.md) for
 exact revisions, binary hashes, exported-player coverage and image failures.
 
+Native Vulkan FSR2/FSR3 uses the separately pinned FidelityFX SDK 1.1.4 at
+`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`. `eng/build-godot-vulkan.ps1` builds
+it in an ignored staging directory, with guarded storage-format and swapchain
+lifetime corrections. Reference sources remain unchanged. The payload includes
+the SDK license texts and a source/patch/compiler/binary hash receipt. Development
+headers come from pinned Godot Vulkan-Headers; the loader import library is
+generated from the installed Windows driver loader. No reference source is copied
+into first-party code or committed. A portable Khronos validation-layer binary
+was used only for development; its exact archive/DLL fingerprints are in the
+research record and it is not part of the runtime payload.
+
 ## Unity Mono DX12 adapter
 
 The local character-shader patch builder pins UnityPy 1.25.0 through its inline uv

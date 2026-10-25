@@ -40,6 +40,25 @@ typedef struct rsf_godot_engine_services {
     void (*reset_history)(void);
 } rsf_godot_engine_services;
 
+typedef void (*rsf_godot_vk_function)(void);
+typedef rsf_godot_vk_function (*rsf_godot_vk_proc)(void* object, const char* name);
+typedef struct rsf_godot_vk_image {
+    uint64_t image;
+    uint32_t format, width, height;
+    uint32_t copy_source;
+} rsf_godot_vk_image;
+/* Driver callback lease. Every image belongs to device and remains live through
+   the engine's submission fence. No Godot object crosses this interface. */
+typedef struct rsf_godot_vk_packet {
+    uint32_t struct_size, abi_version;
+    void* instance;
+    void* physical_device;
+    void* device;
+    rsf_godot_vk_proc instance_proc, device_proc;
+    rsf_game_render_pass pass;
+    rsf_godot_vk_image color, depth, motion, output;
+} rsf_godot_vk_packet;
+
 #if defined(RSF_GODOT_NATIVE_BUILD)
 #define RSF_GODOT_EXPORT __declspec(dllexport)
 #else
@@ -49,6 +68,9 @@ typedef struct rsf_godot_engine_services {
 extern "C" {
 #endif
 RSF_GODOT_EXPORT int rsfg_boot(const rsf_godot_setup* setup);
+RSF_GODOT_EXPORT int rsfg_boot_vulkan(const rsf_godot_setup* setup);
+RSF_GODOT_EXPORT int rsfg_vulkan_supported(void);
+RSF_GODOT_EXPORT int rsfg_render_vulkan(void* command_buffer, const rsf_godot_vk_packet* packet);
 RSF_GODOT_EXPORT int32_t rsfg_create_swapchain(void* factory, void* queue, void* window, const void* description, void** out);
 RSF_GODOT_EXPORT int rsfg_configure(const rsf_godot_settings* settings);
 RSF_GODOT_EXPORT int rsfg_status(rsf_godot_status* status);

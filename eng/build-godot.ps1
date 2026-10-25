@@ -2,7 +2,8 @@ param(
     [ValidateSet('Debug','Release')][string]$Configuration = 'Release',
     [switch]$VS2026,
     [switch]$Prepare,
-    [switch]$StageRuntime
+    [switch]$StageRuntime,
+    [switch]$StageOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -18,13 +19,15 @@ if ($LASTEXITCODE -or $taskRevision -ne $taskLock.bindings.revision) { throw 'go
 $taskDirty = & git -C $taskBindings status --porcelain
 if ($LASTEXITCODE -or $taskDirty) { throw 'The godot-cpp reference must be clean.' }
 $taskSuffix = if ($VS2026) { '-vs18' } else { '' }
-Push-Location -LiteralPath $taskRoot
-try {
-    & cmake --preset "windows-x64$taskSuffix" "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe"
-    if ($LASTEXITCODE) { throw 'Godot configuration failed.' }
-    & cmake --build --preset "windows-$($Configuration.ToLowerInvariant())$taskSuffix" --target rsf_godot
-    if ($LASTEXITCODE) { throw 'Godot native build failed.' }
-} finally { Pop-Location }
+if (!$StageOnly) {
+    Push-Location -LiteralPath $taskRoot
+    try {
+        & cmake --preset "windows-x64$taskSuffix" "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe"
+        if ($LASTEXITCODE) { throw 'Godot configuration failed.' }
+        & cmake --build --preset "windows-$($Configuration.ToLowerInvariant())$taskSuffix" --target rsf_godot
+        if ($LASTEXITCODE) { throw 'Godot native build failed.' }
+    } finally { Pop-Location }
+}
 $taskPackage = Join-Path $taskRoot '.local/godot/package/addons/rescaleframe'
 New-Item -ItemType Directory -Force -Path $taskPackage | Out-Null
 Copy-RsfGodotAddon (Join-Path $taskSource 'addons/rescaleframe') $taskPackage
@@ -54,6 +57,19 @@ if ($StageRuntime) {
     }
     foreach ($taskFile in @('LICENSE.txt','third-party-programs.txt')) {
         $taskPayload["xess/$taskFile"] = Join-Path $taskRoot "vendor/xess/$taskFile"
+    }
+    $taskVulkan = Join-Path $taskRoot '.local/godot/vulkan/runtime'
+    if (Test-Path -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')) {
+        $taskReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskVulkan 'fsr3-sdk-build.json') | ConvertFrom-Json
+        if ($taskReceipt.sdkCommit -ne $taskLock.vendor.fidelityfx_vulkan.revision -or
+            $taskReceipt.buildRecipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/build-sdk.ps1')).Hash -or
+            $taskReceipt.fsr2StoragePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/fsr2-storage-formats.json')).Hash -or
+            $taskReceipt.runtimeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')).Hash) {
+            throw 'The Vulkan FidelityFX runtime does not match its pinned build receipt.'
+        }
+        foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt','fsr3-sdk-build.json')) {
+            $taskPayload["fidelityfx-vulkan/$taskFile"] = Join-Path $taskVulkan $taskFile
+        }
     }
     $taskPayload['MFG-Unlocker-LICENSE.txt'] = Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'
     $taskManifest = @()
