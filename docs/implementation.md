@@ -1,5 +1,13 @@
 # Implementation tracker
 
+## REA MCP update, 25 October 2026
+
+Pinned and installed REA 6.8.0, with an optional private Node path in the repo
+launcher and matching existing user-wide registrations. Six production stdio
+checks passed the 229-tool/six-prompt catalog and target-free request; Ghidra/IDA
+readiness passed. This is tooling validation, without game or target analysis.
+Existing sessions need a reconnect. [Setup and evidence](tooling.md#rea-for-codex-and-claude-code).
+
 ## Drag'n Wash character motion, 20 October 2026
 
 Added a fingerprint-guarded character shader patch and its game-specific URP motion
