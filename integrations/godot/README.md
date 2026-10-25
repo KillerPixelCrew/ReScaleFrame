@@ -121,7 +121,8 @@ a persistent project UUID and installs the export plugin. In
 enabled=true
 ```
 
-Use the custom engine, Forward+ and the `d3d12` rendering driver. Attach a
+Use the custom engine, Forward+ and the `d3d12` or `vulkan` rendering driver,
+within the recorded provider acceptance above. Attach a
 `ReScaleFrameEffect` resource to the active Camera3D or WorldEnvironment
 compositor. This requests actual object and camera motion-vector production.
 The editor add-on's Tools menu can attach the resource to a selected node.
@@ -170,6 +171,18 @@ remain independent of SR. Native temporal upscaling is currently evaluated befor
 the external SR pass as a fallback, with an extra pass cost.
 
 ## Test and inspect generated images
+
+The aggregate Vulkan runner indexes actual player PNGs, raw/generated-image
+reports and failed cases in one HTML report. For example:
+
+```powershell
+./eng/test-godot-vulkan-matrix.ps1 -Target editor -Scenario sr,pcl -SrBackend 1,4,5 -ValidationLayerDirectory $env:VK_LAYER_PATH
+```
+
+Its defaults cover both editions, editors/exports and separate generated-image
+comparisons. This new runner has a preserved failing FSR1 control; its full
+matrix has not yet run. Check the [restart checkpoint](../../docs/implementation.md)
+before interpreting the latest builds as accepted.
 
 ```powershell
 ./eng/test-godot.ps1 -EngineBridge -Edition standard,mono -GraphicsApi d3d12

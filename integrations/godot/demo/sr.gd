@@ -25,7 +25,7 @@ func _ready() -> void:
         if argument.begins_with("--initial-sr="):
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
-    second_backend = 3 if initial_backend in [1, 5] else 5 - initial_backend
+    second_backend = 5 - initial_backend if initial_backend in [2, 3] else (1 if initial_backend == 4 else 3)
     resized_backend = initial_backend if initial_backend == 4 else second_backend
     if RenderingServer.get_current_rendering_driver_name() == "vulkan":
         _require(not runtime.call("configure", {"sr_backend": 3, "fg_mode": 1, "fg_backend": 2}, get_viewport().get_viewport_rid()), "Unsupported Vulkan FG provider was accepted")
@@ -62,7 +62,8 @@ func _check_provider(status: Dictionary, backend: int) -> void:
         _require(status.active_sr == 0 and status.sr_result != 0 and status.refused_frames > 20 and status.evaluated_frames == 0,
             "Missing SDK must retain the SR failure while producing spatial output")
     else:
-        _require(status.active_sr == backend and status.evaluated_frames > 20, "SR provider did not execute")
+        var effective_backend := 3 if backend == 7 else backend
+        _require(status.active_sr == effective_backend and status.evaluated_frames > 20, "SR provider did not execute")
 
 func _process(_delta: float) -> void:
     if runtime == null:

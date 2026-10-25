@@ -1,5 +1,17 @@
 # Current implementation and validation
 
+End-of-day checkpoint, 25 October 2026: work stopped at the user's request.
+The latest native Release gate passes 75 discovered tests, with 64 executed and
+11 opt-in skips, plus formatting and Clippy. Standard/.NET editors also build
+with a new FSR1 storage-format correction, but its GPU retake and matching
+template rebuilds have not run. The new aggregate Vulkan matrix runner preserves
+actual images and failures; its initial FSR1 case exposed the format mismatch,
+and a full matrix has not run. DLSS secondary-window teardown still crashes;
+the primary-only latency-chain experiment failed and was reverted. FSR2 stage
+captures narrow the remaining edge displacement without delivering a production
+fix. XeSS MFG capability/admission follow-up remains unimplemented.
+See the [progress tracker](implementation.md) for the restart checkpoint.
+
 25 October 2026: the developer-facing Godot integration is in progress under
 `integrations/godot`. Custom standard/.NET 4.7.2 Forward+ DX12 engines passed
 SR/FG/MFG provider switching and PCL/input-marker fixtures. Actual FSR-generated

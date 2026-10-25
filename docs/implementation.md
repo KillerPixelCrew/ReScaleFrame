@@ -1,5 +1,44 @@
 # Implementation tracker
 
+## End-of-day checkpoint, 25 October 2026
+
+Stopped at the user's request, with all repository changes committed for the
+next session. No completion or broad readiness claim is made.
+
+- Latest native Release verification: 75 discovered, 64 executed, 11 opt-in skips;
+  Rust formatting and Clippy pass. Log: `.local/godot/verify-godot-wrapup-20261025.log`.
+- Standard/.NET editors build with the FSR1 format correction. The first new
+  aggregate-matrix case correctly failed because FSR1's shader declared RGBA16F
+  while RCAS wrote an RGBA8 UNORM destination. The guarded engine patch selects
+  the storage format separately for EASU and RCAS. GPU retakes and updated
+  Debug/Release templates remain pending. [Format evidence and build hashes](research/godot-fsr1-storage-format-20261025.md).
+- `eng/test-godot-vulkan-matrix.ps1` now aggregates functional/export fixtures and
+  actual generated-image reports, preserves failed cases and indexes player PNGs.
+  Initial failed-control evidence is
+  `.local/godot/matrix-20261025-211312-790/index.html`; the full matrix and passing
+  aggregate path remain unverified. SR fixtures now accept Off, FSR1 and Auto.
+- The latest XeSS FG guide-extent check passes both editions' functional cases
+  and four camera-motion generated-image comparisons after the real SR plan
+  settles. [Evidence](research/godot-fsr4-fg-interop-20261025.md).
+- DLSS options publication removes API/synchronization errors, but a native
+  secondary window still causes a shutdown access violation in driver queue
+  destruction. Startup, resize, count and provider-return controls shut down
+  cleanly. The primary-only latency-chain candidate failed because the SDK
+  re-enabled the omitted secondary marker; that candidate was reverted.
+  [Investigation and next proposal](research/godot-vulkan-dlss-fg.md).
+- FSR2's six bounded diagnostic captures produced 24 intermediate outputs.
+  Boundary bias is already present in reprojected history and can increase during
+  rectification. This is diagnostic evidence, not a production correction.
+  [Stage evidence and limits](research/godot-fsr2-stage-edges-20261025.md).
+- XeSS count2/3 cannot be accepted on this NVIDIA device, whose SDK maximum is
+  one. Cross-provider count preflight and general ordinal analysis were audited
+  but not implemented. [Audit](research/godot-xess-mfg-capability-audit-20261025.md).
+
+Resume with the FSR1 GPU retake, then the distinct secondary-WSI lifetime fix,
+FSR2 reconstruction investigation and pending capability/scene/export coverage.
+Retain the existing image gates and failed controls. Captures remain bounded;
+duplicate cleanup does not disable new captures.
+
 ## Godot developer integration in progress, 25 October 2026
 
 Latest harness milestone: XeSS FG editor image checks pass all twelve standard/.NET

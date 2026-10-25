@@ -161,3 +161,111 @@ importer regression is a separate gate. A source review also found that Streamli
 requirements can include unsupported adapters' mandatory extensions; selected
 device filtering is owned by the parent integration work. AMD startup must not
 be claimed until that path is verified.
+
+## Real negative admission in standard and .NET
+
+The matched E2EE native stage above uses standard editor
+`DE9BA015EDC32412380BE6A57B59118BAC604517538C957371ADF6D8946145CB` and
+.NET editor
+`4C6461FC557BE416EAF35207A92B7963ECC3487B8FE224C36F9AA33729A594D0`.
+The parent also recorded passing standard/.NET debug-export XeSS FG tests on
+this stage, covering the factored importer's positive device path separately
+from the FSR4 negative result.
+
+`integrations/godot/demo/fg_admission.gd` is an explicit negative-admission
+scenario, not a statement that AMD hardware is unsupported. It starts working
+FSR3 FG with SR Off and latency On, samples real activity, then requests exact
+FG4 with one generated frame. It requires refusal and checks unchanged requested
+settings, session and provider immediately. Later samples must show continuing
+source, tagging, real generation-callback, sleep and marker activity. Player PNGs
+must contain the scene. The .NET case also checks the C# facade. The harness
+requires exactly one successful native WSI-owner creation event, excluding an
+unobserved replacement. This scenario requires Vulkan, the engine bridge,
+Khronos validation and reported synchronization validation.
+
+`validation-20261025-210202-553.json` passes both standard and .NET on E2EE,
+with process extension-point mitigation and maintained foreground. Each run
+refuses FG4 and retains FSR3/result zero, SR Off and the same session. Both
+record source IDs `44 -> 74`, tagging/generation callbacks `39 -> 69`, sleeps
+`45 -> 75` and markers `266 -> 446`. Each has exactly one successful WSI-owner
+creation event. The .NET C# check passes. Both processes exit cleanly, with no
+VUID, validation error or synchronization hazard. The loaded Khronos DLL is
+`E86FA4F70676A120F00A32BEAC6979CEB3CAFCE70DE42FA9107C89F587AB206E`,
+and its report explicitly enables Synchronization.
+
+The compact receipt is `fg4-negative-admission-20261025-summary.json`, with
+individual results under `validation/{standard,mono}/fg_admission-20261025-210202-553/`.
+The .NET `vulkan-continued.png` was opened and shows the cyan object and floor
+after the refusal. These results prove that an unsupported request preserves the
+working provider. They do not prove FSR4 generation, AMD execution or latency
+improvement.
+
+## Actual guide-extent correction
+
+Source review found an additional interop lifetime edge while reviewing Godot's
+new FG4 routing. The settings generation alone does not identify a settled SR
+input plan. For example, DLSS can query 427 input pixels while Godot renders its
+initial 426-pixel scale, then converge on the next source without another
+settings change. A fixed interop guide allocated from the first source would
+retain the wrong width. The same edge applies to the existing XeSS broker.
+
+The host correction tracks the first successful prepare's actual render extent
+for its session/view. A later extent change requests normal WSI-owner recreation
+and refuses prepare/HUD-less tagging until recreation completes. A different
+view or session must not silently replace the primary owner. Normal Camera3D
+replacement retains the render-target view identity and uses a history reset,
+so unchanged extents do not require WSI retirement. View ID zero is valid and
+must not double as an uninitialized marker.
+
+The E2EE negative-admission evidence above remains attached to that exact stage.
+A subsequent selected-device SDK/native stage and standard/.NET XeSS FG
+SR-switch/resize regressions are separate evidence, recorded next.
+
+### Selected-device SDK and actual settling regression
+
+The subsequent native stage is
+`3EBCE3E011211E195A573CFE786FBCA465E3A85967D5A68A3B1F91ABDFD3F9B9`.
+The editor identities remain DE9B/4C64 above. Its selected-device Streamline
+common DLL is
+`17D1D02041F5BF8EAE51D2682D1F91755E5E4EA3371702F1DF7B9432CF92A80C`;
+the interposer is
+`B115E2B70EC3A58D831396764ECF747792D9B814596C66453F483FDB98D6E9F6`.
+These identities are retained in the immutable per-fixture runtime manifests.
+
+`validation-20261025-210545-274.json` passes both standard and .NET with XeSS FG
+5, one generated frame and latency On. The fixture switches SR3 to SR Off while
+FG remains active, tests FG Off/resume, coexists with a secondary native window,
+and returns to SR3 with history reset and a 1600×900 resize. It saves player PNGs
+and verifies the .NET C# facade. Both strict synchronization-validation runs exit
+cleanly. This is a functional lifecycle regression, not a generated-image claim.
+
+The bounded standard camera-motion pair
+`visual-20261025-210703-517.json` then passes with SR5 and FG5, latency On and a
+fresh matching 1280×720 8× MSAA reference. This case actually triggers settling:
+source 1 renders at 853×480 while the SDK reports a 753×424 plan, so it takes the
+existing visible spatial fallback. The log records two successful WSI-owner
+creations. Captured sources 12 through 15 have settled 753×424 guide inputs.
+
+All four actual SDK-generated images pass the unchanged geometric and image
+gates. Their provenance records SDK output array ordinal 0, requested/observed
+output count 1 and the interpolation-output callback boundary. Maximum material
+centroid error is `0.1320674129` output pixels; maximum interpolation residual
+after source displacement is `0.0314340901` pixels. The independently rendered
+reference fraction is a `0.5` test hypothesis. SDK interpolation time is still
+not established and must not be inferred from the passing comparison.
+
+Final status reports SR5/FG5 active with both results zero, 88 evaluated sources,
+one initial size-plan refusal, 88 tags and 87 observed generation callbacks.
+Khronos validation is loaded, Synchronization is reported, implicit layers and
+RTSS are excluded, process mitigation is 1, and foreground is maintained. There
+are no VUIDs, validation errors or synchronization hazards. The frame-14
+comparison PNG was opened. Only four generated images were captured, with no
+repeat of the larger motion matrix.
+
+`xess-fg5-guide-extent-3ebce-20261025-summary.json` retains both functional cases,
+the fresh image pair identities, SDK hashes, initial mismatch, two owner-create
+events, settled input metadata, output provenance, validation fingerprints and
+error maxima. This corrects the guide-extent lifetime edge without reassigning
+the earlier E2EE negative-admission evidence to a newer binary. It does not add
+AMD FSR4 FG execution, a known XeSS interpolation fraction or lower-latency
+acceptance.

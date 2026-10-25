@@ -28,6 +28,9 @@ FILES = (
     "servers/rendering/renderer_viewport.cpp",
     "servers/rendering/rendering_device_graph.cpp",
     "thirdparty/amd-fsr2/shaders/ffx_fsr2_callbacks_glsl.h",
+    "servers/rendering/renderer_rd/effects/fsr.h",
+    "servers/rendering/renderer_rd/effects/fsr.cpp",
+    "servers/rendering/renderer_rd/shaders/effects/fsr_upscale.glsl",
 )
 original = {
     path: subprocess.check_output(["git", "-C", str(ENGINE), "show", f"HEAD:{path}"], text=True, encoding="utf-8")
@@ -358,13 +361,53 @@ replace(path, '\t\tVkSubmitInfo submit_info = {};',
         '\t\tVkSubmitInfo submit_info = {};\n'
         '\t\tif (rsf_commands->rescaleframe_timeline) submit_info.pNext = &rsf_timeline_info;')
 
+previous_fsr1_formats_plan = planned.copy()
+path = "servers/rendering/renderer_rd/shaders/effects/fsr_upscale.glsl"
+replace(path, 'layout(rgba16f, set = 1, binding = 0) uniform restrict writeonly image2D fsr_image;',
+        '#ifdef FSR_OUTPUT_RGBA8\nlayout(rgba8, set = 1, binding = 0) uniform restrict writeonly image2D fsr_image;\n'
+        '#else\nlayout(rgba16f, set = 1, binding = 0) uniform restrict writeonly image2D fsr_image;\n#endif')
+path = "servers/rendering/renderer_rd/effects/fsr.h"
+replace(path, '\t\tFSR_SHADER_VARIANT_FALLBACK,\n',
+        '\t\tFSR_SHADER_VARIANT_FALLBACK,\n\t\tFSR_SHADER_VARIANT_NORMAL_RGBA8,\n'
+        '\t\tFSR_SHADER_VARIANT_FALLBACK_RGBA8,\n\t\tFSR_SHADER_VARIANT_MAX,\n')
+replace(path, '\tPipelineDeferredRD pipeline;',
+        '\tFSRShaderVariant base_variant = FSR_SHADER_VARIANT_NORMAL;\n\tPipelineDeferredRD pipelines[FSR_SHADER_VARIANT_MAX];')
+path = "servers/rendering/renderer_rd/effects/fsr.cpp"
+replace(path, '\tfsr_shader.initialize(fsr_upscale_modes);',
+        '\tfsr_upscale_modes.push_back("\\n#define MODE_FSR_UPSCALE_NORMAL\\n#define FSR_OUTPUT_RGBA8\\n");\n'
+        '\tfsr_upscale_modes.push_back("\\n#define MODE_FSR_UPSCALE_FALLBACK\\n#define FSR_OUTPUT_RGBA8\\n");\n'
+        '\tfsr_shader.initialize(fsr_upscale_modes);')
+replace(path, '\tFSRShaderVariant variant;', '\tFSRShaderVariant &variant = base_variant;')
+replace(path, '\tpipeline.create_compute_pipeline(fsr_shader.version_get_shader(shader_version, variant));',
+        '\tfor (int output_variant = 0; output_variant < 2; ++output_variant) {\n'
+        '\t\tint index = variant + output_variant * 2;\n'
+        '\t\tpipelines[index].create_compute_pipeline(fsr_shader.version_get_shader(shader_version, index));\n\t}')
+replace(path, '\tpipeline.free();', '\tfor (auto &pipeline : pipelines) {\n\t\tpipeline.free();\n\t}')
+replace(path, '\tFSRUpscalePushConstant push_constant;',
+        '\tauto upscale_format = RD::get_singleton()->texture_get_format(upscale_texture).format;\n'
+        '\tauto destination_format = RD::get_singleton()->texture_get_format(p_destination_texture).format;\n'
+        '\tERR_FAIL_COND_MSG(upscale_format != RD::DATA_FORMAT_R16G16B16A16_SFLOAT && upscale_format != RD::DATA_FORMAT_R8G8B8A8_UNORM, "Unsupported FSR1 intermediate storage format.");\n'
+        '\tERR_FAIL_COND_MSG(destination_format != RD::DATA_FORMAT_R16G16B16A16_SFLOAT && destination_format != RD::DATA_FORMAT_R8G8B8A8_UNORM, "Unsupported FSR1 destination storage format.");\n'
+        '\tint upscale_variant = base_variant + (upscale_format == RD::DATA_FORMAT_R8G8B8A8_UNORM ? 2 : 0);\n'
+        '\tint destination_variant = base_variant + (destination_format == RD::DATA_FORMAT_R8G8B8A8_UNORM ? 2 : 0);\n'
+        '\tRID destination_shader = fsr_shader.version_get_shader(shader_version, destination_variant);\n'
+        '\tERR_FAIL_COND(destination_shader.is_null());\n\n\tFSRUpscalePushConstant push_constant;')
+replace(path, '\tRD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, pipeline.get_rid());',
+        '\tRD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, pipelines[upscale_variant].get_rid());')
+replace(path, '\tRID shader = fsr_shader.version_get_shader(shader_version, 0);',
+        '\tRID shader = fsr_shader.version_get_shader(shader_version, upscale_variant);')
+replace(path, '\t//FSR Rcas',
+        '\t// RCAS can write the SDR viewport while EASU writes a floating-point intermediate.\n'
+        '\tRD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, pipelines[destination_variant].get_rid());\n'
+        '\tshader = destination_shader;\n\n\t//FSR Rcas')
+
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

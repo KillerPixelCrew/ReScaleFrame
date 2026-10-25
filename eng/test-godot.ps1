@@ -10,7 +10,7 @@ param(
     [switch]$CaptureFrames,
     [switch]$NativeVulkanPresentation,
     [switch]$MissingSrRuntime,
-    [ValidateSet(1,2,3,4,5)][int]$SrBackend = 2,
+    [ValidateSet(0,1,2,3,4,5,6,7)][int]$SrBackend = 2,
     [ValidateSet(1,3,5)][int]$FgBackend = 3,
     [ValidateRange(1,15)][int]$GeneratedFrames = 1,
     [switch]$DisableLegacyExtensionPoints,
@@ -44,6 +44,7 @@ if ($MaintainForeground -and !$EngineBridge) { throw 'Foreground maintenance req
 if ($Scenario -eq 'pcl' -and (!$EngineBridge -or !$NoCSharp)) { throw 'The camera-free PCL fixture requires -EngineBridge -NoCSharp. C# is covered by the runtime/controller fixtures.' }
 if ($GpuValidation -and ($GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'GPU validation currently requires an explicit Vulkan-only test.' }
 if ($CaptureFrames -and (!$EngineBridge -or $Scenario -notin @('sr','fg') -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Raw readback requires -EngineBridge -GraphicsApi vulkan -Scenario sr/fg.' }
+if ($Scenario -eq 'sr' -and $SrBackend -in @(0,6) -and ($CaptureFrames -or $MissingSrRuntime)) { throw 'SR Off and engine FSR1 use player PNG checks; SDK readback and missing-runtime controls require an external SR provider.' }
 if ($MissingSrRuntime -and (!$EngineBridge -or $Scenario -ne 'sr' -or !$NoCSharp -or $Exported -or $CaptureFrames -or $SrBackend -notin @(2,3) -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Missing-runtime recovery requires -EngineBridge -Scenario sr -SrBackend 2/3 -GraphicsApi vulkan -NoCSharp, without export/raw capture.' }
 if (!(Test-Path -LiteralPath (Join-Path $taskPackage 'bin/ReScaleFrame.Godot.Native.dll'))) {
     throw 'Run eng/build-godot.ps1 before validation.'

@@ -554,3 +554,136 @@ publication contract, including refusing WSI if both enable and explicit Off
 publication fail. Resource-completion waits are unchanged. Whether this corrects
 the observed resize error requires the next strict device retake; the static
 review does not establish the runtime root cause.
+
+The options-only retake uses native DLL
+`E2EE9675BFE9A7958F8E261E7181285EB973C4494605663F632B8448C2E6FC5D`
+after the Windows gate passes 74 discovered tests, 63 executed and 11 explicit
+skips, plus formatting and Clippy. Standard fixture
+`fg_lifecycle-20261025-205620-329` (PID 4584) and Mono fixture
+`fg_lifecycle-20261025-205644-034` (PID 31952) now report zero API and
+synchronization errors across both log streams. Synchronization validation is
+confirmed enabled, all eleven state samples pass, and the Mono C# facade passes.
+This corrects the preceding resize/return/secondary validation failures. Both
+processes still exit with `0xc0000005` after the final sample, so full lifecycle
+acceptance remains refused despite those successful rendering checks.
+
+Two bounded debugger reproductions identify the remaining fault without changing
+global debugger settings. Each helper verifies the explicitly owned Godot
+executable path before attaching, captures a small second-chance minidump and
+resumes the normal fatal exception. The first trace lacked unwind metadata for
+the driver loaded after attachment; refreshing the module list in the second
+trace fixes that diagnostic limitation. The crashing thread is the same render
+thread that publishes SDK options and shuts down Streamline, not a driver worker.
+
+In `dlss-lifecycle-debug-20261025-210017-275`, PID 16156, the stack is:
+
+- `nvoglv64.dll` RVAs `0xf09724`, `0xf09922`, `0xef46d4`.
+- Khronos validation DLL RVA `0x1dc744`, then Vulkan loader RVAs `0x5154e` and
+  `0x6cdbd`.
+- Godot editor RVA `0x1772f8a`.
+
+Matched editor disassembly and source place the final return address immediately
+after `vkDestroyDevice` in `RenderingDeviceDriverVulkan` destruction. The driver
+is releasing queue objects; at `0xf09724` it performs an atomic decrement at
+`RCX+0x30` with `RCX=0`, reached through queue state at offsets `0x120`, `0x2010`
+and `0x2b5c0`. This establishes the failing operation and invalid pointer, not
+the still-unknown origin of that driver state. The interposer is retained by the
+bridge after SDK shutdown and is absent from this fault stack; a simple jump
+into an unloaded interposer is disproved.
+
+Two isolated controls retain the same E2EE native DLL and original SDK payload:
+
+- `dlss-count1-shutdown-20261025-210310-125`, PID 20276: 90-source startup-only
+  count-one control, no readbacks or later resize/provider changes. Exit zero,
+  strict API/synchronization clean, FG active, SDK result zero, 88 tagged sources.
+- `dlss-resize-shutdown-20261025-210428-775`, PID 3596: same Off/resume and
+  active resize as the full fixture, stops after the source-115 sample before
+  changing count. Exit zero with strict API/synchronization checks clean.
+
+The remaining shutdown fault therefore requires a later lifecycle action than
+this first active resize. Focused count-change and provider-return controls are
+the next discriminators. No abandoned-recording layout adjustment or speculative
+driver workaround is mixed into these controls.
+
+The next two E2EE controls also exit zero with clean strict validation:
+`dlss-count-shutdown-20261025-210531-431`, PID 22604, stops after the live
+count-one to three to one changes at source 175;
+`dlss-provider-shutdown-20261025-210610-725`, PID 9028, additionally completes
+the FFX replacement and DLSS return, stopping at source 235 before secondary
+creation. Consequently the remaining device-destruction fault requires later
+secondary-window actions in this fixture. This narrows the investigation without
+blaming count changes, provider replacement or active resize on their own.
+
+The corrected secondary-only stop,
+`dlss-secondary-shutdown-20261025-210833-930`, PID 3384, reaches source 265
+with one visible native secondary window, then returns immediately after asking
+the tree to quit. It reproduces the final access violation with clean API and
+synchronization validation. No secondary or primary resize occurs after creating
+that window. An earlier private stop lacked an immediate return after `quit`, so
+it also executed the following resize statement; that ambiguity was corrected
+before using the narrower result. The prior provider-only control also executed
+the following deferred Window construction after `quit`, but SDK logs show no
+secondary swapchain creation in that clean control.
+
+The current engine attaches `VkSwapchainLatencyCreateInfoNV` to both primary
+and native secondary creation, setting `latencyModeEnable=false` on the latter.
+Only the primary HWND owns PCL/Reflex. A proposed primary-only extension-chain
+opt-in is the next small A/B test. Its effect on this driver lifetime fault is
+not established by the source review or by the clean primary ownership log.
+
+The bounded engine patch now performs that primary-only opt-in, with an exact
+source replacement and migration from the preceding known patch plan. Applying
+the patch and running its pinned-source `--check` both pass. The primary's
+`latencyModeEnable` assignment is unchanged. New standard and Mono editor builds
+and an A/B using the preserved E2EE SDK/native fixture are required before
+attributing any crash correction to this change. The observed driver file is
+version `32.0.16.2101`, SHA-256
+`B57E4C1E92950FBBA9BDFC9267E0951B633A16A9B2F4700A7B1194B2D3365642`.
+
+## Wrap-up: failed secondary latency-chain candidate
+
+The primary-only engine candidate does not fix the shutdown fault. Preserved
+E2EE native and SDK payloads were tested with only the editor changed:
+
+| Fixture | PID | Editor SHA-256 | Result |
+| --- | --- | --- | --- |
+| `dlss-full-shutdown-20261025-211328-430` | 10648 | `27840B9DAFD935F0C1866A16FC540338F8B60853452D84A93B0ED9561EAC28A6` | Eleven scalar samples and strict API/synchronization checks pass; final `0xc0000005` |
+| `dlss-full-shutdown-20261025-211405-235` | 32052 | `165544B196B153ADED2D97735B341F24AA0A1218E2D96ABD903E51D51AA5A792` | Same failure, C# facade passes |
+
+Source and runtime evidence explain why this was not a valid latency-disabled
+secondary A/B. Pinned `sl.reflex/reflexEntry.cpp` before-create hook automatically
+prepends a latency-enabled `VkSwapchainLatencyCreateInfoNV` when none exists.
+The after-create hook reads the resulting flag and forwards it to common compute.
+With the original explicit false marker, LL2 logs a secondary and preserves the
+primary. With the candidate's absent marker, it selects the secondary as primary.
+For example the standard retake selects `0x1f910000001f91` with previous owner
+`0x1cd30000001cd3`; the Mono retake shows the same ownership replacement. The
+candidate was therefore reverted in both the tracked engine recipe and ignored
+source. Its immutable editor artifacts and failed evidence remain recorded.
+
+The common Vulkan `notifyCreateSwapchain` and `notifyDestroySwapchain` methods
+simply forward to `m_reflex`. The corrected LL2 false-marker create path returns
+without replacing its cached owner, and destroy clears that cache only when the
+destroyed handle matches. Its semaphore is allocated once during initialization
+and freed during shutdown. This source audit finds no secondary-specific common
+LL2 context allocation on those notification paths. It does not establish the
+origin of the driver queue's null context, and the original false-marker path
+still demonstrably crashes after native secondary use.
+
+The remaining proposal is a distinct synchronous native-secondary WSI scope,
+separate from FFX primary's existing DLSS-G-only suppression. Such a scope would
+skip only DLSS-G and Reflex WSI hooks for explicitly identified secondary calls,
+preserve common/PCL hooks and other threads, and allow a genuinely plain native
+secondary creation without Reflex automatically enabling its latency chain.
+Create/destroy lifetime and any short LL2 broker lease must be reviewed together
+to avoid recursively taking the notification mutex. This proposal is not
+implemented or device-tested. It requires new bounded strict secondary and full
+standard/Mono lifecycle retakes before broad lifecycle acceptance.
+
+Work stopped at the user's wrap-up request. The approved options-publication and
+FFX submission-sequence corrections remain separate from this unresolved
+secondary teardown issue. No abandoned-recording layout adjustment was mixed
+in. No owned GPU, debugger, REA or process handle remains live. The useful second
+debugger minidump is 266,556 bytes; its redundant first dump was removed after
+extracting the fault metadata. The conditional full current-package lifecycle
+pair was not run because the preserved-E2EE candidate pair failed.
