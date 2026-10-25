@@ -98,13 +98,13 @@ int main() {
     VkPresentInfoKHR info{}; info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR; info.swapchainCount = 1; info.pSwapchains = &self.chain;
     auto* prepare = reinterpret_cast<void*>(10); auto* hudless = reinterpret_cast<void*>(11);
     submitted_slot(self, 42, prepare, hudless);
-    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !on_calls && !self.status.presentation.enabled,
-        "recording without submission never enables FG");
+    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !on_calls && off_calls == 1 && !self.status.presentation.enabled,
+        "initial incomplete source explicitly publishes Off and NoClient before ordinary Present");
     submitted_slot(self, 43, prepare, hudless); lease_frame = 43;
     rsf_dlssgvk_submitted(&self, &prepare, 1);
     require(fence_submits == 1 && self.slots[43 % 6].source_pending, "prepare-only submission gets completion fence");
-    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !on_calls,
-        "prepare-only submitted frame presents ordinarily");
+    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !on_calls && off_calls == 2,
+        "consecutive incomplete source republishes exact Off options before ordinary Present");
     submitted_slot(self, 44, prepare, hudless); lease_frame = 44;
     void* lists[] = {prepare, hudless}; rsf_dlssgvk_submitted(&self, lists, 2);
     const auto previous_submits = fence_submits;
@@ -127,7 +127,8 @@ int main() {
     require(wait_inputs(self, in_flight) == RSF_BACKEND_OK && !in_flight.sdk_inputs_pending,
         "SDK timeline value zero is a valid captured completion, not a missing lease");
     in_flight.sdk_inputs_value = expected_inputs_value = 9;
-    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && off_calls == 1 && !self.status.presentation.enabled,
+    const auto before_duplicate_off = off_calls;
+    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && off_calls == before_duplicate_off + 1 && !self.status.presentation.enabled,
         "duplicate source disables interpolation while preserving ordinary Present");
     submitted_slot(self, 45, prepare, hudless); lease_frame = 46; rsf_dlssgvk_submitted(&self, lists, 2);
     require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && on_calls == 1 && !self.status.presentation.enabled,
@@ -137,8 +138,9 @@ int main() {
     require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && on_calls == 1, "unknown submission completion refuses interpolation");
     submitted_slot(self, 48, prepare, hudless); lease_frame = 48; rsf_dlssgvk_submitted(&self, lists, 2);
     refuse_options = true;
-    require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !self.status.presentation.enabled,
-        "failed enable retains ordinary native presentation");
+    const auto before_refused_present = present_calls;
+    require(rsf_dlssgvk_present(&self, &info) == VK_ERROR_INITIALIZATION_FAILED && present_calls == before_refused_present &&
+        !self.status.presentation.enabled, "failed enable and failed explicit Off refuse WSI rather than trusting cached Off");
     refuse_options = false;
     lease_session = 8; lease_frame = 1;
     submitted_slot(self, 1, prepare, hudless); rsf_dlssgvk_submitted(&self, lists, 2);
@@ -173,5 +175,15 @@ int main() {
     info.pSwapchains = &self.chain;
     require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !self.status.presentation.enabled,
         "fenced rejected tags never become accepted interpolation inputs");
+    const auto before_repeated_on = on_calls;
+    require(configure(self, true) == RSF_BACKEND_OK && configure(self, true) == RSF_BACKEND_OK && on_calls == before_repeated_on + 2,
+        "unchanged On count and NoClient options are published for each future Present");
+    const auto before_repeated_off = off_calls;
+    require(configure(self, false) == RSF_BACKEND_OK && configure(self, false) == RSF_BACKEND_OK && off_calls == before_repeated_off + 2,
+        "disable and repeated drain publish Off rather than trusting local enabled cache");
+    rsf_dlssgvk recreated{}; recreated.options = options;
+    const auto before_recreated_off = off_calls;
+    require(configure(recreated, false) == RSF_BACKEND_OK && off_calls == before_recreated_off + 1,
+        "reconstructed owner publishes NoClient and Off even with default local state");
     std::puts("Synthetic DLSS Vulkan FG identity, MFG and WSI checks passed");
 }

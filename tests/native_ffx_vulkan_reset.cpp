@@ -45,6 +45,7 @@ int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
 void record(rsf_ffxgvk& self, uint64_t frame, uint32_t flags) {
     self.latest = frame;
     auto& slot = self.slots[frame % self.slots.size()]; slot = {};
+    slot.recording_sequence = ++self.recording_sequence;
     slot.record.frame_id = frame; slot.record.flags = flags;
     slot.prepared = slot.hudless = slot.submitted_prepare = slot.submitted_hudless = true;
     slot.consumer_completion = reinterpret_cast<VkFence>(uintptr_t(21));

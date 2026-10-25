@@ -2,6 +2,9 @@
 #include <rescaleframe/native_fg_vulkan.h>
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include "native_fg_ffx_vulkan.h"
+#if defined(RSF_HAVE_FSR4_FG_VK)
+#include "native_fg_fsr4_vulkan.h"
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
 #include "native_fg_xess_vulkan.h"
 #endif
@@ -10,19 +13,30 @@
 
 namespace {
 std::atomic<bool> occupied{false};
-constexpr uint32_t dlss_backend = 1, ffx_backend = 3, xess_backend = 5;
+constexpr uint32_t dlss_backend = 1, ffx_backend = 3, fsr4_backend = 4, xess_backend = 5;
 constexpr int32_t wsi_initialization_failed = -3;
 }
 struct rsf_xessgvk;
+struct rsf_fsr4gvk;
 struct rsf_fgvk {
     uint32_t backend = 0, generated_count = 1;
     rsf_ffxgvk* ffx = nullptr;
     rsf_dlssgvk* dlss = nullptr;
     rsf_xessgvk* xess = nullptr;
+    rsf_fsr4gvk* fsr4 = nullptr;
     bool claimed = false;
     ~rsf_fgvk() { if (claimed) occupied = false; }
 };
 namespace {
+#if defined(RSF_HAVE_FSR4_FG_VK)
+rsf_backend_result fsr4_result(int32_t result) {
+    if (!result) return RSF_BACKEND_OK;
+    if (result == RSF_FSR4FG_INVALID_ARGUMENT) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (result == RSF_FSR4FG_ABI_MISMATCH) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (result == RSF_FSR4FG_NOT_SUPPORTED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    return RSF_BACKEND_ERROR_FEATURE_FAILED;
+}
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
 rsf_backend_result xess_result(int32_t result) {
     if (!result) return RSF_BACKEND_OK;
@@ -32,6 +46,13 @@ rsf_backend_result xess_result(int32_t result) {
 }
 #endif
 rsf_backend_result destroy_provider(rsf_fgvk& self) {
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self.backend == fsr4_backend) {
+        const auto result = fsr4_result(rsf_fsr4gvk_destroy(self.fsr4));
+        if (result == RSF_BACKEND_OK) self.fsr4 = nullptr;
+        return result;
+    }
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self.backend == xess_backend) {
         const auto result = xess_result(rsf_xessgvk_destroy(self.xess));
@@ -64,9 +85,19 @@ extern "C" rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup* se
     if (setup->graphics.abi_version != RSF_SRVK_ABI_VERSION)
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if ((backend != dlss_backend && backend != ffx_backend && backend != xess_backend) || (backend == ffx_backend && count != 1)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if ((backend != dlss_backend && backend != ffx_backend && backend != fsr4_backend && backend != xess_backend) ||
+        ((backend == ffx_backend || backend == fsr4_backend) && count != 1)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (host && host->struct_size < sizeof(*host)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (host && host->abi_version != RSF_FGVK_HOST_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (backend == fsr4_backend) {
+#if !defined(RSF_HAVE_FSR4_FG_VK)
+        return RSF_BACKEND_ERROR_NOT_COMPILED;
+#else
+        if (!host || !host->window || host->timeline_enabled != 1 ||
+            !setup->graphics.runtime_directory_utf8 || !setup->graphics.runtime_directory_utf8[0])
+            return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#endif
+    }
     if (backend == xess_backend) {
 #if !defined(RSF_HAVE_XESS_FG_VK)
         return RSF_BACKEND_ERROR_NOT_COMPILED;
@@ -80,6 +111,12 @@ extern "C" rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup* se
     self->claimed = true;
     uint64_t owned_chain = 0;
     rsf_backend_result created;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (backend == fsr4_backend) {
+        const rsf_fsr4gvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count};
+        created = fsr4_result(rsf_fsr4gvk_create(setup, &options, &self->fsr4, &owned_chain));
+    } else
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (backend == xess_backend) {
         const rsf_xessgvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count, host->intel_runtime_directory};
@@ -88,7 +125,7 @@ extern "C" rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup* se
 #endif
     created = backend == dlss_backend ? rsf_dlssgvk_create(setup, &self->dlss, &owned_chain) : rsf_ffxgvk_create(setup, &self->ffx, &owned_chain);
     if (created != RSF_BACKEND_OK) {
-        if (self->dlss || self->ffx || self->xess) {
+        if (self->dlss || self->ffx || self->fsr4 || self->xess) {
             const auto retired = destroy_provider(*self);
             if (retired != RSF_BACKEND_OK) { *chain = owned_chain; *out = self.release(); return retired; }
         }
@@ -104,6 +141,9 @@ extern "C" rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup* se
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 extern "C" int32_t rsf_fgvk_images(rsf_fgvk* self, uint32_t* count, uint64_t* images) {
     if (!self || !count) return wsi_initialization_failed;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return rsf_fsr4gvk_images(self->fsr4, count, images);
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return rsf_xessgvk_images(self->xess, count, images);
 #endif
@@ -111,6 +151,9 @@ extern "C" int32_t rsf_fgvk_images(rsf_fgvk* self, uint32_t* count, uint64_t* im
 }
 extern "C" int32_t rsf_fgvk_acquire(rsf_fgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
     if (!self || !index) return wsi_initialization_failed;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return rsf_fsr4gvk_acquire(self->fsr4, timeout, semaphore, fence, index);
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return rsf_xessgvk_acquire(self->xess, timeout, semaphore, fence, index);
 #endif
@@ -122,8 +165,12 @@ extern "C" rsf_backend_result rsf_fgvk_enable(rsf_fgvk* self, uint32_t enabled) 
 }
 extern "C" rsf_backend_result rsf_fgvk_enable_options(rsf_fgvk* self, uint32_t enabled, uint32_t count) {
     if (!self || enabled > 1 || !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (self->backend == ffx_backend && count != 1) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if ((self->backend == ffx_backend || self->backend == fsr4_backend) && count != 1) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     rsf_backend_result result;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) result = fsr4_result(rsf_fsr4gvk_enable_options(self->fsr4, enabled, count));
+    else
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) result = xess_result(rsf_xessgvk_enable_options(self->xess, enabled, count));
     else
@@ -139,11 +186,14 @@ extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk* self, uint32_t* b
 extern "C" rsf_backend_result rsf_fgvk_image_layout(const rsf_fgvk* self, uint32_t* layout) {
     if (!self || !layout) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self->backend == dlss_backend) return rsf_dlssgvk_image_layout(self->dlss, layout);
-    *layout = 5; return RSF_BACKEND_OK; // FFX/XeSS: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    *layout = 5; return RSF_BACKEND_OK; // FFX/FSR4/XeSS: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 }
 extern "C" rsf_backend_result rsf_fgvk_max_generated(rsf_fgvk* self, uint32_t* count) {
     if (!self || !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self->backend == ffx_backend) { *count = 1; return RSF_BACKEND_OK; }
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) { *count = rsf_fsr4gvk_max_generated(self->fsr4); return RSF_BACKEND_OK; }
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) { *count = rsf_xessgvk_max_generated(self->xess); return RSF_BACKEND_OK; }
 #endif
@@ -186,6 +236,9 @@ extern "C" rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk* self, rsf_fg
 }
 extern "C" rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, void* commands, const rsf_fgvk_frame* frame) {
     if (!self) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return fsr4_result(rsf_fsr4gvk_prepare(self->fsr4, commands, frame));
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return xess_result(rsf_xessgvk_prepare(self->xess, commands, frame));
 #endif
@@ -193,6 +246,9 @@ extern "C" rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, void* commands, c
 }
 extern "C" rsf_backend_result rsf_fgvk_hudless(rsf_fgvk* self, void* commands, const rsf_fgvk_frame* frame) {
     if (!self) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return fsr4_result(rsf_fsr4gvk_hudless(self->fsr4, commands, frame));
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return xess_result(rsf_xessgvk_hudless(self->xess, commands, frame));
 #endif
@@ -200,6 +256,9 @@ extern "C" rsf_backend_result rsf_fgvk_hudless(rsf_fgvk* self, void* commands, c
 }
 extern "C" void rsf_fgvk_submitted(rsf_fgvk* self, void* const* commands, uint32_t count) {
     if (!self) return;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) { rsf_fsr4gvk_submitted(self->fsr4, commands, count); return; }
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) { rsf_xessgvk_submitted(self->xess, commands, count); return; }
 #endif
@@ -208,6 +267,9 @@ extern "C" void rsf_fgvk_submitted(rsf_fgvk* self, void* const* commands, uint32
 }
 extern "C" int32_t rsf_fgvk_present(rsf_fgvk* self, const void* info) {
     if (!self || !info) return wsi_initialization_failed;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return rsf_fsr4gvk_present(self->fsr4, info);
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return rsf_xessgvk_present(self->xess, info);
 #endif
@@ -217,6 +279,9 @@ extern "C" rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self, rsf_fgvk_statu
     if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (status->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (self->backend == ffx_backend) return rsf_ffxgvk_get_status(self->ffx, status);
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return fsr4_result(rsf_fsr4gvk_status(self->fsr4, status));
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return xess_result(rsf_xessgvk_status(self->xess, status));
 #endif
@@ -227,6 +292,9 @@ extern "C" rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self, rsf_fgvk_statu
 }
 extern "C" rsf_backend_result rsf_fgvk_drain(rsf_fgvk* self) {
     if (!self) return RSF_BACKEND_OK;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return fsr4_result(rsf_fsr4gvk_drain(self->fsr4));
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     if (self->backend == xess_backend) return xess_result(rsf_xessgvk_drain(self->xess));
 #endif

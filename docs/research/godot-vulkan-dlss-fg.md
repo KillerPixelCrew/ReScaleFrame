@@ -517,8 +517,11 @@ fake Vulkan and FFX functions. Windows clang with warnings as errors passes
 same-address reuse, combined and split role submissions, duplicate notifications,
 abandoned sources, partial SDK failure, timeout retention, exact view identity
 and restarted frame-ID cases. The existing camera-reset regression also passes.
-These are synthetic results; the coordinated native gate and subsequent device
-retake are separate requirements.
+These are synthetic results. The coordinated MSVC Release gate subsequently
+passes 74 discovered tests, 63 executed and 11 explicit opt-in skips, plus Rust
+formatting and Clippy. The initial gate caught a narrowing warning in the test's
+resource-generation argument; its type now matches the frame ABI's uint32 field.
+Device retakes remain separate requirements.
 
 The new `fg_lifecycle` fixture exercises DLSS Off/resume, resize while active,
 count one to three to one, FFX provider replacement and return, and secondary

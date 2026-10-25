@@ -12,6 +12,12 @@ DLSS lifecycle fixture correctly fails active resize and shutdown; its native fi
 is pending a coordinated build and retake. See the [XeSS capture evidence](research/godot-xess-fg-capture-20261025.md)
 and [DLSS lifecycle investigation](research/godot-vulkan-dlss-fg.md).
 
+The Vulkan FSR4 FG adapter, shared DX12/Vulkan importer, exact-provider admission
+and generic routing now build on MSVC. The Release gate passes 74 discovered tests
+with 63 executed and 11 opt-in skips, plus Rust formatting and Clippy. NVIDIA
+device queries correctly refuse an FSR3-only provider list. AMD execution and
+generated-image acceptance remain untested. [Evidence and limits](research/godot-fsr4-fg-interop-20261025.md).
+
 `integrations/godot` now contains a pinned 4.7.2 GDExtension, a native engine
 module, guarded source patching and an automatic harness. Standard and .NET
 editions passed the DX12/Vulkan renderer probe. The standard custom-engine DX12

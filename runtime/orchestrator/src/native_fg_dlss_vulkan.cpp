@@ -56,7 +56,7 @@ struct rsf_dlssgvk {
     rsf_fgvk_setup setup{};
     VkSwapchainKHR chain = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
-    uint32_t width = 0, height = 0, backbuffers = 0, count = 1, configured_count = 0;
+    uint32_t width = 0, height = 0, backbuffers = 0, count = 1;
     bool claimed = false, requested = false, enabled = false, resources = false;
     uint64_t latest = 0, presented = 0, actual_presents = 0, recording_sequence = 0, presented_sequence = 0;
     std::array<Slot, 6> slots{};
@@ -161,7 +161,8 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
     return RSF_BACKEND_OK;
 }
 rsf_backend_result configure(rsf_dlssgvk& self, bool enabled) {
-    if (self.enabled == enabled && (!enabled || self.configured_count == self.count)) return RSF_BACKEND_OK;
+    // Options apply to the next proxy Present. A new owner must publish Off
+    // too, since its local state cannot describe the shared SDK viewport.
     sl::DLSSGOptions options{}; options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     options.numFramesToGenerate = enabled ? self.count : 1;
@@ -176,7 +177,7 @@ rsf_backend_result configure(rsf_dlssgvk& self, bool enabled) {
     options.onErrorCallback = on_error;
     const auto result = sdk_result(self, self.options(viewport, options));
     if (result == RSF_BACKEND_OK) {
-        self.enabled = enabled; self.configured_count = self.count;
+        self.enabled = enabled;
         self.resources |= enabled;
     }
     return result;

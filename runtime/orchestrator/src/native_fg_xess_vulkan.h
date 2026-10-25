@@ -3,17 +3,14 @@
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_fg_vulkan.h>
 #include "../../vulkan/xess-fg/bridge_api.h"
+#include "native_dx12_vulkan_interop.h"
 
 /* Private Vulkan/DX12 resource owner. No WSI routing is installed by this API.
    The parent presenter owns the bridge, serializes calls and drains both queues
    before releasing this owner. Device creation must enable the Win32 external
    memory/semaphore extensions and timelineSemaphore before this call. */
-typedef struct rsf_xessvk_interop rsf_xessvk_interop;
-typedef struct rsf_xessvk_shared_image {
-    uint64_t image;
-    void* dx12_resource;
-    uint32_t format, width, height;
-} rsf_xessvk_shared_image;
+typedef rsf_dx12vk_interop rsf_xessvk_interop;
+typedef rsf_dx12vk_shared_image rsf_xessvk_shared_image;
 
 int32_t rsf_xessvk_interop_create(const rsf_srvk_setup*, rsf_xess_bridge*,
     uint32_t timeline_enabled, rsf_xessvk_interop**);

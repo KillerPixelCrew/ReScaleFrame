@@ -59,6 +59,38 @@ rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk*) { return refuse_destroy ? RSF
 rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*) { return retire(); }
 rsf_backend_result rsf_dlssgvk_destroy(rsf_dlssgvk*) { return retire(); }
 }
+#if defined(RSF_HAVE_FSR4_FG_VK)
+struct rsf_fsr4gvk {};
+namespace {
+rsf_fsr4gvk fsr4;
+uint32_t fsr4_creates = 0;
+int32_t fsr4_create_result = 0;
+bool fsr4_partial = false;
+}
+int32_t rsf_fsr4gvk_create(const rsf_fgvk_setup* setup, const rsf_fsr4gvk_options* options, rsf_fsr4gvk** out, uint64_t* chain) {
+    ++fsr4_creates; borrowed_setup = setup;
+    require(options->struct_size == sizeof(*options) && options->abi_version == 1 &&
+        options->window == reinterpret_cast<void*>(17) && options->timeline_enabled == 1 && options->generated_count == 1 &&
+        setup->graphics.runtime_directory_utf8[0] == 'F', "FSR4 forwards HWND, timeline and FidelityFX runtime directory");
+    if (!fsr4_create_result || fsr4_partial) { *out = &fsr4; *chain = 44; }
+    return fsr4_create_result;
+}
+int32_t rsf_fsr4gvk_destroy(rsf_fsr4gvk* value) { require(value == &fsr4, "FSR4 destruction owner"); return refuse_destroy ? -77 : 0; }
+int32_t rsf_fsr4gvk_drain(rsf_fsr4gvk*) { return refuse_destroy ? -77 : 0; }
+int32_t rsf_fsr4gvk_images(rsf_fsr4gvk* value, uint32_t* count, uint64_t*) { require(value == &fsr4, "FSR4 image owner"); *count = 3; return 0; }
+int32_t rsf_fsr4gvk_acquire(rsf_fsr4gvk*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
+    require(timeout == 123 && semaphore == 4 && fence == 5, "FSR4 acquire preserves synchronization arguments"); *index = 1; return 2;
+}
+int32_t rsf_fsr4gvk_enable_options(rsf_fsr4gvk*, uint32_t value, uint32_t count) {
+    require(count == 1, "FSR4 MFG never reaches concrete provider"); enabled = value; generated_count = count; return 0;
+}
+uint32_t rsf_fsr4gvk_max_generated(const rsf_fsr4gvk*) { return 1; }
+int32_t rsf_fsr4gvk_prepare(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*) { calls |= 4096; return 0; }
+int32_t rsf_fsr4gvk_hudless(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*) { calls |= 8192; return 0; }
+void rsf_fsr4gvk_submitted(rsf_fsr4gvk*, void* const*, uint32_t) { calls |= 16384; }
+int32_t rsf_fsr4gvk_present(rsf_fsr4gvk*, const void*) { calls |= 32768; return 1000001003; }
+int32_t rsf_fsr4gvk_status(rsf_fsr4gvk*, rsf_fgvk_status* status) { status->prepared = 40; status->result = -77; return 0; }
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
 struct rsf_xessgvk {};
 namespace {
@@ -170,6 +202,57 @@ int main() {
         "concrete create error releases clean generic admission"); refuse_create = false;
     require(rsf_fgvk_create(&setup, &owner, &chain) == RSF_BACKEND_OK && rsf_fgvk_destroy(owner) == RSF_BACKEND_OK,
         "creation resumes after clean factory failure");
+    owner = nullptr;
+    require(rsf_fgvk_create_for_backend(&setup, 4, 3, &owner, &chain) == RSF_BACKEND_ERROR_NOT_SUPPORTED && !owner && !chain,
+        "FSR4 rejects unsupported MFG before concrete creation or fallback");
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    require(rsf_fgvk_create_for_backend(&setup, 4, 1, &owner, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !fsr4_creates,
+        "FSR4 needs explicit host contract");
+    rsf_fgvk_host_options fsr4_host{sizeof(fsr4_host), RSF_FGVK_HOST_ABI_VERSION, reinterpret_cast<void*>(17), 1, nullptr};
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !fsr4_creates,
+        "FSR4 requires FidelityFX runtime directory rather than Intel host path");
+    setup.graphics.runtime_directory_utf8 = "FidelityFX";
+    --fsr4_host.struct_size;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short FSR4 host refused");
+    ++fsr4_host.struct_size; ++fsr4_host.abi_version;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_ABI_MISMATCH, "FSR4 host ABI refused");
+    --fsr4_host.abi_version; fsr4_host.timeline_enabled = 0;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "FSR4 external timeline must be enabled");
+    fsr4_host.timeline_enabled = 1;
+    const auto before_fsr4_ffx = ffx_creates;
+    fsr4_create_result = RSF_FSR4FG_NOT_SUPPORTED;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
+        !owner && !chain && ffx_creates == before_fsr4_ffx, "missing exact FSR4 provider never falls back to FFX3");
+    fsr4_create_result = 0;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_OK && chain == 44 &&
+        borrowed_setup == &setup && !enabled && generated_count == 1, "FSR4 create is SR-independent and starts Off");
+    require(rsf_fgvk_backend(owner, &value) == RSF_BACKEND_OK && value == 4 &&
+        rsf_fgvk_image_layout(owner, &value) == RSF_BACKEND_OK && value == 5 &&
+        rsf_fgvk_max_generated(owner, &value) == RSF_BACKEND_OK && value == 1, "FSR4 owner, shader-read layout and count-one limit");
+    require(rsf_fgvk_enable(owner, 1) == RSF_BACKEND_OK && enabled && generated_count == 1 &&
+        rsf_fgvk_enable_options(owner, 0, 2) == RSF_BACKEND_ERROR_NOT_SUPPORTED && enabled,
+        "FSR4 invalid options retain prior active count-one state");
+    calls = 0; (void)rsf_fgvk_prepare(owner, command, &frame); (void)rsf_fgvk_hudless(owner, command, &frame);
+    rsf_fgvk_submitted(owner, &command, 1);
+    require(rsf_fgvk_present(owner, &frame) == 1000001003 && calls == 61440 &&
+        rsf_fgvk_acquire(owner, 123, 4, 5, &value) == 2 && value == 1 &&
+        rsf_fgvk_images(owner, &value, nullptr) == 0 && value == 3, "FSR4 recording and all WSI routes preserve results");
+    require(rsf_fgvk_get_status(owner, &status) == RSF_BACKEND_OK && status.prepared == 40 && status.result == -77,
+        "FSR4 status preserves private SDK result");
+    refuse_destroy = true;
+    require(rsf_fgvk_drain(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED && rsf_fgvk_destroy(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED &&
+        rsf_fgvk_create(&setup, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_READY,
+        "FSR4 failed retirement preserves owner and process admission");
+    refuse_destroy = false; require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "FSR4 retirement retry succeeds");
+    fsr4_create_result = -77; fsr4_partial = refuse_destroy = true;
+    require(rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &owner, &chain) == RSF_BACKEND_ERROR_FEATURE_FAILED && owner && chain == 44,
+        "FSR4 failed partial cleanup returns retained owner and chain");
+    refuse_destroy = false; require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "FSR4 partial owner retires on retry");
+    fsr4_partial = false; fsr4_create_result = 0;
+#else
+    require(rsf_fgvk_create_for_backend(&setup, 4, 1, &owner, &chain) == RSF_BACKEND_ERROR_NOT_COMPILED && !owner && !chain,
+        "missing FSR4 build is explicit without provider fallback");
+#endif
 #if defined(RSF_HAVE_XESS_FG_VK)
     require(rsf_fgvk_create_for_backend(&setup, 5, 3, &owner, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !xess_creates,
         "legacy creation cannot select XeSS without its host contract");

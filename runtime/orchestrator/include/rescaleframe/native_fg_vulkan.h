@@ -60,7 +60,10 @@ extern "C" {
 /* Legacy creation selects FFX3 with one generated frame. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_setup*, rsf_fgvk**, uint64_t* chain);
 /* Explicit FG selection is independent of setup.graphics.backend (SR). Backend
-   1 selects DLSS; 3 selects FFX3; 5 selects XeSS with host options. Count excludes the real frame. Unsupported
+   1 selects DLSS; 3 selects FFX3; 4 selects FSR4 FG; 5 selects XeSS. FSR4 and
+   XeSS require host options. FSR4 accepts count one and uses the graphics setup's
+   FidelityFX runtime directory; it never falls back to FFX3 or an Intel directory.
+   Count excludes the real frame. Unsupported
    providers/counts are refused. In the exceptional case of failed cleanup after
    partial creation, nonnull owner/chain outputs retain ownership for destroy
    retry even though this call fails. Never discard those retained outputs. */
@@ -75,7 +78,7 @@ RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable(rsf_fgvk*, uint32_t enabled);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable_options(rsf_fgvk*, uint32_t enabled, uint32_t generated_count);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_backend(const rsf_fgvk*, uint32_t* backend);
 /* Final layout of the game-facing images for this owner's entire lifetime,
-   including Off: FFX/XeSS use shader-read, DLSS uses transfer-source. Vulkan enum value. */
+   including Off: FFX/FSR4/XeSS use shader-read, DLSS uses transfer-source. Vulkan enum value. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_image_layout(const rsf_fgvk*, uint32_t* layout);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_max_generated(rsf_fgvk*, uint32_t* count);
 /* Separate XeLL control for the XeSS presentation owner. Mode is Off(0)/On(1);

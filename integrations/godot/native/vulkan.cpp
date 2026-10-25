@@ -5,6 +5,9 @@
 #include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/native_xess_vulkan_requirements.h>
+#if defined(RSF_VULKAN_FSR4_FG_ENABLED)
+#include "../../../runtime/orchestrator/src/native_fg_fsr4_vulkan.h"
+#endif
 #if defined(RSF_VULKAN_FSR4_ENABLED)
 #include "../../../runtime/orchestrator/src/native_sr_fsr4_vulkan.h"
 #else
@@ -39,6 +42,9 @@ rsf_game_log_fn logger = nullptr;
 void* logger_user = nullptr;
 uint32_t diagnostics = 0;
 rsf_fgvk* presentation = nullptr;
+// Device/proc callback borrows remain valid while the presentation owner lives.
+// This copy never retains caller create-info or runtime-directory pointers.
+rsf_srvk_setup presentation_graphics{};
 rsf_godot_vk_proc resolver = nullptr;
 bool sdk_shutdown_pending = false;
 bool graph_handoff_available = false;
@@ -77,7 +83,19 @@ int configure(const rsf_godot_settings* value) {
 #endif
     }
     const auto selected_fg = fg_backend(*value);
-    if (!(selected_fg == 1 || selected_fg == 3 || selected_fg == 5)) return 0;
+    if (!(selected_fg == 1 || selected_fg == 3 || selected_fg == 4 || selected_fg == 5)) return 0;
+    if (selected_fg == 4) {
+#if defined(RSF_VULKAN_FSR4_FG_ENABLED)
+        if (!presentation || !interop_device_ready() || !primary_window || value->generated_frames != 1) return 0;
+        auto probe = presentation_graphics;
+        probe.runtime_directory_utf8 = fsr4_directory.c_str();
+        rsf_fsr4fg_info info{sizeof(info), RSF_FSR4FG_BRIDGE_ABI_VERSION};
+        // Refuse before asking the engine to retire its working WSI owner.
+        if (rsf_fsr4gvk_probe(&probe, &info) != 0 || info.max_generated < 1) return 0;
+#else
+        return 0;
+#endif
+    }
     if (selected_fg == 5) {
 #if defined(RSF_VULKAN_XESS_FG_ENABLED)
         if (!interop_device_ready() || !primary_window || value->latency_mode > 1 || (value->fg_mode && value->latency_mode != 1)) return 0;
@@ -220,7 +238,9 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
     std::lock_guard lock(guard);
     if (presentation) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const uint32_t selected = fg_backend(requested);
-    auto value = *setup; value.graphics.runtime_directory_utf8 = selected == 1 ? streamline_directory.c_str() : directory.c_str();
+    auto value = *setup;
+    value.graphics.runtime_directory_utf8 = selected == 1 ? streamline_directory.c_str() :
+        selected == 4 ? fsr4_directory.c_str() : directory.c_str();
     const rsf_fgvk_host_options host{sizeof(host), RSF_FGVK_HOST_ABI_VERSION, primary_window,
         rsf::godot_vk::interop_device_ready() ? 1u : 0u, reinterpret_cast<const uint16_t*>(intel_directory.c_str())};
     auto code = rsf_fgvk_create_with_host(&value, selected, requested.generated_frames, &host, &presentation, chain);
@@ -231,6 +251,8 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
     if (presentation) (void)rsf_fgvk_max_generated(presentation, &current.max_generated_frames);
     if (presentation) {
         presentation_generation = generation;
+        presentation_graphics = setup->graphics;
+        presentation_graphics.runtime_directory_utf8 = nullptr;
         if (selected == 5) (void)rsf_fgvk_latency_options(presentation, requested.latency_mode, requested.frame_limit_us);
         else (void)rsf_latencyvk_options(requested.latency_mode, requested.frame_limit_us);
     }
@@ -248,7 +270,7 @@ extern "C" int32_t rsfg_vk_acquire(void* value, uint64_t timeout, uint64_t semap
     // Let the engine drain and recreate the complete WSI owner on a provider switch.
     if (owned_backend != fg_backend(requested)) return -1000001004; // VK_ERROR_OUT_OF_DATE_KHR
     // This interop owner's guide allocations are fixed to the active SR plan.
-    if (owned_backend == 5 && presentation_generation != generation) return -1000001004;
+    if ((owned_backend == 4 || owned_backend == 5) && presentation_generation != generation) return -1000001004;
     return rsf_fgvk_acquire(static_cast<rsf_fgvk*>(value), timeout, semaphore, fence, index);
 }
 extern "C" uint32_t rsfg_vk_image_layout(void* value) {
@@ -280,6 +302,7 @@ extern "C" int32_t rsfg_vk_destroy(void* value) try {
     auto result = rsf_fgvk_destroy(target);
     if (result == RSF_BACKEND_OK && presentation == target) {
         presentation = nullptr; current.fg_available = current.fg_active = 0;
+        presentation_graphics = {};
         current.fg_backend = current.max_generated_frames = current.generated_frames = 0;
         if (sdk_shutdown_pending) {
             if (rsf_latencyvk_shutdown() == RSF_BACKEND_OK) sdk_shutdown_pending = false;
