@@ -161,6 +161,13 @@ application/modify_resources=false
                 throw "Exported dependency is missing or changed: $taskExportedFile"
             }
         }
+        $taskExpectedNative = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll')).Hash
+        foreach ($taskNativeCopy in @('ReScaleFrame.Godot.Native.dll','addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll')) {
+            $taskNativeFile = Join-Path $taskExportRoot $taskNativeCopy
+            if (!(Test-Path -LiteralPath $taskNativeFile) -or (Get-FileHash -LiteralPath $taskNativeFile).Hash -ne $taskExpectedNative) {
+                throw "Exported native library differs from the tested package: $taskNativeFile"
+            }
+        }
         $taskExe = $taskPlayer
     }
     foreach ($taskApi in $GraphicsApi) {
@@ -251,7 +258,7 @@ application/modify_resources=false
         $taskRunResults += @{edition=$taskEdition; api=$taskApi; scenario=$Scenario; initial_sr_backend=$(if ($Scenario -eq 'sr') { $SrBackend } else { $null }); exported=$Exported.IsPresent; gpu_validation=$GpuValidation.IsPresent; raw_frames=$CaptureFrames.IsPresent; native_presentation=$NativeVulkanPresentation.IsPresent; missing_sr_runtime=$MissingSrRuntime.IsPresent;
             csharp=($taskEdition -eq 'mono' -and !$NoCSharp); result=$taskResult; executable=$taskExe;
             sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash;
-            native_sha256=(Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll')).Hash;
+            native_sha256=(Get-FileHash -LiteralPath $(if ($Exported) { Join-Path $taskExportRoot 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll' } else { Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll' })).Hash;
             payload_manifest_sha256=if (Test-Path -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/runtime-manifest.json')) { (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/runtime-manifest.json')).Hash } else { $null }}
         if ($Exported) {
             @{passed=$true; edition=$taskEdition; configuration=$ExportConfiguration; executable=$taskExe;

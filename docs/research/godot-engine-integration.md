@@ -1053,6 +1053,57 @@ ownership; `validation-20261025-173639-484.json` covers camera-free native WSI,
 On/Boost/Off, resize, input and ping with no FG owner. These use the final native
 DLL above and do not establish synchronization-validation acceptance.
 
+## Vulkan exported players, 25 October 2026
+
+All four custom export templates were rebuilt from the pinned engine and guarded
+module/patch source. These are built artifacts, not the earlier DX12 templates:
+
+| Template | SHA-256 |
+| --- | --- |
+| Standard Release | `AB0906BA31F335A83E0927767B111B180935154DC0608BC39D05A0531071559F` |
+| Standard Debug | `99753194D36EAFA2111A366A029AAADBDFD8450FA89E351BCB410D02058AB596` |
+| .NET Release | `D8957C8DA2575492CB56803983A7E2FBEFFBAEDE7CC1833D90ACF207034B1E3B` |
+| .NET Debug | `8D281F54B826F9654004676F81C8CDB436DA5925103C2785D7973B6CEF3E36F6` |
+
+The following Vulkan exported-player receipts each pass standard and .NET with
+core validation. Players launch without a source-project path and carry their
+own verified vendor payload. All use the final native DLL `EE22B1A6...13978F3`
+recorded in full above. Both exported native copies, at the root and early-load
+add-on path, are checked against the staged source DLL. A separate post-run audit
+also verifies all 12 player hashes and both native copies in
+`vulkan-export-acceptance-20261025.json`.
+
+| Receipt under `.local/godot` | Configuration and scope |
+| --- | --- |
+| `validation-20261025-174232-223.json` | Release SR: DLSS, K request, FSR3, resize/reset, PNGs and four raw input/output frames per edition |
+| `validation-20261025-174527-447.json` | Release FSR3 FG/PCL: SR Off, Off/resume, resize with secondary window and asserted root ownership |
+| `validation-20261025-174636-278.json` | Release camera-free native-WSI PCL, with no FG owner |
+| `validation-20261025-174806-357.json` | Debug SR, matching the Release SR scope |
+| `validation-20261025-174932-005.json` | Debug FG/PCL, matching the Release FG scope |
+| `validation-20261025-175048-977.json` | Debug camera-free native-WSI PCL |
+
+The SR/FG fixtures exercise C# on .NET; the PCL fixture is GDScript-only on both
+editions. The .NET Release K-request player PNG was opened for inspection.
+These tests establish exported runtime execution, image visibility, input
+conventions and lifecycle. The independent midpoint comparisons above remain
+editor evidence; exported midpoint-quality and measured latency are not claimed.
+
+The first Release FG attempt (`fg-20261025-174319-872`) was terminated by the
+harness's five-second foreground deadline while startup logs were still
+processing SDK manifests, before its main window became available. It is not a
+renderer failure or a passing test. Foreground acquisition now has a measured
+30-second deadline, still requires the actual foreground HWND, and remains
+inside the functional harness's original 60-second overall bound. The corrected
+run passes. Focus timing and exported-library checks are script changes;
+PowerShell parsing and `git diff --check` pass, without a new native/Rust change.
+
+A separate preparation query confirms that the pinned `libxess.dll` exports its
+Vulkan API. `xessVKGetRequiredInstanceExtensions` returns success, minimum Vulkan
+1.3 and zero extra instance extensions (`xess-vulkan-instance-requirements.json`).
+Its DLL hash is `251659DD84A3E84DE67C886A4186E01F3ECA49B00641906FE38BB6B807E5D5B7`.
+This is a CPU API query only. Device-extension/feature preparation and actual
+XeSS Vulkan execution remain pending.
+
 ## Remaining work and validation limits
 
 Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan

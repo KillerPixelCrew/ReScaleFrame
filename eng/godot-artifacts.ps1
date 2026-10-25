@@ -90,7 +90,8 @@ public static class GodotValidationFocus {
 '@
         }
         $taskFocused = $false
-        for ($taskAttempt = 0; $taskAttempt -lt 50 -and !$taskProcess.HasExited; ++$taskAttempt) {
+        $taskFocusTimer = [Diagnostics.Stopwatch]::StartNew()
+        while ($taskFocusTimer.Elapsed.TotalSeconds -lt 30 -and !$taskProcess.HasExited) {
             $taskProcess.Refresh()
             if ($taskProcess.MainWindowHandle -ne [IntPtr]::Zero -and [GodotValidationFocus]::Activate($taskProcess.MainWindowHandle)) {
                 $taskFocused = $true
@@ -99,6 +100,6 @@ public static class GodotValidationFocus {
             Start-Sleep -Milliseconds 100
         }
         if (!$taskFocused) {
-            throw "Cannot establish the actual foreground window required by the DLSS-G fixture: $($taskProcess.Id)"
+            throw "Cannot establish the GPU fixture's actual foreground window within 30 seconds: $($taskProcess.Id)"
         }
 }

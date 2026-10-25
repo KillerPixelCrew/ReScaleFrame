@@ -21,8 +21,10 @@ DLSS SR + FSR3 FG + PCL image cases, covering 24 actual generated frames.
 Standard/.NET Debug and Release exported players have passed the
 runtime and lifecycle fixtures, including C# on .NET. A GDScript-only .NET
 Release export also passed.
-These export results cover earlier DX12 builds; updated Vulkan templates remain
-pending.
+Updated Vulkan Debug/Release exports also pass standard/.NET SR, FG and
+camera-free PCL fixtures. SR/FG include C# on .NET. The exported SR fixture saves
+actual player images and raw inputs; midpoint-image acceptance remains the
+bounded editor suite above.
 See [research and corrections](../../docs/research/godot-engine-integration.md).
 The expanded 30-case image suite currently fails four FSR2/FSR3 independent-object
 cases, with up to 0.62 output-pixel displacement, despite passing vector checks.

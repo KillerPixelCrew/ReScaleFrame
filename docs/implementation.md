@@ -72,8 +72,11 @@ matching CPU token, stages owned input images and uses a separate SR viewport.
 Standard/.NET switching, resize, raw-input/C# checks and six DLSS SR + FSR3 FG +
 PCL image cases pass. Model-switch teardown testing also exposed a deferred SDK
 release that can outlive a camera-free shutdown; drained feature retirement
-addresses it. Other Vulkan providers, FSR2 displacement, updated Vulkan export
-templates and broader acceptance remain unfinished.
+addresses it. Rebuilt Vulkan Debug/Release templates now pass 12 standard/.NET
+exported SR, FG and camera-free PCL fixtures, with C# on .NET SR/FG and actual
+PNG/raw input checks in SR. Template/player and both native-library copies are
+fingerprinted. Other Vulkan providers, FSR2 displacement, synchronization
+validation and broader acceptance remain unfinished.
 [Evidence and corrections](research/godot-engine-integration.md),
 [developer integration](../integrations/godot/README.md).
 

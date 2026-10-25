@@ -23,6 +23,8 @@ six DLSS SR + FSR3 FG + PCL image cases pass against independent midpoint
 renders, covering 24 actual generated frames. Other Vulkan providers and broad scene-quality
 acceptance remain pending. This does
 not change game-plugin readiness flags.
+Rebuilt Vulkan Debug/Release exports pass 12 standard/.NET SR, FG and
+camera-free PCL fixtures, with C# in SR/FG and actual PNG/raw input checks in SR.
 [Evidence and limits](research/godot-engine-integration.md).
 
 10 October update: the user reported a Unity UI/overlay regression in the new
