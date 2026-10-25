@@ -49,6 +49,50 @@ function Copy-RsfGodotAddon([string]$Source, [string]$Destination) {
     }
 }
 
+function Copy-RsfGodotFixtureAddon([string]$Source, [string]$Destination, [string]$CacheRoot) {
+    if (!(Test-Path -LiteralPath (Join-Path $Source 'runtime-manifest.json'))) {
+        Copy-RsfGodotAddon $Source $Destination
+        return
+    }
+    $taskManifest = Get-Content -Raw -LiteralPath (Join-Path $Source 'runtime-manifest.json') | ConvertFrom-Json
+    if ($taskManifest.schema_version -ne 1 -or !$taskManifest.files.Count) { throw 'Invalid Godot runtime cache manifest.' }
+    $taskEntries = @($taskManifest.files | Sort-Object path)
+    $taskCanonical = ($taskEntries | ForEach-Object { $_.path + '=' + $_.sha256.ToUpperInvariant() }) -join "`n"
+    $taskKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($taskCanonical))).ToLowerInvariant()
+    $taskCache = Join-Path ([IO.Path]::GetFullPath($CacheRoot)) $taskKey
+    $taskLease = [Threading.Mutex]::new($false, 'Local\ReScaleFrame.Godot.RuntimeCache')
+    $taskAcquired = $false
+    try {
+        try { $taskAcquired = $taskLease.WaitOne([TimeSpan]::FromMinutes(2)) }
+        catch [Threading.AbandonedMutexException] { $taskAcquired = $true }
+        if (!$taskAcquired) { throw 'Another fixture is preparing the shared Godot runtime cache.' }
+        foreach ($taskEntry in $taskEntries) {
+            if (!$taskEntry.path.StartsWith('runtime/') -or $taskEntry.path.Contains('..') -or $taskEntry.path.Contains('\')) {
+                throw 'Invalid runtime cache manifest path.'
+            }
+            $taskCachedFile = Join-Path $taskCache $taskEntry.path
+            if (!(Test-Path -LiteralPath $taskCachedFile)) {
+                Copy-RsfGodotArtifact (Join-Path $Source $taskEntry.path) $taskCachedFile
+            }
+            if ((Get-FileHash -LiteralPath $taskCachedFile).Hash -ine $taskEntry.sha256) { throw "Immutable runtime cache differs: $taskCachedFile" }
+        }
+        Copy-RsfGodotArtifact (Join-Path $Source 'runtime-manifest.json') (Join-Path $taskCache 'runtime-manifest.json')
+    } finally {
+        if ($taskAcquired) { $taskLease.ReleaseMutex() }
+        $taskLease.Dispose()
+    }
+    foreach ($taskFile in Get-ChildItem -LiteralPath $Source -Recurse -File) {
+        $taskRelative = [IO.Path]::GetRelativePath($Source, $taskFile.FullName)
+        if ($taskRelative.Replace('\','/').StartsWith('runtime/')) { continue }
+        Copy-RsfGodotArtifact $taskFile.FullName (Join-Path $Destination $taskRelative)
+    }
+    $taskRuntime = Join-Path $Destination 'runtime'
+    if (Test-Path -LiteralPath $taskRuntime) { throw 'A fresh fixture runtime destination is required.' }
+    # Each cache key is immutable. Later package staging cannot change an older
+    # fixture, and shader/readback outputs remain private to the fixture.
+    New-Item -ItemType Junction -Path $taskRuntime -Target (Join-Path $taskCache 'runtime') | Out-Null
+}
+
 function Get-RsfGodotBuild([string]$Root, [string]$Edition, [string]$Target = 'editor') {
     $taskCategory = if ($Target -eq 'editor') { 'engines' } else { 'templates' }
     $taskManifest = Join-Path $Root ".local/godot/$taskCategory/$Edition/$Target.json"

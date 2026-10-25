@@ -106,7 +106,8 @@ foreach ($taskEdition in $Edition) {
         Copy-Item -LiteralPath (Join-Path $taskSource "demo/$Scenario.gd") -Destination (Join-Path $taskProject 'main.gd') -Force
         Add-Content -LiteralPath (Join-Path $taskProject 'project.godot') -Value "`n[rescaleframe]`nenabled=true"
     }
-    Copy-RsfGodotAddon $taskPackage (Join-Path $taskProject 'addons/rescaleframe')
+    if ($MissingSrRuntime) { Copy-RsfGodotAddon $taskPackage (Join-Path $taskProject 'addons/rescaleframe') }
+    else { Copy-RsfGodotFixtureAddon $taskPackage (Join-Path $taskProject 'addons/rescaleframe') (Join-Path $taskLocal 'payload-cache') }
     if ($MissingSrRuntime) {
         # Damage only this newly created fixture's private dependency copy.
         Remove-Item -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/runtime/fidelityfx-vulkan/amd_fidelityfx_vk.dll')

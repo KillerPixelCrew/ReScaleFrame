@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Force -Path $taskProject,$taskCapture,(Join-Path $
 Copy-Item -LiteralPath (Join-Path $taskSource 'demo/project.godot'),(Join-Path $taskSource 'demo/main.tscn') -Destination $taskProject -Force
 Copy-Item -LiteralPath (Join-Path $taskSource 'demo/main.gd') -Destination (Join-Path $taskProject 'scene.gd') -Force
 Copy-Item -LiteralPath (Join-Path $taskSource 'demo/visual.gd') -Destination (Join-Path $taskProject 'main.gd') -Force
-Copy-RsfGodotAddon (Join-Path $taskRoot '.local/godot/package/addons/rescaleframe') (Join-Path $taskProject 'addons/rescaleframe')
+Copy-RsfGodotFixtureAddon (Join-Path $taskRoot '.local/godot/package/addons/rescaleframe') (Join-Path $taskProject 'addons/rescaleframe') (Join-Path $taskRoot '.local/godot/payload-cache')
 Add-Content -LiteralPath (Join-Path $taskProject 'project.godot') -Value "`n[rescaleframe]`nenabled=true"
 $taskExe = (Resolve-Path -LiteralPath $EngineExe).Path
 $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash

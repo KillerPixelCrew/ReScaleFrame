@@ -1122,3 +1122,21 @@ pending; a box and floor do not establish transparent, particle, skinned or
 occlusion-heavy scene quality.
 No shipped game, non-Windows platform, Mobile/Compatibility renderer, HDR display
 output, XR device or input-to-display latency claim follows from these runs.
+
+## Capture storage cleanup, 25 October 2026
+
+Removed 85.20 GiB of duplicate binaries/import caches from completed fixture
+projects and 6.51 GiB of obsolete raw readbacks. Compact reports, decoded images,
+selected regression raw inputs and current package/build inputs remain. Cleanup
+manifests are `dump-cleanup-files.json` and `dump-cleanup-raw-result.json` under
+`.local/godot`; old fixture binary paths in historical receipts may no longer
+exist. New captures continue normally.
+
+Capture and functional fixture projects now junction their runtime directory to
+an immutable cache keyed by sorted payload paths/hashes. Native add-on binaries
+and scripts remain private copies. A later package change gets a new cache key;
+it cannot mutate an existing fixture's SDK payload. Fault-injection fixtures keep
+private runtime copies. Four fresh capture projects passed junction and every
+payload-file hash check (`runtime-cache-validation.json`), and loaded/executed
+the SDKs with validation. Their XeSS image comparisons still fail; cache
+validation is not image acceptance. PowerShell parsing and diff checks pass.
