@@ -29,6 +29,7 @@ class FrameCaptureVk {
     uint64_t first = 30, count = 4;
     uint64_t provider = 0;
     uint32_t backend = 0;
+    bool generation = false;
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_properties{};
     PFN_vkCreateBuffer create_buffer = nullptr;
@@ -62,7 +63,7 @@ public:
     } catch (...) { directory.clear(); }
     ~FrameCaptureVk() { for (auto& value : pending) release(*value); }
     bool enabled() const { return !directory.empty() && count; }
-    void set_provider(uint64_t version, uint32_t selected) { provider = version; backend = selected; }
+    void set_provider(uint64_t version, uint32_t selected, bool fg = false) { provider = version; backend = selected; generation = fg; }
     bool wants(uint64_t frame) const { return enabled() && frame >= first && frame - first < count; }
     bool initialize(VkDevice value, rsf_vk_get_proc proc, const VkPhysicalDeviceMemoryProperties& properties) {
         if (!enabled()) return true;
@@ -84,6 +85,8 @@ public:
         switch (source.format) {
         case VK_FORMAT_R16G16B16A16_SFLOAT: pixel_bytes = 8; break;
         case VK_FORMAT_R16G16_SFLOAT:
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_UNORM:
         case VK_FORMAT_R32_SFLOAT:
         case VK_FORMAT_D32_SFLOAT: pixel_bytes = 4; break;
         default: failure(role, identity.frame_id); return false;
@@ -152,7 +155,7 @@ public:
                 << ",\n\"height\":" << value.image.height << ",\n\"row_pitch\":" << value.image.width * pixel_bytes
                 << ",\n\"offset\":0,\n\"vk_format\":" << value.image.format << ",\n\"bytes\":" << value.bytes
                 << ",\n\"sdk_dispatch_reset\":" << value.reset << ",\n\"completion\":\"owner-drained-context-retirement\""
-                << ",\n\"sr_backend\":" << backend << ",\n\"provider_version_id\":" << provider
+                << ",\n\"" << (generation ? "fg_backend" : "sr_backend") << "\":" << backend << ",\n\"provider_version_id\":" << provider
                 << ",\n\"render_size\":[" << camera.render_width << ',' << camera.render_height << "],\n\"output_size\":[" << camera.output_width << ',' << camera.output_height
                 << "],\n\"jitter_pixels\":[" << camera.jitter_pixels[0] << ',' << camera.jitter_pixels[1] << "],\n\"matrix_convention\":\"row_vectors\"";
             auto matrix = [&json](const char* key, const float* values) {

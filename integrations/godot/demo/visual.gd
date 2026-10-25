@@ -58,7 +58,7 @@ func _process(_delta: float) -> void:
     if frame >= 90:
         var mono_status: Dictionary = {}
         if mono_test:
-            mono_status = mono_test.call("validate_mono")
+            mono_status = mono_test.call("validate_sr_mono" if RenderingServer.get_current_rendering_driver_name() == "vulkan" else "validate_mono")
             _require(mono_status.get("passed", false), "C# facade failed during visual capture")
         var report := {"passed": failures.is_empty(), "failures": failures, "mode": mode, "reference": reference, "reference_msaa": reference_msaa, "poses": poses,
             "status": status, "probe": effect.call("get_status"), "mono": mono_status, "sr_backend": 0 if reference else sr_backend}

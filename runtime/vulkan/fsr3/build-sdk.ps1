@@ -41,6 +41,14 @@ $storageFixPath = Join-Path $PSScriptRoot 'sdk-fixes/fsr2-storage-formats.json'
 $storageFix = Get-Content -LiteralPath $storageFixPath -Raw | ConvertFrom-Json
 $storageFixHash = (Get-FileHash -LiteralPath $storageFixPath -Algorithm SHA256).Hash
 if ($storageFix.sdkCommit -ne $commit) { throw 'Storage format corrections require the pinned SDK commit.' }
+$poolFixPath = Join-Path $PSScriptRoot 'sdk-fixes/descriptor-pool-size.json'
+$poolFix = Get-Content -LiteralPath $poolFixPath -Raw | ConvertFrom-Json
+$poolFixHash = (Get-FileHash -LiteralPath $poolFixPath -Algorithm SHA256).Hash
+if ($poolFix.sdkCommit -ne $commit) { throw 'Descriptor pool correction requires the pinned SDK commit.' }
+$cpuFixPath = Join-Path $PSScriptRoot 'sdk-fixes/presenter-cpu-drain.json'
+$cpuFix = Get-Content -LiteralPath $cpuFixPath -Raw | ConvertFrom-Json
+$cpuFixHash = (Get-FileHash -LiteralPath $cpuFixPath -Algorithm SHA256).Hash
+if ($cpuFix.sdkCommit -ne $commit) { throw 'Presenter CPU completion correction requires the pinned SDK commit.' }
 $glslang = (Join-Path $sdkRoot 'sdk/tools/binary_store/glslangValidator.exe').Replace('\','/')
 $glslangHash = (Get-FileHash -LiteralPath $glslang -Algorithm SHA256).Hash
 if (Test-Path -LiteralPath $output) {
@@ -53,6 +61,8 @@ if (Test-Path -LiteralPath $output) {
             $cached.configuration -eq $Configuration -and $cached.patchSha256 -eq $fixHash -and
             $cached.buildRecipeSha256 -eq $recipeHash -and $cached.swapchainLifetimePatchSha256 -eq $lifetimeFixHash -and
             $cached.fsr2StoragePatchSha256 -eq $storageFixHash -and $cached.shaderCompilerSha256 -eq $glslangHash -and
+            $cached.descriptorPoolPatchSha256 -eq $poolFixHash -and
+            $cached.presenterCpuDrainPatchSha256 -eq $cpuFixHash -and
             $cached.runtimeSha256 -eq (Get-FileHash -LiteralPath $cachedBinaryPath -Algorithm SHA256).Hash) {
             Write-Host "Using verified corrected FidelityFX runtime: $cachedBinaryPath"
             return
@@ -127,6 +137,19 @@ foreach ($replacement in $storageFix.replacements) {
     $storageText = $storageText.Replace($replacement.before, $replacement.after)
 }
 [IO.File]::WriteAllText($storagePath, $storageText, [Text.UTF8Encoding]::new($false))
+$poolPath = Join-Path $source $poolFix.file
+$poolText = [IO.File]::ReadAllText($poolPath)
+if ([regex]::Matches($poolText, [regex]::Escape($poolFix.before)).Count -ne 1) { throw 'Pinned global descriptor pool count changed.' }
+[IO.File]::WriteAllText($poolPath, $poolText.Replace($poolFix.before, $poolFix.after), [Text.UTF8Encoding]::new($false))
+foreach ($replacement in $cpuFix.replacements) {
+    $path = Join-Path $source $replacement.file
+    $code = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+    $expectedCount = if ($replacement.PSObject.Properties['count']) { [int]$replacement.count } else { 1 }
+    if ([regex]::Matches($code, [regex]::Escape($replacement.before)).Count -ne $expectedCount) {
+        throw "Pinned SDK presenter CPU completion anchor changed: $($replacement.file)"
+    }
+    [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
+}
 # The SDK otherwise gives every shader compiler the entire host CPU thread count.
 # Limit only staged build scheduling; shader flags and permutations remain identical.
 $shaderCommands = Join-Path $source 'sdk/include/FidelityFX/gpu/CMakeCompileShaders.txt'
@@ -158,6 +181,8 @@ $receipt = [ordered]@{
     callback=$fix.file; sourceBeforeSha256=$beforeHash; sourceAfterSha256=$afterHash
     patchSha256=$fixHash; buildRecipeSha256=$recipeHash; swapchainLifetimePatchSha256=$lifetimeFixHash
     fsr2StoragePatchSha256=$storageFixHash
+    descriptorPoolPatchSha256=$poolFixHash
+    presenterCpuDrainPatchSha256=$cpuFixHash
     runtimeSha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
     cmake=$cmake; compiler=$compiler; generator=$generator; vulkanSdk=$vulkanRoot
     parallel=$Parallel; shaderThreads=$ShaderThreads

@@ -44,7 +44,7 @@ add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
 set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp)
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_fg_vulkan.cpp)
 target_include_directories(rsf_native_vulkan PUBLIC include)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract PRIVATE rsf_build_options)

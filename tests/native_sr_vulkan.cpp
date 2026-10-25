@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_vulkan.h>
+#include <rescaleframe/native_fg_vulkan.h>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -251,6 +252,18 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
 #endif
 
 int main(int argc, char**) try {
+    rsf_fgvk* fg = reinterpret_cast<rsf_fgvk*>(1); uint64_t chain = 1;
+    require(rsf_fgvk_create(nullptr, &fg, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !fg && !chain, "FG null setup refusal");
+    rsf_fgvk_setup short_fg{}; short_fg.struct_size = sizeof(short_fg) - 1;
+    require(rsf_fgvk_create(&short_fg, &fg, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "FG short setup refusal");
+    short_fg.struct_size = sizeof(short_fg); short_fg.abi_version = RSF_FGVK_ABI_VERSION + 1;
+    require(rsf_fgvk_create(&short_fg, &fg, &chain) == RSF_BACKEND_ERROR_ABI_MISMATCH, "FG ABI mismatch refusal");
+    short_fg.abi_version = RSF_FGVK_ABI_VERSION; short_fg.graphics.struct_size = sizeof(short_fg.graphics) - 1;
+    require(rsf_fgvk_create(&short_fg, &fg, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "FG embedded graphics size refusal");
+    short_fg.graphics.struct_size = sizeof(short_fg.graphics); short_fg.graphics.abi_version = RSF_SRVK_ABI_VERSION + 1;
+    require(rsf_fgvk_create(&short_fg, &fg, &chain) == RSF_BACKEND_ERROR_ABI_MISMATCH, "FG embedded graphics ABI refusal");
+    require(rsf_fgvk_destroy(nullptr) == RSF_BACKEND_OK && rsf_fgvk_drain(nullptr) == RSF_BACKEND_OK &&
+        rsf_fgvk_prepare(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "FG null lifecycle contract");
     rsf_srvk* context = reinterpret_cast<rsf_srvk*>(1);
     require(rsf_srvk_create(nullptr, &context) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !context, "null setup refusal");
     rsf_srvk_setup short_setup{}; short_setup.struct_size = sizeof(short_setup) - 1;

@@ -9,7 +9,9 @@ param(
     [ValidateRange(0,60)][int]$AnimationOffset = 0,
     [switch]$RawProbe,
     [switch]$Mono,
-    [ValidateRange(0,7)][int]$SrBackend = 0
+    [ValidateRange(0,7)][int]$SrBackend = 0,
+    [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
+    [switch]$GpuValidation
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -18,6 +20,8 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskSource = Join-Path $taskRoot 'integrations/godot'
 if ($Label -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Use a simple capture label.' }
 if ($ReferenceMsaa -and !$Reference) { throw 'MSAA reference sampling requires -Reference.' }
+if ($ResetSrHistory -and $GraphicsApi -eq 'vulkan') { throw 'The history-reset diagnostic currently targets DX12.' }
+if ($GpuValidation -and $GraphicsApi -ne 'vulkan') { throw 'GPU validation currently targets Vulkan.' }
 $taskProject = Join-Path $taskRoot ".local/godot/visual/$Label-$Mode"
 $taskCapture = Join-Path $taskProject 'frames'
 if ((Test-Path -LiteralPath $taskProject) -and @(Get-ChildItem -LiteralPath $taskProject -Force).Count) {
@@ -34,7 +38,7 @@ $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash
 $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll') -Algorithm SHA256).Hash
 @{engine=$taskExe; engine_sha256=$taskEngineHash; native_sha256=$taskNativeHash;
     first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; sr_backend=$SrBackend; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
-    reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent;
+    reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent;
     captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
 if ($Mono) {
     Copy-Item -Path (Join-Path $taskSource 'demo/mono/*') -Destination $taskProject -Force
@@ -50,21 +54,31 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
     if ($Name -eq 'capture') {
         try { Set-RsfGodotForeground $taskProcess }
         catch { if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }; throw }
+        if ($GpuValidation) {
+            $taskLayer = @($taskProcess.Modules | Where-Object ModuleName -eq 'VkLayer_khronos_validation.dll')
+            if ($taskLayer.Count -ne 1) { if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }; throw 'Requested validation layer did not load.' }
+            @{path=$taskLayer[0].FileName; sha256=(Get-FileHash -LiteralPath $taskLayer[0].FileName).Hash} |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'validation-layer.json') -Encoding utf8
+        }
     }
     if (!$taskProcess.WaitForExit(60000)) { Stop-Process -Id $taskProcess.Id; throw "Capture timed out: $taskProject" }
     if ($taskProcess.ExitCode) { throw "Capture failed ($($taskProcess.ExitCode)): $taskProject/$Name.log" }
     $taskError = Get-Content -Raw -LiteralPath (Join-Path $taskProject "$Name.stderr")
     if ($taskError -match '(?m)^(ERROR|SCRIPT ERROR):') { throw "Capture emitted errors: $taskProject/$Name.stderr" }
+    if ($GpuValidation -and $taskError -match 'VUID-|SYNC-HAZARD|Validation Error|will produce undefined values|not created with any VkDescriptorPoolSize|(?m)^vk[A-Z][A-Za-z0-9_]+\(\):') { throw "Vulkan validation failed: $taskProject/$Name.stderr" }
 }
 Run-Capture @('--headless','--editor','--import','--path',$taskProject,'--quit-after','30') 'import'
 $taskSaved = @{}
-foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT','RSF_FRAME_CAPTURE_RESET_SR')) { $taskSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
+foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_VULKAN_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT','RSF_FRAME_CAPTURE_RESET_SR')) { $taskSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
 try {
-    $env:RSF_FRAME_CAPTURE_DIR = $taskCapture
+    $env:RSF_FRAME_CAPTURE_DIR = if ($GraphicsApi -eq 'd3d12') { $taskCapture } else { $null }
+    $env:RSF_VULKAN_FRAME_CAPTURE_DIR = if ($GraphicsApi -eq 'vulkan') { $taskCapture } else { $null }
     $env:RSF_FRAME_CAPTURE_FIRST = if ($Reference) { [string]($FirstFrame * 2 - 1) } else { [string]$FirstFrame }
     $env:RSF_FRAME_CAPTURE_COUNT = if ($Reference) { '8' } else { '4' }
     $env:RSF_FRAME_CAPTURE_RESET_SR = if ($ResetSrHistory) { '1' } else { $null }
-    $taskRunArgs = @('--path',$taskProject,'--rendering-method','forward_plus','--rendering-driver','d3d12','--position','100,100','--quit-after','120','--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset")
+    $taskRunArgs = @('--path',$taskProject,'--rendering-method','forward_plus','--rendering-driver',$GraphicsApi,'--position','100,100','--quit-after','120')
+    if ($GpuValidation) { $taskRunArgs += '--gpu-validation' }
+    $taskRunArgs += @('--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset")
     if ($Reference) { $taskRunArgs += '--reference' }
     if ($ReferenceMsaa) { $taskRunArgs += '--reference-msaa' }
     if ($RawProbe) { $taskRunArgs += '--raw-probe' }

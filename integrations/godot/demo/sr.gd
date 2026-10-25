@@ -21,7 +21,7 @@ func _ready() -> void:
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
     if RenderingServer.get_current_rendering_driver_name() == "vulkan":
-        _require(not runtime.call("configure", {"sr_backend": 3, "fg_mode": 1}, get_viewport().get_viewport_rid()), "Unimplemented Vulkan FG was accepted")
+        _require(not runtime.call("configure", {"sr_backend": 3, "fg_mode": 1, "fg_backend": 2}, get_viewport().get_viewport_rid()), "Unsupported Vulkan FG provider was accepted")
         _require(not runtime.call("configure", {"sr_backend": 3, "latency_mode": 1}, get_viewport().get_viewport_rid()), "Unimplemented Vulkan PCL was accepted")
 
 func _select(backend: int) -> void:

@@ -9,13 +9,14 @@ resulting interposer through the generated receipt. No game installation is chan
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$HostRoot,
+    [string]$SdkRoot = (Join-Path $HostRoot 'sdk/streamline'),
     [string]$OutputDirectory = (Join-Path $HostRoot 'artifacts/rescaleframe/streamline/Release/win-x64'),
     [string]$Python = 'python.exe',
     [string]$PackageCache = (Join-Path $HostRoot 'artifacts/packman-cache')
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath $HostRoot).Path
-$sdk = Join-Path $root 'sdk/streamline'
+$sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts'))
 if (-not $output.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

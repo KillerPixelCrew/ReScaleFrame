@@ -43,6 +43,12 @@ generated from the installed Windows driver loader. No reference source is copie
 into first-party code or committed. A portable Khronos validation-layer binary
 was used only for development; its exact archive/DLL fingerprints are in the
 research record and it is not part of the runtime payload.
+The Vulkan FG SDK build additionally includes the reviewed descriptor-pool count
+and presenter CPU completion corrections, each recorded in its hash receipt.
+The pinned Streamline source (`2122257e0fce486f91b385aa63b9a09b0a34b363`)
+is prepared separately from its retail SDK archive. Its corrected Production
+common/interposer build stays ignored and is not yet part of Godot's active Vulkan
+runtime. Runtime staging continues to preserve the retail D3D12 payload.
 
 ## Unity Mono DX12 adapter
 

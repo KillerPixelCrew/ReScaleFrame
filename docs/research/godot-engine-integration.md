@@ -555,11 +555,158 @@ SR/FG/MFG/PCL regression on the new binaries
 (`validation-20261025-141020-597.json`). No export templates were rebuilt for this
 Vulkan increment; earlier export acceptance belongs to the recorded DX12 builds.
 
+## Native Vulkan FSR3 presentation, 25 October 2026
+
+Question: can native Vulkan frame generation consume the completed HUD-less
+Godot image and present real generated frames while retaining engine ownership
+of recording/submission? The selected route uses the pinned FidelityFX Vulkan
+swapchain implementation. Its entire WSI table must own creation, image
+enumeration, acquisition, presentation and destruction. Sending the opaque proxy
+handle to a native Vulkan WSI function is invalid. This is a runtime service
+under `runtime/orchestrator`; the Godot module supplies engine queues, resources
+and source identity through C ABI calls.
+
+Source review found that Godot requested one queue per family. The guarded patch
+now requests up to four when this integration booted, reserves indices 1..3 from
+Godot's virtual queue allocator, and admits the presentation service only when
+four distinct same-family queues and Vulkan 1.2 timeline semaphores are available.
+Godot now enables its queried timeline feature. The graphics queue retains
+Godot's locking; SDK submissions use its host callback. The queue mutex is
+recursive because SDK submission can reenter from the engine's Present call.
+The other three queues are reserved for compute, presentation and acquisition.
+Input acquisition waits cover all commands for the proxy, including preparation.
+
+The first actual WSI run failed validation: Godot left proxy images in PRESENT,
+while the SDK requires SHADER_READ_ONLY. Proxy images are regular owned images;
+only the SDK's real WSI images enter PRESENT. The custom render-pass final layout
+now reflects that distinction. Native secondary windows retain their own WSI
+functions. Mixed presentation batches split their per-image completion semaphores;
+the no-command-buffer case fans out the shared wait list through a submission,
+so a binary semaphore is never consumed twice. The functional fixture opens and
+closes a second native Window while root-window FG remains active.
+
+FG preparation runs at the normalized depth/motion producer, before tonemapping.
+The completed SDR RGBA8 scene is copied after tonemapping and before canvas into
+six owned HUD-less slots. The SDK is configured only after actual engine
+submission identified both callbacks' command buffers. Recording alone never
+enables generation. The frame record includes session, source frame, view,
+resource generation, camera transforms, physical frame duration and raster jitter.
+Motion is previous-minus-current UV, scaled by render width/height for the SDK;
+depth is inverted R32F. Cuts and identity/generation gaps reset history. Missing,
+stale or incomplete input bypasses generation. Async interpolation is explicitly
+disabled. A graphics-queue fence after SDK Present covers its interpolation
+callback's HUD-less reads; source-copy and consumer fences protect slot reuse.
+The SDK presents its own images afterwards. CPU waits occur on busy slot reuse
+or explicit retirement, not on every ordinary source frame.
+
+The source/runtime boundary now has separate drain and destroy operations.
+The engine drains deferred presentation before releasing views/semaphores, then
+destroys the chain through its SDK owner. Failed retirement preserves ownership.
+SR context retirement also drains FG before waiting on the shared Vulkan device.
+The public C ABI rejects short enclosing/embedded structures and mismatched ABI
+versions before reading embedded data. Native contract tests cover these guards.
+
+Two more SDK defects were found through actual validation runs:
+
+- The global descriptor pool defines six pool-size entries but reports five,
+  omitting STORAGE_BUFFER. FG creates pipelines requiring that descriptor type.
+  A guarded staged patch computes the actual array count.
+- The present timeline semaphore signals before the presenter thread's final
+  CPU queue operations. A GPU wait alone therefore allowed `vkDeviceWaitIdle`
+  to race `vkQueueSubmit` on the AMD FSR Presenter Thread. Both presenter paths
+  now publish a CPU completion counter/event after processing an entry, and
+  retirement waits for the last scheduled interpolated entry before GPU waits.
+  SR retirement was also missing the FG drain and now performs it first.
+
+`sdk-fixes/descriptor-pool-size.json` and `presenter-cpu-drain.json` retain the
+reviewed anchors against SDK revision `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`.
+The final SDK runtime is
+`A527D594F05128F7E7B98E5A30D3F092C44DE5300F1B9DB2EB2527AAA0DB2358`.
+Its build recipe hash is
+`F132F7379D4DEEBDCE4407EC6C75C91EAF4FC462B5E7EBE98A4E4BEF04A39470`;
+the build receipt records all corrections. Reference sources remain unchanged.
+
+The first image matrix, `visual-20261025-143936-149.json`, preserves 18 cases
+and their raw SDK-generated images. Thirteen passed. Both editions failed
+FSR2 object-only and combined-motion image gates; the .NET FSR3 combined case
+also failed its core-validation run because of the presenter retirement race.
+The FSR2 failure also exists on Vulkan, so it is not isolated to D3D12.
+This is evidence of the remaining displacement, not proof of a vendor defect.
+The analyzer now decodes Vulkan formats and converts captured UV motion to render
+pixels before applying the same geometry and midpoint gates. Vulkan reference
+runs keep SR/FG Off and independently render half steps, with owned diagnostic
+guide copies only on selected frames. Generated and reference binaries must match.
+The generation callback also records actual output before returning to the SDK;
+readback allocations survive until drained retirement. Images were opened and
+inspected, including object/floor motion and the generated HUD.
+
+After the retirement corrections, standard/.NET functional FG fixtures passed
+with SR Off, Off/resume, resize and a secondary native window
+(`validation-20261025-150454-666.json`). Both editions passed SR readback checks
+again (`validation-20261025-150615-593.json`) and the full DX12 regression passed
+(`validation-20261025-150647-855.json`). The Release MSVC native gate passed 45
+executed tests, nine opt-in skips, formatting and Clippy
+(`verify-vulkan-fg-final.log`). These are core-validation results; synchronization
+validation has the separate unresolved result below. No export templates were
+rebuilt for this increment.
+
+The follow-up image suite `visual-20261025-150801-117.json` passed all 12
+standard/.NET cases: SR Off and FSR3, each with object, camera and combined motion,
+against new 8x-MSAA half-step references. It contains 48 actual generated images.
+Maximum midpoint material-centroid error is 0.335683 output pixels; motion p95
+error is at most 0.001876 render pixels, camera metadata error 0.000019 pixels
+and fitted raster-jitter error 0.008120 pixels. This closes the repeated FSR3
+combined-motion case on the corrected runtime. It does not remove the original
+failed run or the FSR2 image failures. The standalone Vulkan device fixture also
+passed both SR providers again with the final SDK binary
+(`test-native-vulkan-after-fg-sdk.log`).
+
+Final binaries for these functional runs:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Standard editor | `50C12366AC3BB386976AD4544D25AE8B24A487ADBA91FB3745B3D0E9BB5CEC78` |
+| .NET editor | `E0A6400CCCDB0E27E5578C210C244C0D897E197440189EB335951C382F8E18C8` |
+| Native extension | `3B055794D98AC3ED45A531ABDCBB23734AB4766D69D95D0F7F66AF5D51C9BFEC` |
+
+Synchronization validation is enabled by the documented `validate_sync` setting
+([LunarG guide](https://vulkan.lunarg.com/doc/view/latest/windows/synchronization_usage.html)).
+The harness now checks the loaded layer's enabled-settings report and records
+the actual layer/module inventory. It catches PRESENT_AFTER_WRITE after
+`vkCmdEndRenderPass`, including in a single-window control and official Godot
+without the integration (`runtime-20261025-145951-849`). Filtering implicit layers
+did not eliminate it; RTSSHooks64.dll remains injected even when its Vulkan layer
+is filtered. Disabling individual layer environment flags did not establish a
+cause. Do not attribute this hazard to FSR, RTSS, the HDR layer or Godot without
+an isolating control. Those failed runs remain failures, including
+`fg-20261025-144937-267`, `fg-20261025-145258-867` and later controls.
+
+A uniquely named, byte-identical test executable was prepared for a temporary
+RTSS application-specific detection exclusion using its installed documented
+profile API. The SDK accepted the in-memory property but could not persist it.
+A scoped write probe confirmed that the installed Profiles directory is not
+writable from this session. The attempted profile was removed and no existing
+profile changed. This control did not launch a test and supplies no renderer
+acceptance. RTSS remains running. The synchronization hazard is still open.
+
+The next NVIDIA/PCL dependency is now prepared: clean Streamline source at
+`2122257e0fce486f91b385aa63b9a09b0a34b363`, with a corrected Production build
+using the retained Vulkan semaphore and NGX dispatch corrections. The receipt at
+`vulkan/host/artifacts/streamline-production/runtime/streamline-sdk-build.json`
+records common DLL hash
+`CE85930D3EFF5F3A806D036279B76714FE515BD3B81AAD6360FBE57AD4E0800D`
+and interposer hash
+`AAFE189D8DC80AD947F4BF7B033531AAE7DAE96A3F98EBC877D487764977EB3B`.
+This is a source build, not Godot Vulkan PCL/DLSS acceptance. It is not staged
+over the active retail D3D12 SDK. The NVIDIA skill catalog had no close
+Streamline/Reflex match; the pinned SDK source remains the integration reference.
+
 ## Remaining work and validation limits
 
 Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan
-FG and PCL still need a completed-frame presentation owner and real submission
-identity; other SR providers remain unfinished. Any interop route needs
+FSR3 FG has a completed-frame presentation owner and real submission identity,
+with the bounded evidence above. Vulkan PCL, other FG/SR providers,
+synchronization validation and broader acceptance remain unfinished. Any interop route needs
 same-adapter external memory/fences and graph-owned submission splits. The Unity
 Vulkan queue-access API cannot be assumed to exist in Godot.
 

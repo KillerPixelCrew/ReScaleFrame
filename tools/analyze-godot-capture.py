@@ -14,7 +14,8 @@ def load_image(path):
     formats = {9: (np.float16, 4), 10: (np.float16, 4), 33: (np.float16, 2),
                34: (np.float16, 2), 41: (np.float32, 1), 27: (np.uint8, 4), 28: (np.uint8, 4),
                29: (np.uint8, 4), 87: (np.uint8, 4), 90: (np.uint8, 4), 91: (np.uint8, 4)}
-    vk_formats = {97: (np.float16, 4), 83: (np.float16, 2), 100: (np.float32, 1), 126: (np.float32, 1)}
+    vk_formats = {97: (np.float16, 4), 83: (np.float16, 2), 100: (np.float32, 1), 126: (np.float32, 1),
+                  37: (np.uint8, 4), 44: (np.uint8, 4)}
     source_formats, format_key = (vk_formats, "vk_format") if "vk_format" in meta else (formats, "dxgi_format")
     if meta[format_key] not in source_formats:
         raise ValueError(f"Unsupported capture format: {path}: {format_key}={meta[format_key]}")
@@ -29,7 +30,7 @@ def load_image(path):
     image = rows.view(dtype).reshape(height, width, channels).astype(np.float64)
     if dtype == np.uint8:
         image /= 255.0
-    if format_key == "dxgi_format" and meta[format_key] in (87, 90, 91):
+    if (format_key == "dxgi_format" and meta[format_key] in (87, 90, 91)) or (format_key == "vk_format" and meta[format_key] == 44):
         image = image[..., [2, 1, 0, 3]]
     return meta, image
 
@@ -237,8 +238,13 @@ def main():
     output.mkdir(exist_ok=True)
     for path in sorted((args.capture / "frames").glob("*.json")):
         meta, data = load_image(path)
+        if meta["role"] == "fg-motion-uv":
+            # Vulkan supplies dense previous-minus-current UV motion. Decode to
+            # the same render-pixel convention as the DX12 guide readbacks.
+            data *= np.asarray(meta["render_size"])
+            meta = {**meta, "role": "fg-motion-pixels"}
         frames.setdefault(meta["frame"], {})[meta["role"]] = (meta, data)
-        png(data, meta["role"]).save(output / (path.stem + ".png"))
+        png(data, meta["role"]).save(output / (path.stem.replace("fg-motion-uv", "fg-motion-pixels") + ".png"))
     references = {}
     if args.reference:
         for path in (args.reference / "frames").glob("*fg-hudless-color*.json"):

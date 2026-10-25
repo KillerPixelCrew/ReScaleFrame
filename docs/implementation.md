@@ -38,8 +38,16 @@ Both editions exercise provider switching, resize/reset and actual player images
 The opt-in raw readback harness checks depth, motion and raster jitter against
 scene geometry and preserves actual SR output. Validation found and corrected
 FSR2 storage-format mismatches in the pinned SDK and Godot fallback, a missing
-copy-destination usage flag and a null Windows surface instance. Vulkan FG/PCL
-and other SR providers remain unfinished. The SR-only readback checks do not
+copy-destination usage flag and a null Windows surface instance. Native Vulkan
+FSR3 FG now has a complete runtime swapchain owner, four reserved queues,
+submission-bound input leases and actual generated-frame readbacks. Standard/.NET
+functional tests cover SR-independent generation, Off/resume, resize and a
+secondary native window. Validation found a truncated SDK descriptor pool and
+a presenter CPU retirement race; guarded staged corrections address both.
+The corrected SR Off/FSR3 image suite passes all 12 standard/.NET cases and 48
+actual generated frames against new MSAA midpoint references.
+Synchronization-validation present hazards also reproduce in official Godot and
+remain unresolved. Vulkan PCL and other providers remain unfinished. The SR-only readback checks do not
 establish Vulkan image-quality acceptance. For DX12, resetting only selected
 FSR2 history frames removes most measured source displacement; this diagnostic
 does not fix the normal temporal path. The 30-case image suite still fails.

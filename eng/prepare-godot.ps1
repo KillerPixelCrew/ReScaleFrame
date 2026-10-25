@@ -42,6 +42,7 @@ function Get-PinnedCheckout([string]$Url, [string]$Revision, [string]$Destinatio
 New-Item -ItemType Directory -Force -Path $taskLocal,(Join-Path $taskRoot 'references/godot') | Out-Null
 Get-PinnedCheckout $taskLock.engine.repository $taskLock.engine.revision (Join-Path $taskRoot 'references/godot/engine') $true
 Get-PinnedCheckout $taskLock.bindings.repository $taskLock.bindings.revision (Join-Path $taskRoot 'references/godot/godot-cpp')
+Get-PinnedCheckout $taskLock.vendor.streamline_source.repository $taskLock.vendor.streamline_source.revision (Join-Path $taskRoot 'references/godot/streamline')
 Get-PinnedCheckout $taskLock.vendor.fidelityfx.repository $taskLock.vendor.fidelityfx.revision (Join-Path $taskRoot 'vendor/fidelityfx')
 Get-PinnedCheckout $taskLock.vendor.fidelityfx_vulkan.repository $taskLock.vendor.fidelityfx_vulkan.revision (Join-Path $taskRoot 'references/godot/fidelityfx-vulkan')
 Get-PinnedCheckout $taskLock.vendor.xess.repository $taskLock.vendor.xess.revision (Join-Path $taskRoot 'vendor/xess')

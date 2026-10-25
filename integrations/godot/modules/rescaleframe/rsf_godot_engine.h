@@ -36,4 +36,12 @@ void camera_changed(RID target);
 RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID motion,
     const Projection &to_previous, const Vector2 &jitter);
 void release_motion();
+bool vulkan_enabled();
+bool vk_create(const void *setup, void **owner, uint64_t *chain);
+int32_t vk_images(void *owner, uint32_t *count, uint64_t *images);
+int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index);
+int32_t vk_present(void *owner, const void *info);
+void vk_submitted(void *const *commands, uint32_t count);
+bool vk_destroy(void *owner);
+bool vk_drain(void *owner);
 }

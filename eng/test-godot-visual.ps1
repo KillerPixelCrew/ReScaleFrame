@@ -2,11 +2,15 @@ param(
     [ValidateSet('standard','mono')][string[]]$Edition = @('standard','mono'),
     [ValidateSet('object','camera','combined')][string[]]$Mode = @('object','camera','combined'),
     [ValidateRange(0,7)][int[]]$SrBackend = @(0,1,2,3,5),
-    [ValidateRange(4,70)][int]$FirstFrame = 12
+    [ValidateRange(4,70)][int]$FirstFrame = 12,
+    [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
+    [switch]$GpuValidation,
+    [switch]$ReferenceMsaa
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+if ($GraphicsApi -eq 'vulkan' -and !$PSBoundParameters.ContainsKey('SrBackend')) { $SrBackend = @(0,2,3) }
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
 $taskPython = Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe'
 $taskRun = 'visual-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
@@ -15,8 +19,8 @@ foreach ($taskEdition in $Edition) {
     $taskEngine = Get-RsfGodotBuild $taskRoot $taskEdition
     foreach ($taskMode in $Mode) {
         $taskReferenceLabel = "$taskRun-$taskEdition-reference"
-        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono')}
-        & (Join-Path $PSScriptRoot 'capture-godot.ps1') @taskOptions -Label $taskReferenceLabel -Reference
+        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent}
+        & (Join-Path $PSScriptRoot 'capture-godot.ps1') @taskOptions -Label $taskReferenceLabel -Reference -ReferenceMsaa:$ReferenceMsaa
         $taskReference = Join-Path $taskRoot ".local/godot/visual/$taskReferenceLabel-$taskMode"
         foreach ($taskSr in $SrBackend) {
             $taskLabel = "$taskRun-$taskEdition-sr$taskSr"
@@ -47,7 +51,7 @@ foreach ($taskEdition in $Edition) {
 }
 $taskManifest = Join-Path $taskRoot ".local/godot/$taskRun.json"
 $taskFailed = @($taskResults | Where-Object { !$_.passed })
-@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
+@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
 Write-Output "Visual test manifest: $taskManifest"
 $taskRows = foreach ($taskCase in $taskResults) {
     $taskState = if ($taskCase.passed) { 'PASS' } else { 'FAIL' }

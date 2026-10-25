@@ -1,7 +1,8 @@
 # ReScaleFrame for Godot
 
 Developer integration for Godot 4.7.2, Forward+ and Windows x64. Direct3D 12 has
-SR/FG/PCL implementations; native Vulkan currently implements FSR2/FSR3 SR.
+SR/FG/PCL implementations; native Vulkan implements FSR2/FSR3 SR and an FSR3
+frame-generation presentation owner.
 It combines a GDExtension add-on with a small module and guarded patches against
 the pinned engine source. Both standard Godot and Godot .NET use the same native
 runtime. Official GodotSharp assemblies remain unchanged.
@@ -11,8 +12,10 @@ DLSS, FSR3 and XeSS SR, FSR3/XeSS/DLSS frame generation, DLSS MFG, and PCL/Refle
 The visual harness now captures actual FSR-generated images and checks temporal
 inputs against scene geometry. It does not establish broad image-quality,
 physical scanout or latency acceptance. Vulkan FSR2/FSR3 SR now has real GPU
-readback and validation-layer coverage on both editions; Vulkan FG/PCL and other
-SR providers remain unfinished. Standard/.NET Debug and Release exported players have passed the
+readback and validation-layer coverage on both editions. Vulkan FSR3 FG now runs
+with SR Off, provider switching, resize and a secondary native window. PCL, other
+Vulkan providers and synchronization-validation acceptance remain unfinished.
+Standard/.NET Debug and Release exported players have passed the
 runtime and lifecycle fixtures, including C# on .NET. A GDScript-only .NET
 Release export also passed.
 See [research and corrections](../../docs/research/godot-engine-integration.md).
@@ -20,6 +23,12 @@ The expanded 30-case image suite currently fails four FSR2/FSR3 independent-obje
 cases, with up to 0.62 output-pixel displacement, despite passing vector checks.
 These failures remain visible in the reports; all-provider image acceptance is
 unfinished.
+The first Vulkan 18-case image matrix also retains FSR2 failures and a teardown
+race caught by validation. The presenter retirement correction has new functional
+coverage and a passing 12-case SR Off/FSR3 image suite; the original failed
+evidence remains available. Synchronization validation
+also reports a present hazard in official Godot in this environment. It remains
+an open interoperability question, not a passing check.
 
 ## Build
 
@@ -52,6 +61,8 @@ For Vulkan SR readbacks on standard and .NET editors:
 ```powershell
 ./eng/test-godot.ps1 -EngineBridge -GraphicsApi vulkan -Scenario sr -CaptureFrames
 ./eng/test-godot.ps1 -EngineBridge -GraphicsApi vulkan -Scenario sr -CaptureFrames -SrBackend 3
+./eng/test-godot.ps1 -EngineBridge -GraphicsApi vulkan -Scenario fg -GpuValidation -CaptureFrames
+./eng/test-godot-visual.ps1 -GraphicsApi vulkan -GpuValidation -ReferenceMsaa
 ```
 
 `-GpuValidation` additionally requires an available Khronos validation layer.

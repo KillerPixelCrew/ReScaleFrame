@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <rescaleframe/game_renderer.h>
+#include <rescaleframe/native_fg_vulkan.h>
 #include <stdint.h>
 
 // Engine module to native runtime contract. Godot objects never cross this interface.
@@ -71,6 +72,13 @@ RSF_GODOT_EXPORT int rsfg_boot(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_boot_vulkan(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_vulkan_supported(void);
 RSF_GODOT_EXPORT int rsfg_render_vulkan(void* command_buffer, const rsf_godot_vk_packet* packet);
+RSF_GODOT_EXPORT int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** owner, uint64_t* chain);
+RSF_GODOT_EXPORT int32_t rsfg_vk_images(void* owner, uint32_t* count, uint64_t* images);
+RSF_GODOT_EXPORT int32_t rsfg_vk_acquire(void* owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);
+RSF_GODOT_EXPORT int32_t rsfg_vk_present(void* owner, const void* present_info);
+RSF_GODOT_EXPORT void rsfg_vk_submitted(void* const* commands, uint32_t count);
+RSF_GODOT_EXPORT int32_t rsfg_vk_destroy(void* owner);
+RSF_GODOT_EXPORT int32_t rsfg_vk_drain(void* owner);
 RSF_GODOT_EXPORT int32_t rsfg_create_swapchain(void* factory, void* queue, void* window, const void* description, void** out);
 RSF_GODOT_EXPORT int rsfg_configure(const rsf_godot_settings* settings);
 RSF_GODOT_EXPORT int rsfg_status(rsf_godot_status* status);

@@ -64,6 +64,8 @@ if ($StageRuntime) {
         if ($taskReceipt.sdkCommit -ne $taskLock.vendor.fidelityfx_vulkan.revision -or
             $taskReceipt.buildRecipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/build-sdk.ps1')).Hash -or
             $taskReceipt.fsr2StoragePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/fsr2-storage-formats.json')).Hash -or
+            $taskReceipt.descriptorPoolPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json')).Hash -or
+            $taskReceipt.presenterCpuDrainPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json')).Hash -or
             $taskReceipt.runtimeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')).Hash) {
             throw 'The Vulkan FidelityFX runtime does not match its pinned build receipt.'
         }

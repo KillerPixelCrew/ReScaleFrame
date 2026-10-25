@@ -12,8 +12,14 @@ FSR2/FSR3 object motion. Standard/.NET Debug and Release
 exports passed runtime/controller fixtures, with C# on .NET and a separate
 GDScript-only .NET export. Native Vulkan FSR2/FSR3 SR now runs on standard/.NET
 editors with resize, C# calls, raw GPU readbacks and validation-layer checks.
-Vulkan FG/PCL, other Vulkan SR providers and broad scene-quality acceptance
-remain pending. This does not change game-plugin readiness flags.
+Vulkan FSR3 FG now passes standard/.NET functional fixtures with SR Off,
+Off/resume, resize and a secondary native window. Captures include actual SDK
+generated images and independent midpoint references. FSR2 image displacement
+and a synchronization-validation present hazard remain open. The corrected
+SR Off/FSR3 Vulkan image suite passes 12 cases and 48 actual generated frames.
+Vulkan PCL, other
+Vulkan providers and broad scene-quality acceptance remain pending. This does
+not change game-plugin readiness flags.
 [Evidence and limits](research/godot-engine-integration.md).
 
 10 October update: the user reported a Unity UI/overlay regression in the new

@@ -16,6 +16,10 @@
       "url": "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.1/streamline-sdk-v2.14.1.zip",
       "sha512": "317aeeae2e692b6e8b5df183471dff3f884822bd8aa681ac50f3a6ef4136f758c59dac8bdaf94db48990a97b434d81e7c0bea3782c5825b76c3450ebf6f7f584"
     },
+    "streamline_source": {
+      "repository": "https://github.com/NVIDIA-RTX/Streamline.git",
+      "revision": "2122257e0fce486f91b385aa63b9a09b0a34b363"
+    },
     "fidelityfx": {
       "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
       "revision": "60f4ea81909200d8542eca14dccb2628b763a9a3"
