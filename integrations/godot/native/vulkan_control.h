@@ -3,6 +3,7 @@
 #include "api.h"
 namespace rsf::godot_vk {
 bool booted();
+void window(void*);
 int configure(const rsf_godot_settings*);
 int status(rsf_godot_status*);
 int settings(rsf_godot_settings*);

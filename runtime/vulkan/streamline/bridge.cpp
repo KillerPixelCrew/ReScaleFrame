@@ -13,6 +13,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <vulkan/vulkan.h>
 #include <sl.h>
 #include <sl_dlss_g.h>
@@ -57,6 +58,7 @@ VkSwapchainKHR currentSwapchain{};
 uint32_t fgCount{}, fgWidth{}, fgHeight{}, fgFormat{}, fgBackBuffers{};
 sl::FrameToken* frameToken{};
 std::atomic<int> lastPresentError{0};
+std::atomic<uint64_t> workerTimeoutEpoch{0};
 bool verboseLog{};
 const sl::ViewportHandle viewport(0);
 std::wstring pluginDirectory;
@@ -209,6 +211,8 @@ void onPresentError(const sl::APIError& error) {
 
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
 void onStreamlineMessage(sl::LogType type, const char* message) {
+    if (message && std::strstr(message, "Worker thread '") && std::strstr(message, "' timed out"))
+        workerTimeoutEpoch.fetch_add(1, std::memory_order_relaxed);
     if ((type == sl::LogType::eInfo && !verboseLog) || !message) return;
     std::fprintf(stderr, "[Streamline %s] %s\n",
         type == sl::LogType::eError ? "error" : type == sl::LogType::eWarn ? "warning" : "info", message);
@@ -299,6 +303,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const cha
     return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
 }
 RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return initialized ? module : nullptr; }
+RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return workerTimeoutEpoch.load(std::memory_order_relaxed); }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
 /// @details Call after provider work is retired. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. A later VulkanStorySlInitialize re-runs slInit.
@@ -453,6 +458,13 @@ RSF_SL_VK_EXPORT int VulkanStorySlVulkanWsiCall(int32_t (*callback)(void*), void
     if (!initialized) return callback(user);
     using Call = int32_t (*)(int32_t (*)(void*), void*);
     auto call = commonProc<Call>("rsfSlVulkanWsiCall");
+    return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
+}
+RSF_SL_VK_EXPORT int VulkanStorySlWithoutDlssG(int32_t (*callback)(void*), void* user) {
+    if (!callback) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!initialized) return callback(user);
+    using Call = int32_t (*)(int32_t (*)(void*), void*);
+    auto call = reinterpret_cast<Call>(GetProcAddress(module, "rsfSlVulkanWithoutDlssGCall"));
     return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 /// @brief Forwards logical-device idle waiting through interposer dispatch.

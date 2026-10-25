@@ -3,7 +3,8 @@ param(
     [switch]$VS2026,
     [switch]$Prepare,
     [switch]$StageRuntime,
-    [switch]$StageOnly
+    [switch]$StageOnly,
+    [string]$Fsr3RuntimeDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -22,7 +23,7 @@ $taskSuffix = if ($VS2026) { '-vs18' } else { '' }
 if (!$StageOnly) {
     Push-Location -LiteralPath $taskRoot
     try {
-        & cmake --preset "windows-x64$taskSuffix" "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-pcl-wsi/runtime"
+        & cmake --preset "windows-x64$taskSuffix" "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-dlssg-mfg-transfer/runtime"
         if ($LASTEXITCODE) { throw 'Godot configuration failed.' }
         & cmake --build --preset "windows-$($Configuration.ToLowerInvariant())$taskSuffix" --target rsf_godot
         if ($LASTEXITCODE) { throw 'Godot native build failed.' }
@@ -47,17 +48,19 @@ if ($StageRuntime) {
     foreach ($taskFile in @('license.txt','3rd-party-licenses.md')) {
         $taskPayload["streamline/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/$taskFile"
     }
-    $taskSlVulkan = Join-Path $taskRoot '.local/godot/vulkan/host/artifacts/streamline-production-pcl-wsi/runtime'
+    $taskSlVulkan = Join-Path $taskRoot '.local/godot/vulkan/host/artifacts/streamline-production-dlssg-mfg-transfer/runtime'
     if (Test-Path -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json')) {
         $taskSlReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json') | ConvertFrom-Json
         if ($taskSlReceipt.sdkCommit -ne $taskLock.vendor.streamline_source.revision -or
+            $taskSlReceipt.recipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1')).Hash -or
+            $taskSlReceipt.presentCaptureSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/present-capture.h')).Hash -or
             $taskSlReceipt.patchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/prepare.py')).Hash -or
             $taskSlReceipt.dispatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h')).Hash) { throw 'Corrected Streamline receipt differs from pinned source corrections.' }
         foreach ($taskFile in @('sl.interposer.dll','sl.common.dll')) {
             if ($taskSlReceipt.binaries.$taskFile -ne (Get-FileHash -LiteralPath (Join-Path $taskSlVulkan $taskFile)).Hash) { throw "Corrected Streamline hash mismatch: $taskFile" }
             $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskSlVulkan $taskFile
         }
-        foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll','sl.dlss.dll','nvngx_dlss.dll','nvngx_dlss.license.txt')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }
+        foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll','sl.dlss.dll','sl.dlss_g.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }
         foreach ($taskFile in @('license.txt','3rd-party-licenses.md')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/$taskFile" }
         $taskPayload['streamline-vulkan/reflex.license.txt'] = Join-Path $taskRoot '.local/streamline/sdk/bin/x64/reflex.license.txt'
         $taskPayload['streamline-vulkan/streamline-sdk-build.json'] = Join-Path $taskSlVulkan 'streamline-sdk-build.json'
@@ -73,7 +76,7 @@ if ($StageRuntime) {
     foreach ($taskFile in @('LICENSE.txt','third-party-programs.txt')) {
         $taskPayload["xess/$taskFile"] = Join-Path $taskRoot "vendor/xess/$taskFile"
     }
-    $taskVulkan = Join-Path $taskRoot '.local/godot/vulkan/runtime'
+    $taskVulkan = if ($Fsr3RuntimeDirectory) { (Resolve-Path -LiteralPath $Fsr3RuntimeDirectory).Path } else { Join-Path $taskRoot '.local/godot/vulkan/runtime' }
     if (Test-Path -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')) {
         $taskReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskVulkan 'fsr3-sdk-build.json') | ConvertFrom-Json
         if ($taskReceipt.sdkCommit -ne $taskLock.vendor.fidelityfx_vulkan.revision -or
@@ -83,6 +86,8 @@ if ($StageRuntime) {
             $taskReceipt.fsr2StoragePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/fsr2-storage-formats.json')).Hash -or
             $taskReceipt.descriptorPoolPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json')).Hash -or
             $taskReceipt.presenterCpuDrainPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json')).Hash -or
+            $taskReceipt.swapchainTracePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json')).Hash -or
+            $taskReceipt.swapchainTraceHeaderSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h')).Hash -or
             $taskReceipt.runtimeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')).Hash) {
             throw 'The Vulkan FidelityFX runtime does not match its pinned build receipt.'
         }

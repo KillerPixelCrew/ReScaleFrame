@@ -28,6 +28,8 @@ if ((& git -C $sdk rev-parse HEAD).Trim() -ne $commit) { throw 'Unexpected Strea
 $patch = Join-Path $PSScriptRoot 'sdk-fixes/prepare.py'
 $patchHash = (Get-FileHash -LiteralPath $patch).Hash
 $dispatchHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/ngx-vulkan-dispatch.h')).Hash
+$presentCapture = Join-Path $PSScriptRoot 'present-capture.h'
+$presentCaptureHash = (Get-FileHash -LiteralPath $presentCapture).Hash
 $recipeHash = (Get-FileHash -LiteralPath $PSCommandPath).Hash
 $runtime = Join-Path $output 'runtime'
 $receiptPath = Join-Path $runtime 'streamline-sdk-build.json'
@@ -35,7 +37,8 @@ if (Test-Path -LiteralPath $output) {
     if (Test-Path -LiteralPath $receiptPath) {
         $cached = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
         $valid = $cached.schema -eq 1 -and $cached.sdkCommit -eq $commit -and
-            $cached.patchSha256 -eq $patchHash -and $cached.dispatchSha256 -eq $dispatchHash -and $cached.recipeSha256 -eq $recipeHash
+            $cached.patchSha256 -eq $patchHash -and $cached.dispatchSha256 -eq $dispatchHash -and
+            $cached.presentCaptureSha256 -eq $presentCaptureHash -and $cached.recipeSha256 -eq $recipeHash
         foreach ($name in @('sl.common.dll','sl.interposer.dll')) {
             $binary = Join-Path $runtime $name
             $valid = $valid -and (Test-Path -LiteralPath $binary)
@@ -93,8 +96,11 @@ try {
         & './tools/premake5/premake5.exe' vs2022 --file=premake.lua "--with-toolset=$toolset" --with-nvllvk=yes
         if ($LASTEXITCODE -ne 0) { throw 'SDK project generation failed.' }
     } finally { Pop-Location }
+    $stagedCapture = Join-Path $source 'source/platforms/sl.chi/rsfPresentCapture.h'
+    Copy-RsfGodotArtifact $presentCapture $stagedCapture
     & $Python $patch $source
     if ($LASTEXITCODE -ne 0) { throw 'SDK source corrections failed.' }
+    if ((Get-FileHash -LiteralPath $stagedCapture).Hash -ne $presentCaptureHash) { throw 'Staged SDK capture ABI differs from its checked input.' }
     New-Item -ItemType Directory -Path (Join-Path $source '_artifacts') -Force | Out-Null
     @('#pragma once','#define GIT_LAST_COMMIT "SHA:2122257"','#define GIT_LAST_COMMIT_TAG "v2.14.1"','#define GIT_LAST_COMMIT_SHORT "2122257"') |
         Set-Content -LiteralPath (Join-Path $source '_artifacts/gitVersion.h')
@@ -116,7 +122,7 @@ try {
         $binaries[$name] = (Get-FileHash -LiteralPath (Join-Path $runtime $name)).Hash
     }
     Copy-RsfGodotArtifact (Join-Path $source 'vulkanstory-fixes.json') (Join-Path $runtime 'vulkanstory-fixes.json')
-    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;recipeSha256=$recipeHash;inputs=$libraryHashes;binaries=$binaries} |
+    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;presentCaptureSha256=$presentCaptureHash;recipeSha256=$recipeHash;inputs=$libraryHashes;binaries=$binaries} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath
 } finally {
     Restore-RsfGodotEnvironment $saved

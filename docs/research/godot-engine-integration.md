@@ -1140,3 +1140,131 @@ private runtime copies. Four fresh capture projects passed junction and every
 payload-file hash check (`runtime-cache-validation.json`), and loaded/executed
 the SDKs with validation. Their XeSS image comparisons still fail; cache
 validation is not image acceptance. PowerShell parsing and diff checks pass.
+
+
+## Vulkan provider expansion and presentation isolation, 25 October 2026
+
+The XeSS Vulkan service now has GPU dispatch/readback evidence and bounded
+standard/.NET SR-switch and resize fixtures. Its combined SR + FSR3 FG image
+suite currently fails: roughly 500 ms source intervals trigger camera-history
+resets, and the affected generated scene pixels copy the source image. The same
+pauses reproduce with PCL disabled, Khronos validation disabled and FSR3 SR in
+place of XeSS. Those controls do not establish a XeSS-specific defect. See
+[the XeSS evidence](godot-xess-vulkan-20261025.md).
+
+The synchronization-validation present hazard has a separate bounded isolation.
+Official and custom Godot runs have the hazard with RTSSHooks64 injected; the
+matching process-only ExtensionPointDisable controls exclude that module and
+have no present hazards. The custom-engine control has no VUIDs. Complete module
+inventory differences contain only RTSSHooks64. Global RTSS settings remain
+unchanged, and the pauses persist. See [the control procedure and
+receipts](godot-vulkan-sync-isolation-20261025.md). Optional capture isolation
+preserves its effective mitigation policy and loaded-module inventory.
+
+The new native FG dispatcher preserves the existing ABI 1 structures and selects
+one process-wide FFX3 or DLSS owner. Provider switches request a complete engine
+swapchain recreation; failed retirement preserves its owner for retry. The engine
+queries the owner's final image layout, including while Off. FFX replacement
+images remain shader-readable; DLSS proxy images require Present. Foreign FFX and
+secondary native WSI calls suppress only the interposer's DLSS-G hooks and retain
+common/PCL hooks. Generated counts are forwarded and SDK refusals are preserved.
+The shared early SDK session now selects SR and FG explicitly. See [the SDK,
+service and synthetic evidence](godot-vulkan-dlss-fg.md). Standard and .NET editor
+builds pass with these engine changes; native Godot DLSS FG image acceptance
+remains pending.
+
+Opt-in `RSF_VULKAN_TIMING_FILE` records a bounded 2048-row CSV with QPC intervals,
+process/thread identity, source frame and stage. It distinguishes slot-fence waits,
+FG preparation, acquire, native/proxy presentation and Reflex pacing. It does not
+change GPU submission or enable a provider. The first attempted old-DLL control
+after the editor rebuild picked up the new editor manifest and failed at startup;
+it produced no image evidence. Subsequent captures require the matching staged
+native library and the explicitly fingerprinted editor.
+
+
+## Win32 interop device preparation
+
+Godot's native resolver now checks the selected physical device for both
+`VK_KHR_external_memory_win32` and `VK_KHR_external_semaphore_win32` before
+appending them to a private device-create request. It also requires the engine's
+existing timeline-semaphore feature promise. It does not modify the engine's
+feature chain or enable an unsupported feature. Unsupported optional extensions
+fall back to the unchanged request; a separate readiness getter prevents a later
+interop provider from assuming admission. Synthetic creation tests cover the
+merged extensions, caller-chain preservation and readiness teardown. The MSVC
+Release gate passes all 63 discovered tests, with 52 executed and 11 opt-in skips,
+plus formatting and Clippy (`verify-vulkan-interop-requirements.log`). The new
+preparation has not yet been staged into a Godot GPU run. The separate XeSS FG
+resource-import device fixture does not prove this engine path or presentation.
+
+
+## Coordinated provider checkpoint
+
+`visual-20261025-194828-946.json` passes all six standard/.NET XeSS SR + FSR3 FG
++ PCL cases with 24 actual generated images and fresh MSAA references. Native
+`CC92455469F2AC7068B69DF5378989C93B10BBA581AAA2C6C257872CE3093DA5`
+is matched in each pair. The maximum material-centroid error is 0.25984 output
+pixels. SDK trace counter queries are disabled. The cold first-use capture and
+its long, successfully fulfilled timeline waits remain recorded separately;
+shader compilation is an inference, not an established cause.
+
+The same native build passes XeSS FG standard/.NET lifecycle, C# and PCL fixtures
+(`validation-20261025-194811-015.json` and `validation-20261025-195016-189.json`).
+Native `19BC537D1FF40A863C91690B2CAE39D005FD3760B65699DEECDF336A2B34F301`
+and editors DE9BA015/4C6461FC extend that evidence: FSR4 switches to DLSS and back,
+resizes/reset and is observed through C# on .NET. A standard FSR4 + FSR3 FG
+combined-motion case passes four actual generated images against a matching
+reference (`visual-20261025-201525-585.json`). The new private SR output readback
+initially refused an engine image without transfer-source usage. Its correction
+reads the owned SDK image in transfer-source layout, which supplies the same
+whole-image engine copy, and awaits a fresh raw-output run.
+
+Actual XeSS FG readbacks pass the first standard object-motion comparisons with
+SR Off and XeSS SR (`visual-20261025-201542-693.json` and
+`visual-20261025-201711-999.json`). These contain depth, motion and HUD-less inputs
+plus genuine SDK output resources. Callback source/ordinal identity is proven;
+0.5 is an independently rendered test hypothesis, not a fabricated SDK fraction.
+DLSS's count-one standard/.NET comparisons also pass, including shared SR + FG.
+MFG3 preserves genuine ordinals but its first strict run caught a private NGX
+buffer fill dependency; the guarded transfer-barrier correction awaits retest.
+
+The coordinated MSVC compile and new Godot/provider contract checks succeed. The
+full 68-test gate currently has one shared-loader failure: Windows maps zero bytes
+at the original build DLL entry point despite valid disk bytes. Identical fresh
+copies and existing aliases pass the actual export/forwarding test. The artifact
+is being preserved and refreshed before repeating the complete gate; this is not
+being bypassed or treated as a passing verification.
+
+
+The final coordinated Release gate now passes all 68 discovered tests, with
+57 executed and 11 opt-in skips, plus formatting and Clippy
+(`verify-godot-provider-milestone.log`). The loader investigation found that a
+normal file copy still reproduced the invalid mapped entry point. A verified
+byte-identical FileStream CreateNew/WriteThrough write, Flush(true), and atomic
+move repaired the original build path. Both the official loader test at that
+path and the full gate then passed. Original failed artifacts remain ignored.
+No loader source or acceptance check was weakened. The compiler instance was
+selected explicitly from the already installed, complete Community instance
+after the cached BuildTools registration became incomplete.
+
+MFG3's new SDK now passes strict validation and all three actual generated-image
+ordinal comparisons against independent quarter-step poses. The declared
+0.25/0.5/0.75 reference times are test hypotheses; SDK fractions remain unset.
+Material-centroid errors stay below 0.251 output pixels across all 12 outputs.
+Using the wrong midpoint hypothesis for ordinal zero fails all four centroid
+gates, preserving a useful negative control. This is bounded standard-editor
+MFG3 evidence, not acceptance of the queried maximum or physical presentation.
+Native `4765226F3364854814CBDA3AC5516F9F388A49FD6E5F31ABD9FCB76BA3A46EC2`
+contains the private FSR4 raw-capture correction and is staged for its raw-output
+rerun. The actual scene renderer/output copy is unchanged by that diagnostic fix.
+
+
+The corrected FSR4 capture is now device-proven on the staged 4765 native build:
+`visual-20261025-202302-354.json` (.NET) and
+`visual-20261025-202351-936.json` (standard) each pass four actual generated-image
+comparisons and all four raw SR roles for the same four source frames. Both use
+matching independently rendered references and strict synchronization validation.
+There are no provider refusals or API errors; .NET C# also passes. This closes
+the capture-only usage correction without asserting the engine output had an
+unavailable transfer-source promise. Object-only/camera-only FSR4 scenes and the
+new provider export/lifecycle expansion retain their separate acceptance gaps.

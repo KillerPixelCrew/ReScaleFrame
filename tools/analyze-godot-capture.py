@@ -35,6 +35,67 @@ def load_image(path):
     return meta, image
 
 
+def dlss_count_one_proof(meta, records, capture_info):
+    """Bind a native generated image to its SDK producer, without guessing time."""
+    return dlss_output_proof(meta, records, capture_info, 1, 0)
+
+
+def dlss_output_proof(meta, records, capture_info, count, ordinal):
+    if (not 1 <= count or not 0 <= ordinal < count or
+            meta.get("role") != f"fg-generated-present-{ordinal}" or meta.get("fg_backend") != 1 or
+            capture_info.get("fg_backend") != 1 or capture_info.get("generated_frames") != count):
+        return None
+    identity = (meta["session"], meta["frame"], meta["view"], meta["generation"])
+    matching = [r for r in records if
+                (r.get("session"), r.get("frame"), r.get("view"), r.get("resource_generation")) == identity]
+    if len(matching) != count + 1:
+        return None
+    generated = [r for r in matching if r.get("generated") is True and
+                 r.get("role") == f"fg-generated-present-{r.get('sdk_generated_index')}"]
+    real = [r for r in matching if r.get("generated") is False and r.get("sdk_generated_index") == -1 and
+            r.get("role") == "fg-real-present"]
+    if len(generated) != count or sorted(r.get("sdk_generated_index", -1) for r in generated) != list(range(count)) or len(real) != 1:
+        return None
+    if any(r.get("requested_generated_count") != count or r.get("present_result") not in (0, 1000001003) or
+           r.get("fraction_established") is not False or r.get("sdk_source_frame") != (meta["frame"] & 0xffffffff)
+           for r in matching):
+        return None
+    if any(row.get(key) != real[0].get(key) for row in generated for key in ("sdk_source_frame", "sdk_present_frame", "real_swapchain")):
+        return None
+    return {"sdk_generated_index": ordinal, "requested_generated_count": count,
+            "source_identity": list(identity), "capture_boundary": "sdk-native-wsi-present",
+            "fraction_established": False}
+
+
+def xess_count_one_proof(meta, source, capture_info):
+    """Require the pinned SDK's real input/output callbacks and exact source."""
+    if (capture_info.get("fg_backend") != 5 or capture_info.get("generated_frames") != 1 or
+            meta.get("role") != "fg-xess-generated-before-present" or not source or
+            source.get("role") != "fg-xess-sdk-backbuffer-input"):
+        return None
+    identity = ("session", "frame", "view", "generation", "sdk_token")
+    if any(meta.get(key) != source.get(key) for key in identity):
+        return None
+    if not isinstance(meta.get("sdk_token"), int) or meta["sdk_token"] & 0xffffffff != meta["frame"] & 0xffffffff:
+        return None
+    for item in (meta, source):
+        if (item.get("fg_backend") != 5 or item.get("requested_generated_count") != 1 or
+                item.get("sdk_array_ordinal") != 0 or
+                item.get("fraction_established") is not False or not item.get("source_resource") or
+                not item.get("command_list") or item.get("completion") != "bridge-owned-dx12-queue-drained" or
+                item.get("provider_sha256", "").lower() != "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27"):
+            return None
+    if (meta.get("sdk_output_kind") != 0 or source.get("sdk_output_kind") != 4 or
+            meta.get("observed_output_count") != 1 or source.get("observed_output_count") not in (0, 1) or
+            meta.get("generated") is not True or source.get("generated") is not False or
+            meta.get("capture_boundary") != "sdk-interpolation-output-callback" or
+            source.get("capture_boundary") != "sdk-input-backbuffer-callback"):
+        return None
+    return {"sdk_array_ordinal": 0, "requested_generated_count": 1, "observed_output_count": 1,
+            "source_identity": [meta[key] for key in identity],
+            "capture_boundary": "sdk-interpolation-output-callback", "fraction_established": False}
+
+
 def png(image, role):
     if "motion" in role:
         magnitude = np.linalg.norm(image[..., :2], axis=-1)
@@ -206,13 +267,14 @@ table{{border-collapse:collapse}}td,th{{padding:8px;border:1px solid #465263;tex
 figure img{{max-width:100%;height:auto}}code{{overflow-wrap:anywhere}}li{{color:#ffb6ad}}</style>
 <h1>{state}: actual generated-frame comparison</h1>
 <p>Godot {".NET" if capture_info.get("mono") else "standard"}; {escape(str(capture_info.get("mode", "unknown")))} motion;
-SR {escape(str(capture_info.get("sr_backend", "unknown")))}; FSR3 frame generation.</p>
+SR {escape(str(capture_info.get("sr_backend", "unknown")))}; FG backend {escape(str(capture_info.get("fg_backend", 3)))}.</p>
+{(f'<p>This comparison tests an independently rendered fraction {summary["reference_fraction_hypothesis"]} hypothesis for SDK ordinal {summary["generated_ordinal"]}. The SDK interpolation fraction remains unestablished.</p>' if summary.get("reference_fraction_hypothesis") is not None else '')}
 <p>This box/floor fixture checks temporal inputs and image displacement. It does not establish broad scene quality or latency.
 Images include the actual SDK-generated output. Click an image for full resolution.</p><ul>{failed}</ul>
 <p>All errors below are in output pixels, except vector errors, which use render pixels.
 Source displacement and interpolation residual are diagnostics; they do not relax the midpoint image gate.</p>
 <table><tr><th>Source frame</th><th>Object motion p95</th><th>Floor motion p95</th><th>Source SR displacement</th>
-<th>Generated midpoint error</th><th>Residual after source displacement</th></tr>{"".join(rows)}</table>
+<th>Generated reference error</th><th>Residual after source displacement</th></tr>{"".join(rows)}</table>
 <p>Motion hue encodes direction, brightness encodes magnitude and saturates at 3 render pixels.
 Black is zero motion. Depth previews use a logarithmic scale; raw values remain in the readbacks.</p>
 {"".join(images)}<p><a href="analysis.json">Numerical report</a> · <a href="../capture-info.json">Capture fingerprints</a>
@@ -227,11 +289,30 @@ def main():
     parser.add_argument("capture", type=Path)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--variant", default="", help="Keep an alternate reference experiment in its own decoded directory")
+    parser.add_argument("--generated-ordinal", type=int, help="Explicit native SDK output ordinal for a declared reference experiment")
+    parser.add_argument("--reference-fraction-hypothesis", type=float,
+                        help="Declared reference time between previous/current source poses; never an SDK-provided factor")
     parser.add_argument("--check", action="store_true", help="Fail on missing captures or incorrect temporal inputs")
     args = parser.parse_args()
     report = json.loads((args.capture / "result.json").read_text())
+    info_path = args.capture / "capture-info.json"
+    capture_info = json.loads(info_path.read_text(encoding="utf-8-sig")) if info_path.exists() else {}
+    native_output = capture_info.get("fg_backend") in (1, 5)
+    output_count = capture_info.get("generated_frames", 1)
+    ordinal = args.generated_ordinal if args.generated_ordinal is not None else 0
+    fraction = args.reference_fraction_hypothesis if args.reference_fraction_hypothesis is not None else 0.5
+    if args.reference_fraction_hypothesis is not None and (not native_output or not 0 < fraction < 1 or not args.reference):
+        parser.error("A native output fraction hypothesis requires a reference and a finite value strictly between zero and one")
+    if args.generated_ordinal is not None and (not native_output or not 0 <= ordinal < output_count):
+        parser.error("The selected ordinal must name a generated output of this native provider")
+    explicit_mfg = (capture_info.get("fg_backend") == 1 and output_count == 3 and
+                    args.generated_ordinal is not None and args.reference_fraction_hypothesis is not None)
+    sidecar = args.capture / "frames" / "dlss-present-capture.jsonl"
+    dlss_records = [json.loads(line) for line in sidecar.read_text().splitlines() if line.strip()] if sidecar.exists() else []
     poses = {p["process_frame"]: p for p in report["poses"]}
     frames = {}
+    xess_output_counts = {}
+    failures = []
     if args.variant and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.variant):
         parser.error("Use a simple analysis variant name")
     output = args.capture / ("decoded-" + args.variant if args.variant else "decoded")
@@ -244,17 +325,45 @@ def main():
             data *= np.asarray(meta["render_size"])
             meta = {**meta, "role": "fg-motion-pixels"}
         frames.setdefault(meta["frame"], {})[meta["role"]] = (meta, data)
+        if meta["role"] == "fg-xess-generated-before-present":
+            xess_output_counts[meta["frame"]] = xess_output_counts.get(meta["frame"], 0) + 1
+        if meta["role"].startswith("fg-generated-present-"):
+            if meta["role"] != f"fg-generated-present-{ordinal}":
+                continue
+            proof = dlss_output_proof(meta, dlss_records, capture_info, output_count if explicit_mfg else 1, ordinal)
+            if proof is None:
+                failures.append(f"Frame {meta['frame']}: DLSS output lacks a matching producer sidecar or explicit MFG reference experiment")
+            else:
+                # Only the internal comparison key is shared. Preserve the
+                # original native-present role and unestablished SDK fraction.
+                frames[meta["frame"]]["fg-generated-before-ui"] = ({**meta, "sdk_present_proof": proof}, data)
         png(data, meta["role"]).save(output / (path.stem.replace("fg-motion-uv", "fg-motion-pixels") + ".png"))
+    for frame, resources in frames.items():
+        if "fg-xess-generated-before-present" not in resources:
+            continue
+        meta, data = resources["fg-xess-generated-before-present"]
+        source = resources.get("fg-xess-sdk-backbuffer-input")
+        proof = xess_count_one_proof(meta, source[0] if source else None, capture_info)
+        if proof is None or xess_output_counts[frame] != 1:
+            failures.append(f"Frame {frame}: XeSS output lacks an exact count-one input/output producer pair")
+        else:
+            resources["fg-generated-before-ui"] = ({**meta, "sdk_output_proof": proof}, data)
     references = {}
+    references_by_time = {}
     if args.reference:
         reference_report = json.loads((args.reference / "result.json").read_text())
+        reference_poses = {p["process_frame"]: p for p in reference_report["poses"]}
         if report.get("geometry", "box") != reference_report.get("geometry", "box"):
             parser.error("Capture and reference use different scene geometry")
         for path in (args.reference / "frames").glob("*fg-hudless-color*.json"):
             meta, data = load_image(path)
             references[meta["frame"]] = data
+            if meta["frame"] in reference_poses:
+                references_by_time[float(reference_poses[meta["frame"]]["animation_frame"])] = data
+    def reference_at(time):
+        exact = [value for key, value in references_by_time.items() if abs(key - time) < 1e-6]
+        return exact[0] if len(exact) == 1 else None
     findings = []
-    failures = []
     if not report.get("passed"):
         failures.append("The engine fixture reported failure")
     requested_sr = report.get("sr_backend", 0)
@@ -278,10 +387,22 @@ def main():
                 metrics["raster_jitter_fit"] = jitter
         metrics["frame"] = frame
         if "fg-generated-before-ui" in resources:
+            generated_meta = resources["fg-generated-before-ui"][0]
             generated = resources["fg-generated-before-ui"][1]
             metrics["actual_generated_frame_captured"] = True
+            metrics["actual_generated_output_role"] = generated_meta["role"]
+            proof = generated_meta.get("sdk_present_proof", generated_meta.get("sdk_output_proof"))
+            if proof is not None:
+                metrics["sdk_output_proof"] = proof
+                metrics["reference_fraction_hypothesis"] = fraction if args.reference else None
+                metrics["reference_fraction_basis"] = "independently-rendered-source-pose-time-test-hypothesis" if args.reference else None
+                metrics["fraction_established"] = False
             panels = [("HUD-less base input", color), ("Actual generated output", generated)]
-            reference = references.get(frame * 2 - 1)
+            previous_time, current_time = float(poses[frame - 1]["animation_frame"]), float(poses[frame]["animation_frame"])
+            reference_time = previous_time + fraction * (current_time - previous_time)
+            reference = reference_at(reference_time) if proof is not None else references.get(frame * 2 - 1)
+            if proof is not None:
+                metrics["reference_animation_time_hypothesis"] = reference_time
             if reference is not None and reference.shape != generated.shape:
                 height, width = generated.shape[:2]
                 scale_y, scale_x = reference.shape[0] // height, reference.shape[1] // width
@@ -333,7 +454,7 @@ def main():
                         # Distinguish SR reconstruction displacement already present
                         # in the source from displacement introduced by interpolation.
                         # This diagnostic does not relax the end-to-end image gate.
-                        current_reference = references.get(frame * 2)
+                        current_reference = reference_at(current_time) if proof is not None else references.get(frame * 2)
                         if current_reference is not None:
                             height, width = generated.shape[:2]
                             sy, sx = current_reference.shape[0] // height, current_reference.shape[1] // width
@@ -348,7 +469,7 @@ def main():
                                     metrics["source_current_material_centroid_error_pixels"] = float(np.linalg.norm(source_error))
                                     metrics["generated_midpoint_material_centroid_error_vector_pixels"] = generated_error.tolist()
                                     metrics["interpolation_residual_after_source_displacement_pixels"] = float(np.linalg.norm(generated_error - source_error))
-                panels += [("Rendered half-step reference", reference), ("Absolute error x4", delta * 4)]
+                panels += [(f"Rendered fraction {fraction} hypothesis" if proof is not None else "Rendered half-step reference", reference), ("Absolute error x4", delta * 4)]
             sheet = Image.new("RGB", (color.shape[1] * len(panels), color.shape[0] + 24), "#121820")
             draw = ImageDraw.Draw(sheet)
             for i, (title, data) in enumerate(panels):
@@ -371,21 +492,26 @@ def main():
         if not report.get("reference") and not metrics.get("actual_generated_frame_captured"):
             failures.append(f"Frame {frame}: actual generated output is missing")
         if args.reference and "generated_midpoint_edge_rgb_error_mean" not in metrics:
-            failures.append(f"Frame {frame}: matching rendered midpoint reference is missing")
+            failures.append(f"Frame {frame}: matching rendered reference time is missing")
         if metrics.get("generated_midpoint_edge_rgb_error_mean", 0) > 0.12:
             failures.append(f"Frame {frame}: generated geometry edge error exceeds the fixture limit")
         if args.reference and metrics.get("generated_midpoint_material_centroid_error_pixels", float("inf")) > 0.35:
-            failures.append(f"Frame {frame}: generated object misses its independently rendered midpoint")
+            target = "reference time hypothesis" if metrics.get("sdk_output_proof") else "midpoint"
+            failures.append(f"Frame {frame}: generated object misses its independently rendered {target}")
     if len(findings) < 4:
         failures.append("Fewer than four complete matching guide/output frames")
     if report.get("probe", {}).get("capture_moving_pixels", 0):
         failures.append("The raw probe forced GPU submission; this run cannot validate ordinary scheduling")
-    info_path = args.capture / "capture-info.json"
-    capture_info = json.loads(info_path.read_text(encoding="utf-8-sig")) if info_path.exists() else {}
     if capture_info.get("reset_sr_history"):
         failures.append("Forced SR history resets are a diagnostic, not ordinary temporal-path acceptance")
     summary = {"capture": str(args.capture), "reference": str(args.reference) if args.reference else None,
-               "passed": not failures, "failures": failures, "frames": findings}
+               "passed": not failures, "failures": failures, "frames": findings,
+               "image_quality_compared": bool(args.reference),
+               "dlss_reference_fraction_hypothesis": fraction if args.reference and capture_info.get("fg_backend") == 1 else None,
+               "generated_ordinal": ordinal if native_output else None,
+               "reference_fraction_hypothesis": fraction if args.reference and native_output else None,
+               "reference_fraction_basis": "independently-rendered-source-pose-time-test-hypothesis" if args.reference and native_output else None,
+               "sdk_interpolation_fraction_established": False if capture_info.get("fg_backend") in (1, 5) else None}
     (output / "analysis.json").write_text(json.dumps(summary, indent=2) + "\n")
     write_report(output, summary, capture_info)
     print(json.dumps(summary, indent=2))

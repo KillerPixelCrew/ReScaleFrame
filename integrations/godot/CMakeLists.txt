@@ -12,7 +12,10 @@ set(GODOTCPP_USE_STATIC_CPP OFF CACHE BOOL "Use the native project's CRT" FORCE)
 add_subdirectory("${RSF_GODOT_CPP_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/godot-cpp" SYSTEM)
 set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp)
+add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
+if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
+    target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
+endif()
 target_compile_definitions(rsf_godot PRIVATE RSF_GODOT_NATIVE_BUILD RSF_STREAMLINE_HOST_BUILD)
 target_link_libraries(rsf_godot PRIVATE godot::cpp rsf_orchestrator_core ReScaleFrame::NativeVulkan rsf_build_options)
 set_target_properties(rsf_godot PROPERTIES OUTPUT_NAME "ReScaleFrame.Godot.Native"

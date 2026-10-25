@@ -15,7 +15,8 @@ param(
     [string]$VulkanSdkRoot = $env:VULKAN_SDK,
     [ValidateSet('Release','RelWithDebInfo')][string]$Configuration = 'Release',
     [ValidateRange(1,4)][int]$Parallel = 4,
-    [ValidateRange(1,4)][int]$ShaderThreads = 1
+    [ValidateRange(1,4)][int]$ShaderThreads = 1,
+    [switch]$SwapchainTrace
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
@@ -52,6 +53,12 @@ $cpuFixPath = Join-Path $PSScriptRoot 'sdk-fixes/presenter-cpu-drain.json'
 $cpuFix = Get-Content -LiteralPath $cpuFixPath -Raw | ConvertFrom-Json
 $cpuFixHash = (Get-FileHash -LiteralPath $cpuFixPath -Algorithm SHA256).Hash
 if ($cpuFix.sdkCommit -ne $commit) { throw 'Presenter CPU completion correction requires the pinned SDK commit.' }
+$traceFixPath = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-trace.json'
+$traceFix = Get-Content -LiteralPath $traceFixPath -Raw | ConvertFrom-Json
+$traceFixHash = (Get-FileHash -LiteralPath $traceFixPath -Algorithm SHA256).Hash
+$traceHeader = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-trace.h'
+$traceHeaderHash = (Get-FileHash -LiteralPath $traceHeader -Algorithm SHA256).Hash
+if ($traceFix.sdkCommit -ne $commit) { throw 'Swapchain diagnostics require the pinned SDK commit.' }
 $glslang = (Join-Path $sdkRoot 'sdk/tools/binary_store/glslangValidator.exe').Replace('\','/')
 $glslangHash = (Get-FileHash -LiteralPath $glslang -Algorithm SHA256).Hash
 if (Test-Path -LiteralPath $output) {
@@ -66,6 +73,8 @@ if (Test-Path -LiteralPath $output) {
             $cached.fsr2StoragePatchSha256 -eq $storageFixHash -and $cached.shaderCompilerSha256 -eq $glslangHash -and
             $cached.descriptorPoolPatchSha256 -eq $poolFixHash -and
             $cached.presenterCpuDrainPatchSha256 -eq $cpuFixHash -and $cached.wsiDispatchHeaderSha256 -eq $wsiHeaderHash -and
+            $cached.PSObject.Properties['swapchainTraceEnabled'] -and $cached.swapchainTraceEnabled -eq $SwapchainTrace.IsPresent -and
+            $cached.swapchainTracePatchSha256 -eq $traceFixHash -and $cached.swapchainTraceHeaderSha256 -eq $traceHeaderHash -and
             $cached.runtimeSha256 -eq (Get-FileHash -LiteralPath $cachedBinaryPath -Algorithm SHA256).Hash) {
             Write-Host "Using verified corrected FidelityFX runtime: $cachedBinaryPath"
             return
@@ -154,6 +163,18 @@ foreach ($replacement in $cpuFix.replacements) {
     [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
 }
 Copy-RsfGodotArtifact $wsiHeader (Join-Path $source 'sdk/src/backends/vk/FrameInterpolationSwapchain/rsf-wsi-dispatch.h')
+if ($SwapchainTrace) {
+    foreach ($replacement in $traceFix.replacements) {
+        $path = Join-Path $source $replacement.file
+        $code = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+        $expectedCount = if ($replacement.PSObject.Properties['count']) { [int]$replacement.count } else { 1 }
+        if ([regex]::Matches($code, [regex]::Escape($replacement.before)).Count -ne $expectedCount) {
+            throw "Pinned SDK swapchain diagnostic anchor changed: $($replacement.file)"
+        }
+        [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
+    }
+    Copy-RsfGodotArtifact $traceHeader (Join-Path $source 'sdk/src/backends/vk/FrameInterpolationSwapchain/rsf-swapchain-trace.h')
+}
 # The SDK otherwise gives every shader compiler the entire host CPU thread count.
 # Limit only staged build scheduling; shader flags and permutations remain identical.
 $shaderCommands = Join-Path $source 'sdk/include/FidelityFX/gpu/CMakeCompileShaders.txt'
@@ -187,6 +208,9 @@ $receipt = [ordered]@{
     fsr2StoragePatchSha256=$storageFixHash
     descriptorPoolPatchSha256=$poolFixHash
     presenterCpuDrainPatchSha256=$cpuFixHash
+    swapchainTraceEnabled=$SwapchainTrace.IsPresent
+    swapchainTracePatchSha256=$traceFixHash
+    swapchainTraceHeaderSha256=$traceHeaderHash
     wsiDispatchHeaderSha256=$wsiHeaderHash
     runtimeSha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
     cmake=$cmake; compiler=$compiler; generator=$generator; vulkanSdk=$vulkanRoot

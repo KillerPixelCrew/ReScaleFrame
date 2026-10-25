@@ -75,8 +75,21 @@ release that can outlive a camera-free shutdown; drained feature retirement
 addresses it. Rebuilt Vulkan Debug/Release templates now pass 12 standard/.NET
 exported SR, FG and camera-free PCL fixtures, with C# on .NET SR/FG and actual
 PNG/raw input checks in SR. Template/player and both native-library copies are
-fingerprinted. Other Vulkan providers, FSR2 displacement, synchronization
-validation and broader acceptance remain unfinished.
+fingerprinted. XeSS Vulkan SR now passes six standard/.NET image cases and 24
+actual generated images with FSR3 FG and PCL. DLSS FG passes strict standard/.NET
+checks and midpoint image comparisons, including shared DLSS SR + FG. MFG3's
+private buffer-write hazard is corrected; all three actual output ordinals pass
+strict GPU validation and independently rendered quarter-step comparisons.
+XeSS FG's Vulkan/DX12 presenter passes standard/.NET lifecycle/C#/PCL checks; the
+first standard object-motion cases with SR Off and XeSS SR pass actual generated
+image and guide checks. FSR4's deferred graph split passes standalone GPU work,
+both Godot editors' switching/resize checks, C# on .NET and one combined-motion
+image comparison per edition. The corrected private-output capture also passes
+four complete raw SR frames per edition.
+The present hazard is isolated to RTSS hook injection in bounded process-only
+controls. Warm steady-state FFX captures no longer show the reset/disable feedback
+loop; cold startup latency remains separate. FSR2 displacement, new-provider
+exports, Vulkan FSR4 FG routing and broad scene acceptance remain unfinished.
 [Evidence and corrections](research/godot-engine-integration.md),
 [developer integration](../integrations/godot/README.md).
 

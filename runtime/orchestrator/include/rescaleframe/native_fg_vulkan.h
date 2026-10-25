@@ -3,6 +3,8 @@
 #include <rescaleframe/native_sr_vulkan.h>
 
 #define RSF_FGVK_ABI_VERSION 1u
+#define RSF_FGVK_HOST_ABI_VERSION 1u
+#define RSF_FGVK_LATENCY_ABI_VERSION 1u
 typedef struct rsf_fgvk rsf_fgvk;
 typedef struct rsf_fgvk_setup {
     uint32_t struct_size, abi_version;
@@ -33,18 +35,55 @@ typedef struct rsf_fgvk_status {
     uint64_t prepared, tagged, generated_callbacks, last_present_count, source_frame;
 } rsf_fgvk_status;
 
+typedef struct rsf_fgvk_host_options {
+    uint32_t struct_size, abi_version;
+    void* window; /* Borrowed HWND; live through owner destruction. */
+    uint32_t timeline_enabled;
+    const uint16_t* intel_runtime_directory; /* Absolute UTF-16 path, borrowed during create. */
+} rsf_fgvk_host_options;
+
+typedef struct rsf_fgvk_latency_status {
+    uint32_t struct_size, abi_version;
+    uint32_t mode, available;
+    uint64_t sleep_calls, marker_calls;
+    int32_t result; /* Original XeLL result; counts cover successful SDK calls. */
+} rsf_fgvk_latency_status;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* The service owns the entire replacement WSI table. Never send its chain to
-   native Vulkan WSI. The graphics queue is externally synchronized by the engine;
-   the other three queues are reserved exclusively for this owner. Serialize owner
-   calls and retain queue callbacks through destroy. This version owns one primary
-   window; secondary native windows retain their separate WSI ownership. */
+/* The service owns the entire provider WSI table. Never send its chain to a
+   different WSI owner. Serialize calls and retain setup callbacks through destroy.
+   There is one process-wide primary owner across providers; secondary windows
+   retain native WSI ownership. FFX needs four distinct queues in one family.
+   DLSS needs the early shared session with DLSS FG selected. */
+/* Legacy creation selects FFX3 with one generated frame. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_setup*, rsf_fgvk**, uint64_t* chain);
+/* Explicit FG selection is independent of setup.graphics.backend (SR). Backend
+   1 selects DLSS; 3 selects FFX3; 5 selects XeSS with host options. Count excludes the real frame. Unsupported
+   providers/counts are refused. In the exceptional case of failed cleanup after
+   partial creation, nonnull owner/chain outputs retain ownership for destroy
+   retry even though this call fails. Never discard those retained outputs. */
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_for_backend(const rsf_fgvk_setup*, uint32_t backend,
+    uint32_t generated_count, rsf_fgvk**, uint64_t* chain);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup*, uint32_t backend,
+    uint32_t generated_count, const rsf_fgvk_host_options*, rsf_fgvk**, uint64_t* chain);
 RSF_RUNTIME_API int32_t rsf_fgvk_images(rsf_fgvk*, uint32_t* count, uint64_t* images);
 RSF_RUNTIME_API int32_t rsf_fgvk_acquire(rsf_fgvk*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable(rsf_fgvk*, uint32_t enabled);
+/* Legacy enable preserves the selected count. Options update only on success. */
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable_options(rsf_fgvk*, uint32_t enabled, uint32_t generated_count);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_backend(const rsf_fgvk*, uint32_t* backend);
+/* Final layout of the game-facing images for this owner's entire lifetime,
+   including Off: FFX/XeSS use shader-read, DLSS uses transfer-source. Vulkan enum value. */
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_image_layout(const rsf_fgvk*, uint32_t* layout);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_max_generated(rsf_fgvk*, uint32_t* count);
+/* Separate XeLL control for the XeSS presentation owner. Mode is Off(0)/On(1);
+   Boost is unsupported. Frame IDs must fit the SDK's nonzero uint32_t domain. */
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_latency_options(rsf_fgvk*, uint32_t mode, uint32_t minimum_interval_us);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_latency_sleep(rsf_fgvk*, uint64_t frame);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_latency_marker(rsf_fgvk*, uint64_t frame, uint32_t marker);
+RSF_RUNTIME_API rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk*, rsf_fgvk_latency_status*);
 /* Record prepare at the depth/motion producer, and HUD-less copying after
    tonemapping before canvas. Inputs are leased until actual GPU completion. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk*, void* commands, const rsf_fgvk_frame*);

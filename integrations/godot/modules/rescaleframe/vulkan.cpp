@@ -37,12 +37,18 @@ bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, v
     graphics.instance = context_driver->instance_get(); graphics.physical_device = physical_device; graphics.device = vk_device;
     graphics.instance_proc = reinterpret_cast<rsf_vk_get_proc>(vkGetInstanceProcAddr);
     graphics.device_proc = reinterpret_cast<rsf_vk_get_proc>(vkGetDeviceProcAddr); graphics.depth_inverted = 1;
+    const auto &description = *static_cast<const VkSwapchainCreateInfoKHR *>(info);
+    graphics.output_width = description.imageExtent.width; graphics.output_height = description.imageExtent.height;
     for (uint32_t i = 0; i < 4; ++i) setup.queues[i] = queue_families[queue->queue_family][i].queue;
     setup.queue_family = queue->queue_family; setup.create_info = info; setup.allocator = allocation_callbacks;
     setup.graphics_submit = rescaleframe_submit; setup.lock_queues = rescaleframe_lock_queues;
     setup.unlock_queues = rescaleframe_unlock_queues; setup.queue_user = chain;
     uint64_t handle = 0;
-    if (!RSFGodot::vk_create(&setup, &chain->rescaleframe_owner, &handle)) return false;
+    const bool created = RSFGodot::vk_create(&setup, &chain->rescaleframe_owner, &handle);
+    if (!created) {
+        if (chain->rescaleframe_owner) chain->vk_swapchain = reinterpret_cast<VkSwapchainKHR>(handle);
+        return false;
+    }
     chain->vk_swapchain = reinterpret_cast<VkSwapchainKHR>(handle); return true;
 }
 bool RenderingDeviceDriverVulkan::rescaleframe_release(void *opaque_chain) {
@@ -144,6 +150,30 @@ void *RenderingDeviceDriverVulkan::rescaleframe_begin(CommandBufferID id) {
     auto *commands = reinterpret_cast<CommandBufferInfo *>(id.id);
     if (!commands || commands->active_render_pass) return nullptr;
     return commands->vk_command_buffer;
+}
+bool RenderingDeviceDriverVulkan::rescaleframe_graph_info(CommandBufferID id, uint32_t &family) {
+    const auto *commands = reinterpret_cast<const CommandBufferInfo *>(id.id);
+    if (!rescaleframe_timeline || !commands || commands->active_render_pass || commands->rescaleframe_timeline) return false;
+    family = commands->rescaleframe_family;
+    return true;
+}
+void RenderingDeviceDriverVulkan::rescaleframe_graph_split(CommandBufferID current, CommandBufferID continuation,
+        uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done) {
+    auto *before = reinterpret_cast<CommandBufferInfo *>(current.id);
+    auto *after = reinterpret_cast<CommandBufferInfo *>(continuation.id);
+    // A second split in a continuation needs another distinct external timeline.
+    // Refuse rather than overwrite a dependency which the engine must submit.
+    CRASH_COND_MSG(before->rescaleframe_timeline || after->rescaleframe_timeline ||
+            before->rescaleframe_family != after->rescaleframe_family,
+            "ReScaleFrame graph split has incompatible command-buffer dependencies.");
+    const VkResult result = vkEndCommandBuffer(before->vk_command_buffer);
+    CRASH_COND_MSG(result != VK_SUCCESS, "ReScaleFrame could not end its source graph command buffer.");
+    before->rescaleframe_timeline = reinterpret_cast<VkSemaphore>(timeline);
+    before->rescaleframe_wait = previous_done;
+    before->rescaleframe_signal = ready;
+    after->rescaleframe_timeline = reinterpret_cast<VkSemaphore>(timeline);
+    after->rescaleframe_wait = done;
+    after->rescaleframe_signal = 0;
 }
 uint64_t RenderingDeviceDriverVulkan::rescaleframe_instance_proc() {
     return reinterpret_cast<uint64_t>(vkGetInstanceProcAddr);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include <rescaleframe/native_fg_vulkan.h>
+#include "native_fg_ffx_vulkan.h"
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
+#include "native_vulkan_timing.h"
 #include <memory>
 #include <cmath>
 
@@ -17,7 +19,7 @@
 #include <mutex>
 
 namespace {
-std::atomic<rsf_fgvk*> owner{nullptr};
+std::atomic<rsf_ffxgvk*> owner{nullptr};
 struct Image { VkImage image = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; bool initialized = false; };
 struct Slot {
     rsf_frame_record record{};
@@ -29,7 +31,7 @@ struct Slot {
     Image color;
 };
 }
-struct rsf_fgvk {
+struct rsf_ffxgvk {
     rsf_fgvk_setup setup{};
     HMODULE module = nullptr;
     ffxContext swapchain = nullptr, effect = nullptr;
@@ -44,6 +46,8 @@ struct rsf_fgvk {
     PFN_vkQueuePresentKHR native_present = nullptr;
     PFN_vkAcquireNextImageKHR native_acquire = nullptr;
     PFN_vkGetSwapchainImagesKHR native_images = nullptr;
+    PFN_vkCreateSwapchainKHR native_create = nullptr;
+    PFN_vkDestroySwapchainKHR native_destroy = nullptr;
     ffxQueryDescSwapchainReplacementFunctionsVK functions{};
     PFN_vkCreateImage create_image = nullptr;
     PFN_vkDestroyImage destroy_image = nullptr;
@@ -68,7 +72,7 @@ struct rsf_fgvk {
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
     rsf::FrameCaptureVk capture;
     std::mutex capture_guard;
-    ~rsf_fgvk() {
+    ~rsf_ffxgvk() {
         if (effect && destroy) (void)destroy(&effect, nullptr);
         if (chain && functions.pOutDestroySwapchainFFXAPI) functions.pOutDestroySwapchainFFXAPI(
             static_cast<VkDevice>(setup.graphics.device), chain, allocator, swapchain);
@@ -88,13 +92,39 @@ struct rsf_fgvk {
     }
 };
 namespace {
+VkResult VKAPI_PTR serialized_create(VkDevice device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* chain) {
+    auto* self = owner.load();
+    if (!self || self->setup.graphics.device != device || !self->native_create) return VK_ERROR_INITIALIZATION_FAILED;
+    struct Lease { PFN_vkCreateSwapchainKHR call; VkDevice device; const VkSwapchainCreateInfoKHR* info; const VkAllocationCallbacks* allocator; VkSwapchainKHR* chain; };
+    Lease lease{self->native_create, device, info, allocator, chain};
+    // Create/destroy hooks take their own LL2 mutex. Suppress only DLSS-G;
+    // never hold an outer WSI mutex across these notification hooks.
+    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.info, value.allocator, value.chain);
+    }, &lease));
+}
+void VKAPI_PTR serialized_destroy(VkDevice device, VkSwapchainKHR chain, const VkAllocationCallbacks* allocator) {
+    auto* self = owner.load();
+    if (!self || self->setup.graphics.device != device || !self->native_destroy) return;
+    struct Lease { PFN_vkDestroySwapchainKHR call; VkDevice device; VkSwapchainKHR chain; const VkAllocationCallbacks* allocator; };
+    Lease lease{self->native_destroy, device, chain, allocator};
+    (void)rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user); value.call(value.device, value.chain, value.allocator); return VK_SUCCESS;
+    }, &lease);
+}
 VkResult VKAPI_PTR serialized_acquire(VkDevice device, VkSwapchainKHR chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
+    const rsf::VulkanTimingScope timing("native_acquire_total", 0);
     auto* self = owner.load();
     if (!self || self->setup.graphics.device != device || !self->native_acquire) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkAcquireNextImageKHR call; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t* index; };
     Lease lease{self->native_acquire, device, chain, timeout, semaphore, fence, index};
-    return VkResult(rsf_latencyvk_wsi_call([](void* user) -> int32_t {
-        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
+    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        return rsf_latencyvk_wsi_call([](void* data) -> int32_t {
+            const auto& value = *static_cast<Lease*>(data);
+            return rsf::vk_timed_call("native_acquire", 0, [&] {
+                return value.call(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
+            });
+        }, user);
     }, &lease));
 }
 VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
@@ -102,13 +132,23 @@ VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint
     if (!self || self->setup.graphics.device != device || !self->native_images) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkGetSwapchainImagesKHR call; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
     Lease lease{self->native_images, device, chain, count, images};
-    return VkResult(rsf_latencyvk_wsi_call([](void* user) -> int32_t {
-        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.chain, value.count, value.images);
+    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        return rsf_latencyvk_wsi_call([](void* data) -> int32_t {
+            const auto& value = *static_cast<Lease*>(data); return value.call(value.device, value.chain, value.count, value.images);
+        }, user);
     }, &lease));
 }
 VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* info) {
+    const rsf::VulkanTimingScope timing("native_present_total", 0);
     auto* self = owner.load();
-    return self && self->native_present ? VkResult(rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(self->native_present), queue, info)) : VK_ERROR_INITIALIZATION_FAILED;
+    if (!self || !self->native_present) return VK_ERROR_INITIALIZATION_FAILED;
+    struct Lease { PFN_vkQueuePresentKHR call; VkQueue queue; const VkPresentInfoKHR* info; } lease{self->native_present, queue, info};
+    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user);
+        return rsf::vk_timed_call("native_queue_present", 0, [&] {
+            return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(value.call), value.queue, value.info);
+        });
+    }, &lease));
 }
 PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
     auto* self = owner.load();
@@ -129,11 +169,11 @@ VkResult graphics_submit(uint32_t count, const VkSubmitInfo* submits, VkFence fe
     return self ? VkResult(self->setup.graphics_submit(self->setup.queue_user, count, submits, reinterpret_cast<uint64_t>(fence))) : VK_ERROR_DEVICE_LOST;
 }
 struct QueueLock {
-    rsf_fgvk& self;
-    explicit QueueLock(rsf_fgvk& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
+    rsf_ffxgvk& self;
+    explicit QueueLock(rsf_ffxgvk& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
     ~QueueLock() { self.setup.unlock_queues(self.setup.queue_user); }
 };
-void transition(rsf_fgvk& self, VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to) {
+void transition(rsf_ffxgvk& self, VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to) {
     VkImageMemoryBarrier data{}; data.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     data.oldLayout = from; data.newLayout = to;
     data.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -142,7 +182,7 @@ void transition(rsf_fgvk& self, VkCommandBuffer commands, VkImage image, VkImage
     data.image = image; data.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &data);
 }
-bool allocate_color(rsf_fgvk& self, Image& image) {
+bool allocate_color(rsf_ffxgvk& self, Image& image) {
     auto device = static_cast<VkDevice>(self.setup.graphics.device);
     VkImageCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO; info.imageType = VK_IMAGE_TYPE_2D;
     info.extent = {self.width, self.height, 1}; info.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -167,7 +207,7 @@ FfxApiResource resource(const rsf_srvk_image& image) {
     return value;
 }
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
-    auto& self = *static_cast<rsf_fgvk*>(userdata);
+    auto& self = *static_cast<rsf_ffxgvk*>(userdata);
     if (!data) return FFX_API_RETURN_ERROR_PARAMETER;
     const auto& slot = self.slots[data->frameID % self.slots.size()];
     if (slot.record.frame_id != data->frameID || !slot.submitted_prepare || !slot.submitted_hudless) return FFX_API_RETURN_ERROR_PARAMETER;
@@ -187,7 +227,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
     }
     return result;
 }
-bool valid_record(const rsf_fgvk& self, const rsf_fgvk_frame* frame) {
+bool valid_record(const rsf_ffxgvk& self, const rsf_fgvk_frame* frame) {
     if (!frame || frame->struct_size < sizeof(*frame) || frame->abi_version != RSF_FGVK_ABI_VERSION || !frame->record) return false;
     const auto& record = *frame->record;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
@@ -206,7 +246,7 @@ bool valid_record(const rsf_fgvk& self, const rsf_fgvk_frame* frame) {
         std::isfinite(camera.vertical_fov_radians) && camera.vertical_fov_radians > 0 && camera.vertical_fov_radians < 3.141593f &&
         std::isfinite(camera.jitter_pixels[0]) && std::isfinite(camera.jitter_pixels[1]);
 }
-rsf_backend_result configure_frame(rsf_fgvk& self, const Slot* slot) {
+rsf_backend_result configure_frame(rsf_ffxgvk& self, const Slot* slot) {
     ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     config.swapChain = reinterpret_cast<void*>(self.chain);
     config.frameGenerationEnabled = slot != nullptr;
@@ -219,16 +259,18 @@ rsf_backend_result configure_frame(rsf_fgvk& self, const Slot* slot) {
             self.width, self.height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
         config.HUDLessColor = resource(color);
     }
-    const auto result = self.configure(&self.effect, &config.header);
+    const char* timing_stage = slot ? (self.configured ? "ffx_configure_update" : "ffx_configure_enable") :
+        (self.configured ? "ffx_configure_disable" : "ffx_configure_disabled");
+    const auto result = rsf::vk_timed_call(timing_stage, config.frameID, [&] { return self.configure(&self.effect, &config.header); });
     if (result != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     self.configured = slot != nullptr; return RSF_BACKEND_OK;
 }
 }
 #else
-struct rsf_fgvk {};
+struct rsf_ffxgvk {};
 #endif
 
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_setup* setup, rsf_fgvk** out, uint64_t* chain) try {
+extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) try {
     if (!out || !chain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr; *chain = 0;
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -249,8 +291,8 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_set
     if (info.oldSwapchain || info.sType != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR || !info.imageExtent.width || !info.imageExtent.height ||
         info.imageArrayLayers != 1 || info.imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ||
         !(info.imageFormat == VK_FORMAT_R8G8B8A8_UNORM || info.imageFormat == VK_FORMAT_B8G8R8A8_UNORM)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    auto self = std::make_unique<rsf_fgvk>(); self->setup = *setup;
-    rsf_fgvk* expected = nullptr;
+    auto self = std::make_unique<rsf_ffxgvk>(); self->setup = *setup;
+    rsf_ffxgvk* expected = nullptr;
     if (!owner.compare_exchange_strong(expected, self.get())) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     self->width = info.imageExtent.width; self->height = info.imageExtent.height;
     self->allocator = const_cast<VkAllocationCallbacks*>(static_cast<const VkAllocationCallbacks*>(setup->allocator));
@@ -283,10 +325,11 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_set
     self->native_present = reinterpret_cast<PFN_vkQueuePresentKHR>(graphics.device_proc(graphics.device, "vkQueuePresentKHR"));
     self->native_acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(graphics.device_proc(graphics.device, "vkAcquireNextImageKHR"));
     self->native_images = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(graphics.device_proc(graphics.device, "vkGetSwapchainImagesKHR"));
+    self->native_create = reinterpret_cast<PFN_vkCreateSwapchainKHR>(graphics.device_proc(graphics.device, "vkCreateSwapchainKHR"));
+    self->native_destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(graphics.device_proc(graphics.device, "vkDestroySwapchainKHR"));
     const rsf_ffx_wsi_dispatch wsi{sizeof(wsi), 2, static_cast<VkDevice>(graphics.device),
-        reinterpret_cast<PFN_vkCreateSwapchainKHR>(graphics.device_proc(graphics.device, "vkCreateSwapchainKHR")),
-        reinterpret_cast<PFN_vkDestroySwapchainKHR>(graphics.device_proc(graphics.device, "vkDestroySwapchainKHR")), serialized_present, serialized_acquire, serialized_images};
-    if (!wsi.create || !wsi.destroy || !self->native_present || !self->native_acquire || !self->native_images || self->wsi_dispatch(&wsi) != 0) return RSF_BACKEND_ERROR_INIT_FAILED;
+        serialized_create, serialized_destroy, serialized_present, serialized_acquire, serialized_images};
+    if (!self->native_create || !self->native_destroy || !self->native_present || !self->native_acquire || !self->native_images || self->wsi_dispatch(&wsi) != 0) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->wsi_registered = true;
     ffxCreateContextDescFrameGenerationSwapChainVK create{}; create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
     create.physicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device); create.device = static_cast<VkDevice>(graphics.device);
@@ -320,7 +363,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_set
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-extern "C" RSF_RUNTIME_API int32_t rsf_fgvk_images(rsf_fgvk* self, uint32_t* count, uint64_t* images) {
+extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk* self, uint32_t* count, uint64_t* images) {
 #if defined(RSF_HAVE_FFX_VK)
     return self && count ? self->functions.pOutGetSwapchainImagesKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, count,
         reinterpret_cast<VkImage*>(images)) : VK_ERROR_INITIALIZATION_FAILED;
@@ -328,15 +371,18 @@ extern "C" RSF_RUNTIME_API int32_t rsf_fgvk_images(rsf_fgvk* self, uint32_t* cou
     (void)self; (void)count; (void)images; return -3;
 #endif
 }
-extern "C" RSF_RUNTIME_API int32_t rsf_fgvk_acquire(rsf_fgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
+extern "C" int32_t rsf_ffxgvk_acquire(rsf_ffxgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
 #if defined(RSF_HAVE_FFX_VK)
-    return self && index ? self->functions.pOutAcquireNextImageKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, timeout,
-        reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(semaphore)), reinterpret_cast<VkFence>(static_cast<uintptr_t>(fence)), index) : VK_ERROR_INITIALIZATION_FAILED;
+    if (!self || !index) return VK_ERROR_INITIALIZATION_FAILED;
+    return rsf::vk_timed_call("ffx_acquire", self->latest, [&] {
+        return self->functions.pOutAcquireNextImageKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, timeout,
+            reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(semaphore)), reinterpret_cast<VkFence>(static_cast<uintptr_t>(fence)), index);
+    });
 #else
     (void)self; (void)timeout; (void)semaphore; (void)fence; (void)index; return -3;
 #endif
 }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable(rsf_fgvk* self, uint32_t enabled) {
+extern "C" rsf_backend_result rsf_ffxgvk_enable(rsf_ffxgvk* self, uint32_t enabled) {
     if (!self || enabled > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if defined(RSF_HAVE_FFX_VK)
     self->enabled = enabled != 0; return RSF_BACKEND_OK;
@@ -344,11 +390,12 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_enable(rsf_fgvk* self, ui
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
+extern "C" rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
     if (!self || !commands || !frame || frame->struct_size < sizeof(*frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (frame->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if defined(RSF_HAVE_FFX_VK)
     if (!valid_record(*self, frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const rsf::VulkanTimingScope timing("ffx_prepare_total", frame->record->frame_id);
     if (!self->enabled && !self->capture.wants(frame->record->frame_id)) return RSF_BACKEND_OK;
     const auto& record = *frame->record;
     if (frame->depth.device != self->setup.graphics.device || frame->motion.device != self->setup.graphics.device ||
@@ -367,7 +414,9 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, v
     // presentation uses its own images afterwards. Wait only on busy slot reuse.
     for (auto fence : {slot.source_pending ? slot.source_completion : VK_NULL_HANDLE,
             slot.consumer_pending ? slot.consumer_completion : VK_NULL_HANDLE}) {
-        if (fence && self->wait_fences(device, 1, &fence, VK_TRUE, 15000000000ull) != VK_SUCCESS) return RSF_BACKEND_ERROR_NOT_READY;
+        if (fence && rsf::vk_timed_call("ffx_slot_fence_wait", record.frame_id, [&] {
+            return self->wait_fences(device, 1, &fence, VK_TRUE, 15000000000ull);
+        }) != VK_SUCCESS) return RSF_BACKEND_ERROR_NOT_READY;
     }
     VkFenceCreateInfo fence_info{}; fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     for (auto* fence : {&slot.source_completion, &slot.consumer_completion}) if (!*fence &&
@@ -392,7 +441,9 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, v
     data.cameraFovAngleVertical = record.camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
     data.depth = resource(frame->depth); data.motionVectors = resource(frame->motion);
     if (self->enabled) {
-        if (self->dispatch(&self->effect, &data.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        if (rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] {
+            return self->dispatch(&self->effect, &data.header);
+        }) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
         slot.prepared = true; ++self->status.prepared;
     }
     slot.guides = true; self->latest = record.frame_id;
@@ -404,7 +455,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk* self, v
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_hudless(rsf_fgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
+extern "C" rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
     if (!self || !commands || !frame || frame->struct_size < sizeof(*frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (frame->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if defined(RSF_HAVE_FFX_VK)
@@ -433,7 +484,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_hudless(rsf_fgvk* self, v
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API void rsf_fgvk_submitted(rsf_fgvk* self, void* const* commands, uint32_t count) {
+extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk* self, void* const* commands, uint32_t count) {
 #if defined(RSF_HAVE_FFX_VK)
     if (!self || !commands) return;
     for (auto& slot : self->slots) for (uint32_t i = 0; i < count; ++i) {
@@ -450,17 +501,23 @@ extern "C" RSF_RUNTIME_API void rsf_fgvk_submitted(rsf_fgvk* self, void* const* 
     (void)self; (void)commands; (void)count;
 #endif
 }
-extern "C" RSF_RUNTIME_API int32_t rsf_fgvk_present(rsf_fgvk* self, const void* present_info) try {
+extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* present_info) try {
 #if defined(RSF_HAVE_FFX_VK)
     if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
+    const rsf::VulkanTimingScope timing("ffx_present_total", self->latest);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
     auto& slot = self->slots[self->latest % self->slots.size()];
+    // A camera reset discards dispatch history through generate(), rather than
+    // disabling the presenter and draining its queues and pacing threads. Keep
+    // activation stable while this frame's submitted input leases are valid.
     const bool valid = self->enabled && self->latest > self->presented && slot.record.frame_id == self->latest &&
-        slot.prepared && slot.hudless && slot.submitted_prepare && slot.submitted_hudless && !(slot.record.flags & RSF_FRAME_FLAG_RESET);
+        slot.prepared && slot.hudless && slot.submitted_prepare && slot.submitted_hudless && !slot.completion_unknown;
     const auto configured = configure_frame(*self, valid ? &slot : nullptr);
     if (configured != RSF_BACKEND_OK) { self->status.result = configured; return VK_ERROR_INITIALIZATION_FAILED; }
-    const auto result = self->functions.pOutQueuePresentKHR(static_cast<VkQueue>(self->setup.queues[0]), &info);
+    const auto result = rsf::vk_timed_call("ffx_queue_present", self->latest, [&] {
+        return self->functions.pOutQueuePresentKHR(static_cast<VkQueue>(self->setup.queues[0]), &info);
+    });
     if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
         auto device = static_cast<VkDevice>(self->setup.graphics.device);
         if (self->reset_fences(device, 1, &slot.consumer_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
@@ -475,7 +532,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_fgvk_present(rsf_fgvk* self, const void* 
     (void)self; (void)present_info; return -3;
 #endif
 } catch (...) { return -3; }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self, rsf_fgvk_status* status) {
+extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) {
     if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (status->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if defined(RSF_HAVE_FFX_VK)
@@ -484,7 +541,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_drain(rsf_fgvk* self) try {
+extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
 #if defined(RSF_HAVE_FFX_VK)
     QueueLock lock(*self);
@@ -497,11 +554,11 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_drain(rsf_fgvk* self) try
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_destroy(rsf_fgvk* self) try {
+extern "C" rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
 #if defined(RSF_HAVE_FFX_VK)
     if (self->effect && configure_frame(*self, nullptr) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (self->chain && rsf_fgvk_drain(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
+    if (self->chain && rsf_ffxgvk_drain(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
     if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     self->effect = nullptr;
     if (self->chain) self->functions.pOutDestroySwapchainFFXAPI(static_cast<VkDevice>(self->setup.graphics.device), self->chain, self->allocator, self->swapchain);

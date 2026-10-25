@@ -5,6 +5,7 @@ var runtime: RefCounted
 var poses: Array[Dictionary] = []
 var initial_backend := 2
 var second_backend := 3
+var resized_backend := 3
 var expect_sr_failure := false
 
 func _matrix(value: Projection) -> Array[float]:
@@ -24,7 +25,8 @@ func _ready() -> void:
         if argument.begins_with("--initial-sr="):
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
-    second_backend = 3 if initial_backend == 1 else 5 - initial_backend
+    second_backend = 3 if initial_backend in [1, 5] else 5 - initial_backend
+    resized_backend = initial_backend if initial_backend == 4 else second_backend
     if RenderingServer.get_current_rendering_driver_name() == "vulkan":
         _require(not runtime.call("configure", {"sr_backend": 3, "fg_mode": 1, "fg_backend": 2}, get_viewport().get_viewport_rid()), "Unsupported Vulkan FG provider was accepted")
         _require(not runtime.call("configure", {"sr_backend": 3, "latency_mode": 3}, get_viewport().get_viewport_rid()), "Invalid Vulkan latency mode was accepted")
@@ -88,10 +90,14 @@ func _process(_delta: float) -> void:
         _check_provider(status, second_backend)
         _snapshot("sr%s" % second_backend)
     elif frame == 90:
+        if initial_backend == 4:
+            # Exercise the interop owner's return after retirement, then rebuild
+            # that same provider for the resized graph resources.
+            _select(initial_backend)
         DisplayServer.window_set_size(Vector2i(800, 450))
         runtime.call("reset_history")
     elif frame == 125:
-        _check_provider(status, second_backend)
+        _check_provider(status, resized_backend)
         _require(status.output_width == 800 and status.output_height == 450, "SR did not follow resize/reset")
         _snapshot("resized")
     elif frame == 150:
@@ -99,6 +105,9 @@ func _process(_delta: float) -> void:
         if mono_test:
             mono_status = mono_test.call("validate_sr_mono")
             _require(mono_status.get("passed", false), "C# SR facade validation failed")
+            if initial_backend == 4:
+                _require(mono_status.get("runtime_status", {}).get("active_sr", 0) == 4,
+                    "C# did not observe the resized FSR4 provider")
         var file := FileAccess.open(result_path, FileAccess.WRITE)
         if file:
             file.store_string(JSON.stringify({"passed": failures.is_empty(), "failures": failures, "samples": samples, "mono": mono_status, "poses": poses, "expected_sr_failure": expect_sr_failure}, "  "))

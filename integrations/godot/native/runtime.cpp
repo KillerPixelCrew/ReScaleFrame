@@ -4,6 +4,7 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
@@ -422,7 +423,7 @@ extern "C" int rsfg_request_latency_ping(void)
     return (booted || rsf::godot_vk::booted()) && window && message >= 0xc000u && PostMessageW(window, message, 0, 0) ? 1 : 0;
 }
 extern "C" void rsfg_vk_window(void* window) {
-    if (rsf::godot_vk::booted()) accept(nullptr, window);
+    if (rsf::godot_vk::booted()) { accept(nullptr, window); rsf::godot_vk::window(window); }
 }
 extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     if (!rsf::godot_vk::booted() || !window || reinterpret_cast<uint64_t>(input_window.load()) != window) return 0;
@@ -430,9 +431,19 @@ extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     return 1;
 }
 extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
-    return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(callback), owning_queue, info);
+    struct Lease { uint64_t callback; void* queue; const void* info; } lease{callback, owning_queue, info};
+    return rsf_slvk_without_dlssg([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user);
+        return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(value.callback), value.queue, value.info);
+    }, &lease);
 }
-extern "C" int32_t rsfg_vk_wsi_call(rsf_vk_wsi_call callback, void* user) { return rsf_latencyvk_wsi_call(callback, user); }
+extern "C" int32_t rsfg_vk_wsi_call(rsf_vk_wsi_call callback, void* user) {
+    struct Lease { rsf_vk_wsi_call callback; void* user; } lease{callback, user};
+    return rsf_slvk_without_dlssg([](void* opaque) -> int32_t {
+        const auto& value = *static_cast<Lease*>(opaque); return rsf_latencyvk_wsi_call(value.callback, value.user);
+    }, &lease);
+}
+extern "C" int32_t rsfg_vk_foreign_call(rsf_vk_wsi_call callback, void* user) { return rsf_slvk_without_dlssg(callback, user); }
 
 extern "C" int rsfg_shutdown(void) try
 {

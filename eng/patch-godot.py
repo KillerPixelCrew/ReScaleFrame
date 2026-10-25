@@ -258,13 +258,113 @@ replace("drivers/vulkan/rendering_device_driver_vulkan.cpp", '\tVkSwapchainCreat
         '\t\trescaleframe_latency.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV;\n'
         '\t\trescaleframe_latency.latencyModeEnable = surface->rescaleframe_primary ? VK_TRUE : VK_FALSE;\n'
         '\t\tswap_create_info.pNext = &rescaleframe_latency;\n\t}\n#endif')
+previous_dlssg_wsi_plan = planned.copy()
+path = "drivers/vulkan/rendering_device_driver_vulkan.cpp"
+replace(path, '\t// The proxy exposes regular shader-readable images, not WSI images.\n\tattachment.finalLayout = swap_chain->rescaleframe_owner ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;',
+        '\t// Each provider defines the layout of its game-facing images, including Off.\n'
+        '\tattachment.finalLayout = VkImageLayout(RSFGodot::vk_image_layout(swap_chain->rescaleframe_owner));')
+replace(path, '\t\terr = VK_SUCCESS;\n\t} else\n#endif',
+        '\t\terr = VK_SUCCESS;\n\t} else if (swap_chain->rescaleframe_owner) {\n'
+        '\t\t// A failed retirement keeps the provider owner for a later retry.\n'
+        '\t\terr = VK_ERROR_INITIALIZATION_FAILED;\n\t} else\n#endif')
+replace(path, '\t\terr = device_functions.CreateSwapchainKHR(vk_device, &swap_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR), &swap_chain->vk_swapchain);',
+        '\t\tstruct Lease { PFN_vkCreateSwapchainKHR call; VkDevice device; const VkSwapchainCreateInfoKHR *info; const VkAllocationCallbacks *allocator; VkSwapchainKHR *chain; };\n'
+        '\t\tLease lease{device_functions.CreateSwapchainKHR, vk_device, &swap_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR), &swap_chain->vk_swapchain};\n'
+        '\t\terr = VkResult(RSFGodot::vk_foreign_call([](void *user) -> int32_t {\n'
+        '\t\t\tconst auto &value = *static_cast<Lease *>(user); return value.call(value.device, value.info, value.allocator, value.chain);\n'
+        '\t\t}, &lease));')
+replace(path, '\t\t\tdevice_functions.DestroySwapchainKHR(vk_device, swap_chain->vk_swapchain, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR));',
+        '\t\t\tstruct Lease { PFN_vkDestroySwapchainKHR call; VkDevice device; VkSwapchainKHR chain; const VkAllocationCallbacks *allocator; };\n'
+        '\t\t\tLease lease{device_functions.DestroySwapchainKHR, vk_device, swap_chain->vk_swapchain, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR)};\n'
+        '\t\t\tRSFGodot::vk_foreign_call([](void *user) -> int32_t {\n'
+        '\t\t\t\tconst auto &value = *static_cast<Lease *>(user); value.call(value.device, value.chain, value.allocator); return 0;\n'
+        '\t\t\t}, &lease);')
+previous_optical_queue_plan = planned.copy()
+replace("drivers/vulkan/rendering_device_driver_vulkan.cpp", '\t\tVkDeviceQueueCreateInfo create_info = {};',
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\t// Leave transfer-only optical-flow families exclusively to the FG SDK.\n'
+        '\t\tconst VkQueueFlags flags = queue_family_properties[i].queueFlags;\n'
+        '\t\tif (RSFGodot::vulkan_enabled() && (flags & VK_QUEUE_OPTICAL_FLOW_BIT_NV) && !(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))) continue;\n'
+        '#endif\n\n\t\tVkDeviceQueueCreateInfo create_info = {};')
+
+previous_graph_split_plan = planned.copy()
+path = "servers/rendering/rendering_device_graph.cpp"
+at = planned[path].index("#include ")
+planned[path] = planned[path][:at] + '#include "modules/modules_enabled.gen.h"\n#ifdef MODULE_RESCALEFRAME_ENABLED\n#include "graph.h"\n#endif\n\n' + planned[path][at:]
+replace(path, '\t\t\t\tdriver_callback_command->callback(driver, r_command_buffer, driver_callback_command->userdata);',
+        '\t\t\t\t// The scoped reference lets a native callback continue on a pooled buffer.\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\t\t\tauto rsf_labels = [&](bool reopen) {\n'
+        '\t\t\t\t\tif (reopen) {\n'
+        '\t\t\t\t\t\t_run_label_command_change(r_command_buffer, command->label_index, p_level, true, true, &p_sorted_commands[i], p_sorted_commands_count - i, r_current_label_index, r_current_label_level);\n'
+        '\t\t\t\t\t} else {\n'
+        '\t\t\t\t\t\t_run_label_command_change(r_command_buffer, -1, -1, false, false, nullptr, 0, r_current_label_index, r_current_label_level);\n'
+        '\t\t\t\t\t\tr_current_label_index = r_current_label_level = -1;\n'
+        '\t\t\t\t\t}\n\t\t\t\t};\n'
+        '\t\t\t\tRSFGodot::GraphScope rsf_graph_scope(driver, r_command_buffer, r_command_buffer_pool, rsf_labels);\n'
+        '#endif\n'
+        '\t\t\t\tdriver_callback_command->callback(driver, r_command_buffer, driver_callback_command->userdata);')
+path = "drivers/vulkan/rendering_device_driver_vulkan.h"
+replace(path, '\t\tCommandBufferType buffer_type = COMMAND_BUFFER_TYPE_PRIMARY;',
+        '\t\tCommandBufferType buffer_type = COMMAND_BUFFER_TYPE_PRIMARY;\n\t\tuint32_t rescaleframe_family = 0;')
+replace(path, '\t\tVkCommandBuffer vk_command_buffer = VK_NULL_HANDLE;',
+        '\t\tVkCommandBuffer vk_command_buffer = VK_NULL_HANDLE;\n'
+        '\t\tuint32_t rescaleframe_family = 0;\n'
+        '\t\tVkSemaphore rescaleframe_timeline = VK_NULL_HANDLE;\n'
+        '\t\tuint64_t rescaleframe_wait = 0, rescaleframe_signal = 0;')
+replace(path, '\tvoid *rescaleframe_begin(CommandBufferID id);',
+        '\tbool rescaleframe_graph_info(CommandBufferID id, uint32_t &family);\n'
+        '\tvoid rescaleframe_graph_split(CommandBufferID current, CommandBufferID continuation, uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done);\n'
+        '\tvoid *rescaleframe_begin(CommandBufferID id);')
+path = "drivers/vulkan/rendering_device_driver_vulkan.cpp"
+replace(path, '\tcommand_pool->buffer_type = p_cmd_buffer_type;',
+        '\tcommand_pool->buffer_type = p_cmd_buffer_type;\n\tcommand_pool->rescaleframe_family = family_index;')
+replace(path, '\tcommand_buffer->vk_command_buffer = vk_command_buffer;',
+        '\tcommand_buffer->vk_command_buffer = vk_command_buffer;\n\tcommand_buffer->rescaleframe_family = command_pool->rescaleframe_family;')
+replace(path, 'bool RenderingDeviceDriverVulkan::command_buffer_begin(CommandBufferID p_cmd_buffer) {\n\tCommandBufferInfo *command_buffer = (CommandBufferInfo *)(p_cmd_buffer.id);',
+        'bool RenderingDeviceDriverVulkan::command_buffer_begin(CommandBufferID p_cmd_buffer) {\n\tCommandBufferInfo *command_buffer = (CommandBufferInfo *)(p_cmd_buffer.id);\n'
+        '\t// The frame fence has retired every previous use of this pooled buffer.\n'
+        '\tcommand_buffer->rescaleframe_timeline = VK_NULL_HANDLE;\n'
+        '\tcommand_buffer->rescaleframe_wait = command_buffer->rescaleframe_signal = 0;')
+# Validate section granularity before consuming the engine's acquire-wait list.
+replace(path, '\tVkResult err;\n\tCommandQueue *command_queue = (CommandQueue *)(p_cmd_queue.id);',
+        '\tVkResult err;\n'
+        '\tfor (uint32_t i = 0; i < p_cmd_buffers.size(); ++i) {\n'
+        '\t\tconst auto *commands = reinterpret_cast<const CommandBufferInfo *>(p_cmd_buffers[i].id);\n'
+        '\t\t// External producer/consumer sections must remain separate submissions.\n'
+        '\t\tERR_FAIL_COND_V_MSG(commands->rescaleframe_timeline && p_cmd_buffers.size() != 1, FAILED, "ReScaleFrame graph sections cannot share one Vulkan submit.");\n'
+        '\t}\n'
+        '\tCommandQueue *command_queue = (CommandQueue *)(p_cmd_queue.id);')
+replace(path, '\t\tVkSubmitInfo submit_info = {};',
+        '\t\tLocalVector<uint64_t> rsf_wait_values, rsf_signal_values;\n'
+        '\t\tVkTimelineSemaphoreSubmitInfo rsf_timeline_info = {};\n'
+        '\t\tconst auto *rsf_commands = reinterpret_cast<const CommandBufferInfo *>(p_cmd_buffers[0].id);\n'
+        '\t\tif (rsf_commands->rescaleframe_timeline) {\n'
+        '\t\t\t// Every existing wait/signal is binary and must have timeline value zero.\n'
+        '\t\t\tfor (uint32_t i = 0; i < wait_semaphores.size(); ++i) rsf_wait_values.push_back(0);\n'
+        '\t\t\tfor (uint32_t i = 0; i < signal_semaphores.size(); ++i) rsf_signal_values.push_back(0);\n'
+        '\t\t\tif (rsf_commands->rescaleframe_wait) {\n'
+        '\t\t\t\twait_semaphores.push_back(rsf_commands->rescaleframe_timeline);\n'
+        '\t\t\t\twait_semaphores_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);\n'
+        '\t\t\t\trsf_wait_values.push_back(rsf_commands->rescaleframe_wait);\n\t\t\t}\n'
+        '\t\t\tif (rsf_commands->rescaleframe_signal) {\n'
+        '\t\t\t\tsignal_semaphores.push_back(rsf_commands->rescaleframe_timeline);\n'
+        '\t\t\t\trsf_signal_values.push_back(rsf_commands->rescaleframe_signal);\n\t\t\t}\n'
+        '\t\t\trsf_timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;\n'
+        '\t\t\trsf_timeline_info.waitSemaphoreValueCount = rsf_wait_values.size();\n'
+        '\t\t\trsf_timeline_info.pWaitSemaphoreValues = rsf_wait_values.ptr();\n'
+        '\t\t\trsf_timeline_info.signalSemaphoreValueCount = rsf_signal_values.size();\n'
+        '\t\t\trsf_timeline_info.pSignalSemaphoreValues = rsf_signal_values.ptr();\n\t\t}\n'
+        '\t\tVkSubmitInfo submit_info = {};\n'
+        '\t\tif (rsf_commands->rescaleframe_timeline) submit_info.pNext = &rsf_timeline_info;')
+
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

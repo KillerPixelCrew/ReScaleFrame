@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_vulkan.h>
 #include "native_dlss_vulkan.h"
+#include "native_xess_vulkan.h"
 #include <cmath>
 #include <memory>
 #include <limits>
@@ -52,6 +53,7 @@ struct Image {
 
 struct rsf_srvk {
     rsf_dlssvk* dlss = nullptr;
+    rsf_xessvk* xess = nullptr;
     rsf_srvk_setup setup{};
     HMODULE module = nullptr;
     ffxContext effect = nullptr;
@@ -203,11 +205,18 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_set
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (!setup->instance || !setup->physical_device || !setup->device || !setup->device_proc || !setup->instance_proc ||
-        !setup->runtime_directory_utf8 || !setup->output_width || !setup->output_height || setup->quality > 4 ||
+        !setup->runtime_directory_utf8 || !setup->output_width || !setup->output_height ||
+        (setup->quality > 4 && (setup->backend != RSF_SR_XESS || setup->quality > 5)) ||
         setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->backend != RSF_SR_DLSS && setup->backend != RSF_SR_FSR2 && setup->backend != RSF_SR_FSR3) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (setup->backend != RSF_SR_DLSS && setup->backend != RSF_SR_XESS && setup->backend != RSF_SR_FSR2 && setup->backend != RSF_SR_FSR3) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #if defined(RSF_HAVE_FFX_VK)
     auto self = std::make_unique<rsf_srvk>(); self->setup = *setup;
+    if (setup->backend == RSF_SR_XESS) {
+        const auto result = rsf_xessvk_create(setup, &self->xess);
+        if (result != RSF_BACKEND_OK) return result;
+        (void)rsf_xessvk_plan(self->xess, &self->width, &self->height);
+        *out = self.release(); return RSF_BACKEND_OK;
+    }
     if (setup->backend == RSF_SR_DLSS) {
         const auto result = rsf_dlssvk_create(setup, &self->dlss);
         if (result != RSF_BACKEND_OK) return result;
@@ -320,6 +329,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
         (!valid_image(*self, *mask, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self->dlss) return rsf_dlssvk_evaluate(self->dlss, commands, input);
+    if (self->xess) return rsf_xessvk_evaluate(self->xess, commands, input);
     auto list = static_cast<VkCommandBuffer>(commands);
     if (!self->zero_mask.initialized) {
         transition(*self, list, self->zero_mask.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -372,6 +382,11 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk* self) t
         const auto result = rsf_dlssvk_destroy(self->dlss);
         if (result != RSF_BACKEND_OK) return result;
         self->dlss = nullptr;
+    }
+    if (self && self->xess) {
+        const auto result = rsf_xessvk_destroy(self->xess);
+        if (result != RSF_BACKEND_OK) return result;
+        self->xess = nullptr;
     }
     if (self && self->effect) {
         (void)self->capture.flush();

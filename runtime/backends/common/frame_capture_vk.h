@@ -52,7 +52,7 @@ class FrameCaptureVk {
         std::ofstream(directory / "capture-errors.log", std::ios::app) << frame << ' ' << role << '\n';
     } catch (...) {}
 public:
-    FrameCaptureVk() noexcept try {
+    FrameCaptureVk() noexcept { try {
         wchar_t path[32768]{}, value[32]{};
         const auto size = GetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", path, 32768);
         if (!size || size >= 32768) return;
@@ -60,7 +60,7 @@ public:
         if (GetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_FIRST", value, 32)) first = std::wcstoull(value, nullptr, 10);
         if (GetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_COUNT", value, 32)) count = (std::min)(uint64_t(16), std::wcstoull(value, nullptr, 10));
         std::filesystem::create_directories(directory);
-    } catch (...) { directory.clear(); }
+    } catch (...) { directory.clear(); } }
     ~FrameCaptureVk() { for (auto& value : pending) release(*value); }
     bool enabled() const { return !directory.empty() && count; }
     void set_provider(uint64_t version, uint32_t selected, bool fg = false) { provider = version; backend = selected; generation = fg; }

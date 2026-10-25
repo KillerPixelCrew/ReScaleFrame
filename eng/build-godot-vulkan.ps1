@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not create the Vulkan loader import libr
 $taskHost = Join-Path $taskLocal 'host'
 New-Item -ItemType Directory -Force -Path $taskHost | Out-Null
 $taskInputHashes = @($taskRecipeHash)
-foreach ($taskInput in @('wsi-dispatch.h','sdk-fixes/luma-history-format.json','sdk-fixes/swapchain-lifetime.json','sdk-fixes/fsr2-storage-formats.json','sdk-fixes/descriptor-pool-size.json','sdk-fixes/presenter-cpu-drain.json')) {
+foreach ($taskInput in @('wsi-dispatch.h','sdk-fixes/luma-history-format.json','sdk-fixes/swapchain-lifetime.json','sdk-fixes/fsr2-storage-formats.json','sdk-fixes/descriptor-pool-size.json','sdk-fixes/presenter-cpu-drain.json','sdk-fixes/swapchain-trace.json','sdk-fixes/swapchain-trace.h')) {
     $taskInputHashes += (Get-FileHash -LiteralPath (Join-Path (Split-Path $taskRecipe) $taskInput)).Hash
 }
 $taskBuildKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($taskInputHashes -join ':'))))
@@ -65,6 +65,6 @@ foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt',
 }
 & (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1') -HostRoot $taskHost `
     -SdkRoot (Join-Path $taskRoot 'references/godot/streamline') `
-    -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-pcl-wsi') `
+    -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-dlssg-mfg-transfer') `
     -Python (Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe')
 Write-Output 'Vulkan SR/FG/PCL payloads built. Run eng/build-godot.ps1 -StageRuntime to include them in the add-on.'

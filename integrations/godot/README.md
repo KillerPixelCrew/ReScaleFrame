@@ -1,8 +1,9 @@
 # ReScaleFrame for Godot
 
 Developer integration for Godot 4.7.2, Forward+ and Windows x64. Direct3D 12 has
-SR/FG/PCL implementations; native Vulkan implements DLSS/FSR2/FSR3 SR and an FSR3
-frame-generation presentation owner, plus PCL/Reflex.
+SR/FG/PCL implementations. Vulkan has native DLSS/FSR2/FSR3/XeSS SR, FSR4 SR
+through a same-adapter DX12 handoff, native FSR3/DLSS frame generation and a XeSS
+DX12 presenter, plus PCL/Reflex.
 It combines a GDExtension add-on with a small module and guarded patches against
 the pinned engine source. Both standard Godot and Godot .NET use the same native
 runtime. Official GodotSharp assemblies remain unchanged.
@@ -14,8 +15,14 @@ inputs against scene geometry. It does not establish broad image-quality,
 physical scanout or latency acceptance. Vulkan FSR2/FSR3 SR now has real GPU
 readback and validation-layer coverage on both editions. Vulkan FSR3 FG now runs
 with SR Off, provider switching, resize and a secondary native window. Vulkan
-PCL/Reflex also runs with native presentation and no camera or FG owner. Other
-Vulkan providers and synchronization-validation acceptance remain unfinished.
+PCL/Reflex also runs with native presentation and no camera or FG owner.
+XeSS SR passes six standard/.NET generated-image cases with FSR3 FG and PCL.
+DLSS FG passes standard/.NET device and midpoint image checks, including DLSS SR
+and FG together. Higher-count MFG3 also passes strict GPU validation and quarter-step image
+comparisons for all three actual output ordinals. XeSS FG passes standard/.NET lifecycle/C#/PCL checks and
+the first standard object-motion image cases using its actual SDK outputs. FSR4
+SR passes both editors' switching/resize checks, C# on .NET and a combined-motion
+image comparison plus four complete raw SR frames per edition. Vulkan FSR4 FG routing and broader provider/export/scene coverage remain unfinished.
 Vulkan DLSS SR passes standard/.NET switching, resize, raw input checks and six
 DLSS SR + FSR3 FG + PCL image cases, covering 24 actual generated frames.
 Standard/.NET Debug and Release exported players have passed the
@@ -33,9 +40,12 @@ unfinished.
 The first Vulkan 18-case image matrix also retains FSR2 failures and a teardown
 race caught by validation. The presenter retirement correction has new functional
 coverage and a passing 12-case SR Off/FSR3 image suite; the original failed
-evidence remains available. Synchronization validation
-also reports a present hazard in official Godot in this environment. It remains
-an open interoperability question, not a passing check.
+evidence remains available. Process-only controls isolate the present hazard
+to RTSS hook injection: official/custom Godot controls have no present hazards
+when that module is excluded, without changing global RTSS settings. This is
+bounded isolation evidence; other hooks and scenes retain their own validation.
+Cold startup FFX waits remain recorded separately from the passing warm image
+matrix. No physical-scanout, performance or latency reduction follows from it.
 
 ## Build
 

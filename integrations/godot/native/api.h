@@ -60,6 +60,18 @@ typedef struct rsf_godot_vk_packet {
     rsf_godot_vk_image color, depth, motion, output;
 } rsf_godot_vk_packet;
 
+#define RSF_GODOT_VK_HANDOFF_ABI_VERSION 1u
+#define RSF_GODOT_VK_GRAPH_HANDOFF 1u
+/* Recording-only graph lease. Both sections are submitted by the engine with
+   its original acquire/transfer dependencies, including on provider failure. */
+typedef struct rsf_godot_vk_handoff {
+    uint32_t struct_size, abi_version;
+    uint32_t timeline_enabled, queue_family;
+    void* user;
+    int32_t (*split_record)(void* user, void* current_commands, uint64_t timeline,
+        uint64_t previous_done, uint64_t ready, uint64_t done, void** continuation_commands);
+} rsf_godot_vk_handoff;
+
 #if defined(RSF_GODOT_NATIVE_BUILD)
 #define RSF_GODOT_EXPORT __declspec(dllexport)
 #else
@@ -71,15 +83,20 @@ extern "C" {
 RSF_GODOT_EXPORT int rsfg_boot(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_boot_vulkan(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_vulkan_supported(void);
+RSF_GODOT_EXPORT int rsfg_vk_host_capabilities(uint32_t flags);
 RSF_GODOT_EXPORT rsf_godot_vk_proc rsfg_vk_resolver(void);
 RSF_GODOT_EXPORT void rsfg_vk_window(void* window);
 RSF_GODOT_EXPORT int rsfg_vk_present_marker(uint64_t window, uint32_t begin);
 RSF_GODOT_EXPORT int32_t rsfg_vk_native_present(uint64_t callback, void* queue, const void* info);
 /* Synchronous callback lease containing only native Vulkan data. */
 RSF_GODOT_EXPORT int32_t rsfg_vk_wsi_call(int32_t (*callback)(void*), void* user);
+RSF_GODOT_EXPORT int32_t rsfg_vk_foreign_call(int32_t (*callback)(void*), void* user);
 RSF_GODOT_EXPORT int rsfg_render_vulkan(void* command_buffer, const rsf_godot_vk_packet* packet);
+RSF_GODOT_EXPORT int rsfg_render_vulkan_handoff(void* command_buffer, const rsf_godot_vk_packet* packet,
+    const rsf_godot_vk_handoff* handoff, void** continuation_commands);
 RSF_GODOT_EXPORT int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** owner, uint64_t* chain);
 RSF_GODOT_EXPORT int32_t rsfg_vk_images(void* owner, uint32_t* count, uint64_t* images);
+RSF_GODOT_EXPORT uint32_t rsfg_vk_image_layout(void* owner);
 RSF_GODOT_EXPORT int32_t rsfg_vk_acquire(void* owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);
 RSF_GODOT_EXPORT int32_t rsfg_vk_present(void* owner, const void* present_info);
 RSF_GODOT_EXPORT void rsfg_vk_submitted(void* const* commands, uint32_t count);

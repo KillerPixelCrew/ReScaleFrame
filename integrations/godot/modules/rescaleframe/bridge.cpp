@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "rsf_godot_engine.h"
 #include "api.h"
+#include "graph.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "core/config/project_settings.h"
 #include "core/config/engine.h"
@@ -32,9 +33,13 @@ decltype(&rsfg_vk_window) native_vk_window = nullptr;
 decltype(&rsfg_vk_present_marker) native_vk_present_marker = nullptr;
 decltype(&rsfg_vk_native_present) native_vk_native_present = nullptr;
 decltype(&rsfg_vk_wsi_call) native_vk_wsi_call = nullptr;
+decltype(&rsfg_vk_foreign_call) native_vk_foreign_call = nullptr;
 decltype(&rsfg_render_vulkan) native_render_vulkan = nullptr;
+decltype(&rsfg_render_vulkan_handoff) native_render_vulkan_handoff = nullptr;
+decltype(&rsfg_vk_host_capabilities) native_vk_host_capabilities = nullptr;
 decltype(&rsfg_vk_create) native_vk_create = nullptr;
 decltype(&rsfg_vk_images) native_vk_images = nullptr;
+decltype(&rsfg_vk_image_layout) native_vk_image_layout = nullptr;
 decltype(&rsfg_vk_acquire) native_vk_acquire = nullptr;
 decltype(&rsfg_vk_present) native_vk_present = nullptr;
 decltype(&rsfg_vk_submitted) native_vk_submitted = nullptr;
@@ -133,7 +138,17 @@ void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBuffer
     Packet *packet = static_cast<Packet *>(userdata);
     if (packet->vulkan) {
         auto *vk = static_cast<RenderingDeviceDriverVulkan *>(driver);
-        if (void *list = vk->rescaleframe_begin(commands)) native_render_vulkan(list, &packet->vk);
+        if (void *list = vk->rescaleframe_begin(commands)) {
+            rsf_godot_vk_handoff handoff{};
+            if (RSFGodot::GraphScope::handoff(driver, commands, handoff)) {
+                void *continuation = nullptr;
+                native_render_vulkan_handoff(list, &packet->vk, &handoff, &continuation);
+                // GraphScope replaced the graph's reference even when the SDK
+                // refused the frame and the native host recorded its fallback.
+            } else {
+                native_render_vulkan(list, &packet->vk);
+            }
+        }
     } else {
         auto *d3d = static_cast<RenderingDeviceDriverD3D12 *>(driver);
         void *list = d3d->rescaleframe_begin(commands);
@@ -226,14 +241,16 @@ void boot() {
     if (!module) { ERR_PRINT("Cannot load ReScaleFrame's native library: " + library + " (Windows error " + itos(GetLastError()) + ")"); return; }
 #define RSF_RESOLVE(name) native_##name = reinterpret_cast<decltype(native_##name)>(GetProcAddress(module, "rsfg_" #name)); if (!native_##name) return
     RSF_RESOLVE(boot); RSF_RESOLVE(boot_vulkan); RSF_RESOLVE(render_vulkan);
+    RSF_RESOLVE(render_vulkan_handoff); RSF_RESOLVE(vk_host_capabilities);
     RSF_RESOLVE(vk_resolver); RSF_RESOLVE(vk_window); RSF_RESOLVE(vk_present_marker); RSF_RESOLVE(vk_native_present); RSF_RESOLVE(vk_wsi_call);
     RSF_RESOLVE(vk_create); RSF_RESOLVE(vk_images); RSF_RESOLVE(vk_acquire); RSF_RESOLVE(vk_present); RSF_RESOLVE(vk_submitted); RSF_RESOLVE(vk_destroy);
-    RSF_RESOLVE(vk_drain);
+    RSF_RESOLVE(vk_drain); RSF_RESOLVE(vk_image_layout); RSF_RESOLVE(vk_foreign_call);
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
 #undef RSF_RESOLVE
     const CharString path_utf8 = runtime.utf8(), id_utf8 = id.utf8();
     const rsf_godot_setup setup{sizeof(setup), RSF_GODOT_ABI_VERSION, path_utf8.get_data(), "4.7.2", id_utf8.get_data(), log, nullptr};
+    native_vk_host_capabilities(RSF_GODOT_VK_GRAPH_HANDOFF);
     ready = (OS::get_singleton()->get_current_rendering_driver_name() == "vulkan" ? native_boot_vulkan(&setup) : native_boot(&setup)) != 0;
     if (!ready) ERR_PRINT("ReScaleFrame native host rejected startup; inspect its dependency and initialization diagnostics.");
     if (ready) {
@@ -255,10 +272,12 @@ int32_t vk_native_present(uint64_t callback, void* queue, const void* info) {
     return reinterpret_cast<Present>(callback)(queue, info);
 }
 int32_t vk_wsi_call(int32_t (*callback)(void*), void* user) { return vulkan_enabled() ? native_vk_wsi_call(callback, user) : callback(user); }
+int32_t vk_foreign_call(int32_t (*callback)(void*), void* user) { return vulkan_enabled() ? native_vk_foreign_call(callback, user) : callback(user); }
 bool vk_create(const void *setup, void **owner, uint64_t *chain) {
     return vulkan_enabled() && native_vk_create(static_cast<const rsf_fgvk_setup *>(setup), owner, chain) == 0;
 }
 int32_t vk_images(void *owner, uint32_t *count, uint64_t *images) { return native_vk_images(owner, count, images); }
+uint32_t vk_image_layout(void *owner) { return native_vk_image_layout(owner); }
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index) { return native_vk_acquire(owner, timeout, semaphore, fence, index); }
 int32_t vk_present(void *owner, const void *info) { return native_vk_present(owner, info); }
 void vk_submitted(void *const *commands, uint32_t count) { if (ready) native_vk_submitted(commands, count); }

@@ -17,6 +17,7 @@ inline PFN_vkCmdPipelineBarrier barrier{};
 inline PFN_vkCmdPipelineBarrier2 barrier2{};
 inline PFN_vkCmdCopyImage copyImage{};
 inline PFN_vkCmdClearColorImage clearImage{};
+inline PFN_vkCmdFillBuffer fillBuffer{};
 struct FreshImage { uint32_t mips, layers; VkImageAspectFlags aspects; std::vector<VkImageAspectFlags> initialized; };
 inline std::mutex freshMutex;
 inline std::unordered_map<VkImage, FreshImage> fresh;
@@ -129,6 +130,14 @@ inline void VKAPI_CALL ClearColor(VkCommandBuffer cmd, VkImage image, VkImageLay
     clearImage(cmd, image, layout, color, count, ranges);
     transferDependency(cmd, false);
 }
+inline void VKAPI_CALL FillBuffer(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset,
+    VkDeviceSize size, uint32_t data) {
+    // NGX reuses scratch buffers between generated ordinals. Queue submission
+    // order alone does not order consecutive transfer writes to that storage.
+    transferDependency(cmd, true);
+    fillBuffer(cmd, buffer, offset, size, data);
+    transferDependency(cmd, false);
+}
 inline PFN_vkVoidFunction wrapped(const char* name) {
     if (!std::strcmp(name, "vkCreateImage")) return (PFN_vkVoidFunction)CreateImage;
     if (!std::strcmp(name, "vkDestroyImage")) return (PFN_vkVoidFunction)DestroyImage;
@@ -136,6 +145,7 @@ inline PFN_vkVoidFunction wrapped(const char* name) {
     if (!std::strcmp(name, "vkCmdPipelineBarrier2") || !std::strcmp(name, "vkCmdPipelineBarrier2KHR")) return (PFN_vkVoidFunction)Barrier2;
     if (!std::strcmp(name, "vkCmdCopyImage")) return (PFN_vkVoidFunction)CopyImage;
     if (!std::strcmp(name, "vkCmdClearColorImage")) return (PFN_vkVoidFunction)ClearColor;
+    if (!std::strcmp(name, "vkCmdFillBuffer")) return (PFN_vkVoidFunction)FillBuffer;
     return nullptr;
 }
 inline PFN_vkVoidFunction VKAPI_CALL GetDeviceProcAddr(VkDevice dev, const char* name) {
@@ -158,5 +168,6 @@ inline void configure(VkDevice dev, PFN_vkGetInstanceProcAddr instanceProc, PFN_
     barrier2 = (PFN_vkCmdPipelineBarrier2)nextDevice(dev, "vkCmdPipelineBarrier2");
     copyImage = (PFN_vkCmdCopyImage)nextDevice(dev, "vkCmdCopyImage");
     clearImage = (PFN_vkCmdClearColorImage)nextDevice(dev, "vkCmdClearColorImage");
+    fillBuffer = (PFN_vkCmdFillBuffer)nextDevice(dev, "vkCmdFillBuffer");
 }
 }

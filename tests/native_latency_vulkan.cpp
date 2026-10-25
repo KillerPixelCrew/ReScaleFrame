@@ -10,7 +10,7 @@ std::array<uint32_t, 6> sdk_tokens{};
 uint32_t cursor = 0, slept = 0, options = 0;
 uint32_t low_latency = 1;
 uintptr_t current = 0;
-uint32_t requested_sr = 0, leased_calls = 0;
+uint32_t requested_sr = 0, requested_fg = 0, leased_calls = 0;
 struct Marker { uint32_t frame, kind; };
 std::vector<Marker> markers;
 void require(bool condition, const char* message) {
@@ -26,7 +26,7 @@ void cpu(uint64_t frame, uint32_t stage, uint32_t expected = 1) {
 // support, actual Reflex sleep, or the Streamline implementation.
 extern "C" {
 int VulkanStorySlInitialize(const wchar_t*, const char*, uint32_t, uint32_t) { return 0; }
-int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t sr) { requested_sr = sr; return 0; }
+int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t fg, uint32_t sr) { requested_sr = sr; requested_fg = fg; return 0; }
 void* VulkanStorySlModule() { return reinterpret_cast<void*>(1); }
 int VulkanStorySlShutdownChecked() { return 0; }
 rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*) { return nullptr; }
@@ -44,8 +44,13 @@ int VulkanStorySlReflexSleep() { ++slept; return 0; }
 int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t kind) { markers.push_back({*reinterpret_cast<uint32_t*>(token), kind}); return 0; }
 int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { return 0; }
 int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return callback(user); }
+int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call callback, void* user) { return callback(user); }
 }
 int main() {
+    require(rsf_slvk_without_dlssg(nullptr, nullptr) == -3, "missing foreign WSI callback refused");
+    int foreign_wsi = 7;
+    require(rsf_slvk_without_dlssg([](void* user) -> int32_t { return *static_cast<int*>(user); }, &foreign_wsi) == 7,
+        "foreign WSI callback result preserved");
     rsf_slvk_call lease{sizeof(lease), RSF_SLVK_ABI_VERSION, 1, 1,
         [](void* module, uintptr_t token, void*) -> rsf_backend_result {
             require(module == reinterpret_cast<void*>(1) && token && *reinterpret_cast<uint32_t*>(token) == 1, "matching source token leased");
@@ -68,7 +73,7 @@ int main() {
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_ERROR_ABI_MISMATCH, "ABI mismatch refused");
     setup.abi_version = RSF_LATENCYVK_ABI_VERSION;
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_OK, "synthetic initialization");
-    require(requested_sr == 0, "legacy latency ABI does not load SR");
+    require(requested_sr == 0 && requested_fg == 0, "legacy latency ABI does not load SR or FG");
     require(rsf_latencyvk_options(3, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown mode refused");
     require(rsf_latencyvk_options(1, 12345) == RSF_BACKEND_OK, "options queued");
     cpu(1, RSF_GAME_CPU_FRAME_BEGIN); cpu(1, RSF_GAME_CPU_PACING); cpu(1, RSF_GAME_CPU_PACING);
@@ -120,7 +125,7 @@ int main() {
     require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short shared SDK setup refused");
     invalid_setup = shared; invalid_setup.abi_version++;
     require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_ABI_MISMATCH, "shared SDK ABI mismatch refused");
-    invalid_setup = shared; invalid_setup.features = 2;
+    invalid_setup = shared; invalid_setup.features = 4;
     require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown shared SDK features refused");
     require(rsf_slvk_initialize(&shared) == RSF_BACKEND_OK && requested_sr == 1, "SR requested on shared SDK session");
     lease.session_id = lease.frame_id = 0;
@@ -128,5 +133,9 @@ int main() {
         require(module && !token, "non-frame lease has no fabricated source token"); return RSF_BACKEND_OK;
     };
     require(rsf_slvk_invoke(&lease) == RSF_BACKEND_OK && rsf_latencyvk_shutdown() == RSF_BACKEND_OK, "non-frame SDK operations serialized");
+    shared.features = RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG;
+    require(rsf_slvk_initialize(&shared) == RSF_BACKEND_OK && requested_sr == 1 && requested_fg == 1,
+        "SR and FG requested together on shared SDK session");
+    require(rsf_latencyvk_shutdown() == RSF_BACKEND_OK, "shared SR and FG session retired");
     return 0;
 }

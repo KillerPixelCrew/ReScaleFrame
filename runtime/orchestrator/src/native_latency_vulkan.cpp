@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_latency_vulkan.h>
+#include "native_vulkan_timing.h"
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <array>
 #include <mutex>
@@ -24,6 +25,7 @@ int VulkanStorySlReflexSleep();
 int VulkanStorySlMarkerForToken(uintptr_t, uint32_t);
 int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*);
 int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call, void*);
+int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call, void*);
 }
 #endif
 namespace {
@@ -68,7 +70,7 @@ extern "C" rsf_backend_result rsf_latencyvk_initialize(const rsf_latencyvk_setup
 extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) try {
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_SLVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (setup->features & ~RSF_SLVK_DLSS_SR) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (setup->features & ~(RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!setup->runtime_directory_utf8 || !setup->project_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(mutex);
     if (initialized) return RSF_BACKEND_ERROR_NOT_READY;
@@ -77,7 +79,9 @@ extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) t
     if (!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::wstring path(static_cast<size_t>(count), 0);
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, path.data(), count)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!accepted(VulkanStorySlInitializeFeatures(path.c_str(), setup->project_id, 1, 0, (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
+    if (!accepted(VulkanStorySlInitializeFeatures(path.c_str(), setup->project_id, 1,
+        (setup->features & RSF_SLVK_DLSS_FG) ? 1u : 0u,
+        (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
     bound = false; mode = interval = 0;
     tokens = {}; session = render_frame = present_frame = 0;
     status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
@@ -107,6 +111,14 @@ extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) try {
     return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" int32_t rsf_slvk_without_dlssg(int32_t (*callback)(void*), void* user) {
+    if (!callback) return -3;
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    return VulkanStorySlWithoutDlssG(callback, user);
+#else
+    return callback(user);
+#endif
+}
 extern "C" rsf_vk_function rsf_latencyvk_instance_proc(void* instance, const char* name) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     // Resolver remains usable after slShutdown for Vulkan object destruction.
@@ -128,6 +140,7 @@ extern "C" rsf_backend_result rsf_latencyvk_options(uint32_t requested, uint32_t
 }
 extern "C" void rsf_latencyvk_cpu(const rsf_game_cpu_event* event) {
     if (!event || event->struct_size < sizeof(*event) || !event->session_id || !event->source_frame_id) return;
+    const rsf::VulkanTimingScope timing(event->stage == RSF_GAME_CPU_PACING ? "cpu_pacing_total" : nullptr, event->source_frame_id);
     std::lock_guard lock(mutex);
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!initialized || !bind()) return;
@@ -146,9 +159,11 @@ extern "C" void rsf_latencyvk_cpu(const rsf_game_cpu_event* event) {
             slot.stages |= 1u << 31;
             // LL2 mode belongs to the real swapchain. Refresh once per CPU
             // frame so a resized successor receives unchanged requested options.
-            if (!accepted(VulkanStorySlSetReflexInterval(static_cast<int>(mode), interval))) return;
+            if (!accepted(rsf::vk_timed_call("reflex_options", event->source_frame_id,
+                [&] { return VulkanStorySlSetReflexInterval(static_cast<int>(mode), interval); }))) return;
             status.mode = mode;
-            if (status.low_latency_available && accepted(VulkanStorySlReflexSleep())) ++status.sleep_calls;
+            if (status.low_latency_available && accepted(rsf::vk_timed_call("reflex_sleep", event->source_frame_id,
+                [] { return VulkanStorySlReflexSleep(); }))) ++status.sleep_calls;
         }
     } else if (event->stage == RSF_GAME_CPU_SIMULATION_BEGIN) marker(event->source_frame_id, 0);
     else if (event->stage == RSF_GAME_CPU_SIMULATION_END) marker(event->source_frame_id, 1);

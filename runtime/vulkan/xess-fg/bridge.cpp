@@ -14,6 +14,9 @@
 #include <cstdlib>
 #include "xess_fg/xefg_swapchain_d3d12.h"
 #include "xell/xell_d3d12.h"
+#define RSF_XESS_BRIDGE_BUILD
+#include "bridge_api.h"
+#include "diagnostic-capture.h"
 
 /// @brief Releases a local COM reference and clears its pointer without GPU waiting.
 template<typename T> static void Release(T*& value) {
@@ -98,6 +101,7 @@ PresentTiming timing;
 /// @brief Native owner of matching-adapter DX12 resources, XeLL/FG contexts and triple allocator tracking.
 /// @details Calls are serialized by the managed presenter owner. Shared image COM references remain caller-owned. releaseFailure preserves unsafe cleanup states instead of releasing remaining owners.
 struct VulkanStoryXessFg {
+    rsf_xess_capture::Capture capture;
     HMODULE fgModule = nullptr;
     HMODULE xellModule = nullptr;
     IDXGIFactory4* factory = nullptr;
@@ -129,6 +133,7 @@ struct VulkanStoryXessFg {
     uint32_t width = 0, height = 0;
     uint32_t maxInterpolations = 0, activeInterpolations = 0;
     bool started = false;
+    bool backbufferHudless = false;
     int releaseFailure = 0;
     bool releasePrepared = false;
 
@@ -190,9 +195,10 @@ static std::wstring ModulePath() {
 
 /// @brief Loads private XeSS-FG/XeLL modules and resolves the required SDK export set.
 /// @details Acquired module handles belong to value and are released by checked context destruction.
-static bool LoadRuntime(VulkanStoryXessFg* value) {
-    std::wstring base = ModulePath();
+static bool LoadRuntime(VulkanStoryXessFg* value, const wchar_t* directory) {
+    std::wstring base = directory ? directory : ModulePath();
     if (base.empty()) return false;
+    if (base.back() != L'\\' && base.back() != L'/') base += L'\\';
     value->fgModule = LoadLibraryExW((base + L"libxess_fg.dll").c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     value->xellModule = LoadLibraryExW((base + L"libxell.dll").c_str(), nullptr,
@@ -265,6 +271,7 @@ static int PrepareDestroy(VulkanStoryXessFg* value) {
     }
     int idle = VulkanStoryXessFgWaitIdle(value);
     if (idle != 0) return idle;
+    if (!value->capture.flush()) return -7010;
     // The SDK cannot destroy its context while our DXGI wrapper reference is
     // outstanding. The present thread is stopped and both queues are drained;
     // relinquish only this reference before destroying SDK consumers.
@@ -349,7 +356,7 @@ extern "C" __declspec(dllexport) void VulkanStoryXessFgDestroy(VulkanStoryXessFg
 /// @param adapterLuid Nonzero Windows adapter LUID copied from Vulkan physical-device ID properties.
 /// @param output Required owner slot; checked destruction owns final release.
 /// @return Zero on success; local, HRESULT-derived or Intel SDK failure otherwise.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLuid,
+static int CreateContext(uint64_t adapterLuid, const wchar_t* directory,
     VulkanStoryXessFg** output) {
     lastCreateStage = "argument validation";
     if (!output || !adapterLuid) return -1;
@@ -360,7 +367,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLui
     int error = 0;
     do {
         lastCreateStage = "runtime DLL/export loading";
-        if (!LoadRuntime(value)) { error = -3; break; }
+        if (!LoadRuntime(value, directory)) { error = -3; break; }
         lastCreateStage = "CreateDXGIFactory2";
         if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&value->factory)))) { error = -4; break; }
         LUID luid{};
@@ -420,6 +427,38 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLui
     return 0;
 }
 
+extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLuid,
+    VulkanStoryXessFg** output) {
+    return CreateContext(adapterLuid, nullptr, output);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgeCreate(
+    const rsf_xess_bridge_create* setup, rsf_xess_bridge** output) {
+    if (!output) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    *output = nullptr;
+    if (!setup) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_xess_bridge_check(setup->struct_size, setup->abi_version, sizeof(*setup));
+    if (check) return check;
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    const auto* directory = reinterpret_cast<const wchar_t*>(setup->runtime_directory);
+    // Accept drive-rooted or UNC absolute paths, never a DLL search-path input.
+    if (!directory || !directory[0] ||
+        !((directory[0] && directory[1] == L':' &&
+           (directory[2] == L'\\' || directory[2] == L'/')) ||
+          (directory[0] == L'\\' && directory[1] == L'\\')))
+        return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    return CreateContext(setup->adapter_luid, directory, output);
+}
+
+extern "C" __declspec(dllexport) uint64_t RsfXessBridgeAdapterLuid(const rsf_xess_bridge* value) {
+    DXGI_ADAPTER_DESC1 desc{};
+    if (!value || !value->adapter || FAILED(value->adapter->GetDesc1(&desc))) return 0;
+    uint64_t luid = 0;
+    static_assert(sizeof(luid) == sizeof(desc.AdapterLuid));
+    std::memcpy(&luid, &desc.AdapterLuid, sizeof(luid));
+    return luid;
+}
+
 /// @brief Queries the selected Vulkan device LUID and creates its matching native presentation context.
 /// @details The Vulkan physical device is borrowed and must expose a valid Windows LUID.
 /// @return Native creation result, or a negative argument/Vulkan-query availability code.
@@ -448,8 +487,9 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateFromVulkan(
 /// @brief Initializes the three-buffer XeSS DXGI swapchain and presentation command resources for a borrowed HWND.
 /// @details The caller ensures this presenter is the window's sole swapchain owner. The initial vsync argument is reserved here; each frame supplies its actual Present interval.
 /// @return Zero on successful startup; local, HRESULT or SDK failure otherwise.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* value,
-    HWND window, uint32_t width, uint32_t height, uint32_t vsync) {
+static int StartContext(VulkanStoryXessFg* value,
+    HWND window, uint32_t width, uint32_t height, uint32_t vsync,
+    bool backbufferHudless, bool invertedDepth) {
     if (!value || !window || !width || !height || value->started) return -1;
     (void)vsync;
     IDXGIFactory5* factory5 = nullptr;
@@ -470,7 +510,9 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* v
     desc.Flags = value->allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
     xefg_swapchain_d3d12_init_params_t params{};
     params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
-    params.uiMode = XEFG_SWAPCHAIN_UI_MODE_HUDLESS_UITEXTURE;
+    params.uiMode = backbufferHudless ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS :
+        XEFG_SWAPCHAIN_UI_MODE_HUDLESS_UITEXTURE;
+    params.initFlags = invertedDepth ? XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH : 0;
     int code = static_cast<int>(value->initSwapchain(value->fg, window, &desc, nullptr,
         value->queue, value->factory, &params));
     if (code < 0) return code;
@@ -482,8 +524,8 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* v
     code = static_cast<int>(value->getSwapchain(value->fg,
         __uuidof(IDXGISwapChain4), reinterpret_cast<void**>(&value->swapchain)));
     if (code < 0 || !value->swapchain) return code < 0 ? code : -2;
-    // HUDLESS_UITEXTURE selects the composition method, but the SDK leaves
-    // composition disabled until this separate switch is enabled.
+    // Selecting a composition method leaves composition disabled until this
+    // separate switch is enabled.
     code = static_cast<int>(value->setUi(value->fg,
         XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED));
     if (code < 0) return code;
@@ -504,8 +546,61 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* v
     if (FAILED(result)) return static_cast<int>(result);
     value->width = width;
     value->height = height;
+    value->backbufferHudless = backbufferHudless;
     value->started = true;
+    if (!value->capture.initialize(value->fgModule, value->fg)) return -7011;
     return 0;
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgeCaptureSource(rsf_xess_bridge* value,
+    const rsf_frame_record* record) {
+    if (!value || !record || record->struct_size < sizeof(*record) || record->camera.struct_size < sizeof(record->camera) ||
+        !record->frame_id || record->frame_id > UINT32_MAX || !record->session_id) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION || record->camera.abi_version != RSF_GAME_FRAME_ABI_VERSION)
+        return RSF_XESS_BRIDGE_ABI_MISMATCH;
+    return value->capture.source(*record, value->activeInterpolations) ? 0 : -7012;
+}
+
+extern "C" __declspec(dllexport) uint64_t RsfXessBridgeCapturedCallbacks(const rsf_xess_bridge* value) {
+    return value ? value->capture.observed() : 0;
+}
+
+extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* value,
+    HWND window, uint32_t width, uint32_t height, uint32_t vsync) {
+    return StartContext(value, window, width, height, vsync, false, false);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgeStart(rsf_xess_bridge* value,
+    const rsf_xess_bridge_start* setup) {
+    if (!value || !setup) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_xess_bridge_check(setup->struct_size, setup->abi_version, sizeof(*setup));
+    if (check) return check;
+    if (!setup->window || !setup->width || !setup->height || !setup->generated_count ||
+        setup->inverted_depth > 1 || value->started) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    xefg_swapchain_properties_t properties{};
+    int code = static_cast<int>(value->getProperties(value->fg, &properties));
+    if (code < 0) return code;
+    if (setup->generated_count > properties.maxSupportedInterpolations)
+        return XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED;
+    code = StartContext(value, static_cast<HWND>(setup->window), setup->width, setup->height,
+        0, true, setup->inverted_depth != 0);
+    if (code < 0) return code;
+    code = static_cast<int>(value->setInterpolations(value->fg, setup->generated_count));
+    if (code >= 0) value->activeInterpolations = setup->generated_count;
+    return code;
+}
+
+extern "C" __declspec(dllexport) uint32_t RsfXessBridgeMaxGenerated(const rsf_xess_bridge* value) {
+    return value ? value->maxInterpolations : 0;
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgeSetGenerated(rsf_xess_bridge* value, uint32_t count) {
+    if (!value || !value->started || !count) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    if (count > value->maxInterpolations) return XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED;
+    if (count == value->activeInterpolations) return 0;
+    int result = static_cast<int>(value->setInterpolations(value->fg, count));
+    if (result >= 0) value->activeInterpolations = count;
+    return result;
 }
 
 /// @brief Forwards frame-generation enablement for an already started native presenter.
@@ -729,21 +824,23 @@ static int PresentFrame(VulkanStoryXessFg* value,
         !frame->frameId || !frame->readyFenceValue ||
         frame->doneFenceValue <= frame->readyFenceValue ||
         !frame->color || !frame->depth || !frame->motion ||
-        !frame->hudless || !frame->ui) return -1;
+        !frame->hudless || (!value->backbufferHudless && !frame->ui)) return -1;
 
     D3D12_RESOURCE_DESC color = frame->color->GetDesc();
     D3D12_RESOURCE_DESC hudless = frame->hudless->GetDesc();
-    D3D12_RESOURCE_DESC ui = frame->ui->GetDesc();
+    D3D12_RESOURCE_DESC ui = frame->ui ? frame->ui->GetDesc() : D3D12_RESOURCE_DESC{};
     D3D12_RESOURCE_DESC motion = frame->motion->GetDesc();
     D3D12_RESOURCE_DESC depth = frame->depth->GetDesc();
     if (color.Width != value->width || color.Height != value->height ||
         color.Format != DXGI_FORMAT_B8G8R8A8_UNORM ||
         hudless.Width != value->width || hudless.Height != value->height ||
-        hudless.Format != color.Format || ui.Width != value->width ||
-        ui.Height != value->height || ui.Format != color.Format ||
+        hudless.Format != color.Format ||
+        (!value->backbufferHudless && (ui.Width != value->width ||
+        ui.Height != value->height || ui.Format != color.Format)) ||
         motion.Width != depth.Width || motion.Height != depth.Height ||
         motion.Format != DXGI_FORMAT_R16G16_FLOAT ||
-        depth.Format != DXGI_FORMAT_D32_FLOAT) return -2;
+        (value->backbufferHudless ? depth.Format != DXGI_FORMAT_R32_FLOAT :
+            depth.Format != DXGI_FORMAT_D32_FLOAT)) return -2;
 
     const bool timed = timing.enabled;
     int64_t phaseStart = timed ? timing.Now() : 0;
@@ -763,9 +860,16 @@ static int PresentFrame(VulkanStoryXessFg* value,
     std::array<ID3D12Resource*, 5> inputs = {
         frame->color, frame->depth, frame->motion, frame->hudless, frame->ui
     };
-    for (ID3D12Resource* input : inputs)
+    // Real-frame fallback can use final color as HUD-less. Transition an aliased
+    // resource once while still tagging it for the requested SDK input role.
+    for (size_t i = 0; i < inputs.size(); ++i)
+        for (size_t j = 0; j < i; ++j)
+            if (inputs[i] && inputs[i] == inputs[j]) { inputs[i] = nullptr; break; }
+    for (ID3D12Resource* input : inputs) {
+        if (!input) continue;
         Transition(value->commandList, input, D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_STATE_COPY_SOURCE);
+    }
     ID3D12Resource* backbuffer = nullptr;
     uint32_t backbufferIndex = value->swapchain->GetCurrentBackBufferIndex();
     result = value->swapchain->GetBuffer(backbufferIndex, IID_PPV_ARGS(&backbuffer));
@@ -782,6 +886,7 @@ static int PresentFrame(VulkanStoryXessFg* value,
         {frame->ui, XEFG_SWAPCHAIN_RES_UI},
     }};
     for (const Tag& tag : tags) {
+        if (!tag.resource) continue;
         D3D12_RESOURCE_DESC desc = tag.resource->GetDesc();
         xefg_swapchain_d3d12_resource_data_t data{};
         data.type = tag.type;
@@ -797,9 +902,11 @@ static int PresentFrame(VulkanStoryXessFg* value,
             return code;
         }
     }
-    for (ID3D12Resource* input : inputs)
+    for (ID3D12Resource* input : inputs) {
+        if (!input) continue;
         Transition(value->commandList, input, D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_COMMON);
+    }
     Transition(value->commandList, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
         D3D12_RESOURCE_STATE_PRESENT);
     Release(backbuffer);
@@ -899,6 +1006,41 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgPresent(VulkanStoryXessFg*
         if (FAILED(handoff)) return value->releaseFailure = static_cast<int>(handoff);
     }
     return code;
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgePresent(rsf_xess_bridge* value,
+    const rsf_xess_bridge_frame* frame, rsf_xess_bridge_present_status* status) {
+    if (!frame || !status) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_xess_bridge_check(frame->struct_size, frame->abi_version, sizeof(*frame));
+    if (check) return check;
+    check = rsf_xess_bridge_check(status->struct_size, status->abi_version, sizeof(*status));
+    if (check) return check;
+    status->frames_presented = status->fg_enabled = 0;
+    status->fg_result = 0;
+    if (!value || !value->backbufferHudless || frame->reserved || frame->reset > 1 ||
+        frame->vsync > 1 || !frame->frame_id || !frame->color || !frame->depth ||
+        !frame->motion || !frame->hudless || !frame->ready_fence_value ||
+        frame->ready_fence_value <= value->lastDoneSignalled ||
+        frame->done_fence_value <= frame->ready_fence_value)
+        return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    VulkanStoryXessFrame legacy{};
+    legacy.frameId = frame->frame_id;
+    legacy.reset = frame->reset;
+    legacy.vsync = frame->vsync;
+    legacy.color = static_cast<ID3D12Resource*>(frame->color);
+    legacy.depth = static_cast<ID3D12Resource*>(frame->depth);
+    legacy.motion = static_cast<ID3D12Resource*>(frame->motion);
+    legacy.hudless = static_cast<ID3D12Resource*>(frame->hudless);
+    std::memcpy(legacy.viewMatrix, frame->view_matrix, sizeof(legacy.viewMatrix));
+    std::memcpy(legacy.projectionMatrix, frame->projection_matrix, sizeof(legacy.projectionMatrix));
+    legacy.jitterX = frame->jitter_x;
+    legacy.jitterY = frame->jitter_y;
+    legacy.motionScaleX = frame->motion_scale_x;
+    legacy.motionScaleY = frame->motion_scale_y;
+    legacy.readyFenceValue = frame->ready_fence_value;
+    legacy.doneFenceValue = frame->done_fence_value;
+    return VulkanStoryXessFgPresent(value, &legacy, &status->frames_presented,
+        &status->fg_result, &status->fg_enabled);
 }
 
 /// @brief Forwards XeLL sleep-mode and minimum-interval options.

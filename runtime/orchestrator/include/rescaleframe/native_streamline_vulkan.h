@@ -4,6 +4,7 @@
 
 #define RSF_SLVK_ABI_VERSION 1u
 #define RSF_SLVK_DLSS_SR 1u
+#define RSF_SLVK_DLSS_FG 2u
 
 typedef struct rsf_slvk_setup {
     uint32_t struct_size, abi_version;
@@ -31,6 +32,10 @@ RSF_RUNTIME_API rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup*);
    The callback must not reenter this service or PCL. Module/token are borrowed
    only during the call; the current CPU token is never replaced by this API. */
 RSF_RUNTIME_API rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call*);
+/* Synchronous per-thread suppression of DLSS-G WSI hooks for a foreign owner.
+   Common SDK/PCL hooks stay enabled. No service mutex spans the callback;
+   retain the initialized session and never shut it down from this callback. */
+RSF_RUNTIME_API int32_t rsf_slvk_without_dlssg(int32_t (*callback)(void*), void* user);
 #ifdef __cplusplus
 }
 #endif
