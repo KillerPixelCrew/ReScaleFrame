@@ -1,0 +1,17 @@
+{
+  "enabled_classes": [
+    "OS",
+    "CompositorEffect",
+    "RenderData",
+    "RenderSceneBuffersRD",
+    "RenderSceneData",
+    "RenderingServer",
+    "RenderingDevice",
+    "RDTextureFormat",
+    "RDShaderSource",
+    "RDShaderSPIRV",
+    "RDSamplerState",
+    "RDUniform",
+    "RDPipelineSpecializationConstant"
+  ]
+}

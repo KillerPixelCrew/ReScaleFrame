@@ -254,7 +254,9 @@ class Bridge final : public IDXGISwapChain4 {
             desc.Flags = tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
             ComPtr<IDXGISwapChain> plain;
             auto* owner_queue = native12 ? direct_queue.Get() : static_cast<ID3D12CommandQueue*>(graphics.native_queue);
-            if (FAILED(original_create(parent.Get(), owner_queue, &desc, &plain)) || FAILED(plain.As(&replacement)))
+            const HRESULT created = original_create ? original_create(parent.Get(), owner_queue, &desc, &plain) :
+                parent->CreateSwapChain(owner_queue, &desc, &plain);
+            if (FAILED(created) || FAILED(plain.As(&replacement)))
                 return RSF_BACKEND_ERROR_INIT_FAILED;
             publish_physical(replacement, owner_queue);
             return RSF_BACKEND_OK;
@@ -835,10 +837,8 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
-extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
+extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
     if (!setup || setup->struct_size < sizeof(*setup) || !setup->runtime_directory_utf8 || !setup->accept_window || original_create) return 0;
-    ComPtr<IDXGIFactory2> factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     // Depth units are the plugin's to state; the bridge no longer guesses them from the API.
     if (!(setup->units_to_meters > 0)) {
         if (setup->log) setup->log(setup->user, "presentation bridge: units_to_meters must be positive; interception refused");
@@ -855,6 +855,30 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     xess_directory = setup->xess_directory_utf8 ? setup->xess_directory_utf8 : runtime_directory;
     streamline_directory = setup->streamline_directory_utf8 ? setup->streamline_directory_utf8 : runtime_directory;
     active_backend.store(setup->backend ? setup->backend : setup->runtime_switching ? 0u : RSF_FG_BACKEND_DLSS);
+    return 1;
+}
+extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
+    const void* description, void** out) try {
+    if (!factory || !queue || !description || !out) return E_INVALIDARG;
+    *out = nullptr;
+    const auto& desc = *static_cast<const DXGI_SWAP_CHAIN_DESC1*>(description);
+    if (desc.Stereo) return DXGI_ERROR_UNSUPPORTED;
+    DXGI_SWAP_CHAIN_DESC translated{};
+    translated.BufferDesc = {desc.Width, desc.Height, {}, desc.Format, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_MODE_SCALING_UNSPECIFIED};
+    translated.SampleDesc = desc.SampleDesc; translated.BufferUsage = desc.BufferUsage; translated.BufferCount = desc.BufferCount;
+    translated.OutputWindow = static_cast<HWND>(hwnd); translated.Windowed = TRUE;
+    translated.SwapEffect = desc.SwapEffect; translated.Flags = desc.Flags;
+    ComPtr<IDXGISwapChain> bridge;
+    const HRESULT result = create_bridge(static_cast<IDXGIFactory*>(factory), static_cast<IUnknown*>(queue), translated, &bridge);
+    return SUCCEEDED(result) ? bridge->QueryInterface(__uuidof(IDXGISwapChain1), out) : result;
+} catch (...) {
+    if (out) *out = nullptr;
+    return E_FAIL;
+}
+extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
+    if (!rsf_d3d11_present_prepare(setup)) return 0;
+    ComPtr<IDXGIFactory2> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     const auto initialized = MH_Initialize();
     if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return 0;
     auto** table = *reinterpret_cast<void***>(factory.Get());

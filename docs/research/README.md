@@ -15,6 +15,7 @@ route general Unreal 4, version-specific UE4.18 and TrueSky research.
 
 | Document | Read it for |
 | --- | --- |
+| [Godot engine integration](godot-engine-integration.md) | Developer-facing GDExtension/module, renderer probes, standard/.NET interop, DX12 runtime harness and remaining Vulkan/export work |
 | [Shared FSR/XeSS generation](shared-fg-20261004.md) | Independent SR/FG selection, live provider replacement, Unity input/pacing corrections, device fixtures and final user acceptance |
 | [Unity DX12 SR runtime](unity-dx12-runtime-20261004.md) | Shared shim, Mono/Harmony contracts, live SR execution, jitter/order corrections and Auto policy |
 | [AC7 motion/depth follow-up](ac7-motion-depth-20261004.md) | Dense motion, translucency hints, cloud depth and material mip bias with separate validation scopes |

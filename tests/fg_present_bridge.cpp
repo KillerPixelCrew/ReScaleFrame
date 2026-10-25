@@ -184,6 +184,8 @@ int main(int argc, char** argv) {
     legacy_hot = std::strcmp(argv[4], "11-hot") == 0 || flip11;
     service = hot || std::strcmp(argv[4], "12-service") == 0;
     const bool native = std::strcmp(argv[4], "11") != 0 && !legacy_hot;
+    const bool explicit_creation = std::getenv("RSF_EXPLICIT_SWAPCHAIN") != nullptr;
+    if (explicit_creation && !native) return 1;
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 1;
     for (UINT i = 0;; ++i) {
@@ -224,8 +226,8 @@ int main(int argc, char** argv) {
             request.xess_directory_utf8 = argc >= 6 ? argv[5] : argv[2];
             request.streamline_directory_utf8 = argc == 7 ? argv[6] : nullptr;
         }
-        if (rsf_fg12_install(&request) != RSF_BACKEND_OK) return 1;
-    } else if (!rsf_d3d11_present_install(&setup)) return 1;
+        if ((explicit_creation ? rsf_fg12_install_explicit(&request) : rsf_fg12_install(&request)) != RSF_BACKEND_OK) return 1;
+    } else if (!(explicit_creation ? rsf_d3d11_present_prepare(&setup) : rsf_d3d11_present_install(&setup))) return 1;
     ComPtr<ID3D11Device> device11; ComPtr<ID3D11DeviceContext> context11;
     ComPtr<ID3D12Device> device12; ComPtr<ID3D12CommandQueue> queue;
     IUnknown* producer = nullptr;
@@ -245,7 +247,16 @@ int main(int argc, char** argv) {
     desc.OutputWindow = window; desc.Windowed = TRUE; desc.SwapEffect = native || flip11 ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_DISCARD;
     if (hot && native) desc.Flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     ComPtr<IDXGISwapChain> chain;
-    if (FAILED(factory->CreateSwapChain(producer, &desc, &chain))) return 1;
+    if (explicit_creation) {
+        DXGI_SWAP_CHAIN_DESC1 explicit_desc{};
+        explicit_desc.Width = desc.BufferDesc.Width; explicit_desc.Height = desc.BufferDesc.Height;
+        explicit_desc.Format = desc.BufferDesc.Format; explicit_desc.SampleDesc = desc.SampleDesc;
+        explicit_desc.BufferUsage = desc.BufferUsage; explicit_desc.BufferCount = desc.BufferCount;
+        explicit_desc.SwapEffect = desc.SwapEffect; explicit_desc.Flags = desc.Flags;
+        ComPtr<IDXGISwapChain1> created_chain;
+        if (FAILED(rsf_d3d11_present_create_for_hwnd(factory.Get(), producer, window, &explicit_desc,
+            reinterpret_cast<void**>(created_chain.GetAddressOf()))) || FAILED(created_chain.As(&chain))) return 1;
+    } else if (FAILED(factory->CreateSwapChain(producer, &desc, &chain))) return 1;
     if (!rsf_d3d11_present_has_owner()) { std::puts("SKIP: provider refused, original engine chain retained"); return 77; }
     // The first engine query prepares the deferred provider outside the factory callback.
     ComPtr<IDXGISwapChain2> latency_chain;

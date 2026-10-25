@@ -199,7 +199,7 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
         (self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI && !frame->ui.resource))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     xefg_swapchain_frame_constant_data_t constants{};
-    constants.resetHistory = !self.history_valid || id != self.last_prepare + 1;
+    constants.resetHistory = (frame->record->flags & RSF_FRAME_FLAG_RESET) || !self.history_valid || id != self.last_prepare + 1;
     std::memcpy(constants.viewMatrix, frame->record->camera.world_to_view, sizeof(constants.viewMatrix));
     std::memcpy(constants.projectionMatrix, frame->record->camera.view_to_clip, sizeof(constants.projectionMatrix));
     constants.jitterOffsetX = frame->record->camera.jitter_pixels[0]; constants.jitterOffsetY = frame->record->camera.jitter_pixels[1];

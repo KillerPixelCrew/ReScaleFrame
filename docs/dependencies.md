@@ -18,6 +18,21 @@ Its Python packages stay under ignored `.local/rea/ida-venv`. IDA Pro and Hex-Ra
 retain their commercial licenses and are not copied into Git or runtime packages.
 [Setup and real-provider verification](tooling.md#ida-pro-through-rea-and-direct-mcp).
 
+## Godot developer integration
+
+The [Godot dependency lock](../integrations/godot/dependencies.json) pins Godot
+4.7.2, godot-cpp, official standard/.NET archives, vendor SDKs and the Godot Mesa
+NIR binary used by the Windows D3D12 engine build. Engine/reference checkouts,
+SDKs and build tools remain ignored. The GDExtension links godot-cpp; the custom
+engine builds the first-party module from this monorepo. The add-on preserves
+the Godot/godot-cpp license texts and the vendor payload's bundled notices.
+
+Python tooling uses the local environment and pinned SCons, NumPy and Pillow
+requirements. .NET validation uses the matching official GodotSharp assemblies
+and bundled NuGet packages, without changing their generated public API.
+Read the [build and validation record](research/godot-engine-integration.md) for
+exact revisions, binary hashes, exported-player coverage and image failures.
+
 ## Unity Mono DX12 adapter
 
 The local character-shader patch builder pins UnityPy 1.25.0 through its inline uv

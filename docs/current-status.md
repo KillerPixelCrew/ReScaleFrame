@@ -1,5 +1,19 @@
 # Current implementation and validation
 
+25 October 2026: the developer-facing Godot integration is in progress under
+`integrations/godot`. Custom standard/.NET 4.7.2 Forward+ DX12 engines passed
+SR/FG/MFG provider switching and PCL/input-marker fixtures. Actual FSR-generated
+frame dumps exposed and helped correct a zero-motion handoff and camera matrix
+conventions. Six standard/.NET visual cases now compare generated images with
+independently rendered midpoints. SR-enabled testing also corrected Godot's
+unwritten-motion sentinel. The expanded matrix passed vector/camera checks on
+120 generated frames, but four of 30 end-to-end image cases still fail for
+FSR2/FSR3 object motion. Standard/.NET Debug and Release
+exports passed runtime/controller fixtures, with C# on .NET and a separate
+GDScript-only .NET export. Vulkan runtime and broad scene-quality acceptance
+remain pending. This does not change game-plugin readiness flags.
+[Evidence and limits](research/godot-engine-integration.md).
+
 10 October update: the user reported a Unity UI/overlay regression in the new
 package. The pre-UI snapshot, overlay synchronization, touch handling and Auto
 FG corrections are applied and pass the recorded automated checks. Fresh game

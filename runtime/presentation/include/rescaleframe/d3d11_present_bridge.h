@@ -46,6 +46,12 @@ typedef struct rsf_d3d11_present_setup {
 /* Cold startup only, before the game's main swapchain. Unsupported creation forwards unchanged.
    No game-specific sites or policies live in the bridge. Hooks remain for process lifetime. */
 int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup);
+/* Engine integrations own the creation call and need no DXGI detours. Prepare
+   once before device/swapchain creation, then call create_for_hwnd at that site.
+   All arguments are borrowed DXGI objects/descriptors; out owns one COM reference. */
+int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup);
+int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
+    const void* description, void** out);
 rsf_streamline_host* rsf_d3d11_present_host(void);
 /* D3D11 execution thread: shared device plus the dedicated SR/upload queue, borrowed through
    process lifetime. native_queue is null; this proxy queue differs from the FG present queue. */

@@ -1,5 +1,42 @@
 # Implementation tracker
 
+## Godot developer integration in progress, 25 October 2026
+
+`integrations/godot` now contains a pinned 4.7.2 GDExtension, a native engine
+module, guarded source patching and an automatic harness. Standard and .NET
+editions passed the DX12/Vulkan renderer probe. The standard custom-engine DX12
+run passed shared DLSS/FSR3/XeSS SR, FSR3/XeSS/DLSS FG switching, SR-independent
+generation, DLSS MFG and PCL with SR/FG Off. A typeless-resource fixture passed
+after correcting the shared normalizer. The C# facade now runs on the .NET engine.
+Actual generated-frame dumps exposed zero motion at the native consumer despite
+valid engine vectors. Declaring native callback pipeline stages and correcting
+camera matrix layout/Y conventions fixed the captured inputs. The new visual
+harness compares actual FSR-generated output with separately rendered midpoints
+and rejects the preserved broken capture. It covers standard/.NET object and
+camera motion separately. Explicit engine-owned swapchain creation also replaces
+DXGI detours in this developer path. All six standard/.NET visual cases passed,
+covering 24 actual generated images, and the corrected standard/.NET functional
+tests passed all six provider/PCL phases with real foreground ownership. The Release
+native gate passed (44 executed tests, eight opt-in skips); explicit FSR3
+presentation and FSR/XeSS switching device fixtures passed separately. Vulkan
+runtime remains unfinished. Standard/.NET Debug and Release exported players now
+pass runtime switching and controller lifecycle fixtures, including C#; the
+GDScript-only .NET Release export also passed. PCL diagnostic pings are checked
+in each runtime phase, and lifecycle checks cover camera changes/cuts, pause,
+Off/resume, controller replacement and PCL after the last camera is removed.
+SR-enabled captures exposed a second motion convention: Godot's temporal
+sentinel `(-1,-1)` requires camera reprojection. The engine module now resolves
+it without replacing valid object vectors. The expanded matrix completed 30
+cases and 120 actual generated frames: all vector/camera gates passed, while
+26 image cases passed and four FSR2/FSR3 object-motion cases failed. The suite
+fails overall and preserves the images. Most FSR2 displacement is already in the
+SR source; a same-motion warmup experiment did not remove it. PCL from startup
+without any camera/compositor also passed on both editions and Release exports.
+These engine/device runs
+do not establish broad visual acceptance or measured latency.
+[Evidence and corrections](research/godot-engine-integration.md),
+[developer integration](../integrations/godot/README.md).
+
 ## Drag'n Wash character motion, 20 October 2026
 
 Added a fingerprint-guarded character shader patch and its game-specific URP motion

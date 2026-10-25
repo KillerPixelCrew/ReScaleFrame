@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
+#include "../../common/frame_capture12.h"
 #include "ffx_version.h"
 #include <wrl/client.h>
 #include <atomic>
@@ -21,6 +22,11 @@ struct FfxSession {
     PfnFfxQuery query{};
     ComPtr<ID3D12Device> device;
     ComPtr<IDXGISwapChain4> chain;
+    ComPtr<ID3D12CommandQueue> queue;
+    rsf::FrameCapture12 capture;
+    struct CaptureIdentity { uint64_t sequence = 0; rsf_frame_record record{}; };
+    std::array<CaptureIdentity, 64> capture_identities;
+    std::mutex capture_guard;
     ffxCreateContextDescFrameGeneration description{};
     ffxCreateContextDescFrameGenerationVersion api_version{};
     ffxCreateBackendDX12Desc backend{};
@@ -64,6 +70,23 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
 {
     auto* self = static_cast<FfxSession*>(pointer);
     const auto result = self->dispatch(&self->generation, &desc->header);
+    if (result == FFX_API_RETURN_OK && self->capture.enabled()) {
+        rsf_frame_record record{};
+        {
+            std::lock_guard lock(self->capture_guard);
+            const auto& identity = self->capture_identities[desc->frameID % self->capture_identities.size()];
+            if (identity.sequence == desc->frameID) record = identity.record;
+        }
+        if (self->capture.wants(record.frame_id)) {
+            auto* list = static_cast<ID3D12GraphicsCommandList*>(desc->commandList);
+            D3D12_RESOURCE_STATES state{};
+            if (native_state(desc->presentColor.state, state))
+                self->capture.record(list, static_cast<ID3D12Resource*>(desc->presentColor.resource), state, record, "fg-generation-input");
+            for (uint32_t i = 0; i < desc->numGeneratedFrames && i < 4; ++i)
+                if (native_state(desc->outputs[i].state, state))
+                    self->capture.record(list, static_cast<ID3D12Resource*>(desc->outputs[i].resource), state, record, "fg-generated-before-ui", 0, i, desc->reset ? 1u : 0u);
+        }
+    }
     self->dispatch_result = static_cast<int32_t>(result);
     if (result == FFX_API_RETURN_OK) self->dispatched += desc->numGeneratedFrames;
     const auto report = self->dispatch_logs.fetch_add(1);
@@ -125,6 +148,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     auto* self = new (std::nothrow) FfxSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device); self->ui_mode = setup->chain.ui_mode;
+    self->queue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
     self->log = setup->chain.log; self->log_user = setup->chain.log_user;
     self->view_space_to_meters = setup->view_space_to_meters;
     self->module = rsf::fg_library(*setup, L"amd_fidelityfx_framegeneration_dx12.dll");
@@ -275,6 +299,10 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     }
     config.generationRect = {0, 0, static_cast<int32_t>(record.output_width), static_cast<int32_t>(record.output_height)};
     config.frameID = ++self.sequence;
+    if (self.capture.enabled()) {
+        std::lock_guard lock(self.capture_guard);
+        self.capture_identities[config.frameID % self.capture_identities.size()] = {config.frameID, record};
+    }
     if (enabled && self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS) {
         if (!frame->hudless.resource) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
         config.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->hudless.resource));
@@ -294,7 +322,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     data.frameTimeDelta = record.frame_time_ms; data.cameraNear = record.camera.near_plane;
     data.cameraFar = record.camera.far_plane; data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
     data.viewSpaceToMetersFactor = self.view_space_to_meters;
-    data.reset = !self.history_valid || record.frame_id != self.last_prepare + 1;
+    data.reset = (record.flags & RSF_FRAME_FLAG_RESET) || !self.history_valid || record.frame_id != self.last_prepare + 1;
     data.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth.resource));
     data.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion.resource));
     // Perspective W follows view Z. Unity's right-handed projection looks down
@@ -306,7 +334,9 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
         data.cameraUp[i] = record.camera.view_to_world[4 + i];
         data.cameraForward[i] = forward_sign * record.camera.view_to_world[8 + i];
     }
-    if (self.dispatch(&self.generation, &data.header) != FFX_API_RETURN_OK) {
+    const auto dispatched = self.dispatch(&self.generation, &data.header);
+    (void)self.capture.event(record, "fsr-prepare", data.frameID, data.reset, static_cast<int32_t>(dispatched));
+    if (dispatched != FFX_API_RETURN_OK) {
         self.history_valid = false; self.prepared_enabled = false; return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
     self.history_valid = true; self.last_prepare = record.frame_id; return RSF_BACKEND_OK;
@@ -315,6 +345,8 @@ rsf_backend_result after(void* pointer)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<FfxSession*>(pointer);
+    if (self.capture.pending() && wait(self) == RSF_BACKEND_OK)
+        (void)self.capture.flush_after_queue(self.queue.Get());
     self.state.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();
     self.state.present_callbacks = self.presented.load(); self.state.vendor_status = self.dispatch_result.load();
     self.state.valid_statistics = RSF_FG_STAT_ACTIVITY | (self.ui_mode == RSF_UI_MODE_NONE ? RSF_FG_STAT_PRESENT_CALLBACKS : 0u);
