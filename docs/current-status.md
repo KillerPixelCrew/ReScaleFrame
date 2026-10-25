@@ -30,11 +30,13 @@ image cases with SR Off or XeSS SR pass, covering 48 actual SDK-generated images
 Optional foreground maintenance records scoped activation and preserved failed controls.
 FSR4 SR uses a graph-owned
 Vulkan/DX12 handoff; both editors pass switching/resize checks, with C# on .NET. One combined-motion
-image case and four raw SR frames pass per edition. Rebuilt standard Release exports
-also pass FSR4 switching, resize and raw-output checks. The new strict DLSS lifecycle
-fixture exposes synchronization errors after active resize and a shutdown crash;
-the correction and retake remain pending. These remain bounded fixture results. Cold
-startup pauses, FSR2 displacement, Vulkan FSR4 FG routing, new-provider export coverage and broader
+image case and four raw SR frames pass per edition. Rebuilt standard/.NET Release exports
+also pass FSR4 switching, resize and raw-output checks. Debug exports pass XeSS FG/PCL,
+Off/resume and resize on both editions. The strict DLSS lifecycle fixture now passes
+all eleven phases and API/synchronization checks after the options correction, but
+still crashes during SDK shutdown. FSR4 FG routing builds and correctly refuses
+the current NVIDIA provider list; AMD execution remains untested. These remain bounded fixture results. Cold
+startup pauses, FSR2 displacement, DLSS shutdown, new-provider export coverage and broader
 scene-quality acceptance remain open. This does
 not change game-plugin readiness flags.
 Rebuilt Vulkan Debug/Release exports pass 12 standard/.NET SR, FG and

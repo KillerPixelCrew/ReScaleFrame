@@ -1268,3 +1268,41 @@ There are no provider refusals or API errors; .NET C# also passes. This closes
 the capture-only usage correction without asserting the engine output had an
 unavailable transfer-source promise. Object-only/camera-only FSR4 scenes and the
 new provider export/lifecycle expansion retain their separate acceptance gaps.
+
+## Fresh export and lifecycle checks after the provider milestone
+
+Native `E2EE9675BFE9A7958F8E261E7181285EB973C4494605663F632B8448C2E6FC5D`
+passes standard/.NET Debug XeSS FG count1, SR-independent generation, Off/resume,
+resize and PCL fixtures. `.local/godot/validation-20261025-205954-842.json`
+records both independent exported payloads, template hashes and C# success on
+.NET. Actual player PNGs are saved; this is functional acceptance, without a new
+generated-image-quality claim. It also exercises the shared-importer refactor.
+
+Standard Release FSR4 SR export evidence is `validation-20261025-204201-052.json`
+on the preceding 4765 Native pair. Fresh .NET Release evidence is
+`validation-20261025-205744-973.json` on E2EE. Both switch FSR4 to DLSS and back,
+resize to 800x450, save actual player images and pass four complete raw-frame
+checks under portable synchronization validation and process mitigation. .NET
+C# observes FSR4 after resize. The .NET export initially failed restoring new
+10.0.14 Microsoft runtime packs because the fixture allowed only bundled Godot
+NuGet packages. The harness now adds the official NuGet feed within the fixture's
+configuration; no global source changes are made. A second invalid run omitted
+the portable layer path and correctly failed layer-presence verification. The
+final retry loads the pinned layer and passes; failed controls remain retained.
+
+The options-publication correction separately removes active-resize validation
+errors from both strict DLSS lifecycle retakes (`fg_lifecycle-20261025-205620-329`
+and `fg_lifecycle-20261025-205644-034`). All eleven scalar/PNG phases pass and
+.NET C# passes, with zero VUIDs or synchronization hazards. Both processes still
+exit with an access violation during SDK shutdown. These are failed lifecycle
+acceptance results; the [focused investigation](godot-vulkan-dlss-fg.md) tracks
+the remaining crash.
+
+The explicit negative `fg_admission` fixture passes standard/.NET on the E2EE
+Native pair (`validation-20261025-210202-553.json`). A requested exact FG4 path
+is refused on this NVIDIA provider list. Settings, session and FSR3 owner remain
+unchanged; the harness observes exactly one successful owner creation. Continued
+source frames, actual FG callbacks, tags, pacing and PCL markers increase after
+refusal. Player PNGs, .NET C# and strict synchronization/teardown checks pass.
+This proves preservation on the tested unsupported device, without classifying
+AMD hardware as unsupported or claiming FSR4 rendering.

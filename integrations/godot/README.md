@@ -20,9 +20,12 @@ XeSS SR passes six standard/.NET generated-image cases with FSR3 FG and PCL.
 DLSS FG passes standard/.NET device and midpoint image checks, including DLSS SR
 and FG together. Higher-count MFG3 also passes strict GPU validation and quarter-step image
 comparisons for all three actual output ordinals. XeSS FG passes standard/.NET lifecycle/C#/PCL checks and
-the first standard object-motion image cases using its actual SDK outputs. FSR4
+twelve object/camera/combined image cases using 48 actual SDK outputs. FSR4
 SR passes both editors' switching/resize checks, C# on .NET and a combined-motion
-image comparison plus four complete raw SR frames per edition. Vulkan FSR4 FG routing and broader provider/export/scene coverage remain unfinished.
+image comparison plus four complete raw SR frames per edition. Vulkan FSR4 FG routing
+builds with exact-provider admission; the current NVIDIA provider list is correctly
+refused. AMD execution and generated-image acceptance remain untested. Strict DLSS
+lifecycle runs now pass API checks but expose a shutdown crash still under investigation.
 Vulkan DLSS SR passes standard/.NET switching, resize, raw input checks and six
 DLSS SR + FSR3 FG + PCL image cases, covering 24 actual generated frames.
 Standard/.NET Debug and Release exported players have passed the
@@ -32,6 +35,9 @@ Updated Vulkan Debug/Release exports also pass standard/.NET SR, FG and
 camera-free PCL fixtures. SR/FG include C# on .NET. The exported SR fixture saves
 actual player images and raw inputs; midpoint-image acceptance remains the
 bounded editor suite above.
+Fresh Release exports pass FSR4 SR switching/return/resize/raw readbacks on both
+editions. Debug exports pass XeSS FG, Off/resume, resize and PCL on both editions,
+including C# on .NET. These checks do not establish exported generated-image quality.
 See [research and corrections](../../docs/research/godot-engine-integration.md).
 The expanded 30-case image suite currently fails four FSR2/FSR3 independent-object
 cases, with up to 0.62 output-pixel displacement, despite passing vector checks.

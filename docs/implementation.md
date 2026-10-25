@@ -6,10 +6,12 @@ Latest harness milestone: XeSS FG editor image checks pass all twelve standard/.
 object/camera/combined cases with SR0/SR5, covering 48 actual generated images and
 fresh independent references. Maximum centroid error is 0.265658 output pixels;
 the existing 0.35-pixel gate is unchanged. Optional foreground maintenance records
-owned-window activation, bounded failures and successful retries. A rebuilt standard
-Release FSR4 SR export passes switching, resize and raw capture checks. The strict
-DLSS lifecycle fixture correctly fails active resize and shutdown; its native fix
-is pending a coordinated build and retake. See the [XeSS capture evidence](research/godot-xess-fg-capture-20261025.md)
+owned-window activation, bounded failures and successful retries. Rebuilt standard/.NET
+Release FSR4 SR exports pass switching, resize and raw capture checks. Debug exports
+pass XeSS FG/PCL switching, Off/resume and resize on both editions. Negative FG4
+admission preserves the working FSR3 pipeline and continued generation on both
+editions. The strict DLSS lifecycle fixture now passes all eleven phases and API
+checks after the options correction, but still fails shutdown. See the [XeSS capture evidence](research/godot-xess-fg-capture-20261025.md)
 and [DLSS lifecycle investigation](research/godot-vulkan-dlss-fg.md).
 
 The Vulkan FSR4 FG adapter, shared DX12/Vulkan importer, exact-provider admission
