@@ -929,6 +929,40 @@ executes 47 and skips nine opt-in fixtures;
 formatting and Clippy pass. The native Vulkan service and Godot private exports
 do not change game ABI 13 or game-plugin readiness flags.
 
+## Vulkan SR failure output, 25 October 2026
+
+Source review found that the engine callback ignores the native SR return value
+and still consumes its upscaled texture. A rejected context creation or dispatch
+therefore left that image unwritten. The runtime now provides a separate,
+size/version-checked spatial fallback call. It checks image ownership, layouts,
+transfer-source usage and RGBA16F blit/filter support before recording. A linear
+blit fills the output, restores the input's shader-read layout and leaves output
+in the graph's transfer-destination layout. It never submits a queue or retains
+images; the existing callback lease lasts through GPU completion. The Godot
+adapter calls it on SR creation/evaluation/retirement refusal, keeps `active_sr`
+zero, increments refused frames and preserves the original provider error.
+
+The Release native gate passes 47 executed tests with nine opt-in skips, plus
+formatting and Clippy (`verify-sr-fallback.log`). The explicit RTX 5080 Vulkan
+fixture passes two full-image gradient readbacks, including borders/alpha,
+layout reuse and invalid-owner guards, then 24 FSR2/FSR3 dispatch/readbacks
+(`test-native-vulkan-sr-fallback.log`). Core validation reports no API errors;
+this does not settle the earlier synchronization-validation present hazard.
+
+`validation-20261025-171133-378.json` passes standard/.NET fixtures with the
+FidelityFX Vulkan DLL deliberately removed only from each new fixture's private
+payload. Both requested SR providers remain refused, while actual player PNGs
+retain the cyan object before and after resize. The standard FSR2 PNG was opened
+for inspection. No C# is exercised in this failure fixture. The outer command
+returned a stale prior native-command exit code of one despite the successful
+script/manifest; retain the manifest and player results as the test evidence.
+The ordinary regression `validation-20261025-171211-760.json` exits successfully
+and passes both editions, C# on .NET, four raw SR frames per edition and core
+validation. The tested native DLL is
+`8FEEA9C797C6BB9D1CBAF1D499D8784FB4BF1A1DB0131C38F7D7211E0C18B04C`;
+engine identities remain those in the preceding PCL acceptance. These tests
+prove bounded failure recovery, not FSR2 moving-object reconstruction quality.
+
 ## Remaining work and validation limits
 
 Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan

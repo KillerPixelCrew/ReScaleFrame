@@ -36,6 +36,16 @@ typedef struct rsf_srvk_frame {
     float motion_scale_x, motion_scale_y, pre_exposure;
 } rsf_srvk_frame;
 
+typedef struct rsf_srvk_fallback {
+    uint32_t struct_size, abi_version;
+    void* instance;
+    void* physical_device;
+    void* device;
+    rsf_vk_get_proc instance_proc, device_proc;
+    void* command_buffer;
+    rsf_srvk_image color, output;
+} rsf_srvk_fallback;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -50,6 +60,13 @@ RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk*, uint32_t* widt
    destruction. FIRST/COUNT use the RSF_FRAME_CAPTURE_* variables (at most 16).
    Capturing an input requires copy_source and the corresponding image usage. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk*, void* command_buffer, const rsf_srvk_frame*);
+/* Spatial failure recovery, independent of an SDK context. Both images are
+   single-sample RGBA16F level-zero images on device. Color requires copy_source
+   and SHADER_READ_ONLY_OPTIMAL; output requires TRANSFER_DST usage/layout.
+   Restores color layout and leaves output TRANSFER_DST_OPTIMAL. All validation
+   precedes recording. The caller submits and leases both images through GPU
+   completion, and retains the original SR failure in its provider status. */
+RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback*);
 /* Failure preserves the context and its module/resources for a later retry. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk*);
 #ifdef __cplusplus

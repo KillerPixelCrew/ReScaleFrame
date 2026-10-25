@@ -63,6 +63,10 @@ do not establish broad visual acceptance or measured latency.
 An additional geometry control keeps the ordinary FSR2 cube failure visible,
 while a thin camera-facing box passes its four generated-image checks. It narrows
 the reconstruction investigation without changing production rendering or gates.
+Vulkan SR refusal now records a spatial fallback while preserving the SDK error.
+Full-image GPU gradient checks and standard/.NET missing-DLL fixtures pass;
+normal SR regression also passes with C# and raw inputs. The FSR2 displacement
+and other-provider work remain open.
 [Evidence and corrections](research/godot-engine-integration.md),
 [developer integration](../integrations/godot/README.md).
 

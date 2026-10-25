@@ -153,6 +153,7 @@ the external SR pass as a fallback, with an extra pass cost.
 ./eng/test-godot.ps1 -EngineBridge -Edition standard,mono -GraphicsApi d3d12
 ./eng/test-godot.ps1 -EngineBridge -Scenario controller
 ./eng/test-godot.ps1 -EngineBridge -Scenario pcl -NoCSharp
+./eng/test-godot.ps1 -EngineBridge -Scenario sr -GraphicsApi vulkan -NoCSharp -MissingSrRuntime
 ./eng/test-godot-visual.ps1
 ./eng/verify.ps1 -Configuration Release -VS2026
 ```
@@ -164,6 +165,10 @@ camera-only and combined motion on standard and .NET engines, with C# facade
 validation on .NET. Its default SR matrix includes Off, DLSS, FSR2, FSR3 and
 XeSS. `-SrBackend` selects a smaller provider set for diagnosis; it does not
 turn an unsupported or failing provider into a pass.
+
+The missing-runtime fixture removes the Vulkan SR DLL from its private copy and
+checks actual player images through provider switches and resize. SR status
+retains the provider failure while the runtime records a spatial fallback.
 
 For exported-player validation, build both target configurations, with and
 without `-Mono`, then use the same functional scenarios:

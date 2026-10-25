@@ -4,6 +4,7 @@ extends "res://scene.gd"
 var runtime: RefCounted
 var poses: Array[Dictionary] = []
 var initial_backend := 2
+var expect_sr_failure := false
 
 func _matrix(value: Projection) -> Array[float]:
     var values: Array[float] = []
@@ -17,6 +18,8 @@ func _ready() -> void:
     Engine.max_fps = 60
     runtime = ClassDB.instantiate("ReScaleFrameRuntime") as RefCounted
     for argument: String in OS.get_cmdline_user_args():
+        if argument == "--expect-sr-failure":
+            expect_sr_failure = true
         if argument.begins_with("--initial-sr="):
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
@@ -33,12 +36,29 @@ func _snapshot(name: String) -> void:
     if image == null or image.is_empty():
         return
     _require(image.save_png(result_path.get_basename() + "-" + name + ".png") == OK, "Cannot save the actual player image")
+    # The cyan object must survive SR rejection. Status counters alone cannot
+    # distinguish a valid spatial fallback from an unwritten upscaled image.
+    var object_samples := 0
+    for y in range(64, image.get_height() - 16, 2):
+        for x in range(16, image.get_width() - 16, 2):
+            var pixel := image.get_pixel(x, y)
+            if pixel.b > pixel.r * 1.5 and pixel.g > pixel.r * 1.5 and pixel.b > 0.2:
+                object_samples += 1
+    _require(object_samples > 100, "The rendered cyan object is missing from the player image")
     # Read status after the GPU readback has synchronized the last rendered source.
     var status: Dictionary = runtime.call("get_status")
+    status["visible_object_samples"] = object_samples
     var metadata := FileAccess.open(result_path.get_basename() + "-" + name + ".json", FileAccess.WRITE)
     if metadata:
         metadata.store_string(JSON.stringify(status, "  "))
     samples.append(status)
+
+func _check_provider(status: Dictionary, backend: int) -> void:
+    if expect_sr_failure:
+        _require(status.active_sr == 0 and status.sr_result != 0 and status.refused_frames > 20 and status.evaluated_frames == 0,
+            "Missing SDK must retain the SR failure while producing spatial output")
+    else:
+        _require(status.active_sr == backend and status.evaluated_frames > 20, "SR provider did not execute")
 
 func _process(_delta: float) -> void:
     if runtime == null:
@@ -52,18 +72,19 @@ func _process(_delta: float) -> void:
     var status: Dictionary = runtime.call("get_status")
     label.text = "Godot native SR: %s\nEvaluated %s, refused %s" % [status.get("active_sr", 0), status.get("evaluated_frames", 0), status.get("refused_frames", 0)]
     if frame == 45:
-        _require(status.active_sr == initial_backend and status.evaluated_frames > 20, "Initial SR provider did not execute")
+        _check_provider(status, initial_backend)
         _snapshot("fsr%s" % initial_backend)
     elif frame == 60:
         _select(5 - initial_backend)
     elif frame == 85:
-        _require(status.active_sr == 5 - initial_backend, "Second SR provider did not execute")
+        _check_provider(status, 5 - initial_backend)
         _snapshot("fsr%s" % (5 - initial_backend))
     elif frame == 90:
         DisplayServer.window_set_size(Vector2i(800, 450))
         runtime.call("reset_history")
     elif frame == 125:
-        _require(status.active_sr == 5 - initial_backend and status.output_width == 800 and status.output_height == 450, "SR did not follow resize/reset")
+        _check_provider(status, 5 - initial_backend)
+        _require(status.output_width == 800 and status.output_height == 450, "SR did not follow resize/reset")
         _snapshot("resized")
     elif frame == 150:
         var mono_status: Dictionary = {}
@@ -72,7 +93,7 @@ func _process(_delta: float) -> void:
             _require(mono_status.get("passed", false), "C# SR facade validation failed")
         var file := FileAccess.open(result_path, FileAccess.WRITE)
         if file:
-            file.store_string(JSON.stringify({"passed": failures.is_empty(), "failures": failures, "samples": samples, "mono": mono_status, "poses": poses}, "  "))
+            file.store_string(JSON.stringify({"passed": failures.is_empty(), "failures": failures, "samples": samples, "mono": mono_status, "poses": poses, "expected_sr_failure": expect_sr_failure}, "  "))
         else:
             get_tree().quit(2)
             return

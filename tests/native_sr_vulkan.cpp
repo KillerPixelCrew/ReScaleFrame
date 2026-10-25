@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -135,7 +136,7 @@ struct Gpu {
         require(allocate_commands(device, &cmd_info, &commands) == VK_SUCCESS, "allocate commands");
         VkFenceCreateInfo fence_info{}; fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         require(create_fence(device, &fence_info, nullptr, &fence) == VK_SUCCESS, "create fence");
-        VkBufferCreateInfo buffer{}; buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; buffer.size = 320 * 180 * 8; buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VkBufferCreateInfo buffer{}; buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; buffer.size = 320 * 180 * 8; buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         require(create_buffer(device, &buffer, nullptr, &readback) == VK_SUCCESS, "create readback");
         VkMemoryRequirements r{}; buffer_requirements(device, readback, &r);
         VkMemoryAllocateInfo allocation{}; allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; allocation.allocationSize = r.size;
@@ -205,6 +206,62 @@ struct Gpu {
         unmap(device, readback_memory); require(valid, "GPU output disagrees with known linear scene colour");
     }
 };
+void fallback_case(Gpu& gpu) {
+    auto color = gpu.image(160, 90, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    auto output = gpu.image(320, 180, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    rsf_srvk_fallback call{}; call.struct_size = sizeof(call); call.abi_version = RSF_SRVK_ABI_VERSION;
+    call.instance = gpu.instance; call.physical_device = gpu.physical; call.device = gpu.device;
+    call.instance_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gip); call.device_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gdp);
+    call.command_buffer = gpu.commands; call.color = gpu.describe(color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    call.output = gpu.describe(output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    const auto upload = gpu.device_function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage");
+    for (uint32_t iteration = 0; iteration < 2; ++iteration) {
+        void* pointer = nullptr;
+        require(gpu.map(gpu.device, gpu.readback_memory, 0, VK_WHOLE_SIZE, 0, &pointer) == VK_SUCCESS, "map gradient upload");
+        auto* pixels = static_cast<uint16_t*>(pointer);
+        for (uint32_t y = 0; y < 90; ++y) for (uint32_t x = 0; x < 160; ++x) {
+            const std::array<float, 4> value{float(x) / 159, float(y) / 89, iteration ? 0.7f : 0.2f, 1};
+            for (uint32_t c = 0; c < 4; ++c) pixels[(y * 160 + x) * 4 + c] = DirectX::PackedVector::XMConvertFloatToHalf(value[c]);
+        }
+        gpu.unmap(gpu.device, gpu.readback_memory);
+        gpu.start();
+        gpu.transition(color, iteration ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        if (!iteration) gpu.transition(output, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkBufferMemoryBarrier host{}; host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        host.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT; host.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; host.buffer = gpu.readback; host.size = VK_WHOLE_SIZE;
+        gpu.barrier(gpu.commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+        VkBufferImageCopy region{}; region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.imageExtent = {160, 90, 1};
+        upload(gpu.commands, gpu.readback, color.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        gpu.transition(color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        gpu.fill(output, {0.9f, 0.1f, 0.9f, 0});
+        auto invalid = call; invalid.color.device = nullptr;
+        require(rsf_srvk_spatial_fallback(&invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "fallback rejects foreign image");
+        invalid = call; invalid.color.copy_source = 0;
+        require(rsf_srvk_spatial_fallback(&invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "fallback requires transfer-source usage");
+        invalid = call; invalid.output.image = invalid.color.image;
+        require(rsf_srvk_spatial_fallback(&invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "fallback rejects image alias");
+        require(rsf_srvk_spatial_fallback(&call) == RSF_BACKEND_OK, "record spatial fallback");
+        // The upload and readback deliberately reuse a buffer. Order its read
+        // before the output copy writes it, independently of image barriers.
+        host.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; host.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        gpu.barrier(gpu.commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+        gpu.read(output); gpu.finish();
+        require(gpu.map(gpu.device, gpu.readback_memory, 0, VK_WHOLE_SIZE, 0, &pointer) == VK_SUCCESS, "map fallback output");
+        pixels = static_cast<uint16_t*>(pointer); bool valid = true;
+        for (uint32_t y = 0; y < 180; ++y) for (uint32_t x = 0; x < 320; ++x) {
+            const std::array<float, 4> expected{std::clamp((float(x) + 0.5f) * 0.5f - 0.5f, 0.0f, 159.0f) / 159,
+                std::clamp((float(y) + 0.5f) * 0.5f - 0.5f, 0.0f, 89.0f) / 89, iteration ? 0.7f : 0.2f, 1};
+            for (uint32_t c = 0; c < 4; ++c) {
+                const float value = DirectX::PackedVector::XMConvertHalfToFloat(pixels[(y * 320 + x) * 4 + c]);
+                valid &= std::isfinite(value) && std::abs(value - expected[c]) < 0.0025f;
+            }
+        }
+        gpu.unmap(gpu.device, gpu.readback_memory);
+        require(valid, "spatial fallback must scale the gradient and write every output pixel");
+    }
+    std::puts("PASS: Vulkan spatial fallback gradient, borders, alpha, layout reuse and ownership guards");
+}
 void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     rsf_srvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_SRVK_ABI_VERSION;
     setup.instance = gpu.instance; setup.physical_device = gpu.physical; setup.device = gpu.device;
@@ -252,6 +309,11 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
 #endif
 
 int main(int argc, char**) try {
+    rsf_srvk_fallback fallback{}; fallback.struct_size = sizeof(fallback) - 1;
+    require(rsf_srvk_spatial_fallback(nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        rsf_srvk_spatial_fallback(&fallback) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "fallback null/short ABI refusal");
+    fallback.struct_size = sizeof(fallback); fallback.abi_version = RSF_SRVK_ABI_VERSION + 1;
+    require(rsf_srvk_spatial_fallback(&fallback) == RSF_BACKEND_ERROR_ABI_MISMATCH, "fallback ABI mismatch refusal");
     rsf_fgvk* fg = reinterpret_cast<rsf_fgvk*>(1); uint64_t chain = 1;
     require(rsf_fgvk_create(nullptr, &fg, &chain) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !fg && !chain, "FG null setup refusal");
     rsf_fgvk_setup short_fg{}; short_fg.struct_size = sizeof(short_fg) - 1;
@@ -276,7 +338,7 @@ int main(int argc, char**) try {
     const char* directory = std::getenv("RSF_VULKAN_SR_RUNTIME");
     if (!directory) { std::puts("SKIP: set RSF_VULKAN_SR_RUNTIME for the Vulkan device fixture"); return 77; }
 #if defined(RSF_TEST_VULKAN)
-    Gpu gpu; gpu.initialize(); device_case(gpu, directory, RSF_SR_FSR2); device_case(gpu, directory, RSF_SR_FSR3); return 0;
+    Gpu gpu; gpu.initialize(); fallback_case(gpu); device_case(gpu, directory, RSF_SR_FSR2); device_case(gpu, directory, RSF_SR_FSR3); return 0;
 #else
     std::puts("SKIP: built without Vulkan SDK headers"); return 77;
 #endif

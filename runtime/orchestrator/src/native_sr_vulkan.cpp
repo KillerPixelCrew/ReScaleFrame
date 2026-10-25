@@ -148,6 +148,53 @@ bool valid_image(const rsf_srvk& self, const rsf_srvk_image& image, uint32_t wid
 struct rsf_srvk {};
 #endif
 
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback* call) try {
+    if (!call || call->struct_size < sizeof(*call)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (call->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    const auto& source = call->color;
+    const auto& output = call->output;
+    if (!call->instance || !call->physical_device || !call->device || !call->instance_proc || !call->device_proc || !call->command_buffer ||
+        source.device != call->device || output.device != call->device || !source.image || !output.image ||
+        source.image == output.image || !source.copy_source || source.format != 97 || output.format != 97 ||
+        source.layout != 5 || output.layout != 7 || !source.width || !source.height || !output.width || !output.height ||
+        source.width > INT32_MAX || source.height > INT32_MAX || output.width > INT32_MAX || output.height > INT32_MAX)
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_HAVE_FFX_VK)
+    auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(call->instance_proc(call->instance, "vkGetPhysicalDeviceFormatProperties"));
+    auto barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(call->device_proc(call->device, "vkCmdPipelineBarrier"));
+    auto blit = reinterpret_cast<PFN_vkCmdBlitImage>(call->device_proc(call->device, "vkCmdBlitImage"));
+    if (!properties || !barrier || !blit) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    VkFormatProperties format{};
+    properties(static_cast<VkPhysicalDevice>(call->physical_device), VK_FORMAT_R16G16B16A16_SFLOAT, &format);
+    constexpr auto required = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((format.optimalTilingFeatures & required) != required) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    const auto commands = static_cast<VkCommandBuffer>(call->command_buffer);
+    VkImageMemoryBarrier change{}; change.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    change.image = reinterpret_cast<VkImage>(source.image);
+    change.srcQueueFamilyIndex = change.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    change.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    change.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; change.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    change.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; change.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &change);
+    auto target = change; target.image = reinterpret_cast<VkImage>(output.image);
+    target.oldLayout = target.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    target.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT; target.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &target);
+    VkImageBlit region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffsets[1] = {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height), 1};
+    region.dstOffsets[1] = {static_cast<int32_t>(output.width), static_cast<int32_t>(output.height), 1};
+    blit(commands, reinterpret_cast<VkImage>(source.image), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        reinterpret_cast<VkImage>(output.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+    change.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; change.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    change.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; change.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &change);
+    return RSF_BACKEND_OK;
+#else
+    return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_setup* setup, rsf_srvk** out) try {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;

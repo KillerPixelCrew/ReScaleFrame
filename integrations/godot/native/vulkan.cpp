@@ -179,10 +179,24 @@ extern "C" int rsfg_render_vulkan(void* commands, const rsf_godot_vk_packet* pac
         current.fg_result = pass.role == RSF_GAME_RENDER_SR ? rsf_fgvk_prepare(presentation, commands, &fg) : rsf_fgvk_hudless(presentation, commands, &fg);
     }
     if (pass.role == RSF_GAME_RENDER_FINAL_SCENE) return current.fg_result == RSF_BACKEND_OK ? 1 : 0;
+    auto fallback = [&]() {
+        rsf_srvk_fallback call{}; call.struct_size = sizeof(call); call.abi_version = RSF_SRVK_ABI_VERSION;
+        call.instance = packet->instance; call.physical_device = packet->physical_device; call.device = packet->device;
+        call.instance_proc = reinterpret_cast<rsf_vk_get_proc>(packet->instance_proc);
+        call.device_proc = reinterpret_cast<rsf_vk_get_proc>(packet->device_proc); call.command_buffer = commands;
+        call.color = image(packet->color, 5); call.output = image(packet->output, 7);
+        const auto result = rsf_srvk_spatial_fallback(&call);
+        current.active_sr = 0; ++current.refused_frames;
+        if (diagnostics++ < 4 && logger) {
+            char message[128]; std::snprintf(message, sizeof(message), "Vulkan SR rejected: provider=%d spatial fallback=%d", current.sr_result, result);
+            logger(logger_user, message);
+        }
+        return result == RSF_BACKEND_OK ? 1 : 0;
+    };
     const uint32_t backend = requested.sr_backend == 7 ? 3 : requested.sr_backend;
     if (context && (generation != context_generation || packet->device != device ||
         current.output_width != camera.output_width || current.output_height != camera.output_height)) {
-        if (!retire()) { current.sr_result = RSF_BACKEND_ERROR_NOT_READY; return 0; }
+        if (!retire()) { current.sr_result = RSF_BACKEND_ERROR_NOT_READY; return fallback(); }
     }
     current.requested_sr = requested.sr_backend;
     current.output_width = camera.output_width; current.output_height = camera.output_height;
@@ -198,7 +212,7 @@ extern "C" int rsfg_render_vulkan(void* commands, const rsf_godot_vk_packet* pac
         setup.depth_inverted = camera.depth_inverted; setup.motion_jittered = camera.motion_jittered; setup.runtime_directory_utf8 = directory.c_str();
         current.sr_result = rsf_srvk_create(&setup, &context);
         current.active_sr = 0;
-        if (!context) { ++current.refused_frames; return 0; }
+        if (!context) return fallback();
         device = packet->device; device_proc = packet->device_proc;
         context_generation = generation; context_backend = backend;
     }
@@ -221,7 +235,7 @@ extern "C" int rsfg_render_vulkan(void* commands, const rsf_godot_vk_packet* pac
         logger(logger_user, message);
     }
     current.active_sr = current.sr_result == RSF_BACKEND_OK ? context_backend : 0;
-    if (current.sr_result == RSF_BACKEND_OK) ++current.evaluated_frames;
-    else ++current.refused_frames;
-    return current.sr_result == RSF_BACKEND_OK ? 1 : 0;
+    if (current.sr_result != RSF_BACKEND_OK) return fallback();
+    ++current.evaluated_frames;
+    return 1;
 } catch (...) { return 0; }
