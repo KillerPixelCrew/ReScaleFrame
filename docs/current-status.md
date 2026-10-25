@@ -17,8 +17,9 @@ Off/resume, resize and a secondary native window. Captures include actual SDK
 generated images and independent midpoint references. FSR2 image displacement
 and a synchronization-validation present hazard remain open. The corrected
 SR Off/FSR3 Vulkan image suite passes 12 cases and 48 actual generated frames.
-Vulkan PCL, other
-Vulkan providers and broad scene-quality acceptance remain pending. This does
+Vulkan PCL/Reflex now runs with camera-free native presentation and alongside
+FSR3 FG on standard/.NET editors. Other Vulkan providers and broad scene-quality
+acceptance remain pending. This does
 not change game-plugin readiness flags.
 [Evidence and limits](research/godot-engine-integration.md).
 

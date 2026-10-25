@@ -4,6 +4,7 @@ param(
     [ValidateRange(0,7)][int[]]$SrBackend = @(0,1,2,3,5),
     [ValidateRange(4,70)][int]$FirstFrame = 12,
     [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
+    [ValidateRange(0,2)][int]$LatencyMode = 0,
     [switch]$GpuValidation,
     [switch]$ReferenceMsaa
 )
@@ -19,7 +20,7 @@ foreach ($taskEdition in $Edition) {
     $taskEngine = Get-RsfGodotBuild $taskRoot $taskEdition
     foreach ($taskMode in $Mode) {
         $taskReferenceLabel = "$taskRun-$taskEdition-reference"
-        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent}
+        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent; LatencyMode=$LatencyMode}
         & (Join-Path $PSScriptRoot 'capture-godot.ps1') @taskOptions -Label $taskReferenceLabel -Reference -ReferenceMsaa:$ReferenceMsaa
         $taskReference = Join-Path $taskRoot ".local/godot/visual/$taskReferenceLabel-$taskMode"
         foreach ($taskSr in $SrBackend) {
@@ -34,13 +35,13 @@ foreach ($taskEdition in $Edition) {
             if ($taskInfo.engine_sha256 -ne $taskReferenceInfo.engine_sha256 -or $taskInfo.native_sha256 -ne $taskReferenceInfo.native_sha256) {
                 throw 'The generated and reference images used different binaries.'
             }
-            $taskResults += @{passed=$true; edition=$taskEdition; mode=$taskMode; sr_backend=$taskSr; engine_sha256=$taskInfo.engine_sha256; native_sha256=$taskInfo.native_sha256;
+            $taskResults += @{passed=$true; edition=$taskEdition; mode=$taskMode; sr_backend=$taskSr; latency_mode=$LatencyMode; engine_sha256=$taskInfo.engine_sha256; native_sha256=$taskInfo.native_sha256;
                 analysis=(Join-Path $taskCapture 'decoded/analysis.json')}
             Write-Output "PASS: actual generated frames and geometry-derived temporal inputs, Godot $taskEdition / $taskMode / SR $taskSr"
             } catch {
                 $taskInfoPath = Join-Path $taskCapture 'capture-info.json'
                 $taskInfo = if (Test-Path -LiteralPath $taskInfoPath) { Get-Content -Raw -LiteralPath $taskInfoPath | ConvertFrom-Json } else { $null }
-                $taskResults += @{passed=$false; edition=$taskEdition; mode=$taskMode; sr_backend=$taskSr;
+                $taskResults += @{passed=$false; edition=$taskEdition; mode=$taskMode; sr_backend=$taskSr; latency_mode=$LatencyMode;
                     engine_sha256=$(if ($null -ne $taskInfo) { $taskInfo.engine_sha256 } else { $null });
                     native_sha256=$(if ($null -ne $taskInfo) { $taskInfo.native_sha256 } else { $null });
                     analysis=(Join-Path $taskCapture 'decoded/analysis.json'); error=$_.Exception.Message}
@@ -51,7 +52,7 @@ foreach ($taskEdition in $Edition) {
 }
 $taskManifest = Join-Path $taskRoot ".local/godot/$taskRun.json"
 $taskFailed = @($taskResults | Where-Object { !$_.passed })
-@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
+@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; graphics_api=$GraphicsApi; latency_mode=$LatencyMode; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
 Write-Output "Visual test manifest: $taskManifest"
 $taskRows = foreach ($taskCase in $taskResults) {
     $taskState = if ($taskCase.passed) { 'PASS' } else { 'FAIL' }

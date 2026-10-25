@@ -26,6 +26,9 @@ void RenderingDeviceDriverVulkan::rescaleframe_unlock_queues(void *user) {
 bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, void *opaque_chain, const void *info, const void *allocation_callbacks) {
     auto *queue = reinterpret_cast<CommandQueue *>(queue_id.id);
     auto *chain = static_cast<SwapChain *>(opaque_chain);
+    const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(chain->surface);
+    if (!surface || !surface->rescaleframe_primary) return false;
+    if (OS::get_singleton()->get_environment("RSF_GODOT_NATIVE_WSI") == "1") return false;
     if (!RSFGodot::vulkan_enabled() || !rescaleframe_timeline || queue->queue_index != 0 || queue_families[queue->queue_family].size() < 4) return false;
     chain->rescaleframe_driver = this; chain->rescaleframe_family = queue->queue_family;
     rsf_fgvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_FGVK_ABI_VERSION;
@@ -54,15 +57,33 @@ bool RenderingDeviceDriverVulkan::rescaleframe_drain(void *opaque_chain) {
 }
 VkResult RenderingDeviceDriverVulkan::rescaleframe_images(void *opaque_chain, uint32_t *count, VkImage *images) {
     auto *chain = static_cast<SwapChain *>(opaque_chain);
-    return chain->rescaleframe_owner ? VkResult(RSFGodot::vk_images(chain->rescaleframe_owner, count, reinterpret_cast<uint64_t *>(images))) :
-        device_functions.GetSwapchainImagesKHR(vk_device, chain->vk_swapchain, count, images);
+    if (chain->rescaleframe_owner) return VkResult(RSFGodot::vk_images(chain->rescaleframe_owner, count, reinterpret_cast<uint64_t *>(images)));
+    struct Lease { PFN_vkGetSwapchainImagesKHR call; VkDevice device; VkSwapchainKHR chain; uint32_t *count; VkImage *images; };
+    Lease lease{device_functions.GetSwapchainImagesKHR, vk_device, chain->vk_swapchain, count, images};
+    return VkResult(RSFGodot::vk_wsi_call([](void *user) -> int32_t {
+        const auto &value = *static_cast<Lease *>(user); return value.call(value.device, value.chain, value.count, value.images);
+    }, &lease));
 }
 VkResult RenderingDeviceDriverVulkan::rescaleframe_acquire(void *opaque_chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t *index) {
     auto *chain = static_cast<SwapChain *>(opaque_chain);
-    return chain->rescaleframe_owner ? VkResult(RSFGodot::vk_acquire(chain->rescaleframe_owner, timeout, reinterpret_cast<uint64_t>(semaphore), reinterpret_cast<uint64_t>(fence), index)) :
-        device_functions.AcquireNextImageKHR(vk_device, chain->vk_swapchain, timeout, semaphore, fence, index);
+    if (chain->rescaleframe_owner) return VkResult(RSFGodot::vk_acquire(chain->rescaleframe_owner, timeout, reinterpret_cast<uint64_t>(semaphore), reinterpret_cast<uint64_t>(fence), index));
+    struct Lease { PFN_vkAcquireNextImageKHR call; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t *index; };
+    Lease lease{device_functions.AcquireNextImageKHR, vk_device, chain->vk_swapchain, timeout, semaphore, fence, index};
+    return VkResult(RSFGodot::vk_wsi_call([](void *user) -> int32_t {
+        const auto &value = *static_cast<Lease *>(user); return value.call(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
+    }, &lease));
 }
 VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_id, const VkPresentInfoKHR *info, VectorView<SwapChainID> chains, bool submitted) {
+    // PCL belongs to the root window, independently of the active WSI/FG owner.
+    struct PresentScope {
+        uint64_t window = 0;
+        ~PresentScope() { if (window) RSFGodot::vk_present_marker(window, 0); }
+    } scope;
+    for (uint32_t i = 0; i < chains.size(); ++i) {
+        const auto *chain = reinterpret_cast<SwapChain *>(chains[i].id);
+        const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(chain->surface);
+        if (surface && RSFGodot::vk_present_marker(surface->rescaleframe_window, 1)) { scope.window = surface->rescaleframe_window; break; }
+    }
     auto *queue = reinterpret_cast<CommandQueue *>(queue_id.id);
     if (chains.size() == 1) {
         auto *chain = reinterpret_cast<SwapChain *>(chains[0].id);
@@ -109,13 +130,14 @@ VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_
             one.swapchainCount = one.waitSemaphoreCount = 1;
             one.pSwapchains = &chain->vk_swapchain; one.pImageIndices = &chain->image_index;
             one.pWaitSemaphores = &chain->present_semaphores[chain->image_index]; one.pResults = info->pResults ? &info->pResults[i] : nullptr;
-            VkResult item = chain->rescaleframe_owner ? VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, &one)) : device_functions.QueuePresentKHR(graphics, &one);
+            VkResult item = chain->rescaleframe_owner ? VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, &one)) :
+                VkResult(RSFGodot::vk_native_present(reinterpret_cast<uint64_t>(device_functions.QueuePresentKHR), graphics, &one));
             if (one.pResults) *one.pResults = item;
             if (item != VK_SUCCESS) result = item;
         }
         return result;
     }
-    return device_functions.QueuePresentKHR(graphics, info);
+    return VkResult(RSFGodot::vk_native_present(reinterpret_cast<uint64_t>(device_functions.QueuePresentKHR), graphics, info));
 }
 
 void *RenderingDeviceDriverVulkan::rescaleframe_begin(CommandBufferID id) {

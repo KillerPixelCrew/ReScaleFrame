@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_fg_vulkan.h>
+#include <rescaleframe/native_latency_vulkan.h>
 #include <memory>
 #include <cmath>
 
@@ -8,6 +9,7 @@
 #include <ffx_api/ffx_framegeneration.h>
 #include <ffx_api/vk/ffx_api_vk.h>
 #include "../../backends/common/frame_capture_vk.h"
+#include "../../vulkan/fsr3/wsi-dispatch.h"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -37,6 +39,11 @@ struct rsf_fgvk {
     PfnFfxQuery query = nullptr;
     PfnFfxDispatch dispatch = nullptr;
     PfnFfxConfigure configure = nullptr;
+    rsf_ffx_set_wsi_dispatch wsi_dispatch = nullptr;
+    bool wsi_registered = false;
+    PFN_vkQueuePresentKHR native_present = nullptr;
+    PFN_vkAcquireNextImageKHR native_acquire = nullptr;
+    PFN_vkGetSwapchainImagesKHR native_images = nullptr;
     ffxQueryDescSwapchainReplacementFunctionsVK functions{};
     PFN_vkCreateImage create_image = nullptr;
     PFN_vkDestroyImage destroy_image = nullptr;
@@ -66,6 +73,10 @@ struct rsf_fgvk {
         if (chain && functions.pOutDestroySwapchainFFXAPI) functions.pOutDestroySwapchainFFXAPI(
             static_cast<VkDevice>(setup.graphics.device), chain, allocator, swapchain);
         if (swapchain && destroy) (void)destroy(&swapchain, nullptr);
+        if (wsi_registered && wsi_dispatch) {
+            const rsf_ffx_wsi_dispatch clear{sizeof(clear), 2, static_cast<VkDevice>(setup.graphics.device), nullptr, nullptr, nullptr, nullptr, nullptr};
+            (void)wsi_dispatch(&clear);
+        }
         for (auto& slot : slots) {
             if (slot.color.image && destroy_image) destroy_image(static_cast<VkDevice>(setup.graphics.device), slot.color.image, nullptr);
             if (slot.color.memory && free_memory) free_memory(static_cast<VkDevice>(setup.graphics.device), slot.color.memory, nullptr);
@@ -77,6 +88,28 @@ struct rsf_fgvk {
     }
 };
 namespace {
+VkResult VKAPI_PTR serialized_acquire(VkDevice device, VkSwapchainKHR chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
+    auto* self = owner.load();
+    if (!self || self->setup.graphics.device != device || !self->native_acquire) return VK_ERROR_INITIALIZATION_FAILED;
+    struct Lease { PFN_vkAcquireNextImageKHR call; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t* index; };
+    Lease lease{self->native_acquire, device, chain, timeout, semaphore, fence, index};
+    return VkResult(rsf_latencyvk_wsi_call([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
+    }, &lease));
+}
+VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
+    auto* self = owner.load();
+    if (!self || self->setup.graphics.device != device || !self->native_images) return VK_ERROR_INITIALIZATION_FAILED;
+    struct Lease { PFN_vkGetSwapchainImagesKHR call; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
+    Lease lease{self->native_images, device, chain, count, images};
+    return VkResult(rsf_latencyvk_wsi_call([](void* user) -> int32_t {
+        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.chain, value.count, value.images);
+    }, &lease));
+}
+VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* info) {
+    auto* self = owner.load();
+    return self && self->native_present ? VkResult(rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(self->native_present), queue, info)) : VK_ERROR_INITIALIZATION_FAILED;
+}
 PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
     auto* self = owner.load();
     if (!self || self->setup.graphics.device != device) return nullptr;
@@ -245,6 +278,16 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_set
     if (!memory) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     memory(static_cast<VkPhysicalDevice>(graphics.physical_device), &self->memory_properties);
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory_properties)) return RSF_BACKEND_ERROR_INIT_FAILED;
+    self->wsi_dispatch = reinterpret_cast<rsf_ffx_set_wsi_dispatch>(GetProcAddress(self->module, "rsfFfxSetVulkanWsiDispatch"));
+    if (!self->wsi_dispatch) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->native_present = reinterpret_cast<PFN_vkQueuePresentKHR>(graphics.device_proc(graphics.device, "vkQueuePresentKHR"));
+    self->native_acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(graphics.device_proc(graphics.device, "vkAcquireNextImageKHR"));
+    self->native_images = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(graphics.device_proc(graphics.device, "vkGetSwapchainImagesKHR"));
+    const rsf_ffx_wsi_dispatch wsi{sizeof(wsi), 2, static_cast<VkDevice>(graphics.device),
+        reinterpret_cast<PFN_vkCreateSwapchainKHR>(graphics.device_proc(graphics.device, "vkCreateSwapchainKHR")),
+        reinterpret_cast<PFN_vkDestroySwapchainKHR>(graphics.device_proc(graphics.device, "vkDestroySwapchainKHR")), serialized_present, serialized_acquire, serialized_images};
+    if (!wsi.create || !wsi.destroy || !self->native_present || !self->native_acquire || !self->native_images || self->wsi_dispatch(&wsi) != 0) return RSF_BACKEND_ERROR_INIT_FAILED;
+    self->wsi_registered = true;
     ffxCreateContextDescFrameGenerationSwapChainVK create{}; create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
     create.physicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device); create.device = static_cast<VkDevice>(graphics.device);
     create.swapchain = &self->chain; create.allocator = self->allocator; create.createInfo = info;

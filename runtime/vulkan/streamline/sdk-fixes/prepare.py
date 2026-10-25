@@ -229,6 +229,79 @@ replace("source/core/sl.security/secureLoadLibrary.cpp",
 #endif
     HMODULE mod = {};''')
 
+# Godot supplies individual 1.3 features. The SDK only merges synchronization2
+# in that branch, and its compute backend creates private-data slots based on
+# function availability rather than the enabled feature. Keep the ABI unchanged
+# and publish the actual enablement through the existing shared parameter store.
+wrapper = "source/core/sl.interposer/vulkan/wrapper.cpp"
+replace(wrapper, "std::unordered_set<std::string> requiredSLPhysicalDevice13FeatureNames{};",
+        'std::unordered_set<std::string> requiredSLPhysicalDevice13FeatureNames{"privateData"};')
+replace(wrapper, "VkPhysicalDevicePrivateDataFeatures*                    pClientPrivateDataFeatures{};",
+        "VkPhysicalDevicePrivateDataFeatures                     privateDataFeatures{}, *pClientPrivateDataFeatures{};")
+replace(wrapper, "            if ((requiredSLPhysicalDevice13Features.synchronization2 || s_vk.nativeOpticalFlowHWSupport)",
+        """            if (requiredSLPhysicalDevice13Features.privateData && supportedPhysicalDevice13Features.privateData)
+            {
+                if (!pClientPrivateDataFeatures)
+                {
+                    privateDataFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES;
+                    privateDataFeatures.pNext = (void*)createInfo.pNext;
+                    createInfo.pNext = pClientPrivateDataFeatures = &privateDataFeatures;
+                }
+                pClientPrivateDataFeatures->privateData = VK_TRUE;
+                requiredSLDeviceExtensionNames.emplace(VK_EXT_PRIVATE_DATA_EXTENSION_NAME);
+            }
+            if ((requiredSLPhysicalDevice13Features.synchronization2 || s_vk.nativeOpticalFlowHWSupport)""")
+replace(wrapper, "        std::vector<const char*> extensions;", """        if (requiredSLDeviceExtensionNames.count("VK_NV_low_latency2"))
+        {
+            // NV low_latency2 requires present_id (or present_id2). The pinned
+            // Reflex plugin requests LL2 but omits this dependency.
+            requiredSLDeviceExtensionNames.emplace(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+        }
+        std::vector<const char*> extensions;""")
+replace(wrapper, "        sl::param::getInterface()->set(sl::param::global::kVulkanSynchronization2Enabled, synchronization2Enabled);",
+        """        sl::param::getInterface()->set(sl::param::global::kVulkanSynchronization2Enabled, synchronization2Enabled);
+        bool privateDataEnabled = false;
+        for (auto* p = (const VkBaseInStructure*)createInfo.pNext; p; p = p->pNext)
+        {
+            if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES)
+                privateDataEnabled |= ((const VkPhysicalDevicePrivateDataFeatures*)p)->privateData == VK_TRUE;
+            else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
+                privateDataEnabled |= ((const VkPhysicalDeviceVulkan13Features*)p)->privateData == VK_TRUE;
+        }
+        sl::param::getInterface()->set("rsf.vulkan.privateDataEnabled", privateDataEnabled);""")
+replace(vulkan, "    if (m_ddt.CreatePrivateDataSlot)", """    bool privateDataEnabled = false;
+    m_parameters->get("rsf.vulkan.privateDataEnabled", &privateDataEnabled);
+    if (privateDataEnabled && m_ddt.CreatePrivateDataSlot)""")
+
+replace("source/platforms/sl.chi/vknvll2.cpp", """        m_swapchain = (VkSwapchainKHR)chain;
+        m_isLatencyModeEnabled = isLatencyModeEnabled;""", """        if (!isLatencyModeEnabled)
+        {
+            SL_LOG_INFO("RSF Reflex secondary swapchain ignored: %p owner=%p", (void*)chain, (void*)m_swapchain);
+            return ComputeStatus::eOk;
+        }
+        SL_LOG_INFO("RSF Reflex primary swapchain selected: %p previous=%p", (void*)chain, (void*)m_swapchain);
+        m_swapchain = (VkSwapchainKHR)chain;
+        m_isLatencyModeEnabled = true;""")
+
+replace("source/platforms/sl.chi/vknvll2.cpp", "class VkNvLowLatency2 : public IReflexVk", """namespace { std::mutex rsfLatencySwapchainMutex; }
+// Host WSI and LL2 calls share this lock. It covers the immediate Vulkan call,
+// never the subsequent timeline-semaphore wait inside Reflex sleep.
+extern "C" __declspec(dllexport) VkResult rsfSlVulkanQueuePresent(PFN_vkQueuePresentKHR present, VkQueue queue, const VkPresentInfoKHR* info)
+{
+    if (!present || !queue || !info) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> lock(rsfLatencySwapchainMutex);
+    return present(queue, info);
+}
+class VkNvLowLatency2 : public IReflexVk""")
+replace("source/platforms/sl.chi/vknvll2.cpp", "class VkNvLowLatency2 : public IReflexVk", """extern "C" __declspec(dllexport) int32_t rsfSlVulkanWsiCall(int32_t (*callback)(void*), void* user)
+{
+    if (!callback || !user) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> lock(rsfLatencySwapchainMutex);
+    return callback(user);
+}
+class VkNvLowLatency2 : public IReflexVk""")
+replace("source/platforms/sl.chi/vknvll2.cpp", "    std::mutex m_swapchainMtx;", "    std::mutex& m_swapchainMtx = rsfLatencySwapchainMutex;")
+
 (sdk / "vulkanstory-fixes.json").write_text(json.dumps({
     "sdkCommit": "2122257e0fce486f91b385aa63b9a09b0a34b363",
     "edits": edits,

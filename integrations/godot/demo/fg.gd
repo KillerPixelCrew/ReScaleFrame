@@ -20,7 +20,7 @@ func _ready() -> void:
 
 func _select(sr: int, fg: int) -> void:
     _require(runtime.call("configure", {"sr_backend": sr, "quality": 1, "fg_backend": 3,
-        "fg_mode": fg, "generated_frames": 1, "latency_mode": 0}, get_viewport().get_viewport_rid()), "Vulkan FG configuration refused")
+        "fg_mode": fg, "generated_frames": 1, "latency_mode": 1}, get_viewport().get_viewport_rid()), "Vulkan FG configuration refused")
 
 func _sample(phase: String, sr: int, active: bool) -> void:
     var image := get_viewport().get_texture().get_image()
@@ -33,6 +33,7 @@ func _sample(phase: String, sr: int, active: bool) -> void:
     _require(status.active_sr == sr, "Incorrect active SR in " + phase)
     _require(status.fg_available == 1 and status.fg_backend == 3 and status.max_generated_frames == 1, "Native FSR3 FG owner missing")
     _require(status.fg_active == int(active), "Incorrect FG state in " + phase)
+    _require(status.pcl_available == 1 and status.latency_available == 1 and status.latency_mode == 1 and status.sleep_calls > 8 and status.marker_calls > 8, "PCL/Reflex missing in " + phase)
     if active:
         _require(status.generated_callbacks > 8 and status.tagged_frames > 8 and status.fg_result == 0, "Actual generation callbacks missing in " + phase)
 
@@ -47,7 +48,10 @@ func _process(_delta: float) -> void:
         "projection": _matrix(camera.get_camera_projection()), "box_world": _matrix(Projection(moving_box.global_transform))})
     var status: Dictionary = runtime.call("get_status")
     label.text = "Vulkan FSR3 FG\nSR %s, FG %s, actual generated callbacks %s" % [status.get("active_sr", 0), status.get("fg_active", 0), status.get("generated_callbacks", 0)]
-    if frame == 45:
+    if frame == 30:
+        _require(runtime.call("request_latency_ping"), "FG latency ping could not be posted")
+    elif frame == 45:
+        _require(status.pcl_pings > 0, "FG latency ping did not reach the SDK")
         _sample("sr3-fg", 3, true)
     elif frame == 60:
         _select(0, 1)
@@ -62,7 +66,9 @@ func _process(_delta: float) -> void:
         secondary.add_child(text)
         add_child(secondary)
         secondary.show()
-    elif frame == 85:
+    elif frame == 75 and is_instance_valid(secondary):
+        DisplayServer.window_set_size(Vector2i(720, 405))
+    elif frame == 88:
         _sample("sr-off-fg", 0, true)
     elif frame == 90:
         if is_instance_valid(secondary):
@@ -80,7 +86,7 @@ func _process(_delta: float) -> void:
     elif frame == 165:
         var mono_status: Dictionary = {}
         if mono_test:
-            mono_status = mono_test.call("validate_sr_mono")
+            mono_status = mono_test.call("validate_mono")
             _require(mono_status.get("passed", false), "C# facade failed")
         var file := FileAccess.open(result_path, FileAccess.WRITE)
         if file:

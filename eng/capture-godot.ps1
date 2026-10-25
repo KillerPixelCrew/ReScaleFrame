@@ -10,6 +10,7 @@ param(
     [switch]$RawProbe,
     [switch]$Mono,
     [ValidateRange(0,7)][int]$SrBackend = 0,
+    [ValidateRange(0,2)][int]$LatencyMode = 0,
     [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
     [switch]$GpuValidation
 )
@@ -17,6 +18,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
+$taskGpuLease = Enter-RsfGodotValidation
+try {
 $taskSource = Join-Path $taskRoot 'integrations/godot'
 if ($Label -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Use a simple capture label.' }
 if ($ReferenceMsaa -and !$Reference) { throw 'MSAA reference sampling requires -Reference.' }
@@ -37,7 +40,7 @@ $taskExe = (Resolve-Path -LiteralPath $EngineExe).Path
 $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash
 $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll') -Algorithm SHA256).Hash
 @{engine=$taskExe; engine_sha256=$taskEngineHash; native_sha256=$taskNativeHash;
-    first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; sr_backend=$SrBackend; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
+    first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; sr_backend=$SrBackend; latency_mode=$LatencyMode; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
     reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent;
     captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
 if ($Mono) {
@@ -78,12 +81,12 @@ try {
     $env:RSF_FRAME_CAPTURE_RESET_SR = if ($ResetSrHistory) { '1' } else { $null }
     $taskRunArgs = @('--path',$taskProject,'--rendering-method','forward_plus','--rendering-driver',$GraphicsApi,'--position','100,100','--quit-after','120')
     if ($GpuValidation) { $taskRunArgs += '--gpu-validation' }
-    $taskRunArgs += @('--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset")
+    $taskRunArgs += @('--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset","--latency=$LatencyMode")
     if ($Reference) { $taskRunArgs += '--reference' }
     if ($ReferenceMsaa) { $taskRunArgs += '--reference-msaa' }
     if ($RawProbe) { $taskRunArgs += '--raw-probe' }
     Run-Capture $taskRunArgs 'capture'
-} finally { foreach ($taskKey in $taskSaved.Keys) { [Environment]::SetEnvironmentVariable($taskKey,$taskSaved[$taskKey]) } }
+} finally { Restore-RsfGodotEnvironment $taskSaved }
 if ((Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash -ne $taskEngineHash) { throw 'Engine changed during capture; discard this run.' }
 $taskGenerated = @(Get-ChildItem -LiteralPath $taskCapture -Filter '*fg-generated-before-ui*.json')
 if (!$Reference -and !$taskGenerated.Count) { throw "No actual generated frame was captured: $taskCapture" }
@@ -91,3 +94,5 @@ $taskReport = Get-Content -Raw -LiteralPath (Join-Path $taskProject 'result.json
 if (!$taskReport.passed) { throw "Visual fixture failed: $taskProject/result.json" }
 if ($Mono -and !$taskReport.mono.passed) { throw "C# visual fixture failed: $taskProject/result.json" }
 Write-Output "Captured $($taskGenerated.Count) generated frame(s) and matching guides: $taskCapture"
+
+} finally { $taskGpuLease.ReleaseMutex(); $taskGpuLease.Dispose() }

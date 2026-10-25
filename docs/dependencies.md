@@ -47,8 +47,17 @@ The Vulkan FG SDK build additionally includes the reviewed descriptor-pool count
 and presenter CPU completion corrections, each recorded in its hash receipt.
 The pinned Streamline source (`2122257e0fce486f91b385aa63b9a09b0a34b363`)
 is prepared separately from its retail SDK archive. Its corrected Production
-common/interposer build stays ignored and is not yet part of Godot's active Vulkan
-runtime. Runtime staging continues to preserve the retail D3D12 payload.
+common/interposer build stays ignored and is staged in a separate
+`streamline-vulkan` directory for Godot PCL/Reflex. The build receipt also covers
+the low-latency extension dependency and private-data feature corrections. CMake
+checks the source recipe and binary hashes and pins the interposer bytes in the
+bridge. Runtime staging preserves the retail D3D12 payload and includes the SDK
+and Reflex notices alongside the separate Vulkan payload.
+The corrected FidelityFX Vulkan DLL also includes a first-party C ABI broker
+for native WSI callbacks. It lets Streamline observe the real primary swapchain
+and serializes acquire/image-query/Present calls with LL2 driver calls. The SDK
+receipts cover that header and the checked source changes. Primary/secondary
+window ownership remains engine-owned.
 
 ## Unity Mono DX12 adapter
 

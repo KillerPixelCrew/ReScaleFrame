@@ -3,6 +3,7 @@
 #include "vulkan_control.h"
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
+#include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
@@ -161,23 +162,31 @@ extern "C" int rsfg_configure(const rsf_godot_settings* input) try
 
 extern "C" void rsfg_cpu(const rsf_game_cpu_event* event)
 {
-    if (!booted || !event || event->struct_size < sizeof(*event)) return;
+    const bool vulkan = rsf::godot_vk::booted();
+    if ((!booted && !vulkan) || !event || event->struct_size < sizeof(*event)) return;
+    if (vulkan) rsf::godot_vk::cpu(event);
     if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) {
         const HWND window = input_window.load();
         if (window && !previous_proc) previous_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
         rsf_streamline_latency_status latency{}; latency.struct_size = sizeof(latency);
-        if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency) == RSF_BACKEND_OK)
+        if (vulkan) ping_message.store(rsf::godot_vk::ping_message());
+        else if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency) == RSF_BACKEND_OK)
             ping_message.store(latency.pcl_message_id);
     }
     if (event->stage == RSF_GAME_CPU_INPUT_EVENT) {
-        if (!(event->input_kind & ~7u) && rsf_d3d11_present_input(event->source_frame_id, event->input_kind, event->message_id) == RSF_BACKEND_OK) {
+        const bool accepted = vulkan ? rsf::godot_vk::input(event->source_frame_id, event->input_kind, event->message_id) != 0 :
+            rsf_d3d11_present_input(event->source_frame_id, event->input_kind, event->message_id) == RSF_BACKEND_OK;
+        if (!(event->input_kind & ~7u) && accepted) {
             for (uint32_t i = 0; i < 3; ++i) if (event->input_kind & (1u << i)) ++input_counts[i];
         }
         return;
     }
     if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE && ping_pending.exchange(false)) {
-        if (rsf_d3d11_present_input(event->source_frame_id, 0, ping_message.load()) == RSF_BACKEND_OK) ++input_counts[3];
+        const bool accepted = vulkan ? rsf::godot_vk::input(event->source_frame_id, 0, ping_message.load()) != 0 :
+            rsf_d3d11_present_input(event->source_frame_id, 0, ping_message.load()) == RSF_BACKEND_OK;
+        if (accepted) ++input_counts[3];
     }
+    if (vulkan) return;
     rsf_fg12_cpu(event);
     if (event->stage == RSF_GAME_CPU_FRAME_END && !event->render_expected) {
         if (auto* host = rsf_d3d11_present_host()) rsf_streamline_host_abort(host, event->source_frame_id);
@@ -308,6 +317,7 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
 
 extern "C" void rsfg_render_begin(uint64_t frame) try
 {
+    if (rsf::godot_vk::booted()) { rsf::godot_vk::render_begin(frame); return; }
     if (!booted) return;
     current_render_frame = frame;
     if (!frame) return;
@@ -355,7 +365,15 @@ extern "C" void rsfg_present(void* chain)
 extern "C" int rsfg_status(rsf_godot_status* output) try
 {
     if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_ABI_VERSION) return 0;
-    if (rsf::godot_vk::booted()) return rsf::godot_vk::status(output);
+    if (rsf::godot_vk::booted()) {
+        if (!rsf::godot_vk::status(output)) return 0;
+        output->keyboard_inputs = input_counts[0].load(); output->mouse_inputs = input_counts[1].load();
+        output->controller_inputs = input_counts[2].load(); output->pcl_pings = input_counts[3].load();
+        DWORD foreground = 0; GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
+        output->foreground_process_id = foreground; output->window_foreground = foreground == GetCurrentProcessId();
+        output->window_visible = IsWindowVisible(input_window.load()) ? 1u : 0u;
+        return 1;
+    }
     if (!booted) return 0;
     rsf_godot_status value;
     { std::lock_guard lock(guard); value = status; }
@@ -401,16 +419,31 @@ extern "C" int rsfg_request_latency_ping(void)
 {
     const uint32_t message = ping_message.load();
     const HWND window = input_window.load();
-    return booted && window && message >= 0xc000u && PostMessageW(window, message, 0, 0) ? 1 : 0;
+    return (booted || rsf::godot_vk::booted()) && window && message >= 0xc000u && PostMessageW(window, message, 0, 0) ? 1 : 0;
 }
+extern "C" void rsfg_vk_window(void* window) {
+    if (rsf::godot_vk::booted()) accept(nullptr, window);
+}
+extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
+    if (!rsf::godot_vk::booted() || !window || reinterpret_cast<uint64_t>(input_window.load()) != window) return 0;
+    rsf_latencyvk_present(begin);
+    return 1;
+}
+extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
+    return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(callback), owning_queue, info);
+}
+extern "C" int32_t rsfg_vk_wsi_call(rsf_vk_wsi_call callback, void* user) { return rsf_latencyvk_wsi_call(callback, user); }
 
 extern "C" int rsfg_shutdown(void) try
 {
-    if (rsf::godot_vk::booted()) return rsf::godot_vk::shutdown();
     const HWND window = input_window.load();
-    if (window && previous_proc && reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == input_proc)
+    if (window && previous_proc && reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == input_proc) {
         SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous_proc));
+        previous_proc = nullptr;
+    }
+    input_window.store(nullptr); ping_pending.store(false);
     ping_message.store(0);
+    if (rsf::godot_vk::booted()) return rsf::godot_vk::shutdown();
     if (!wait(submitted) || !rsf_fg12_end_session(status.session_id)) return 0;
     if (capture) (void)capture->flush();
     rsf_sr12_destroy(context); context = nullptr;

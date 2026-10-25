@@ -19,6 +19,10 @@ FILES = (
     "drivers/d3d12/rendering_device_driver_d3d12.h",
     "drivers/vulkan/rendering_device_driver_vulkan.h",
     "drivers/vulkan/rendering_device_driver_vulkan.cpp",
+    "drivers/vulkan/rendering_context_driver_vulkan.cpp",
+    "drivers/vulkan/rendering_context_driver_vulkan.h",
+    "platform/windows/rendering_context_driver_vulkan_windows.cpp",
+    "platform/windows/rendering_context_driver_vulkan_windows.h",
     "servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp",
     "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp",
     "servers/rendering/renderer_viewport.cpp",
@@ -223,13 +227,44 @@ path = "drivers/vulkan/rendering_device_driver_vulkan.h"
 replace(path, '\tbool rescaleframe_release(void *chain);', '\tbool rescaleframe_release(void *chain);\n\tbool rescaleframe_drain(void *chain);')
 replace(path, 'const VkPresentInfoKHR *info, VectorView<SwapChainID> chains);',
         'const VkPresentInfoKHR *info, VectorView<SwapChainID> chains, bool submitted);')
+previous_latency_plan = planned.copy()
+path = "drivers/vulkan/rendering_context_driver_vulkan.cpp"
+at = planned[path].index("#include ")
+planned[path] = planned[path][:at] + INCLUDE + "\n" + planned[path][at:]
+replace(path, '\terr = _initialize_vulkan_version();',
+        '#if defined(USE_VOLK) && defined(MODULE_RESCALEFRAME_ENABLED)\n'
+        '\t// Streamline must observe instance/device creation and own all later dispatch lookups.\n'
+        '\tif (uint64_t resolver = RSFGodot::vk_resolver()) volkInitializeCustom(reinterpret_cast<PFN_vkGetInstanceProcAddr>(resolver));\n'
+        '#endif\n\n\terr = _initialize_vulkan_version();')
+previous_latency_wsi_plan = planned.copy()
+replace("drivers/vulkan/rendering_context_driver_vulkan.h", '\tstruct Surface {',
+        '\tstruct Surface {\n\t\tuint64_t rescaleframe_window = 0;')
+replace("platform/windows/rendering_context_driver_vulkan_windows.cpp", '\tsurface->vk_surface = vk_surface;',
+        '\tsurface->vk_surface = vk_surface;\n\tsurface->rescaleframe_window = reinterpret_cast<uint64_t>(wpd->window);')
+previous_latency_owner_plan = planned.copy()
+replace("platform/windows/rendering_context_driver_vulkan_windows.h", '\t\tHINSTANCE instance;',
+        '\t\tHINSTANCE instance;\n\t\tbool rescaleframe_primary;')
+replace("platform/windows/display_server_windows.cpp", '\t\twpd.vulkan.window = wd.hWnd;',
+        '\t\twpd.vulkan.window = wd.hWnd;\n\t\twpd.vulkan.rescaleframe_primary = p_window_id == DisplayServerEnums::MAIN_WINDOW_ID;')
+replace("drivers/vulkan/rendering_context_driver_vulkan.h", '\t\tuint64_t rescaleframe_window = 0;',
+        '\t\tuint64_t rescaleframe_window = 0;\n\t\tbool rescaleframe_primary = false;')
+replace("platform/windows/rendering_context_driver_vulkan_windows.cpp", '\tsurface->rescaleframe_window = reinterpret_cast<uint64_t>(wpd->window);',
+        '\tsurface->rescaleframe_window = reinterpret_cast<uint64_t>(wpd->window);\n\tsurface->rescaleframe_primary = wpd->rescaleframe_primary;')
+replace("drivers/vulkan/rendering_device_driver_vulkan.cpp", '\tVkSwapchainCreateInfoKHR swap_create_info = {};',
+        '\tVkSwapchainCreateInfoKHR swap_create_info = {};\n'
+        '\tVkSwapchainLatencyCreateInfoNV rescaleframe_latency = {};\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\tif (RSFGodot::vulkan_enabled() && context_driver->functions_get().GetDeviceProcAddr(vk_device, "vkLatencySleepNV")) {\n'
+        '\t\trescaleframe_latency.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV;\n'
+        '\t\trescaleframe_latency.latencyModeEnable = surface->rescaleframe_primary ? VK_TRUE : VK_FALSE;\n'
+        '\t\tswap_create_info.pNext = &rescaleframe_latency;\n\t}\n#endif')
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

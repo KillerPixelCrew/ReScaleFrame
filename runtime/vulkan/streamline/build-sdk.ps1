@@ -15,6 +15,7 @@ param(
     [string]$PackageCache = (Join-Path $HostRoot 'artifacts/packman-cache')
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
 $root = (Resolve-Path -LiteralPath $HostRoot).Path
 $sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -58,9 +59,10 @@ foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
     $to = Join-Path $source $file
     New-Item -ItemType Directory -Path (Split-Path $to) -Force | Out-Null
-    Copy-Item -LiteralPath $from -Destination $to
+    Copy-RsfGodotArtifact $from $to
 }
 $saved = @{}
+$libraryHashes = [ordered]@{}
 foreach ($name in @('PM_PACKAGES_ROOT','GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 try {
     $env:PM_PACKAGES_ROOT = [IO.Path]::GetFullPath($PackageCache)
@@ -73,6 +75,19 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Isolated SDK index initialization failed.' }
         & git lfs pull '--include=external/nvapi/amd64/nvapi64.lib,external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib,external/reflex-sdk-vk/lib/NvLowLatencyVk.lib' '--exclude='
         if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK build-library fetch failed.' }
+        foreach ($library in @('external/nvapi/amd64/nvapi64.lib','external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib','external/reflex-sdk-vk/lib/NvLowLatencyVk.lib')) {
+            $pointer = (& git show "${commit}:$library") -join "`n"
+            if ($LASTEXITCODE -ne 0 -or $pointer -notmatch '(?m)^oid sha256:([0-9a-f]{64})$') { throw "Pinned LFS identity missing: $library" }
+            $expected = $Matches[1]
+            $libraryHashes[$library] = $expected
+            $stagedLibrary = Join-Path $source $library
+            if ((Get-FileHash -LiteralPath $stagedLibrary).Hash -ne $expected) {
+                $referenceLibrary = Join-Path $sdk $library
+                if ((Get-FileHash -LiteralPath $referenceLibrary).Hash -ne $expected) { throw "SDK LFS content hash mismatch: $library" }
+                Copy-RsfGodotArtifact $referenceLibrary $stagedLibrary
+            }
+            if ((Get-FileHash -LiteralPath $stagedLibrary).Hash -ne $expected) { throw "Staged SDK library differs from pinned LFS content: $library" }
+        }
         & './tools/packman/packman.cmd' pull -p windows-x86_64 project.xml
         if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK dependency fetch failed.' }
         & './tools/premake5/premake5.exe' vs2022 --file=premake.lua "--with-toolset=$toolset" --with-nvllvk=yes
@@ -97,12 +112,12 @@ try {
     $binaries = [ordered]@{}
     foreach ($project in @('sl.common','sl.interposer')) {
         $name = "$project.dll"
-        Copy-Item -LiteralPath (Join-Path $source "_artifacts/$project/Production_x64/$name") -Destination $runtime
+        Copy-RsfGodotArtifact (Join-Path $source "_artifacts/$project/Production_x64/$name") (Join-Path $runtime $name)
         $binaries[$name] = (Get-FileHash -LiteralPath (Join-Path $runtime $name)).Hash
     }
-    Copy-Item -LiteralPath (Join-Path $source 'vulkanstory-fixes.json') -Destination $runtime
-    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;recipeSha256=$recipeHash;binaries=$binaries} |
+    Copy-RsfGodotArtifact (Join-Path $source 'vulkanstory-fixes.json') (Join-Path $runtime 'vulkanstory-fixes.json')
+    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;recipeSha256=$recipeHash;inputs=$libraryHashes;binaries=$binaries} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath
 } finally {
-    foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') }
+    Restore-RsfGodotEnvironment $saved
 }

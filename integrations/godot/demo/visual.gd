@@ -7,6 +7,7 @@ var reference := false
 var reference_msaa := false
 var raw_probe := false
 var sr_backend := 0
+var latency_mode := 0
 var animation_offset := 0.0
 var poses: Array[Dictionary] = []
 
@@ -24,6 +25,8 @@ func _ready() -> void:
             raw_probe = true
         if arg.begins_with("--sr="):
             sr_backend = arg.trim_prefix("--sr=").to_int()
+        if arg.begins_with("--latency="):
+            latency_mode = arg.trim_prefix("--latency=").to_int()
         if arg.begins_with("--animation-offset="):
             animation_offset = arg.trim_prefix("--animation-offset=").to_float()
     if reference:
@@ -34,7 +37,7 @@ func _ready() -> void:
             DisplayServer.window_set_size(Vector2i(1280, 720))
     control = ClassDB.instantiate("ReScaleFrameRuntime") as RefCounted
     _require(control.call("configure", {"sr_backend": 0 if reference else sr_backend, "fg_backend": 3, "fg_mode": 0 if reference else 1,
-        "generated_frames": 1, "latency_mode": 0}, get_viewport().get_viewport_rid()), "Visual capture configuration failed")
+        "generated_frames": 1, "latency_mode": latency_mode}, get_viewport().get_viewport_rid()), "Visual capture configuration failed")
     DisplayServer.window_move_to_foreground()
 
 func _process(_delta: float) -> void:
@@ -56,6 +59,8 @@ func _process(_delta: float) -> void:
     if raw_probe and frame == 32:
         effect.call("request_motion_capture")
     if frame >= 90:
+        if latency_mode:
+            _require(status.get("pcl_available", 0) == 1 and status.get("latency_available", 0) == 1 and status.get("latency_mode", 0) == latency_mode and status.get("sleep_calls", 0) > 8 and status.get("marker_calls", 0) > 8, "PCL/Reflex missing from visual capture")
         var mono_status: Dictionary = {}
         if mono_test:
             mono_status = mono_test.call("validate_sr_mono" if RenderingServer.get_current_rendering_driver_name() == "vulkan" else "validate_mono")

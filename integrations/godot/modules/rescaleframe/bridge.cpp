@@ -27,6 +27,11 @@
 namespace {
 decltype(&rsfg_boot) native_boot = nullptr;
 decltype(&rsfg_boot_vulkan) native_boot_vulkan = nullptr;
+decltype(&rsfg_vk_resolver) native_vk_resolver = nullptr;
+decltype(&rsfg_vk_window) native_vk_window = nullptr;
+decltype(&rsfg_vk_present_marker) native_vk_present_marker = nullptr;
+decltype(&rsfg_vk_native_present) native_vk_native_present = nullptr;
+decltype(&rsfg_vk_wsi_call) native_vk_wsi_call = nullptr;
 decltype(&rsfg_render_vulkan) native_render_vulkan = nullptr;
 decltype(&rsfg_vk_create) native_vk_create = nullptr;
 decltype(&rsfg_vk_images) native_vk_images = nullptr;
@@ -174,6 +179,7 @@ bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
     value.latency_mode = options.get("latency_mode", value.latency_mode);
     value.frame_limit_us = options.get("frame_limit_us", value.frame_limit_us);
     value.gameplay = options.get("gameplay", value.gameplay);
+    if (RSFGodot::vulkan_enabled()) native_vk_window(reinterpret_cast<void *>(DisplayServer::get_singleton()->window_get_native_handle(DisplayServerEnums::WINDOW_HANDLE)));
     if (!native_configure(&value)) return false;
     requested_sr.store(value.sr_backend);
     RenderingServer *rs = RenderingServer::get_singleton();
@@ -220,6 +226,7 @@ void boot() {
     if (!module) { ERR_PRINT("Cannot load ReScaleFrame's native library: " + library + " (Windows error " + itos(GetLastError()) + ")"); return; }
 #define RSF_RESOLVE(name) native_##name = reinterpret_cast<decltype(native_##name)>(GetProcAddress(module, "rsfg_" #name)); if (!native_##name) return
     RSF_RESOLVE(boot); RSF_RESOLVE(boot_vulkan); RSF_RESOLVE(render_vulkan);
+    RSF_RESOLVE(vk_resolver); RSF_RESOLVE(vk_window); RSF_RESOLVE(vk_present_marker); RSF_RESOLVE(vk_native_present); RSF_RESOLVE(vk_wsi_call);
     RSF_RESOLVE(vk_create); RSF_RESOLVE(vk_images); RSF_RESOLVE(vk_acquire); RSF_RESOLVE(vk_present); RSF_RESOLVE(vk_submitted); RSF_RESOLVE(vk_destroy);
     RSF_RESOLVE(vk_drain);
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
@@ -240,6 +247,14 @@ bool create_swapchain(void *factory, void *queue, void *window, const void *desc
     return ready && SUCCEEDED(native_create_swapchain(factory, queue, window, description, out));
 }
 bool vulkan_enabled() { return ready && OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"; }
+uint64_t vk_resolver() { return vulkan_enabled() ? reinterpret_cast<uint64_t>(native_vk_resolver()) : 0; }
+bool vk_present_marker(uint64_t window, uint32_t begin) { return vulkan_enabled() && native_vk_present_marker(window, begin); }
+int32_t vk_native_present(uint64_t callback, void* queue, const void* info) {
+    if (vulkan_enabled()) return native_vk_native_present(callback, queue, info);
+    using Present = int32_t (*)(void*, const void*);
+    return reinterpret_cast<Present>(callback)(queue, info);
+}
+int32_t vk_wsi_call(int32_t (*callback)(void*), void* user) { return vulkan_enabled() ? native_vk_wsi_call(callback, user) : callback(user); }
 bool vk_create(const void *setup, void **owner, uint64_t *chain) {
     return vulkan_enabled() && native_vk_create(static_cast<const rsf_fgvk_setup *>(setup), owner, chain) == 0;
 }

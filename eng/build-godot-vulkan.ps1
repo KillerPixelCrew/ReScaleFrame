@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Builds and stages Godot's pinned FidelityFX Vulkan runtime using local tools.
+Builds and stages Godot's pinned FidelityFX and Streamline Vulkan runtimes using local tools.
 #>
 [CmdletBinding()]
 param(
@@ -53,9 +53,18 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not create the Vulkan loader import libr
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskDev 'inputs.json') -Encoding utf8
 $taskHost = Join-Path $taskLocal 'host'
 New-Item -ItemType Directory -Force -Path $taskHost | Out-Null
-$taskOutput = Join-Path $taskHost ('artifacts/' + $taskRecipeHash.Substring(0,16).ToLowerInvariant())
+$taskInputHashes = @($taskRecipeHash)
+foreach ($taskInput in @('wsi-dispatch.h','sdk-fixes/luma-history-format.json','sdk-fixes/swapchain-lifetime.json','sdk-fixes/fsr2-storage-formats.json','sdk-fixes/descriptor-pool-size.json','sdk-fixes/presenter-cpu-drain.json')) {
+    $taskInputHashes += (Get-FileHash -LiteralPath (Join-Path (Split-Path $taskRecipe) $taskInput)).Hash
+}
+$taskBuildKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($taskInputHashes -join ':'))))
+$taskOutput = Join-Path $taskHost ('artifacts/' + $taskBuildKey.Substring(0,16).ToLowerInvariant())
 & $taskRecipe -HostRoot $taskHost -SdkRoot $taskSdk -OutputDirectory $taskOutput -VulkanSdkRoot $taskDev -Parallel $Parallel -ShaderThreads $ShaderThreads
 foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt','fsr3-sdk-build.json')) {
     Copy-RsfGodotArtifact (Join-Path $taskOutput "runtime/$taskFile") (Join-Path $taskLocal "runtime/$taskFile")
 }
-Write-Output 'Vulkan SR payload staged. Run eng/build-godot.ps1 -StageRuntime to include it in the add-on.'
+& (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1') -HostRoot $taskHost `
+    -SdkRoot (Join-Path $taskRoot 'references/godot/streamline') `
+    -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-pcl-wsi') `
+    -Python (Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe')
+Write-Output 'Vulkan SR/FG/PCL payloads built. Run eng/build-godot.ps1 -StageRuntime to include them in the add-on.'

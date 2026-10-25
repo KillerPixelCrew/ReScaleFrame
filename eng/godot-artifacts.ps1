@@ -1,4 +1,28 @@
 # Shared artifact paths and copies for the Godot build and validation scripts.
+function Enter-RsfGodotValidation {
+    # Foreground ownership is part of the FG acceptance contract. Separate
+    # scripts must not steal focus from one another while a player is running.
+    $taskLease = [Threading.Mutex]::new($false, 'Local\ReScaleFrame.Godot.ForegroundValidation')
+    try {
+        try { $taskAcquired = $taskLease.WaitOne([TimeSpan]::FromMinutes(15)) }
+        catch [Threading.AbandonedMutexException] { $taskAcquired = $true }
+        if (!$taskAcquired) { throw 'Another Godot validation still owns the foreground GPU fixture.' }
+        return $taskLease
+    } catch { $taskLease.Dispose(); throw }
+}
+
+function Restore-RsfGodotEnvironment([hashtable]$Snapshot) {
+    foreach ($taskVariable in $Snapshot.Keys) {
+        if ($null -eq $Snapshot[$taskVariable]) {
+            # String argument conversion passes an empty string to the .NET
+            # setter. On .NET 9 that leaves the variable present.
+            Remove-Item -LiteralPath ('Env:' + $taskVariable) -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($taskVariable, $Snapshot[$taskVariable])
+        }
+    }
+}
+
 function Copy-RsfGodotArtifact([string]$Source, [string]$Destination) {
     $taskSourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
     if ((Test-Path -LiteralPath $Destination) -and (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -eq $taskSourceHash) { return }

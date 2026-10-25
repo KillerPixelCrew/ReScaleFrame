@@ -18,6 +18,7 @@ param(
     [ValidateRange(1,4)][int]$ShaderThreads = 1
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
 $projectRoot = (Resolve-Path -LiteralPath $HostRoot).Path
 $sdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
@@ -32,6 +33,8 @@ if ($LASTEXITCODE -ne 0 -or $commit -ne $fix.sdkCommit) { throw 'The FSR3 correc
 $dirty = & git -C $sdkRoot status --porcelain --untracked-files=no
 if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'FidelityFX SDK tracked sources must be unchanged before staging.' }
 $recipeHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+$wsiHeader = Join-Path $PSScriptRoot 'wsi-dispatch.h'
+$wsiHeaderHash = (Get-FileHash -LiteralPath $wsiHeader).Hash
 $fixHash = (Get-FileHash -LiteralPath $fixPath -Algorithm SHA256).Hash
 $lifetimeFixPath = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-lifetime.json'
 $lifetimeFix = Get-Content -LiteralPath $lifetimeFixPath -Raw | ConvertFrom-Json
@@ -62,7 +65,7 @@ if (Test-Path -LiteralPath $output) {
             $cached.buildRecipeSha256 -eq $recipeHash -and $cached.swapchainLifetimePatchSha256 -eq $lifetimeFixHash -and
             $cached.fsr2StoragePatchSha256 -eq $storageFixHash -and $cached.shaderCompilerSha256 -eq $glslangHash -and
             $cached.descriptorPoolPatchSha256 -eq $poolFixHash -and
-            $cached.presenterCpuDrainPatchSha256 -eq $cpuFixHash -and
+            $cached.presenterCpuDrainPatchSha256 -eq $cpuFixHash -and $cached.wsiDispatchHeaderSha256 -eq $wsiHeaderHash -and
             $cached.runtimeSha256 -eq (Get-FileHash -LiteralPath $cachedBinaryPath -Algorithm SHA256).Hash) {
             Write-Host "Using verified corrected FidelityFX runtime: $cachedBinaryPath"
             return
@@ -150,6 +153,7 @@ foreach ($replacement in $cpuFix.replacements) {
     }
     [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
 }
+Copy-RsfGodotArtifact $wsiHeader (Join-Path $source 'sdk/src/backends/vk/FrameInterpolationSwapchain/rsf-wsi-dispatch.h')
 # The SDK otherwise gives every shader compiler the entire host CPU thread count.
 # Limit only staged build scheduling; shader flags and permutations remain identical.
 $shaderCommands = Join-Path $source 'sdk/include/FidelityFX/gpu/CMakeCompileShaders.txt'
@@ -175,7 +179,7 @@ $built = Join-Path $source "ffx-api/bin/$binaryName"
 if (-not (Test-Path -LiteralPath $built -PathType Leaf)) { throw "The SDK build did not produce $built" }
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 $destination = Join-Path $runtime 'amd_fidelityfx_vk.dll'
-Copy-Item -LiteralPath $built -Destination $destination
+Copy-RsfGodotArtifact $built $destination
 $receipt = [ordered]@{
     schema=1; fix=$fix.id; upstream=$fix.upstream; sdkCommit=$commit; configuration=$Configuration
     callback=$fix.file; sourceBeforeSha256=$beforeHash; sourceAfterSha256=$afterHash
@@ -183,6 +187,7 @@ $receipt = [ordered]@{
     fsr2StoragePatchSha256=$storageFixHash
     descriptorPoolPatchSha256=$poolFixHash
     presenterCpuDrainPatchSha256=$cpuFixHash
+    wsiDispatchHeaderSha256=$wsiHeaderHash
     runtimeSha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
     cmake=$cmake; compiler=$compiler; generator=$generator; vulkanSdk=$vulkanRoot
     parallel=$Parallel; shaderThreads=$ShaderThreads

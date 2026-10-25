@@ -701,11 +701,198 @@ This is a source build, not Godot Vulkan PCL/DLSS acceptance. It is not staged
 over the active retail D3D12 SDK. The NVIDIA skill catalog had no close
 Streamline/Reflex match; the pinned SDK source remains the integration reference.
 
+## Native Vulkan PCL/Reflex, 25 October 2026
+
+The question was whether Godot could run PCL/Reflex before input polling and
+retain matching simulation, render and Present identity without a camera, SR or
+an FG presentation owner. The D3D12 host already supplied those boundaries, but
+the Vulkan adapter still refused latency options. Attaching marker calls to the
+3D callback would omit camera-free frames and place sleep after input.
+
+The native runtime now initializes Streamline before Vulkan instance creation.
+The guarded Godot context patch installs its instance resolver through
+`volkInitializeCustom`, so instance/device creation and subsequent instance and
+device dispatch lookups share the interposer. The same private runtime module
+stays mapped through Godot device/instance destruction after SDK shutdown.
+The reusable `native_latency_vulkan.h` interface has size/version-checked setup
+and status structures. It preserves frame-limit units in microseconds.
+
+CPU frame begin obtains a token before Windows input polling. Pacing applies
+Reflex Off/On/Boost and sleeps once for that source frame. Simulation markers
+follow the existing engine boundaries; render-submit start occurs at the queued
+RenderingServer draw boundary. The pinned SDK retains only six frame tokens.
+The host keeps a bounded identity map and checks the SDK token's current index
+before use. A late pacing event cannot sleep using a newer frame's token.
+Nonrendered frames are aborted, and duplicate common markers are suppressed.
+
+The Win32 surface records its HWND, so Present markers follow the actual root
+window on both native Godot WSI and the FSR proxy. They do not depend on a 3D
+callback or a captured FG input. A completed source identity is consumed once;
+secondary windows cannot reuse it. The actual registered Windows ping message
+passes through the input window procedure to a PCL marker on the CPU source
+token. Godot input events use that token too. Keyboard/mouse event counters
+retain real engine dequeue timing; controller input emits marker 13 once per
+source. Keyboard/mouse events do not spoof controller or deprecated input
+markers. Synthetic keyboard, mouse and controller events in the fixture test
+that route; they are not physical-device input tests.
+
+The first device-validation run reached the SDK but failed with two concrete
+API errors: enabling `VK_NV_low_latency2` omitted its `VK_KHR_present_id`
+dependency, and the compute backend called `vkCreatePrivateDataSlot` without
+the privateData feature. Source inspection of the pinned interposer and compute
+backend explained both errors. The guarded SDK build now adds the dependency,
+merges privateData when supported, publishes actual feature enablement through
+the shared parameter store and creates private-data slots only when enabled.
+This preserves the internal VkTable ABI used by the signed retail plugins.
+The SDK's older Vulkan headers lack the LL2 extension-name macro, so the
+dependency check uses its registered string name.
+
+The initial PCL device-validation build was staged separately in `streamline-vulkan`.
+Its receipt at
+`.local/godot/vulkan/host/artifacts/streamline-production-pcl/runtime/streamline-sdk-build.json`
+records source `2122257e0fce486f91b385aa63b9a09b0a34b363`, correction hash
+`30797A862E07B1EABA2B00F42F5C946C35C575F5960CCC72A1431E9307A0C392`,
+common DLL hash
+`868A02D49F383997035B868B4F1ED98B5168EBCD5F1BD16C4F7AEE2D22AB7272`
+and interposer hash
+`69C41F12B6E5D0D66347E88900319A4CC7257351C00C53750214B679FD178139`.
+CMake checks recipe/correction/binary hashes and embeds the interposer pin.
+Staging retains the signed PCL/Reflex binaries and notices. D3D12 uses its
+existing separate retail SDK directory.
+
+Bounded Windows/RTX 5080 evidence, with the recorded Khronos layer actually
+loaded and core validation enabled:
+
+| Receipt under `.local/godot` | Scope |
+| --- | --- |
+| `validation-20261025-154458-090.json` | Standard/.NET camera-free native WSI, no FG owner, On/Boost/Off, resize, synthetic inputs and ping |
+| `validation-20261025-154516-266.json` | Same PCL fixture using the FSR presentation owner with SR/FG Off |
+| `validation-20261025-154534-250.json` | Standard/.NET FSR3 FG with PCL, SR-independent generation, Off/resume, resize, secondary window, C# and raw GPU frames |
+| `validation-20261025-154556-487.json` | Standard/.NET SR switching/reset/resize, actual raw image checks and C# |
+| `validation-20261025-154619-206.json` | Standard/.NET D3D12 SR/FG/MFG/PCL regression |
+| `visual-20261025-153904-884.json/.html` | 12 PCL-enabled Vulkan image cases, 48 actual generated images, SR Off/FSR3, object/camera/combined motion and both editions |
+
+The 12-case image suite passes unchanged gates with new 8x MSAA independent
+midpoint references. Maximum material-centroid displacement is
+0.335802173 output pixels; maximum motion p95 error is 0.001875748 render
+pixels, camera metadata p95 error 0.000018796 render pixels, and fitted raster
+jitter error 0.008119276 pixels. The .NET combined-motion frame 14 comparison
+was also opened for visual inspection. These simple scenes do not establish
+broad image quality. PCL availability, accepted markers/sleeps and report
+availability do not measure input-to-display latency reduction.
+
+The image suite used standard engine hash
+`BFB655A0827800DCBE4FB32112B1A062C2A779B803260DE0245CA1938FB9907A`,
+.NET hash
+`2B5418A69CE269FA1CF1AC4BB8E6E12F10BD6F52DD844DC3F2BD2623371686A5`
+and native runtime
+`5EC71F23CB49EA952D0D879954A4E9161E14E9D761E82808BB92445CD224AB13`.
+The later functional receipts use the explicit test-flag correction and session
+cleanup, with standard engine
+`31A03F40ECD5C6962C49630E138658FF19CA5ED2A3AC45F274EDF9AB64576448`,
+.NET engine
+`16FD6A0552CAB85D751E1DA2F92482C7EEFFA8E2C646C1E92E8DC7E1FAA1FAC6`
+and native runtime
+`F7329FD12D3B032BD588ADF1C518230018532E8DADAA734E415B793B8C7EB372`.
+Each receipt and capture fingerprints its actual binaries, rather than relying
+on these filenames alone. Template/export acceptance above belongs to earlier
+D3D12 binaries; Vulkan templates have not yet been rebuilt for this increment.
+
+Failed controls remain preserved. `pcl-20261025-152921-681` omitted the layer
+environment; the harness stopped it when the required DLL was absent.
+`pcl-20261025-152953-821` reached PCL but failed the two device API checks above.
+`fg-20261025-153857-570` accidentally retained the native-WSI diagnostic flag as
+an empty environment variable, so it had no FG owner and rejected FG options.
+A separate .NET/PowerShell probe confirmed that assigning null through the
+string setter leaves an empty variable present. The control now requires the
+value `1`, and environment restoration removes originally absent variables.
+Named Windows mutexes serialize foreground validation across scripts. These
+failures were not converted into acceptance or removed from the evidence.
+
+These early PCL counters were not proof of a driver sleep target. A later
+ownership audit found that FSR's swapchain code calls the system loader directly,
+so Streamline never observed its real primary swapchain. Its LL2 backend can
+return success with no current swapchain. The first secondary window then became
+the most recently created chain. The earlier image results remain SR/FG evidence,
+but do not establish PCL driver ownership.
+
+The engine now carries explicit primary-window identity from Win32 platform
+data to the Vulkan surface and sets the NV latency-mode creation flag only for
+that window. The corrected LL2 backend ignores secondary chains. A private FSR
+WSI dispatch ABI 2 routes real create/destroy, image queries, acquire and Present
+through host callbacks with explicit synchronous leases. Native Godot WSI uses
+the same broker. The callbacks never retain caller data or Godot objects.
+
+Routing real WSI exposed two further validation failures:
+`fg-20261025-160843-868` reported overlapping `vkSetLatencyMarkerNV`/sleep and
+the AMD presenter thread's `vkQueuePresentKHR`;
+`fg-20261025-161808-125` showed the corresponding `vkAcquireNextImageKHR`
+race after Present alone was serialized. The final broker uses the LL2 backend's
+own mutex for the immediate WSI/latency calls, including acquire/image queries.
+The blocking timeline wait after Reflex sleep stays outside that SDK mutex.
+Reflex options are refreshed once per CPU source frame, so an unchanged mode
+and microsecond interval reach a resized successor. The simulation thread ID is
+preserved when the Reflex API forwards PCL options.
+
+The final corrected SDK receipts are:
+
+- Streamline: `vulkan/host/artifacts/streamline-production-pcl-wsi/runtime/streamline-sdk-build.json`,
+  correction hash `6DBB51FDCA4CF230178AFFDB1594BFE55C9182D4AF66C7283E23165C9F78D5E8`,
+  common DLL `4905A476770CDFD7AEA03C0216B13B8CD781082C89D03566FBCC374F15CC1607`,
+  interposer `C3D186BC196F14D907A2008B40CC4E2B3D026483A3A6BB44759026781AFF6B6F`.
+- FidelityFX: `vulkan/runtime/fsr3-sdk-build.json`, runtime DLL
+  `273AA4A84B3BE01AFE0F0CA111B291BB37BD9A94F703DC39EC1A96D8B788288D`,
+  WSI header `BA7EEFF4CD344F8636740A3397EE54AF3564790D154280B3068A1FDE4F8A9FB3`.
+
+The first SDK ownership build also stopped at a corrupt staged NVAPI library:
+its hash was `753CA1D58DB01F810D1185778E9D6016D0AC91DD851D6B04FF4277AA453DBE6A`,
+while the pinned LFS pointer and clean reference both require
+`901E479E548D41C30688C7481F0C6353C0BE7FDEE978796D27D87C32E19CE172`.
+That failed output remains under `streamline-production-pcl-owners-corrupt-nvapi`.
+The builder now verifies copies, checks the three build libraries against their
+LFS content identities and records those identities in the receipt. The cause
+of the mismatched copy was not established. It also restores originally absent
+Git environment variables by removing them, rather than leaving empty values.
+
+Final acceptance after these corrections:
+
+| Receipt under `.local/godot` | Scope |
+| --- | --- |
+| `validation-20261025-162924-233.json` | Standard/.NET FG/PCL, SR Off, Off/resume, C#, actual GPU dumps, primary resize while a secondary window remains open, and asserted SDK owner traces; core validation passes |
+| `validation-20261025-162947-366.json` | Standard/.NET camera-free native WSI with no FG owner, On/Boost/Off, resize, synthetic input and ping; core validation passes |
+| `visual-20261025-163005-264.json/.html` | Four combined-motion cases, SR Off/FSR3 and both editions, with PCL enabled; 16 actual generated images pass against new independent MSAA midpoint references |
+
+The final image suite's maximum material-centroid displacement is 0.273574387
+output pixels. Its scope is combined motion; the earlier 12-case suite supplies
+separate object/camera SR/FG evidence, not final PCL ownership evidence.
+The final standard engine hash is
+`E60D28D55689EF5DA3E28A98023032E21C6EB8C5264B5BF224EAF41AEB0034EF`,
+the .NET engine hash is
+`64E12816663F9840EAB59C4757A9161C8528775820B5CF5FF7EA585A71FD2218`,
+and the staged, GPU-tested native DLL is
+`15A17E960B77F87C66957EBB16EB6B8B1971885AC81EDB164997A70B0107EF23`.
+The native gate subsequently relinked the DLL as
+`1DF5C8A3B16C2D0047B8DD520F104117F5C520A1EB947C8EC2AB003FCDAF2C5D`.
+An explicit binary comparison found only two differing bytes, in the PE and
+debug-directory timestamps; code and other sections match. The receipt is
+`native-built-vs-staged-final-pcl.json`. The GPU-tested staged payload remains
+preserved. The explicit device fixture also passed 24 FSR2/FSR3 GPU dispatches,
+readback/reset and foreign-device checks against the final FidelityFX DLL.
+
+The native Release gate adds synthetic SDK-boundary tests for ABI refusal,
+microsecond options, token expiry, duplicate pacing/markers, aborted frames,
+Present identity consumption, session reinitialization, and WSI callback routing
+and retirement. They are not GPU SDK tests. The gate discovers 56 tests,
+executes 47 and skips nine opt-in fixtures;
+formatting and Clippy pass. The native Vulkan service and Godot private exports
+do not change game ABI 13 or game-plugin readiness flags.
+
 ## Remaining work and validation limits
 
 Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan
 FSR3 FG has a completed-frame presentation owner and real submission identity,
-with the bounded evidence above. Vulkan PCL, other FG/SR providers,
+with the bounded evidence above. Vulkan PCL has the engine/device evidence above.
+Other FG/SR providers,
 synchronization validation and broader acceptance remain unfinished. Any interop route needs
 same-adapter external memory/fences and graph-owned submission splits. The Unity
 Vulkan queue-access API cannot be assumed to exist in Godot.

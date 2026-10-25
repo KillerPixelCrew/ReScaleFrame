@@ -37,6 +37,10 @@ RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID moti
     const Projection &to_previous, const Vector2 &jitter);
 void release_motion();
 bool vulkan_enabled();
+uint64_t vk_resolver();
+bool vk_present_marker(uint64_t window, uint32_t begin);
+int32_t vk_native_present(uint64_t callback, void* queue, const void* info);
+int32_t vk_wsi_call(int32_t (*callback)(void*), void* user);
 bool vk_create(const void *setup, void **owner, uint64_t *chain);
 int32_t vk_images(void *owner, uint32_t *count, uint64_t *images);
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index);

@@ -47,7 +47,14 @@ a presenter CPU retirement race; guarded staged corrections address both.
 The corrected SR Off/FSR3 image suite passes all 12 standard/.NET cases and 48
 actual generated frames against new MSAA midpoint references.
 Synchronization-validation present hazards also reproduce in official Godot and
-remain unresolved. Vulkan PCL and other providers remain unfinished. The SR-only readback checks do not
+remain unresolved. Vulkan PCL/Reflex now has a reusable native service, early
+Streamline dispatch, CPU/source token tracking and root-window Present markers.
+Standard/.NET camera-free fixtures cover On/Boost/Off, resize, synthetic input
+and diagnostic pings, including a control with no FG presentation owner. A
+SR Off/FSR3 image suite retains 12 passing cases and 48 actual generated
+frames. The final PCL ownership/synchronization path additionally passes four
+combined-motion cases and 16 actual generated images. Real WSI callbacks now
+use a versioned C ABI broker, and primary/secondary SDK ownership is asserted. Other Vulkan providers remain unfinished. The SR-only readback checks do not
 establish Vulkan image-quality acceptance. For DX12, resetting only selected
 FSR2 history frames removes most measured source displacement; this diagnostic
 does not fix the normal temporal path. The 30-case image suite still fails.

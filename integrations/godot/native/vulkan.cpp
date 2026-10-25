@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "vulkan_control.h"
 #include <rescaleframe/native_sr_vulkan.h>
+#include <rescaleframe/native_latency_vulkan.h>
 #include <windows.h>
 #include <mutex>
 #include <string>
@@ -35,12 +36,13 @@ bool retire() {
 namespace rsf::godot_vk {
 bool booted() { return active; }
 int configure(const rsf_godot_settings* value) {
-    // These paths are added independently. Do not accept unavailable FG/PCL or
+    // These paths are added independently. Do not accept unavailable FG or
     // silently substitute an FSR3 provider for a requested DLSS/XeSS/FSR4 path.
-    if (!active || value->latency_mode ||
+    if (!active ||
         !(value->sr_backend == 0 || value->sr_backend == 2 || value->sr_backend == 3 || value->sr_backend == 6 || value->sr_backend == 7)) return 0;
     std::lock_guard lock(guard);
     if (value->fg_mode && (!presentation || value->generated_frames != 1 || !(value->fg_backend == 3 || value->fg_backend == 7))) return 0;
+    if (rsf_latencyvk_options(value->latency_mode, value->frame_limit_us) != RSF_BACKEND_OK) return 0;
     if (value->sr_backend != requested.sr_backend || value->quality != requested.quality) ++generation;
     requested = *value;
     return 1;
@@ -48,6 +50,12 @@ int configure(const rsf_godot_settings* value) {
 int status(rsf_godot_status* value) {
     std::lock_guard lock(guard);
     *value = current;
+    rsf_latencyvk_status latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION};
+    if (rsf_latencyvk_get_status(&latency) == RSF_BACKEND_OK) {
+        value->latency_available = latency.low_latency_available; value->latency_report_available = latency.report_available;
+        value->pcl_available = latency.pcl_message >= 0xc000u; value->latency_mode = latency.mode;
+        value->sleep_calls = latency.sleep_calls; value->marker_calls = latency.marker_calls;
+    }
     return active ? 1 : 0;
 }
 int settings(rsf_godot_settings* value) {
@@ -60,10 +68,21 @@ int shutdown() {
         if (rsf_fgvk_drain(presentation) != RSF_BACKEND_OK) return 0;
     }
     if (!retire()) return 0;
+    if (rsf_latencyvk_shutdown() != RSF_BACKEND_OK) return 0;
     active = false; current.active_sr = 0; current.sr_result = RSF_BACKEND_ERROR_NOT_READY;
     device = nullptr; device_proc = nullptr; directory.clear();
     return 1;
 }
+void cpu(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
+void render_begin(uint64_t frame) { rsf_latencyvk_render(frame); }
+int input(uint64_t frame, uint32_t kind, uint32_t message) { return rsf_latencyvk_input(frame, kind, message) == RSF_BACKEND_OK ? 1 : 0; }
+uint32_t ping_message() {
+    rsf_latencyvk_status latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION};
+    return rsf_latencyvk_get_status(&latency) == RSF_BACKEND_OK ? latency.pcl_message : 0;
+}
+}
+extern "C" rsf_godot_vk_proc rsfg_vk_resolver() {
+    return rsf_latencyvk_instance_proc(nullptr, "vkCreateInstance") ? reinterpret_cast<rsf_godot_vk_proc>(rsf_latencyvk_instance_proc) : nullptr;
 }
 extern "C" int rsfg_vulkan_supported(void) {
 #if defined(RSF_VULKAN_SR_ENABLED)
@@ -82,8 +101,12 @@ extern "C" int rsfg_boot_vulkan(const rsf_godot_setup* setup) try {
     current = {sizeof(current), RSF_GODOT_ABI_VERSION};
     current.session_id = GetTickCount64() + 1; diagnostics = 0;
     current.fg_result = RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    const std::string streamline = std::string(setup->runtime_directory) + "/streamline-vulkan";
+    const rsf_latencyvk_setup latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION, streamline.c_str(), setup->project_id};
+    const auto latency_result = rsf_latencyvk_initialize(&latency);
     active = true;
-    if (setup->log) setup->log(setup->log_user, "Godot Vulkan host ready. Native FSR presentation requires its reserved queues. PCL is pending.");
+    if (setup->log) setup->log(setup->log_user, latency_result == RSF_BACKEND_OK ?
+        "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; latency is unavailable.");
     return 1;
 } catch (...) { return 0; }
 extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, uint64_t* chain) try {

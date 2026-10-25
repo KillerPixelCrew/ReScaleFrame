@@ -71,6 +71,12 @@ extern "C" {
 RSF_GODOT_EXPORT int rsfg_boot(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_boot_vulkan(const rsf_godot_setup* setup);
 RSF_GODOT_EXPORT int rsfg_vulkan_supported(void);
+RSF_GODOT_EXPORT rsf_godot_vk_proc rsfg_vk_resolver(void);
+RSF_GODOT_EXPORT void rsfg_vk_window(void* window);
+RSF_GODOT_EXPORT int rsfg_vk_present_marker(uint64_t window, uint32_t begin);
+RSF_GODOT_EXPORT int32_t rsfg_vk_native_present(uint64_t callback, void* queue, const void* info);
+/* Synchronous callback lease containing only native Vulkan data. */
+RSF_GODOT_EXPORT int32_t rsfg_vk_wsi_call(int32_t (*callback)(void*), void* user);
 RSF_GODOT_EXPORT int rsfg_render_vulkan(void* command_buffer, const rsf_godot_vk_packet* packet);
 RSF_GODOT_EXPORT int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** owner, uint64_t* chain);
 RSF_GODOT_EXPORT int32_t rsfg_vk_images(void* owner, uint32_t* count, uint64_t* images);
