@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$EngineExe,
     [Parameter(Mandatory)][string]$Label,
     [ValidateSet('object','camera','combined')][string]$Mode = 'combined',
+    [ValidateSet('box','billboard')][string]$Geometry = 'box',
     [switch]$Reference,
     [switch]$ReferenceMsaa,
     [switch]$ResetSrHistory,
@@ -40,7 +41,7 @@ $taskExe = (Resolve-Path -LiteralPath $EngineExe).Path
 $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash
 $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll') -Algorithm SHA256).Hash
 @{engine=$taskExe; engine_sha256=$taskEngineHash; native_sha256=$taskNativeHash;
-    first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; sr_backend=$SrBackend; latency_mode=$LatencyMode; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
+    first_frame=$FirstFrame; animation_offset=$AnimationOffset; mode=$Mode; geometry=$Geometry; sr_backend=$SrBackend; latency_mode=$LatencyMode; mono=$Mono.IsPresent; reference=$Reference.IsPresent; raw_probe=$RawProbe.IsPresent;
     reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent;
     captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
 if ($Mono) {
@@ -81,7 +82,7 @@ try {
     $env:RSF_FRAME_CAPTURE_RESET_SR = if ($ResetSrHistory) { '1' } else { $null }
     $taskRunArgs = @('--path',$taskProject,'--rendering-method','forward_plus','--rendering-driver',$GraphicsApi,'--position','100,100','--quit-after','120')
     if ($GpuValidation) { $taskRunArgs += '--gpu-validation' }
-    $taskRunArgs += @('--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset","--latency=$LatencyMode")
+    $taskRunArgs += @('--',"--result=$taskProject/result.json","--mode=$Mode","--sr=$SrBackend","--animation-offset=$AnimationOffset","--latency=$LatencyMode","--geometry=$Geometry")
     if ($Reference) { $taskRunArgs += '--reference' }
     if ($ReferenceMsaa) { $taskRunArgs += '--reference-msaa' }
     if ($RawProbe) { $taskRunArgs += '--raw-probe' }

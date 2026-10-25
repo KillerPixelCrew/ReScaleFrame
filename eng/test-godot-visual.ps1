@@ -1,6 +1,7 @@
 param(
     [ValidateSet('standard','mono')][string[]]$Edition = @('standard','mono'),
     [ValidateSet('object','camera','combined')][string[]]$Mode = @('object','camera','combined'),
+    [ValidateSet('box','billboard')][string]$Geometry = 'box',
     [ValidateRange(0,7)][int[]]$SrBackend = @(0,1,2,3,5),
     [ValidateRange(4,70)][int]$FirstFrame = 12,
     [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
@@ -20,7 +21,7 @@ foreach ($taskEdition in $Edition) {
     $taskEngine = Get-RsfGodotBuild $taskRoot $taskEdition
     foreach ($taskMode in $Mode) {
         $taskReferenceLabel = "$taskRun-$taskEdition-reference"
-        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent; LatencyMode=$LatencyMode}
+        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; Geometry=$Geometry; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent; LatencyMode=$LatencyMode}
         & (Join-Path $PSScriptRoot 'capture-godot.ps1') @taskOptions -Label $taskReferenceLabel -Reference -ReferenceMsaa:$ReferenceMsaa
         $taskReference = Join-Path $taskRoot ".local/godot/visual/$taskReferenceLabel-$taskMode"
         foreach ($taskSr in $SrBackend) {
@@ -52,7 +53,7 @@ foreach ($taskEdition in $Edition) {
 }
 $taskManifest = Join-Path $taskRoot ".local/godot/$taskRun.json"
 $taskFailed = @($taskResults | Where-Object { !$_.passed })
-@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; graphics_api=$GraphicsApi; latency_mode=$LatencyMode; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
+@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; geometry=$Geometry; graphics_api=$GraphicsApi; latency_mode=$LatencyMode; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
 Write-Output "Visual test manifest: $taskManifest"
 $taskRows = foreach ($taskCase in $taskResults) {
     $taskState = if ($taskCase.passed) { 'PASS' } else { 'FAIL' }

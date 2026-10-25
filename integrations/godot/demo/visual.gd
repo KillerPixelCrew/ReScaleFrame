@@ -8,6 +8,7 @@ var reference_msaa := false
 var raw_probe := false
 var sr_backend := 0
 var latency_mode := 0
+var geometry := "box"
 var animation_offset := 0.0
 var poses: Array[Dictionary] = []
 
@@ -27,6 +28,8 @@ func _ready() -> void:
             sr_backend = arg.trim_prefix("--sr=").to_int()
         if arg.begins_with("--latency="):
             latency_mode = arg.trim_prefix("--latency=").to_int()
+        if arg.begins_with("--geometry="):
+            geometry = arg.trim_prefix("--geometry=")
         if arg.begins_with("--animation-offset="):
             animation_offset = arg.trim_prefix("--animation-offset=").to_float()
     if reference:
@@ -48,6 +51,10 @@ func _process(_delta: float) -> void:
     moving_box.position.x = sin(animation_frame / 20.0) * 1.5 if mode != "camera" else 0.0
     camera.position.x = sin(animation_frame / 45.0) * 1.2 if mode != "object" else 0.0
     camera.look_at(Vector3.ZERO)
+    if geometry == "billboard":
+        # Keep the box topology used by the geometric oracle while isolating
+        # motion at nearly constant view depth on its visible front surface.
+        moving_box.basis = camera.basis.scaled(Vector3(1.0, 1.0, 0.02))
     var status: Dictionary = control.call("get_status")
     label.text = "Godot visual capture: %s\nSR %s, FSR3 FG\nInput frames: %s / tagged: %s" % [mode, sr_backend, status.get("evaluated_frames", 0), status.get("tagged_frames", 0)]
     poses.append({"process_frame": frame, "animation_frame": animation_frame, "camera": _matrix(Projection(camera.global_transform)),
@@ -66,7 +73,7 @@ func _process(_delta: float) -> void:
             mono_status = mono_test.call("validate_sr_mono" if RenderingServer.get_current_rendering_driver_name() == "vulkan" else "validate_mono")
             _require(mono_status.get("passed", false), "C# facade failed during visual capture")
         var report := {"passed": failures.is_empty(), "failures": failures, "mode": mode, "reference": reference, "reference_msaa": reference_msaa, "poses": poses,
-            "status": status, "probe": effect.call("get_status"), "mono": mono_status, "sr_backend": 0 if reference else sr_backend}
+            "status": status, "probe": effect.call("get_status"), "mono": mono_status, "sr_backend": 0 if reference else sr_backend, "geometry": geometry}
         var file := FileAccess.open(result_path, FileAccess.WRITE)
         if file:
             file.store_string(JSON.stringify(report, "  "))

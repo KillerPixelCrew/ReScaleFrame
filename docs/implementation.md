@@ -60,6 +60,9 @@ FSR2 history frames removes most measured source displacement; this diagnostic
 does not fix the normal temporal path. The 30-case image suite still fails.
 These engine/device runs
 do not establish broad visual acceptance or measured latency.
+An additional geometry control keeps the ordinary FSR2 cube failure visible,
+while a thin camera-facing box passes its four generated-image checks. It narrows
+the reconstruction investigation without changing production rendering or gates.
 [Evidence and corrections](research/godot-engine-integration.md),
 [developer integration](../integrations/godot/README.md).
 

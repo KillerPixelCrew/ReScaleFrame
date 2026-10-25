@@ -454,6 +454,48 @@ directories. `.local/godot/reanalysis-jitter-fit-20261025.json` still reports
 all 120 source frames is 0.008311 render pixels, below the 0.02-pixel gate.
 Original captures, primary reports, thresholds and failures remain intact.
 
+## FSR2 geometry control, 25 October 2026
+
+The remaining question was whether the cube's FSR2 displacement still reflects
+missing object vectors, or depends on its reconstruction geometry. A fresh
+ordinary Vulkan capture with the current staged runtime retains all four image
+failures: `visual-20261025-164837-931.json`. Its midpoint centroid errors are
+0.5240, 0.5517, 0.5848 and 0.4603 output pixels. Object-motion p95 error remains
+below 0.001424 render pixels. Most displacement is already in the SR source.
+
+The visual fixture now has an explicit `-Geometry billboard` diagnostic. It
+keeps the same unit-box topology and records its complete transform, but aligns
+the box with the camera and makes it 0.02 world units thick. Source/reference
+poses and material remain paired. This reduces depth variation on the visible
+surface without replacing temporal history or changing acceptance thresholds.
+Both the capture metadata and scene report record the geometry, and the analyzer
+rejects reference/capture geometry mismatches.
+
+`visual-20261025-165209-485.json` passes all four actual generated-image checks
+for this control. Maximum material-centroid error is 0.314833 output pixels and
+object-motion p95 error is below 0.000809 render pixels. The rendered comparison
+images for frame 14 in both runs were opened. This supports geometry-dependent
+FSR2 reconstruction as the next investigation target; it does not isolate
+motion dilation from depth clipping or shading, prove a vendor defect, or fix
+the ordinary cube. The ordinary failure remains a failure.
+
+The first, 0.002-unit-thick control (`visual-20261025-164915-303.json`) passed
+its image gates but failed the existing minimum geometric-pixel count on one
+frame. Depth/projection precision left only 95 accepted object samples there.
+The 0.02-unit control retains 676 to 678 accepted object samples. Its nearly
+front-facing plane does not independently constrain both raster-jitter axes on
+every frame, so it is not additional jitter acceptance. The cube's existing
+plane-fit evidence remains separate. `fsr2-geometry-mismatch.log` preserves a
+negative control rejected for pairing billboard inputs with a box reference.
+
+Source checks also confirmed the supplied vertical FOV conversion and render-pixel
+motion scaling against the pinned Godot projection helpers and FSR2 dispatch.
+They did not reveal an incorrect convention to patch. The fixture uses SDK
+FSR2 2.3.3; Godot's built-in FSR2 is 2.2.1, so the latter would not be an
+identical provider oracle. No production rendering change follows from this
+bounded control. Other Godot providers and the remaining failed image cases
+still require work.
+
 ## Native Vulkan SR and raw image validation, 25 October 2026
 
 Question: can the developer integration use Godot's native Vulkan images and

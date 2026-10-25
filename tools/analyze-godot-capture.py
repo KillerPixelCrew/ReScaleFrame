@@ -247,6 +247,9 @@ def main():
         png(data, meta["role"]).save(output / (path.stem.replace("fg-motion-uv", "fg-motion-pixels") + ".png"))
     references = {}
     if args.reference:
+        reference_report = json.loads((args.reference / "result.json").read_text())
+        if report.get("geometry", "box") != reference_report.get("geometry", "box"):
+            parser.error("Capture and reference use different scene geometry")
         for path in (args.reference / "frames").glob("*fg-hudless-color*.json"):
             meta, data = load_image(path)
             references[meta["frame"]] = data

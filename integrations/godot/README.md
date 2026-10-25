@@ -58,6 +58,9 @@ the corrected pinned FidelityFX and Streamline SDKs without installing a global
 Vulkan SDK. The corrected Streamline DLLs use a private `streamline-vulkan`
 directory, while D3D12 retains its retail SDK payload.
 `-StageOnly -StageRuntime` on `build-godot.ps1` repackages already built binaries.
+The visual harness also accepts `-Geometry billboard` for a thin camera-facing
+geometry control. Its results are diagnostic and do not replace the default box
+suite. The analyzer rejects a reference with a different recorded geometry.
 
 For Vulkan SR readbacks on standard and .NET editors:
 
