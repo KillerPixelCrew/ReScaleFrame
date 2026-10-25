@@ -57,7 +57,7 @@ if ($StageRuntime) {
             if ($taskSlReceipt.binaries.$taskFile -ne (Get-FileHash -LiteralPath (Join-Path $taskSlVulkan $taskFile)).Hash) { throw "Corrected Streamline hash mismatch: $taskFile" }
             $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskSlVulkan $taskFile
         }
-        foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }
+        foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll','sl.dlss.dll','nvngx_dlss.dll','nvngx_dlss.license.txt')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }
         foreach ($taskFile in @('license.txt','3rd-party-licenses.md')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/$taskFile" }
         $taskPayload['streamline-vulkan/reflex.license.txt'] = Join-Path $taskRoot '.local/streamline/sdk/bin/x64/reflex.license.txt'
         $taskPayload['streamline-vulkan/streamline-sdk-build.json'] = Join-Path $taskSlVulkan 'streamline-sdk-build.json'

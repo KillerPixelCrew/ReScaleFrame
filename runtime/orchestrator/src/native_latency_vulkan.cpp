@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
 #include <array>
 #include <mutex>
 #include <string>
@@ -7,7 +8,8 @@
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 extern "C" {
-int VulkanStorySlInitialize(const wchar_t*, const char*, uint32_t, uint32_t);
+int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t);
+void* VulkanStorySlModule();
 int VulkanStorySlShutdownChecked();
 rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*);
 int VulkanStorySlBindReflex();
@@ -60,6 +62,13 @@ bool bind() {
 extern "C" rsf_backend_result rsf_latencyvk_initialize(const rsf_latencyvk_setup* setup) try {
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_LATENCYVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    const rsf_slvk_setup shared{sizeof(shared), RSF_SLVK_ABI_VERSION, setup->runtime_directory_utf8, setup->project_id, 0};
+    return rsf_slvk_initialize(&shared);
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) try {
+    if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (setup->abi_version != RSF_SLVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (setup->features & ~RSF_SLVK_DLSS_SR) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!setup->runtime_directory_utf8 || !setup->project_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(mutex);
     if (initialized) return RSF_BACKEND_ERROR_NOT_READY;
@@ -68,12 +77,32 @@ extern "C" rsf_backend_result rsf_latencyvk_initialize(const rsf_latencyvk_setup
     if (!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::wstring path(static_cast<size_t>(count), 0);
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, path.data(), count)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!accepted(VulkanStorySlInitialize(path.c_str(), setup->project_id, 1, 0))) return RSF_BACKEND_ERROR_LOAD_FAILED;
+    if (!accepted(VulkanStorySlInitializeFeatures(path.c_str(), setup->project_id, 1, 0, (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
     bound = false; mode = interval = 0;
     tokens = {}; session = render_frame = present_frame = 0;
     status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
     initialized = true;
     return RSF_BACKEND_OK;
+#else
+    return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) try {
+    if (!call || call->struct_size < sizeof(*call)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (call->abi_version != RSF_SLVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (!call->callback || ((call->session_id == 0) != (call->frame_id == 0))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard lock(mutex);
+    if (!initialized) return RSF_BACKEND_ERROR_NOT_READY;
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    uintptr_t token = 0;
+    if (call->frame_id) {
+        const auto& slot = tokens[call->frame_id % tokens.size()];
+        if (session != call->session_id || slot.frame != call->frame_id ||
+            !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(call->frame_id))) return RSF_BACKEND_ERROR_NOT_READY;
+        token = slot.token;
+    }
+    void* module = VulkanStorySlModule();
+    return module ? call->callback(module, token, call->user) : RSF_BACKEND_ERROR_NOT_READY;
 #else
     return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #endif

@@ -60,6 +60,13 @@ function Get-RsfGodotBuild([string]$Root, [string]$Edition, [string]$Target = 'e
     return $taskBuild.executable
 }
 
+function Get-RsfGodotVulkanValidationText([string]$Text) {
+    # The pinned interposer quotes this VUID while announcing its correction.
+    # Exclude only that exact informational notice; retain actual layer errors.
+    $taskNotice = '(?m)^\[Streamline info\] \[[^\r\n]*\]wrapper\.cpp:\d+\[vkCreateDevice\] As per VK spec - VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-03328, both extensions - VK_KHR_buffer_device_address and VK_EXT_buffer_device_address[ \t]+cannot be enabled at the same time\. Removed older extension VK_EXT_buffer_device_address\.\r?$'
+    return [regex]::Replace($Text, $taskNotice, '')
+}
+
 function Set-RsfGodotForeground([Diagnostics.Process]$taskProcess) {
         if (!('GodotValidationFocus' -as [type])) {
             Add-Type -TypeDefinition @'

@@ -216,15 +216,16 @@ void onStreamlineMessage(sl::LogType type, const char* message) {
 }
 
 extern "C" {
-/// @brief Loads the verified interposer and initializes the selected PCL/Reflex/DLSS-G feature set.
+/// @brief Loads the verified interposer and initializes the selected PCL/Reflex/DLSS feature set.
 /// @details Global bridge state is owned by one serialized host session. Plugin path and project identity are copied into persistent strings. Repeated initialization while initialized returns zero. After VulkanStorySlShutdown the interposer stays loaded, so a later call re-runs slInit on that module, which must come from the same directory.
 /// @param directory Borrowed terminated directory path containing the private interposer/plugins.
 /// @param projectId Borrowed terminated project identity copied for SDK use.
 /// @param loadReflex Requests Reflex plus PCL when DLSS-G is not requested.
 /// @param loadDlssG Requests DLSS-G, Reflex and PCL.
+/// @param loadDlssSr Adds DLSS SR to the shared session.
 /// @return Zero on successful/already-initialized state, a negative local failure or native Streamline result.
-RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const char* projectId,
-    uint32_t loadReflex, uint32_t loadDlssG) {
+RSF_SL_VK_EXPORT int VulkanStorySlInitializeFeatures(const wchar_t* directory, const char* projectId,
+    uint32_t loadReflex, uint32_t loadDlssG, uint32_t loadDlssSr) {
     if (shutdownAttempted && shutdownResult != 0) return shutdownResult;
     if (initialized) return 0;
     if (!directory || !projectId) return -1;
@@ -263,14 +264,14 @@ RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const cha
     pluginDirectory = directory;
     projectIdentity = projectId;
     pluginPath = pluginDirectory.c_str();
-    static const sl::Feature pclOnly[] = { sl::kFeaturePCL };
-    static const sl::Feature latencyFeatures[] = { sl::kFeatureReflex, sl::kFeaturePCL };
-    static const sl::Feature frameGenerationFeatures[] = {
-        sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
+    sl::Feature features[4] = {sl::kFeaturePCL};
+    uint32_t featureCount = 1;
+    if (loadReflex || loadDlssG) features[featureCount++] = sl::kFeatureReflex;
+    if (loadDlssG) features[featureCount++] = sl::kFeatureDLSS_G;
+    if (loadDlssSr) features[featureCount++] = sl::kFeatureDLSS;
     sl::Preferences preferences{};
-    preferences.featuresToLoad = loadDlssG ? frameGenerationFeatures :
-        loadReflex ? latencyFeatures : pclOnly;
-    preferences.numFeaturesToLoad = loadDlssG ? 3 : loadReflex ? 2 : 1;
+    preferences.featuresToLoad = features;
+    preferences.numFeaturesToLoad = featureCount;
     preferences.projectId = projectIdentity.c_str();
     preferences.engine = sl::EngineType::eCustom;
     preferences.engineVersion = "0.3";
@@ -293,6 +294,11 @@ RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const cha
     shutdownResult = 0;
     return 0;
 }
+RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const char* projectId,
+    uint32_t loadReflex, uint32_t loadDlssG) {
+    return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
+}
+RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return initialized ? module : nullptr; }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
 /// @details Call after provider work is retired. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. A later VulkanStorySlInitialize re-runs slInit.

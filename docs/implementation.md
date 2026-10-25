@@ -67,6 +67,13 @@ Vulkan SR refusal now records a spatial fallback while preserving the SDK error.
 Full-image GPU gradient checks and standard/.NET missing-DLL fixtures pass;
 normal SR regression also passes with C# and raw inputs. The FSR2 displacement
 and other-provider work remain open.
+Native Vulkan DLSS SR now shares the early Streamline/PCL session, leases the
+matching CPU token, stages owned input images and uses a separate SR viewport.
+Standard/.NET switching, resize, raw-input/C# checks and six DLSS SR + FSR3 FG +
+PCL image cases pass. Model-switch teardown testing also exposed a deferred SDK
+release that can outlive a camera-free shutdown; drained feature retirement
+addresses it. Other Vulkan providers, FSR2 displacement, updated Vulkan export
+templates and broader acceptance remain unfinished.
 [Evidence and corrections](research/godot-engine-integration.md),
 [developer integration](../integrations/godot/README.md).
 

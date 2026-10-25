@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
-if ($GraphicsApi -eq 'vulkan' -and !$PSBoundParameters.ContainsKey('SrBackend')) { $SrBackend = @(0,2,3) }
+if ($GraphicsApi -eq 'vulkan' -and !$PSBoundParameters.ContainsKey('SrBackend')) { $SrBackend = @(0,1,2,3) }
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
 $taskPython = Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe'
 $taskRun = 'visual-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')

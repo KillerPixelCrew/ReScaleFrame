@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@ std::array<uint32_t, 6> sdk_tokens{};
 uint32_t cursor = 0, slept = 0, options = 0;
 uint32_t low_latency = 1;
 uintptr_t current = 0;
+uint32_t requested_sr = 0, leased_calls = 0;
 struct Marker { uint32_t frame, kind; };
 std::vector<Marker> markers;
 void require(bool condition, const char* message) {
@@ -24,6 +26,8 @@ void cpu(uint64_t frame, uint32_t stage, uint32_t expected = 1) {
 // support, actual Reflex sleep, or the Streamline implementation.
 extern "C" {
 int VulkanStorySlInitialize(const wchar_t*, const char*, uint32_t, uint32_t) { return 0; }
+int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t sr) { requested_sr = sr; return 0; }
+void* VulkanStorySlModule() { return reinterpret_cast<void*>(1); }
 int VulkanStorySlShutdownChecked() { return 0; }
 rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*) { return nullptr; }
 int VulkanStorySlBindReflex() { return 0; }
@@ -42,6 +46,21 @@ int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { retur
 int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return callback(user); }
 }
 int main() {
+    rsf_slvk_call lease{sizeof(lease), RSF_SLVK_ABI_VERSION, 1, 1,
+        [](void* module, uintptr_t token, void*) -> rsf_backend_result {
+            require(module == reinterpret_cast<void*>(1) && token && *reinterpret_cast<uint32_t*>(token) == 1, "matching source token leased");
+            ++leased_calls; return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        }, nullptr};
+    require(rsf_slvk_invoke(nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        rsf_slvk_invoke(&lease) == RSF_BACKEND_ERROR_NOT_READY, "no SDK lease before initialization");
+    auto malformed = lease; malformed.struct_size--;
+    require(rsf_slvk_invoke(&malformed) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short SDK lease refused");
+    malformed = lease; malformed.abi_version++;
+    require(rsf_slvk_invoke(&malformed) == RSF_BACKEND_ERROR_ABI_MISMATCH, "SDK lease ABI mismatch refused");
+    malformed = lease; malformed.callback = nullptr;
+    require(rsf_slvk_invoke(&malformed) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "null SDK callback refused");
+    malformed = lease; malformed.session_id = 0;
+    require(rsf_slvk_invoke(&malformed) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "partial frame identity refused");
     require(rsf_latencyvk_initialize(nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "null setup refused");
     rsf_latencyvk_setup setup{sizeof(setup) - 1, RSF_LATENCYVK_ABI_VERSION, "unused", "synthetic"};
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short setup refused");
@@ -49,9 +68,13 @@ int main() {
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_ERROR_ABI_MISMATCH, "ABI mismatch refused");
     setup.abi_version = RSF_LATENCYVK_ABI_VERSION;
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_OK, "synthetic initialization");
+    require(requested_sr == 0, "legacy latency ABI does not load SR");
     require(rsf_latencyvk_options(3, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown mode refused");
     require(rsf_latencyvk_options(1, 12345) == RSF_BACKEND_OK, "options queued");
     cpu(1, RSF_GAME_CPU_FRAME_BEGIN); cpu(1, RSF_GAME_CPU_PACING); cpu(1, RSF_GAME_CPU_PACING);
+    require(rsf_slvk_invoke(&lease) == RSF_BACKEND_ERROR_FEATURE_FAILED && leased_calls == 1, "callback failure preserved");
+    auto foreign = lease; foreign.session_id = 2;
+    require(rsf_slvk_invoke(&foreign) == RSF_BACKEND_ERROR_NOT_READY && leased_calls == 1, "foreign session lease refused");
     cpu(1, RSF_GAME_CPU_SIMULATION_BEGIN); cpu(1, RSF_GAME_CPU_SIMULATION_BEGIN); cpu(1, RSF_GAME_CPU_SIMULATION_END);
     require(slept == 1 && options == 1, "one pacing call per CPU frame");
     const size_t before_input = markers.size();
@@ -65,10 +88,13 @@ int main() {
     require(markers.size() == completed, "secondary Present cannot reuse completed source identity");
     require(markers.front().frame == 1 && markers.front().kind == 0 && markers.back().kind == 5, "simulation through Present on one source token");
     cpu(2, RSF_GAME_CPU_FRAME_BEGIN); cpu(2, RSF_GAME_CPU_PACING); cpu(2, RSF_GAME_CPU_FRAME_END, 0);
+    const auto newest = current;
+    require(rsf_slvk_invoke(&lease) == RSF_BACKEND_ERROR_FEATURE_FAILED && current == newest, "older render lease cannot rewind pacing token");
     require(slept == 2 && options == 2, "unchanged options refreshed for a possible swapchain successor");
     rsf_latencyvk_render(2); rsf_latencyvk_present(1); rsf_latencyvk_present(0);
     require(markers.size() == completed, "nonrendered frame aborted");
     for (uint64_t frame = 3; frame < 10; ++frame) cpu(frame, RSF_GAME_CPU_FRAME_BEGIN);
+    require(rsf_slvk_invoke(&lease) == RSF_BACKEND_ERROR_NOT_READY && leased_calls == 2, "expired render lease refused");
     cpu(8, RSF_GAME_CPU_PACING);
     require(slept == 2, "late pacing event cannot sleep with a newer frame token");
     rsf_latencyvk_render(1); rsf_latencyvk_present(1); rsf_latencyvk_present(0);
@@ -89,5 +115,18 @@ int main() {
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_OK, "stats-only session initialized");
     require(rsf_latencyvk_options(1, 0) == RSF_BACKEND_ERROR_NOT_SUPPORTED && rsf_latencyvk_options(0, 12345) == RSF_BACKEND_ERROR_NOT_SUPPORTED, "unavailable Reflex mode and limiter refused");
     require(rsf_latencyvk_options(0, 0) == RSF_BACKEND_OK && rsf_latencyvk_shutdown() == RSF_BACKEND_OK, "stats-only PCL remains available");
+    rsf_slvk_setup shared{sizeof(shared), RSF_SLVK_ABI_VERSION, "unused", "synthetic", RSF_SLVK_DLSS_SR};
+    auto invalid_setup = shared; invalid_setup.struct_size--;
+    require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short shared SDK setup refused");
+    invalid_setup = shared; invalid_setup.abi_version++;
+    require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_ABI_MISMATCH, "shared SDK ABI mismatch refused");
+    invalid_setup = shared; invalid_setup.features = 2;
+    require(rsf_slvk_initialize(&invalid_setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown shared SDK features refused");
+    require(rsf_slvk_initialize(&shared) == RSF_BACKEND_OK && requested_sr == 1, "SR requested on shared SDK session");
+    lease.session_id = lease.frame_id = 0;
+    lease.callback = [](void* module, uintptr_t token, void*) -> rsf_backend_result {
+        require(module && !token, "non-frame lease has no fabricated source token"); return RSF_BACKEND_OK;
+    };
+    require(rsf_slvk_invoke(&lease) == RSF_BACKEND_OK && rsf_latencyvk_shutdown() == RSF_BACKEND_OK, "non-frame SDK operations serialized");
     return 0;
 }

@@ -69,7 +69,7 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
     if ($taskProcess.ExitCode) { throw "Capture failed ($($taskProcess.ExitCode)): $taskProject/$Name.log" }
     $taskError = Get-Content -Raw -LiteralPath (Join-Path $taskProject "$Name.stderr")
     if ($taskError -match '(?m)^(ERROR|SCRIPT ERROR):') { throw "Capture emitted errors: $taskProject/$Name.stderr" }
-    if ($GpuValidation -and $taskError -match 'VUID-|SYNC-HAZARD|Validation Error|will produce undefined values|not created with any VkDescriptorPoolSize|(?m)^vk[A-Z][A-Za-z0-9_]+\(\):') { throw "Vulkan validation failed: $taskProject/$Name.stderr" }
+    if ($GpuValidation -and (Get-RsfGodotVulkanValidationText $taskError) -match 'VUID-|SYNC-HAZARD|Validation Error|will produce undefined values|not created with any VkDescriptorPoolSize|(?m)^vk[A-Z][A-Za-z0-9_]+\(\):') { throw "Vulkan validation failed: $taskProject/$Name.stderr" }
 }
 Run-Capture @('--headless','--editor','--import','--path',$taskProject,'--quit-after','30') 'import'
 $taskSaved = @{}

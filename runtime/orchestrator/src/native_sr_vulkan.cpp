@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_vulkan.h>
+#include "native_dlss_vulkan.h"
 #include <cmath>
 #include <memory>
 #include <limits>
@@ -50,6 +51,7 @@ struct Image {
 }
 
 struct rsf_srvk {
+    rsf_dlssvk* dlss = nullptr;
     rsf_srvk_setup setup{};
     HMODULE module = nullptr;
     ffxContext effect = nullptr;
@@ -203,9 +205,15 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_set
     if (!setup->instance || !setup->physical_device || !setup->device || !setup->device_proc || !setup->instance_proc ||
         !setup->runtime_directory_utf8 || !setup->output_width || !setup->output_height || setup->quality > 4 ||
         setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->backend != RSF_SR_FSR2 && setup->backend != RSF_SR_FSR3) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (setup->backend != RSF_SR_DLSS && setup->backend != RSF_SR_FSR2 && setup->backend != RSF_SR_FSR3) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #if defined(RSF_HAVE_FFX_VK)
     auto self = std::make_unique<rsf_srvk>(); self->setup = *setup;
+    if (setup->backend == RSF_SR_DLSS) {
+        const auto result = rsf_dlssvk_create(setup, &self->dlss);
+        if (result != RSF_BACKEND_OK) return result;
+        (void)rsf_dlssvk_plan(self->dlss, &self->width, &self->height);
+        *out = self.release(); return RSF_BACKEND_OK;
+    }
     std::u8string directory(std::strlen(setup->runtime_directory_utf8), u8'\0');
     std::memcpy(directory.data(), setup->runtime_directory_utf8, directory.size());
     const auto path = std::filesystem::path(directory) / L"amd_fidelityfx_vk.dll";
@@ -311,6 +319,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     for (const auto* mask : {&input->reactive, &input->composition}) if (mask->image &&
         (!valid_image(*self, *mask, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (self->dlss) return rsf_dlssvk_evaluate(self->dlss, commands, input);
     auto list = static_cast<VkCommandBuffer>(commands);
     if (!self->zero_mask.initialized) {
         transition(*self, list, self->zero_mask.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -359,6 +368,11 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk* self) try {
 #if defined(RSF_HAVE_FFX_VK)
+    if (self && self->dlss) {
+        const auto result = rsf_dlssvk_destroy(self->dlss);
+        if (result != RSF_BACKEND_OK) return result;
+        self->dlss = nullptr;
+    }
     if (self && self->effect) {
         (void)self->capture.flush();
         if (self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -366,4 +380,13 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk* self) t
     }
 #endif
     delete self; return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_dlss_preset(rsf_srvk* self, uint32_t preset) try {
+    if (!self) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_HAVE_FFX_VK)
+    return self->dlss ? rsf_dlssvk_preset(self->dlss, preset) : RSF_BACKEND_ERROR_NOT_SUPPORTED;
+#else
+    (void)preset; return RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

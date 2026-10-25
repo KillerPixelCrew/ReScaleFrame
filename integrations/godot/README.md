@@ -1,7 +1,7 @@
 # ReScaleFrame for Godot
 
 Developer integration for Godot 4.7.2, Forward+ and Windows x64. Direct3D 12 has
-SR/FG/PCL implementations; native Vulkan implements FSR2/FSR3 SR and an FSR3
+SR/FG/PCL implementations; native Vulkan implements DLSS/FSR2/FSR3 SR and an FSR3
 frame-generation presentation owner, plus PCL/Reflex.
 It combines a GDExtension add-on with a small module and guarded patches against
 the pinned engine source. Both standard Godot and Godot .NET use the same native
@@ -16,9 +16,13 @@ readback and validation-layer coverage on both editions. Vulkan FSR3 FG now runs
 with SR Off, provider switching, resize and a secondary native window. Vulkan
 PCL/Reflex also runs with native presentation and no camera or FG owner. Other
 Vulkan providers and synchronization-validation acceptance remain unfinished.
+Vulkan DLSS SR passes standard/.NET switching, resize, raw input checks and six
+DLSS SR + FSR3 FG + PCL image cases, covering 24 actual generated frames.
 Standard/.NET Debug and Release exported players have passed the
 runtime and lifecycle fixtures, including C# on .NET. A GDScript-only .NET
 Release export also passed.
+These export results cover earlier DX12 builds; updated Vulkan templates remain
+pending.
 See [research and corrections](../../docs/research/godot-engine-integration.md).
 The expanded 30-case image suite currently fails four FSR2/FSR3 independent-object
 cases, with up to 0.62 output-pixel displacement, despite passing vector checks.
@@ -153,6 +157,7 @@ the external SR pass as a fallback, with an extra pass cost.
 ./eng/test-godot.ps1 -EngineBridge -Edition standard,mono -GraphicsApi d3d12
 ./eng/test-godot.ps1 -EngineBridge -Scenario controller
 ./eng/test-godot.ps1 -EngineBridge -Scenario pcl -NoCSharp
+./eng/test-godot.ps1 -EngineBridge -Scenario sr -GraphicsApi vulkan -SrBackend 1 -CaptureFrames
 ./eng/test-godot.ps1 -EngineBridge -Scenario sr -GraphicsApi vulkan -NoCSharp -MissingSrRuntime
 ./eng/test-godot-visual.ps1
 ./eng/verify.ps1 -Configuration Release -VS2026
@@ -169,6 +174,9 @@ turn an unsupported or failing provider into a pass.
 The missing-runtime fixture removes the Vulkan SR DLL from its private copy and
 checks actual player images through provider switches and resize. SR status
 retains the provider failure while the runtime records a spatial fallback.
+The SR fixture accepts initial DLSS=1, FSR2=2 or FSR3=3. The DLSS case additionally
+requests model K before switching to FSR3. A model request can be overridden by
+the driver; this check establishes accepted configuration and continued rendering.
 
 For exported-player validation, build both target configurations, with and
 without `-Mono`, then use the same functional scenarios:

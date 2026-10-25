@@ -49,8 +49,14 @@ typedef struct rsf_srvk_fallback {
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* DLSS requires an early shared rsf_slvk_initialize session with DLSS SR
+   selected. Its inputs must support transfer-source usage; depth is R32F.
+   Only one DLSS SR owner is admitted per SDK session, on viewport one. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_setup*, rsf_srvk**);
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk*, uint32_t* width, uint32_t* height);
+/* DLSS model request, applied on subsequent evaluations. The owner serializes
+   calls and drains referencing GPU work before changing a live model. */
+RSF_RUNTIME_API rsf_backend_result rsf_srvk_dlss_preset(rsf_srvk*, uint32_t preset);
 /* Inputs: SHADER_READ_ONLY_OPTIMAL. Engine output: TRANSFER_DST_OPTIMAL. SDK
    output is private and reaches the engine only after an accepted dispatch.
    The owner serializes calls, leases images until GPU completion, and submits

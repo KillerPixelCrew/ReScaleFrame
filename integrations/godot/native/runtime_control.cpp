@@ -55,6 +55,7 @@ Dictionary ReScaleFrameRuntime::get_status() const
     if (!available) return result;
     rsf_godot_settings requested{sizeof(requested), RSF_GODOT_ABI_VERSION};
     if (rsfg_settings(&requested)) {
+        result["requested_dlss_preset"] = requested.dlss_preset;
         result["requested_fg_backend"] = requested.fg_backend;
         result["requested_fg_mode"] = requested.fg_mode;
         result["requested_generated_frames"] = requested.generated_frames;

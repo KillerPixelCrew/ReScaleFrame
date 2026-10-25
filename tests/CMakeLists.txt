@@ -322,4 +322,5 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_VK_INCLU
 endif()
 add_test(NAME native_vulkan_contract COMMAND rsf_native_vulkan_test)
 add_test(NAME native_vulkan_device COMMAND rsf_native_vulkan_test --device)
-set_tests_properties(native_vulkan_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+add_test(NAME native_vulkan_dlss_device COMMAND rsf_native_vulkan_test --dlss)
+set_tests_properties(native_vulkan_device native_vulkan_dlss_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

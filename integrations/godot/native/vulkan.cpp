@@ -2,6 +2,7 @@
 #include "vulkan_control.h"
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
 #include <windows.h>
 #include <mutex>
 #include <string>
@@ -39,11 +40,11 @@ int configure(const rsf_godot_settings* value) {
     // These paths are added independently. Do not accept unavailable FG or
     // silently substitute an FSR3 provider for a requested DLSS/XeSS/FSR4 path.
     if (!active ||
-        !(value->sr_backend == 0 || value->sr_backend == 2 || value->sr_backend == 3 || value->sr_backend == 6 || value->sr_backend == 7)) return 0;
+        !(value->sr_backend == 0 || value->sr_backend == 1 || value->sr_backend == 2 || value->sr_backend == 3 || value->sr_backend == 6 || value->sr_backend == 7)) return 0;
     std::lock_guard lock(guard);
     if (value->fg_mode && (!presentation || value->generated_frames != 1 || !(value->fg_backend == 3 || value->fg_backend == 7))) return 0;
     if (rsf_latencyvk_options(value->latency_mode, value->frame_limit_us) != RSF_BACKEND_OK) return 0;
-    if (value->sr_backend != requested.sr_backend || value->quality != requested.quality) ++generation;
+    if (value->sr_backend != requested.sr_backend || value->quality != requested.quality || value->dlss_preset != requested.dlss_preset) ++generation;
     requested = *value;
     return 1;
 }
@@ -102,8 +103,8 @@ extern "C" int rsfg_boot_vulkan(const rsf_godot_setup* setup) try {
     current.session_id = GetTickCount64() + 1; diagnostics = 0;
     current.fg_result = RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const std::string streamline = std::string(setup->runtime_directory) + "/streamline-vulkan";
-    const rsf_latencyvk_setup latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION, streamline.c_str(), setup->project_id};
-    const auto latency_result = rsf_latencyvk_initialize(&latency);
+    const rsf_slvk_setup latency{sizeof(latency), RSF_SLVK_ABI_VERSION, streamline.c_str(), setup->project_id, RSF_SLVK_DLSS_SR};
+    const auto latency_result = rsf_slvk_initialize(&latency);
     active = true;
     if (setup->log) setup->log(setup->log_user, latency_result == RSF_BACKEND_OK ?
         "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; latency is unavailable.");
@@ -213,6 +214,7 @@ extern "C" int rsfg_render_vulkan(void* commands, const rsf_godot_vk_packet* pac
         current.sr_result = rsf_srvk_create(&setup, &context);
         current.active_sr = 0;
         if (!context) return fallback();
+        if (backend == 1) (void)rsf_srvk_dlss_preset(context, requested.dlss_preset);
         device = packet->device; device_proc = packet->device_proc;
         context_generation = generation; context_backend = backend;
     }

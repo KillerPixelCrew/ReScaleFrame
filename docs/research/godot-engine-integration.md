@@ -931,9 +931,12 @@ do not change game ABI 13 or game-plugin readiness flags.
 
 ## Vulkan SR failure output, 25 October 2026
 
-Source review found that the engine callback ignores the native SR return value
-and still consumes its upscaled texture. A rejected context creation or dispatch
-therefore left that image unwritten. The runtime now provides a separate,
+Initial inspection inferred an unwritten output because the engine callback
+ignores the native SR return value. A later trace of Forward+ corrected that
+conclusion: its built-in FSR2 pass already writes the upscaled texture before
+the native callback on the current temporal path. The missing-DLL fixture below
+does not prove that the previous engine produced blank frames. The runtime now
+provides explicit failure recovery independently of that preceding pass: a separate,
 size/version-checked spatial fallback call. It checks image ownership, layouts,
 transfer-source usage and RGBA16F blit/filter support before recording. A linear
 blit fills the output, restores the input's shader-read layout and leaves output
@@ -963,18 +966,106 @@ validation. The tested native DLL is
 engine identities remain those in the preceding PCL acceptance. These tests
 prove bounded failure recovery, not FSR2 moving-object reconstruction quality.
 
+## Native Vulkan DLSS SR, 25 October 2026
+
+DLSS SR now uses the same early Streamline initialization as PCL, rather than
+loading another interposer or acquiring render-thread frame tokens. A separate
+size/version-checked session setup selects SR while preserving latency ABI 1.
+A synchronous SDK-call lease holds the session mutex and validates the original
+64-bit session/source identity against the SDK's six retained token handles.
+Non-frame operations explicitly use zero identities. The synthetic boundary
+checks callback errors, foreign/expired tokens, ABI refusal and an older render
+lease leaving the newer CPU pacing token unchanged.
+
+The native SR service checks support on the borrowed physical device and queries
+optimal render dimensions. One DLSS owner uses viewport one, leaving root-window
+latency/presentation ownership separate. It copies RGBA16F scene colour,
+normalized R32F depth and RG16F UV motion into owned images/views. Engine inputs
+return to shader-read layout before SDK evaluation; the SDK only touches owned
+resources. Camera constants use row vectors, inverted depth, pixel jitter and
+motion scale divided by render dimensions. Matching source/session/view/resource
+identity controls reset. HDR scene colour, automatic exposure and the requested
+model reach DLSS options. An accepted dispatch copies private output into the
+engine's transfer-destination image. Refusal retains the original error and uses
+the explicit spatial recovery above. The caller owns submission and GPU drain.
+Raw readbacks record `sr_backend=1`; `provider_version_id=0` means no SDK version
+query was established. Payload manifests carry the actual DLL identities.
+
+The private Vulkan payload now includes unmodified, signed retail `sl.dlss.dll`
+(`73BF52C0CFAA5900A8F3F4A91306E4625E7CCA696DFB305AAE44C9F97B582E1F`)
+and `nvngx_dlss.dll`
+(`3975567B8943C53ACCE397F2B72380092F84F162D00B0D2C7D08A1025C563983`),
+with their notices. Corrected common/interposer identities and pinned source
+remain those in the PCL section. No new SDK source correction was required here.
+
+Failures retained during development:
+
+- `test-native-vulkan-dlss.log`: pixel checks passed, but validation rejected
+  an output without transfer-destination usage, which NGX clears. The private
+  output now declares that usage. The standalone fixture also enables surface
+  and swapchain extensions required by its Reflex/WSI feature set.
+- `validation/standard/sr-20261025-172033-266`: the first engine raw-capture run
+  crashed because the new path had not initialized its capture helper. The
+  corrected path initializes it with the owner device/dispatch/memory properties.
+- `test-native-vulkan-dlss-final.log` and `...-final-verbose.log`: changing the
+  preset in place passed all pixel checks but crashed during SDK shutdown.
+  The pinned DLSS source queues a release lambda with a three-Present delay
+  (`dlssEntry.cpp` around 373); the standalone fixture has no Presents.
+  `Generic::collectGarbage` called that lambda during common shutdown after the
+  feature plugin was unloaded. The SDK dump reports access violation
+  `0xC0000005` in common at offset `0x72442`, reading an address outside the
+  dump's loaded modules. Source shutdown order and the deferred-task log support
+  the lifetime diagnosis; this is not a reconstruction of the signed DLL.
+  The model setter now requires drained GPU work and frees the old SDK feature
+  before applying a changed model. Engine model changes already retire the
+  whole context. `test-native-vulkan-dlss-model-retirement.log` now passes
+  default/K pixel readbacks and clean shutdown, with no queued release lambda
+  or validation errors.
+- The first FG regression rejected a verbose SDK info message quoting VUID
+  `03328` while explaining removal of `VK_EXT_buffer_device_address`. It was
+  not a layer error. The harness classifies only that exact source notice;
+  injected real VUID, synchronization and SDK errors remain detectable
+  (`vulkan-validation-log-filter-check.txt`). Original logs remain intact.
+
+`validation-20261025-172115-185.json` passes standard/.NET DLSS-to-FSR3 switching,
+resize/reset, actual player PNGs, C# and four raw SR frames per edition.
+`visual-20261025-172254-662.json/.html` passes all six object/camera/combined
+DLSS SR + FSR3 FG + PCL cases, covering 24 actual generated images against
+independent MSAA midpoint renders. The .NET combined frame-14 comparison was
+opened. Those runs used native DLL
+`56ED1AD7B78F77A18BAC17B65A64DB17889D1F3572A4DE6CED11993093817235`.
+They precede the final live-model retirement correction; their default-model
+scope does not exercise that setter transition.
+
+The final model/switching engine run
+`validation-20261025-173343-430.json` passes both editions, the K model request,
+DLSS-to-FSR3 switching, resize, raw inputs and C#. Its native DLL is
+`EE22B1A698E6DD906E1C294A0DC72805C37857543368F379DE2E1F54713978F3`.
+The Release gate (`verify-dlss-model-retirement.log`) executes 47 tests and skips
+ten opt-in fixtures, including the newly registered DLSS device test; formatting
+and Clippy pass. The explicit default/K Vulkan device run is separate GPU
+evidence, not an executed device check in that gate. Model configuration and
+continued rendering do not prove a driver-selected effective model.
+The final shared-session regressions also pass both editions with core
+validation: `validation-20261025-173608-568.json` covers FSR3 FG/PCL, SR Off,
+Off/resume, resize while a secondary window remains open and asserted SDK root
+ownership; `validation-20261025-173639-484.json` covers camera-free native WSI,
+On/Boost/Off, resize, input and ping with no FG owner. These use the final native
+DLL above and do not establish synchronization-validation acceptance.
+
 ## Remaining work and validation limits
 
 Vulkan FSR2/FSR3 SR has the bounded engine/device/readback evidence above. Vulkan
 FSR3 FG has a completed-frame presentation owner and real submission identity,
 with the bounded evidence above. Vulkan PCL has the engine/device evidence above.
+Vulkan DLSS SR has the bounded engine/device/image evidence above.
 Other FG/SR providers,
 synchronization validation and broader acceptance remain unfinished. Any interop route needs
 same-adapter external memory/fences and graph-owned submission splits. The Unity
 Vulkan queue-access API cannot be assumed to exist in Godot.
 
-The expanded SR-enabled image matrix completed against the final staged
-binaries; its FSR2/FSR3 object-motion failures remain unresolved. Earlier passing
+The earlier expanded SR-enabled image matrix retains its FSR2/FSR3 object-motion
+failures. Earlier passing
 cases do not establish all-provider image acceptance. Broader scene-quality coverage remains
 pending; a box and floor do not establish transparent, particle, skinned or
 occlusion-heavy scene quality.

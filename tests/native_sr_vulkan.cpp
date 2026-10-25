@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_fg_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
+#include <rescaleframe/native_latency_vulkan.h>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <cstring>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -87,11 +90,14 @@ struct Gpu {
     template<class T> T device_function(const char* name) {
         auto value = reinterpret_cast<T>(gdp(device, name)); require(value != nullptr, name); return value;
     }
-    void initialize() {
+    void initialize(bool streamline = false) {
         module = LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32); require(module != nullptr, "Vulkan loader");
         gip = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(module, "vkGetInstanceProcAddr")); require(gip != nullptr, "Vulkan instance dispatch");
+        if (streamline) gip = reinterpret_cast<PFN_vkGetInstanceProcAddr>(rsf_latencyvk_instance_proc);
         VkApplicationInfo app{}; app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO; app.pApplicationName = "ReScaleFrame Vulkan SR fixture"; app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo instance_info{}; instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO; instance_info.pApplicationInfo = &app;
+        const char* instance_extension = VK_KHR_SURFACE_EXTENSION_NAME;
+        if (streamline) { instance_info.enabledExtensionCount = 1; instance_info.ppEnabledExtensionNames = &instance_extension; }
         auto create_instance = reinterpret_cast<PFN_vkCreateInstance>(gip(nullptr, "vkCreateInstance")); require(create_instance != nullptr, "create instance entry");
         require(create_instance(&instance_info, nullptr, &instance) == VK_SUCCESS, "create Vulkan instance");
         destroy_instance = instance_function<PFN_vkDestroyInstance>("vkDestroyInstance");
@@ -114,6 +120,8 @@ struct Gpu {
         float priority = 1; VkDeviceQueueCreateInfo queue_info{}; queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queue_info.queueFamilyIndex = family; queue_info.queueCount = 1; queue_info.pQueuePriorities = &priority;
         VkDeviceCreateInfo device_info{}; device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO; device_info.pNext = &features;
+        const char* device_extension = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        if (streamline) { device_info.enabledExtensionCount = 1; device_info.ppEnabledExtensionNames = &device_extension; }
         device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;
         require(instance_function<PFN_vkCreateDevice>("vkCreateDevice")(physical, &device_info, nullptr, &device) == VK_SUCCESS, "create Vulkan device");
         gdp = instance_function<PFN_vkGetDeviceProcAddr>("vkGetDeviceProcAddr");
@@ -273,9 +281,9 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     // Context retirement must precede device retirement even when an assertion fails.
     struct ContextOwner { Gpu& gpu; rsf_srvk* value; ~ContextOwner() { (void)gpu.idle(gpu.device); (void)rsf_srvk_destroy(value); } } owner{gpu, context};
     uint32_t width = 0, height = 0; require(rsf_srvk_plan(context, &width, &height) == RSF_BACKEND_OK && width && height, "SR sizing plan");
-    auto color = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    auto depth = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    auto motion = gpu.image(width, height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    auto color = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    auto depth = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    auto motion = gpu.image(width, height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     auto output = gpu.image(320, 180, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = 43; record.view_id = 1; record.resource_generation = 1; record.frame_time_ms = 16.667f;
@@ -283,11 +291,19 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     record.output_width = record.camera.output_width = 320; record.output_height = record.camera.output_height = 180;
     record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.camera.depth_inverted = 1; record.camera.near_plane = 0.1f; record.camera.far_plane = 100; record.camera.vertical_fov_radians = 1;
+    for (auto* matrix : {record.camera.view_to_clip, record.camera.clip_to_view, record.camera.view_to_world, record.camera.world_to_view, record.camera.clip_to_previous_clip})
+        for (uint32_t i = 0; i < 4; ++i) matrix[i * 4 + i] = 1;
     rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
     frame.color = gpu.describe(color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.depth = gpu.describe(depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     frame.motion = gpu.describe(motion, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.output = gpu.describe(output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     frame.motion_scale_x = frame.motion_scale_y = frame.pre_exposure = 1;
     for (uint32_t index = 1; index <= 12; ++index) {
+        if (backend == RSF_SR_DLSS) {
+            require(rsf_srvk_dlss_preset(context, 99) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown DLSS preset refused");
+            require(rsf_srvk_dlss_preset(context, index < 7 ? 0u : 11u) == RSF_BACKEND_OK, "DLSS default/K model request");
+            rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.session_id = record.session_id;
+            event.source_frame_id = index; event.stage = RSF_GAME_CPU_FRAME_BEGIN; rsf_latencyvk_cpu(&event);
+        }
         const std::array<float, 4> value = index < 7 ? std::array<float, 4>{0.18f, 0.05f, 0.7f, 1} : std::array<float, 4>{0.05f, 0.4f, 0.12f, 1};
         gpu.start();
         for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, index == 1 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -303,12 +319,12 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
         gpu.read(output); gpu.finish(); gpu.verify(value);
     }
     require(gpu.idle(gpu.device) == VK_SUCCESS && rsf_srvk_destroy(context) == RSF_BACKEND_OK, "drain and retire Vulkan SR"); owner.value = nullptr;
-    std::printf("PASS: Vulkan FSR%u GPU pixels, reset and image-owner guards\n", backend);
+    std::printf("PASS: Vulkan SR backend %u GPU pixels, reset and image-owner guards\n", backend);
 }
 }
 #endif
 
-int main(int argc, char**) try {
+int main(int argc, char** argv) try {
     rsf_srvk_fallback fallback{}; fallback.struct_size = sizeof(fallback) - 1;
     require(rsf_srvk_spatial_fallback(nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
         rsf_srvk_spatial_fallback(&fallback) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "fallback null/short ABI refusal");
@@ -333,13 +349,31 @@ int main(int argc, char**) try {
     short_setup.struct_size = sizeof(short_setup); short_setup.abi_version = RSF_SRVK_ABI_VERSION + 1;
     require(rsf_srvk_create(&short_setup, &context) == RSF_BACKEND_ERROR_ABI_MISMATCH, "ABI mismatch refusal");
     require(rsf_srvk_plan(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        rsf_srvk_evaluate(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && rsf_srvk_destroy(nullptr) == RSF_BACKEND_OK, "null lifecycle contract");
+        rsf_srvk_evaluate(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        rsf_srvk_dlss_preset(nullptr, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && rsf_srvk_destroy(nullptr) == RSF_BACKEND_OK, "null lifecycle contract");
     if (argc == 1) { std::puts("PASS: native Vulkan SR C ABI guards"); return 0; }
     const char* directory = std::getenv("RSF_VULKAN_SR_RUNTIME");
     if (!directory) { std::puts("SKIP: set RSF_VULKAN_SR_RUNTIME for the Vulkan device fixture"); return 77; }
 #if defined(RSF_TEST_VULKAN)
-    Gpu gpu; gpu.initialize(); fallback_case(gpu); device_case(gpu, directory, RSF_SR_FSR2); device_case(gpu, directory, RSF_SR_FSR3); return 0;
+    const bool dlss = std::strcmp(argv[1], "--dlss") == 0;
+    if (dlss) {
+        const char* streamline = std::getenv("RSF_VULKAN_SL_RUNTIME");
+        if (!streamline) { std::puts("SKIP: set RSF_VULKAN_SL_RUNTIME for the shared DLSS SDK session"); return 77; }
+        const rsf_slvk_setup setup{sizeof(setup), RSF_SLVK_ABI_VERSION, streamline, "D9435FE3-13D4-4D81-B880-CCB98271F876", RSF_SLVK_DLSS_SR};
+        require(rsf_slvk_initialize(&setup) == RSF_BACKEND_OK, "initialize shared Vulkan DLSS/PCL session");
+    }
+    Gpu gpu;
+    struct SessionOwner { bool active; ~SessionOwner() { if (active) (void)rsf_latencyvk_shutdown(); } } session{dlss};
+    gpu.initialize(dlss);
+    if (dlss) {
+        require(rsf_latencyvk_options(0, 0) == RSF_BACKEND_OK, "bind shared PCL on Vulkan device");
+        device_case(gpu, directory, RSF_SR_DLSS);
+    } else {
+        fallback_case(gpu); device_case(gpu, directory, RSF_SR_FSR2); device_case(gpu, directory, RSF_SR_FSR3);
+    }
+    return 0;
 #else
+    (void)argv;
     std::puts("SKIP: built without Vulkan SDK headers"); return 77;
 #endif
 } catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }

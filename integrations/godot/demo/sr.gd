@@ -4,6 +4,7 @@ extends "res://scene.gd"
 var runtime: RefCounted
 var poses: Array[Dictionary] = []
 var initial_backend := 2
+var second_backend := 3
 var expect_sr_failure := false
 
 func _matrix(value: Projection) -> Array[float]:
@@ -23,6 +24,7 @@ func _ready() -> void:
         if argument.begins_with("--initial-sr="):
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
+    second_backend = 3 if initial_backend == 1 else 5 - initial_backend
     if RenderingServer.get_current_rendering_driver_name() == "vulkan":
         _require(not runtime.call("configure", {"sr_backend": 3, "fg_mode": 1, "fg_backend": 2}, get_viewport().get_viewport_rid()), "Unsupported Vulkan FG provider was accepted")
         _require(not runtime.call("configure", {"sr_backend": 3, "latency_mode": 3}, get_viewport().get_viewport_rid()), "Invalid Vulkan latency mode was accepted")
@@ -73,17 +75,23 @@ func _process(_delta: float) -> void:
     label.text = "Godot native SR: %s\nEvaluated %s, refused %s" % [status.get("active_sr", 0), status.get("evaluated_frames", 0), status.get("refused_frames", 0)]
     if frame == 45:
         _check_provider(status, initial_backend)
-        _snapshot("fsr%s" % initial_backend)
+        _snapshot("sr%s" % initial_backend)
+    elif frame == 50 and initial_backend == 1:
+        _require(runtime.call("configure", {"sr_backend": 1, "quality": 1, "dlss_preset": 11, "fg_mode": 0}, get_viewport().get_viewport_rid()), "DLSS K model request was refused")
+    elif frame == 58 and initial_backend == 1:
+        _check_provider(status, 1)
+        _require(status.requested_dlss_preset == 11, "DLSS K request was not retained")
+        _snapshot("sr1-preset-k")
     elif frame == 60:
-        _select(5 - initial_backend)
+        _select(second_backend)
     elif frame == 85:
-        _check_provider(status, 5 - initial_backend)
-        _snapshot("fsr%s" % (5 - initial_backend))
+        _check_provider(status, second_backend)
+        _snapshot("sr%s" % second_backend)
     elif frame == 90:
         DisplayServer.window_set_size(Vector2i(800, 450))
         runtime.call("reset_history")
     elif frame == 125:
-        _check_provider(status, 5 - initial_backend)
+        _check_provider(status, second_backend)
         _require(status.output_width == 800 and status.output_height == 450, "SR did not follow resize/reset")
         _snapshot("resized")
     elif frame == 150:
