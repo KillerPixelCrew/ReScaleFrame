@@ -176,3 +176,62 @@ reference directories under `visual/` using that prefix.
 This establishes standard-editor SR0/SR5 object/count1/latency-On paths. Camera,
 combined motion, C# and exported-player acceptance remain separate checks. No
 gate was relaxed and no broader readiness flag was changed.
+
+## Completed editor image matrix
+
+The subsequent matrix completed all twelve standard/.NET editor combinations:
+object, camera and combined motion with SR0 or XeSS SR5, XeSS FG5 count1 and
+latency On. Each case contains four actual generated images, all three FG guides,
+independent poses and a fresh binary-matched 1280x720 MSAA reference. Core and
+synchronization validation, process-only hook mitigation and the exact Intel
+diagnostic fingerprint guard remained enabled. The SDK fraction field remained
+false and the independent half-step comparison remained explicitly hypothetical.
+
+Maximum material centroid error in output pixels, identical in the standard and
+.NET controls:
+
+| Motion | SR0 + FG5 | SR5 + FG5 |
+| --- | ---: | ---: |
+| Object | 0.252433 | 0.246316 |
+| Camera | 0.157915 | 0.132067 |
+| Combined | 0.265657 | 0.191185 |
+
+All 48 images passed the unchanged 0.35-pixel gate and the existing vector/depth
+and image checks. The expanded cases used capture-fix Native
+`4765226F3364854814CBDA3AC5516F9F388A49FD6E5F31ABD9FCB76BA3A46EC2`, standard
+engine `DE9BA015EDC32412380BE6A57B59118BAC604517538C957371ADF6D8946145CB` and
+.NET engine `4C6461FC557BE416EAF35207A92B7963ECC3487B8FE224C36F9AA33729A594D0`. The two
+initial standard object cases retain their earlier matching 19BC Native pair.
+The signed Intel runtime and engine revisions did not change.
+
+Aggregate `.local/godot/xess-fg-image-matrix-20261025.json` records all accepted
+case manifests, full binary hashes, reports, foreground receipts and preserved
+failed controls. New successful retry manifests are
+`visual-20261025-203933-923` (standard SR5 camera),
+`visual-20261025-204014-346` (standard combined SR0/SR5), and
+`visual-20261025-204242-863` (.NET SR5 combined).
+
+Four preceding cases failed foreground validity. One completed with SDK FG
+inactive after another application became foreground; three could not establish
+the fixture's foreground ownership. Those rows remain failed in their original
+manifests. No renderer/VUID failure was inferred from those focus failures.
+
+The explicit optional `-MaintainForeground` harness mode samples the live owned
+window every 500 ms, reasserting only a visible HWND whose PID matches the owned
+fixture. It records owner/target HWNDs and PIDs, activation/attachment results,
+startup/runtime loss counts and reassert counts. Thread-input attachments are
+undone immediately. Desktop/cloaking queries are read-only; no application,
+global setting or virtual desktop is changed. The startup deadline remains 30
+seconds and the mode's overall capture deadline includes startup within 60
+seconds. Defaults remain unchanged.
+
+Initial monitor controls also preserved two bounded foreground refusals while
+ApplicationFrameHost remained active. Successful retries observed the owned
+`Engine` window on the current desktop, uncloaked, with one successful scoped
+activation in each receipt. The four invalid cases were then rerun with this
+explicit mode and fresh matching references, and passed all existing gates.
+
+This acceptance covers normal forward-frame editor image flow on the recorded
+GPU, provider/count and latency mode. It does not establish exported players,
+resize/abandoned-command-buffer behavior, XeSS multi-frame counts, broad scene
+quality or lower measured latency. Readiness flags remain unchanged.

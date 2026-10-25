@@ -2,6 +2,16 @@
 
 ## Godot developer integration in progress, 25 October 2026
 
+Latest harness milestone: XeSS FG editor image checks pass all twelve standard/.NET
+object/camera/combined cases with SR0/SR5, covering 48 actual generated images and
+fresh independent references. Maximum centroid error is 0.265658 output pixels;
+the existing 0.35-pixel gate is unchanged. Optional foreground maintenance records
+owned-window activation, bounded failures and successful retries. A rebuilt standard
+Release FSR4 SR export passes switching, resize and raw capture checks. The strict
+DLSS lifecycle fixture correctly fails active resize and shutdown; its native fix
+is pending a coordinated build and retake. See the [XeSS capture evidence](research/godot-xess-fg-capture-20261025.md)
+and [DLSS lifecycle investigation](research/godot-vulkan-dlss-fg.md).
+
 `integrations/godot` now contains a pinned 4.7.2 GDExtension, a native engine
 module, guarded source patching and an automatic harness. Standard and .NET
 editions passed the DX12/Vulkan renderer probe. The standard custom-engine DX12

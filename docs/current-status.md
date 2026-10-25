@@ -25,10 +25,15 @@ with FSR3 FG and PCL, covering 24 actual generated images. Vulkan DLSS FG passes
 strict standard/.NET device checks and independent midpoint image tests, including
 a shared DLSS SR + FG case. Higher-count MFG3 passes strict GPU checks and independent quarter-step image
 comparisons, preserving all three generated ordinals. XeSS FG uses a Vulkan/DX12 presenter: standard/.NET
-lifecycle, C# and PCL checks pass, and the first standard SR Off and XeSS SR object
-image cases pass with actual SDK-generated outputs. FSR4 SR uses a graph-owned
+lifecycle, C# and PCL checks pass. All twelve standard/.NET object/camera/combined
+image cases with SR Off or XeSS SR pass, covering 48 actual SDK-generated images.
+Optional foreground maintenance records scoped activation and preserved failed controls.
+FSR4 SR uses a graph-owned
 Vulkan/DX12 handoff; both editors pass switching/resize checks, with C# on .NET. One combined-motion
-image case and four raw SR frames pass per edition. These remain bounded fixture results. Cold
+image case and four raw SR frames pass per edition. Rebuilt standard Release exports
+also pass FSR4 switching, resize and raw-output checks. The new strict DLSS lifecycle
+fixture exposes synchronization errors after active resize and a shutdown crash;
+the correction and retake remain pending. These remain bounded fixture results. Cold
 startup pauses, FSR2 displacement, Vulkan FSR4 FG routing, new-provider export coverage and broader
 scene-quality acceptance remain open. This does
 not change game-plugin readiness flags.

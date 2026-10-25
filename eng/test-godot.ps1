@@ -4,7 +4,7 @@ param(
     [switch]$EngineBridge,
     [switch]$Exported,
     [ValidateSet('debug','release')][string]$ExportConfiguration = 'release',
-    [ValidateSet('runtime','controller','pcl','sr','fg')][string]$Scenario = 'runtime',
+    [ValidateSet('runtime','controller','pcl','sr','fg','fg_lifecycle')][string]$Scenario = 'runtime',
     [switch]$NoCSharp,
     [switch]$GpuValidation,
     [switch]$CaptureFrames,
@@ -13,13 +13,15 @@ param(
     [ValidateSet(1,2,3,4,5)][int]$SrBackend = 2,
     [ValidateSet(1,3,5)][int]$FgBackend = 3,
     [ValidateRange(1,15)][int]$GeneratedFrames = 1,
-    [switch]$DisableLegacyExtensionPoints
+    [switch]$DisableLegacyExtensionPoints,
+    [switch]$MaintainForeground
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
 if ($DisableLegacyExtensionPoints) { . (Join-Path $PSScriptRoot 'godot-process-isolation.ps1') }
+if ($MaintainForeground) { . (Join-Path $PSScriptRoot 'godot-capture-foreground.ps1') }
 $taskGpuLease = Enter-RsfGodotValidation
 try {
 $taskLocal = Join-Path $taskRoot '.local/godot'
@@ -29,12 +31,15 @@ $taskPackage = Join-Path $taskLocal 'package/addons/rescaleframe'
 $taskRunStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
 $taskRunResults = @()
 if ($EngineBridge -and !$PSBoundParameters.ContainsKey('GraphicsApi')) { $GraphicsApi = @('d3d12') }
-if ($EngineBridge -and $GraphicsApi -contains 'vulkan' -and $Scenario -notin @('sr','fg','pcl')) { throw 'Godot Vulkan full provider switching is unfinished. Use -Scenario sr/fg/pcl for native Vulkan fixtures, or omit -EngineBridge for renderer probes.' }
+if ($EngineBridge -and $GraphicsApi -contains 'vulkan' -and $Scenario -notin @('sr','fg','fg_lifecycle','pcl')) { throw 'Godot Vulkan full provider switching is unfinished. Use -Scenario sr/fg/fg_lifecycle/pcl for native Vulkan fixtures, or omit -EngineBridge for renderer probes.' }
 if ($Exported -and !$EngineBridge) { throw 'Exported runtime validation requires -EngineBridge.' }
 if ($NativeVulkanPresentation -and (!$EngineBridge -or $Scenario -ne 'pcl' -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Native presentation control requires -EngineBridge -GraphicsApi vulkan -Scenario pcl.' }
 if ($Scenario -eq 'controller' -and !$EngineBridge) { throw 'Controller validation requires -EngineBridge.' }
-if (($FgBackend -ne 3 -or $GeneratedFrames -ne 1) -and (!$EngineBridge -or $Scenario -ne 'fg' -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Explicit FG provider/count requires -EngineBridge -Scenario fg -GraphicsApi vulkan.' }
+if (($FgBackend -ne 3 -or $GeneratedFrames -ne 1) -and (!$EngineBridge -or $Scenario -notin @('fg','fg_lifecycle') -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Explicit FG provider/count requires -EngineBridge -Scenario fg/fg_lifecycle -GraphicsApi vulkan.' }
+if ($Scenario -eq 'fg_lifecycle' -and (!$EngineBridge -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan' -or $FgBackend -ne 1 -or $GeneratedFrames -ne 1 -or $CaptureFrames -or $env:RSF_GODOT_SINGLE_WINDOW -eq '1')) { throw 'The DLSS lifecycle fixture requires -EngineBridge -GraphicsApi vulkan -FgBackend 1 -GeneratedFrames 1 and secondary windows, without raw capture.' }
+if ($Scenario -eq 'fg_lifecycle' -and (!$GpuValidation -or $env:VK_VALIDATION_VALIDATE_SYNC -ne '1')) { throw 'The DLSS lifecycle fixture requires -GpuValidation and VK_VALIDATION_VALIDATE_SYNC=1.' }
 if ($DisableLegacyExtensionPoints -and !$EngineBridge) { throw 'Process mitigation requires an engine-bridge foreground fixture.' }
+if ($MaintainForeground -and !$EngineBridge) { throw 'Foreground maintenance requires an engine-bridge foreground fixture.' }
 if ($Scenario -eq 'pcl' -and (!$EngineBridge -or !$NoCSharp)) { throw 'The camera-free PCL fixture requires -EngineBridge -NoCSharp. C# is covered by the runtime/controller fixtures.' }
 if ($GpuValidation -and ($GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'GPU validation currently requires an explicit Vulkan-only test.' }
 if ($CaptureFrames -and (!$EngineBridge -or $Scenario -notin @('sr','fg') -or $GraphicsApi.Count -ne 1 -or $GraphicsApi[0] -ne 'vulkan')) { throw 'Raw readback requires -EngineBridge -GraphicsApi vulkan -Scenario sr/fg.' }
@@ -57,8 +62,20 @@ function Invoke-BoundedGodot([string]$Executable, [string[]]$Arguments, [string]
     } else {
         $taskProcess = Start-Process -FilePath $Executable -ArgumentList $taskArguments -PassThru -WindowStyle $taskStyle -RedirectStandardOutput $Log -RedirectStandardError ($Log + '.stderr')
     }
+    $taskMaintain = $MaintainForeground -and $Foreground
+    $taskForegroundReceipt = if ($taskMaintain) { New-RsfCaptureForegroundReceipt $taskProcess } else { $null }
+    try {
     if ($Foreground) {
-        try { Set-RsfGodotForeground $taskProcess }
+        try {
+            if ($taskMaintain) {
+                $taskFocused = $false
+                while (!$taskProcess.HasExited -and $taskTimer.Elapsed.TotalSeconds -lt 30 -and $taskTimer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+                    if (Update-RsfCaptureForeground $taskProcess $taskForegroundReceipt $taskTimer 'startup') { $taskFocused = $true; break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (!$taskFocused) { throw "Cannot establish the owned GPU fixture's foreground window: $($taskProcess.Id)" }
+            } else { Set-RsfGodotForeground $taskProcess }
+        }
         catch { if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }; throw }
         if ($DisableLegacyExtensionPoints) {
             @{process_id=$taskProcess.Id; requested_extension_point_disable=$true; effective_extension_point_policy=$taskProcessPolicy;
@@ -78,7 +95,8 @@ function Invoke-BoundedGodot([string]$Executable, [string[]]$Arguments, [string]
                 ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($Log + '.validation-layer.json') -Encoding utf8
         }
     }
-    while (!$taskProcess.WaitForExit(1000)) {
+    while (!$taskProcess.WaitForExit(500)) {
+        if ($taskMaintain) { $null = Update-RsfCaptureForeground $taskProcess $taskForegroundReceipt $taskTimer 'runtime' }
         if ($taskTimer.Elapsed.TotalSeconds -gt $TimeoutSeconds) {
             Stop-Process -Id $taskProcess.Id
             throw "Godot validation exceeded $TimeoutSeconds seconds: $Log"
@@ -98,6 +116,9 @@ function Invoke-BoundedGodot([string]$Executable, [string[]]$Arguments, [string]
     }
     if ($Foreground -and $GpuValidation -and $env:VK_VALIDATION_VALIDATE_SYNC -eq '1' -and (Get-Content -Raw -LiteralPath $Log) -notmatch '(?m)^\s+- Synchronization\s*$') {
         throw 'Synchronization validation was requested but the loaded layer did not report it enabled.'
+    }
+    } finally {
+        if ($taskMaintain) { Save-RsfCaptureForegroundReceipt $taskForegroundReceipt ($Log + '.foreground-maintenance.json') }
     }
 }
 
@@ -200,7 +221,7 @@ application/modify_resources=false
         if ($Scenario -eq 'fg') { $taskRunArguments += @("--fg=$FgBackend", "--generated=$GeneratedFrames") }
         if ($MissingSrRuntime) { $taskRunArguments += '--expect-sr-failure' }
         $taskCaptureSaved = @{}
-        if ($Scenario -eq 'fg' -and $taskApi -eq 'vulkan') {
+        if ($Scenario -in @('fg','fg_lifecycle') -and $taskApi -eq 'vulkan') {
             $taskCaptureSaved['VULKANSTORY_STREAMLINE_VERBOSE'] = [Environment]::GetEnvironmentVariable('VULKANSTORY_STREAMLINE_VERBOSE')
             $env:VULKANSTORY_STREAMLINE_VERBOSE = '1'
         }
@@ -257,7 +278,7 @@ application/modify_resources=false
         if (!(Test-Path -LiteralPath $taskResult)) { throw "Godot did not produce a report: $taskResult" }
         $taskReport = Get-Content -Raw -LiteralPath $taskResult | ConvertFrom-Json
         if (!$taskReport.passed) { throw "Godot validation failed: $taskResult" }
-        if ($Scenario -eq 'fg' -and $FgBackend -ne 5 -and $taskApi -eq 'vulkan' -and $env:RSF_GODOT_SINGLE_WINDOW -ne '1') {
+        if ($Scenario -in @('fg','fg_lifecycle') -and $FgBackend -ne 5 -and $taskApi -eq 'vulkan' -and $env:RSF_GODOT_SINGLE_WINDOW -ne '1') {
             $taskSdkLog = Get-Content -Raw -LiteralPath (Join-Path $taskProject "$taskApi.log.stderr")
             $taskPrimaryOwners = @([regex]::Matches($taskSdkLog, 'RSF Reflex primary swapchain selected: ([0-9A-Fa-fx]+)'))
             $taskSecondaryOwners = @([regex]::Matches($taskSdkLog, 'RSF Reflex secondary swapchain ignored: ([0-9A-Fa-fx]+) owner=([0-9A-Fa-fx]+)'))
@@ -273,7 +294,7 @@ application/modify_resources=false
             if ($LASTEXITCODE) { throw "Vulkan raw frame checks failed: $taskProject/frames/decoded/report.html" }
         }
         if ($taskEdition -eq 'mono' -and !$NoCSharp -and !$taskReport.mono.passed) { throw "Godot C# validation failed: $taskResult" }
-        $taskRunResults += @{edition=$taskEdition; api=$taskApi; scenario=$Scenario; fg_backend=$(if ($Scenario -eq 'fg') { $FgBackend } else { $null }); generated_frames=$(if ($Scenario -eq 'fg') { $GeneratedFrames } else { $null }); disable_legacy_extension_points=$DisableLegacyExtensionPoints.IsPresent; initial_sr_backend=$(if ($Scenario -eq 'sr') { $SrBackend } else { $null }); exported=$Exported.IsPresent; gpu_validation=$GpuValidation.IsPresent; raw_frames=$CaptureFrames.IsPresent; native_presentation=$NativeVulkanPresentation.IsPresent; missing_sr_runtime=$MissingSrRuntime.IsPresent;
+        $taskRunResults += @{edition=$taskEdition; api=$taskApi; scenario=$Scenario; fg_backend=$(if ($Scenario -in @('fg','fg_lifecycle')) { $FgBackend } else { $null }); generated_frames=$(if ($Scenario -in @('fg','fg_lifecycle')) { $GeneratedFrames } else { $null }); disable_legacy_extension_points=$DisableLegacyExtensionPoints.IsPresent; maintain_foreground=$MaintainForeground.IsPresent; initial_sr_backend=$(if ($Scenario -eq 'sr') { $SrBackend } else { $null }); exported=$Exported.IsPresent; gpu_validation=$GpuValidation.IsPresent; raw_frames=$CaptureFrames.IsPresent; native_presentation=$NativeVulkanPresentation.IsPresent; missing_sr_runtime=$MissingSrRuntime.IsPresent;
             csharp=($taskEdition -eq 'mono' -and !$NoCSharp); result=$taskResult; executable=$taskExe;
             sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash;
             native_sha256=(Get-FileHash -LiteralPath $(if ($Exported) { Join-Path $taskExportRoot 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll' } else { Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll' })).Hash;
@@ -283,7 +304,7 @@ application/modify_resources=false
                 sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash; result=$taskResult} |
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskExportRoot 'validation.json') -Encoding utf8
         }
-        $taskScope = if ($MissingSrRuntime) { 'missing Vulkan SR DLL, preserved provider refusal and visible spatial output through provider switches/resize' } elseif ($Scenario -eq 'fg') { "FG $FgBackend count $GeneratedFrames and PCL, SR-independent generation, Off/resume and resize; no generated-image-quality claim" } elseif ($Scenario -eq 'sr' -and $SrBackend -eq 4) { 'SR4 to SR1, return to SR4, resize/reset and actual player PNGs; no FG/PCL claim' } elseif ($Scenario -eq 'sr') { "SR $SrBackend to SR $(if ($SrBackend -in @(1,5)) { 3 } else { 5 - $SrBackend }), resize, reset and actual player PNGs; no FG/PCL claim" } elseif ($Scenario -eq 'pcl') { 'PCL from startup without a camera or compositor' } elseif ($Scenario -eq 'controller') { 'settings, pause/cut, Off/resume, controller replacement and PCL' } elseif ($EngineBridge) { 'SR/FG/MFG switching, resize, PCL and input markers' } else { 'object/camera motion, resize, disable/resume' }
+        $taskScope = if ($MissingSrRuntime) { 'missing Vulkan SR DLL, preserved provider refusal and visible spatial output through provider switches/resize' } elseif ($Scenario -eq 'fg_lifecycle') { 'DLSS Off/resume, active resize, count 1/3/1, FFX round trip, secondary coexistence and PCL; no generated-image-quality claim' } elseif ($Scenario -eq 'fg') { "FG $FgBackend count $GeneratedFrames and PCL, SR-independent generation, Off/resume and resize; no generated-image-quality claim" } elseif ($Scenario -eq 'sr' -and $SrBackend -eq 4) { 'SR4 to SR1, return to SR4, resize/reset and actual player PNGs; no FG/PCL claim' } elseif ($Scenario -eq 'sr') { "SR $SrBackend to SR $(if ($SrBackend -in @(1,5)) { 3 } else { 5 - $SrBackend }), resize, reset and actual player PNGs; no FG/PCL claim" } elseif ($Scenario -eq 'pcl') { 'PCL from startup without a camera or compositor' } elseif ($Scenario -eq 'controller') { 'settings, pause/cut, Off/resume, controller replacement and PCL' } elseif ($EngineBridge) { 'SR/FG/MFG switching, resize, PCL and input markers' } else { 'object/camera motion, resize, disable/resume' }
         Write-Output "PASS: Godot $taskEdition / $taskApi ($taskScope)"
     }
 }

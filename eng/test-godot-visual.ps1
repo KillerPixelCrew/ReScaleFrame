@@ -11,7 +11,8 @@ param(
     [ValidateRange(0,2)][int]$LatencyMode = 0,
     [switch]$GpuValidation,
     [switch]$ReferenceMsaa,
-    [switch]$DisableLegacyExtensionPoints
+    [switch]$DisableLegacyExtensionPoints,
+    [switch]$MaintainForeground
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -25,7 +26,7 @@ foreach ($taskEdition in $Edition) {
     $taskEngine = Get-RsfGodotBuild $taskRoot $taskEdition
     foreach ($taskMode in $Mode) {
         $taskReferenceLabel = "$taskRun-$taskEdition-reference"
-        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; Geometry=$Geometry; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent; LatencyMode=$LatencyMode; DisableLegacyExtensionPoints=$DisableLegacyExtensionPoints.IsPresent; LargeOutput=($LargeOutput.IsPresent -or $FgBackend -in @(1,5))}
+        $taskOptions = @{EngineExe=$taskEngine; Mode=$taskMode; Geometry=$Geometry; FirstFrame=$FirstFrame; Mono=($taskEdition -eq 'mono'); GraphicsApi=$GraphicsApi; GpuValidation=$GpuValidation.IsPresent; LatencyMode=$LatencyMode; DisableLegacyExtensionPoints=$DisableLegacyExtensionPoints.IsPresent; MaintainForeground=$MaintainForeground.IsPresent; LargeOutput=($LargeOutput.IsPresent -or $FgBackend -in @(1,5))}
         & (Join-Path $PSScriptRoot 'capture-godot.ps1') @taskOptions -Label $taskReferenceLabel -Reference -ReferenceMsaa:$ReferenceMsaa -FgBackend 3 -GeneratedFrames 1
         $taskReference = Join-Path $taskRoot ".local/godot/visual/$taskReferenceLabel-$taskMode"
         foreach ($taskSr in $SrBackend) {
@@ -57,7 +58,7 @@ foreach ($taskEdition in $Edition) {
 }
 $taskManifest = Join-Path $taskRoot ".local/godot/$taskRun.json"
 $taskFailed = @($taskResults | Where-Object { !$_.passed })
-@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; geometry=$Geometry; graphics_api=$GraphicsApi; fg_backend=$FgBackend; generated_frames=$GeneratedFrames; large_output=($LargeOutput.IsPresent -or $FgBackend -in @(1,5)); latency_mode=$LatencyMode; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; disable_legacy_extension_points=$DisableLegacyExtensionPoints.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
+@{passed=($taskFailed.Count -eq 0); first_frame=$FirstFrame; geometry=$Geometry; graphics_api=$GraphicsApi; fg_backend=$FgBackend; generated_frames=$GeneratedFrames; large_output=($LargeOutput.IsPresent -or $FgBackend -in @(1,5)); latency_mode=$LatencyMode; gpu_validation=$GpuValidation.IsPresent; reference_msaa=$ReferenceMsaa.IsPresent; disable_legacy_extension_points=$DisableLegacyExtensionPoints.IsPresent; maintain_foreground=$MaintainForeground.IsPresent; cases=$taskResults} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskManifest -Encoding utf8
 Write-Output "Visual test manifest: $taskManifest"
 $taskRows = foreach ($taskCase in $taskResults) {
     $taskState = if ($taskCase.passed) { 'PASS' } else { 'FAIL' }

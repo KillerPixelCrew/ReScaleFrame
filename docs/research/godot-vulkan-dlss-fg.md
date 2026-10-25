@@ -498,3 +498,56 @@ continued to surface/device destruction and reported `01266`/`05137`, then exite
 with an access violation. No clean retirement or generated-image acceptance is
 claimed from that run. The correction requires a new native build and repeat of
 both readback controls; it does not change the SDK recipe.
+
+## Submission identity and explicit lifecycle follow-up
+
+The private FFX Vulkan submission notifier previously matched every pending slot
+by command-buffer pointer and could reset an already accepted slot's completed
+fence when a later recording reused the address. The corrected implementation
+assigns a monotonic local recording sequence to each accepted prepare, discards
+older unsubmitted matching roles, and fences only roles newly accepted by the
+current notification. Recording and successful SDK preparation are separate:
+partially recorded SDK failures still retain a producer completion lease, without
+becoming eligible for interpolation. HUD-less admission also checks session,
+view and resource generation. Present freshness follows recording sequence so
+source frame numbers may restart in a new session.
+
+`tests/native_ffx_vulkan_submission.cpp` includes the real implementation with
+fake Vulkan and FFX functions. Windows clang with warnings as errors passes
+same-address reuse, combined and split role submissions, duplicate notifications,
+abandoned sources, partial SDK failure, timeout retention, exact view identity
+and restarted frame-ID cases. The existing camera-reset regression also passes.
+These are synthetic results; the coordinated native gate and subsequent device
+retake are separate requirements.
+
+The new `fg_lifecycle` fixture exercises DLSS Off/resume, resize while active,
+count one to three to one, FFX provider replacement and return, and secondary
+window creation, resize and retirement. The first standard run,
+`fg_lifecycle-20261025-203843-939`, used native DLL
+`4765226F3364854814CBDA3AC5516F9F388A49FD6E5F31ABD9FCB76BA3A46EC2`.
+All eleven scalar samples and player images pass their state, foreground,
+extent and root-session checks. Nevertheless the process fails strict
+acceptance: immediately after active resize at source 85, validation reports
+`03238` and cross-queue read/write racing on the new proxy image. The binary wait
+depends on the SDK's older `0xc900000000c9` timeline, value 90. The process later
+exits with an access violation during shutdown. The first error precedes the
+count-three change, which starts only after the source-115 sample. An initial
+provider-transition suspicion was corrected by matching SDK timestamps to PNG
+write times. The root cause remains under investigation; healthy counters and
+the report's scalar `passed:true` do not establish lifecycle acceptance.
+
+Pinned retail review confirms `slSetData` at RVA `0x58250` stores the options
+with the SDK present ordinal; `presentCommon` at RVA `0x46840` reconciles viewport
+options and mode one skips the client-queue completion wait at context offset
+`0x45d0`. Evidence IDs are
+`ev_1d1ac670924d385c4f4404917c24575682891425091306c5750cb8c2f4ec61d0`
+and `ev_6d5e342a5f442c885f3056a3ce4ac8189cd72d6528634adfc1c73fd63b999113`.
+The public pinned guide says options apply to the next Present. Native options
+publication now follows that boundary on every owned proxy Present, including
+initial Off and unchanged states, and on drain. The previous local-state cache
+could skip publishing Off for a newly reconstructed owner even though its local
+state did not describe the shared SDK viewport. Synthetic assertions cover this
+publication contract, including refusing WSI if both enable and explicit Off
+publication fail. Resource-completion waits are unchanged. Whether this corrects
+the observed resize error requires the next strict device retake; the static
+review does not establish the runtime root cause.

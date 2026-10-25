@@ -18,13 +18,15 @@ param(
     [ValidateRange(0,2)][int]$LatencyMode = 0,
     [ValidateSet('d3d12','vulkan')][string]$GraphicsApi = 'd3d12',
     [switch]$GpuValidation,
-    [switch]$DisableLegacyExtensionPoints
+    [switch]$DisableLegacyExtensionPoints,
+    [switch]$MaintainForeground
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
 if ($DisableLegacyExtensionPoints) { . (Join-Path $PSScriptRoot 'godot-process-isolation.ps1') }
+if ($MaintainForeground) { . (Join-Path $PSScriptRoot 'godot-capture-foreground.ps1') }
 $taskGpuLease = Enter-RsfGodotValidation
 try {
 $taskSource = Join-Path $taskRoot 'integrations/godot'
@@ -52,6 +54,7 @@ $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/res
     large_output=($LargeOutput.IsPresent -or $FgBackend -in @(1,5)); reference_substeps=$ReferenceSubsteps;
     reference_msaa=$ReferenceMsaa.IsPresent; reset_sr_history=$ResetSrHistory.IsPresent; graphics_api=$GraphicsApi; gpu_validation=$GpuValidation.IsPresent;
     disable_legacy_extension_points=$DisableLegacyExtensionPoints.IsPresent;
+    maintain_foreground=$MaintainForeground.IsPresent;
     captured_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'capture-info.json') -Encoding utf8
 if ($Mono) {
     Copy-Item -Path (Join-Path $taskSource 'demo/mono/*') -Destination $taskProject -Force
@@ -71,8 +74,21 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
     } else {
         $taskProcess = Start-Process -FilePath $taskExe -ArgumentList $taskArguments -WindowStyle Normal -PassThru -RedirectStandardOutput (Join-Path $taskProject "$Name.log") -RedirectStandardError (Join-Path $taskProject "$Name.stderr")
     }
+    $taskMaintain = $MaintainForeground -and $Name -eq 'capture'
+    $taskForegroundTimer = [Diagnostics.Stopwatch]::StartNew()
+    $taskForegroundReceipt = if ($taskMaintain) { New-RsfCaptureForegroundReceipt $taskProcess } else { $null }
+    try {
     if ($Name -eq 'capture') {
-        try { Set-RsfGodotForeground $taskProcess }
+        try {
+            if ($taskMaintain) {
+                $taskFocused = $false
+                while (!$taskProcess.HasExited -and $taskForegroundTimer.Elapsed.TotalSeconds -lt 30) {
+                    if (Update-RsfCaptureForeground $taskProcess $taskForegroundReceipt $taskForegroundTimer 'startup') { $taskFocused = $true; break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (!$taskFocused) { throw "Cannot establish the owned GPU fixture's foreground window: $($taskProcess.Id)" }
+            } else { Set-RsfGodotForeground $taskProcess }
+        }
         catch { if (!$taskProcess.HasExited) { Stop-Process -Id $taskProcess.Id }; throw }
         if ($GpuValidation) {
             $taskLayer = @($taskProcess.Modules | Where-Object ModuleName -eq 'VkLayer_khronos_validation.dll')
@@ -81,10 +97,11 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskProject 'validation-layer.json') -Encoding utf8
         }
     }
-    if ($taskIsolated) {
+    if ($taskIsolated -or $taskMaintain) {
         $taskIsolationTimer = [Diagnostics.Stopwatch]::StartNew()
         $taskProcessModules = @{}
         while (!$taskProcess.HasExited) {
+            if ($taskMaintain) { $null = Update-RsfCaptureForeground $taskProcess $taskForegroundReceipt $taskForegroundTimer 'runtime' }
             try { $taskLiveModules = $taskProcess.Modules }
             catch {
                 if ($taskProcess.HasExited) { break }
@@ -97,17 +114,22 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
                 }
             }
             if ($taskProcess.WaitForExit(500)) { break }
-            if ($taskIsolationTimer.Elapsed.TotalSeconds -gt 60) { Stop-Process -Id $taskProcess.Id; throw "Capture timed out: $taskProject" }
+            if (($taskMaintain -and $taskForegroundTimer.Elapsed.TotalSeconds -gt 60) -or (!$taskMaintain -and $taskIsolationTimer.Elapsed.TotalSeconds -gt 60)) { Stop-Process -Id $taskProcess.Id; throw "Capture timed out: $taskProject" }
             $taskProcess.Refresh()
         }
-        @{process_id=$taskProcess.Id; requested_extension_point_disable=$true; effective_extension_point_policy=$taskProcessPolicy;
+        if ($taskIsolated) { @{process_id=$taskProcess.Id; requested_extension_point_disable=$true; effective_extension_point_policy=$taskProcessPolicy;
             working_directory=(Get-Location).ProviderPath; modules=@($taskProcessModules.Values | Sort-Object name)} |
-            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskProject 'process-isolation.json') -Encoding utf8
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskProject 'process-isolation.json') -Encoding utf8 }
     } elseif (!$taskProcess.WaitForExit(60000)) { Stop-Process -Id $taskProcess.Id; throw "Capture timed out: $taskProject" }
     if ($taskProcess.ExitCode) { throw "Capture failed ($($taskProcess.ExitCode)): $taskProject/$Name.log" }
     $taskError = Get-Content -Raw -LiteralPath (Join-Path $taskProject "$Name.stderr")
     if ($taskError -match '(?m)^(ERROR|SCRIPT ERROR):') { throw "Capture emitted errors: $taskProject/$Name.stderr" }
     if ($GpuValidation -and (Get-RsfGodotVulkanValidationText $taskError) -match 'VUID-|SYNC-HAZARD|Validation Error|will produce undefined values|not created with any VkDescriptorPoolSize|(?m)^vk[A-Z][A-Za-z0-9_]+\(\):') { throw "Vulkan validation failed: $taskProject/$Name.stderr" }
+    } finally {
+        if ($taskMaintain) {
+            Save-RsfCaptureForegroundReceipt $taskForegroundReceipt (Join-Path $taskProject 'foreground-maintenance.json')
+        }
+    }
 }
 Run-Capture @('--headless','--editor','--import','--path',$taskProject,'--quit-after','30') 'import'
 $taskSaved = @{}
