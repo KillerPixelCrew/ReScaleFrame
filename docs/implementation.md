@@ -20,6 +20,15 @@ with 63 executed and 11 opt-in skips, plus Rust formatting and Clippy. NVIDIA
 device queries correctly refuse an FSR3-only provider list. AMD execution and
 generated-image acceptance remain untested. [Evidence and limits](research/godot-fsr4-fg-interop-20261025.md).
 
+The next coordinated MSVC Release gate passes 75 discovered tests, 64 executed
+and 11 opt-in skips, plus formatting and Clippy. Streamline now filters device
+requirements by the selected adapter's exact LUID and gates NVIDIA latency
+constructors by the selected vendor. The fresh NVIDIA pair passes standard/.NET
+camera-free native-WSI PCL and standard DLSS SR switching/resize with four raw
+frames. A fixed-guide extent guard also passes standard/.NET XeSS FG SR switches,
+Off/resume and resize. AMD and mixed-adapter execution remain untested.
+[SDK evidence](research/godot-streamline-device-requirements-20261025.md).
+
 `integrations/godot` now contains a pinned 4.7.2 GDExtension, a native engine
 module, guarded source patching and an automatic harness. Standard and .NET
 editions passed the DX12/Vulkan renderer probe. The standard custom-engine DX12

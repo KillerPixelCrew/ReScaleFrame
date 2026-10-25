@@ -37,6 +37,9 @@ void* device = nullptr;
 rsf_godot_vk_proc device_proc = nullptr;
 uint64_t generation = 1, context_generation = 0;
 uint64_t presentation_generation = 0;
+bool presentation_guides_recorded = false;
+uint64_t presentation_guide_session = 0;
+uint32_t presentation_guide_view = 0, presentation_guide_width = 0, presentation_guide_height = 0;
 uint32_t context_backend = 0;
 rsf_game_log_fn logger = nullptr;
 void* logger_user = nullptr;
@@ -251,6 +254,7 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
     if (presentation) (void)rsf_fgvk_max_generated(presentation, &current.max_generated_frames);
     if (presentation) {
         presentation_generation = generation;
+        presentation_guides_recorded = false;
         presentation_graphics = setup->graphics;
         presentation_graphics.runtime_directory_utf8 = nullptr;
         if (selected == 5) (void)rsf_fgvk_latency_options(presentation, requested.latency_mode, requested.frame_limit_us);
@@ -303,6 +307,7 @@ extern "C" int32_t rsfg_vk_destroy(void* value) try {
     if (result == RSF_BACKEND_OK && presentation == target) {
         presentation = nullptr; current.fg_available = current.fg_active = 0;
         presentation_graphics = {};
+        presentation_guides_recorded = false;
         current.fg_backend = current.max_generated_frames = current.generated_frames = 0;
         if (sdk_shutdown_pending) {
             if (rsf_latencyvk_shutdown() == RSF_BACKEND_OK) sdk_shutdown_pending = false;
@@ -343,8 +348,22 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
         fg.motion_scale_x = -float(camera.render_width) * pass.motion_to_uv[0]; fg.motion_scale_y = -float(camera.render_height) * pass.motion_to_uv[1];
         (void)rsf_fgvk_backend(presentation, &current.fg_backend);
         current.generated_frames = enabled && options_result == RSF_BACKEND_OK ? requested.generated_frames : 0u;
-        current.fg_result = options_result != RSF_BACKEND_OK ? options_result :
+        const bool fixed_guides = current.fg_backend == 4 || current.fg_backend == 5;
+        if (fixed_guides && presentation_guides_recorded && pass.role == RSF_GAME_RENDER_SR &&
+            record.session_id == presentation_guide_session && record.view_id == presentation_guide_view &&
+            (record.render_width != presentation_guide_width || record.render_height != presentation_guide_height)) {
+            // The SDK's first plan can settle one frame after settings change.
+            // Retire fixed guide allocations through the normal WSI owner path.
+            presentation_generation = 0;
+        }
+        const bool guides_ready = !fixed_guides || presentation_generation == generation;
+        current.fg_result = options_result != RSF_BACKEND_OK ? options_result : !guides_ready ? RSF_BACKEND_ERROR_NOT_READY :
             (pass.role == RSF_GAME_RENDER_SR ? rsf_fgvk_prepare(presentation, commands, &fg) : rsf_fgvk_hudless(presentation, commands, &fg));
+        if (fixed_guides && !presentation_guides_recorded && pass.role == RSF_GAME_RENDER_SR && current.fg_result == RSF_BACKEND_OK) {
+            presentation_guides_recorded = true;
+            presentation_guide_session = record.session_id; presentation_guide_view = record.view_id;
+            presentation_guide_width = record.render_width; presentation_guide_height = record.render_height;
+        }
     }
     if (pass.role == RSF_GAME_RENDER_FINAL_SCENE) return current.fg_result == RSF_BACKEND_OK ? 1 : 0;
     auto fallback = [&]() {

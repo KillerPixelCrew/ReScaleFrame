@@ -2,6 +2,7 @@
 from pathlib import Path
 import argparse
 import json
+from selected_device import apply as apply_selected_device
 
 parser = argparse.ArgumentParser()
 parser.add_argument("sdk", type=Path)
@@ -546,6 +547,8 @@ replace("source/core/sl.interposer/vulkan/wrapper.cpp", """        if (s_vk.nati
             }
             extraOpticalFlowQueues = 0;
         }""")
+
+edits.extend(apply_selected_device(sdk)["edits"])
 
 (sdk / "vulkanstory-fixes.json").write_text(json.dumps({
     "sdkCommit": "2122257e0fce486f91b385aa63b9a09b0a34b363",

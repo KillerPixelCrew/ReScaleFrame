@@ -65,6 +65,6 @@ foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt',
 }
 & (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1') -HostRoot $taskHost `
     -SdkRoot (Join-Path $taskRoot 'references/godot/streamline') `
-    -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-dlssg-mfg-transfer') `
+    -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-selected-device-reflex') `
     -Python (Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe')
 Write-Output 'Vulkan SR/FG/PCL payloads built. Run eng/build-godot.ps1 -StageRuntime to include them in the add-on.'
