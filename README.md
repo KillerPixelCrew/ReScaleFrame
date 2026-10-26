@@ -1,135 +1,158 @@
-# ReScaleFrame
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/ReScaleFrame-logo-transparent.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/branding/ReScaleFrame-logo-black-transparent.svg">
+    <img src="assets/branding/ReScaleFrame-logo.svg" alt="ReScaleFrame" width="600">
+  </picture>
+</p>
 
-**A framework for engine-aware upscaling, frame generation and latency integration.**
+<h1 align="center">ReScaleFrame</h1>
 
-ReScaleFrame connects game-specific rendering hooks to a shared native runtime. Each game
-integration finds the right scene data and puts the processed result back into the engine's frame.
-The runtime handles the vendor SDKs, graphics resources, settings and presentation.
+<p align="center"><strong>Multi-vendor upscaling, PCL and frame-generation orchestration.</strong></p>
 
-The goal is to share that infrastructure across games and GPU vendors while keeping each game's
-rendering rules in its own integration. A [KillerPixelCrew](https://github.com/KillerPixelCrew) project.
+<p align="center">
+  <a href="https://github.com/KillerPixelCrew/ReScaleFrame/releases">Game releases</a> ·
+  <a href="#pipe-in-pipe-out">The framework</a> ·
+  <a href="#the-framework-in-use">Integrations</a> ·
+  <a href="https://github.com/KillerPixelCrew/ReScaleFrame/issues">Issues</a>
+</p>
 
-## Current status
+ReScaleFrame is a **pipe-in, pipe-out framework** for bringing vendor rendering technology into
+an engine, renderer or project. Once the right inputs and output boundaries are identified,
+the integration connects them to a shared orchestrator for upscaling, frame generation and
+PC latency (PCL).
 
-**Ace Combat 7 is the first working integration.** Its engine-owned upscaling path and corrected
-wing/cloud rendering are accepted in game, with full-resolution UI and the in-game settings overlay.
-The AC7 proxy loads the game plugin and shared runtime services.
+The engine knowledge stays in the integration. Provider selection, SDK contexts, temporal
+processing, latency coordination and presentation transitions belong to ReScaleFrame. That
+makes the work reusable: a new project supplies its rendering data and host operations to
+the framework rather than rebuilding the orchestration around each vendor SDK.
 
-| Area | Status |
-| --- | --- |
-| DLSS Super Resolution / DLAA | Working in AC7 |
-| Game detection and native SDK | Game ABI 13 with lifecycle, CPU events and renderer callbacks; AC7 and Unity Mono paths implemented; Project Wingman has a native temporal graph observer |
-| Frame generation and latency | Current source implements DLSS-G, FSR3/4 FG, XeSS FG, Reflex/XeLL and live provider switching; AC7 DLSS-G and Unity corrections have user acceptance; broader hardware/scene and measured latency validation remain open |
-| FSR and XeSS | FSR 2/3/4 and XeSS SR available in AC7; optimized D3D11/D3D12 transfer; FSR 4 INT8 compatibility device-tested on RTX 4070 |
-| Standalone launcher and WSGM | Scaffolding and planned integration |
+A [KillerPixelCrew](https://github.com/KillerPixelCrew) framework.
 
-The published v0.1.0 AC7 ZIP provides SR and the overlay; it does not contain the later FG/Reflex
-work on `main`. Unity currently has local test packages, not a published release.
-See [current implementation and validation](docs/current-status.md) for evidence and remaining limits.
+## Pipe in, pipe out
 
-For downloads, supported builds, installation and controls, see the relevant game's README:
-
-| Game | Availability | Guide |
-| --- | --- | --- |
-| Ace Combat 7 | DLSS/DLAA, FSR 2/3/4, XeSS SR and overlay on Windows x64 | [AC7 README](games/ac7/README.md) |
-| Project Wingman | Native carrier and desktop-tested temporal observer; GPU processing unsupported | [Project Wingman README](games/project-wingman/README.md) |
-| Drag'n Wash | Unity Mono DX12 SR, shared overlay and runtime FG switching in source/local test builds; Claw acceptance pending | [Drag'n Wash README](games/drag-n-wash/README.md) |
-
-[Releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases)
-· [Implementation tracker](docs/implementation.md)
-· [Issues](https://github.com/KillerPixelCrew/ReScaleFrame/issues)
-
-## How the framework is divided
-
-A game integration owns engine knowledge: executable fingerprints, hooks, camera data, motion-vector
-conventions, render resolution and composition boundaries. Vendor SDK code and presentation belong
-to the shared runtime. Loading that runtime is separate from activating a rendering pipeline.
-
-| Component | Responsibility |
-| --- | --- |
-| Bootstrap | Load the runtime into the game process |
-| Orchestrator | Select and prepare the game integration; own settings, vendor SDKs and shared graphics services |
-| Game integration | Detect the game, prepare the renderer, collect frame data and reinsert the result |
-| Game SDK | Keep the plugin/runtime boundary versioned and explicit through a C ABI |
-| Frontends | Configure sessions and show status through bounded IPC |
-
-The AC7 DirectInput carrier prepares the game plugin and links shared runtime objects into its
-proxy. The Unity version shim loads the runtime DLL and shared Mono plugin. Bootstrap and launcher
-remain scaffolds; frontend IPC is intended architecture rather than an implemented control route.
-
-Super resolution consumes scene colour before tonemapping. Frame generation needs a completed
-HUD-less image later in the frame. ReScaleFrame treats those as separate inputs and keeps frame/view
-identity, resource lifetime, colour space, motion and jitter conventions with the data. UI and
-translucency can keep their own resolution and composition paths.
-
-The standalone frontend is intended to work independently of WSGM. Neither frontend receives GPU
-textures or runs the game's graphics loop.
-
-See the [design](docs/design.md), [architecture research](docs/research/architecture.md) and
-[vendor contracts](docs/research/vendor-fg-contracts.md) for the detailed boundaries and remaining work.
-
-## Repository
-
-All first-party components live in this monorepo and share one release version.
-
-| Directory | Contents |
-| --- | --- |
-| [`loader/`](loader/) | Bootstrap, AC7 proxy and loading diagnostics |
-| [`runtime/orchestrator/`](runtime/orchestrator/) | Shared lifecycle and frame-processing coordination |
-| [`runtime/backends/`](runtime/backends/) | Vendor adapters and upscaling contracts |
-| [`runtime/graphics/`](runtime/graphics/) | Resource handling, observation, state restoration and composition |
-| [`runtime/presentation/`](runtime/presentation/) | Shared surfaces, synchronization and presentation work |
-| [`games/`](games/) | Game-specific integrations and their evidence |
-| [`sdk/game/`](sdk/game/) | Public native C ABI |
-| [`ui/overlay/`](ui/overlay/) | In-game settings overlay |
-| [`apps/launcher/`](apps/launcher/), [`integrations/wsgm/`](integrations/wsgm/) | Frontend work |
-| [`tests/`](tests/), [`tools/`](tools/), [`docs/`](docs/) | Verification, analysis tools and documentation |
-
-## Build and verify
-
-Windows/MSVC is the reference platform. You need Visual Studio C++ tools, a Windows SDK, CMake,
-PowerShell and the Rust toolchain pinned in `rust-toolchain.toml`. Unity managed builds additionally
-need .NET, Unity native headers and the researched player's Managed assemblies; see
-[the Unity guide](games/unity-mono/README.md).
-
-```powershell
-./eng/verify.ps1 -Configuration Release
-cargo test --workspace --locked
-cargo build --release --locked -p rescaleframe-overlay
+```mermaid
+flowchart LR
+    A["Project integration<br/>Scene, depth, motion, camera<br/>Input and frame boundaries"]
+    B["ReScaleFrame<br/>Upscaling · PCL · Frame generation<br/>Provider and resource coordination"]
+    C["Project output<br/>Reconstructed scene<br/>Composition and presentation"]
+    A --> B --> C
 ```
 
-Use `-VS2026` on the verification command if you have Visual Studio 2026 instead of 2022.
-Shared native outputs are written to `build/windows-x64/bin/Release`; the dedicated AC7 carrier is
-`build/windows-x64/ac7/bin/Release/dinput8.dll`. The Rust overlay is in `target/release`.
+The input is more than a texture. Temporal processing needs matching colour, depth, motion,
+camera matrices, jitter, render/output dimensions and history-reset information. Input,
+simulation, rendering and presentation also need to refer to the same source frame.
 
-The verification gate builds and tests the native tree, checks Rust formatting and runs Clippy.
-Rust tests use the separate command above. Verification never launches a game or changes an
-installation.
+ReScaleFrame connects those inputs to NVIDIA DLSS/DLAA and DLSS-G, AMD FSR, Intel XeSS,
+and the corresponding latency and pacing services. SR and FG can be selected independently.
+The available algorithms, generated-frame counts and latency features follow the chosen
+backend, graphics path and hardware.
 
-Vendor SDKs are optional local dependencies. A backend built without its SDK reports that it is
-unavailable. See [dependencies and packaging](docs/dependencies.md) and [tool setup](docs/tooling.md)
-for the expected versions and paths. A MinGW/Wine development route is also documented in
-[AGENTS.md](AGENTS.md); it does not replace Windows verification.
+The output returns at the project's own composition or presentation boundary. SR consumes
+scene inputs at the reconstruction point; FG consumes the completed scene and its matching
+temporal guides, with HUD-less and UI inputs where the integration supplies them.
+Those are separate stages with different inputs and lifetimes.
 
-## Development approach
+### What the integration supplies, and what the framework owns
 
-Rendering support is established from engine behaviour and captures. A matching executable hash
-only identifies a build; it does not prove that its hooks or rendering path work.
+| Integration | ReScaleFrame |
+| --- | --- |
+| Scene/depth/motion producers and camera conventions | Provider input preparation and SDK evaluation |
+| Engine hooks or renderer callbacks | Vendor contexts, capability checks and provider selection |
+| Input, simulation and render boundaries | PCL markers, frame tokens and provider pacing |
+| Renderer resources and their completion/retirement operations | Coordination of temporal history and provider resource lifetimes |
+| Composition targets and presentation operations | Reconstructed output, FG eligibility and presentation-provider transitions |
 
-Research notes record the question, method, evidence, failed approaches and remaining uncertainty.
-Tests and status distinguish built, synthetic-tested, game-tested and device-tested results. Engine
-patches check their expected bytes before writing and report when they cannot apply.
+This boundary exists in both the [native runtime](runtime/orchestrator/) and the
+[managed Vulkan runtime](runtime/managed/ReScaleFrame.Vulkan/). The native path uses
+[versioned C ABI contracts](sdk/game/); the managed Vulkan path uses
+[temporal contracts](runtime/managed/ReScaleFrame.Contracts/) and renderer host interfaces.
 
-Start with [AGENTS.md](AGENTS.md), the [render-analysis method](docs/research/methodology.md) and
-the [implementation tracker](docs/implementation.md). Game-specific findings belong with the
-integration and its research notes. Licensed engine/game source, vendor binaries and raw captures
-stay outside Git.
+The implementation includes provider planning, requested/effective state, failure reporting,
+history resets, resource retirement and live provider changes. The renderer remains responsible
+for the resources and operations exposed through its host interface.
+
+## The framework in use
+
+### Minecraft: modern vendor processing behind an OpenGL renderer
+
+ReScaleFrameCraft connects Minecraft's Java/OpenGL renderer to ReScaleFrame's native runtime.
+The adapter supplies scene colour, depth, motion, camera state and frame boundaries.
+
+The [OpenGL sharing layer](runtime/presentation/src/gl_shared_surface.cpp) imports shared
+D3D12 resources as OpenGL textures and synchronizes access through shared fences and
+semaphores. The [GL pipeline](runtime/orchestrator/src/gl_pipeline.cpp) passes those resources
+to the D3D12 SR/FG paths and exposes reconstructed output back to OpenGL.
+
+That bridge brings technology requiring D3D12 into Minecraft's OpenGL rendering path.
+Minecraft composes its HUD after scene reconstruction and supplies a separate HUD-less
+image for FG. When native presentation is active, a child DXGI surface owns presentation
+inside the game window while GLFW retains input and focus ownership.
+
+The game integration identifies and produces the inputs. The framework handles the
+vendor processing and the graphics-API boundary.
+
+### Ace Combat 7: modern temporal technology in an older engine
+
+AC7's integration brings modern upscaling and frame generation into its existing UE4/D3D11
+rendering pipeline. Native hooks expose the engine's scene, camera, depth, motion and
+composition boundaries, and prepare the renderer to supply the data those technologies need.
+
+The [native bridge](loader/proxy/src/dlss_bridge.c) routes scene passes into ReScaleFrame's
+SR processing and carries CPU, scene, UI and window events into the shared FG/latency paths.
+The D3D11/D3D12 presentation bridge provides the route to SDKs that require D3D12.
+
+Reconstructed scene output is reinserted into the engine's frame. UI and translucent
+composition keep their own boundaries. The AC7 code owns the engine-specific hooks and
+rendering corrections; the shared runtime owns the vendor processing, frame association
+and presentation coordination.
+
+### Drag'n Wash: connecting Unity URP to the same runtime
+
+The Unity Mono adapter connects URP RenderGraph to ReScaleFrame through a managed helper
+and Unity's native rendering interfaces. The helper identifies the reconstruction and
+pre-UI stages, produces camera/temporal packets and queues native render events.
+
+The [native Unity bridge](games/unity-mono/src/bridge.cpp) validates those packets, retains
+their resources and forwards the passes to the shared runtime. SR runs before DoF, bloom
+and tonemapping; completed scene colour is captured before UI for FG. Player-loop callbacks
+supply the CPU frame boundaries used by latency coordination.
+
+Unity supplies a different engine integration while reusing the runtime's vendor backends,
+SR/FG selection, overlay and presentation services.
+
+### VulkanStory: ReScaleFrame inside a Vulkan renderer
+
+[VulkanStory](https://github.com/KillerPixelCrew/VulkanStory) uses ReScaleFrame as its temporal
+technology orchestrator. Its renderer references `ReScaleFrame.Contracts` and
+`ReScaleFrame.Vulkan` from the pinned ReScaleFrame submodule.
+
+VulkanStory's
+[upscaling adapter](https://github.com/KillerPixelCrew/VulkanStory/blob/HEAD/src/VulkanStory.Game/RuntimeUpscalers.cs)
+supplies scene targets and temporal data to ReScaleFrame's `UpscalerSession`.
+Its frame-generation adapter supplies scene, UI, motion and camera inputs; the renderer
+implements the resource and presentation operations required by the framework's host interfaces.
+
+ReScaleFrame's managed Vulkan runtime owns SR provider planning/evaluation,
+`FrameGenerationSession`, and `LatencySession`. Those controllers coordinate vendor
+contexts, current-frame eligibility, PCL/Reflex/XeLL and other supported latency paths,
+provider transitions and generated-frame pacing. VulkanStory owns the game rendering and
+the Vulkan resources those controllers use.
+
+This is the same integration model embedded in a renderer: **identify the inputs and
+outputs, connect the host, and let ReScaleFrame orchestrate the vendor technology.**
+
+## Releases and implementation
+
+[Game releases](https://github.com/KillerPixelCrew/ReScaleFrame/releases) contain installation
+instructions, controls, requirements and package-specific information.
+
+[Design](docs/design.md) · [Native contracts](sdk/game/include/rescaleframe/) ·
+[Vulkan provider runtime](runtime/managed/ReScaleFrame.Vulkan/) ·
+[Vulkan native bridges](runtime/vulkan/) · [Implementation record](docs/implementation.md)
 
 ## License
 
-First-party code and documentation are [GPL-3.0-only](LICENSE), except the
-[MIT-licensed Game SDK](sdk/game/LICENSE).
-
-Third-party libraries and vendor runtimes retain their own licenses. Game release packages include
-the applicable notices; bundled NVIDIA runtime files are unmodified and are not relicensed under
-GPL. Game binaries and licensed engine source are not distributed with ReScaleFrame.
+First-party code is [GPL-3.0-only](LICENSE), except the [MIT Game SDK](sdk/game/LICENSE).
+The [managed Vulkan migration](runtime/managed/NOTICE.md) retains its original notices and
+license terms. Vendor runtimes and other dependencies retain their own licenses.

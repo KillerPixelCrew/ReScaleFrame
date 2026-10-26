@@ -1,0 +1,20 @@
+{
+  "id": "fsr2-storage-formats",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "file": "sdk/include/FidelityFX/gpu/fsr2/ffx_fsr2_callbacks_glsl.h",
+  "resources": "sdk/src/components/fsr2/ffx_fsr2.cpp",
+  "replacements": [
+    {
+      "before": "FSR2_BIND_UAV_DILATED_DEPTH, r16f)",
+      "after": "FSR2_BIND_UAV_DILATED_DEPTH, r32f)",
+      "identifier": "FFX_FSR2_RESOURCE_IDENTIFIER_DILATED_DEPTH",
+      "format": "FFX_SURFACE_FORMAT_R32_FLOAT"
+    },
+    {
+      "before": "FSR2_BIND_UAV_PREPARED_INPUT_COLOR, rgba16)",
+      "after": "FSR2_BIND_UAV_PREPARED_INPUT_COLOR, rgba16f)",
+      "identifier": "FFX_FSR2_RESOURCE_IDENTIFIER_PREPARED_INPUT_COLOR",
+      "format": "FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT"
+    }
+  ]
+}

@@ -31,21 +31,30 @@ counts, all scene/resize paths or Claw operation. See
 ```powershell
 ./eng/verify.ps1 -Configuration Release -VS2026
 ctest --preset windows-release-vs18 -R game_unity_mono_plugin_contract
-./eng/build-unity-sr.ps1 -VS2026 -UnityManagedDirectory '<game>/DragNWash_Data/Managed'
-./eng/deploy-unity-sr.ps1 -GameDirectory '<game>' -FrameGeneration FSR3 -GeneratedFrames 1
-./eng/package-unity-sr.ps1 -GameDirectory '<game>' -Backend Auto
+./eng/prepare-unity-references.ps1 -UnityEditorDirectory '<Unity SDK>' -UrpReferenceDirectory '<URP SDK assemblies>' -UrpReferenceVersion '<actual URP version>'
+./eng/build-unity-sr.ps1 -VS2026
+# Commit the source before packaging.
+./eng/package-unity-sr.ps1 -Backend Auto -FrameGeneration Auto
 ```
 
 Use the Visual Studio 2022 preset on a machine that has VS 2022. The DLL lands under
 `build/windows-x64/bin/<Config>/`.
 
-The managed build requires .NET, the researched player's Managed references, Unity native headers
-and locked Harmony 2.4.2; see [dependencies](../../docs/dependencies.md). Deployment defaults to
+The managed build requires .NET, prepared Unity/URP SDK references, Unity native headers
+and locked Harmony 2.4.2; see [dependencies](../../docs/dependencies.md). No game installation
+is needed to build or package. Supply `-UnityReferenceDirectory` to use another provisioned cache.
+References are compile-only; the helper still checks the target player's private URP contracts
+before installing hooks. A successful compile against a newer SDK does not establish support
+for that player. [Release build evidence](../../docs/releases/v0.1.1-drag-n-wash.md).
+
+For an explicitly requested local installation, `eng/deploy-unity-sr.ps1` defaults to
 Auto/Quality with FG Off, backs up owned RSF files and checks original-file hashes. Run deployment
 only against a closed game. It copies all FG runtime families even when the default is Off.
 The version carrier goes beside `DragNWash.exe`; runtime/plugin/helper/overlay live in `ReScaleFrame/`.
-The packager writes a local Claw test ZIP under `.local/packages`, keeps the deployed FG defaults
-and excludes preferences, logs, backups and original game files. It does not publish a release.
+The packager writes a Windows ZIP under `.local/packages` from Release outputs and the pinned
+vendor SDK directories. It excludes Unity SDK references, preferences, logs, backups and original
+game files. `-GameDirectory` remains an optional input for a verified deployment. Publishing the
+archive is a separate release step.
 Unity saves FG provider selection in `ReScaleFrame/preferences.ini`; SR choices remain session
 settings over `[UnitySR]` defaults. [Current status](../../docs/current-status.md) records limits.
 

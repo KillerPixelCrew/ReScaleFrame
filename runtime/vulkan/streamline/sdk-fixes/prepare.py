@@ -2,6 +2,7 @@
 from pathlib import Path
 import argparse
 import json
+from selected_device import apply as apply_selected_device
 
 parser = argparse.ArgumentParser()
 parser.add_argument("sdk", type=Path)
@@ -81,6 +82,12 @@ replace(vulkan, """        VK_CHECK_RE(res, m_ddt.AcquireNextImageKHR(m_device, 
 # Both public SDK transfers and NGX's private Vulkan commands use the same
 # corrected dispatch. New-image tracking covers every mip/layer/aspect once.
 dispatch = Path(__file__).parent / "ngx-vulkan-dispatch.h"
+dispatch_source = dispatch.read_text(encoding="utf-8")
+for required in ('inline void VKAPI_CALL FillBuffer(',
+                 'if (!std::strcmp(name, "vkCmdFillBuffer")) return (PFN_vkVoidFunction)FillBuffer;',
+                 'fillBuffer = (PFN_vkCmdFillBuffer)nextDevice(dev, "vkCmdFillBuffer");'):
+    if dispatch_source.count(required) != 1:
+        raise SystemExit("NGX scratch fill correction must be defined, routed and loaded exactly once")
 target = sdk / "source/platforms/sl.chi/ngxVulkanDispatch.h"
 if target.exists():
     raise SystemExit("SDK dispatch correction already exists; use a fresh source copy")
@@ -228,6 +235,320 @@ replace("source/core/sl.security/secureLoadLibrary.cpp",
     if (_wcsicmp(name, L"sl.common.dll") == 0) return loadPinnedCommon(path);
 #endif
     HMODULE mod = {};''')
+
+# Godot supplies individual 1.3 features. The SDK only merges synchronization2
+# in that branch, and its compute backend creates private-data slots based on
+# function availability rather than the enabled feature. Keep the ABI unchanged
+# and publish the actual enablement through the existing shared parameter store.
+wrapper = "source/core/sl.interposer/vulkan/wrapper.cpp"
+replace(wrapper, "std::unordered_set<std::string> requiredSLPhysicalDevice13FeatureNames{};",
+        'std::unordered_set<std::string> requiredSLPhysicalDevice13FeatureNames{"privateData"};')
+replace(wrapper, "VkPhysicalDevicePrivateDataFeatures*                    pClientPrivateDataFeatures{};",
+        "VkPhysicalDevicePrivateDataFeatures                     privateDataFeatures{}, *pClientPrivateDataFeatures{};")
+replace(wrapper, "            if ((requiredSLPhysicalDevice13Features.synchronization2 || s_vk.nativeOpticalFlowHWSupport)",
+        """            if (requiredSLPhysicalDevice13Features.privateData && supportedPhysicalDevice13Features.privateData)
+            {
+                if (!pClientPrivateDataFeatures)
+                {
+                    privateDataFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES;
+                    privateDataFeatures.pNext = (void*)createInfo.pNext;
+                    createInfo.pNext = pClientPrivateDataFeatures = &privateDataFeatures;
+                }
+                pClientPrivateDataFeatures->privateData = VK_TRUE;
+                requiredSLDeviceExtensionNames.emplace(VK_EXT_PRIVATE_DATA_EXTENSION_NAME);
+            }
+            if ((requiredSLPhysicalDevice13Features.synchronization2 || s_vk.nativeOpticalFlowHWSupport)""")
+replace(wrapper, "        std::vector<const char*> extensions;", """        if (requiredSLDeviceExtensionNames.count("VK_NV_low_latency2"))
+        {
+            // NV low_latency2 requires present_id (or present_id2). The pinned
+            // Reflex plugin requests LL2 but omits this dependency.
+            requiredSLDeviceExtensionNames.emplace(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+        }
+        std::vector<const char*> extensions;""")
+replace(wrapper, "        sl::param::getInterface()->set(sl::param::global::kVulkanSynchronization2Enabled, synchronization2Enabled);",
+        """        sl::param::getInterface()->set(sl::param::global::kVulkanSynchronization2Enabled, synchronization2Enabled);
+        bool privateDataEnabled = false;
+        for (auto* p = (const VkBaseInStructure*)createInfo.pNext; p; p = p->pNext)
+        {
+            if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES)
+                privateDataEnabled |= ((const VkPhysicalDevicePrivateDataFeatures*)p)->privateData == VK_TRUE;
+            else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
+                privateDataEnabled |= ((const VkPhysicalDeviceVulkan13Features*)p)->privateData == VK_TRUE;
+        }
+        sl::param::getInterface()->set("rsf.vulkan.privateDataEnabled", privateDataEnabled);""")
+replace(vulkan, "    if (m_ddt.CreatePrivateDataSlot)", """    bool privateDataEnabled = false;
+    m_parameters->get("rsf.vulkan.privateDataEnabled", &privateDataEnabled);
+    if (privateDataEnabled && m_ddt.CreatePrivateDataSlot)""")
+
+replace("source/platforms/sl.chi/vknvll2.cpp", """        m_swapchain = (VkSwapchainKHR)chain;
+        m_isLatencyModeEnabled = isLatencyModeEnabled;""", """        if (!isLatencyModeEnabled)
+        {
+            SL_LOG_INFO("RSF Reflex secondary swapchain ignored: %p owner=%p", (void*)chain, (void*)m_swapchain);
+            return ComputeStatus::eOk;
+        }
+        SL_LOG_INFO("RSF Reflex primary swapchain selected: %p previous=%p", (void*)chain, (void*)m_swapchain);
+        m_swapchain = (VkSwapchainKHR)chain;
+        m_isLatencyModeEnabled = true;""")
+
+replace("source/platforms/sl.chi/vknvll2.cpp", "class VkNvLowLatency2 : public IReflexVk", """namespace { std::mutex rsfLatencySwapchainMutex; }
+// Host WSI and LL2 calls share this lock. It covers the immediate Vulkan call,
+// never the subsequent timeline-semaphore wait inside Reflex sleep.
+extern "C" __declspec(dllexport) VkResult rsfSlVulkanQueuePresent(PFN_vkQueuePresentKHR present, VkQueue queue, const VkPresentInfoKHR* info)
+{
+    if (!present || !queue || !info) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> lock(rsfLatencySwapchainMutex);
+    return present(queue, info);
+}
+class VkNvLowLatency2 : public IReflexVk""")
+replace("source/platforms/sl.chi/vknvll2.cpp", "class VkNvLowLatency2 : public IReflexVk", """extern "C" __declspec(dllexport) int32_t rsfSlVulkanWsiCall(int32_t (*callback)(void*), void* user)
+{
+    if (!callback || !user) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> lock(rsfLatencySwapchainMutex);
+    return callback(user);
+}
+class VkNvLowLatency2 : public IReflexVk""")
+replace("source/platforms/sl.chi/vknvll2.cpp", "    std::mutex m_swapchainMtx;", "    std::mutex& m_swapchainMtx = rsfLatencySwapchainMutex;")
+
+# Scoped DLSS-G hook suppression for foreign presentation owners. This section
+# is inserted before the manifest writer in the tracked checked SDK recipe.
+wrapper = "source/core/sl.interposer/vulkan/wrapper.cpp"
+replace(wrapper, "HMODULE s_module = {};", """namespace {
+thread_local bool rsfSuppressDlssG = false;
+struct RsfDlssGHookScope
+{
+    bool previous = rsfSuppressDlssG;
+    RsfDlssGHookScope() { rsfSuppressDlssG = true; }
+    ~RsfDlssGHookScope() { rsfSuppressDlssG = previous; }
+};
+}
+// A synchronous host lease. Only this thread's DLSS-G WSI hooks are suppressed;
+// Reflex/common hooks remain active and other threads retain their own state.
+extern "C" __declspec(dllexport) int32_t rsfSlVulkanWithoutDlssGCall(int32_t (*callback)(void*), void* user)
+{
+    if (!callback || !user) return VK_ERROR_INITIALIZATION_FAILED;
+    RsfDlssGHookScope scope;
+    try { return callback(user); }
+    catch (...) { return VK_ERROR_UNKNOWN; }
+}
+HMODULE s_module = {};""")
+wrapper_source = (sdk / wrapper).read_text(encoding="utf-8")
+wsi_begin = wrapper_source.index("    VkResult VKAPI_CALL vkCreateSwapchainKHR(")
+wsi_end = wrapper_source.index("    // -- VK_KHR_win32_surface", wsi_begin)
+wsi = wrapper_source[wsi_begin:wsi_end]
+anchor = "            for (auto [hook, feature] : hooks)\n            {"
+if wsi.count(anchor) != 7:
+    raise SystemExit("Expected exactly seven Vulkan WSI hook loops")
+replace(wrapper, wsi, wsi.replace(anchor, anchor + "\n                if (rsfSuppressDlssG && feature == sl::kFeatureDLSS_G) continue;"))
+
+# Optional, explicitly leased diagnostic callback at the SDK's real WSI
+# boundary. The discriminator comes from the SDK's FrameBoundaryGuard producer.
+capture_header = Path(__file__).parent.parent / "present-capture.h"
+capture_target = sdk / "source/platforms/sl.chi/rsfPresentCapture.h"
+if capture_target.exists():
+    if capture_target.read_bytes() != capture_header.read_bytes():
+        raise SystemExit("Staged SDK capture header differs from the checked input")
+else:
+    capture_target.write_bytes(capture_header.read_bytes())
+replace(vulkan, '#include "source/platforms/sl.chi/ngxVulkanDispatch.h"',
+        '#include "source/platforms/sl.chi/ngxVulkanDispatch.h"\n#include "source/platforms/sl.chi/rsfPresentCapture.h"')
+replace(vulkan, "Vulkan s_vulkan;", """
+extern "C" int32_t rsfSlVulkanWsiCall(int32_t (*callback)(void*), void* user);
+extern "C" VkResult rsfSlVulkanQueuePresent(PFN_vkQueuePresentKHR present, VkQueue queue, const VkPresentInfoKHR* info);
+namespace {
+VkResult rsfSerializedImages(PFN_vkGetSwapchainImagesKHR next, VkDevice device, VkSwapchainKHR chain, uint32_t* count, VkImage* images)
+{
+    struct Call { PFN_vkGetSwapchainImagesKHR next; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
+    Call call{next, device, chain, count, images};
+    return (VkResult)rsfSlVulkanWsiCall([](void* user) -> int32_t {
+        const auto& value = *(Call*)user; return value.next(value.device, value.chain, value.count, value.images);
+    }, &call);
+}
+VkResult rsfSerializedAcquire(PFN_vkAcquireNextImageKHR next, VkDevice device, VkSwapchainKHR chain, uint64_t timeout,
+    VkSemaphore semaphore, VkFence fence, uint32_t* index)
+{
+    struct Call { PFN_vkAcquireNextImageKHR next; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t* index; };
+    Call call{next, device, chain, timeout, semaphore, fence, index};
+    return (VkResult)rsfSlVulkanWsiCall([](void* user) -> int32_t {
+        const auto& value = *(Call*)user; return value.next(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
+    }, &call);
+}
+std::mutex rsfPresentCaptureMutex;
+rsf_sl_present_capture_registration rsfPresentCapture{};
+int32_t rsfDispatchPresentCapture(const rsf_sl_present_capture_packet& packet)
+{
+    std::lock_guard<std::mutex> lock(rsfPresentCaptureMutex);
+    if (rsfPresentCapture.callback && rsfPresentCapture.device == packet.device)
+    {
+        try { return rsfPresentCapture.callback(rsfPresentCapture.user, &packet); }
+        catch (...) { return VK_ERROR_UNKNOWN; }
+    }
+    return rsfSlVulkanQueuePresent((PFN_vkQueuePresentKHR)packet.native_present, (VkQueue)packet.queue, (const VkPresentInfoKHR*)packet.present_info);
+}
+}
+extern "C" __declspec(dllexport) int32_t rsfSlSetPresentCapture(const rsf_sl_present_capture_registration* value)
+{
+    if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_SL_PRESENT_CAPTURE_ABI_VERSION ||
+        !value->device || !value->user) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> lock(rsfPresentCaptureMutex);
+    if (rsfPresentCapture.callback && (value->device != rsfPresentCapture.device || value->user != rsfPresentCapture.user))
+        return VK_ERROR_INITIALIZATION_FAILED;
+    rsfPresentCapture = value->callback ? *value : rsf_sl_present_capture_registration{};
+    return VK_SUCCESS;
+}
+Vulkan s_vulkan;""")
+replace(vulkan, "    std::atomic<uint64_t> m_latencyFrameId{ 0 };", """    std::atomic<uint64_t> m_latencyFrameId{ 0 };
+    // FrameBoundaryGuard supplies the real/generated discriminator explicitly,
+    // before optional Nsight initialization gates its own tracing calls.
+    uint32_t m_rsfBoundaryPresentFrame{};
+    int32_t m_rsfBoundaryGeneratedIndex{-1};
+    bool m_rsfBoundaryValid{};
+    uint32_t m_rsfQueueFamily{};""")
+replace(vulkan, "        m_cmdQueue = (VkQueue)queue->native;", """        m_cmdQueue = (VkQueue)queue->native;
+        m_rsfQueueFamily = queue->family;""")
+replace(vulkan, """    void delimitFrame(uint32_t presentFrameIndex, int32_t genFrameIndex, bool isBegin, uint32_t syncInterval, uint32_t flags, const void* /*presentParams*/) override
+    {
+        if (!m_nsightInitialized)""", """    void delimitFrame(uint32_t presentFrameIndex, int32_t genFrameIndex, bool isBegin, uint32_t syncInterval, uint32_t flags, const void* /*presentParams*/) override
+    {
+        m_rsfBoundaryPresentFrame = presentFrameIndex;
+        m_rsfBoundaryGeneratedIndex = genFrameIndex;
+        m_rsfBoundaryValid = isBegin;
+        if (!m_nsightInitialized)""")
+replace(vulkan, "        res = m_ddt.QueuePresentKHR(m_cmdQueue, &info);", """        const rsf_sl_present_capture_packet capturePacket{sizeof(rsf_sl_present_capture_packet), RSF_SL_PRESENT_CAPTURE_ABI_VERSION,
+            m_device, m_cmdQueue, &info, &sc->info, (uintptr_t)m_ddt.QueuePresentKHR,
+            m_latencyFrameId.load(std::memory_order_relaxed), m_rsfBoundaryPresentFrame, m_rsfBoundaryGeneratedIndex,
+            m_rsfBoundaryValid ? 1u : 0u, m_rsfQueueFamily, (uintptr_t)m_ddt.GetSwapchainImagesKHR, (uintptr_t)m_ddt.QueueSubmit,
+            (uintptr_t)rsfSlVulkanWsiCall};
+        res = rsfDispatchPresentCapture(capturePacket);""")
+replace(vulkan, "m_ddt.GetSwapchainImagesKHR(", "rsfSerializedImages(m_ddt.GetSwapchainImagesKHR, ", count=3)
+replace(vulkan, "m_ddt.AcquireNextImageKHR(", "rsfSerializedAcquire(m_ddt.AcquireNextImageKHR, ")
+
+# Optional, bounded submission evidence. Semaphore types come from creation,
+# never from guessed values (binary values are ignored by Vulkan).
+replace(vulkan, '#include "nvllvk.h"', '#include "nvllvk.h"\n#include <cstdio>')
+replace(vulkan, "class CommandListContextVK : public ICommandListContext", """namespace {
+bool rsfSyncTraceEnabled() {
+    static const bool enabled = GetEnvironmentVariableA("RSF_SL_VULKAN_SYNC_TRACE", nullptr, 0) > 0;
+    return enabled;
+}
+std::mutex rsfSyncTraceMutex;
+uint32_t rsfSyncTraceRows = 0, rsfSyncTraceSequence = 0;
+std::unordered_map<VkSemaphore, const char*> rsfSyncTraceTypes;
+void rsfSyncTraceSemaphore(VkSemaphore semaphore, const char* type, const char* name) {
+    if (!rsfSyncTraceEnabled()) return;
+    std::lock_guard<std::mutex> lock(rsfSyncTraceMutex);
+    if (rsfSyncTraceRows >= 1024) return;
+    rsfSyncTraceTypes[semaphore] = type;
+    ++rsfSyncTraceRows;
+    std::fprintf(stderr, "[RSF SL sync] create tid=%lu sem=%p type=%s name=%s\\n",
+        GetCurrentThreadId(), (void*)semaphore, type, name);
+}
+uint32_t rsfSyncTraceSubmit(const std::wstring& context, VkQueue queue, VkCommandBuffer commands,
+    const std::vector<chi::Fence>& waits, const std::vector<uint64_t>& waitValues,
+    const std::vector<chi::Fence>& signals, const std::vector<uint64_t>& signalValues) {
+    if (!rsfSyncTraceEnabled()) return 0;
+    std::lock_guard<std::mutex> lock(rsfSyncTraceMutex);
+    if (rsfSyncTraceRows >= 1024) return 0;
+    const uint32_t sequence = ++rsfSyncTraceSequence;
+    ++rsfSyncTraceRows;
+    std::fprintf(stderr, "[RSF SL sync] submit seq=%u tid=%lu ctx=%s queue=%p cmd=%p\\n",
+        sequence, GetCurrentThreadId(), extra::utf16ToUtf8(context.c_str()).c_str(), (void*)queue, (void*)commands);
+    auto semaphores = [&](const char* role, const std::vector<chi::Fence>& handles, const std::vector<uint64_t>& values) {
+        for (size_t i = 0; i < handles.size() && rsfSyncTraceRows < 1024; ++i) {
+            const auto found = rsfSyncTraceTypes.find((VkSemaphore)handles[i]);
+            const char* type = found == rsfSyncTraceTypes.end() ? "unknown" : found->second;
+            ++rsfSyncTraceRows;
+            std::fprintf(stderr, "[RSF SL sync] %s seq=%u sem=%p type=%s value=%llu\\n", role, sequence,
+                (void*)handles[i], type, (unsigned long long)(i < values.size() ? values[i] : 0));
+        }
+    };
+    semaphores("wait", waits, waitValues); semaphores("signal", signals, signalValues);
+    return sequence;
+}
+void rsfSyncTraceResult(uint32_t sequence, VkResult result) {
+    if (!sequence) return;
+    std::lock_guard<std::mutex> lock(rsfSyncTraceMutex);
+    if (rsfSyncTraceRows >= 1024) return;
+    ++rsfSyncTraceRows;
+    std::fprintf(stderr, "[RSF SL sync] result seq=%u tid=%lu result=%d\\n", sequence, GetCurrentThreadId(), result);
+}
+}
+class CommandListContextVK : public ICommandListContext""")
+replace(vulkan, "                VK_CHECK_RV(m_ddt.CreateSemaphore(dev, &createInfo, NULL, &m_fence[i]));", """                VK_CHECK_RV(m_ddt.CreateSemaphore(dev, &createInfo, NULL, &m_fence[i]));
+                rsfSyncTraceSemaphore(m_fence[i], "timeline", debugName);""")
+replace(vulkan, "            VK_CHECK_RV(m_ddt.CreateSemaphore(dev, &createInfo, NULL, &m_acquireSemaphore[i]));", """            VK_CHECK_RV(m_ddt.CreateSemaphore(dev, &createInfo, NULL, &m_acquireSemaphore[i]));
+            rsfSyncTraceSemaphore(m_acquireSemaphore[i], "binary", debugName);""")
+replace(vulkan, "                VkResult created = m_ddt.CreateSemaphore(m_device, &create, nullptr, &semaphores[i]);", """                VkResult created = m_ddt.CreateSemaphore(m_device, &create, nullptr, &semaphores[i]);
+                if (created == VK_SUCCESS) rsfSyncTraceSemaphore(semaphores[i], "binary", "native-present-image");""")
+replace(vulkan, "    VK_CHECK(m_ddt.CreateSemaphore(m_device, &createInfo, NULL, &fence));", """    VK_CHECK(m_ddt.CreateSemaphore(m_device, &createInfo, NULL, &fence));
+    rsfSyncTraceSemaphore(fence, "timeline", friendlyName);""")
+replace(vulkan, """        const VkLatencySubmissionPresentIdNV* latencyInfo, VkFence fence)
+    {
+        if (m_useSync2)""", """        const VkLatencySubmissionPresentIdNV* latencyInfo, VkFence fence)
+    {
+        const auto trace = rsfSyncTraceSubmit(m_name, m_cmdQueue, cmdBuffer, waitSemaphores, waitValues, signalSemaphores, signalValues);
+        if (m_useSync2)""")
+replace(vulkan, "            return m_ddt.QueueSubmit2(m_cmdQueue, 1, &submitInfo, fence);", """            const auto result = m_ddt.QueueSubmit2(m_cmdQueue, 1, &submitInfo, fence);
+            rsfSyncTraceResult(trace, result);
+            return result;""")
+replace(vulkan, "        return m_ddt.QueueSubmit(m_cmdQueue, 1, &submitInfo, fence);", """        const auto result = m_ddt.QueueSubmit(m_cmdQueue, 1, &submitInfo, fence);
+        rsfSyncTraceResult(trace, result);
+        return result;""")
+
+replace("source/core/sl.interposer/vulkan/wrapper.cpp", """        if (s_vk.nativeOpticalFlowHWSupport && extraOpticalFlowQueues > 0 && queueFamilyProperties[s_vk.opticalFlowQueueFamily].queueCount >= extraOpticalFlowQueues)
+        {
+            queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueInfo.queueFamilyIndex = s_vk.opticalFlowQueueFamily;
+            queueInfo.flags = s_vk.opticalFlowQueueCreateFlags;
+            queueInfo.queueCount = extraOpticalFlowQueues;
+            queueInfo.pQueuePriorities = opticalFlowQueuePriorities.data();
+            queueCreateInfos.push_back(queueInfo);
+            extraOpticalFlowQueues = 0;
+        }""", """        if (s_vk.nativeOpticalFlowHWSupport && extraOpticalFlowQueues > 0)
+        {
+            const auto family = s_vk.opticalFlowQueueFamily;
+            if (family >= queueFamilyProperties.size())
+            {
+                SL_LOG_ERROR("Invalid optical flow queue family %u", family);
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
+            uint64_t allocated = 0;
+            VkDeviceQueueCreateInfo* compatible = nullptr;
+            for (auto& existing : queueCreateInfos)
+            {
+                if (existing.queueFamilyIndex != family) continue;
+                allocated += existing.queueCount;
+                if (existing.flags == s_vk.opticalFlowQueueCreateFlags) compatible = &existing;
+            }
+            if (allocated + extraOpticalFlowQueues > queueFamilyProperties[family].queueCount)
+            {
+                SL_LOG_ERROR("No dedicated optical flow queues available in family %u: host %llu + SL %u exceeds %u",
+                    family, (unsigned long long)allocated, extraOpticalFlowQueues, queueFamilyProperties[family].queueCount);
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
+            if (compatible)
+            {
+                // Preserve the host's queue indices; SDK work gets distinct
+                // appended indices under one unique family/flags create info.
+                s_vk.opticalFlowQueueIndex = compatible->queueCount;
+                opticalFlowQueuePriorities.insert(opticalFlowQueuePriorities.begin(), compatible->pQueuePriorities,
+                    compatible->pQueuePriorities + compatible->queueCount);
+                compatible->pQueuePriorities = opticalFlowQueuePriorities.data();
+                compatible->queueCount += extraOpticalFlowQueues;
+            }
+            else
+            {
+                s_vk.opticalFlowQueueIndex = 0;
+                queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+                queueInfo.queueFamilyIndex = family;
+                queueInfo.flags = s_vk.opticalFlowQueueCreateFlags;
+                queueInfo.queueCount = extraOpticalFlowQueues;
+                queueInfo.pQueuePriorities = opticalFlowQueuePriorities.data();
+                queueCreateInfos.push_back(queueInfo);
+            }
+            extraOpticalFlowQueues = 0;
+        }""")
+
+edits.extend(apply_selected_device(sdk)["edits"])
 
 (sdk / "vulkanstory-fixes.json").write_text(json.dumps({
     "sdkCommit": "2122257e0fce486f91b385aa63b9a09b0a34b363",

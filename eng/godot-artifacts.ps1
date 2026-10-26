@@ -1,0 +1,149 @@
+# Shared artifact paths and copies for the Godot build and validation scripts.
+function Enter-RsfGodotValidation {
+    # Foreground ownership is part of the FG acceptance contract. Separate
+    # scripts must not steal focus from one another while a player is running.
+    $taskLease = [Threading.Mutex]::new($false, 'Local\ReScaleFrame.Godot.ForegroundValidation')
+    try {
+        try { $taskAcquired = $taskLease.WaitOne([TimeSpan]::FromMinutes(15)) }
+        catch [Threading.AbandonedMutexException] { $taskAcquired = $true }
+        if (!$taskAcquired) { throw 'Another Godot validation still owns the foreground GPU fixture.' }
+        return $taskLease
+    } catch { $taskLease.Dispose(); throw }
+}
+
+function Restore-RsfGodotEnvironment([hashtable]$Snapshot) {
+    foreach ($taskVariable in $Snapshot.Keys) {
+        if ($null -eq $Snapshot[$taskVariable]) {
+            # String argument conversion passes an empty string to the .NET
+            # setter. On .NET 9 that leaves the variable present.
+            Remove-Item -LiteralPath ('Env:' + $taskVariable) -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($taskVariable, $Snapshot[$taskVariable])
+        }
+    }
+}
+
+function Copy-RsfGodotArtifact([string]$Source, [string]$Destination) {
+    $taskSourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+    if ((Test-Path -LiteralPath $Destination) -and (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -eq $taskSourceHash) { return }
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
+    $taskTemporary = $Destination + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+    $taskBytes = [IO.File]::ReadAllBytes($Source)
+    if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($taskBytes)) -ne $taskSourceHash) {
+        throw 'Godot artifact source changed or could not be read consistently.'
+    }
+    $taskOutput = [IO.FileStream]::new($taskTemporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+        [IO.FileShare]::None, 1048576, [IO.FileOptions]::WriteThrough)
+    try {
+        $taskOutput.Write($taskBytes, 0, $taskBytes.Length)
+        $taskOutput.Flush($true)
+    } finally { $taskOutput.Dispose() }
+    if ((Get-FileHash -LiteralPath $taskTemporary -Algorithm SHA256).Hash -ne $taskSourceHash) { throw 'Godot artifact copy failed its hash check.' }
+    [IO.File]::Move($taskTemporary, $Destination, $true)
+}
+
+function Copy-RsfGodotAddon([string]$Source, [string]$Destination) {
+    foreach ($taskFile in Get-ChildItem -LiteralPath $Source -Recurse -File) {
+        $taskRelative = [IO.Path]::GetRelativePath($Source, $taskFile.FullName)
+        Copy-RsfGodotArtifact $taskFile.FullName (Join-Path $Destination $taskRelative)
+    }
+}
+
+function Copy-RsfGodotFixtureAddon([string]$Source, [string]$Destination, [string]$CacheRoot) {
+    if (!(Test-Path -LiteralPath (Join-Path $Source 'runtime-manifest.json'))) {
+        Copy-RsfGodotAddon $Source $Destination
+        return
+    }
+    $taskManifest = Get-Content -Raw -LiteralPath (Join-Path $Source 'runtime-manifest.json') | ConvertFrom-Json
+    if ($taskManifest.schema_version -ne 1 -or !$taskManifest.files.Count) { throw 'Invalid Godot runtime cache manifest.' }
+    $taskEntries = @($taskManifest.files | Sort-Object path)
+    $taskCanonical = ($taskEntries | ForEach-Object { $_.path + '=' + $_.sha256.ToUpperInvariant() }) -join "`n"
+    $taskKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($taskCanonical))).ToLowerInvariant()
+    $taskCache = Join-Path ([IO.Path]::GetFullPath($CacheRoot)) $taskKey
+    $taskLease = [Threading.Mutex]::new($false, 'Local\ReScaleFrame.Godot.RuntimeCache')
+    $taskAcquired = $false
+    try {
+        try { $taskAcquired = $taskLease.WaitOne([TimeSpan]::FromMinutes(2)) }
+        catch [Threading.AbandonedMutexException] { $taskAcquired = $true }
+        if (!$taskAcquired) { throw 'Another fixture is preparing the shared Godot runtime cache.' }
+        foreach ($taskEntry in $taskEntries) {
+            if (!$taskEntry.path.StartsWith('runtime/') -or $taskEntry.path.Contains('..') -or $taskEntry.path.Contains('\')) {
+                throw 'Invalid runtime cache manifest path.'
+            }
+            $taskCachedFile = Join-Path $taskCache $taskEntry.path
+            if (!(Test-Path -LiteralPath $taskCachedFile)) {
+                Copy-RsfGodotArtifact (Join-Path $Source $taskEntry.path) $taskCachedFile
+            }
+            if ((Get-FileHash -LiteralPath $taskCachedFile).Hash -ine $taskEntry.sha256) { throw "Immutable runtime cache differs: $taskCachedFile" }
+        }
+        Copy-RsfGodotArtifact (Join-Path $Source 'runtime-manifest.json') (Join-Path $taskCache 'runtime-manifest.json')
+    } finally {
+        if ($taskAcquired) { $taskLease.ReleaseMutex() }
+        $taskLease.Dispose()
+    }
+    foreach ($taskFile in Get-ChildItem -LiteralPath $Source -Recurse -File) {
+        $taskRelative = [IO.Path]::GetRelativePath($Source, $taskFile.FullName)
+        if ($taskRelative.Replace('\','/').StartsWith('runtime/')) { continue }
+        Copy-RsfGodotArtifact $taskFile.FullName (Join-Path $Destination $taskRelative)
+    }
+    $taskRuntime = Join-Path $Destination 'runtime'
+    if (Test-Path -LiteralPath $taskRuntime) { throw 'A fresh fixture runtime destination is required.' }
+    # Each cache key is immutable. Later package staging cannot change an older
+    # fixture, and shader/readback outputs remain private to the fixture.
+    New-Item -ItemType Junction -Path $taskRuntime -Target (Join-Path $taskCache 'runtime') | Out-Null
+}
+
+function Get-RsfGodotBuild([string]$Root, [string]$Edition, [string]$Target = 'editor') {
+    $taskCategory = if ($Target -eq 'editor') { 'engines' } else { 'templates' }
+    $taskManifest = Join-Path $Root ".local/godot/$taskCategory/$Edition/$Target.json"
+    if (!(Test-Path -LiteralPath $taskManifest)) { throw "Build the matching Godot $Edition / $Target artifact first." }
+    $taskBuild = Get-Content -Raw -LiteralPath $taskManifest | ConvertFrom-Json
+    if (!(Test-Path -LiteralPath $taskBuild.executable) -or (Get-FileHash -LiteralPath $taskBuild.executable -Algorithm SHA256).Hash -ne $taskBuild.sha256) {
+        throw "Godot build artifact does not match its manifest: $taskManifest"
+    }
+    return $taskBuild.executable
+}
+
+function Get-RsfGodotVulkanValidationText([string]$Text) {
+    # The pinned interposer quotes this VUID while announcing its correction.
+    # Exclude only that exact informational notice; retain actual layer errors.
+    $taskNotice = '(?m)^\[Streamline info\] \[[^\r\n]*\]wrapper\.cpp:\d+\[vkCreateDevice\] As per VK spec - VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-03328, both extensions - VK_KHR_buffer_device_address and VK_EXT_buffer_device_address[ \t]+cannot be enabled at the same time\. Removed older extension VK_EXT_buffer_device_address\.\r?$'
+    return [regex]::Replace($Text, $taskNotice, '')
+}
+
+function Set-RsfGodotForeground([Diagnostics.Process]$taskProcess) {
+        if (!('GodotValidationFocus' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class GodotValidationFocus {
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr process);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr window);
+    public static bool Activate(IntPtr window) {
+        uint current = GetCurrentThreadId();
+        uint foreground = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+        bool attached = foreground != 0 && foreground != current && AttachThreadInput(current, foreground, true);
+        try { BringWindowToTop(window); SetForegroundWindow(window); return GetForegroundWindow() == window; }
+        finally { if (attached) AttachThreadInput(current, foreground, false); }
+    }
+}
+'@
+        }
+        $taskFocused = $false
+        $taskFocusTimer = [Diagnostics.Stopwatch]::StartNew()
+        while ($taskFocusTimer.Elapsed.TotalSeconds -lt 30 -and !$taskProcess.HasExited) {
+            $taskProcess.Refresh()
+            if ($taskProcess.MainWindowHandle -ne [IntPtr]::Zero -and [GodotValidationFocus]::Activate($taskProcess.MainWindowHandle)) {
+                $taskFocused = $true
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if (!$taskFocused) {
+            throw "Cannot establish the GPU fixture's actual foreground window within 30 seconds: $($taskProcess.Id)"
+        }
+}

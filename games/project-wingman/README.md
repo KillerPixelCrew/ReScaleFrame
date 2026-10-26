@@ -1,5 +1,9 @@
 # Project Wingman
 
+There is no published Project Wingman package. The observer preview was withdrawn;
+SR, FG, latency and VR processing remain unimplemented. The observer build and
+research notes below document development work only.
+
 The Windows x64 plugin recognizes the researched executable, exposes game-plugin ABI 13 and
 observes the native temporal graph. Its dedicated XInput carrier is deployed and the desktop
 observer is game-tested. GPU resource leases, upscaling, HUD separation, frame generation,

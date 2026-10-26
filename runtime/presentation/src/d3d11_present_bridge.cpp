@@ -76,9 +76,11 @@ class Bridge final : public IDXGISwapChain4 {
     ComPtr<ID3D11DeviceContext4> context;
     ComPtr<IDXGIFactory> parent;
     ComPtr<IDXGISwapChain4> physical;
+    std::atomic<bool> physical_pending{false};
     std::mutex physical_guard;
     std::atomic<UINT> application_presents{0};
     template<class Call> HRESULT query_physical(Call call) {
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         std::lock_guard<std::mutex> lock(physical_guard);
         return physical ? call(physical.Get()) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
@@ -105,7 +107,7 @@ class Bridge final : public IDXGISwapChain4 {
     std::array<ComPtr<ID3D12Resource>, 8> render_buffers;
     uint32_t render_index = 0;
     void* provider = nullptr;
-    rsf_shared_surface* surface = nullptr;
+    std::array<rsf_shared_surface*, 8> surfaces{};
     rsf_shared_fence* shared_fence = nullptr;
     ComPtr<ID3D12Fence> complete;
     // Signalled on the provider queue once vendor retirement has joined; see retire().
@@ -118,6 +120,10 @@ class Bridge final : public IDXGISwapChain4 {
     } slots[3];
     DXGI_SWAP_CHAIN_DESC description{};
     HANDLE completion_event = nullptr;
+    HANDLE application_ready = nullptr;
+    std::atomic<UINT> application_latency{1};
+    std::array<uint64_t, 16> application_fences{};
+    uint64_t application_serial = 0;
     uint64_t serial = 0;
     uint32_t next_slot = 0;
     bool faulted = false;
@@ -156,6 +162,15 @@ class Bridge final : public IDXGISwapChain4 {
         timing_frames = 0; timing_sum = {}; timing_max = {}; interval_min = interval_max = 0; timing_slots = 0;
     }
     HRESULT wait(ID3D12Fence* fence, uint64_t value) { return rsf::wait_fence(fence, value, completion_event); }
+    HRESULT application_frame_complete(uint64_t value) {
+        if (!application_ready) return S_OK;
+        const auto frame = ++application_serial;
+        application_fences[frame % application_fences.size()] = value;
+        const auto latency = application_latency.load();
+        if (frame < latency) return SetEvent(application_ready) ? S_OK : E_FAIL;
+        const auto available = application_fences[(frame - latency + 1) % application_fences.size()];
+        return complete->SetEventOnCompletion(available, application_ready);
+    }
     void report_device_failure(HRESULT result) {
         char text[160]; std::snprintf(text, sizeof(text), "Unity presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
             active_backend.load(), static_cast<unsigned long>(result), static_cast<unsigned long>(direct_device->GetDeviceRemovedReason())); log(text);
@@ -187,9 +202,18 @@ class Bridge final : public IDXGISwapChain4 {
         return S_OK;
     }
     HRESULT make_surface(UINT width, UINT height, DXGI_FORMAT format) {
+        if (!description.BufferCount || description.BufferCount > surfaces.size()) return E_INVALIDARG;
         rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION,
             width, height, uint32_t(format), 1, settings.log, settings.user};
-        return rsf_shared_surface_create(device.Get(), graphics.native_device, &setup, &surface) == RSF_SHARED_OK ? S_OK : E_FAIL;
+        for (UINT i = 0; i < description.BufferCount; ++i) {
+            if (rsf_shared_surface_create(device.Get(), graphics.native_device, &setup, &surfaces[i]) != RSF_SHARED_OK) {
+                release_surfaces(); return E_FAIL;
+            }
+        }
+        render_index = 0; return S_OK;
+    }
+    void release_surfaces() {
+        for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface); surface = nullptr; }
     }
     HRESULT make_render_buffers() {
         if (!description.BufferCount || description.BufferCount > render_buffers.size()) return E_INVALIDARG;
@@ -201,7 +225,9 @@ class Bridge final : public IDXGISwapChain4 {
         for (UINT i = 0; i < description.BufferCount; ++i)
             if (FAILED(direct_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&render_buffers[i])))) return E_FAIL;
-        render_index = 0; return S_OK;
+        render_index = 0; application_serial = 0; application_fences = {};
+        if (application_ready) SetEvent(application_ready);
+        return S_OK;
     }
     rsf_generation_setup generation_setup(uint32_t backend) {
         rsf_generation_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_FG_ABI_VERSION;
@@ -228,7 +254,9 @@ class Bridge final : public IDXGISwapChain4 {
             desc.Flags = tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
             ComPtr<IDXGISwapChain> plain;
             auto* owner_queue = native12 ? direct_queue.Get() : static_cast<ID3D12CommandQueue*>(graphics.native_queue);
-            if (FAILED(original_create(parent.Get(), owner_queue, &desc, &plain)) || FAILED(plain.As(&replacement)))
+            const HRESULT created = original_create ? original_create(parent.Get(), owner_queue, &desc, &plain) :
+                parent->CreateSwapChain(owner_queue, &desc, &plain);
+            if (FAILED(created) || FAILED(plain.As(&replacement)))
                 return RSF_BACKEND_ERROR_INIT_FAILED;
             publish_physical(replacement, owner_queue);
             return RSF_BACKEND_OK;
@@ -243,6 +271,22 @@ class Bridge final : public IDXGISwapChain4 {
         if (result != RSF_BACKEND_OK) { replacement.Reset(); if (provider) api->destroy(provider); provider = nullptr; }
         else publish_physical(replacement, static_cast<ID3D12CommandQueue*>(setup.chain.d3d12_queue));
         return result;
+    }
+    HRESULT ensure_physical() {
+        if (!physical_pending.exchange(false)) return current_physical() ? S_OK : DXGI_ERROR_WAS_STILL_DRAWING;
+        // Overlay creation callbacks retain per-call device/queue state. A provider's
+        // nested native creation must happen after the engine's factory call returns.
+        const bool was_creating = creating; creating = true;
+        struct Restore { bool value; ~Restore() { creating = value; } } restore{was_creating};
+        if (host && active_backend.load() != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
+        const auto result = create_physical(active_backend.load());
+        if (result != RSF_BACKEND_OK) {
+            switch_result.store(result); active_backend.store(0);
+            if (create_physical(0) != RSF_BACKEND_OK) { faulted = true; return E_FAIL; }
+        }
+        if (!description.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
+        active_session.store(provider, std::memory_order_release); host_paced.store(paced_by_host());
+        return S_OK;
     }
     // The provider session is the latency owner only when it does not pace through the host.
     bool paced_by_host() {
@@ -309,10 +353,11 @@ class Bridge final : public IDXGISwapChain4 {
             for (auto& buffer : render_buffers) buffer.Detach();
             return;
         }
-        rsf_shared_surface_destroy(surface); rsf_shared_fence_destroy(shared_fence);
+        release_surfaces(); rsf_shared_fence_destroy(shared_fence);
         physical.Reset();
         if (provider) generation_api()->destroy(provider);
         if (completion_event) CloseHandle(completion_event);
+        if (application_ready) CloseHandle(application_ready);
         if (host && active_host.load() != host) {
             interop_queue.Reset();
             for (auto& slot : slots) { slot.list.Reset(); slot.allocator.Reset(); }
@@ -445,6 +490,10 @@ public:
         else if (FAILED(gpu->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&interop_queue)))) return E_FAIL;
         completion_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!completion_event || FAILED(gpu->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&complete)))) return E_FAIL;
+        if (native12 && settings.runtime_switching && (description.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)) {
+            application_ready = CreateEventW(nullptr, FALSE, TRUE, nullptr);
+            if (!application_ready) return E_FAIL;
+        }
         if (!native12 && (rsf_shared_fence_create(device.Get(), graphics.native_device, settings.log, settings.user, &shared_fence) != RSF_SHARED_OK ||
             FAILED(make_surface(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format)))) return E_FAIL;
         for (auto& slot : slots)
@@ -452,12 +501,7 @@ public:
                     slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
         if (settings.runtime_switching) {
             if (native12 && FAILED(make_render_buffers())) return E_FAIL;
-            if (host && active_backend.load() != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
-            const auto result = create_physical(active_backend.load());
-            if (result != RSF_BACKEND_OK) {
-                switch_result.store(result); active_backend.store(0);
-                if (create_physical(0) != RSF_BACKEND_OK) return E_FAIL;
-            }
+            physical_pending.store(true);
         } else {
             const auto result = create_physical(active_backend.load());
             if (result != RSF_BACKEND_OK) {
@@ -465,7 +509,7 @@ public:
                 log(text); return E_FAIL;
             }
         }
-        if (!desc.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
+        if (physical && !desc.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
         log(tearing_supported ? "presentation bridge: windowed flip chain supports immediate tearing presentation" :
             "presentation bridge: DXGI tearing unavailable; using supported flip presentation");
         active_host.store(host, std::memory_order_release);
@@ -526,6 +570,7 @@ public:
     HRESULT STDMETHODCALLTYPE Present(UINT sync, UINT flags) override {
         if (faulted) return DXGI_ERROR_DEVICE_REMOVED;
         if (flags & DXGI_PRESENT_TEST) return query_physical([&](IDXGISwapChain4* chain) { return chain->Present(sync, flags); });
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         // Legacy discard chains cannot request the flip-model tearing creation flag.
         // Translate VSync Off to the supported DX12/windowed immediate-present contract.
         BOOL fullscreen = FALSE;
@@ -578,6 +623,8 @@ public:
             }
             notify_presented(event, result);
             if (SUCCEEDED(result) && settings.runtime_switching) {
+                const auto available = application_frame_complete(slot.fence);
+                if (FAILED(available)) return available;
                 ++application_presents;
                 render_index = (render_index + 1) % description.BufferCount;
                 switch_if_requested();
@@ -590,7 +637,8 @@ public:
             if (settings.debug_timing) ticks[2] = clock_tick();
             // Real DXGI backbuffers (the Off path) must be written on their creation queue.
             // Keep the separate interop queue for SR; final upload uses the present queue.
-            auto* queue = static_cast<ID3D12CommandQueue*>(graphics.queue);
+            auto* queue = provider_queue.load();
+            if (!queue) return DXGI_ERROR_DEVICE_REMOVED;
             auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(shared_fence));
             auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(shared_fence));
             // One facade render target is written by AC7. The shared copy is read only for the
@@ -604,11 +652,11 @@ public:
                 ComPtr<ID3D12Resource> buffer;
                 if (SUCCEEDED(physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) {
                     rsf::copy_transitioned(slot.list.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-                        static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surface)), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+                        static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surfaces[0])), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
                     void* command = provider_list(slot.list.Get());
                     if (settings.prepare) settings.prepare(settings.user, this, context.Get(), command, buffer.Get(), host, provider, sync);
                     if (SUCCEEDED(slot.list->Close())) {
-                        ID3D12CommandList* lists[]{slot.list.Get()}; queue->ExecuteCommandLists(1, lists);
+                        ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; queue->ExecuteCommandLists(1, lists);
                         const auto copied = ++serial;
                         if (SUCCEEDED(queue->Signal(fence12, copied)) && SUCCEEDED(queue->Wait(fence12, copied)) &&
                             SUCCEEDED(context->Wait(fence11, copied)))
@@ -621,11 +669,14 @@ public:
         }
         notify_presented(event, result);
         if (settings.debug_timing && SUCCEEDED(result)) { ticks[5] = clock_tick(); trace_pacing(ticks, index, sync, physical_flags); }
-        if (SUCCEEDED(result) && settings.runtime_switching) switch_if_requested();
+        if (SUCCEEDED(result)) {
+            if (settings.runtime_switching) switch_if_requested();
+        }
         if (FAILED(result)) faulted = true;
         return result;
     }
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         if (native12 && settings.runtime_switching) {
             if (!out) return E_POINTER; *out = nullptr;
             return index < description.BufferCount && render_buffers[index] ? render_buffers[index]->QueryInterface(iid, out) : DXGI_ERROR_INVALID_CALL;
@@ -633,10 +684,11 @@ public:
         if (native12) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetBuffer(index, iid, out); });
         if (!out) return E_POINTER;
         *out = nullptr;
-        if (index || !surface) return DXGI_ERROR_INVALID_CALL;
-        return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface))->QueryInterface(iid, out);
+        if (index >= description.BufferCount || !surfaces[index]) return DXGI_ERROR_INVALID_CALL;
+        return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surfaces[index]))->QueryInterface(iid, out);
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled, IDXGIOutput* target) override {
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         if (FAILED(drain())) return E_FAIL;
         const auto chain = current_physical(); return chain ? chain->SetFullscreenState(enabled, target) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
@@ -645,14 +697,17 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !settings.runtime_switching) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc(out); }); *out = description; return S_OK; }
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override {
-        if ((!native12 && count > 1) || faulted) return DXGI_ERROR_INVALID_CALL;
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
+        if (count > surfaces.size() || faulted) return DXGI_ERROR_INVALID_CALL;
         if (!width || !height) { RECT rect{}; if (!GetClientRect(description.OutputWindow, &rect)) return E_FAIL; width = UINT(rect.right); height = UINT(rect.bottom); }
         if (!width || !height) return DXGI_ERROR_INVALID_CALL;
         if (format == DXGI_FORMAT_UNKNOWN) format = description.BufferDesc.Format;
         if (FAILED(drain())) return E_FAIL;
         if (!native12) {
-            auto* texture = static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface));
-            texture->AddRef(); if (texture->Release() > 1) return DXGI_ERROR_INVALID_CALL;
+            for (auto* surface : surfaces) if (surface) {
+                auto* texture = static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface));
+                texture->AddRef(); if (texture->Release() > 1) return DXGI_ERROR_INVALID_CALL;
+            }
         }
         if (provider && generation_api()->configure(provider, &fg_off) != RSF_BACKEND_OK) return E_FAIL;
         if (native12 && settings.runtime_switching) {
@@ -661,11 +716,14 @@ public:
             }
             if (count > render_buffers.size()) return DXGI_ERROR_INVALID_CALL;
         }
-        rsf_shared_surface_destroy(surface); surface = nullptr;
         const auto result = physical->ResizeBuffers(native12 ? count : 3, width, height, format,
             tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
-        if (FAILED(result)) { if (!native12) make_surface(description.BufferDesc.Width, description.BufferDesc.Height, description.BufferDesc.Format); return result; }
-        if (!native12 && FAILED(make_surface(width, height, format))) { faulted = true; return E_FAIL; }
+        if (FAILED(result)) return result;
+        if (!native12) {
+            release_surfaces();
+            if (count) description.BufferCount = count;
+            if (FAILED(make_surface(width, height, format))) { faulted = true; return E_FAIL; }
+        }
         description.BufferDesc.Width = width; description.BufferDesc.Height = height; description.BufferDesc.Format = format; description.Flags = flags;
         if (native12 && settings.runtime_switching) {
             if (count) description.BufferCount = count;
@@ -689,7 +747,7 @@ public:
         }
         return query_physical([&](IDXGISwapChain4* chain) { return chain->GetLastPresentCount(out); });
     }
-    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override { if (!out) return E_POINTER; const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); }); if (SUCCEEDED(result) && (!native12 || settings.runtime_switching)) { out->BufferCount = native12 ? description.BufferCount : 1; out->SwapEffect = description.SwapEffect; out->Flags = description.Flags; } return result; }
+    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override { if (!out) return E_POINTER; const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); }); if (SUCCEEDED(result) && (!native12 || settings.runtime_switching)) { out->BufferCount = description.BufferCount; out->SwapEffect = description.SwapEffect; out->Flags = description.Flags; } return result; }
     HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); }); }
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetHwnd(out); }); }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void** out) override { if (out) *out = nullptr; return E_NOINTERFACE; }
@@ -704,14 +762,37 @@ public:
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetRotation(value); }); }
     HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetSourceSize(width, height); }); }
     HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* width, UINT* height) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetSourceSize(width, height); }); }
-    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT value) override { return native12 ? query_physical([&](IDXGISwapChain4* chain) { return chain->SetMaximumFrameLatency(value); }) : DXGI_ERROR_INVALID_CALL; }
-    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* out) override { if (native12) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetMaximumFrameLatency(out); }); if (!out) return E_POINTER; *out = 1; return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT value) override {
+        if (native12 && settings.runtime_switching) {
+            if (!application_ready || !value || value > application_fences.size()) return DXGI_ERROR_INVALID_CALL;
+            application_latency.store(std::min(value, description.BufferCount)); return S_OK;
+        }
+        return native12 ? query_physical([&](IDXGISwapChain4* chain) { return chain->SetMaximumFrameLatency(value); }) : DXGI_ERROR_INVALID_CALL;
+    }
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* out) override {
+        if (!out) return E_POINTER;
+        if (native12 && settings.runtime_switching) {
+            if (!application_ready) return DXGI_ERROR_INVALID_CALL;
+            *out = application_latency.load(); return S_OK;
+        }
+        if (native12) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetMaximumFrameLatency(out); });
+        *out = 1; return S_OK;
+    }
     HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override {
+        if (native12 && settings.runtime_switching) {
+            // The application owns this duplicate. Provider replacement must never close
+            // the wait object retained by the engine for the facade's entire lifetime.
+            HANDLE duplicate = nullptr;
+            if (application_ready) DuplicateHandle(GetCurrentProcess(), application_ready, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS);
+            return duplicate;
+        }
         std::lock_guard<std::mutex> lock(physical_guard); return native12 && physical ? physical->GetFrameLatencyWaitableObject() : nullptr;
     }
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetMatrixTransform(value); }); }
     HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetMatrixTransform(value); }); }
     UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override {
+        // DX11 retains a view of logical buffer zero across Present. Our shared textures
+        // cannot perform DXGI's automatic backing-resource rotation, so keep that source.
         if (!native12) return 0;
         if (settings.runtime_switching) return render_index;
         std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->GetCurrentBackBufferIndex() : 0;
@@ -729,8 +810,7 @@ HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_
         (desc.BufferDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.BufferDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
          desc.BufferDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM && desc.BufferDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)) return DXGI_ERROR_UNSUPPORTED;
     if (!unknown) return DXGI_ERROR_UNSUPPORTED;
-    ComPtr<ID3D12CommandQueue> queue;
-    if (FAILED(unknown->QueryInterface(IID_PPV_ARGS(&queue))) && desc.BufferCount != 1) return DXGI_ERROR_UNSUPPORTED;
+    if (!desc.BufferCount || desc.BufferCount > 8) return DXGI_ERROR_UNSUPPORTED;
     std::lock_guard<std::mutex> lock(creation_guard);
     if (active_chain.load()) return DXGI_ERROR_UNSUPPORTED;
     creating = true;
@@ -757,10 +837,8 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
-extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
+extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
     if (!setup || setup->struct_size < sizeof(*setup) || !setup->runtime_directory_utf8 || !setup->accept_window || original_create) return 0;
-    ComPtr<IDXGIFactory2> factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     // Depth units are the plugin's to state; the bridge no longer guesses them from the API.
     if (!(setup->units_to_meters > 0)) {
         if (setup->log) setup->log(setup->user, "presentation bridge: units_to_meters must be positive; interception refused");
@@ -777,6 +855,30 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     xess_directory = setup->xess_directory_utf8 ? setup->xess_directory_utf8 : runtime_directory;
     streamline_directory = setup->streamline_directory_utf8 ? setup->streamline_directory_utf8 : runtime_directory;
     active_backend.store(setup->backend ? setup->backend : setup->runtime_switching ? 0u : RSF_FG_BACKEND_DLSS);
+    return 1;
+}
+extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
+    const void* description, void** out) try {
+    if (!factory || !queue || !description || !out) return E_INVALIDARG;
+    *out = nullptr;
+    const auto& desc = *static_cast<const DXGI_SWAP_CHAIN_DESC1*>(description);
+    if (desc.Stereo) return DXGI_ERROR_UNSUPPORTED;
+    DXGI_SWAP_CHAIN_DESC translated{};
+    translated.BufferDesc = {desc.Width, desc.Height, {}, desc.Format, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_MODE_SCALING_UNSPECIFIED};
+    translated.SampleDesc = desc.SampleDesc; translated.BufferUsage = desc.BufferUsage; translated.BufferCount = desc.BufferCount;
+    translated.OutputWindow = static_cast<HWND>(hwnd); translated.Windowed = TRUE;
+    translated.SwapEffect = desc.SwapEffect; translated.Flags = desc.Flags;
+    ComPtr<IDXGISwapChain> bridge;
+    const HRESULT result = create_bridge(static_cast<IDXGIFactory*>(factory), static_cast<IUnknown*>(queue), translated, &bridge);
+    return SUCCEEDED(result) ? bridge->QueryInterface(__uuidof(IDXGISwapChain1), out) : result;
+} catch (...) {
+    if (out) *out = nullptr;
+    return E_FAIL;
+}
+extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
+    if (!rsf_d3d11_present_prepare(setup)) return 0;
+    ComPtr<IDXGIFactory2> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     const auto initialized = MH_Initialize();
     if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return 0;
     auto** table = *reinterpret_cast<void***>(factory.Get());

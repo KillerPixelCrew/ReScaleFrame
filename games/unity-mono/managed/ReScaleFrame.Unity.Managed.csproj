@@ -20,6 +20,6 @@
     <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <Target Name="CheckUnityReferences" BeforeTargets="ResolveReferences">
-    <Error Condition="!Exists('$(UnityManagedDirectory)/UnityEngine.CoreModule.dll')" Text="Set UnityManagedDirectory to the examined Mono player's Managed directory." />
+    <Error Condition="!Exists('$(UnityManagedDirectory)/UnityEngine.CoreModule.dll')" Text="Set UnityManagedDirectory to prepared public Unity SDK references or a compatible Managed reference directory." />
   </Target>
 </Project>

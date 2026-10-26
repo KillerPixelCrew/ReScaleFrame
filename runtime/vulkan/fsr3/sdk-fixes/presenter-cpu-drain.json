@@ -1,0 +1,37 @@
+{
+  "id": "vulkan-presenter-cpu-completion-before-device-idle",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "replacements": [
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h",
+      "before": "    HANDLE           pacerEvent                    = NULL;",
+      "after": "    HANDLE           pacerEvent                    = NULL;\n    HANDLE cpuCompletionEvent = NULL;\n    uint64_t cpuScheduledPresentation = 0;\n    std::atomic<uint64_t> cpuCompletedPresentation{0};"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    presentInfo.pacerEvent         = CreateEvent(NULL, FALSE, FALSE, TEXT(\"PacerEvent\"));",
+      "after": "    presentInfo.pacerEvent         = CreateEvent(NULL, FALSE, FALSE, TEXT(\"PacerEvent\"));\n    presentInfo.cpuCompletionEvent = CreateEvent(NULL, FALSE, FALSE, nullptr);\n    if (!presentInfo.cpuCompletionEvent) return VK_ERROR_OUT_OF_HOST_MEMORY;"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    SafeCloseHandle(presentInfo.pacerEvent);",
+      "after": "    SafeCloseHandle(presentInfo.pacerEvent);\n    SafeCloseHandle(presentInfo.cpuCompletionEvent);"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "count": 2,
+      "before": "                    numFramesSentForPresentation = entry.numFramesSentForPresentationBase + entry.numFramesToPresent;",
+      "after": "                    numFramesSentForPresentation = entry.numFramesSentForPresentationBase + entry.numFramesToPresent;\n                    // GPU semaphore completion precedes vkQueuePresentKHR. Also\n                    // acknowledge completion of every CPU queue operation.\n                    presenter->cpuCompletedPresentation.store(numFramesSentForPresentation, std::memory_order_release);\n                    SetEvent(presenter->cpuCompletionEvent);"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "    // Set event to kick off async CPU present thread\n    SetEvent(presentInfo.presentEvent);",
+      "after": "    // Set event to kick off async CPU present thread\n    presentInfo.cpuScheduledPresentation = framesSentForPresentation;\n    SetEvent(presentInfo.presentEvent);"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
+      "before": "bool FrameInterpolationSwapChainVK::waitForPresents()\n{\n    // wait for interpolation to finish",
+      "after": "bool FrameInterpolationSwapChainVK::waitForPresents()\n{\n    // A signaled GPU semaphore alone cannot serialize host queue calls. The\n    // presenter signals it before its vkQueuePresentKHR and trailing submits.\n    while (presentInfo.cpuCompletedPresentation.load(std::memory_order_acquire) < presentInfo.cpuScheduledPresentation) {\n        if (WaitForSingleObject(presentInfo.cpuCompletionEvent, INFINITE) != WAIT_OBJECT_0) return false;\n    }\n    // wait for interpolation to finish"
+    }
+  ]
+}

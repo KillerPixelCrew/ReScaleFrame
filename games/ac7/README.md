@@ -1,5 +1,11 @@
 # Ace Combat 7
 
+[Current 0.1.1 preview with FG/latency code](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
+is available separately from the stable SR-only package described below. See its
+[installation guide](../../docs/releases/ac7-development-install.md) and
+[build evidence](../../docs/releases/v0.1.1-windows.md). This preview has no fresh
+AC7 gameplay acceptance; frame generation defaults Off.
+
 **DLSS/DLAA, FSR 2/3/4 and XeSS Super Resolution for AC7.**
 
 The integration starts with the game and keeps the original lighting, post-processing and UI.

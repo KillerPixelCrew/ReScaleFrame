@@ -5,6 +5,7 @@
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/srv_format.h>
 #include "../../backends/common/d3d12_helpers.h"
+#include "../../backends/common/frame_capture12.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -31,6 +32,7 @@ struct rsf_sr12 {
     bool exposure_initialized = false;
     uint32_t width = 0, height = 0, output_width = 0, output_height = 0;
     uint32_t backend = 0, quality = 0;
+    bool normalize_color = false;
     uint64_t last_frame = 0, last_view = 0, last_session = 0;
     uint32_t last_generation = 0;
     rsf_backend_log_fn diagnostic_log = nullptr;
@@ -45,6 +47,7 @@ struct rsf_sr12 {
     std::array<DXGI_FORMAT, 3> view_formats{};
     uint32_t validated_generation = 0;
     ComPtr<ID3D12GraphicsCommandList> validated_list;
+    rsf::FrameCapture12 capture;
 };
 namespace {
 using rsf::transition;
@@ -170,15 +173,16 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
             desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
             desc.DepthOrArraySize != 1 || desc.Width < (i == 3 ? self.output_width : self.width) ||
             desc.Height < (i == 3 ? self.output_height : self.height)) return false;
-        if (i == 0 && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT && desc.Format != DXGI_FORMAT_R11G11B10_FLOAT)
+        const DXGI_FORMAT readable_format = rsf::srv_format(desc.Format);
+        if (i == 0 && readable_format != DXGI_FORMAT_R16G16B16A16_FLOAT && readable_format != DXGI_FORMAT_R11G11B10_FLOAT)
             return false;
         if (i == 1 && desc.Format != DXGI_FORMAT_R32_FLOAT && desc.Format != DXGI_FORMAT_R32_TYPELESS &&
             desc.Format != DXGI_FORMAT_D32_FLOAT && desc.Format != DXGI_FORMAT_D32_FLOAT_S8X24_UINT &&
             desc.Format != DXGI_FORMAT_R32G8X24_TYPELESS && desc.Format != DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS &&
             desc.Format != DXGI_FORMAT_D24_UNORM_S8_UINT && desc.Format != DXGI_FORMAT_R24G8_TYPELESS) return false;
-        if (i == 2 && desc.Format != DXGI_FORMAT_R16G16_FLOAT) return false;
-        if (i == 3 && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) return false;
-        if (i < 3) self.view_formats[i] = i == 1 ? depth_view_format(desc.Format) : desc.Format;
+        if (i == 2 && readable_format != DXGI_FORMAT_R16G16_FLOAT) return false;
+        if (i == 3 && readable_format != DXGI_FORMAT_R16G16B16A16_FLOAT) return false;
+        if (i < 3) self.view_formats[i] = i == 1 ? depth_view_format(desc.Format) : readable_format;
     }
     for (size_t i = 0; i < 4; ++i) self.validated[i] = static_cast<ID3D12Resource*>(pointers[i]);
     self.validated_generation = pass.resource_generation;
@@ -226,7 +230,8 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         }
     }
     if (result != RSF_BACKEND_OK) return result;
-    if (!prepare_shader(*self) || !texture(*self, self->backend ? self->width : 1u, self->backend ? self->height : 1u, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
+    self->normalize_color = self->backend || self->capture.enabled();
+    if (!prepare_shader(*self) || !texture(*self, self->normalize_color ? self->width : 1u, self->normalize_color ? self->height : 1u, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R32_FLOAT, self->normalized[1]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16_FLOAT, self->normalized[2]) ||
         (self->backend && !texture(*self, self->output_width, self->output_height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->output)))
@@ -262,6 +267,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     if (!self || !commands || !pass || pass->struct_size < sizeof(*pass) || slot >= 3 || !inputs_valid(*self, *pass))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
+    (void)self->capture.flush(slot);
     if (list != self->validated_list.Get()) {
         ComPtr<ID3D12Device> list_device;
         if (FAILED(list->GetDevice(IID_PPV_ARGS(&list_device))) || list_device.Get() != self->device.Get())
@@ -288,7 +294,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     list->SetDescriptorHeaps(1, &heap); list->SetComputeRootSignature(self->root.Get());
     list->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart()); list->SetPipelineState(self->pipeline.Get());
     struct Constants { uint32_t width, height; float x, y; uint32_t inputs_only; } constants{self->width, self->height,
-        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], self->backend == RSF_SR_NONE};
+        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], !self->normalize_color};
     list->SetComputeRoot32BitConstants(1, 5, &constants, 0);
     list->Dispatch((self->width + 7) / 8, (self->height + 7) / 8, 1);
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -304,6 +310,9 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     const bool reset = (pass->flags & RSF_GAME_RENDER_RESET) || self->last_frame + 1 != pass->native_frame ||
         self->last_view != pass->history_key || self->last_session != pass->session_id || self->last_generation != pass->resource_generation;
     record.flags = reset ? RSF_FRAME_FLAG_RESET : 0;
+    (void)self->capture.record(list, self->normalized[0].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-linear-color", slot);
+    (void)self->capture.record(list, self->normalized[1].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-depth", slot);
+    (void)self->capture.record(list, self->normalized[2].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-motion-pixels", slot);
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
     if (self->exposure) {
         if (!self->exposure_initialized) {
@@ -330,14 +339,16 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     frame.jitter_x = pass->camera.jitter_pixels[0]; frame.jitter_y = pass->camera.jitter_pixels[1];
     // The producer measures pixel jitter from the actual GPU projection, including its Y conversion.
     frame.motion_scale_x = frame.motion_scale_y = 1; frame.pre_exposure = frame.view_space_to_meters = 1;
-    frame.reset = reset;
+    frame.reset = reset || self->capture.force_sr_history_reset(record.frame_id);
     const auto result = !self->backend ? RSF_BACKEND_OK : self->dlss ? rsf_dlss_native12_evaluate(self->dlss, list, &frame) :
         rsf_sr_session_evaluate(self->alternate, list, &frame);
+    (void)self->capture.event(record, "sr-evaluate", record.frame_id, frame.reset != 0, result);
     if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (result != RSF_BACKEND_OK) { self->last_frame = 0; return result; }
     if (self->backend) {
+        (void)self->capture.record(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, record, "sr-output-linear", slot, 0, frame.reset ? 1u : 0u);
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->output.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = static_cast<ID3D12Resource*>(pass->color_output); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -352,5 +363,6 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
 extern "C" void rsf_sr12_destroy(rsf_sr12* self)
 {
     if (!self) return;
+    (void)self->capture.flush();
     rsf_sr_session_destroy(self->alternate); rsf_dlss_native12_destroy(self->dlss); delete self;
 }

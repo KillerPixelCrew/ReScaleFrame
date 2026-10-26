@@ -1,5 +1,7 @@
 param(
-    [Parameter(Mandatory)][string]$GameDirectory,
+    [string]$GameDirectory,
+    [string]$OutputDirectory,
+    [string]$Python = 'python',
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
     [ValidateSet('Auto','Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Auto',
     [ValidateRange(0,4)][int]$Quality = 1
@@ -7,18 +9,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
-$taskGame = (Resolve-Path -LiteralPath $GameDirectory).Path
-$taskDeployment = Get-Content -Raw -LiteralPath (Join-Path $taskGame 'ReScaleFrame/deployment.json') | ConvertFrom-Json
+$taskGame = if ($GameDirectory) { (Resolve-Path -LiteralPath $GameDirectory).Path } else { $null }
+$taskDeployment = if ($taskGame) { Get-Content -Raw -LiteralPath (Join-Path $taskGame 'ReScaleFrame/deployment.json') | ConvertFrom-Json } else { $null }
 $taskVersion = (Get-Content -LiteralPath "$taskRoot/VERSION" -Raw).Trim()
 $taskBin = Join-Path $taskRoot 'build/windows-x64/bin/Release'
 $taskFirstParty = @('ReScaleFrame.Runtime.dll', 'ReScaleFrame.Game.UnityMono.dll',
     'ReScaleFrame.Unity.Managed.dll', 'rescaleframe_overlay.dll')
-$taskName = "ReScaleFrame-DragNWash-$taskVersion-Claw-Test-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-$taskOutput = Join-Path $taskRoot '.local/packages'
+$taskName = "ReScaleFrame-$taskVersion-DragNWash-Windows-x64"
+$taskOutput = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $taskRoot '.local/packages' }
 $taskStage = Join-Path $taskOutput $taskName
 $taskZip = Join-Path $taskOutput "$taskName.zip"
 if ((Test-Path -LiteralPath $taskStage) -or (Test-Path -LiteralPath $taskZip)) { throw 'Package destination already exists.' }
-if ($taskDeployment.game -ne 'drag-n-wash') { throw 'Expected the DragNWash deployment manifest.' }
+if ($taskDeployment -and $taskDeployment.game -ne 'drag-n-wash') { throw 'Expected the DragNWash deployment manifest.' }
 $taskExpected = @(
     'version.dll', 'ReScaleFrame.ini',
     'ReScaleFrame/ReScaleFrame.Runtime.dll', 'ReScaleFrame/ReScaleFrame.Game.UnityMono.dll',
@@ -38,7 +40,56 @@ $taskExpected = @(
     'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt',
     'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
 )
+if (!$taskDeployment) {
+    if (& git -C $taskRoot status --porcelain) { throw 'Commit the intended source before packaging Release artifacts.' }
+    # Assemble an explicit build-output payload. No game installation or deployment is involved.
+    $taskGame = Join-Path $taskRoot ('.local/unity-package-input-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $taskGame -Force | Out-Null
+    $taskInputs = @()
+    foreach ($taskRelative in $taskExpected) {
+        $taskLeaf = [IO.Path]::GetFileName($taskRelative)
+        $taskSource = switch -Wildcard ($taskRelative) {
+            'version.dll' { Join-Path $taskBin 'ReScaleFrame.Loader.dll'; break }
+            'ReScaleFrame.ini' { $null; break }
+            'ReScaleFrame/streamline/*' {
+                if ($taskLeaf -in @('license.txt','3rd-party-licenses.md')) { Join-Path $taskRoot "vendor/streamline/$taskLeaf" }
+                else { Join-Path $taskRoot "vendor/streamline/bin/x64/$taskLeaf" }; break
+            }
+            'ReScaleFrame/fidelityfx/*' {
+                if ($taskLeaf -eq 'license.md') { Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX/docs/license.md' }
+                elseif ($taskLeaf -eq '3rdpartynotice.md') { Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md' }
+                else { Join-Path $taskRoot "vendor/fidelityfx/Kits/FidelityFX/signedbin/$taskLeaf" }; break
+            }
+            'ReScaleFrame/xess/*' {
+                if ($taskLeaf -in @('LICENSE.txt','third-party-programs.txt')) { Join-Path $taskRoot "vendor/xess/$taskLeaf" }
+                else { Join-Path $taskRoot "vendor/xess/bin/$taskLeaf" }; break
+            }
+            'ReScaleFrame/MFG-Unlocker-LICENSE.txt' { Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'; break }
+            default { Join-Path $taskBin $taskLeaf }
+        }
+        $taskDestination = Join-Path $taskGame $taskRelative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null
+        if ($taskRelative -eq 'ReScaleFrame.ini') {
+            [IO.File]::WriteAllLines($taskDestination, @('[UnitySR]','Backend=7','Quality=1',
+                'FrameGeneration=7','GeneratedFrames=1','GraphicsDebug=0',
+                'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
+                'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',
+                'FSR4=ReScaleFrame/fidelityfx','XeSS=ReScaleFrame/xess'), [Text.Encoding]::Unicode)
+        } else { Copy-Item -LiteralPath $taskSource -Destination $taskDestination }
+        $taskInputs += @{ path=$taskRelative; sha256=(Get-FileHash -LiteralPath $taskDestination).Hash }
+    }
+    $taskDeployment = @{ game='drag-n-wash'; files=$taskInputs }
+}
 $taskFiles = @($taskDeployment.files)
+$taskPinnedRuntimes = @{
+    'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll' = 'd0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+    'ReScaleFrame/xess/libxess.dll' = '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
+}
+foreach ($taskRelative in $taskPinnedRuntimes.Keys) {
+    if ((Get-FileHash -LiteralPath (Join-Path $taskGame $taskRelative)).Hash.ToLowerInvariant() -ne $taskPinnedRuntimes[$taskRelative]) {
+        throw "Runtime differs from the validated SDK: $taskRelative"
+    }
+}
 if ($taskFiles.Count -ne $taskExpected.Count -or @($taskFiles.path | Select-Object -Unique).Count -ne $taskExpected.Count) {
     throw 'Deployment payload is incomplete or contains duplicate files.'
 }
@@ -71,6 +122,10 @@ $taskSettings = [regex]::Replace($taskSettings, '(?m)^FrameGeneration=\d+', "Fra
 [IO.File]::WriteAllText($taskIni, $taskSettings, [Text.Encoding]::Unicode)
 Copy-Item -LiteralPath "$taskRoot/LICENSE" -Destination "$taskStage/LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/build/windows-x64/_deps/minhook-src/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
+Copy-Item -LiteralPath "$taskRoot/sdk/game/LICENSE" -Destination "$taskStage/GameSDK-MIT.txt"
+Copy-Item -LiteralPath "$taskRoot/vendor/streamline/bin/x64/reflex.license.txt" -Destination "$taskStage/ReScaleFrame/streamline/reflex.license.txt"
+& $Python "$taskRoot/tools/package-unity-notices.py" $taskStage
+if ($LASTEXITCODE -ne 0) { throw 'Rust dependency notice collection failed.' }
 [IO.File]::WriteAllText("$taskStage/Unity-NOTICE.txt", @'
 Unity Native Plugin API copyright (c) 2015 Unity Technologies ApS.
 The native rendering interface declarations are licensed under the Unity Companion
@@ -80,7 +135,7 @@ Reference revision: 522254181faf188efa8b50c3e3bf6fce720b26e4.
 No Unity engine binaries or game assemblies are included in this package.
 '@, [Text.UTF8Encoding]::new($false))
 $taskReadme = @'
-ReScaleFrame: Drag'n Wash DX12 test package
+ReScaleFrame: Drag'n Wash DX12 package
 
 Install
 1. Close Drag'n Wash.
@@ -98,9 +153,9 @@ The panel offers DLSS, FSR1, FSR2, FSR3, FSR4 and XeSS, with Native, Quality,
 Balanced, Performance and Ultra Performance modes. Unsupported providers report
 refusal and keep a spatial fallback. DLSS requires supported NVIDIA hardware.
 FSR4 uses the experimental INT8 compatibility path on non-native hardware;
-support and image quality on your Claw have not been validated yet.
+support and image quality depend on the hardware and runtime.
 
-This is a Unity Mono/URP DX12 test build for Steam build 25286774,
+This is a Unity Mono/URP DX12 build for Steam build 25286774,
 Unity 6000.3.14f1. It refuses an unrecognized executable or native player.
 Temporal SR runs before DoF/blur, bloom and tone mapping. UI is drawn afterward.
 This build includes independent DLSS-G, FSR3/4 and XeSS FG selection in Insert,
@@ -137,10 +192,11 @@ Uninstall
 Close the game, then remove the added version.dll, ReScaleFrame.ini and
 ReScaleFrame folder. Leave every original game file in place.
 
-This package contains the verified Release build and hash-verified deployed vendor
-payload, including the accepted post-processing correction and new Auto policy.
-MSI Claw hardware acceptance is pending. The existing game installation is not
-changed by packaging.
+This package contains the Release build and hash-verified pinned vendor
+payload, including the post-processing correction, DLSS model selection,
+guarded RTX 40 MFG support and current Auto policy. This archive was built and
+checked without launching the game; the acceptance above refers to earlier
+game sessions. MSI Claw hardware acceptance is pending.
 First-party code is GPL-3.0-only; see LICENSE.txt. Vendor and Harmony notices
 are included alongside their runtimes. No game assets, game assemblies,
 decompiles, logs or machine-specific deployment baseline are included.
@@ -149,7 +205,7 @@ decompiles, logs or machine-specific deployment baseline are included.
 $taskManifest = [ordered]@{
     format = 1; version = $taskVersion; game = 'drag-n-wash'; steam_build = '25286774'
     executable_sha256 = '5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc'
-    artifact_source = 'verified Release build with hash-verified deployed vendor payload'; backend = $Backend; quality = $Quality
+    artifact_source = 'Release artifacts and hash-verified vendor payload'; backend = $Backend; quality = $Quality
     source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim()
     source_has_uncommitted_changes = [bool](& git -C $taskRoot status --porcelain)
     frame_generation = $FrameGeneration

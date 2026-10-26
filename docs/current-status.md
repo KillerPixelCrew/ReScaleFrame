@@ -1,5 +1,60 @@
 # Current implementation and validation
 
+End-of-day checkpoint, 25 October 2026: work stopped at the user's request.
+The latest native Release gate passes 75 discovered tests, with 64 executed and
+11 opt-in skips, plus formatting and Clippy. Standard/.NET editors also build
+with a new FSR1 storage-format correction, but its GPU retake and matching
+template rebuilds have not run. The new aggregate Vulkan matrix runner preserves
+actual images and failures; its initial FSR1 case exposed the format mismatch,
+and a full matrix has not run. DLSS secondary-window teardown still crashes;
+the primary-only latency-chain experiment failed and was reverted. FSR2 stage
+captures narrow the remaining edge displacement without delivering a production
+fix. XeSS MFG capability/admission follow-up remains unimplemented.
+See the [progress tracker](implementation.md) for the restart checkpoint.
+
+25 October 2026: the developer-facing Godot integration is in progress under
+`integrations/godot`. Custom standard/.NET 4.7.2 Forward+ DX12 engines passed
+SR/FG/MFG provider switching and PCL/input-marker fixtures. Actual FSR-generated
+frame dumps exposed and helped correct a zero-motion handoff and camera matrix
+conventions. Six standard/.NET visual cases now compare generated images with
+independently rendered midpoints. SR-enabled testing also corrected Godot's
+unwritten-motion sentinel. The expanded matrix passed vector/camera checks on
+120 generated frames, but four of 30 end-to-end image cases still fail for
+FSR2/FSR3 object motion. Standard/.NET Debug and Release
+exports passed runtime/controller fixtures, with C# on .NET and a separate
+GDScript-only .NET export. Native Vulkan FSR2/FSR3 SR now runs on standard/.NET
+editors with resize, C# calls, raw GPU readbacks and validation-layer checks.
+Vulkan FSR3 FG now passes standard/.NET functional fixtures with SR Off,
+Off/resume, resize and a secondary native window. Captures include actual SDK
+generated images and independent midpoint references. FSR2 image displacement
+and a synchronization-validation present hazard remain open. The corrected
+SR Off/FSR3 Vulkan image suite passes 12 cases and 48 actual generated frames.
+Vulkan PCL/Reflex now runs with camera-free native presentation and alongside
+FSR3 FG on standard/.NET editors. Vulkan DLSS SR also runs on both editions;
+six DLSS SR + FSR3 FG + PCL image cases pass against independent midpoint
+renders, covering 24 actual generated frames. XeSS Vulkan SR now passes six standard/.NET object/camera/combined image cases
+with FSR3 FG and PCL, covering 24 actual generated images. Vulkan DLSS FG passes
+strict standard/.NET device checks and independent midpoint image tests, including
+a shared DLSS SR + FG case. Higher-count MFG3 passes strict GPU checks and independent quarter-step image
+comparisons, preserving all three generated ordinals. XeSS FG uses a Vulkan/DX12 presenter: standard/.NET
+lifecycle, C# and PCL checks pass. All twelve standard/.NET object/camera/combined
+image cases with SR Off or XeSS SR pass, covering 48 actual SDK-generated images.
+Optional foreground maintenance records scoped activation and preserved failed controls.
+FSR4 SR uses a graph-owned
+Vulkan/DX12 handoff; both editors pass switching/resize checks, with C# on .NET. One combined-motion
+image case and four raw SR frames pass per edition. Rebuilt standard/.NET Release exports
+also pass FSR4 switching, resize and raw-output checks. Debug exports pass XeSS FG/PCL,
+Off/resume and resize on both editions. The strict DLSS lifecycle fixture now passes
+all eleven phases and API/synchronization checks after the options correction, but
+still crashes during SDK shutdown. FSR4 FG routing builds and correctly refuses
+the current NVIDIA provider list; AMD execution remains untested. These remain bounded fixture results. Cold
+startup pauses, FSR2 displacement, DLSS shutdown, new-provider export coverage and broader
+scene-quality acceptance remain open. This does
+not change game-plugin readiness flags.
+Rebuilt Vulkan Debug/Release exports pass 12 standard/.NET SR, FG and
+camera-free PCL fixtures, with C# in SR/FG and actual PNG/raw input checks in SR.
+[Evidence and limits](research/godot-engine-integration.md).
+
 10 October update: the user reported a Unity UI/overlay regression in the new
 package. The pre-UI snapshot, overlay synchronization, touch handling and Auto
 FG corrections are applied and pass the recorded automated checks. Fresh game
@@ -18,6 +73,12 @@ Documentation checked on 7 October 2026 against source commit
 This is a source/documentation audit. No new game, GPU or Windows build was run for this audit.
 
 ## Downloads and source builds
+
+18 October 2026: the [AC7 0.1.1 prerelease](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
+packages the current Windows source with FG/latency dependencies. It has build
+and fixture checks, not fresh game acceptance. The Project Wingman observer
+preview was withdrawn; Wingman remains research only, without a published
+package. [Release evidence](releases/v0.1.1-windows.md).
 
 The published [v0.1.0 AC7 release](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/v0.1.0)
 contains DLSS/DLAA, FSR 2/3/4 and XeSS SR, the AC7 plugin and Insert overlay. Its replacement
@@ -93,7 +154,7 @@ physical scanout, a latency reduction, or an in-game performance gain.
 | FG provider | 2 | `runtime/contract/include/rescaleframe/frame_generation.h` |
 | Overlay | 12 | `ui/overlay/include/rescaleframe/overlay.h` |
 
-`VERSION` and the Cargo workspace both specify 0.1.0. Equal component versions do not imply equal
+`VERSION` and the Cargo workspace both specify 0.1.1. Equal component versions do not imply equal
 builds or ABI compatibility; deploy matched artifacts. SDK headers are optional, and absent headers
 produce explicit unavailable stubs. Unity managed builds additionally require .NET, the researched
 player's Managed assemblies, Harmony and Unity native headers. Those game assemblies are build

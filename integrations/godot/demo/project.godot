@@ -1,0 +1,21 @@
+config_version=5
+
+[application]
+config/name="ReScaleFrame Godot Validation"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[display]
+window/size/viewport_width=640
+window/size/viewport_height=360
+window/size/window_width_override=640
+window/size/window_height_override=360
+
+[rendering]
+renderer/rendering_method="forward_plus"
+
+[editor_plugins]
+enabled=PackedStringArray("res://addons/rescaleframe/plugin.cfg")
+
+[rescaleframe]
+project_id="125d2115-7176-46e1-8806-95b790f01717"

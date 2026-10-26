@@ -13,6 +13,8 @@ The examined executable remains SHA-256
 The original `globalgamemanagers.assets` is
 `0948b788c15132fccb447a120daa4ad991ebf7878db7365757381dbb7c0ab4f0`.
 Baseline source is `3cbaaa9`; unrelated work in the checkout is excluded from this repair.
+Delivery reconciles this change onto `main` at `267c0e5`, with a fresh Release managed
+build and both contract fixtures from the isolated checkout.
 
 UnityPy 1.25.0 inspected all 106 packaged Shader objects and renderer/material references.
 The 272 serialized SkinnedMeshRenderers request object motion and retain previous skinning
@@ -117,5 +119,8 @@ candidate repair until the player binding and moving-character checks succeed.
 Final asset SHA-256 is
 `96150c2617614ae2657e235845f795403614a4173b7f7676f7ffcb16ed10c791`;
 the matched helper is
-`f638929cd531cb8e1bda00f9543a5f85def0aeb587180c9e07686a98a8359808`.
+`18fcfa9c2568f5d083205d914fbdec936cd5e9b8ac72a6404ce0d298b9915b90`.
 Raw shader sources, logs and GPU fixture material stay in `.local/drag-n-wash`.
+
+The earlier local build recorded helper SHA-256 `f638929cd531cb8e1bda00f9543a5f85def0aeb587180c9e07686a98a8359808`.
+The reconciled delivery identity above supersedes that local binary identity.

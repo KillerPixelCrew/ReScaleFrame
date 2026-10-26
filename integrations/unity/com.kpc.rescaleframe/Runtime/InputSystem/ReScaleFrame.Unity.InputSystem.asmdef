@@ -1,0 +1,6 @@
+{
+  "name": "ReScaleFrame.Unity.InputSystem",
+  "references": ["ReScaleFrame.Unity", "Unity.InputSystem"],
+  "defineConstraints": ["RSF_INPUT_SYSTEM", "ENABLE_UPSCALER_FRAMEWORK"],
+  "versionDefines": [{"name": "com.unity.inputsystem", "expression": "1.0.0", "define": "RSF_INPUT_SYSTEM"}]
+}

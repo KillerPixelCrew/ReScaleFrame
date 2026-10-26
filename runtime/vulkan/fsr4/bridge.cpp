@@ -1,6 +1,8 @@
 // AMD FSR 4 DX12 upscaler on the Vulkan adapter. Shared D3D12 resources are
 // imported by Vulkan; a D3D12 fence orders both queues without CPU readback.
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -13,9 +15,13 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <cmath>
+#include <limits>
 #include "api/include/dx12/ffx_api_dx12.h"
 #include "upscalers/include/ffx_upscale.h"
 #include "fsr4_compat_core.h"
+#define RSF_FSR4_BRIDGE_BUILD
+#include "bridge_api.h"
 
 /// @brief Releases a local COM reference and clears its pointer without waiting for GPU work.
 template<class T> static void Release(T*& object) {
@@ -62,6 +68,9 @@ struct VulkanStoryFsr4 {
     PfnFfxQuery query{};
     int releaseFailure{};
     bool releasePrepared{};
+    uint64_t adapterLuid{}, providerVersion{}, lastDoneSignalled{};
+    uint32_t vendor{}, maxRenderWidth{}, maxRenderHeight{}, maxOutputWidth{}, maxOutputHeight{};
+    bool depthInverted{}, depthInfinite{};
 };
 
 /// @brief Whether a PCI vendor is an FSR4 candidate: AMD natively, NVIDIA/Intel through the INT8 compatibility lease.
@@ -207,28 +216,16 @@ extern "C" __declspec(dllexport) void VulkanStoryFsr4Destroy(VulkanStoryFsr4* va
 /// @param displayHeight Maximum output height.
 /// @param output Required owner slot; release an attached owner only with checked destruction.
 /// @return Zero on success; local, HRESULT or FidelityFX failure code otherwise.
-extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
-    VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
-    uint32_t displayWidth, uint32_t displayHeight, VulkanStoryFsr4** output) {
-    if (!physical || !output || !renderWidth || !renderHeight ||
+static int CreateContext(uint64_t luid, const wchar_t* runtimeDirectory,
+    uint32_t renderWidth, uint32_t renderHeight, uint32_t displayWidth,
+    uint32_t displayHeight, uint32_t flags, VulkanStoryFsr4** output) {
+    if (!luid || !output || !renderWidth || !renderHeight ||
         !displayWidth || !displayHeight) return -1;
     *output = nullptr;
-    if (VulkanStoryFsr4Probe(physical) != 0) return -11;
     auto* value = new (std::nothrow) VulkanStoryFsr4();
     if (!value) return -2;
     int error = 0;
     do {
-        HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
-        auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
-            GetProcAddress(loader, "vkGetPhysicalDeviceProperties2")) : nullptr;
-        if (!properties) { error = -3; break; }
-        VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-        VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        props.pNext = &id;
-        properties(physical, &props);
-        if (!id.deviceLUIDValid) { error = -4; break; }
-        uint64_t luid{};
-        std::memcpy(&luid, id.deviceLUID, VK_LUID_SIZE);
         uint32_t vendor{};
         HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&value->factory));
         if (FAILED(hr)) { error = static_cast<int>(hr); break; }
@@ -259,8 +256,9 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
         queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         hr = value->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&value->queue));
         if (FAILED(hr)) { error = static_cast<int>(hr); break; }
-        std::wstring base = OwnDirectory();
+        std::wstring base = runtimeDirectory ? runtimeDirectory : OwnDirectory();
         if (base.empty()) { error = -6; break; }
+        if (base.back() != L'\\' && base.back() != L'/') base += L'\\';
         value->module = LoadLibraryExW((base + L"amd_fidelityfx_upscaler_dx12.dll").c_str(),
             nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!value->module) { error = -7; break; }
@@ -296,6 +294,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
         ffxCreateContextDescUpscale upscale{};
         upscale.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         upscale.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+        upscale.flags |= flags;
         upscale.maxRenderSize = {renderWidth, renderHeight};
         upscale.maxUpscaleSize = {displayWidth, displayHeight};
         ffxCreateBackendDX12Desc backend{};
@@ -319,6 +318,11 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
         // The signed loader can select a legacy FSR provider on older GPUs.
         // This option promises the ML upscaler, so reject that substitution.
         if (provider.versionId != selected || !IsFsr4Name(provider.versionName)) { error = -9; break; }
+        value->adapterLuid = luid; value->providerVersion = provider.versionId; value->vendor = vendor;
+        value->maxRenderWidth = renderWidth; value->maxRenderHeight = renderHeight;
+        value->maxOutputWidth = displayWidth; value->maxOutputHeight = displayHeight;
+        value->depthInverted = (flags & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
+        value->depthInfinite = (flags & FFX_UPSCALE_ENABLE_DEPTH_INFINITE) != 0;
         hr = value->device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
             IID_PPV_ARGS(&value->completionFence));
         if (FAILED(hr)) { error = static_cast<int>(hr); break; }
@@ -344,6 +348,64 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
     return 0;
 }
 
+extern "C" __declspec(dllexport) int VulkanStoryFsr4Create(
+    VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
+    uint32_t displayWidth, uint32_t displayHeight, VulkanStoryFsr4** output) {
+    if (!output) return -1;
+    *output = nullptr;
+    if (!physical) return -1;
+    HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
+    auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+        GetProcAddress(loader, "vkGetPhysicalDeviceProperties2")) : nullptr;
+    if (!properties) return -3;
+    VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; props.pNext = &id;
+    properties(physical, &props);
+    uint64_t luid = 0; std::memcpy(&luid, id.deviceLUID, sizeof(luid));
+    if (!id.deviceLUIDValid) return -4;
+    return CreateContext(luid, nullptr, renderWidth, renderHeight, displayWidth, displayHeight, 0, output);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfFsr4BridgeCreate(const rsf_fsr4_bridge_create* setup,
+    rsf_fsr4_bridge** output) {
+    if (!output) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    *output = nullptr;
+    if (!setup) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_fsr4_bridge_check(setup->struct_size, setup->abi_version, sizeof(*setup));
+    if (check) return check;
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    const auto* directory = reinterpret_cast<const wchar_t*>(setup->runtime_directory);
+    if (!directory || !directory[0] || !((directory[1] == L':' && (directory[2] == L'\\' || directory[2] == L'/')) ||
+        (directory[0] == L'\\' && directory[1] == L'\\')) || setup->reserved || setup->depth_inverted > 1 ||
+        setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    uint32_t flags = setup->depth_inverted ? FFX_UPSCALE_ENABLE_DEPTH_INVERTED : 0;
+    if (setup->depth_infinite) flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
+    if (setup->motion_jittered) flags |= FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
+    return CreateContext(setup->adapter_luid, directory, setup->render_width, setup->render_height,
+        setup->output_width, setup->output_height, flags, output);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfFsr4BridgeInfo(const rsf_fsr4_bridge* value,
+    rsf_fsr4_bridge_info* info) {
+    if (!value || !info) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_fsr4_bridge_check(info->struct_size, info->abi_version, sizeof(*info));
+    if (check) return check;
+    info->adapter_luid = value->adapterLuid; info->provider_version = value->providerVersion;
+    info->vendor_id = value->vendor; info->int8_compatibility = value->compatibility ? 1u : 0u;
+    return 0;
+}
+
+extern "C" __declspec(dllexport) int32_t RsfFsr4BridgePlan(rsf_fsr4_bridge* value,
+    uint32_t quality, uint32_t* width, uint32_t* height) {
+    if (!value || !width || !height || quality > 4) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    *width = *height = 0;
+    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode plan{};
+    plan.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
+    plan.displayWidth = value->maxOutputWidth; plan.displayHeight = value->maxOutputHeight;
+    plan.qualityMode = quality; plan.pOutRenderWidth = width; plan.pOutRenderHeight = height;
+    return static_cast<int>(value->query(&value->effect, &plan.header));
+}
+
 /// @brief Creates a committed DX12 texture and NT handle for dedicated Vulkan import.
 /// @param value Borrowed live runtime owner.
 /// @param width Nonzero texture width.
@@ -363,6 +425,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4CreateSharedImage(
     switch (static_cast<VkFormat>(vkFormat)) {
         case VK_FORMAT_R16G16B16A16_SFLOAT: format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
         case VK_FORMAT_R16G16_SFLOAT: format = DXGI_FORMAT_R16G16_FLOAT; break;
+        case VK_FORMAT_R32_SFLOAT: format = DXGI_FORMAT_R32_FLOAT; break;
         case VK_FORMAT_D32_SFLOAT:
             format = DXGI_FORMAT_D32_FLOAT;
             flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -429,8 +492,8 @@ static void Transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* reso
 /// @param value Live runtime owner; calls are serialized by the host.
 /// @param frame Borrowed fixed-layout resources and temporal constants for this dispatch.
 /// @return Zero when submission/signals succeed; local, HRESULT or FidelityFX failure otherwise. Signal failure can retain a terminal release error.
-extern "C" __declspec(dllexport) int VulkanStoryFsr4Evaluate(
-    VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame) {
+static int EvaluateFrame(VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame,
+    float motionScaleX, float motionScaleY, float preExposure) {
     if (!value || !frame || !frame->color || !frame->depth || !frame->motion ||
         !frame->output || !frame->readyValue || !frame->doneValue ||
         !value->sharedFence) return -1;
@@ -455,11 +518,11 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Evaluate(
     upscale.motionVectors = ffxApiGetResourceDX12(frame->motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.output = ffxApiGetResourceDX12(frame->output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     upscale.jitterOffset = {frame->jitterX, frame->jitterY};
-    upscale.motionVectorScale = {1.0f, 1.0f};
+    upscale.motionVectorScale = {motionScaleX, motionScaleY};
     upscale.renderSize = {frame->renderWidth, frame->renderHeight};
     upscale.upscaleSize = {frame->displayWidth, frame->displayHeight};
     upscale.frameTimeDelta = frame->deltaMs > 0.0f ? frame->deltaMs : 16.667f;
-    upscale.preExposure = 1.0f;
+    upscale.preExposure = preExposure;
     upscale.reset = frame->reset != 0;
     upscale.cameraNear = frame->nearPlane;
     upscale.cameraFar = frame->farPlane;
@@ -484,8 +547,76 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr4Evaluate(
     uint64_t completed = ++value->completionValue;
     value->allocatorValues[slot] = completed;
     HRESULT handoff = value->queue->Signal(value->sharedFence, frame->doneValue);
+    if (SUCCEEDED(handoff)) value->lastDoneSignalled = frame->doneValue;
     hr = value->queue->Signal(value->completionFence, completed);
     if (FAILED(hr)) return value->releaseFailure = static_cast<int>(hr);
     if (FAILED(handoff)) return value->releaseFailure = static_cast<int>(handoff);
     return 0;
+}
+
+static int FinishHandoff(VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame, int result) {
+    // The host may have already recorded a continuation waiting for done.
+    // Every failure still respects producer readiness before releasing that wait.
+    if (value && frame && value->queue && value->sharedFence && frame->readyValue &&
+        frame->doneValue > frame->readyValue && frame->doneValue > value->lastDoneSignalled) {
+        HRESULT wait = value->queue->Wait(value->sharedFence, frame->readyValue);
+        if (FAILED(wait)) return value->releaseFailure = static_cast<int>(wait);
+        HRESULT handoff = value->queue->Signal(value->sharedFence, frame->doneValue);
+        if (SUCCEEDED(handoff)) value->lastDoneSignalled = frame->doneValue;
+        uint64_t completed = ++value->completionValue;
+        HRESULT retired = value->queue->Signal(value->completionFence, completed);
+        if (FAILED(retired)) return value->releaseFailure = static_cast<int>(retired);
+        if (FAILED(handoff)) return value->releaseFailure = static_cast<int>(handoff);
+    }
+    return result;
+}
+
+static int EvaluateChecked(VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame,
+    float motionScaleX, float motionScaleY, float preExposure) {
+    return FinishHandoff(value, frame, EvaluateFrame(value, frame, motionScaleX, motionScaleY, preExposure));
+}
+
+extern "C" __declspec(dllexport) int VulkanStoryFsr4Evaluate(
+    VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame) {
+    return EvaluateChecked(value, frame, 1.0f, 1.0f, 1.0f);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfFsr4BridgeEvaluate(rsf_fsr4_bridge* value,
+    const rsf_fsr4_bridge_frame* frame) {
+    if (!value || !frame) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    int32_t check = rsf_fsr4_bridge_check(frame->struct_size, frame->abi_version, sizeof(*frame));
+    if (check) return check;
+    const auto reject = [&] {
+        VulkanStoryFsr4Frame handoff{};
+        handoff.readyValue = frame->ready_value; handoff.doneValue = frame->done_value;
+        return FinishHandoff(value, &handoff, RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+    };
+    if (!frame->color || !frame->depth || !frame->motion || !frame->output || !frame->render_width ||
+        !frame->render_height || !frame->output_width || !frame->output_height || frame->reset > 1 ||
+        frame->render_width > value->maxRenderWidth || frame->render_height > value->maxRenderHeight ||
+        frame->output_width > value->maxOutputWidth || frame->output_height > value->maxOutputHeight ||
+        !frame->ready_value || frame->ready_value <= value->lastDoneSignalled || frame->done_value <= frame->ready_value ||
+        !std::isfinite(frame->jitter_x) || !std::isfinite(frame->jitter_y) || !std::isfinite(frame->motion_scale_x) ||
+        !std::isfinite(frame->motion_scale_y) || !frame->motion_scale_x || !frame->motion_scale_y ||
+        !std::isfinite(frame->delta_ms) || frame->delta_ms <= 0 || !std::isfinite(frame->pre_exposure) || frame->pre_exposure <= 0 ||
+        !std::isfinite(frame->near_plane) || frame->near_plane <= 0 || !std::isfinite(frame->far_plane) || frame->far_plane < 0 ||
+        (!value->depthInfinite && frame->far_plane <= frame->near_plane) || !std::isfinite(frame->vertical_fov) ||
+        frame->vertical_fov <= 0 || frame->vertical_fov >= 3.141593f) return reject();
+    VulkanStoryFsr4Frame legacy{};
+    legacy.color = static_cast<ID3D12Resource*>(frame->color); legacy.depth = static_cast<ID3D12Resource*>(frame->depth);
+    legacy.motion = static_cast<ID3D12Resource*>(frame->motion); legacy.output = static_cast<ID3D12Resource*>(frame->output);
+    const auto color = legacy.color->GetDesc(), depth = legacy.depth->GetDesc(), motion = legacy.motion->GetDesc(), output = legacy.output->GetDesc();
+    if (color.Width != frame->render_width || color.Height != frame->render_height || color.Format != DXGI_FORMAT_R16G16B16A16_FLOAT ||
+        depth.Width != color.Width || depth.Height != color.Height || depth.Format != DXGI_FORMAT_R32_FLOAT ||
+        motion.Width != color.Width || motion.Height != color.Height || motion.Format != DXGI_FORMAT_R16G16_FLOAT ||
+        output.Width != frame->output_width || output.Height != frame->output_height || output.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+        return reject();
+    legacy.renderWidth = frame->render_width; legacy.renderHeight = frame->render_height;
+    legacy.displayWidth = frame->output_width; legacy.displayHeight = frame->output_height;
+    legacy.jitterX = frame->jitter_x; legacy.jitterY = frame->jitter_y; legacy.deltaMs = frame->delta_ms;
+    legacy.nearPlane = frame->near_plane;
+    legacy.farPlane = frame->far_plane > 0 ? frame->far_plane : std::numeric_limits<float>::max();
+    legacy.fov = frame->vertical_fov; legacy.reset = frame->reset;
+    legacy.readyValue = frame->ready_value; legacy.doneValue = frame->done_value;
+    return EvaluateChecked(value, &legacy, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure);
 }

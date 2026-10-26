@@ -10,15 +10,18 @@ hash receipt required by prepare-native-bundle.ps1's Fsr3RuntimeDirectory overri
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$HostRoot,
+    [string]$SdkRoot = (Join-Path $HostRoot 'sdk/fidelityfx-vk'),
     [string]$OutputDirectory = (Join-Path $HostRoot 'artifacts/rescaleframe/fsr3-sdk/Release/win-x64'),
     [string]$VulkanSdkRoot = $env:VULKAN_SDK,
     [ValidateSet('Release','RelWithDebInfo')][string]$Configuration = 'Release',
     [ValidateRange(1,4)][int]$Parallel = 4,
-    [ValidateRange(1,4)][int]$ShaderThreads = 1
+    [ValidateRange(1,4)][int]$ShaderThreads = 1,
+    [switch]$SwapchainTrace
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
 $projectRoot = (Resolve-Path -LiteralPath $HostRoot).Path
-$sdkRoot = Join-Path $projectRoot 'sdk/fidelityfx-vk'
+$sdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $output.StartsWith($artifactsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -31,11 +34,33 @@ if ($LASTEXITCODE -ne 0 -or $commit -ne $fix.sdkCommit) { throw 'The FSR3 correc
 $dirty = & git -C $sdkRoot status --porcelain --untracked-files=no
 if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'FidelityFX SDK tracked sources must be unchanged before staging.' }
 $recipeHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+$wsiHeader = Join-Path $PSScriptRoot 'wsi-dispatch.h'
+$wsiHeaderHash = (Get-FileHash -LiteralPath $wsiHeader).Hash
 $fixHash = (Get-FileHash -LiteralPath $fixPath -Algorithm SHA256).Hash
 $lifetimeFixPath = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-lifetime.json'
 $lifetimeFix = Get-Content -LiteralPath $lifetimeFixPath -Raw | ConvertFrom-Json
 $lifetimeFixHash = (Get-FileHash -LiteralPath $lifetimeFixPath -Algorithm SHA256).Hash
 if ($lifetimeFix.sdkCommit -ne $commit) { throw 'Swapchain corrections require the pinned SDK commit.' }
+$storageFixPath = Join-Path $PSScriptRoot 'sdk-fixes/fsr2-storage-formats.json'
+$storageFix = Get-Content -LiteralPath $storageFixPath -Raw | ConvertFrom-Json
+$storageFixHash = (Get-FileHash -LiteralPath $storageFixPath -Algorithm SHA256).Hash
+if ($storageFix.sdkCommit -ne $commit) { throw 'Storage format corrections require the pinned SDK commit.' }
+$poolFixPath = Join-Path $PSScriptRoot 'sdk-fixes/descriptor-pool-size.json'
+$poolFix = Get-Content -LiteralPath $poolFixPath -Raw | ConvertFrom-Json
+$poolFixHash = (Get-FileHash -LiteralPath $poolFixPath -Algorithm SHA256).Hash
+if ($poolFix.sdkCommit -ne $commit) { throw 'Descriptor pool correction requires the pinned SDK commit.' }
+$cpuFixPath = Join-Path $PSScriptRoot 'sdk-fixes/presenter-cpu-drain.json'
+$cpuFix = Get-Content -LiteralPath $cpuFixPath -Raw | ConvertFrom-Json
+$cpuFixHash = (Get-FileHash -LiteralPath $cpuFixPath -Algorithm SHA256).Hash
+if ($cpuFix.sdkCommit -ne $commit) { throw 'Presenter CPU completion correction requires the pinned SDK commit.' }
+$traceFixPath = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-trace.json'
+$traceFix = Get-Content -LiteralPath $traceFixPath -Raw | ConvertFrom-Json
+$traceFixHash = (Get-FileHash -LiteralPath $traceFixPath -Algorithm SHA256).Hash
+$traceHeader = Join-Path $PSScriptRoot 'sdk-fixes/swapchain-trace.h'
+$traceHeaderHash = (Get-FileHash -LiteralPath $traceHeader -Algorithm SHA256).Hash
+if ($traceFix.sdkCommit -ne $commit) { throw 'Swapchain diagnostics require the pinned SDK commit.' }
+$glslang = (Join-Path $sdkRoot 'sdk/tools/binary_store/glslangValidator.exe').Replace('\','/')
+$glslangHash = (Get-FileHash -LiteralPath $glslang -Algorithm SHA256).Hash
 if (Test-Path -LiteralPath $output) {
     $cachedReceiptPath = Join-Path $output 'runtime/fsr3-sdk-build.json'
     $cachedBinaryPath = Join-Path $output 'runtime/amd_fidelityfx_vk.dll'
@@ -45,6 +70,11 @@ if (Test-Path -LiteralPath $output) {
         if ($cached.schema -eq 1 -and $cached.sdkCommit -eq $commit -and
             $cached.configuration -eq $Configuration -and $cached.patchSha256 -eq $fixHash -and
             $cached.buildRecipeSha256 -eq $recipeHash -and $cached.swapchainLifetimePatchSha256 -eq $lifetimeFixHash -and
+            $cached.fsr2StoragePatchSha256 -eq $storageFixHash -and $cached.shaderCompilerSha256 -eq $glslangHash -and
+            $cached.descriptorPoolPatchSha256 -eq $poolFixHash -and
+            $cached.presenterCpuDrainPatchSha256 -eq $cpuFixHash -and $cached.wsiDispatchHeaderSha256 -eq $wsiHeaderHash -and
+            $cached.PSObject.Properties['swapchainTraceEnabled'] -and $cached.swapchainTraceEnabled -eq $SwapchainTrace.IsPresent -and
+            $cached.swapchainTracePatchSha256 -eq $traceFixHash -and $cached.swapchainTraceHeaderSha256 -eq $traceHeaderHash -and
             $cached.runtimeSha256 -eq (Get-FileHash -LiteralPath $cachedBinaryPath -Algorithm SHA256).Hash) {
             Write-Host "Using verified corrected FidelityFX runtime: $cachedBinaryPath"
             return
@@ -107,6 +137,44 @@ foreach ($replacement in $lifetimeFix.replacements) {
     [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
 }
 $afterHash = (Get-FileHash -LiteralPath $callback -Algorithm SHA256).Hash
+$storagePath = Join-Path $source $storageFix.file
+$storageText = [IO.File]::ReadAllText($storagePath)
+$storageResources = [IO.File]::ReadAllText((Join-Path $source $storageFix.resources))
+foreach ($replacement in $storageFix.replacements) {
+    $pattern = [regex]::Escape($replacement.identifier) + ',\s*L"[^"]+",\s*FFX_RESOURCE_TYPE_TEXTURE2D,\s*[^\r\n]+\r?\n\s*' + [regex]::Escape($replacement.format) + ','
+    if ([regex]::Matches($storageResources, $pattern).Count -ne 1 -or
+        [regex]::Matches($storageText, [regex]::Escape($replacement.before)).Count -ne 1) {
+        throw "Pinned FSR2 storage declaration or allocation changed: $($replacement.identifier)"
+    }
+    $storageText = $storageText.Replace($replacement.before, $replacement.after)
+}
+[IO.File]::WriteAllText($storagePath, $storageText, [Text.UTF8Encoding]::new($false))
+$poolPath = Join-Path $source $poolFix.file
+$poolText = [IO.File]::ReadAllText($poolPath)
+if ([regex]::Matches($poolText, [regex]::Escape($poolFix.before)).Count -ne 1) { throw 'Pinned global descriptor pool count changed.' }
+[IO.File]::WriteAllText($poolPath, $poolText.Replace($poolFix.before, $poolFix.after), [Text.UTF8Encoding]::new($false))
+foreach ($replacement in $cpuFix.replacements) {
+    $path = Join-Path $source $replacement.file
+    $code = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+    $expectedCount = if ($replacement.PSObject.Properties['count']) { [int]$replacement.count } else { 1 }
+    if ([regex]::Matches($code, [regex]::Escape($replacement.before)).Count -ne $expectedCount) {
+        throw "Pinned SDK presenter CPU completion anchor changed: $($replacement.file)"
+    }
+    [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
+}
+Copy-RsfGodotArtifact $wsiHeader (Join-Path $source 'sdk/src/backends/vk/FrameInterpolationSwapchain/rsf-wsi-dispatch.h')
+if ($SwapchainTrace) {
+    foreach ($replacement in $traceFix.replacements) {
+        $path = Join-Path $source $replacement.file
+        $code = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+        $expectedCount = if ($replacement.PSObject.Properties['count']) { [int]$replacement.count } else { 1 }
+        if ([regex]::Matches($code, [regex]::Escape($replacement.before)).Count -ne $expectedCount) {
+            throw "Pinned SDK swapchain diagnostic anchor changed: $($replacement.file)"
+        }
+        [IO.File]::WriteAllText($path, $code.Replace($replacement.before, $replacement.after), [Text.UTF8Encoding]::new($false))
+    }
+    Copy-RsfGodotArtifact $traceHeader (Join-Path $source 'sdk/src/backends/vk/FrameInterpolationSwapchain/rsf-swapchain-trace.h')
+}
 # The SDK otherwise gives every shader compiler the entire host CPU thread count.
 # Limit only staged build scheduling; shader flags and permutations remain identical.
 $shaderCommands = Join-Path $source 'sdk/include/FidelityFX/gpu/CMakeCompileShaders.txt'
@@ -114,7 +182,7 @@ $commandsText = [IO.File]::ReadAllText($shaderCommands)
 $threadAnchor = 'set(SC_ARGS ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})'
 $threadAnchors = [regex]::Matches($commandsText, [regex]::Escape($threadAnchor)).Count
 if ($threadAnchors -ne 1) { throw 'The pinned SDK shader scheduling function changed.' }
-$threadReplacement = 'set(SC_ARGS -num-threads=' + $ShaderThreads + ' ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})'
+$threadReplacement = 'set(SC_ARGS -num-threads=' + $ShaderThreads + ' "-glslangexe=' + $glslang + '" ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})'
 [IO.File]::WriteAllText($shaderCommands, $commandsText.Replace($threadAnchor, $threadReplacement), [Text.UTF8Encoding]::new($false))
 $previousVulkanSdk = $env:VULKAN_SDK
 try {
@@ -125,20 +193,29 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "FidelityFX SDK configure failed: $LASTEXITCODE" }
     & $cmake --build $build --config $Configuration --target amd_fidelityfx_vk --parallel $Parallel
     if ($LASTEXITCODE -ne 0) { throw "FidelityFX SDK build failed: $LASTEXITCODE" }
+    if ((Get-FileHash -LiteralPath $glslang -Algorithm SHA256).Hash -ne $glslangHash) { throw 'Pinned shader compiler changed during the build.' }
 } finally { $env:VULKAN_SDK = $previousVulkanSdk }
 $binaryName = if ($Configuration -eq 'Release') { 'amd_fidelityfx_vk.dll' } else { 'amd_fidelityfx_vkdrel.dll' }
 $built = Join-Path $source "ffx-api/bin/$binaryName"
 if (-not (Test-Path -LiteralPath $built -PathType Leaf)) { throw "The SDK build did not produce $built" }
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 $destination = Join-Path $runtime 'amd_fidelityfx_vk.dll'
-Copy-Item -LiteralPath $built -Destination $destination
+Copy-RsfGodotArtifact $built $destination
 $receipt = [ordered]@{
     schema=1; fix=$fix.id; upstream=$fix.upstream; sdkCommit=$commit; configuration=$Configuration
     callback=$fix.file; sourceBeforeSha256=$beforeHash; sourceAfterSha256=$afterHash
     patchSha256=$fixHash; buildRecipeSha256=$recipeHash; swapchainLifetimePatchSha256=$lifetimeFixHash
+    fsr2StoragePatchSha256=$storageFixHash
+    descriptorPoolPatchSha256=$poolFixHash
+    presenterCpuDrainPatchSha256=$cpuFixHash
+    swapchainTraceEnabled=$SwapchainTrace.IsPresent
+    swapchainTracePatchSha256=$traceFixHash
+    swapchainTraceHeaderSha256=$traceHeaderHash
+    wsiDispatchHeaderSha256=$wsiHeaderHash
     runtimeSha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
     cmake=$cmake; compiler=$compiler; generator=$generator; vulkanSdk=$vulkanRoot
     parallel=$Parallel; shaderThreads=$ShaderThreads
+    shaderCompiler=$glslang; shaderCompilerSha256=$glslangHash
 }
 $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtime 'fsr3-sdk-build.json') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $sdkRoot 'LICENSE.txt') -Destination (Join-Path $runtime 'LICENSE.txt')

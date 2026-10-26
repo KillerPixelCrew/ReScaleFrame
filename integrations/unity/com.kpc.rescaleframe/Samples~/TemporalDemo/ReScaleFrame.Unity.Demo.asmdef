@@ -1,0 +1,4 @@
+{
+  "name": "ReScaleFrame.Unity.Demo",
+  "references": ["ReScaleFrame.Unity", "Unity.RenderPipelines.Core.Runtime", "Unity.RenderPipelines.Universal.Runtime"]
+}

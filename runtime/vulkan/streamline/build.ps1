@@ -41,6 +41,8 @@ if ($CorrectedRuntimeDirectory) {
     $receipt = Get-Content -LiteralPath (Join-Path $CorrectedRuntimeDirectory 'streamline-sdk-build.json') -Raw | ConvertFrom-Json
     if ($receipt.sdkCommit -ne '2122257e0fce486f91b385aa63b9a09b0a34b363' -or
         $receipt.patchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/prepare.py')).Hash -or
+        $receipt.selectedDevicePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected_device.py')).Hash -or
+        $receipt.selectedDeviceConfigSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected-device-config.h')).Hash -or
         $receipt.dispatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/ngx-vulkan-dispatch.h')).Hash) {
         throw 'Corrected Streamline receipt does not match the pinned source corrections.'
     }

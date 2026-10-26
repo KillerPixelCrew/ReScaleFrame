@@ -35,6 +35,10 @@ static bool texture(ID3D12Device* device, uint32_t width, uint32_t height, DXGI_
     D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
     desc.Format = format; desc.SampleDesc.Count = 1; desc.Flags = flags;
+    if (std::getenv("RSF_SR_TYPELESS_INPUTS")) {
+        if (format == DXGI_FORMAT_R16G16B16A16_FLOAT) desc.Format = DXGI_FORMAT_R16G16B16A16_TYPELESS;
+        if (format == DXGI_FORMAT_R16G16_FLOAT) desc.Format = DXGI_FORMAT_R16G16_TYPELESS;
+    }
     return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&out)));
 }
 static bool buffer(ID3D12Device* device, uint64_t size, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out)

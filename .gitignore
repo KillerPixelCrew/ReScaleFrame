@@ -14,6 +14,8 @@ __pycache__/
 /.local/
 /references/
 /vendor/
+/integrations/unity/com.kpc.rescaleframe/Runtime~/
+/integrations/unity/com.kpc.rescaleframe/Plugins/x86_64/*.dll
 /captures/
 /dumps/
 /ghidra_projects/

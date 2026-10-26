@@ -9,13 +9,15 @@ resulting interposer through the generated receipt. No game installation is chan
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$HostRoot,
+    [string]$SdkRoot = (Join-Path $HostRoot 'sdk/streamline'),
     [string]$OutputDirectory = (Join-Path $HostRoot 'artifacts/rescaleframe/streamline/Release/win-x64'),
     [string]$Python = 'python.exe',
     [string]$PackageCache = (Join-Path $HostRoot 'artifacts/packman-cache')
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
 $root = (Resolve-Path -LiteralPath $HostRoot).Path
-$sdk = Join-Path $root 'sdk/streamline'
+$sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts'))
 if (-not $output.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -26,6 +28,10 @@ if ((& git -C $sdk rev-parse HEAD).Trim() -ne $commit) { throw 'Unexpected Strea
 $patch = Join-Path $PSScriptRoot 'sdk-fixes/prepare.py'
 $patchHash = (Get-FileHash -LiteralPath $patch).Hash
 $dispatchHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/ngx-vulkan-dispatch.h')).Hash
+$selectedDevicePatchHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected_device.py')).Hash
+$selectedDeviceConfigHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected-device-config.h')).Hash
+$presentCapture = Join-Path $PSScriptRoot 'present-capture.h'
+$presentCaptureHash = (Get-FileHash -LiteralPath $presentCapture).Hash
 $recipeHash = (Get-FileHash -LiteralPath $PSCommandPath).Hash
 $runtime = Join-Path $output 'runtime'
 $receiptPath = Join-Path $runtime 'streamline-sdk-build.json'
@@ -33,7 +39,10 @@ if (Test-Path -LiteralPath $output) {
     if (Test-Path -LiteralPath $receiptPath) {
         $cached = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
         $valid = $cached.schema -eq 1 -and $cached.sdkCommit -eq $commit -and
-            $cached.patchSha256 -eq $patchHash -and $cached.dispatchSha256 -eq $dispatchHash -and $cached.recipeSha256 -eq $recipeHash
+            $cached.patchSha256 -eq $patchHash -and $cached.dispatchSha256 -eq $dispatchHash -and
+            $cached.selectedDevicePatchSha256 -eq $selectedDevicePatchHash -and
+            $cached.selectedDeviceConfigSha256 -eq $selectedDeviceConfigHash -and
+            $cached.presentCaptureSha256 -eq $presentCaptureHash -and $cached.recipeSha256 -eq $recipeHash
         foreach ($name in @('sl.common.dll','sl.interposer.dll')) {
             $binary = Join-Path $runtime $name
             $valid = $valid -and (Test-Path -LiteralPath $binary)
@@ -57,9 +66,10 @@ foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
     $to = Join-Path $source $file
     New-Item -ItemType Directory -Path (Split-Path $to) -Force | Out-Null
-    Copy-Item -LiteralPath $from -Destination $to
+    Copy-RsfGodotArtifact $from $to
 }
 $saved = @{}
+$libraryHashes = [ordered]@{}
 foreach ($name in @('PM_PACKAGES_ROOT','GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 try {
     $env:PM_PACKAGES_ROOT = [IO.Path]::GetFullPath($PackageCache)
@@ -72,13 +82,30 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Isolated SDK index initialization failed.' }
         & git lfs pull '--include=external/nvapi/amd64/nvapi64.lib,external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib,external/reflex-sdk-vk/lib/NvLowLatencyVk.lib' '--exclude='
         if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK build-library fetch failed.' }
+        foreach ($library in @('external/nvapi/amd64/nvapi64.lib','external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib','external/reflex-sdk-vk/lib/NvLowLatencyVk.lib')) {
+            $pointer = (& git show "${commit}:$library") -join "`n"
+            if ($LASTEXITCODE -ne 0 -or $pointer -notmatch '(?m)^oid sha256:([0-9a-f]{64})$') { throw "Pinned LFS identity missing: $library" }
+            $expected = $Matches[1]
+            $libraryHashes[$library] = $expected
+            $stagedLibrary = Join-Path $source $library
+            if ((Get-FileHash -LiteralPath $stagedLibrary).Hash -ne $expected) {
+                $referenceLibrary = Join-Path $sdk $library
+                if ((Get-FileHash -LiteralPath $referenceLibrary).Hash -ne $expected) { throw "SDK LFS content hash mismatch: $library" }
+                Copy-RsfGodotArtifact $referenceLibrary $stagedLibrary
+            }
+            if ((Get-FileHash -LiteralPath $stagedLibrary).Hash -ne $expected) { throw "Staged SDK library differs from pinned LFS content: $library" }
+        }
         & './tools/packman/packman.cmd' pull -p windows-x86_64 project.xml
         if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK dependency fetch failed.' }
         & './tools/premake5/premake5.exe' vs2022 --file=premake.lua "--with-toolset=$toolset" --with-nvllvk=yes
         if ($LASTEXITCODE -ne 0) { throw 'SDK project generation failed.' }
     } finally { Pop-Location }
+    $stagedCapture = Join-Path $source 'source/platforms/sl.chi/rsfPresentCapture.h'
+    Copy-RsfGodotArtifact $presentCapture $stagedCapture
     & $Python $patch $source
     if ($LASTEXITCODE -ne 0) { throw 'SDK source corrections failed.' }
+    if ((Get-FileHash -LiteralPath $stagedCapture).Hash -ne $presentCaptureHash) { throw 'Staged SDK capture ABI differs from its checked input.' }
+    if ((Get-FileHash -LiteralPath (Join-Path $source 'source/core/sl.interposer/vulkan/rsfSelectedDeviceConfig.h')).Hash -ne $selectedDeviceConfigHash) { throw 'Staged selected-device helper differs from its checked input.' }
     New-Item -ItemType Directory -Path (Join-Path $source '_artifacts') -Force | Out-Null
     @('#pragma once','#define GIT_LAST_COMMIT "SHA:2122257"','#define GIT_LAST_COMMIT_TAG "v2.14.1"','#define GIT_LAST_COMMIT_SHORT "2122257"') |
         Set-Content -LiteralPath (Join-Path $source '_artifacts/gitVersion.h')
@@ -96,12 +123,13 @@ try {
     $binaries = [ordered]@{}
     foreach ($project in @('sl.common','sl.interposer')) {
         $name = "$project.dll"
-        Copy-Item -LiteralPath (Join-Path $source "_artifacts/$project/Production_x64/$name") -Destination $runtime
+        Copy-RsfGodotArtifact (Join-Path $source "_artifacts/$project/Production_x64/$name") (Join-Path $runtime $name)
         $binaries[$name] = (Get-FileHash -LiteralPath (Join-Path $runtime $name)).Hash
     }
-    Copy-Item -LiteralPath (Join-Path $source 'vulkanstory-fixes.json') -Destination $runtime
-    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;recipeSha256=$recipeHash;binaries=$binaries} |
+    Copy-RsfGodotArtifact (Join-Path $source 'vulkanstory-fixes.json') (Join-Path $runtime 'vulkanstory-fixes.json')
+    Copy-RsfGodotArtifact (Join-Path $source 'rsf-selected-device-fixes.json') (Join-Path $runtime 'rsf-selected-device-fixes.json')
+    [ordered]@{schema=1;sdkCommit=$commit;configuration='Production';patchSha256=$patchHash;dispatchSha256=$dispatchHash;selectedDevicePatchSha256=$selectedDevicePatchHash;selectedDeviceConfigSha256=$selectedDeviceConfigHash;presentCaptureSha256=$presentCaptureHash;recipeSha256=$recipeHash;inputs=$libraryHashes;binaries=$binaries} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath
 } finally {
-    foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') }
+    Restore-RsfGodotEnvironment $saved
 }

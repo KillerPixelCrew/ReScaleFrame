@@ -1,0 +1,7 @@
+{
+  "id": "vulkan-global-descriptor-pool-storage-buffer",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "file": "sdk/src/backends/vk/ffx_vk.cpp",
+  "before": "descriptorPoolCreateInfo.poolSizeCount = 5;",
+  "after": "descriptorPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(sizeof(poolSizes) / sizeof(poolSizes[0]));"
+}

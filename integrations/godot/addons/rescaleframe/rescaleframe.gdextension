@@ -1,0 +1,9 @@
+[configuration]
+entry_symbol = "rsf_godot_initialize"
+compatibility_minimum = "4.7"
+compatibility_maximum = "4.7.99"
+reloadable = false
+
+[libraries]
+windows.debug.x86_64.single = "bin/ReScaleFrame.Godot.Native.dll"
+windows.release.x86_64.single = "bin/ReScaleFrame.Godot.Native.dll"

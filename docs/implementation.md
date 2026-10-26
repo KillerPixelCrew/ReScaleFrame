@@ -1,5 +1,164 @@
 # Implementation tracker
 
+## End-of-day checkpoint, 25 October 2026
+
+Stopped at the user's request, with all repository changes committed for the
+next session. No completion or broad readiness claim is made.
+
+- Latest native Release verification: 75 discovered, 64 executed, 11 opt-in skips;
+  Rust formatting and Clippy pass. Log: `.local/godot/verify-godot-wrapup-20261025.log`.
+- Standard/.NET editors build with the FSR1 format correction. The first new
+  aggregate-matrix case correctly failed because FSR1's shader declared RGBA16F
+  while RCAS wrote an RGBA8 UNORM destination. The guarded engine patch selects
+  the storage format separately for EASU and RCAS. GPU retakes and updated
+  Debug/Release templates remain pending. [Format evidence and build hashes](research/godot-fsr1-storage-format-20261025.md).
+- `eng/test-godot-vulkan-matrix.ps1` now aggregates functional/export fixtures and
+  actual generated-image reports, preserves failed cases and indexes player PNGs.
+  Initial failed-control evidence is
+  `.local/godot/matrix-20261025-211312-790/index.html`; the full matrix and passing
+  aggregate path remain unverified. SR fixtures now accept Off, FSR1 and Auto.
+- The latest XeSS FG guide-extent check passes both editions' functional cases
+  and four camera-motion generated-image comparisons after the real SR plan
+  settles. [Evidence](research/godot-fsr4-fg-interop-20261025.md).
+- DLSS options publication removes API/synchronization errors, but a native
+  secondary window still causes a shutdown access violation in driver queue
+  destruction. Startup, resize, count and provider-return controls shut down
+  cleanly. The primary-only latency-chain candidate failed because the SDK
+  re-enabled the omitted secondary marker; that candidate was reverted.
+  [Investigation and next proposal](research/godot-vulkan-dlss-fg.md).
+- FSR2's six bounded diagnostic captures produced 24 intermediate outputs.
+  Boundary bias is already present in reprojected history and can increase during
+  rectification. This is diagnostic evidence, not a production correction.
+  [Stage evidence and limits](research/godot-fsr2-stage-edges-20261025.md).
+- XeSS count2/3 cannot be accepted on this NVIDIA device, whose SDK maximum is
+  one. Cross-provider count preflight and general ordinal analysis were audited
+  but not implemented. [Audit](research/godot-xess-mfg-capability-audit-20261025.md).
+
+Resume with the FSR1 GPU retake, then the distinct secondary-WSI lifetime fix,
+FSR2 reconstruction investigation and pending capability/scene/export coverage.
+Retain the existing image gates and failed controls. Captures remain bounded;
+duplicate cleanup does not disable new captures.
+
+## Godot developer integration in progress, 25 October 2026
+
+Latest harness milestone: XeSS FG editor image checks pass all twelve standard/.NET
+object/camera/combined cases with SR0/SR5, covering 48 actual generated images and
+fresh independent references. Maximum centroid error is 0.265658 output pixels;
+the existing 0.35-pixel gate is unchanged. Optional foreground maintenance records
+owned-window activation, bounded failures and successful retries. Rebuilt standard/.NET
+Release FSR4 SR exports pass switching, resize and raw capture checks. Debug exports
+pass XeSS FG/PCL switching, Off/resume and resize on both editions. Negative FG4
+admission preserves the working FSR3 pipeline and continued generation on both
+editions. The strict DLSS lifecycle fixture now passes all eleven phases and API
+checks after the options correction, but still fails shutdown. See the [XeSS capture evidence](research/godot-xess-fg-capture-20261025.md)
+and [DLSS lifecycle investigation](research/godot-vulkan-dlss-fg.md).
+
+The Vulkan FSR4 FG adapter, shared DX12/Vulkan importer, exact-provider admission
+and generic routing now build on MSVC. The Release gate passes 74 discovered tests
+with 63 executed and 11 opt-in skips, plus Rust formatting and Clippy. NVIDIA
+device queries correctly refuse an FSR3-only provider list. AMD execution and
+generated-image acceptance remain untested. [Evidence and limits](research/godot-fsr4-fg-interop-20261025.md).
+
+The next coordinated MSVC Release gate passes 75 discovered tests, 64 executed
+and 11 opt-in skips, plus formatting and Clippy. Streamline now filters device
+requirements by the selected adapter's exact LUID and gates NVIDIA latency
+constructors by the selected vendor. The fresh NVIDIA pair passes standard/.NET
+camera-free native-WSI PCL and standard DLSS SR switching/resize with four raw
+frames. A fixed-guide extent guard also passes standard/.NET XeSS FG SR switches,
+Off/resume and resize. AMD and mixed-adapter execution remain untested.
+[SDK evidence](research/godot-streamline-device-requirements-20261025.md).
+
+`integrations/godot` now contains a pinned 4.7.2 GDExtension, a native engine
+module, guarded source patching and an automatic harness. Standard and .NET
+editions passed the DX12/Vulkan renderer probe. The standard custom-engine DX12
+run passed shared DLSS/FSR3/XeSS SR, FSR3/XeSS/DLSS FG switching, SR-independent
+generation, DLSS MFG and PCL with SR/FG Off. A typeless-resource fixture passed
+after correcting the shared normalizer. The C# facade now runs on the .NET engine.
+Actual generated-frame dumps exposed zero motion at the native consumer despite
+valid engine vectors. Declaring native callback pipeline stages and correcting
+camera matrix layout/Y conventions fixed the captured inputs. The new visual
+harness compares actual FSR-generated output with separately rendered midpoints
+and rejects the preserved broken capture. It covers standard/.NET object and
+camera motion separately. Explicit engine-owned swapchain creation also replaces
+DXGI detours in this developer path. All six standard/.NET visual cases passed,
+covering 24 actual generated images, and the corrected standard/.NET functional
+tests passed all six provider/PCL phases with real foreground ownership. The Release
+native gate passed (44 executed tests, eight opt-in skips); explicit FSR3
+presentation and FSR/XeSS switching device fixtures passed separately. Vulkan
+runtime remains unfinished. Standard/.NET Debug and Release exported players now
+pass runtime switching and controller lifecycle fixtures, including C#; the
+GDScript-only .NET Release export also passed. PCL diagnostic pings are checked
+in each runtime phase, and lifecycle checks cover camera changes/cuts, pause,
+Off/resume, controller replacement and PCL after the last camera is removed.
+SR-enabled captures exposed a second motion convention: Godot's temporal
+sentinel `(-1,-1)` requires camera reprojection. The engine module now resolves
+it without replacing valid object vectors. The expanded matrix completed 30
+cases and 120 actual generated frames: all vector/camera gates passed, while
+26 image cases passed and four FSR2/FSR3 object-motion cases failed. The suite
+fails overall and preserves the images. Most FSR2 displacement is already in the
+SR source; a same-motion warmup experiment did not remove it. PCL from startup
+without any camera/compositor also passed on both editions and Release exports.
+Native Vulkan FSR2/FSR3 SR is now implemented as a reusable runtime service and
+a Godot adapter, with same-device image leases and engine command-buffer recording.
+Both editions exercise provider switching, resize/reset and actual player images.
+The opt-in raw readback harness checks depth, motion and raster jitter against
+scene geometry and preserves actual SR output. Validation found and corrected
+FSR2 storage-format mismatches in the pinned SDK and Godot fallback, a missing
+copy-destination usage flag and a null Windows surface instance. Native Vulkan
+FSR3 FG now has a complete runtime swapchain owner, four reserved queues,
+submission-bound input leases and actual generated-frame readbacks. Standard/.NET
+functional tests cover SR-independent generation, Off/resume, resize and a
+secondary native window. Validation found a truncated SDK descriptor pool and
+a presenter CPU retirement race; guarded staged corrections address both.
+The corrected SR Off/FSR3 image suite passes all 12 standard/.NET cases and 48
+actual generated frames against new MSAA midpoint references.
+Synchronization-validation present hazards also reproduce in official Godot and
+remain unresolved. Vulkan PCL/Reflex now has a reusable native service, early
+Streamline dispatch, CPU/source token tracking and root-window Present markers.
+Standard/.NET camera-free fixtures cover On/Boost/Off, resize, synthetic input
+and diagnostic pings, including a control with no FG presentation owner. A
+SR Off/FSR3 image suite retains 12 passing cases and 48 actual generated
+frames. The final PCL ownership/synchronization path additionally passes four
+combined-motion cases and 16 actual generated images. Real WSI callbacks now
+use a versioned C ABI broker, and primary/secondary SDK ownership is asserted. Other Vulkan providers remain unfinished. The SR-only readback checks do not
+establish Vulkan image-quality acceptance. For DX12, resetting only selected
+FSR2 history frames removes most measured source displacement; this diagnostic
+does not fix the normal temporal path. The 30-case image suite still fails.
+These engine/device runs
+do not establish broad visual acceptance or measured latency.
+An additional geometry control keeps the ordinary FSR2 cube failure visible,
+while a thin camera-facing box passes its four generated-image checks. It narrows
+the reconstruction investigation without changing production rendering or gates.
+Vulkan SR refusal now records a spatial fallback while preserving the SDK error.
+Full-image GPU gradient checks and standard/.NET missing-DLL fixtures pass;
+normal SR regression also passes with C# and raw inputs. The FSR2 displacement
+and other-provider work remain open.
+Native Vulkan DLSS SR now shares the early Streamline/PCL session, leases the
+matching CPU token, stages owned input images and uses a separate SR viewport.
+Standard/.NET switching, resize, raw-input/C# checks and six DLSS SR + FSR3 FG +
+PCL image cases pass. Model-switch teardown testing also exposed a deferred SDK
+release that can outlive a camera-free shutdown; drained feature retirement
+addresses it. Rebuilt Vulkan Debug/Release templates now pass 12 standard/.NET
+exported SR, FG and camera-free PCL fixtures, with C# on .NET SR/FG and actual
+PNG/raw input checks in SR. Template/player and both native-library copies are
+fingerprinted. XeSS Vulkan SR now passes six standard/.NET image cases and 24
+actual generated images with FSR3 FG and PCL. DLSS FG passes strict standard/.NET
+checks and midpoint image comparisons, including shared DLSS SR + FG. MFG3's
+private buffer-write hazard is corrected; all three actual output ordinals pass
+strict GPU validation and independently rendered quarter-step comparisons.
+XeSS FG's Vulkan/DX12 presenter passes standard/.NET lifecycle/C#/PCL checks; the
+first standard object-motion cases with SR Off and XeSS SR pass actual generated
+image and guide checks. FSR4's deferred graph split passes standalone GPU work,
+both Godot editors' switching/resize checks, C# on .NET and one combined-motion
+image comparison per edition. The corrected private-output capture also passes
+four complete raw SR frames per edition.
+The present hazard is isolated to RTSS hook injection in bounded process-only
+controls. Warm steady-state FFX captures no longer show the reset/disable feedback
+loop; cold startup latency remains separate. FSR2 displacement, new-provider
+exports, Vulkan FSR4 FG routing and broad scene acceptance remain unfinished.
+[Evidence and corrections](research/godot-engine-integration.md),
+[developer integration](../integrations/godot/README.md).
+
 ## REA MCP update, 25 October 2026
 
 Pinned and installed REA 6.8.0, with an optional private Node path in the repo
@@ -19,6 +178,65 @@ deployed locally with backups. Unity player binding and Claw visual acceptance r
 pending; the Editor fixture is blocked by a missing license. The shader audit also
 identifies separate procedural mesh, skinned particle-material, VFX and fluid coverage
 gaps. [Evidence, implementation and limits](research/drag-n-wash-character-motion-20261020.md).
+
+## Drag'n Wash 0.1.1 SDK build and packaging, 18 October 2026
+
+Removed the installed-game requirement from the Unity build/package path. Public Unity
+SDK references compile the unchanged helper; Release artifacts and allowlisted vendor
+runtimes produce the package without deployment. Compile references are excluded from
+the download, and dependency notices and every archived file hash are checked.
+Windows Release verification passed 44 native checks with eight skips and clean Rust
+formatting/Clippy. The available newer URP reference cache fails the target-specific
+metadata preflight; this is recorded separately from compilation, not reported as a
+target-player pass. No fresh game session is claimed.
+[Inputs, failed approaches and checks](releases/v0.1.1-drag-n-wash.md).
+
+## Release target correction, 18 October 2026
+
+Withdrew the Project Wingman observer preview to draft and removed its public
+download links. Wingman remains renderer research, without SR/FG/latency/VR
+processing. The requested next package is Drag'n Wash with the latest shared
+runtime, Unity helper and overlay. The initial assumption that its managed build
+needed game assemblies was corrected by the SDK build above.
+
+## Windows 0.1.1 preview packaging, 18 October 2026
+
+Prepared separate AC7 and Project Wingman observer prereleases, retaining the
+stable AC7 SR-only assets. Component versions and Cargo lock entries are 0.1.1.
+Fixed VS2022 C4127 template conditions with `if constexpr`; added Wingman's
+allowlisted observer packager and restored the AMD loader/MFG notice to AC7's
+payload. Local SDK-enabled Windows Release verification passes 44 native
+checks with eight skips, formatting/Clippy and all 59 Rust tests. No fresh game
+or VR acceptance is claimed. [Rationale and checks](releases/v0.1.1-windows.md).
+## Reusable Unity URP package, 18 October 2026
+
+RTSS compatibility is a hard requirement for every supported API, including active FG
+and provider changes. Disabling or excluding RTSS does not satisfy this integration.
+
+The new `integrations/unity/com.kpc.rescaleframe` package supplies URP scene colour,
+depth, object/camera motion, jitter and completed-frame inputs to shared SR, FG and
+PCL. It includes DX11/DX12/Vulkan bridges, Editor Game-view presentation, runtime
+quality/model/provider controls, SDK-limited MFG and actual Base/output FPS counters.
+The full target remains Editor Play and Windows players across all three APIs.
+[Source contracts, failures and current evidence](research/unity-urp-package.md).
+
+The current-main Release gate passed 44 native checks with eight optional skips and
+clean formatting/Clippy. Unity 6000.6.6f1 / URP 17.6 built the validation player.
+RTSS-enabled Unity runs executed DLSS SR with active FSR3 FG and PCL markers on all
+three APIs. Follow-up runs also executed XeSS SR with active XeSS FG and FSR2 SR with
+active FSR3 FG. Repeated Editor Play and runtime provider changes resumed rendering.
+
+Corrections cover the shared Streamline owner, Play-session cleanup, RTSS's nested
+creation queue association, a stable engine latency handle, DX11's cached buffer-zero
+view and presentation queue, Vulkan window-thread coordination, and XeSS's 32-bit SDK
+frame counters. Explicit GPU checks passed 40 DX11 physical-copy pixels through
+provider changes and retained one latency handle across a wide-ID/session-epoch test.
+
+The UPM archive is built. The latest native DLL still awaits deployment to the open
+editor; it must close before its loaded file is replaced. Foreground DLSS-G/MFG,
+visible RTSS OSD and broad image-quality acceptance remain open. Stock URP reproduces
+the DX12 reduced-scale depth-backbuffer validation errors tracked as UUM-136054.
+This integration is in progress until the remaining live acceptance is completed.
 
 ## RTX 40 MFG unlock, 18 October 2026
 
@@ -730,7 +948,7 @@ this overlay preflight is not a gameplay test.
 - [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
-- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024×576 input and 2048×1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
+- [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024Ã—576 input and 2048Ã—1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
 - [x] Conditional composed-colour selection for the DLSS bridge. Persistent input watch and AC7
       recombine rule are cross-built and synthetic-tested under Wine. Each frame falls back to the
       identified colour unless a matching composition is observed; no new per-frame allocations.
@@ -751,7 +969,7 @@ this overlay preflight is not a gameplay test.
       quality level instead of being fixed. Going above the scene's resolution needs the engine to
       size the layer's depth to match, which four one-byte patches enable by narrowing `Scale < 1.f`
       to `Scale == 1.f`; they are no-ops for every scale the engine produces on its own.
-      Game-tested on 7 September: the briefing relief draws at 2048×1152 inside a 1024×576 scene
+      Game-tested on 7 September: the briefing relief draws at 2048Ã—1152 inside a 1024Ã—576 scene
       with a matching depth, and reaches the reconstruction. Flight, the post-mission replay and
       other heavy screens are unverified. [Evidence](research/ac7-frame-capture.md).
 - [x] Consumer session controls: automatic DLSS startup and deferred reinsertion; Insert opens an
@@ -792,7 +1010,7 @@ this overlay preflight is not a gameplay test.
       there and each failed differently, which is worth keeping because the failures were all the
       same mistake about bindings.
 
-      First run: nothing happened at all. The tail walk had taken a 2048×32 strip as the composite,
+      First run: nothing happened at all. The tail walk had taken a 2048Ã—32 strip as the composite,
       a UI bar the final draw also reads, and promoted that. Zero gates opened, so F6 did precisely
       nothing. Fixed by rejecting any input less than half the height of the target it is drawn into.
 
@@ -1288,7 +1506,7 @@ producer extensions have not been game-tested.
       refusal tested on those adapters; FSR4 evaluation still requires compatible hardware.
 - [x] Generic sparse-motion/depth preparation, WARP numeric fixture and controller rollback tests.
 - [x] Compatibility path and Insert overlay selector for DLSS/FSR2/FSR3/FSR4/XeSS. Built;
-      synthetic hardware sequence DLSS → FSR2 → FSR3 → XeSS → DLSS passed. Engine identity and
+      synthetic hardware sequence DLSS â†’ FSR2 â†’ FSR3 â†’ XeSS â†’ DLSS passed. Engine identity and
       world units are supplied by the integration. Existing AC7 startup still begins with DLSS.
 - [ ] Game-test AC7 switching, motion, exposure, transitions and overhead. New FSR/XeSS game
       support is not claimed. Public plugin lifecycle migration, native XeSS D3D11, FG and latency

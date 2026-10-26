@@ -32,7 +32,7 @@ bool installed = false;
 rsf_backend_log_fn logger = nullptr;
 void* logger_user = nullptr;
 struct Cpu {
-    uint64_t id = 0, input = 0, generation = 0;
+    uint64_t id = 0, input = 0, generation = 0, session = 0;
     bool begun = false, simulation = false, failed = false, render_started = false, completed = false;
 };
 std::array<Cpu, 128> cpu;
@@ -332,7 +332,7 @@ std::string backend_directory(const wchar_t* ini, uint32_t backend) {
     return rsf::unity_config::utf8(rsf::unity_config::path_setting(ini, key.c_str()));
 }
 }
-extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_setup* request) try {
+static rsf_backend_result install(const rsf_fg12_setup* request, bool explicit_creation) try {
     if (!request || request->struct_size < sizeof(*request) || !request->runtime_directory_utf8 || !request->accept_window ||
         request->options.struct_size < sizeof(request->options) || request->options.mode > RSF_FG_FIXED ||
         !request->options.generated_frames || request->units_to_meters <= 0)
@@ -357,10 +357,16 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_se
     setup.project_id_utf8 = request->project_id_utf8;
     setup.log = log; setup.user = request->user; setup.accept_window = request->accept_window;
     setup.prepare = prepare; setup.retire = retire; setup.latency_event = latency;
-    installed = rsf_d3d11_present_install(&setup) != 0;
+    installed = (explicit_creation ? rsf_d3d11_present_prepare(&setup) : rsf_d3d11_present_install(&setup)) != 0;
     return installed ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_setup* request) {
+    return install(request, false);
+}
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install_explicit(const rsf_fg12_setup* request) {
+    return install(request, true);
+}
 extern "C" RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* ini) try {
     if (!ini || installed) return installed ? 0u : 1u;
     const auto backend = rsf::unity_config::fg_choice_start(ini);
@@ -403,7 +409,7 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event* event) {
     const auto slept = event->stage == RSF_GAME_CPU_PACING ? rsf_d3d11_present_begin(event->source_frame_id, &generation) : RSF_BACKEND_OK;
     std::lock_guard<std::mutex> lock(guard);
     auto& frame = cpu[event->source_frame_id % cpu.size()];
-    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) { frame = {}; frame.id = event->source_frame_id; frame.failed = acquired != RSF_BACKEND_OK; }
+    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) { frame = {}; frame.id = event->source_frame_id; frame.session = event->session_id; frame.failed = acquired != RSF_BACKEND_OK; }
     if (frame.id != event->source_frame_id) return;
     if (event->stage == RSF_GAME_CPU_PACING) { frame.generation = generation; frame.begun = slept == RSF_BACKEND_OK; frame.failed |= !frame.begun; }
     if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE) {
@@ -431,11 +437,22 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_capture(void* commands, const rsf_frame
         !copy(list, static_cast<ID3D12Resource*>(motion), slot.motion, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &slot.motion_state)) return;
     slot.record = *record; slot.ready = true;
     auto& timing = cpu[record->frame_id % cpu.size()];
-    if (timing.id == record->frame_id) {
+    if (timing.id == record->frame_id && !timing.render_started) {
         timing.render_started = true;
         timing.failed |= rsf_d3d11_present_marker(timing.generation, record->frame_id, RSF_LATENCY_RENDER_SUBMIT_START, 0) != RSF_BACKEND_OK;
     }
 }
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t session, uint64_t id) try {
+    if (!session || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(guard);
+    auto& timing = cpu[id % cpu.size()];
+    if (timing.id != id || timing.session != session || !timing.begun) return RSF_BACKEND_ERROR_NOT_READY;
+    if (timing.render_started) return RSF_BACKEND_OK;
+    timing.render_started = true;
+    const auto result = rsf_d3d11_present_marker(timing.generation, id, RSF_LATENCY_RENDER_SUBMIT_START, 0);
+    timing.failed |= result != RSF_BACKEND_OK;
+    return result;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" RSF_RUNTIME_API void rsf_fg12_hudless(void* commands, const rsf_game_render_pass* pass) {
     if (!commands || !pass || !pass->color_input || !pass->source_frame_id || !rsf_d3d11_present_has_owner()) return;
     std::lock_guard<std::mutex> lock(guard);
@@ -469,6 +486,20 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_submitted(uint64_t session, uint64_t id
         slot.submitted = true;
         if (slot.hudless_ready) slot.hudless_submitted = true;
     }
+}
+extern "C" RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session) {
+    if (!session) return 0;
+    std::lock_guard<std::mutex> lock(guard);
+    for (auto& slot : slots)
+        if (slot.record.session_id == session && !finished(slot)) return 0;
+    auto* host = rsf_d3d11_present_host();
+    for (auto& frame : cpu) if (frame.session == session) {
+        if (host && frame.id && !frame.completed) rsf_streamline_host_abort(host, frame.id);
+        frame = {};
+    }
+    for (auto& slot : slots) if (slot.record.session_id == session) slot.ready = false;
+    for (auto& window : windows) if (window.session == session) window = {};
+    return 1;
 }
 extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) {
     if (!output || output->struct_size < sizeof(*output)) return 0;
