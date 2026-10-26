@@ -50,6 +50,14 @@ typedef uint32_t rsf_dump_view;
    be compared side by side, but without decoding again, and marking the sentinel rather than a
    stored zero: after a decode, zero is a real motion of zero and cannot serve as the marker. */
 #define RSF_DUMP_VIEW_DECODED_MOTION ((rsf_dump_view)2)
+/* Opaque website previews: Reinhard + sRGB for linear HDR, logarithmic device depth,
+   or the first channel replicated as grayscale for masks/exposure. Raw bytes stay unchanged. */
+#define RSF_DUMP_VIEW_HDR ((rsf_dump_view)3)
+#define RSF_DUMP_VIEW_DEPTH ((rsf_dump_view)4)
+#define RSF_DUMP_VIEW_SCALAR ((rsf_dump_view)5)
+#define RSF_DUMP_VIEW_ALPHA ((rsf_dump_view)6)
+/* Dense pixel displacement has no unwritten sentinel; large negative vectors are valid. */
+#define RSF_DUMP_VIEW_DENSE_MOTION ((rsf_dump_view)7)
 /* Anything at or below this is the sentinel a decode pass wrote, not motion. Real screen space
    motion is a fraction of the [-1,1] range, so the gap is several orders of magnitude wide. */
 #define RSF_DUMP_DECODED_SENTINEL_THRESHOLD (-100.0f)
@@ -94,6 +102,11 @@ rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* text
    devices and deferred contexts. Rows are packed; source and file row pitches are recorded. */
 rsf_dump_texture_result rsf_dump_texture_bytes(void* device, void* context, void* texture,
                                               const rsf_texture_dump_options* options);
+
+/* Same options and report as the Targa preview, but writes an opaque .png and .json.
+   Requires an immediate context and single-sample subresource zero. */
+rsf_dump_texture_result rsf_dump_texture_png(void* device, void* context, void* texture,
+    const rsf_texture_dump_options* options, rsf_texture_dump_report* report);
 
 #ifdef __cplusplus
 } /* extern "C" */

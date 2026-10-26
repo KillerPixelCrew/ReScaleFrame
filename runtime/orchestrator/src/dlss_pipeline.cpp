@@ -10,6 +10,7 @@
 #include <rescaleframe/colour_transport.h>
 #include <rescaleframe/log.h>
 #include "sr_legacy_adapter.h"
+#include <rescaleframe/input_dump.h>
 
 #include <windows.h>
 
@@ -802,6 +803,17 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             say(self, "DLSS colour transport: exposed display-range encoding in, HDR input off, decoded to linear with highlight recovery");
         }
     }
+    rsf_input_dump_texture(context_pointer, "sr_source_jittered", "Jittered pre-tonemap linear HDR source at the active render rectangle", frame->scene_color, RSF_DUMP_VIEW_HDR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_game_motion", "Native sparse UE velocity encoding: current-minus-previous NDC, unwritten zero", frame->game_motion, RSF_DUMP_VIEW_VELOCITY, 8);
+    rsf_input_dump_texture(context_pointer, "sr_motion_decoded", "Decoded sparse game motion before dense camera reconstruction", rsf_motion_decode_texture(self.decode), RSF_DUMP_VIEW_DECODED_MOTION, 8);
+    rsf_input_dump_texture(context_pointer, "sr_scene_depth", "Original scene device depth before cloud/motion depth preparation", frame->depth, RSF_DUMP_VIEW_DEPTH, 1);
+    rsf_input_dump_texture(context_pointer, "sr_engine_exposure", "Engine exposure guide before colour transport/backend policy", frame->exposure, RSF_DUMP_VIEW_SCALAR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_opaque_color", "Opaque-only colour before translucency; auxiliary, not a DLSS SR input", frame->color_before_transparency, RSF_DUMP_VIEW_HDR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_transparency_layer", "Separate translucency colour; auxiliary, not a DLSS SR input", frame->transparency_layer, RSF_DUMP_VIEW_HDR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_reactive_mask", "FSR/XeSS reactive-mask input", frame->reactive_mask, RSF_DUMP_VIEW_SCALAR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_transparency_mask", "Translucency coverage hint; consumption depends on backend", frame->transparency_mask, RSF_DUMP_VIEW_SCALAR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_bias_mask", "Bias-current-colour hint; DLSS use is preset dependent", frame->bias_mask, RSF_DUMP_VIEW_SCALAR, 1);
+    rsf_input_dump_texture(context_pointer, "sr_cloud_depth", "Cloud/translucent depth used by the dense-motion resolve", frame->motion_depth_layer, RSF_DUMP_VIEW_DEPTH, 1);
     rsf_dlss_result evaluated = RSF_DLSS_OK;
     if (self.backend == RSF_SR_DLSS) {
         evaluated = rsf_native_fg_evaluate(context_pointer, &dlss_frame);
@@ -843,6 +855,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
         return finish(self, RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED);
     }
+    rsf_input_dump_texture(context_pointer, "sr_backend_output", "SR backend output before colour-transport decode and optional fidelity correction", self.output,
+        dlss_frame.color_encoded ? RSF_DUMP_VIEW_RAW : RSF_DUMP_VIEW_HDR, 1);
     if (dlss_frame.color_encoded &&
         !rsf_colour_transport_decode(self.transport, context_pointer, self.output, frame->exposure,
             output_width, output_height, frame->scene_color, frame->render_width, frame->render_height,
@@ -954,6 +968,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
         // A failed dump is diagnostic only and does not change the frame's outcome.
     }
+
+    rsf_input_dump_texture(context_pointer, "sr_output", "Reconstructed linear HDR image reinserted before native tonemapping", self.output, RSF_DUMP_VIEW_HDR, 1);
 
     // One good frame means the run of failures was a rebuild rather than a wall.
     if (self.last_evaluated_backend != self.backend || self.last_evaluated_width != frame->render_width ||

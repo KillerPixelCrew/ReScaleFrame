@@ -14,6 +14,7 @@
 #include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/input_dump.h>
 #include <rescaleframe/dlss_pipeline.h>
 
 #include "dlss_bridge.h"
@@ -376,6 +377,11 @@ static void start_observer(void)
     options.constant_buffer_min_bytes = read_number("RSF_VIEW_CB_MIN", 1024);
     options.constant_buffer_max_bytes = read_number("RSF_VIEW_CB_MAX", 8192);
     options.log = observer_note;
+    {
+        char sha256[65] = {0};
+        executable_sha256(sha256);
+        rsf_input_dump_configure(observe_directory, "AC7", sha256, observer_note, NULL);
+    }
     rsf_bridge_set_motion_capture(read_number("RSF_MOTION_CAPTURE", 0) != 0);
     if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
         rsf_ac7_motion_capture_configure(observe_directory, observer_note, NULL);

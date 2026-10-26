@@ -3,6 +3,7 @@
 #include "sr_legacy_adapter.h"
 #include <rescaleframe/sr_bridge.h>
 #include <rescaleframe/motion_resolve.h>
+#include <rescaleframe/input_dump.h>
 #include <windows.h>
 #include <algorithm>
 #include <cmath>
@@ -137,6 +138,15 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
         masks[i]->struct_size = sizeof(*masks[i]); masks[i]->resource = mask_textures[i];
         masks[i]->width = input->render_width; masks[i]->height = input->render_height;
         masks[i]->generation = adapter->generation;
+    }
+    if (rsf_input_dump_active()) {
+        rsf_sr_session_status status{}; status.struct_size = sizeof(status);
+        rsf_sr_bridge_get_status(adapter->bridge, &status);
+        auto submitted = *input;
+        submitted.depth = textures[1]; submitted.motion = textures[2];
+        submitted.motion_scale_x = submitted.motion_scale_y = 1;
+        submitted.camera_motion_included = 1;
+        rsf_input_dump_sr(context, &submitted, status.effective);
     }
     return rsf_sr_bridge_evaluate(adapter->bridge, context, &frame);
 }

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/input_dump.h>
+#include <rescaleframe/sr_session.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_window.h>
@@ -638,6 +640,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_final(void* context, const rsf_gam
     slot.hudless_ready = signal11(value, slot.complete);
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_dlss_frame* frame) {
+    if (context && frame && frame->camera_motion_included) rsf_input_dump_fg(context, &scene, frame);
     if (!rsf_d3d11_present_has_owner() || !context || !frame || !scene.source_frame_id || !frame->camera_motion_included) return;
     auto& value = transfer(); if (!initialize(value, context)) return;
     auto& slot = slot_for(value, scene.source_frame_id);
@@ -654,7 +657,10 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_d
 }
 extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context, const rsf_dlss_frame* frame) {
     const auto started = now_qpc();
-    if (!rsf_d3d11_present_host()) return rsf_dlss_evaluate(context, frame);
+    if (!rsf_d3d11_present_host()) {
+        rsf_input_dump_sr(context, frame, RSF_SR_DLSS);
+        return rsf_dlss_evaluate(context, frame);
+    }
     if (!context || !frame || !scene.source_frame_id || !frame->camera_motion_included ||
         !rsf_streamline_host_token(rsf_d3d11_present_host(), scene.source_frame_id)) return RSF_DLSS_ERROR_NOT_READY;
     with_frame(scene.source_frame_id, [](CpuOwner& owner) { ++owner.sr_calls; });
@@ -674,6 +680,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
         was_generating = generating;
     }
     void* inputs[]{frame->color_in, frame->depth, frame->motion, frame->exposure};
+    rsf_input_dump_sr(context, &translated, RSF_SR_DLSS);
     void** targets[]{&translated.color_in, &translated.depth, &translated.motion, &translated.exposure};
     for (uint32_t i = 0; i < 4; ++i) {
         if (!inputs[i]) { *targets[i] = nullptr; continue; }
@@ -849,6 +856,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
     }
     selected->restore = true;
     const auto preparation = rsf_d3d11_present_provider()->prepare(provider, list, &frame);
+    rsf_input_dump_fg_prepare(&selected->pass, &frame, preparation);
     selected->prepared = preparation == RSF_BACKEND_OK;
     { std::lock_guard<std::mutex> lock(settings_guard); cached.last_result = preparation; if (selected->prepared && frame.interpolate) ++cached.tagged_frames; }
     trace("prepare/tags", window.source_frame_id, preparation);

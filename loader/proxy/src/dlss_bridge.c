@@ -23,6 +23,7 @@
 #include <rescaleframe/depth_replay.h>
 #include <rescaleframe/present_blit.h>
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/input_dump.h>
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/overlay_fg_stats.h>
 #include <rescaleframe/ac7_ui_rules.h>
@@ -753,6 +754,7 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
 {
     (void)user; (void)list;
     if (!pass || pass->struct_size != sizeof(*pass)) return;
+    rsf_input_dump_pass(bridge.context, pass, begin);
     if (pass->role == RSF_GAME_RENDER_VELOCITY_FINALIZE && begin && bridge.started)
         rsf_ac7_velocity_commit(bridge.context, pass);
     if (pass->role == RSF_GAME_RENDER_FRAME && !begin) rsf_ac7_velocity_frame_end();
@@ -821,6 +823,7 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
     memcpy(bridge.held_camera.jitter_pixels, pass->camera.jitter_pixels, 8);
     bridge.held_width = pass->camera.render_width; bridge.held_height = pass->camera.render_height;
     bridge.last_result = rsf_native_sr_evaluate(bridge.context, pass);
+    rsf_input_dump_sr_result(bridge.last_result);
     if (bridge.route_dump_frames) {
         route_dump(bridge.context, pass->color_input, "native_sr_input");
         route_dump(bridge.context, rsf_dlss_pipeline_output_texture(), "native_sr_backend_output");
@@ -3311,6 +3314,7 @@ static void on_present(void* user, void* swapchain)
     rsf_depth_replay_end_frame(bridge.layer_replay);
     if (!InterlockedCompareExchange(&native_owner, 0, 0)) follow_layer_size();
     bridge.layer_camera_valid = 0;
+    rsf_input_dump_present(swapchain, bridge.context);
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
@@ -3346,6 +3350,8 @@ static void on_present_event(void* user, const rsf_observer_present_event* event
 {
     (void)user;
     rsf_native_window_present(event);
+    if (event && event->completed && !(event->flags & DXGI_PRESENT_TEST))
+        rsf_input_dump_presented(event->swapchain, event->result);
     if (event && event->completed && event->result == S_OK && !(event->flags & DXGI_PRESENT_TEST))
         ++bridge.application_presented_frames;
 }

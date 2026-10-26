@@ -215,6 +215,51 @@ final corrections have recorded user acceptance; new AC7 FSR/XeSS FG acceptance 
 Active DLSS-G applies effective Reflex at least On even if requested Off; XeSS uses XeLL and FSR
 owns its pacing without an NVIDIA SR sleep. FSR3/4 stay 2x in the pinned API; higher DLSS/XeSS
 counts follow SDK queries and lack device/game proof on the tested RTX 4070.
+# AC7 website input dump
+
+With AC7 focused and SR enabled, press **F10** once in the scene to export. No diagnostic
+INI setting is needed. Each press writes one source frame under
+`%LOCALAPPDATA%\ReScaleFrame\AC7\website\scene-*` (or `RSF_DUMP_DIR\website`).
+The readbacks can briefly hitch. Wait for `website dump complete` in `rsf-dump.log`
+before taking another scene. A `partial` result names missing/failed inputs in the manifest.
+
+Every available image has a browser-ready, fully opaque `.png`, a bit-exact `.bin`,
+and `_raw.json` recording DXGI storage format and packed row pitch. `manifest.json`
+names the images, explains preview transforms, and records source/session/view/frame
+identity, RSF version, executable SHA-256, and per-image success or unavailability.
+
+| File stem | Contents |
+| --- | --- |
+| `sr_source_jittered` | Jittered linear HDR scene at the active render rectangle |
+| `sr_color` | Actual SR colour input, including DLSS colour transport when active |
+| `sr_game_motion`, `sr_motion_decoded`, `sr_motion` | Native encoded, sparse decoded, and actual submitted vectors |
+| `sr_scene_depth`, `sr_depth`, `sr_cloud_depth` | Original scene, submitted SR, and cloud/translucent device depth |
+| `sr_engine_exposure`, `sr_exposure` | Engine exposure and exposure supplied to SR |
+| `sr_opaque_color`, `sr_transparency_layer` | Available opaque colour and separate translucency guides |
+| `sr_reactive_mask`, `sr_transparency_mask`, `sr_bias_mask` | Available reactive, coverage, and bias hints |
+| `sr_backend_output`, `sr_output` | Backend result and reconstructed linear HDR before engine tonemapping |
+| `hudless_color` | Tonemapped scene immediately before the native HUD compositor |
+| `hud_color`, `hud_alpha`, `hud_composed_color` | Native HUD raster RGB, alpha coverage, and composition result |
+| `fg_depth`, `fg_motion`, `fg_hudless_color` | Normalized FG guides and completed scene handed to FG before final window UI |
+| `final_color` | Final real frame with game UI, before RSF debug/overlay drawing and interpolation |
+
+`sr_constants.json` contains the actual SR jitter, vector scales, camera matrices,
+near/far planes, quality/preset, reset, colour transport, and render/output rectangles.
+When a provider receives this frame, `fg_constants.json` records its preparation result,
+timing, jitter, matrices, vector scales, flags, and generation identity. Enable FG to
+include those provider constants. The FG source images are also exported with FG Off.
+
+The native HUD raster is an engine input, not a promise of a standalone compositable
+layer for every effect. The current AC7 FG path has no separate `fg_ui` resource; the
+manifest marks it unavailable. Optional guides absent in the chosen scene/backend are
+also marked unavailable. `hudless_color` and `fg_hudless_color` name different native
+handoffs and are both preserved. No image is substituted from another frame.
+
+HDR previews use Reinhard plus sRGB. Reversed-Z depth uses logarithmic grayscale.
+Vectors centre zero at gray, with X in red and Y in green; sparse unwritten vectors
+are blue. Dense pixel vectors use a fixed 32-pixel display range and have no sparse
+sentinel. Masks and HUD alpha use grayscale. Preview transforms never alter raw data.
+
 # AC7 motion research capture
 
 Set `RSF_MOTION_CAPTURE=1` in the proxy INI before launching AC7. With the game focused,

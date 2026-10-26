@@ -59,6 +59,11 @@ add_executable(rsf_texture_dump texture_dump.cpp)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_executable(rsf_input_dump_test input_dump.cpp)
+target_link_libraries(rsf_input_dump_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
+add_test(NAME input_dump COMMAND rsf_input_dump_test "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(input_dump PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 add_executable(rsf_frame_assembly frame_assembly.cpp)
 target_link_libraries(rsf_frame_assembly PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME frame_assembly COMMAND rsf_frame_assembly)

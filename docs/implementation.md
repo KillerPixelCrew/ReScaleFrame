@@ -1,5 +1,18 @@
 # Implementation tracker
 
+## AC7 website input dump, 26 October 2026
+
+F10 exports a named single-source-frame bundle with opaque PNG previews, lossless
+raw buffers, SR/FG camera constants and explicit unavailable inputs. Includes jittered
+HDR source, encoded/sparse/dense vectors, depth, available masks/exposure, SR output,
+native pre-HUD/HUD/alpha/composed stages, FG scene/guides and the final game image.
+[Mechanism and proof limits](research/ac7-website-input-dump.md).
+Windows Release build, WARP/PNG handoff fixture, real overlay fixture, Rust formatting
+and Clippy pass. The 80-case native batch reports 68 passes, 11 opt-in skips and one
+failure in the separate, pre-existing vendor-census hook-installation fixture.
+Proxy/plugin/overlay and SDK dependencies are backed up, deployed and hash-verified
+in the local AC7 installation. No game capture has been performed in this session.
+
 ## End-of-day checkpoint, 25 October 2026
 
 Stopped at the user's request, with all repository changes committed for the

@@ -9,6 +9,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_window.cpp
     src/native_cpu.cpp
     src/native_fg.cpp
+    src/input_dump.cpp
     src/native_fg_d3d12.cpp
     src/native_composition.cpp
     src/native_sr.cpp

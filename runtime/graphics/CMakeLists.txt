@@ -26,6 +26,7 @@ target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/i
 target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
 target_link_libraries(rsf_graphics PUBLIC d3d11 dxgi)
+target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32)
 target_link_libraries(rsf_graphics PRIVATE minhook)
 # Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.
 target_link_libraries(rsf_graphics PUBLIC ReScaleFrame::RuntimeCommon)

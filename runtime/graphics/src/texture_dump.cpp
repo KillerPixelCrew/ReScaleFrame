@@ -4,6 +4,8 @@
 #include <rescaleframe/texture_dump.h>
 
 #include <d3d11.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include <cmath>
 #include <cstdarg>
@@ -31,6 +33,7 @@ struct Sample {
     // what the velocity views expect and what they had before this existed.
     float z;
     bool written;
+    float alpha = 1;
 };
 
 // One of the small unsigned floats R11G11B10 packs: five exponent bits, `mantissa_bits` of
@@ -89,12 +92,29 @@ float half_to_float(uint16_t value)
 bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
 {
     switch (format) {
+    case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_TYPELESS:
+        out.x = out.y = out.z = pixel[0] / 255.0f; out.written = true; return true;
+    case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_TYPELESS: {
+        uint16_t raw = 0; std::memcpy(&raw, pixel, sizeof(raw));
+        out.x = out.y = out.z = format == DXGI_FORMAT_R16_FLOAT ? half_to_float(raw) : raw / 65535.0f;
+        out.written = true; return true;
+    }
+    case DXGI_FORMAT_R24G8_TYPELESS: case DXGI_FORMAT_D24_UNORM_S8_UINT: {
+        uint32_t raw = 0; std::memcpy(&raw, pixel, sizeof(raw));
+        out.x = out.y = out.z = float(raw & 0xffffffu) / 16777215.0f;
+        out.written = true; return true;
+    }
+    case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_TYPELESS: case DXGI_FORMAT_D32_FLOAT:
+    case DXGI_FORMAT_R32G8X24_TYPELESS: case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        std::memcpy(&out.x, pixel, sizeof(float)); out.y = out.z = out.x;
+        out.written = true; return true;
     case DXGI_FORMAT_R10G10B10A2_UNORM:
     case DXGI_FORMAT_R10G10B10A2_TYPELESS: {
         uint32_t raw = 0; std::memcpy(&raw, pixel, sizeof(raw));
         out.x = float(raw & 1023u) / 1023.0f;
         out.y = float((raw >> 10) & 1023u) / 1023.0f;
         out.z = float((raw >> 20) & 1023u) / 1023.0f;
+        out.alpha = float(raw >> 30) / 3.0f;
         out.written = true;
         return true;
     }
@@ -106,6 +126,7 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
         out.x = pixel[bgra ? 2 : 0] / 255.0f;
         out.y = pixel[1] / 255.0f;
         out.z = pixel[bgra ? 0 : 2] / 255.0f;
+        out.alpha = pixel[3] / 255.0f;
         out.written = true;
         return true;
     }
@@ -181,7 +202,13 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
         out.x = half_to_float(raw[0]);
         out.y = half_to_float(raw[1]);
         out.z = half_to_float(raw[2]);
+        out.alpha = half_to_float(raw[3]);
         out.written = raw[0] != 0 || raw[1] != 0 || raw[2] != 0;
+        return true;
+    }
+    case DXGI_FORMAT_R32G32B32A32_FLOAT: {
+        float raw[4]{}; std::memcpy(raw, pixel, sizeof(raw));
+        out.x = raw[0]; out.y = raw[1]; out.z = raw[2]; out.alpha = raw[3]; out.written = true;
         return true;
     }
     default:
@@ -191,6 +218,7 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
 
 uint8_t clamp_byte(float value)
 {
+    if (!std::isfinite(value)) return 0;
     if (value <= 0.0f) {
         return 0;
     }
@@ -222,12 +250,45 @@ bool write_targa(const std::string& path, uint32_t width, uint32_t height,
     return ok;
 }
 
+bool write_png(const std::string& path, uint32_t width, uint32_t height, std::vector<uint8_t>& bgra)
+{
+    using Microsoft::WRL::ComPtr;
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return false;
+    struct Apartment { bool owned; ~Apartment() { if (owned) CoUninitialize(); } } apartment{SUCCEEDED(initialized)};
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, nullptr, 0);
+    if (!length) return false;
+    std::wstring filename(size_t(length), L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, filename.data(), length)) return false;
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(filename.c_str(), GENERIC_WRITE)) &&
+        SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+        SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
+        SUCCEEDED(frame->SetSize(width, height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
+        IsEqualGUID(format, GUID_WICPixelFormat32bppBGRA) &&
+        SUCCEEDED(frame->WritePixels(height, width * 4, UINT(bgra.size()), bgra.data())) &&
+        SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+}
+
+float display_hdr(float value)
+{
+    value = std::isfinite(value) && value > 0 ? value : 0;
+    value = value / (1.0f + value);
+    return value <= 0.0031308f ? value * 12.92f : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
 } // namespace
 
-extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* context_pointer,
+static rsf_dump_texture_result dump_texture(void* device_pointer, void* context_pointer,
                                                     void* texture_pointer,
                                                     const rsf_texture_dump_options* options,
-                                                    rsf_texture_dump_report* report)
+                                                    rsf_texture_dump_report* report, bool png)
 {
     if (!device_pointer || !context_pointer || !texture_pointer || !options ||
         options->struct_size < sizeof(rsf_texture_dump_options) || !options->output_prefix_utf8) {
@@ -243,6 +304,12 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
 
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || desc.SampleDesc.Count != 1 ||
+        !desc.Width || !desc.Height || uint64_t(desc.Width) * desc.Height * 4 > 256ull * 1024 * 1024)
+        return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    Microsoft::WRL::ComPtr<ID3D11Device> context_device;
+    context->GetDevice(&context_device);
+    if (context_device.Get() != device) return RSF_TEXTURE_ERROR_FOREIGN_DEVICE;
     rsf::say(options->log, options->log_user, "dump %s: %ux%u format %u mips %u slices %u samples %u",
         options->output_prefix_utf8, desc.Width, desc.Height, unsigned(desc.Format), desc.MipLevels,
         desc.ArraySize, desc.SampleDesc.Count);
@@ -281,7 +348,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     staging.SampleDesc.Quality = 0;
 
     rsf::say(options->log, options->log_user, "dump: creating staging copy");
-    ID3D11Texture2D* readable = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> readable;
     if (FAILED(device->CreateTexture2D(&staging, nullptr, &readable)) || !readable) {
         return RSF_TEXTURE_ERROR_STAGING_FAILED;
     }
@@ -293,19 +360,21 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
         desc.SampleDesc.Count > 1 ? "resolve"
                                   : (single_subresource ? "whole resource" : "top subresource"));
     if (desc.SampleDesc.Count > 1) {
-        context->ResolveSubresource(readable, 0, texture, 0, desc.Format);
+        context->ResolveSubresource(readable.Get(), 0, texture, 0, desc.Format);
     } else if (single_subresource) {
-        context->CopyResource(readable, texture);
+        context->CopyResource(readable.Get(), texture);
     } else {
-        context->CopySubresourceRegion(readable, 0, 0, 0, 0, texture, 0, nullptr);
+        context->CopySubresourceRegion(readable.Get(), 0, 0, 0, 0, texture, 0, nullptr);
     }
 
     rsf::say(options->log, options->log_user, "dump: mapping");
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(readable, 0, D3D11_MAP_READ, 0, &mapped))) {
-        readable->Release();
+    if (FAILED(context->Map(readable.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
         return RSF_TEXTURE_ERROR_MAP_FAILED;
     }
+    struct Mapping { ID3D11DeviceContext* context; ID3D11Texture2D* texture;
+        ~Mapping() { if (texture) context->Unmap(texture, 0); } } mapping{context, readable.Get()};
+    if (mapped.RowPitch < uint64_t(desc.Width) * stride) return RSF_TEXTURE_ERROR_MAP_FAILED;
     rsf::say(options->log, options->log_user, "dump: decoding %u rows", desc.Height);
 
     const float scale = options->scale != 0.0f ? options->scale : 1.0f;
@@ -352,14 +421,12 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
                 red = (sample.x - velocity_bias) / velocity_scale;
                 green = (sample.y - velocity_bias) / velocity_scale;
             }
-            if (red < min_x) min_x = red;
-            if (red > max_x) max_x = red;
-            if (green < min_y) min_y = green;
-            if (green > max_y) max_y = green;
+            if (std::isfinite(red)) { if (red < min_x) min_x = red; if (red > max_x) max_x = red; }
+            if (std::isfinite(green)) { if (green < min_y) min_y = green; if (green > max_y) max_y = green; }
 
             uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
             if (options->view == RSF_DUMP_VIEW_VELOCITY ||
-                options->view == RSF_DUMP_VIEW_DECODED_MOTION) {
+                options->view == RSF_DUMP_VIEW_DECODED_MOTION || options->view == RSF_DUMP_VIEW_DENSE_MOTION) {
                 // Zero motion sits at mid grey so sign is readable at a glance.
                 pixel[2] = clamp_byte(128.0f + red * scale * 127.0f);
                 pixel[1] = clamp_byte(128.0f + green * scale * 127.0f);
@@ -368,16 +435,26 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
                 // Scene colour is linear and can exceed one, so this clips rather than tonemaps.
                 // Good enough to see whether an upscaled frame is the scene at all, which is the
                 // question being asked, and not a judgement of its brightness.
-                pixel[2] = clamp_byte(red * scale * 255.0f);
-                pixel[1] = clamp_byte(green * scale * 255.0f);
-                pixel[0] = clamp_byte(sample.z * scale * 255.0f);
+                float blue = sample.z;
+                if (options->view == RSF_DUMP_VIEW_HDR) {
+                    red = display_hdr(red * scale); green = display_hdr(green * scale); blue = display_hdr(blue * scale);
+                } else if (options->view == RSF_DUMP_VIEW_DEPTH) {
+                    red = green = blue = std::isfinite(red) && red > 0 ? std::log2(1.0f + red * 65535.0f) / 16.0f : 0;
+                } else if (options->view == RSF_DUMP_VIEW_ALPHA) {
+                    red = green = blue = sample.alpha;
+                } else if (options->view == RSF_DUMP_VIEW_SCALAR) {
+                    red *= scale; green = blue = red;
+                } else { red *= scale; green *= scale; blue *= scale; }
+                pixel[2] = clamp_byte(red * 255.0f);
+                pixel[1] = clamp_byte(green * 255.0f);
+                pixel[0] = clamp_byte(blue * 255.0f);
             }
             pixel[3] = 255;
         }
     }
 
-    context->Unmap(readable, 0);
-    readable->Release();
+    context->Unmap(readable.Get(), 0); mapping.texture = nullptr;
+    readable.Reset();
 
     // Nothing contributed a value, so the running extremes are still their starting sentinels.
     // Reporting those as a range would read as an enormous motion rather than as no data.
@@ -386,8 +463,9 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     }
 
     const std::string prefix = options->output_prefix_utf8;
-    rsf::say(options->log, options->log_user, "dump: writing %s.tga", prefix.c_str());
-    if (!write_targa(prefix + ".tga", desc.Width, desc.Height, image)) {
+    rsf::say(options->log, options->log_user, "dump: writing %s.%s", prefix.c_str(), png ? "png" : "tga");
+    if (!(png ? write_png(prefix + ".png", desc.Width, desc.Height, image) :
+        write_targa(prefix + ".tga", desc.Width, desc.Height, image))) {
         return RSF_TEXTURE_ERROR_WRITE_FAILED;
     }
 
@@ -417,3 +495,13 @@ extern "C" rsf_dump_texture_result rsf_dump_texture(void* device_pointer, void* 
     rsf::say(options->log, options->log_user, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
     return RSF_TEXTURE_OK;
 }
+
+extern "C" rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* texture,
+    const rsf_texture_dump_options* options, rsf_texture_dump_report* report) try
+{ return dump_texture(device, context, texture, options, report, false); }
+catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }
+
+extern "C" rsf_dump_texture_result rsf_dump_texture_png(void* device, void* context, void* texture,
+    const rsf_texture_dump_options* options, rsf_texture_dump_report* report) try
+{ return dump_texture(device, context, texture, options, report, true); }
+catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }
