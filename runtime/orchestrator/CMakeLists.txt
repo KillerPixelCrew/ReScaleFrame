@@ -2,6 +2,17 @@
 # and directly into the research proxy, which is what actually gets loaded into the game today.
 # Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
 # would both be worse.
+add_library(rsf_frame_dump STATIC src/input_dump.cpp)
+target_include_directories(rsf_frame_dump PUBLIC include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
+target_compile_definitions(rsf_frame_dump PRIVATE RSF_RUNTIME_BUILD)
+target_link_libraries(rsf_frame_dump PUBLIC ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon PRIVATE rsf_build_options)
+add_library(ReScaleFrame::FrameDump ALIAS rsf_frame_dump)
+# Readback helpers in the backend libraries share the same capture owner as the host.
+foreach(rsf_dump_backend rsf_dlss rsf_fsr rsf_xess)
+    target_link_libraries(${rsf_dump_backend} PRIVATE ReScaleFrame::FrameDump)
+    target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
+endforeach()
+
 add_library(rsf_orchestrator_core OBJECT
     src/runtime.cpp
     src/plugin_session.cpp
@@ -9,7 +20,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_window.cpp
     src/native_cpu.cpp
     src/native_fg.cpp
-    src/input_dump.cpp
     src/native_fg_d3d12.cpp
     src/native_composition.cpp
     src/native_sr.cpp
@@ -41,6 +51,7 @@ target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUI
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::DLSS ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
 target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
+target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
@@ -48,7 +59,7 @@ set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/f
 add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.cpp)
 target_include_directories(rsf_native_vulkan PUBLIC include)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract PRIVATE rsf_build_options)
+target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump PRIVATE rsf_build_options)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FFX_VK=1)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_SR_ENABLED=1)
@@ -119,6 +130,14 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     target_link_libraries(rsf_native_vulkan PRIVATE wintrust advapi32)
 endif()
 add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
+find_path(RSF_FRAME_DUMP_VULKAN_INCLUDE vulkan/vulkan.h
+    HINTS "${RSF_VULKAN_INCLUDE}" "$ENV{VULKAN_SDK}/Include")
+if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
+    target_sources(rsf_native_vulkan PRIVATE src/input_dump_vulkan.cpp)
+    target_include_directories(rsf_native_vulkan SYSTEM PUBLIC "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
+    target_compile_definitions(rsf_native_vulkan PUBLIC RSF_FRAME_DUMP_VULKAN=1)
+endif()
+
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
 target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)

@@ -14,5 +14,6 @@ public:
     godot::Dictionary get_status() const;
     void reset_history();
     bool request_latency_ping();
+    void request_frame_dump();
 };
 }

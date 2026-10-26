@@ -754,7 +754,7 @@ void hooked_render_family(void* list, void* renderer)
 struct PassLease {
     rsf_ac7_native_renderer* owner = nullptr;
     PassLease* next = nullptr;
-    uint64_t input_pool = 0, depth_pool = 0, exposure_pool = 0, motion_pool = 0;
+    uint64_t input_pool = 0, depth_pool = 0, exposure_pool = 0, motion_pool = 0, ui_pool = 0;
     ID3D11Resource* motion = nullptr;
     ID3D11Resource* ui = nullptr;
     ID3D11Resource* scene_surface = nullptr;
@@ -831,11 +831,13 @@ void resolve_pass(void* object, rsf_ac7_render_scope* scope)
     scope->depth = pool_texture(lease.depth_pool, false);
     scope->motion = lease.motion_pool ? pool_texture(lease.motion_pool, false) : lease.motion;
     scope->exposure = pool_texture(lease.exposure_pool, false);
-    scope->ui_input = lease.ui; scope->scene_surface = lease.scene_surface;
+    scope->ui_input = lease.ui_pool ? pool_texture(lease.ui_pool, false) : lease.ui;
+    scope->scene_surface = lease.scene_surface;
 }
 void release_pass(void* object)
 {
     auto* lease = static_cast<PassLease*>(object);
+    pool_ref(lease->ui_pool, 0x30);
     if (lease->motion) { lease->motion->Release(); lease->motion = nullptr; }
     if (lease->ui) { lease->ui->Release(); lease->ui = nullptr; }
     if (lease->scene_surface) { lease->scene_surface->Release(); lease->scene_surface = nullptr; }
@@ -1999,6 +2001,9 @@ void process(uint32_t index, void* node, void* context)
     rsf_ac7_render_scope scope{};
     scope.struct_size = sizeof(scope); scope.session_id = self->options.session_id;
     scope.role = sites[index].role; scope.pass_key = uint64_t(uintptr_t(node));
+    // Nimbus front-end composition has its UI in graph input one. The separate
+    // HUDCombine path instead reads the view-owned raster. Both are native UI boundaries.
+    if (index == hook_process_composite) scope.role = RSF_GAME_RENDER_UI_COMPOSITE;
     uint64_t list = 0; uint32_t frame = 0;
     const auto ctx = uint64_t(uintptr_t(context));
     const bool valid = read(ctx, 0, scope.view_key) && read(ctx, 0x28, list) &&
@@ -2022,6 +2027,12 @@ void process(uint32_t index, void* node, void* context)
                 if (read(reference, 0, input) && read(reference, 8, output)) lease->input_pool = output_pool(input, output);
             }
             pool_ref(lease->input_pool, 0x28);
+            if (index == hook_process_composite) {
+                if (const auto* ui = input_ref(scope.pass_key, 1); ui && ui->node) {
+                    lease->ui_pool = output_pool(ui->node, ui->index);
+                    pool_ref(lease->ui_pool, 0x28);
+                }
+            }
             if (index == hook_process_hud) {
                 // All reviewed HUD shader variants bind view+0x13a0's render-target resource.
                 uint64_t target = 0, resource = 0, texture = 0;

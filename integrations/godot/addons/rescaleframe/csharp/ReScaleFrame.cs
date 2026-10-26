@@ -35,6 +35,11 @@ public static class GodotIntegration
         using var runtime = CreateRuntimeControl();
         runtime.Call("reset_history");
     }
+    public static void RequestFrameDump()
+    {
+        using var runtime = CreateRuntimeControl();
+        runtime.Call("request_frame_dump");
+    }
 
     /// <summary>Posts a synthetic PCL message to validate marker plumbing, without measuring latency.</summary>
     public static bool RequestLatencyPing()

@@ -1,5 +1,11 @@
 # ReScaleFrame for Godot
 
+F10 uses the shared [core frame dump](../../docs/research/core-frame-dump.md) to
+write named opaque PNGs, raw resources and frame metadata. GDScript can call
+`ReScaleFrameRuntime.request_frame_dump()` and C# can call
+`ReScaleFrame.RequestFrameDump()`. Requests are queued on the rendering owner.
+Resources absent in the chosen pipeline remain explicit in the manifest.
+
 Developer integration for Godot 4.7.2, Forward+ and Windows x64. Direct3D 12 has
 SR/FG/PCL implementations. Vulkan has native DLSS/FSR2/FSR3/XeSS SR, FSR4 SR
 through a same-adapter DX12 handoff, native FSR3/DLSS frame generation and a XeSS

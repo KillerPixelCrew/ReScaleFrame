@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
+#include <rescaleframe/capture_names.h>
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <iomanip>
 #include <memory>
 #include <vector>
+#include <mutex>
 
 namespace rsf {
 // Serial recording only. The owner drains all referencing GPU submissions before
@@ -24,6 +26,9 @@ class FrameCaptureVk {
         std::string role;
         uint32_t reset = 0;
         bool recorded = false;
+        bool legacy = false;
+        uint64_t core_ticket = 0;
+        std::string core_name;
     };
     std::filesystem::path directory;
     uint64_t first = 30, count = 4;
@@ -43,13 +48,14 @@ class FrameCaptureVk {
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImageToBuffer copy = nullptr;
     std::vector<std::unique_ptr<Readback>> pending;
+    std::mutex guard;
     void release(Readback& value) {
         if (value.buffer) destroy_buffer(device, value.buffer, nullptr);
         if (value.memory) free_memory(device, value.memory, nullptr);
         value.buffer = VK_NULL_HANDLE; value.memory = VK_NULL_HANDLE;
     }
     void failure(const char* role, uint64_t frame) noexcept try {
-        std::ofstream(directory / "capture-errors.log", std::ios::app) << frame << ' ' << role << '\n';
+        if (!directory.empty()) std::ofstream(directory / "capture-errors.log", std::ios::app) << frame << ' ' << role << '\n';
     } catch (...) {}
 public:
     FrameCaptureVk() noexcept { try {
@@ -63,12 +69,16 @@ public:
     } catch (...) { directory.clear(); } }
     ~FrameCaptureVk() { for (auto& value : pending) release(*value); }
     bool enabled() const { return !directory.empty() && count; }
+    bool ready() const { return device != VK_NULL_HANDLE; }
+    size_t pending_count() { std::lock_guard lock(guard); return pending.size(); }
     void set_provider(uint64_t version, uint32_t selected, bool fg = false) { provider = version; backend = selected; generation = fg; }
-    bool wants(uint64_t frame) const { return enabled() && frame >= first && frame - first < count; }
+    bool wants(uint64_t frame) const {
+        (void)const_cast<FrameCaptureVk*>(this)->flush(true);
+        return (enabled() && frame >= first && frame - first < count) || rsf_input_dump_wants_frame(frame);
+    }
     bool initialize(VkDevice value, rsf_vk_get_proc proc, const VkPhysicalDeviceMemoryProperties& properties) {
-        if (!enabled()) return true;
         device = value; memory_properties = properties;
-#define RSF_CAPTURE_LOAD(member, function) member = reinterpret_cast<PFN_##function>(proc(device, #function)); if (!member) return false
+#define RSF_CAPTURE_LOAD(member, function) member = reinterpret_cast<PFN_##function>(proc(device, #function)); if (!member) { device = VK_NULL_HANDLE; return !enabled(); }
         RSF_CAPTURE_LOAD(create_buffer, vkCreateBuffer); RSF_CAPTURE_LOAD(destroy_buffer, vkDestroyBuffer);
         RSF_CAPTURE_LOAD(requirements, vkGetBufferMemoryRequirements); RSF_CAPTURE_LOAD(allocate, vkAllocateMemory);
         RSF_CAPTURE_LOAD(free_memory, vkFreeMemory); RSF_CAPTURE_LOAD(bind, vkBindBufferMemory);
@@ -78,22 +88,41 @@ public:
         return true;
     }
     bool record(VkCommandBuffer commands, const rsf_srvk_image& source, const rsf_frame_record& identity,
-        const char* role, uint32_t reset) noexcept try {
+        const char* role, uint32_t reset, bool core_source = true, uint64_t* core_ticket = nullptr) noexcept try {
+        if (core_ticket) *core_ticket = 0;
         if (!wants(identity.frame_id)) return true;
+        if (!device || !commands || source.device != device || !source.width || !source.height) return false;
+        std::lock_guard lock(guard);
         if (!source.copy_source) { failure(role, identity.frame_id); return false; }
         uint32_t pixel_bytes = 0;
         switch (source.format) {
         case VK_FORMAT_R16G16B16A16_SFLOAT: pixel_bytes = 8; break;
+        case VK_FORMAT_R32G32_SFLOAT: pixel_bytes = 8; break;
+        case VK_FORMAT_R8_UNORM: pixel_bytes = 1; break;
         case VK_FORMAT_R16G16_SFLOAT:
         case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB:
         case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_R32_SFLOAT:
         case VK_FORMAT_D32_SFLOAT: pixel_bytes = 4; break;
         default: failure(role, identity.frame_id); return false;
         }
         auto owned = std::make_unique<Readback>();
         owned->image = source; owned->identity = identity; owned->role = role; owned->reset = reset;
+        owned->legacy = enabled() && identity.frame_id >= first && identity.frame_id - first < count;
+        if (core_source && rsf_input_dump_wants(&identity)) {
+            owned->core_name = capture_name(role);
+            owned->core_ticket = rsf_input_dump_reserve(&identity, owned->core_name.c_str(), role,
+                capture_view(owned->core_name), capture_scale(role));
+            if (core_ticket) *core_ticket = owned->core_ticket;
+        }
+        if (!owned->legacy && !owned->core_ticket) return true;
         owned->bytes = VkDeviceSize(source.width) * source.height * pixel_bytes;
+        if (!owned->bytes || owned->bytes > 256ull * 1024 * 1024) {
+            rsf_input_dump_failed(owned->core_ticket, owned->core_name.c_str(), RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT); return false;
+        }
         // Retain even a partially allocated buffer. Failure records no GPU copy;
         // successful copies keep their allocation until drained retirement.
         pending.push_back(std::move(owned)); auto& value = *pending.back();
@@ -135,13 +164,44 @@ public:
         return true;
     } catch (...) { failure(role, identity.frame_id); return false; }
     // Caller has completed all command buffers containing these readbacks.
-    bool flush() noexcept try {
+    bool flush(bool ready_only = false) noexcept try {
+        std::lock_guard lock(guard);
         bool okay = true;
-        for (auto& owned : pending) {
-            auto& value = *owned;
-            if (!value.recorded) { okay = false; release(value); continue; }
+        for (auto it = pending.begin(); it != pending.end();) {
+            auto& value = **it;
+            if (ready_only && value.legacy && !value.core_ticket) { ++it; continue; }
+            if (!value.recorded) { okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_STAGING_FAILED); release(value); it = pending.erase(it); continue; }
+            if (value.core_ticket && !rsf_input_dump_gpu_ready(value.core_ticket, value.core_name.c_str(), 3, device)) {
+                if (ready_only) { ++it; continue; }
+                okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED);
+                value.core_ticket = 0;
+                if (!value.legacy) { release(value); it = pending.erase(it); continue; }
+            }
             void* data = nullptr;
-            if (map(device, value.memory, 0, value.bytes, 0, &data) != VK_SUCCESS) { okay = false; release(value); continue; }
+            if (map(device, value.memory, 0, value.bytes, 0, &data) != VK_SUCCESS) { okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED); release(value); it = pending.erase(it); continue; }
+            if (value.core_ticket) {
+                uint32_t encoding = 0, pixel_size = 4;
+                switch (value.image.format) {
+                case VK_FORMAT_R16G16B16A16_SFLOAT: encoding = 10; pixel_size = 8; break;
+                case VK_FORMAT_R32G32_SFLOAT: encoding = 16; pixel_size = 8; break;
+                case VK_FORMAT_R16G16_SFLOAT: encoding = 34; break;
+                case VK_FORMAT_R8G8B8A8_UNORM: encoding = 28; break;
+                case VK_FORMAT_R8G8B8A8_SRGB: encoding = 29; break;
+                case VK_FORMAT_B8G8R8A8_UNORM: encoding = 87; break;
+                case VK_FORMAT_B8G8R8A8_SRGB: encoding = 91; break;
+                case VK_FORMAT_A2B10G10R10_UNORM_PACK32: encoding = 24; break;
+                case VK_FORMAT_R32_SFLOAT: encoding = 41; break;
+                case VK_FORMAT_D32_SFLOAT: encoding = 40; break;
+                case VK_FORMAT_R8_UNORM: encoding = 61; pixel_size = 1; break;
+                default: break;
+                }
+                rsf_dump_pixels pixels{sizeof(pixels), value.image.width, value.image.height, encoding,
+                    value.image.width * pixel_size, value.bytes, data};
+                okay &= rsf_input_dump_pixels(value.core_ticket, value.core_name.c_str(), &pixels, 3, value.image.format) != 0;
+                value.core_ticket = 0;
+            }
+            if (ready_only && value.legacy) { unmap(device, value.memory); ++it; continue; }
+            if (!value.legacy) { unmap(device, value.memory); release(value); it = pending.erase(it); continue; }
             const auto stem = std::to_string(value.identity.session_id) + '-' + std::to_string(value.identity.frame_id) + '-' + value.role + "-0";
             std::ofstream raw(directory / (stem + ".raw"), std::ios::binary);
             raw.write(static_cast<const char*>(data), static_cast<std::streamsize>(value.bytes)); unmap(device, value.memory);
@@ -167,8 +227,9 @@ public:
             matrix("clip_to_previous_clip", camera.clip_to_previous_clip);
             json << "\n}\n"; okay &= bool(raw) && bool(json);
             release(value);
+            it = pending.erase(it);
         }
-        pending.clear(); if (!okay) failure("readback-flush", 0); return okay;
+        if (!okay) failure("readback-flush", 0); return okay;
     } catch (...) { return false; }
 };
 }

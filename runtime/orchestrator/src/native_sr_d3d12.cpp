@@ -33,6 +33,7 @@ struct rsf_sr12 {
     uint32_t width = 0, height = 0, output_width = 0, output_height = 0;
     uint32_t backend = 0, quality = 0;
     bool normalize_color = false;
+    bool input_sdr = false;
     uint64_t last_frame = 0, last_view = 0, last_session = 0;
     uint32_t last_generation = 0;
     rsf_backend_log_fn diagnostic_log = nullptr;
@@ -231,6 +232,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
     }
     if (result != RSF_BACKEND_OK) return result;
     self->normalize_color = self->backend || self->capture.enabled();
+    self->input_sdr = setup->input_sdr != 0;
     if (!prepare_shader(*self) || !texture(*self, self->normalize_color ? self->width : 1u, self->normalize_color ? self->height : 1u, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R32_FLOAT, self->normalized[1]) ||
         !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16_FLOAT, self->normalized[2]) ||
@@ -302,7 +304,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     // The caller joins a slot's previous GPU completion before entering this evaluation.
     motion_diagnostic(*self, list, slot);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = pass->session_id; record.frame_id = pass->native_frame; record.view_id = static_cast<uint32_t>(pass->view_key);
+    record.session_id = pass->session_id; record.frame_id = pass->source_frame_id ? pass->source_frame_id : pass->native_frame; record.view_id = static_cast<uint32_t>(pass->view_key);
     record.resource_generation = pass->resource_generation; record.camera = pass->camera; record.screen = pass->screen;
     record.render_width = self->width; record.render_height = self->height;
     record.output_width = self->output_width; record.output_height = self->output_height;
@@ -310,7 +312,19 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     const bool reset = (pass->flags & RSF_GAME_RENDER_RESET) || self->last_frame + 1 != pass->native_frame ||
         self->last_view != pass->history_key || self->last_session != pass->session_id || self->last_generation != pass->resource_generation;
     record.flags = reset ? RSF_FRAME_FLAG_RESET : 0;
-    (void)self->capture.record(list, self->normalized[0].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-linear-color", slot);
+    auto capture_identity = record;
+    if (!pass->source_frame_id) capture_identity.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
+    if (rsf_input_dump_begin_record(&capture_identity, self->backend)) {
+        rsf_input_dump_pass_metadata(pass);
+        (void)self->capture.record(list, static_cast<ID3D12Resource*>(pass->color_input), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-source-jittered", slot, 0, UINT32_MAX,
+            self->input_sdr ? RSF_DUMP_VIEW_RAW : RSF_DUMP_VIEW_HDR);
+        (void)self->capture.record(list, static_cast<ID3D12Resource*>(pass->depth), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-scene-depth", slot);
+        (void)self->capture.record(list, static_cast<ID3D12Resource*>(pass->motion), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-game-motion-uv", slot);
+        (void)self->capture.record(list, self->normalized[1].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-depth", slot);
+        (void)self->capture.record(list, self->normalized[2].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-motion-pixels", slot);
+    }
+    if (self->normalize_color) (void)self->capture.record(list, self->normalized[0].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-linear-color", slot, 0, UINT32_MAX,
+        self->input_sdr ? RSF_DUMP_VIEW_RAW : RSF_DUMP_VIEW_HDR);
     (void)self->capture.record(list, self->normalized[1].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-depth", slot);
     (void)self->capture.record(list, self->normalized[2].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-motion-pixels", slot);
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
@@ -340,15 +354,20 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     // The producer measures pixel jitter from the actual GPU projection, including its Y conversion.
     frame.motion_scale_x = frame.motion_scale_y = 1; frame.pre_exposure = frame.view_space_to_meters = 1;
     frame.reset = reset || self->capture.force_sr_history_reset(record.frame_id);
+    rsf_input_dump_sr_frame(&frame, self->backend, self->input_sdr ? 1u : 0u);
+    if (frame.exposure.resource) (void)self->capture.record(list, static_cast<ID3D12Resource*>(frame.exposure.resource),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-exposure", slot);
     const auto result = !self->backend ? RSF_BACKEND_OK : self->dlss ? rsf_dlss_native12_evaluate(self->dlss, list, &frame) :
         rsf_sr_session_evaluate(self->alternate, list, &frame);
+    rsf_input_dump_result(&record, "sr", self->backend, result);
     (void)self->capture.event(record, "sr-evaluate", record.frame_id, frame.reset != 0, result);
     if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (result != RSF_BACKEND_OK) { self->last_frame = 0; return result; }
     if (self->backend) {
-        (void)self->capture.record(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, record, "sr-output-linear", slot, 0, frame.reset ? 1u : 0u);
+        (void)self->capture.record(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, record, "sr-output-linear", slot, 0, frame.reset ? 1u : 0u,
+            self->input_sdr ? RSF_DUMP_VIEW_RAW : RSF_DUMP_VIEW_HDR);
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->output.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = static_cast<ID3D12Resource*>(pass->color_output); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;

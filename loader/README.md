@@ -217,6 +217,9 @@ owns its pacing without an NVIDIA SR sleep. FSR3/4 stay 2x in the pinned API; hi
 counts follow SDK queries and lack device/game proof on the tested RTX 4070.
 # AC7 website input dump
 
+This is the shared [orchestrator frame dump](../docs/research/core-frame-dump.md),
+also wired through the D3D12/Vulkan integration paths and Minecraft's GL bridge.
+
 With AC7 focused and SR enabled, press **F10** once in the scene to export. No diagnostic
 INI setting is needed. Each press writes one source frame under
 `%LOCALAPPDATA%\ReScaleFrame\AC7\website\scene-*` (or `RSF_DUMP_DIR\website`).
@@ -240,7 +243,7 @@ identity, RSF version, executable SHA-256, and per-image success or unavailabili
 | `sr_backend_output`, `sr_output` | Backend result and reconstructed linear HDR before engine tonemapping |
 | `hudless_color` | Tonemapped scene immediately before the native HUD compositor |
 | `hud_color`, `hud_alpha`, `hud_composed_color` | Native HUD raster RGB, alpha coverage, and composition result |
-| `fg_depth`, `fg_motion`, `fg_hudless_color` | Normalized FG guides and completed scene handed to FG before final window UI |
+| `fg_depth`, `fg_motion`, `fg_scene_color` | Normalized FG guides and actual completed scene handed to FG before final window UI |
 | `final_color` | Final real frame with game UI, before RSF debug/overlay drawing and interpolation |
 
 `sr_constants.json` contains the actual SR jitter, vector scales, camera matrices,
@@ -249,11 +252,12 @@ When a provider receives this frame, `fg_constants.json` records its preparation
 timing, jitter, matrices, vector scales, flags, and generation identity. Enable FG to
 include those provider constants. The FG source images are also exported with FG Off.
 
-The native HUD raster is an engine input, not a promise of a standalone compositable
-layer for every effect. The current AC7 FG path has no separate `fg_ui` resource; the
+The native HUD raster is an engine input, with its stored alpha exported separately;
+that alpha can remain zero for translucent/additive producers. The current AC7 FG path has no separate `fg_ui` resource; the
 manifest marks it unavailable. Optional guides absent in the chosen scene/backend are
-also marked unavailable. `hudless_color` and `fg_hudless_color` name different native
-handoffs and are both preserved. No image is substituted from another frame.
+also marked unavailable. `hudless_color` is the genuine scene before the UI compositor;
+`fg_scene_color` is the later actual FG input and can already contain game UI.
+Both are preserved. No image is substituted from another frame.
 
 HDR previews use Reinhard plus sRGB. Reversed-Z depth uses logarithmic grayscale.
 Vectors centre zero at gray, with X in red and Y in green; sparse unwritten vectors

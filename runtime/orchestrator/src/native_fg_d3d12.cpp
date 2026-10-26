@@ -4,6 +4,7 @@
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/unity_sr_host.h>
 #include "../../backends/common/d3d12_helpers.h"
+#include "../../backends/common/frame_capture12.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -28,6 +29,7 @@ rsf_native_fg_options options{sizeof(options), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0,
 rsf_native_fg_status state{};
 std::string directory;
 std::wstring log_path;
+rsf::FrameCapture12 core_capture;
 bool installed = false;
 rsf_backend_log_fn logger = nullptr;
 void* logger_user = nullptr;
@@ -175,6 +177,9 @@ bool copy(ID3D12GraphicsCommandList* list, ID3D12Resource* source, ComPtr<ID3D12
     return true;
 }
 void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_streamline_host*, void* context, uint32_t) {
+    (void)core_capture.flush_ready();
+    const bool requested_dump = rsf_input_dump_requested() != 0;
+    rsf_input_dump_poll();
     std::lock_guard<std::mutex> lock(guard);
     ComPtr<IDXGISwapChain3> chain;
     Window identity{};
@@ -183,6 +188,20 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
         if (index < windows.size()) { identity = windows[index]; windows[index] = {}; }
     }
     window_frame = identity.frame; window_session = identity.session; window_view = identity.view;
+    rsf_frame_record capture_record{}; capture_record.struct_size = sizeof(capture_record);
+    if (requested_dump && buffer && identity.session && identity.frame && !rsf_input_dump_current(&capture_record)) {
+        const auto description = static_cast<ID3D12Resource*>(buffer)->GetDesc();
+        capture_record = {}; capture_record.struct_size = sizeof(capture_record); capture_record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        capture_record.session_id = identity.session; capture_record.frame_id = identity.frame; capture_record.view_id = identity.view;
+        capture_record.output_width = uint32_t(description.Width); capture_record.output_height = description.Height;
+        capture_record.flags = RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG;
+        (void)rsf_input_dump_begin_record(&capture_record, 0);
+    }
+    if (commands && buffer && rsf_input_dump_current(&capture_record) && capture_record.session_id == identity.session &&
+        capture_record.frame_id == identity.frame && capture_record.view_id == identity.view) {
+        (void)core_capture.record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(buffer),
+            D3D12_RESOURCE_STATE_PRESENT, capture_record, "final_color", uint32_t(identity.frame % 3));
+    }
     auto& timing = cpu[window_frame % cpu.size()];
     window_generation = timing.id == window_frame ? timing.generation : 0;
     // Present has advanced beyond these unpresented CPU frames. Release their shared
@@ -252,6 +271,8 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     if (rsf_d3d11_present_backend() == RSF_FG_BACKEND_FSR3)
         capture_colors(list, static_cast<ID3D12Resource*>(buffer), slot.hudless.Get(), record.frame_id);
     state.last_result = provider->prepare(context, commands, &frame);
+    rsf_input_dump_fg_prepare(nullptr, &frame, state.last_result);
+    rsf_input_dump_result(&record, "fg", rsf_d3d11_present_backend(), state.last_result);
     // Vendors consume persistent inputs during asynchronous Present. Keep the declared
     // read states until retirement; the next capture transitions them for reuse.
     if (state.last_result != RSF_BACKEND_OK && prepare_failures++ < 8) {
@@ -312,6 +333,12 @@ void latency(void*, const rsf_observer_present_event* event) {
         rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_RENDER_SUBMIT_END, 0);
         rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_PRESENT_START, 0);
     } else {
+        rsf_frame_record capture_record{}; capture_record.struct_size = sizeof(capture_record);
+        if (rsf_input_dump_current(&capture_record) && capture_record.session_id == window_session &&
+            capture_record.frame_id == window_frame && capture_record.view_id == window_view) {
+            (void)core_capture.submitted(static_cast<ID3D12CommandQueue*>(rsf_d3d11_present_queue()));
+            rsf_input_dump_complete(&capture_record, event->result);
+        }
         rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_PRESENT_END, 0);
         if (auto* host = rsf_d3d11_present_host()) rsf_streamline_host_abort(host, window_frame);
         std::lock_guard<std::mutex> lock(guard);
@@ -454,6 +481,20 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t ses
     return result;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" RSF_RUNTIME_API void rsf_fg12_hudless(void* commands, const rsf_game_render_pass* pass) {
+    if (commands && pass && pass->struct_size >= sizeof(*pass) && pass->color_input) {
+        rsf_frame_record capture_record{}; capture_record.struct_size = sizeof(capture_record);
+        if (rsf_input_dump_current(&capture_record) && capture_record.session_id == pass->session_id &&
+            capture_record.frame_id == pass->source_frame_id && capture_record.view_id == uint32_t(pass->view_key)) {
+            (void)core_capture.record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(pass->color_input),
+                D3D12_RESOURCE_STATE_RENDER_TARGET, capture_record, "hudless_color");
+            if (pass->ui_input) {
+                (void)core_capture.record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(pass->ui_input),
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, capture_record, "hud_color");
+                (void)core_capture.record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(pass->ui_input),
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, capture_record, "hud_alpha");
+            }
+        }
+    }
     if (!commands || !pass || !pass->color_input || !pass->source_frame_id || !rsf_d3d11_present_has_owner()) return;
     std::lock_guard<std::mutex> lock(guard);
     auto& slot = slots[pass->source_frame_id % slots.size()];
@@ -492,6 +533,7 @@ extern "C" RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session) {
     std::lock_guard<std::mutex> lock(guard);
     for (auto& slot : slots)
         if (slot.record.session_id == session && !finished(slot)) return 0;
+    (void)core_capture.flush_ready();
     auto* host = rsf_d3d11_present_host();
     for (auto& frame : cpu) if (frame.session == session) {
         if (host && frame.id && !frame.completed) rsf_streamline_host_abort(host, frame.id);

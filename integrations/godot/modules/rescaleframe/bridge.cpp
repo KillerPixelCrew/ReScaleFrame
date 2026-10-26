@@ -38,6 +38,8 @@ decltype(&rsfg_render_vulkan) native_render_vulkan = nullptr;
 decltype(&rsfg_render_vulkan_handoff) native_render_vulkan_handoff = nullptr;
 decltype(&rsfg_vk_host_capabilities) native_vk_host_capabilities = nullptr;
 decltype(&rsfg_vk_create) native_vk_create = nullptr;
+decltype(&rsfg_vk_capture_setup) native_vk_capture_setup = nullptr;
+decltype(&rsfg_vk_capture_release) native_vk_capture_release = nullptr;
 decltype(&rsfg_vk_images) native_vk_images = nullptr;
 decltype(&rsfg_vk_image_layout) native_vk_image_layout = nullptr;
 decltype(&rsfg_vk_acquire) native_vk_acquire = nullptr;
@@ -248,6 +250,8 @@ void boot() {
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
 #undef RSF_RESOLVE
+    native_vk_capture_setup = reinterpret_cast<decltype(native_vk_capture_setup)>(GetProcAddress(module, "rsfg_vk_capture_setup"));
+    native_vk_capture_release = reinterpret_cast<decltype(native_vk_capture_release)>(GetProcAddress(module, "rsfg_vk_capture_release"));
     const CharString path_utf8 = runtime.utf8(), id_utf8 = id.utf8();
     const rsf_godot_setup setup{sizeof(setup), RSF_GODOT_ABI_VERSION, path_utf8.get_data(), "4.7.2", id_utf8.get_data(), log, nullptr};
     native_vk_host_capabilities(RSF_GODOT_VK_GRAPH_HANDOFF);
@@ -275,6 +279,12 @@ int32_t vk_wsi_call(int32_t (*callback)(void*), void* user) { return vulkan_enab
 int32_t vk_foreign_call(int32_t (*callback)(void*), void* user) { return vulkan_enabled() ? native_vk_foreign_call(callback, user) : callback(user); }
 bool vk_create(const void *setup, void **owner, uint64_t *chain) {
     return vulkan_enabled() && native_vk_create(static_cast<const rsf_fgvk_setup *>(setup), owner, chain) == 0;
+}
+void vk_capture_setup(const void *setup) {
+    if (vulkan_enabled() && native_vk_capture_setup) native_vk_capture_setup(static_cast<const rsf_fgvk_setup *>(setup));
+}
+bool vk_capture_release(void *queue_user) {
+    return !vulkan_enabled() || !native_vk_capture_release || native_vk_capture_release(queue_user) == 0;
 }
 int32_t vk_images(void *owner, uint32_t *count, uint64_t *images) { return native_vk_images(owner, count, images); }
 uint32_t vk_image_layout(void *owner) { return native_vk_image_layout(owner); }

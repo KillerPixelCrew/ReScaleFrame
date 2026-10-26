@@ -95,6 +95,9 @@ RSF_GODOT_EXPORT int rsfg_render_vulkan(void* command_buffer, const rsf_godot_vk
 RSF_GODOT_EXPORT int rsfg_render_vulkan_handoff(void* command_buffer, const rsf_godot_vk_packet* packet,
     const rsf_godot_vk_handoff* handoff, void** continuation_commands);
 RSF_GODOT_EXPORT int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** owner, uint64_t* chain);
+/* Readback ownership is independent of the optional FG presenter. */
+RSF_GODOT_EXPORT void rsfg_vk_capture_setup(const rsf_fgvk_setup* setup);
+RSF_GODOT_EXPORT int32_t rsfg_vk_capture_release(void* queue_user);
 RSF_GODOT_EXPORT int32_t rsfg_vk_images(void* owner, uint32_t* count, uint64_t* images);
 RSF_GODOT_EXPORT uint32_t rsfg_vk_image_layout(void* owner);
 RSF_GODOT_EXPORT int32_t rsfg_vk_acquire(void* owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);

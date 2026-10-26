@@ -3150,6 +3150,7 @@ static int drain_shutdown(void)
     stop_reinsert(); release_held(); rsf_frame_tap_uninstall();
     rsf_ac7_velocity_release();
     rsf_dlss_pipeline_stop(); bridge.started = 0;
+    rsf_input_dump_cancel(0);
     InterlockedExchange(&native_owner, 0); rsf_ac7_motion_capture_native_owner(0);
     bridge.startup_attempted = 1; bridge.show = 0;
     InterlockedExchange(&shutdown_requested, 0);
@@ -3314,7 +3315,11 @@ static void on_present(void* user, void* swapchain)
     rsf_depth_replay_end_frame(bridge.layer_replay);
     if (!InterlockedCompareExchange(&native_owner, 0, 0)) follow_layer_size();
     bridge.layer_camera_valid = 0;
-    rsf_input_dump_present(swapchain, bridge.context);
+    {
+        rsf_game_render_pass window = {0}; window.struct_size = sizeof(window);
+        const int matched = rsf_native_window_match(swapchain, &window);
+        rsf_input_dump_present(swapchain, bridge.context, matched ? &window : NULL);
+    }
     show_result(swapchain);
 
     /* Last, so the panel is drawn over the finished frame and over the debug view when that is on.
@@ -3350,8 +3355,10 @@ static void on_present_event(void* user, const rsf_observer_present_event* event
 {
     (void)user;
     rsf_native_window_present(event);
-    if (event && event->completed && !(event->flags & DXGI_PRESENT_TEST))
-        rsf_input_dump_presented(event->swapchain, event->result);
+    if (event && event->completed && !(event->flags & DXGI_PRESENT_TEST)) {
+        rsf_game_render_pass window = {0}; window.struct_size = sizeof(window);
+        if (rsf_native_window_match(event->swapchain, &window)) rsf_input_dump_presented(&window, event->result);
+    }
     if (event && event->completed && event->result == S_OK && !(event->flags & DXGI_PRESENT_TEST))
         ++bridge.application_presented_frames;
 }

@@ -23,13 +23,12 @@ void RenderingDeviceDriverVulkan::rescaleframe_unlock_queues(void *user) {
         for (uint32_t j = family.size(); j > 0; --j) family[j - 1].submit_mutex.unlock();
     }
 }
-bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, void *opaque_chain, const void *info, const void *allocation_callbacks) {
+bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, void *opaque_chain, void *info, const void *allocation_callbacks) {
     auto *queue = reinterpret_cast<CommandQueue *>(queue_id.id);
     auto *chain = static_cast<SwapChain *>(opaque_chain);
     const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(chain->surface);
     if (!surface || !surface->rescaleframe_primary) return false;
-    if (OS::get_singleton()->get_environment("RSF_GODOT_NATIVE_WSI") == "1") return false;
-    if (!RSFGodot::vulkan_enabled() || !rescaleframe_timeline || queue->queue_index != 0 || queue_families[queue->queue_family].size() < 4) return false;
+    if (!RSFGodot::vulkan_enabled() || queue->queue_index != 0) return false;
     chain->rescaleframe_driver = this; chain->rescaleframe_family = queue->queue_family;
     rsf_fgvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_FGVK_ABI_VERSION;
     auto &graphics = setup.graphics;
@@ -37,12 +36,17 @@ bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, v
     graphics.instance = context_driver->instance_get(); graphics.physical_device = physical_device; graphics.device = vk_device;
     graphics.instance_proc = reinterpret_cast<rsf_vk_get_proc>(vkGetInstanceProcAddr);
     graphics.device_proc = reinterpret_cast<rsf_vk_get_proc>(vkGetDeviceProcAddr); graphics.depth_inverted = 1;
-    const auto &description = *static_cast<const VkSwapchainCreateInfoKHR *>(info);
+    auto &description = *static_cast<VkSwapchainCreateInfoKHR *>(info);
+    VkSurfaceCapabilitiesKHR capabilities{};
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, description.surface, &capabilities) == VK_SUCCESS &&
+            (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) description.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     graphics.output_width = description.imageExtent.width; graphics.output_height = description.imageExtent.height;
-    for (uint32_t i = 0; i < 4; ++i) setup.queues[i] = queue_families[queue->queue_family][i].queue;
+    for (uint32_t i = 0; i < 4; ++i) setup.queues[i] = queue_families[queue->queue_family][i < uint32_t(queue_families[queue->queue_family].size()) ? i : 0].queue;
     setup.queue_family = queue->queue_family; setup.create_info = info; setup.allocator = allocation_callbacks;
     setup.graphics_submit = rescaleframe_submit; setup.lock_queues = rescaleframe_lock_queues;
     setup.unlock_queues = rescaleframe_unlock_queues; setup.queue_user = chain;
+    RSFGodot::vk_capture_setup(&setup);
+    if (OS::get_singleton()->get_environment("RSF_GODOT_NATIVE_WSI") == "1" || !rescaleframe_timeline || queue_families[queue->queue_family].size() < 4) return false;
     uint64_t handle = 0;
     const bool created = RSFGodot::vk_create(&setup, &chain->rescaleframe_owner, &handle);
     if (!created) {
@@ -53,6 +57,7 @@ bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, v
 }
 bool RenderingDeviceDriverVulkan::rescaleframe_release(void *opaque_chain) {
     auto *chain = static_cast<SwapChain *>(opaque_chain);
+    if (!RSFGodot::vk_capture_release(chain)) return false;
     if (!chain->rescaleframe_owner) return true;
     if (!RSFGodot::vk_destroy(chain->rescaleframe_owner)) return false;
     chain->rescaleframe_owner = nullptr; chain->vk_swapchain = VK_NULL_HANDLE; return true;

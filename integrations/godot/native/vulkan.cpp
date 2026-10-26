@@ -5,6 +5,11 @@
 #include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/native_xess_vulkan_requirements.h>
+#include <rescaleframe/input_dump.h>
+#if defined(RSF_FRAME_DUMP_VULKAN)
+#include <rescaleframe/input_dump_vulkan.h>
+#include "../../../runtime/backends/common/frame_capture_vk.h"
+#endif
 #if defined(RSF_VULKAN_FSR4_FG_ENABLED)
 #include "../../../runtime/orchestrator/src/native_fg_fsr4_vulkan.h"
 #endif
@@ -18,6 +23,7 @@ struct rsf_fsr4vk;
 #include <string>
 #include <cstdio>
 #include <atomic>
+#include <vector>
 
 namespace {
 std::mutex guard;
@@ -51,6 +57,82 @@ rsf_srvk_setup presentation_graphics{};
 rsf_godot_vk_proc resolver = nullptr;
 bool sdk_shutdown_pending = false;
 bool graph_handoff_available = false;
+#if defined(RSF_FRAME_DUMP_VULKAN)
+rsf_input_dump_vk* dump_owner = nullptr;
+rsf::FrameCaptureVk dump_stages;
+rsf_input_dump_vk_setup dump_setup{};
+VkFormat dump_format = VK_FORMAT_UNDEFINED;
+VkExtent2D dump_extent{};
+VkImageUsageFlags dump_usage = 0;
+VkSwapchainKHR dump_chain = VK_NULL_HANDLE;
+rsf_frame_record dump_record{};
+int32_t release_capture(void* user) {
+    if (!dump_owner || dump_setup.user != user) return RSF_BACKEND_OK;
+    const auto joined = rsf_input_dump_vk_drain(dump_owner);
+    if (joined != RSF_BACKEND_OK) return joined;
+    (void)dump_stages.flush();
+    const auto stopped = rsf_input_dump_vk_destroy(dump_owner);
+    if (stopped != RSF_BACKEND_OK) return stopped;
+    dump_owner = nullptr; dump_chain = VK_NULL_HANDLE; dump_record = {}; dump_setup = {};
+    return RSF_BACKEND_OK;
+}
+void setup_capture(const rsf_fgvk_setup& setup) {
+    if (!setup.create_info || (dump_owner && dump_setup.user != setup.queue_user)) return;
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup.create_info);
+    dump_setup = {sizeof(dump_setup), 1, setup.graphics, setup.queues[0], setup.queue_family, setup.graphics_submit, setup.queue_user};
+    dump_setup.graphics.runtime_directory_utf8 = nullptr;
+    if (!dump_owner) (void)rsf_input_dump_vk_create(&dump_setup, &dump_owner);
+    dump_format = info.imageFormat; dump_extent = info.imageExtent; dump_usage = info.imageUsage;
+    VkPhysicalDeviceMemoryProperties memory{};
+    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(setup.graphics.instance_proc(setup.graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
+    if (properties) { properties(static_cast<VkPhysicalDevice>(setup.graphics.physical_device), &memory);
+        (void)dump_stages.initialize(static_cast<VkDevice>(setup.graphics.device), setup.graphics.device_proc, memory); }
+}
+void capture_present_impl(rsf_fgvk* owner, const void* native_info, int32_t result, uint32_t begin) {
+    const bool armed = rsf_input_dump_requested() != 0;
+    rsf_input_dump_poll();
+    if (!armed || !dump_owner || !native_info || !render_source_frame) return;
+    auto record = dump_record;
+    if (record.frame_id != render_source_frame) {
+        record = {}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.session_id = current.session_id; record.frame_id = render_source_frame;
+        record.output_width = dump_extent.width; record.output_height = dump_extent.height;
+        record.flags = RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG;
+    }
+    if (!begin) { rsf_input_dump_complete(&record, result); return; }
+    (void)rsf_input_dump_begin_record(&record, requested.sr_backend);
+    if (!rsf_input_dump_wants(&record)) return;
+    const auto& info = *static_cast<const VkPresentInfoKHR*>(native_info);
+    if (info.swapchainCount != 1 || !info.pSwapchains || !info.pImageIndices) return;
+    if (!owner && dump_chain && dump_chain != info.pSwapchains[0]) return;
+    dump_chain = info.pSwapchains[0];
+    uint32_t count = 0;
+    std::vector<uint64_t> images;
+    uint32_t layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    if (owner) {
+        if (rsf_fgvk_images(owner, &count, nullptr) != 0 || !count || count > 16) return;
+        images.resize(count);
+        if (rsf_fgvk_images(owner, &count, images.data()) != 0) return;
+        if (rsf_fgvk_image_layout(owner, &layout) != 0) return;
+    } else {
+        const auto get = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(dump_setup.graphics.device_proc(dump_setup.graphics.device, "vkGetSwapchainImagesKHR"));
+        if (!get || get(static_cast<VkDevice>(dump_setup.graphics.device), dump_chain, &count, nullptr) != VK_SUCCESS || !count || count > 16) return;
+        std::vector<VkImage> native(count);
+        if (get(static_cast<VkDevice>(dump_setup.graphics.device), dump_chain, &count, native.data()) != VK_SUCCESS) return;
+        for (auto image : native) images.push_back(reinterpret_cast<uint64_t>(image));
+    }
+    if (info.pImageIndices[0] >= images.size()) return;
+    const rsf_srvk_image image{dump_setup.graphics.device, images[info.pImageIndices[0]], uint32_t(dump_format),
+        dump_extent.width, dump_extent.height, layout, (dump_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? 1u : 0u};
+    const auto code = rsf_input_dump_vk_snapshot(dump_owner, &record, &image, "final_color");
+    if (code) {
+        const auto submitted = rsf_input_dump_gpu_submission(&record);
+        if (rsf_input_dump_vk_drain(dump_owner) == RSF_BACKEND_OK)
+            rsf_input_dump_gpu_completed(submitted, 3, dump_setup.graphics.device);
+    }
+    if (code && logger) logger(logger_user, "Core frame dump: final Vulkan image could not be read; see the bundle's missing stage.");
+}
+#endif
 uint32_t fg_backend(const rsf_godot_settings& value) { return value.fg_backend == 7 ? 3u : value.fg_backend; }
 bool retire() {
     if (!context && !fsr4_context) return true;
@@ -148,6 +230,9 @@ int shutdown() {
         if (rsf_fgvk_drain(presentation) != RSF_BACKEND_OK) return 0;
     }
     if (!retire()) return 0;
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    if (release_capture(dump_setup.user) != RSF_BACKEND_OK) return 0;
+#endif
     if (rsf_xessvk_shutdown() != RSF_BACKEND_OK) return 0;
     stop_creation_requirements();
     // Scene teardown precedes the engine's swapchain destruction. A DLSS owner
@@ -155,6 +240,7 @@ int shutdown() {
     sdk_shutdown_pending = presentation != nullptr;
     if (!sdk_shutdown_pending && rsf_latencyvk_shutdown() != RSF_BACKEND_OK) return 0;
     active = false; current.active_sr = 0; current.sr_result = RSF_BACKEND_ERROR_NOT_READY;
+    rsf_input_dump_cancel(current.session_id);
     device = nullptr; device_proc = nullptr; directory.clear();
     return 1;
 }
@@ -180,6 +266,16 @@ int input(uint64_t frame, uint32_t kind, uint32_t message) { return rsf_latencyv
 uint32_t ping_message() {
     rsf_latencyvk_status latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION};
     return rsf_latencyvk_get_status(&latency) == RSF_BACKEND_OK ? latency.pcl_message : 0;
+}
+void capture_present(const void* info, int32_t result, uint32_t begin) {
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    // Provider-owned Present already captures the application image outside its SDK call.
+    // Nested SDK WSI calls must not re-enter that owner's lock or capture generated frames.
+    std::unique_lock lock(guard, std::try_to_lock);
+    if (lock.owns_lock()) capture_present_impl(nullptr, info, result, begin);
+#else
+    (void)info; (void)result; (void)begin;
+#endif
 }
 }
 extern "C" rsf_godot_vk_proc rsfg_vk_resolver() {
@@ -242,6 +338,18 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
     if (presentation) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const uint32_t selected = fg_backend(requested);
     auto value = *setup;
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    VkSwapchainCreateInfoKHR readable{};
+    if (setup->create_info) {
+        readable = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
+        VkSurfaceCapabilitiesKHR capabilities{};
+        const auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(setup->graphics.instance_proc(setup->graphics.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+        if (get && get(static_cast<VkPhysicalDevice>(setup->graphics.physical_device), readable.surface, &capabilities) == VK_SUCCESS &&
+            (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) readable.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        value.create_info = &readable;
+        setup_capture(value);
+    }
+#endif
     value.graphics.runtime_directory_utf8 = selected == 1 ? streamline_directory.c_str() :
         selected == 4 ? fsr4_directory.c_str() : directory.c_str();
     const rsf_fgvk_host_options host{sizeof(host), RSF_FGVK_HOST_ABI_VERSION, primary_window,
@@ -266,6 +374,21 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
     }
     return code;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" void rsfg_vk_capture_setup(const rsf_fgvk_setup* setup) try {
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    if (!active || !setup || setup->struct_size < sizeof(*setup) || !setup->graphics.instance_proc || !setup->graphics.device_proc) return;
+    std::lock_guard lock(guard); setup_capture(*setup);
+#else
+    (void)setup;
+#endif
+} catch (...) {}
+extern "C" int32_t rsfg_vk_capture_release(void* user) try {
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    std::lock_guard lock(guard); return release_capture(user);
+#else
+    (void)user; return 0;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" int32_t rsfg_vk_images(void* value, uint32_t* count, uint64_t* images) { return rsf_fgvk_images(static_cast<rsf_fgvk*>(value), count, images); }
 extern "C" int32_t rsfg_vk_acquire(void* value, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
     std::lock_guard lock(guard);
@@ -288,7 +411,13 @@ extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
     uint32_t backend = 0;
     if (rsf_fgvk_backend(target, &backend) == RSF_BACKEND_OK && backend == 5)
         (void)rsf_fgvk_latency_marker(target, render_source_frame, 3);
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    capture_present_impl(target, info, 0, 1);
+#endif
     auto result = rsf_fgvk_present(target, info);
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    capture_present_impl(target, info, result, 0);
+#endif
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
     if (rsf_fgvk_get_status(target, &status) == RSF_BACKEND_OK) {
         current.fg_active = status.enabled; current.fg_result = status.result; current.generated_callbacks = status.generated_callbacks;
@@ -303,6 +432,9 @@ extern "C" void rsfg_vk_submitted(void* const* commands, uint32_t count) try {
 extern "C" int32_t rsfg_vk_destroy(void* value) try {
     std::lock_guard lock(guard);
     auto* target = static_cast<rsf_fgvk*>(value);
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    if (target == presentation && release_capture(dump_setup.user) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
+#endif
     auto result = rsf_fgvk_destroy(target);
     if (result == RSF_BACKEND_OK && presentation == target) {
         presentation = nullptr; current.fg_available = current.fg_active = 0;
@@ -340,6 +472,16 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
     auto image = [packet](const rsf_godot_vk_image& value, uint32_t layout) {
         return rsf_srvk_image{packet->device, value.image, value.format, value.width, value.height, layout, value.copy_source};
     };
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    dump_record = record;
+    if (pass.role == RSF_GAME_RENDER_SR) (void)rsf_input_dump_begin_record(&record, requested.sr_backend);
+    (void)dump_stages.wants(record.frame_id); // Poll completed snapshots even after the selected frame.
+    if (rsf_input_dump_wants(&record)) {
+        rsf_input_dump_pass_metadata(&pass);
+        if (pass.role == RSF_GAME_RENDER_FINAL_SCENE)
+            (void)dump_stages.record(static_cast<VkCommandBuffer>(commands), image(packet->color, 5), record, "hudless_color", record.flags);
+    }
+#endif
     if (presentation) {
         const bool enabled = requested.fg_mode && requested.gameplay && pass.screen == RSF_SCREEN_FLIGHT;
         const auto options_result = rsf_fgvk_enable_options(presentation, enabled ? 1u : 0u, requested.generated_frames);
@@ -454,6 +596,7 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
         current.sr_result = RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
     } else current.sr_result = rsf_srvk_evaluate(context, commands, &frame);
+    rsf_input_dump_result(&record, "sr", context_backend, current.sr_result);
     if (current.sr_result == RSF_BACKEND_ERROR_INVALID_ARGUMENT && diagnostics++ < 4 && logger) {
         char message[512];
         std::snprintf(message, sizeof(message), "Vulkan SR input refusal: frame=%llu render=%ux%u plan=%ux%u output=%ux%u formats=%u/%u/%u/%u sizes=%ux%u/%ux%u/%ux%u/%ux%u ms=%.3f near=%.3f far=%.3f fov=%.3f",

@@ -43,6 +43,8 @@ int32_t vk_native_present(uint64_t callback, void* queue, const void* info);
 int32_t vk_wsi_call(int32_t (*callback)(void*), void* user);
 int32_t vk_foreign_call(int32_t (*callback)(void*), void* user);
 bool vk_create(const void *setup, void **owner, uint64_t *chain);
+void vk_capture_setup(const void *setup);
+bool vk_capture_release(void *queue_user);
 int32_t vk_images(void *owner, uint32_t *count, uint64_t *images);
 uint32_t vk_image_layout(void *owner);
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index);

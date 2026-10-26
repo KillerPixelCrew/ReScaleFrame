@@ -56,7 +56,7 @@ typedef uint32_t rsf_dump_view;
 #define RSF_DUMP_VIEW_DEPTH ((rsf_dump_view)4)
 #define RSF_DUMP_VIEW_SCALAR ((rsf_dump_view)5)
 #define RSF_DUMP_VIEW_ALPHA ((rsf_dump_view)6)
-/* Dense pixel displacement has no unwritten sentinel; large negative vectors are valid. */
+/* Dense displacement has no unwritten sentinel; units come from the capture metadata. */
 #define RSF_DUMP_VIEW_DENSE_MOTION ((rsf_dump_view)7)
 /* Anything at or below this is the sentinel a decode pass wrote, not motion. Real screen space
    motion is a fraction of the [-1,1] range, so the gap is several orders of magnitude wide. */
@@ -107,6 +107,16 @@ rsf_dump_texture_result rsf_dump_texture_bytes(void* device, void* context, void
    Requires an immediate context and single-sample subresource zero. */
 rsf_dump_texture_result rsf_dump_texture_png(void* device, void* context, void* texture,
     const rsf_texture_dump_options* options, rsf_texture_dump_report* report);
+
+/* Borrowed CPU readback from any graphics API. Format names the matching DXGI
+   storage encoding, not a device or resource. Rows may include GPU padding. */
+typedef struct rsf_dump_pixels {
+    uint32_t struct_size, width, height, format, row_pitch;
+    uint64_t data_size;
+    const void* data;
+} rsf_dump_pixels;
+rsf_dump_texture_result rsf_dump_pixels_png(const rsf_dump_pixels*,
+    const rsf_texture_dump_options*, rsf_texture_dump_report*);
 
 #ifdef __cplusplus
 } /* extern "C" */

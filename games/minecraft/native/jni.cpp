@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <jni.h>
 #include <rescaleframe/gl_pipeline.h>
+#include <rescaleframe/input_dump.h>
 #include <windows.h>
 #include <string>
 #include <cstdio>
@@ -51,6 +52,7 @@ JNI_METHOD(jlong) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_ope
     Text path(env,root);if(!path.text)return 0;
     if(!logfile) {const std::string file=std::string(path.text)+"/minecraft-native.log";logfile=std::fopen(file.c_str(),"a");}
     rsf_gl_pipeline_setup setup{sizeof(setup),reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)),path.text,log,nullptr,"Minecraft 1.21.1","11e3ed7f-06c6-4863-a54d-2b790f2176f2",reinterpret_cast<void*>(static_cast<uintptr_t>(surface))};
+    rsf_input_dump_configure(nullptr,"Minecraft",nullptr,log,nullptr);
     Pipeline* self=nullptr;const auto result=rsf_gl_pipeline_open(&setup,&self);
     if(result!=RSF_BACKEND_OK) {char message[96];std::snprintf(message,sizeof(message),"Minecraft native open failed: %d",result);log(nullptr,message);}
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(self));

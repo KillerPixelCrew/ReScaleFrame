@@ -372,6 +372,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rs
     if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), info.surface, &supported) != VK_SUCCESS ||
         (supported.supportedUsageFlags & required_usage) != required_usage) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     info.imageUsage |= required_usage;
+    if (supported.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     // Streamline's LL2 create/destroy hooks acquire their own swapchain mutex.
     // The outer WSI broker is only for image/acquire/present operations.
     const auto created = self->create_chain(static_cast<VkDevice>(self->setup.graphics.device),

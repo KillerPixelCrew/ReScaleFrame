@@ -328,8 +328,17 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     for (const auto* mask : {&input->reactive, &input->composition}) if (mask->image &&
         (!valid_image(*self, *mask, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (self->dlss) return rsf_dlssvk_evaluate(self->dlss, commands, input);
-    if (self->xess) return rsf_xessvk_evaluate(self->xess, commands, input);
+    (void)rsf_input_dump_begin_record(record, self->setup.backend);
+    if (rsf_input_dump_wants(record)) {
+        auto capture_list = static_cast<VkCommandBuffer>(commands);
+        (void)self->capture.record(capture_list, input->color, *record, "sr-source-jittered", record->flags & RSF_FRAME_FLAG_RESET);
+        if (input->reactive.image) (void)self->capture.record(capture_list, input->reactive, *record, "sr-reactive-mask", 0);
+        if (input->composition.image) (void)self->capture.record(capture_list, input->composition, *record, "sr-transparency-mask", 0);
+    }
+    if (self->dlss || self->xess) {
+        const auto result = self->dlss ? rsf_dlssvk_evaluate(self->dlss, commands, input) : rsf_xessvk_evaluate(self->xess, commands, input);
+        rsf_input_dump_result(record, "sr", self->setup.backend, result); return result;
+    }
     auto list = static_cast<VkCommandBuffer>(commands);
     if (!self->zero_mask.initialized) {
         transition(*self, list, self->zero_mask.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -356,12 +365,15 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     data.cameraFovAngleVertical = record->camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
     data.reset = (record->flags & RSF_FRAME_FLAG_RESET) || self->last_frame + 1 != record->frame_id || self->last_session != record->session_id ||
         self->last_view != record->view_id || self->last_generation != record->resource_generation;
+    rsf::capture_sr_parameters(*record, self->setup.backend, input->motion_scale_x, input->motion_scale_y, input->pre_exposure, data.reset);
     if (self->capture.wants(record->frame_id)) {
         (void)self->capture.record(list, input->color, *record, "sr-linear-color", data.reset);
         (void)self->capture.record(list, input->depth, *record, "sr-depth", data.reset);
         (void)self->capture.record(list, input->motion, *record, "sr-motion-uv", data.reset);
     }
-    if (self->dispatch(&self->effect, &data.header) != FFX_API_RETURN_OK) { self->last_frame = 0; return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+    if (self->dispatch(&self->effect, &data.header) != FFX_API_RETURN_OK) {
+        self->last_frame = 0; rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_ERROR_FEATURE_FAILED); return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    }
     (void)self->capture.record(list, output, *record, "sr-output-linear", data.reset);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -370,6 +382,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
         reinterpret_cast<VkImage>(static_cast<uintptr_t>(input->output.image)), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
     self->last_frame = record->frame_id; self->last_session = record->session_id; self->last_view = record->view_id; self->last_generation = record->resource_generation;
+    rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_OK);
     return RSF_BACKEND_OK;
 #else
     return RSF_BACKEND_ERROR_NOT_COMPILED;

@@ -185,6 +185,8 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     if (self.evaluate(sl::kFeatureDLSS, frame, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(call.commands)) != sl::Result::eOk) { self.frame = 0; return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     const rsf_srvk_image out{self.setup.device, reinterpret_cast<uint64_t>(self.output.image), VK_FORMAT_R16G16B16A16_SFLOAT,
         record.output_width, record.output_height, VK_IMAGE_LAYOUT_GENERAL, 1};
+    rsf::capture_sr_parameters(record, RSF_SR_DLSS, input.motion_scale_x, input.motion_scale_y, input.pre_exposure, reset);
+    (void)self.capture.record(call.commands, input.color, record, "sr-source-jittered", reset);
     (void)self.capture.record(call.commands, input.color, record, "sr-linear-color", reset);
     (void)self.capture.record(call.commands, input.depth, record, "sr-depth", reset);
     (void)self.capture.record(call.commands, input.motion, record, "sr-motion-uv", reset);

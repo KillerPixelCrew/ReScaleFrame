@@ -1,5 +1,9 @@
 # AC7 website input dump
 
+Superseded by the shared [core frame dump](core-frame-dump.md). The user-run
+26 October retake confirms the corrected separate scene/HUD boundary. The original
+late FG tap below already contains UI and is now exported as `fg_scene_color`.
+
 26 October 2026. Source implementation and synthetic validation, with user-run AC7
 capture acceptance pending. The question is how to export every available SR/FG
 input, native HUD boundary, and final image as named opaque PNGs alongside lossless data.

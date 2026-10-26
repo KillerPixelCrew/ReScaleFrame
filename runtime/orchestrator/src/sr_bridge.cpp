@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/sr_bridge.h>
+#include <rescaleframe/input_dump.h>
 #include <rescaleframe/shared_surface.h>
 #include "../../backends/common/sr_helpers.h"
 #include "../../backends/common/d3d12_helpers.h"
@@ -40,6 +41,7 @@ struct rsf_sr_bridge {
     // A D3D11 signal of `tick` that has not been flushed yet. CPU waits flush it first.
     bool signal_unflushed = false;
     uint32_t auto_exposure = 0;
+    bool hdr = true;
     // Inputs (colour, depth, motion, exposure, output, reactive, transparency) as last validated.
     // Holding the texture keeps its address from being reused by another one while cached.
     struct Validated {
@@ -133,6 +135,7 @@ extern "C" rsf_backend_result rsf_sr_bridge_create(const rsf_sr_session_setup* s
     bridge->device11 = static_cast<ID3D11Device*>(setup->open.device);
     bridge->log = setup->open.log; bridge->log_user = setup->open.log_user;
     bridge->auto_exposure = setup->open.auto_exposure;
+    bridge->hdr = setup->open.hdr != 0;
     bridge->device11->GetImmediateContext(&bridge->immediate);
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
@@ -188,6 +191,19 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
     if (bridge->faulted) return RSF_BACKEND_ERROR_NOT_READY;
     auto result = rsf::validate_frame(frame);
     if (result != RSF_BACKEND_OK) return result;
+    rsf_input_dump_poll();
+    if (rsf_input_dump_requested()) {
+        rsf_sr_session_status status{}; status.struct_size = sizeof(status);
+        rsf_sr_session_get_status(bridge->session, &status);
+        if (rsf_input_dump_begin_record(frame->record, status.effective)) {
+            rsf_input_dump_sr_frame(frame, status.effective, bridge->hdr ? 0u : 1u);
+            rsf_input_dump_texture_record(context_pointer, frame->record, "sr_source_jittered", "D3D11 SR source colour", frame->color.resource, bridge->hdr ? RSF_DUMP_VIEW_HDR : RSF_DUMP_VIEW_RAW, 1);
+            rsf_input_dump_texture_record(context_pointer, frame->record, "sr_color", "D3D11 SR backend colour", frame->color.resource, bridge->hdr ? RSF_DUMP_VIEW_HDR : RSF_DUMP_VIEW_RAW, 1);
+            rsf_input_dump_texture_record(context_pointer, frame->record, "sr_depth", "D3D11 SR device depth", frame->depth.resource, RSF_DUMP_VIEW_DEPTH, 1);
+            rsf_input_dump_texture_record(context_pointer, frame->record, "sr_motion", "D3D11 dense pixel displacement", frame->motion.resource, RSF_DUMP_VIEW_DENSE_MOTION, 1.0f / 32);
+            rsf_input_dump_texture_record(context_pointer, frame->record, "sr_exposure", "D3D11 SR exposure", frame->exposure.resource, RSF_DUMP_VIEW_SCALAR, 1);
+        }
+    }
     // The pointer the device handed out needs no QueryInterface; anything else must be the same
     // context reached through another interface.
     auto* context = bridge->context11.Get();
@@ -304,6 +320,13 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
         // Not flushed here: the game's Present submits it, and only a CPU wait needs it sooner,
         // which wait() covers.
         bridge->signal_unflushed = true;
+    }
+    rsf_sr_session_status capture_status{}; capture_status.struct_size = sizeof(capture_status);
+    if (rsf_input_dump_wants(frame->record)) {
+        rsf_sr_session_get_status(bridge->session, &capture_status);
+        rsf_input_dump_result(frame->record, "sr", capture_status.effective, result);
+        if (result == RSF_BACKEND_OK) rsf_input_dump_texture_record(context_pointer, frame->record, "sr_output",
+            "Reconstructed D3D11 scene before tonemapping", frame->output.resource, bridge->hdr ? RSF_DUMP_VIEW_HDR : RSF_DUMP_VIEW_RAW, 1);
     }
     return result;
 }

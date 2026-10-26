@@ -1,17 +1,27 @@
 # Implementation tracker
 
-## AC7 website input dump, 26 October 2026
+## Core frame dump and AC7 HUD correction, 26 October 2026
 
-F10 exports a named single-source-frame bundle with opaque PNG previews, lossless
-raw buffers, SR/FG camera constants and explicit unavailable inputs. Includes jittered
-HDR source, encoded/sparse/dense vectors, depth, available masks/exposure, SR output,
-native pre-HUD/HUD/alpha/composed stages, FG scene/guides and the final game image.
-[Mechanism and proof limits](research/ac7-website-input-dump.md).
-Windows Release build, WARP/PNG handoff fixture, real overlay fixture, Rust formatting
-and Clippy pass. The 80-case native batch reports 68 passes, 11 opt-in skips and one
-failure in the separate, pre-existing vendor-census hook-installation fixture.
-Proxy/plugin/overlay and SDK dependencies are backed up, deployed and hash-verified
-in the local AC7 installation. No game capture has been performed in this session.
+F10 and the C API now use an orchestrator-owned named frame service across D3D11,
+D3D12, Vulkan and Minecraft's GL/D3D12 bridge. GPU readers keep snapshots through
+real completion and produce opaque PNGs, exact raw rows, camera/SR/FG metadata and
+explicit unavailable stages. New integrations can submit named resources through
+C interfaces. [Contract, boundary correction and evidence](research/core-frame-dump.md).
+
+The user's AC7 retake confirms a genuine pre-UI scene, separate menu raster and final
+image at source frame 7167/native frame 4651. Nimbus composite input one was missing
+from the first exporter; it is now leased alongside input zero. The later actual FG
+input is correctly named `fg_scene_color` and can contain UI. Existing FG routing
+and broad readiness flags are unchanged. The stored HUD alpha is preserved as-is.
+
+The primary 83-case native batch and the independent feature-only 78-case batch
+pass, each with 11 opt-in skips; formatting and Clippy pass. D3D11/WARP, public
+D3D12/WARP, Intel Vulkan with validation/RTSS, and the real hidden OpenGL pipeline
+validate PNG/raw production, identities and completion. Minecraft's 43 checks pass;
+Godot's native add-on and both editor editions build, as does its C# facade.
+AC7, the owned Unity pair and Minecraft's JAR payload are backed up, deployed and
+hash-verified. Godot's package/editors are staged. New Unity/Minecraft/Godot gameplay
+capture acceptance remains open; no user's game was launched or stopped.
 
 ## End-of-day checkpoint, 25 October 2026
 

@@ -114,7 +114,7 @@ struct DlssPresentCapture::State {
         const auto role = packet.generated_index >= 0 ? "fg-generated-present-" + std::to_string(packet.generated_index) : "fg-real-present";
         const rsf_srvk_image image{packet.device, reinterpret_cast<uint64_t>(actual_images[info.pImageIndices[0]]), uint32_t(chain_info.imageFormat),
             chain_info.imageExtent.width, chain_info.imageExtent.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, 1};
-        const bool recorded = capture.record(work->commands, image, identity, role.c_str(), identity.flags & RSF_FRAME_FLAG_RESET);
+        const bool recorded = capture.record(work->commands, image, identity, role.c_str(), identity.flags & RSF_FRAME_FLAG_RESET, false);
         result = end(work->commands);
         if (!recorded || result != VK_SUCCESS) { failure(packet.source_frame, "record", result); return real_present(info); }
         std::vector<VkPipelineStageFlags> stages(info.waitSemaphoreCount, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);

@@ -79,8 +79,9 @@ int main(int argc, char** argv)
     auto reactive = image(DXGI_FORMAT_R8_UNORM, mask.data(), 4);
     auto ui = image(DXGI_FORMAT_R8G8B8A8_UNORM, hud.data(), 16);
     if (!passed) return 1;
-    const auto root = std::filesystem::path(argv[1]) / ("input-dump-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()));
-    rsf_input_dump_configure(root.string().c_str(), "AC7", "fixture", nullptr, nullptr);
+    const auto root = std::filesystem::path(argv[1]) / ("input-dump-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64())) / std::filesystem::path(u8"preview-\u03a9");
+    const auto root_utf8 = root.u8string();
+    rsf_input_dump_configure(reinterpret_cast<const char*>(root_utf8.c_str()), "AC7", "fixture", nullptr, nullptr);
     rsf_input_dump_request();
     rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
     pass.session_id = 9; pass.source_frame_id = 101; pass.native_frame = 33; pass.view_key = 11;
@@ -125,17 +126,17 @@ int main(int argc, char** argv)
     pass.role = RSF_GAME_RENDER_WINDOW; pass.window_key = 14; pass.rhi_viewport_key = 15; pass.swapchain = chain.Get();
     wrong = pass; wrong.source_frame_id = 102;
     check(rsf_native_window_scope(&wrong, 1) != 0, "Begin different window frame.");
-    rsf_input_dump_present(chain.Get(), context.Get());
+    rsf_input_dump_present(chain.Get(), context.Get(), &wrong);
     rsf_native_window_scope(&wrong, 0);
     check(!std::filesystem::exists(bundle / "final_color.bin"), "A different presented frame must not complete the bundle.");
     check(rsf_native_window_scope(&pass, 1) != 0, "Begin matched window.");
-    rsf_input_dump_present(chain.Get(), context.Get());
+    rsf_input_dump_present(chain.Get(), context.Get(), &pass);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.session_id = 9; record.frame_id = 101;
     record.render_width = record.output_width = 4; record.render_height = record.output_height = 2; record.frame_time_ms = 16.67f;
     rsf_fg_frame fg{}; fg.struct_size = sizeof(fg); fg.record = &record; fg.interpolate = 1;
     fg.motion_scale_x = fg.motion_scale_y = 1;
     rsf_input_dump_fg_prepare(&pass, &fg, 0);
-    rsf_input_dump_presented(chain.Get(), S_OK); rsf_native_window_scope(&pass, 0);
+    rsf_input_dump_presented(&pass, S_OK); rsf_native_window_scope(&pass, 0);
     const auto metadata = read(bundle / "manifest.json");
     check(metadata.find("\"status\":\"complete\"") != std::string::npos, "Matched handoffs must complete the manifest.");
     check(metadata.find("\"status\":\"unavailable\"") != std::string::npos, "Absent optional inputs must be explicit.");
@@ -156,7 +157,37 @@ int main(int argc, char** argv)
         "Valid zero motion and the unwritten sentinel must stay distinct.");
     const auto dense_png = png(bundle / "sr_motion.png", 4, 2);
     check(dense_png[12] == 0 && dense_png[13] == 0 && dense_png[14] == 128, "Large negative dense displacement must remain valid motion.");
-    png(bundle / "hud_color.png", 4, 2); png(bundle / "fg_hudless_color.png", 4, 2); png(bundle / "final_color.png", 4, 2);
+    png(bundle / "hud_color.png", 4, 2); png(bundle / "fg_scene_color.png", 4, 2); png(bundle / "final_color.png", 4, 2);
+    rsf_input_dump_request();
+    rsf_frame_record generic{}; generic.struct_size = sizeof(generic); generic.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    generic.session_id = 29; generic.frame_id = 30; generic.view_id = 31; generic.resource_generation = 2;
+    check(rsf_input_dump_begin_record(&generic, 2) != 0, "D3D11 uses the same generic core owner without AC7 scopes.");
+    auto mismatched = generic; ++mismatched.resource_generation;
+    check(!rsf_input_dump_wants(&mismatched), "A changed resource generation must not complete the selected frame.");
+    mismatched = generic; ++mismatched.abi_version;
+    check(!rsf_input_dump_wants(&mismatched), "Generic image submission must reject a different frame ABI.");
+    check(rsf_input_dump_texture_record(context.Get(), &generic, "final_color", "Generic D3D11 final", ui.Get(), RSF_DUMP_VIEW_RAW, 1) != 0,
+        "Capture actual D3D11 pixels through the core C ABI.");
+    rsf_input_dump_complete(&generic, 0);
+    rsf_input_dump_request(); ++generic.frame_id;
+    check(rsf_input_dump_begin_record(&generic, 2) != 0, "Start a later capture request.");
+    const auto abandoned = rsf_input_dump_reserve(&generic, "pending", "unsubmitted readback", RSF_DUMP_VIEW_RAW, 1);
+    check(abandoned != 0, "Reserve a pending image for cancellation.");
+    const auto submitted_images = rsf_input_dump_gpu_submission(&generic);
+    const auto late = rsf_input_dump_reserve(&generic, "later", "copy recorded after the completion point", RSF_DUMP_VIEW_RAW, 1);
+    void* fixture_device = reinterpret_cast<void*>(uintptr_t(1));
+    rsf_input_dump_gpu_completed(submitted_images, 3, fixture_device);
+    check(rsf_input_dump_gpu_ready(abandoned, "pending", 3, fixture_device) != 0 &&
+        !rsf_input_dump_gpu_ready(late, "later", 3, fixture_device), "A fence may certify only the reservations in its submission token.");
+    check(!rsf_input_dump_gpu_ready(abandoned, "pending", 3, reinterpret_cast<void*>(uintptr_t(2))), "Another device's fence must not certify a readback.");
+    rsf_input_dump_cancel(generic.session_id + 1);
+    check(rsf_input_dump_requested() != 0, "Another session must not cancel this capture.");
+    rsf_input_dump_cancel(generic.session_id);
+    check(!rsf_input_dump_requested(), "Owner cancellation must release its capture request.");
+    rsf_input_dump_gpu_completed(submitted_images, 3, fixture_device);
+    check(!rsf_input_dump_gpu_ready(abandoned, "pending", 3, fixture_device), "A cancelled submission token must not regain ownership.");
+    rsf_dump_pixels stale{}; stale.struct_size = sizeof(stale);
+    check(!rsf_input_dump_pixels(abandoned, "pending", &stale, 1, 0), "Cancelled GPU completions must not populate a later bundle.");
     rsf_texture_dump_options options{sizeof(options), RSF_TEXTURE_DUMP_ABI_VERSION, "unused", RSF_DUMP_VIEW_RAW, 1, nullptr, nullptr};
     ComPtr<ID3D11DeviceContext> deferred; device->CreateDeferredContext(0, &deferred);
     check(rsf_dump_texture_png(device.Get(), deferred.Get(), color.Get(), &options, nullptr) == RSF_TEXTURE_ERROR_INVALID_ARGUMENT,
@@ -167,7 +198,8 @@ int main(int argc, char** argv)
         auto* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data()); info->GetMessage(i, message, &length);
         check(message->Severity != D3D11_MESSAGE_SEVERITY_ERROR && message->Severity != D3D11_MESSAGE_SEVERITY_CORRUPTION, message->pDescription);
     }
-    std::printf("Website fixture bundle: %s\n", bundle.string().c_str());
+    const auto bundle_utf8 = bundle.u8string();
+    std::printf("Website fixture bundle: %s\n", reinterpret_cast<const char*>(bundle_utf8.c_str()));
     rsf_native_window_reset(); buffer.Reset(); chain.Reset(); context->ClearState(); context.Reset(); device.Reset();
     DestroyWindow(window); CoUninitialize();
     return passed ? 0 : 1;

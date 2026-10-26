@@ -14,6 +14,7 @@ reinsertion. Shared SR/FG APIs accept no game signature or private engine addres
 | `native_composition`, `native_translucency` | Native composition and translucency inputs |
 | `gpu_policy`, `unity_sr_host`, `overlay_d3d12` | Actual-adapter Auto policy, Unity hosting and shared overlay drawing |
 | `runtime` | DLL version entry point; other services are exported by their own modules |
+| `input_dump`, `input_dump_vulkan`, `FrameDump` | Shared F10/API frame capture, named opaque PNG/raw images, camera metadata and completion tickets |
 
 Direct SR sessions consume matching frame/view records, pre-tonemap colour, device depth, dense
 previous-minus-current render-pixel motion, jitter and exposure conventions. Callers own resources
@@ -37,3 +38,9 @@ the version shim. Product bootstrap, standalone launching and WSGM IPC remain pl
 recorded game/device acceptance. See [SR evidence](../../docs/research/orchestrator-sr-switching.md),
 [bridge/FSR4 correction](../../docs/research/sr-interop-performance-20261002.md) and
 [shared FG corrections](../../docs/research/shared-fg-20261004.md).
+
+F10 captures a named frame bundle through the owning runtime. D3D11, D3D12,
+Vulkan and the OpenGL/D3D12 bridge share the same storage and metadata service.
+New integrations can submit additional named resources through the C API without
+changing vendor backends. Unproduced HUD/guide resources remain explicit in the
+manifest. See the [capture contract and evidence](../../docs/research/core-frame-dump.md).

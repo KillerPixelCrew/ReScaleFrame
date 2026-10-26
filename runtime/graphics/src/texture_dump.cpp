@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 // Defined in texture_dump_raw.cpp, shared so both dumpers accept the same formats.
 namespace rsf {
@@ -231,7 +232,7 @@ uint8_t clamp_byte(float value)
 bool write_targa(const std::string& path, uint32_t width, uint32_t height,
                  const std::vector<uint8_t>& bgra)
 {
-    std::FILE* stream = std::fopen(path.c_str(), "wb");
+    std::FILE* stream = _wfopen(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())).c_str(), L"wb");
     if (!stream) {
         return false;
     }
@@ -284,6 +285,132 @@ float display_hdr(float value)
 }
 
 } // namespace
+
+static rsf_dump_texture_result write_pixels(const D3D11_TEXTURE2D_DESC& desc,
+    const D3D11_MAPPED_SUBRESOURCE& mapped, const rsf_texture_dump_options* options,
+    rsf_texture_dump_report* report, bool png)
+{
+    const uint32_t stride = rsf::texture_pixel_bytes(desc.Format);
+    const uint8_t probe_pixel[16]{}; Sample probe{};
+    if (!stride || !decode(desc.Format, probe_pixel, probe)) return RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT;
+    if (!mapped.pData || !desc.Width || !desc.Height || mapped.RowPitch < uint64_t(desc.Width) * stride ||
+        uint64_t(desc.Width) * desc.Height * 4 > 256ull * 1024 * 1024) return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    const float scale = options->scale != 0.0f ? options->scale : 1.0f;
+    std::vector<uint8_t> image(static_cast<size_t>(desc.Width) * desc.Height * 4u);
+    float min_x = 1e30f, max_x = -1e30f, min_y = 1e30f, max_y = -1e30f;
+    size_t unwritten = 0;
+
+    for (uint32_t y = 0; y < desc.Height; ++y) {
+        const auto* row = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch;
+        for (uint32_t x = 0; x < desc.Width; ++x) {
+            Sample sample{};
+            if (!decode(desc.Format, row + size_t(x) * stride, sample)) {
+                continue;
+            }
+            float red = sample.x;
+            float green = sample.y;
+            if (options->view == RSF_DUMP_VIEW_DECODED_MOTION) {
+                // Already decoded, so the only thing to recognise is the sentinel a decode pass
+                // wrote where the source held its clear value.
+                if (red <= RSF_DUMP_DECODED_SENTINEL_THRESHOLD) {
+                    ++unwritten;
+                    uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
+                    pixel[0] = 220;  // blue, the same marker the velocity view uses
+                    pixel[1] = 0;
+                    pixel[2] = 0;
+                    pixel[3] = 255;
+                    continue;
+                }
+            }
+            if (options->view == RSF_DUMP_VIEW_VELOCITY) {
+                if (!sample.written) {
+                    ++unwritten;
+                    // Unwritten pixels are marked rather than drawn as motion, so the sentinel is
+                    // visible instead of reading as a large negative velocity. Blue, because the
+                    // motion channels are red and green and a marker sharing them reads as
+                    // motion that is not there.
+                    uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
+                    pixel[0] = 220;  // blue
+                    pixel[1] = 0;
+                    pixel[2] = 0;
+                    pixel[3] = 255;
+                    continue;
+                }
+                red = (sample.x - velocity_bias) / velocity_scale;
+                green = (sample.y - velocity_bias) / velocity_scale;
+            }
+            if (std::isfinite(red)) { if (red < min_x) min_x = red; if (red > max_x) max_x = red; }
+            if (std::isfinite(green)) { if (green < min_y) min_y = green; if (green > max_y) max_y = green; }
+
+            uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
+            if (options->view == RSF_DUMP_VIEW_VELOCITY ||
+                options->view == RSF_DUMP_VIEW_DECODED_MOTION || options->view == RSF_DUMP_VIEW_DENSE_MOTION) {
+                // Zero motion sits at mid grey so sign is readable at a glance.
+                pixel[2] = clamp_byte(128.0f + red * scale * 127.0f);
+                pixel[1] = clamp_byte(128.0f + green * scale * 127.0f);
+                pixel[0] = 128;
+            } else {
+                // Scene colour is linear and can exceed one, so this clips rather than tonemaps.
+                // Good enough to see whether an upscaled frame is the scene at all, which is the
+                // question being asked, and not a judgement of its brightness.
+                float blue = sample.z;
+                if (options->view == RSF_DUMP_VIEW_HDR) {
+                    red = display_hdr(red * scale); green = display_hdr(green * scale); blue = display_hdr(blue * scale);
+                } else if (options->view == RSF_DUMP_VIEW_DEPTH) {
+                    red = green = blue = std::isfinite(red) && red > 0 ? std::log2(1.0f + red * 65535.0f) / 16.0f : 0;
+                } else if (options->view == RSF_DUMP_VIEW_ALPHA) {
+                    red = green = blue = sample.alpha;
+                } else if (options->view == RSF_DUMP_VIEW_SCALAR) {
+                    red *= scale; green = blue = red;
+                } else { red *= scale; green *= scale; blue *= scale; }
+                pixel[2] = clamp_byte(red * 255.0f);
+                pixel[1] = clamp_byte(green * 255.0f);
+                pixel[0] = clamp_byte(blue * 255.0f);
+            }
+            pixel[3] = 255;
+        }
+    }
+
+
+    // Nothing contributed a value, so the running extremes are still their starting sentinels.
+    // Reporting those as a range would read as an enormous motion rather than as no data.
+    if (min_x > max_x) {
+        min_x = max_x = min_y = max_y = 0.0f;
+    }
+
+    const std::string prefix = options->output_prefix_utf8;
+    rsf::say(options->log, options->log_user, "dump: writing %s.%s", prefix.c_str(), png ? "png" : "tga");
+    if (!(png ? write_png(prefix + ".png", desc.Width, desc.Height, image) :
+        write_targa(prefix + ".tga", desc.Width, desc.Height, image))) {
+        return RSF_TEXTURE_ERROR_WRITE_FAILED;
+    }
+
+    const size_t total = size_t(desc.Width) * desc.Height;
+    const float fraction = total ? float(unwritten) / float(total) : 0.0f;
+    if (std::FILE* stream = _wfopen(std::filesystem::path(reinterpret_cast<const char8_t*>((prefix + ".json").c_str())).c_str(), L"wb")) {
+        std::fprintf(stream,
+                     "{\n  \"width\": %u,\n  \"height\": %u,\n  \"format\": %u,\n"
+                     "  \"view\": %u,\n  \"fraction_unwritten\": %.4f,\n"
+                     "  \"x_range\": [%.4f, %.4f],\n  \"y_range\": [%.4f, %.4f]\n}\n",
+                     desc.Width, desc.Height, unsigned(desc.Format), options->view,
+                     double(fraction), double(min_x), double(max_x), double(min_y), double(max_y));
+        std::fclose(stream);
+    }
+
+    if (report && report->struct_size >= sizeof(rsf_texture_dump_report)) {
+        report->width = desc.Width;
+        report->height = desc.Height;
+        report->format = static_cast<uint32_t>(desc.Format);
+        report->bytes_written = static_cast<uint32_t>(image.size());
+        report->fraction_unwritten = fraction;
+        report->min_x = min_x;
+        report->max_x = max_x;
+        report->min_y = min_y;
+        report->max_y = max_y;
+    }
+    rsf::say(options->log, options->log_user, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
+    return RSF_TEXTURE_OK;
+}
 
 static rsf_dump_texture_result dump_texture(void* device_pointer, void* context_pointer,
                                                     void* texture_pointer,
@@ -377,123 +504,7 @@ static rsf_dump_texture_result dump_texture(void* device_pointer, void* context_
     if (mapped.RowPitch < uint64_t(desc.Width) * stride) return RSF_TEXTURE_ERROR_MAP_FAILED;
     rsf::say(options->log, options->log_user, "dump: decoding %u rows", desc.Height);
 
-    const float scale = options->scale != 0.0f ? options->scale : 1.0f;
-    std::vector<uint8_t> image(static_cast<size_t>(desc.Width) * desc.Height * 4u);
-    float min_x = 1e30f, max_x = -1e30f, min_y = 1e30f, max_y = -1e30f;
-    size_t unwritten = 0;
-
-    for (uint32_t y = 0; y < desc.Height; ++y) {
-        const auto* row = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch;
-        for (uint32_t x = 0; x < desc.Width; ++x) {
-            Sample sample{};
-            if (!decode(desc.Format, row + size_t(x) * stride, sample)) {
-                continue;
-            }
-            float red = sample.x;
-            float green = sample.y;
-            if (options->view == RSF_DUMP_VIEW_DECODED_MOTION) {
-                // Already decoded, so the only thing to recognise is the sentinel a decode pass
-                // wrote where the source held its clear value.
-                if (red <= RSF_DUMP_DECODED_SENTINEL_THRESHOLD) {
-                    ++unwritten;
-                    uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
-                    pixel[0] = 220;  // blue, the same marker the velocity view uses
-                    pixel[1] = 0;
-                    pixel[2] = 0;
-                    pixel[3] = 255;
-                    continue;
-                }
-            }
-            if (options->view == RSF_DUMP_VIEW_VELOCITY) {
-                if (!sample.written) {
-                    ++unwritten;
-                    // Unwritten pixels are marked rather than drawn as motion, so the sentinel is
-                    // visible instead of reading as a large negative velocity. Blue, because the
-                    // motion channels are red and green and a marker sharing them reads as
-                    // motion that is not there.
-                    uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
-                    pixel[0] = 220;  // blue
-                    pixel[1] = 0;
-                    pixel[2] = 0;
-                    pixel[3] = 255;
-                    continue;
-                }
-                red = (sample.x - velocity_bias) / velocity_scale;
-                green = (sample.y - velocity_bias) / velocity_scale;
-            }
-            if (std::isfinite(red)) { if (red < min_x) min_x = red; if (red > max_x) max_x = red; }
-            if (std::isfinite(green)) { if (green < min_y) min_y = green; if (green > max_y) max_y = green; }
-
-            uint8_t* pixel = &image[(size_t(y) * desc.Width + x) * 4u];
-            if (options->view == RSF_DUMP_VIEW_VELOCITY ||
-                options->view == RSF_DUMP_VIEW_DECODED_MOTION || options->view == RSF_DUMP_VIEW_DENSE_MOTION) {
-                // Zero motion sits at mid grey so sign is readable at a glance.
-                pixel[2] = clamp_byte(128.0f + red * scale * 127.0f);
-                pixel[1] = clamp_byte(128.0f + green * scale * 127.0f);
-                pixel[0] = 128;
-            } else {
-                // Scene colour is linear and can exceed one, so this clips rather than tonemaps.
-                // Good enough to see whether an upscaled frame is the scene at all, which is the
-                // question being asked, and not a judgement of its brightness.
-                float blue = sample.z;
-                if (options->view == RSF_DUMP_VIEW_HDR) {
-                    red = display_hdr(red * scale); green = display_hdr(green * scale); blue = display_hdr(blue * scale);
-                } else if (options->view == RSF_DUMP_VIEW_DEPTH) {
-                    red = green = blue = std::isfinite(red) && red > 0 ? std::log2(1.0f + red * 65535.0f) / 16.0f : 0;
-                } else if (options->view == RSF_DUMP_VIEW_ALPHA) {
-                    red = green = blue = sample.alpha;
-                } else if (options->view == RSF_DUMP_VIEW_SCALAR) {
-                    red *= scale; green = blue = red;
-                } else { red *= scale; green *= scale; blue *= scale; }
-                pixel[2] = clamp_byte(red * 255.0f);
-                pixel[1] = clamp_byte(green * 255.0f);
-                pixel[0] = clamp_byte(blue * 255.0f);
-            }
-            pixel[3] = 255;
-        }
-    }
-
-    context->Unmap(readable.Get(), 0); mapping.texture = nullptr;
-    readable.Reset();
-
-    // Nothing contributed a value, so the running extremes are still their starting sentinels.
-    // Reporting those as a range would read as an enormous motion rather than as no data.
-    if (min_x > max_x) {
-        min_x = max_x = min_y = max_y = 0.0f;
-    }
-
-    const std::string prefix = options->output_prefix_utf8;
-    rsf::say(options->log, options->log_user, "dump: writing %s.%s", prefix.c_str(), png ? "png" : "tga");
-    if (!(png ? write_png(prefix + ".png", desc.Width, desc.Height, image) :
-        write_targa(prefix + ".tga", desc.Width, desc.Height, image))) {
-        return RSF_TEXTURE_ERROR_WRITE_FAILED;
-    }
-
-    const size_t total = size_t(desc.Width) * desc.Height;
-    const float fraction = total ? float(unwritten) / float(total) : 0.0f;
-    if (std::FILE* stream = std::fopen((prefix + ".json").c_str(), "wb")) {
-        std::fprintf(stream,
-                     "{\n  \"width\": %u,\n  \"height\": %u,\n  \"format\": %u,\n"
-                     "  \"view\": %u,\n  \"fraction_unwritten\": %.4f,\n"
-                     "  \"x_range\": [%.4f, %.4f],\n  \"y_range\": [%.4f, %.4f]\n}\n",
-                     desc.Width, desc.Height, unsigned(desc.Format), options->view,
-                     double(fraction), double(min_x), double(max_x), double(min_y), double(max_y));
-        std::fclose(stream);
-    }
-
-    if (report && report->struct_size >= sizeof(rsf_texture_dump_report)) {
-        report->width = desc.Width;
-        report->height = desc.Height;
-        report->format = static_cast<uint32_t>(desc.Format);
-        report->bytes_written = static_cast<uint32_t>(image.size());
-        report->fraction_unwritten = fraction;
-        report->min_x = min_x;
-        report->max_x = max_x;
-        report->min_y = min_y;
-        report->max_y = max_y;
-    }
-    rsf::say(options->log, options->log_user, "dump: done, %.1f%% unwritten", double(fraction) * 100.0);
-    return RSF_TEXTURE_OK;
+    return write_pixels(desc, mapped, options, report, png);
 }
 
 extern "C" rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* texture,
@@ -505,3 +516,16 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_png(void* device, void* cont
     const rsf_texture_dump_options* options, rsf_texture_dump_report* report) try
 { return dump_texture(device, context, texture, options, report, true); }
 catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }
+
+extern "C" rsf_dump_texture_result rsf_dump_pixels_png(const rsf_dump_pixels* pixels,
+    const rsf_texture_dump_options* options, rsf_texture_dump_report* report) try
+{
+    if (!pixels || pixels->struct_size < sizeof(*pixels) || !options || options->struct_size < sizeof(*options) ||
+        !options->output_prefix_utf8 || !pixels->height || pixels->data_size < uint64_t(pixels->row_pitch) * (pixels->height - 1) +
+            uint64_t(pixels->width) * rsf::texture_pixel_bytes(DXGI_FORMAT(pixels->format)))
+        return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    if (options->abi_version != RSF_TEXTURE_DUMP_ABI_VERSION) return RSF_TEXTURE_ERROR_ABI_MISMATCH;
+    D3D11_TEXTURE2D_DESC desc{}; desc.Width = pixels->width; desc.Height = pixels->height; desc.Format = DXGI_FORMAT(pixels->format);
+    D3D11_MAPPED_SUBRESOURCE mapped{const_cast<void*>(pixels->data), pixels->row_pitch, 0};
+    return write_pixels(desc, mapped, options, report, true);
+} catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }

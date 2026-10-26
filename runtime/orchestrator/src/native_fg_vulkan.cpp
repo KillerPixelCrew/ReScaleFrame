@@ -224,7 +224,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
                 uint32_t(VK_FORMAT_R8G8B8A8_UNORM), source.description.width, source.description.height, VK_IMAGE_LAYOUT_GENERAL, 1};
             // The generated output uses the actual swapchain channel order.
             if (source.description.format == FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM) image.format = VK_FORMAT_B8G8R8A8_UNORM;
-            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, slot.record, "fg-generated-before-ui", data->reset);
+            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, slot.record, "fg-generated-before-ui", data->reset, false);
         }
     }
     return result;

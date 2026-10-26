@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 #include <cstdio>
 #include <string>
+#include <filesystem>
 
 using Microsoft::WRL::ComPtr;
 namespace rsf {
@@ -77,7 +78,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(
     mapping.mapped = true;
     if (data.RowPitch < row_bytes) return RSF_TEXTURE_ERROR_MAP_FAILED;
     const std::string prefix = options->output_prefix_utf8;
-    File binary{std::fopen((prefix + ".bin").c_str(), "wb")};
+    File binary{_wfopen(std::filesystem::path(reinterpret_cast<const char8_t*>((prefix + ".bin").c_str())).c_str(), L"wb")};
     if (!binary.value) return RSF_TEXTURE_ERROR_WRITE_FAILED;
     for (uint32_t row = 0; row < desc.Height; ++row) {
         const auto* source = static_cast<const unsigned char*>(data.pData) + size_t(row) * data.RowPitch;
@@ -85,7 +86,7 @@ extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(
             return RSF_TEXTURE_ERROR_WRITE_FAILED;
     }
     if (!binary.close()) return RSF_TEXTURE_ERROR_WRITE_FAILED;
-    File metadata{std::fopen((prefix + "_raw.json").c_str(), "wb")};
+    File metadata{_wfopen(std::filesystem::path(reinterpret_cast<const char8_t*>((prefix + "_raw.json").c_str())).c_str(), L"wb")};
     if (!metadata.value) return RSF_TEXTURE_ERROR_WRITE_FAILED;
     const int written = std::fprintf(metadata.value,
         "{\"width\":%u,\"height\":%u,\"format\":%u,\"row_pitch\":%llu,"

@@ -1,4 +1,15 @@
 {
+  "frame_dump": {
+    "hotkey": "F10",
+    "owner": "shared orchestrator frame dump",
+    "research": "docs/research/core-frame-dump.md",
+    "menu_scene_source": "Nimbus composite graph input zero before UI composition",
+    "menu_hud_source": "Nimbus composite graph input one, with an owned pool lease",
+    "confirmed_capture": "scene-20261026-195414-807-357872500",
+    "source_frame_id": 7167,
+    "native_frame": 4651,
+    "scope": "Inspected user-run 1600x900 hangar retake: pre-UI scene, separate HUD raster and final image. Stored alpha remains native. Later actual FG scene can already contain UI; FG routing is unchanged."
+  },
   "current_validation": {
     "audited": "2026-10-07",
     "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",

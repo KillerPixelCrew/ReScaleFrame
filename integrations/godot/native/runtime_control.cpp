@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "runtime_control.h"
 #include "api.h"
+#include <rescaleframe/input_dump.h>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/variant/callable_method_pointer.hpp>
 
 namespace rsf {
 using namespace godot;
+namespace { void capture_on_render_thread() { rsf_input_dump_request(); } }
 void ReScaleFrameRuntime::_bind_methods()
 {
     ClassDB::bind_method(D_METHOD("configure", "options", "viewport"), &ReScaleFrameRuntime::configure);
     ClassDB::bind_method(D_METHOD("get_status"), &ReScaleFrameRuntime::get_status);
     ClassDB::bind_method(D_METHOD("reset_history"), &ReScaleFrameRuntime::reset_history);
     ClassDB::bind_method(D_METHOD("request_latency_ping"), &ReScaleFrameRuntime::request_latency_ping);
+    ClassDB::bind_method(D_METHOD("request_frame_dump"), &ReScaleFrameRuntime::request_frame_dump);
 }
 bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
 {
@@ -78,4 +82,8 @@ Dictionary ReScaleFrameRuntime::get_status() const
 }
 void ReScaleFrameRuntime::reset_history() { rsfg_reset_history(); }
 bool ReScaleFrameRuntime::request_latency_ping() { return rsfg_request_latency_ping() != 0; }
+void ReScaleFrameRuntime::request_frame_dump() {
+    if (auto* rendering = RenderingServer::get_singleton())
+        rendering->call_on_render_thread(callable_mp_static(&capture_on_render_thread));
+}
 }

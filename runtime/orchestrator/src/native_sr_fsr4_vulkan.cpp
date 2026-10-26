@@ -248,7 +248,9 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         frame->output.format != VK_FORMAT_R16G16B16A16_SFLOAT || frame->output.width != record.output_width ||
         frame->output.height != record.output_height || frame->output.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    (void)rsf_input_dump_begin_record(&record, 4);
     const auto commands = static_cast<VkCommandBuffer>(current_commands);
+    (void)self->capture.record(commands, frame->color, record, "sr-source-jittered", record.flags & RSF_FRAME_FLAG_RESET);
     const uint32_t reset = record.flags & RSF_FRAME_FLAG_RESET;
     (void)self->capture.record(commands, frame->color, record, "sr-linear-color", reset);
     (void)self->capture.record(commands, frame->depth, record, "sr-depth", reset);
@@ -301,6 +303,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     // source of that exact whole-image copy, whose allocation supports reads.
     const rsf_srvk_image captured_output{self->setup.device, reinterpret_cast<uint64_t>(output.image),
         VK_FORMAT_R16G16B16A16_SFLOAT, output.width, output.height, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1};
+    rsf::capture_sr_parameters(record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, dispatch.reset);
     (void)self->capture.record(continuation, captured_output, record, "sr-output-linear", dispatch.reset);
     transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, false, true);
     return 0;

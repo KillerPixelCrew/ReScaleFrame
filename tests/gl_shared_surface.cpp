@@ -4,6 +4,7 @@
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/sr_session.h>
+#include <rescaleframe/input_dump.h>
 #include <windows.h>
 #include <GL/gl.h>
 #include <d3d12.h>
@@ -16,6 +17,9 @@
 #include <atomic>
 #include <thread>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 using Microsoft::WRL::ComPtr;
 extern "C" __declspec(dllexport) DWORD NvOptimusEnablement=1;
 extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
@@ -134,6 +138,11 @@ int main() try {
         require(rsf_gl_window_create(window.window)==nullptr,"reject window creation on the wrong event thread");
         rsf_gl_pipeline_setup pipeline_setup{sizeof(pipeline_setup),window.window,runtime,log,nullptr,"Minecraft 1.21.1","11e3ed7f-06c6-4863-a54d-2b790f2176f2",child};
         rsf_gl_pipeline* pipeline=nullptr;require(rsf_gl_pipeline_open(&pipeline_setup,&pipeline)==RSF_BACKEND_OK,"GL window must accept framework DXGI presentation");
+        std::filesystem::path capture_root;
+        if(const char* path=std::getenv("RSF_GL_CAPTURE_DIR")) {
+            capture_root=path;rsf_input_dump_configure(path,"OpenGLFixture","fixture",log,nullptr);
+        }
+        bool capture_requested=false;
         uint64_t frame=0;
         GLuint held_framebuffer=0;gen(1,&held_framebuffer);
         const uint32_t scenarios[][4]={{0,0,1280,720},{2,0,1280,720},{3,0,1280,720},{5,0,1280,720},{1,0,1280,720},
@@ -180,6 +189,7 @@ int main() try {
             camera.near_plane=.05f;camera.far_plane=1024;camera.vertical_fov_radians=1;camera.frame_time_seconds=.016f;
             pass.motion_to_uv[0]=1.0f/surfaces.render_width;pass.motion_to_uv[1]=1.0f/surfaces.render_height;
             for(uint32_t iteration=0;iteration<(generation_backend?16u:3u);++iteration) {
+                if(!capture_root.empty()&&!capture_requested&&backend==3&&iteration==0) {rsf_input_dump_request();capture_requested=true;}
                 pass.native_frame=pass.source_frame_id=++frame;pass.flags=iteration?0:RSF_GAME_RENDER_RESET;
                 for(uint32_t stage:{0u,6u,1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 require(rsf_gl_pipeline_evaluate(pipeline,&pass)==RSF_BACKEND_OK,"real vendor SR evaluate from GL shared inputs");
@@ -218,6 +228,16 @@ int main() try {
         }
         bind(0x8d40,0);remove(1,&held_framebuffer);
         require(rsf_gl_pipeline_close(pipeline)==RSF_BACKEND_OK,"close GL native pipeline");
+        if(capture_requested) {
+            std::filesystem::path bundle;
+            for(const auto& entry:std::filesystem::directory_iterator(capture_root/"website"))if(entry.is_directory())bundle=entry.path();
+            auto read=[](const std::filesystem::path& path) {std::ifstream in(path,std::ios::binary);return std::string(std::istreambuf_iterator<char>(in),{});};
+            require(read(bundle/"manifest.json").find("\"status\":\"complete\"")!=std::string::npos,"OpenGL frame bundle must retire all actual GPU readbacks");
+            require(std::filesystem::file_size(bundle/"sr_source_jittered.bin")>0&&std::filesystem::file_size(bundle/"hudless_color.bin")>0&&
+                std::filesystem::file_size(bundle/"final_color.bin")>0,"OpenGL source, HUD-less and final images must be present");
+            require(read(bundle/"sr_parameters.json").find("\"input_sdr\":1")!=std::string::npos,"Preserve Minecraft's declared SDR input instead of inferring HDR from float storage");
+            std::printf("PASS: OpenGL core frame dump: %s\n",bundle.string().c_str());
+        }
         } catch(...) {render_error=std::current_exception();}
         wglMakeCurrent(nullptr,nullptr);done.store(true,std::memory_order_release);
         });

@@ -7,6 +7,7 @@ var initial_backend := 2
 var second_backend := 3
 var resized_backend := 3
 var expect_sr_failure := false
+var capture_frame_dump := false
 
 func _matrix(value: Projection) -> Array[float]:
     var values: Array[float] = []
@@ -22,6 +23,8 @@ func _ready() -> void:
     for argument: String in OS.get_cmdline_user_args():
         if argument == "--expect-sr-failure":
             expect_sr_failure = true
+        if argument == "--frame-dump":
+            capture_frame_dump = true
         if argument.begins_with("--initial-sr="):
             initial_backend = argument.trim_prefix("--initial-sr=").to_int()
     _select(initial_backend)
@@ -76,6 +79,8 @@ func _process(_delta: float) -> void:
         "projection": _matrix(camera.get_camera_projection()), "box_world": _matrix(Projection(moving_box.global_transform))})
     var status: Dictionary = runtime.call("get_status")
     label.text = "Godot native SR: %s\nEvaluated %s, refused %s" % [status.get("active_sr", 0), status.get("evaluated_frames", 0), status.get("refused_frames", 0)]
+    if frame == 30 and capture_frame_dump:
+        runtime.call("request_frame_dump")
     if frame == 45:
         _check_provider(status, initial_backend)
         _snapshot("sr%s" % initial_backend)

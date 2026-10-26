@@ -192,7 +192,7 @@ replace(path, '\tstruct SwapChain {', '\tstruct SwapChain {\n\t\tvoid *rescalefr
         '\t\tRenderingDeviceDriverVulkan *rescaleframe_driver = nullptr;\n\t\tuint32_t rescaleframe_family = 0;')
 replace(path, '\tvoid _swap_chain_release(SwapChain *p_swap_chain);', '\tbool _swap_chain_release(SwapChain *p_swap_chain);')
 replace(path, '\tvoid *rescaleframe_begin(CommandBufferID id);',
-        '\tbool rescaleframe_create(CommandQueueID queue, void *chain, const void *info, const void *allocator);\n'
+        '\tbool rescaleframe_create(CommandQueueID queue, void *chain, void *info, const void *allocator);\n'
         '\tbool rescaleframe_release(void *chain);\n'
         '\tVkResult rescaleframe_images(void *chain, uint32_t *count, VkImage *images);\n'
         '\tVkResult rescaleframe_acquire(void *chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t *index);\n'

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/gl_pipeline.h>
+#include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/fg_choice.h>
@@ -238,6 +239,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_close(rsf_gl_pipeline* self) {
     if(!self)return RSF_BACKEND_OK;const auto drained=rsf_gl_drain(self->sharing);if(drained!=RSF_BACKEND_OK)return drained;
     // DLSS SR borrows the chain's Streamline host, so release SR before that host.
     release_surfaces(*self);self->chain.Reset();const auto closed=rsf_gl_close(self->sharing);if(closed!=RSF_BACKEND_OK)return closed;self->sharing=nullptr;
+    rsf_input_dump_cancel(self->session);
     if(self->own_window)rsf_gl_window_destroy(self->window);self->window=nullptr;
     // Installed presentation callbacks are process-lifetime. Keep this small owner alive.
     return RSF_BACKEND_OK;

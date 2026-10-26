@@ -294,6 +294,8 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     if (self->sdk->execute(self->context, list, &data) != XESS_RESULT_SUCCESS) { self->frame = 0; return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     const rsf_srvk_image output{self->setup.device, reinterpret_cast<uint64_t>(self->output.image), VK_FORMAT_R16G16B16A16_SFLOAT,
         record.output_width, record.output_height, VK_IMAGE_LAYOUT_GENERAL, 1};
+    rsf::capture_sr_parameters(record, RSF_SR_XESS, input->motion_scale_x, input->motion_scale_y, input->pre_exposure, data.resetHistory);
+    (void)self->capture.record(list, input->color, record, "sr-source-jittered", data.resetHistory);
     (void)self->capture.record(list, input->color, record, "sr-linear-color", data.resetHistory);
     (void)self->capture.record(list, input->depth, record, "sr-depth", data.resetHistory);
     (void)self->capture.record(list, input->motion, record, "sr-motion-uv", data.resetHistory);

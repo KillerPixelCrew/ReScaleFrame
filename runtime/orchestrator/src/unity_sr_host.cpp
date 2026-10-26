@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/unity_sr_host.h>
+#include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/fg_choice.h>
@@ -374,6 +375,7 @@ extern "C" uint32_t __stdcall rsf_unity_sr_stop(void*) try
     rsf_overlay_d3d12_stop();
     rsf_sr12_destroy(host->sr); host->sr = nullptr;
     rsf_sr12_destroy(host->inputs); host->inputs = nullptr;
+    rsf_input_dump_cancel(0);
     log(host.get(), "Unity SR stopped after managed/native/GPU retirement.");
     host.reset(); return 0;
 }

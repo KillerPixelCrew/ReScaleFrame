@@ -36,6 +36,7 @@ ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> fence;
 uint64_t submitted = 0;
 uint64_t current_render_frame = 0;
+thread_local bool capture_native_primary_present = false;
 std::array<uint64_t, 3> slots{};
 uint32_t next_slot = 0, context_backend = 0, desired_width = 0, desired_height = 0;
 uint32_t output_width = 0, output_height = 0;
@@ -428,14 +429,18 @@ extern "C" void rsfg_vk_window(void* window) {
 extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     if (!rsf::godot_vk::booted() || !window || reinterpret_cast<uint64_t>(input_window.load()) != window) return 0;
     rsf_latencyvk_present(begin);
+    capture_native_primary_present = begin != 0;
     return 1;
 }
 extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
     struct Lease { uint64_t callback; void* queue; const void* info; } lease{callback, owning_queue, info};
-    return rsf_slvk_without_dlssg([](void* user) -> int32_t {
+    if (capture_native_primary_present) rsf::godot_vk::capture_present(info, 0, 1);
+    const auto result = rsf_slvk_without_dlssg([](void* user) -> int32_t {
         const auto& value = *static_cast<Lease*>(user);
         return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(value.callback), value.queue, value.info);
     }, &lease);
+    if (capture_native_primary_present) rsf::godot_vk::capture_present(info, result, 0);
+    return result;
 }
 extern "C" int32_t rsfg_vk_wsi_call(rsf_vk_wsi_call callback, void* user) {
     struct Lease { rsf_vk_wsi_call callback; void* user; } lease{callback, user};
@@ -458,5 +463,6 @@ extern "C" int rsfg_shutdown(void) try
     if (!wait(submitted) || !rsf_fg12_end_session(status.session_id)) return 0;
     if (capture) (void)capture->flush();
     rsf_sr12_destroy(context); context = nullptr;
+    rsf_input_dump_cancel(status.session_id);
     return 1;
 } catch (...) { return 0; }
