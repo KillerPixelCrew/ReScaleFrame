@@ -8,6 +8,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <new>
 using Microsoft::WRL::ComPtr;
@@ -26,6 +27,8 @@ cbuffer Params : register(b0) {
     uint2 Size;
     uint HasLayer;
     uint Padding;
+    float2 JitterPixels;
+    float2 Padding2;
 };
 [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= Size)) return;
@@ -33,7 +36,9 @@ cbuffer Params : register(b0) {
     float2 decoded = Motion[id.xy];
     float2 motion = decoded * DecodedToPixels;
     if (HasSentinel != 0 && all(decoded == Sentinel)) {
-        float2 ndc = (float2(id.xy) + 0.5) / float2(Size) * float2(2,-2) + float2(-1,1);
+        // Depth belongs to a raster sample shifted by the current projection. Both matrices and
+        // written vectors exclude jitter, so reconstruct at the corresponding unjittered position.
+        float2 ndc = (float2(id.xy) + 0.5 - JitterPixels) / float2(Size) * float2(2,-2) + float2(-1,1);
         // Reversed Z: the larger value is the nearer surface, such as a cloud in front of sky.
         float reprojected = HasLayer != 0 ? max(depth, DepthLayer[id.xy]) : depth;
         float4 previous = mul(float4(ndc, reprojected, 1), ClipToPrevious);
@@ -45,7 +50,9 @@ cbuffer Params : register(b0) {
 struct Constants {
     float matrix[16]; float scale[2]; float sentinel; uint32_t has_sentinel;
     uint32_t size[2]; uint32_t has_layer; uint32_t padding;
+    float jitter[2]; float padding2[2];
 };
+static_assert(sizeof(Constants) % 16 == 0);
 }
 struct rsf_motion_resolve {
     ComPtr<ID3D11Device> device;
@@ -87,7 +94,8 @@ extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t
 extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_pointer,
     void* motion_pointer, void* depth_pointer, const rsf_motion_resolve_params* params)
 {
-    if (!pass || !context_pointer || !motion_pointer || !depth_pointer || !params || params->struct_size < sizeof(*params)) return 0;
+    if (!pass || !context_pointer || !motion_pointer || !depth_pointer || !params ||
+        params->struct_size < offsetof(rsf_motion_resolve_params, jitter_pixels)) return 0;
     for (auto value : params->clip_to_previous) if (!std::isfinite(value)) return 0;
     if (!std::isfinite(params->decoded_to_pixels[0]) || !std::isfinite(params->decoded_to_pixels[1]) ||
         !std::isfinite(params->sentinel)) return 0;
@@ -103,7 +111,7 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
         if (!source_views[i]) return 0;
     }
     ID3D11ShaderResourceView* layer_view = nullptr;
-    if (params->struct_size >= sizeof(*params) && params->depth_layer) {
+    if (params->depth_layer) {
         auto* layer = static_cast<ID3D11Texture2D*>(params->depth_layer);
         D3D11_TEXTURE2D_DESC desc{}; layer->GetDesc(&desc);
         // A layer that does not fit is ignored: scene depth alone is the established behaviour.
@@ -117,6 +125,10 @@ extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_po
     std::memcpy(constants.scale, params->decoded_to_pixels, sizeof(constants.scale));
     constants.sentinel = params->sentinel; constants.has_sentinel = params->has_sentinel;
     constants.size[0] = pass->width; constants.size[1] = pass->height;
+    if (params->struct_size >= sizeof(*params)) {
+        if (!std::isfinite(params->jitter_pixels[0]) || !std::isfinite(params->jitter_pixels[1])) return 0;
+        std::memcpy(constants.jitter, params->jitter_pixels, sizeof(constants.jitter));
+    }
     context->UpdateSubresource(pass->constants.Get(), 0, nullptr, &constants, 0, 0);
     rsf_d3d11_state saved{};
     if (!rsf_d3d11_state_save(context, &saved)) return 0;

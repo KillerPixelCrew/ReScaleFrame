@@ -77,6 +77,9 @@ RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, uint64_t frame_id,
     rsf_latency_marker marker, uint32_t controller_input);
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t frame_id);
+/* Ordered engine Present completion also retires older CPU inputs that produced no image.
+   Call only after that completion proves no older frame can still reach SR/FG submission. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host*, uint64_t frame_id);
 RSF_SL_HOST_API int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t frame_id);
 /* Device-kind bits follow game_renderer.h; registered message IDs are checked against PCL. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t frame_id,

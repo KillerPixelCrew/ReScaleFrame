@@ -1,5 +1,25 @@
 # Implementation tracker
 
+## RDR2 shared overlay and quality controls, 26 October 2026
+
+All five performance presets now change real engine input resolution during play, including
+Native/DLAA at1:1 and Native->Quality transitions. The permanent PID140840 run measured
+2560x1600,1707x1067,1485x928,1280x800 and853x533 inputs into2560x1600 output; the human confirmed
+it works. The fix updates RAGE's pending graphics owner before native synchronized reconfiguration.
+Earlier active-only/notification attempts and their corruption are retained as failed evidence.
+
+The shared Rust overlay replaces cancelled native UI insertion. Busy observation/full GPU-ring
+UI omissions are corrected. The final FG-Off selector correction retains the last provider for
+re-enable while displaying Off consistently; frontend regression/build pass, deployed, separate
+post-patch visual acceptance pending. Release VS2026:97 discovered/11 optional skips, fmt/Clippy;
+Rust41+19 tests/release for the panel. Frontend ABI2, overlay ABI13, game ABI19. Diagnostics default
+off and caches unchanged; RTSS/Social Club corrections preserved. HDR/non-NVIDIA hardware and
+complete HUD-mode acceptance remain open; broad rendering_ready stays0.
+
+Evidence: [RDR2 research](research/rdr2-renderer.md),
+[continuation](../games/rdr2/RESEARCH-HANDOFF.md), and
+`.local/rdr2-tools/quality-overlay-20261026/{permanent-result.json,deployment.json}`.
+
 ## Core frame dump and AC7 HUD correction, 26 October 2026
 
 F10 and the C API now use an orchestrator-owned named frame service across D3D11,
@@ -189,6 +209,140 @@ launcher and matching existing user-wide registrations. Six production stdio
 checks passed the 229-tool/six-prompt catalog and target-free request; Ghidra/IDA
 readiness passed. This is tooling validation, without game or target analysis.
 Existing sessions need a reconnect. [Setup and evidence](tooling.md#rea-for-codex-and-claude-code).
+
+## Red Dead Redemption 2 scaffold, 25 October 2026
+
+26 October frontend correction: the human confirmed the ABI19 ScriptHook status overlay and
+quick menu in gameplay; inline RSF rows in the stock graphics page remain unfinished. XeSS
+FG flicker was measured as result3 (too few frames), resetHistory1, source-gap1 despite valid
+inputs. Normal RAGE PresentEnd cleanup called provider abort for retired CPU inputs, which
+clears XeSS history. Removed provider abort from this completion path while retaining shared
+Streamline token retirement. Release VS2026 passes82 discovered/11 optional skips, fmt/Clippy;
+backed-up Runtime68b7229e...5bd37a0 is deployed. Follow-up gameplay shows83.344 seconds/4320 source
+frames/8640 SDK presented frames with37 active/error-free samples after warm-up; the human
+reports improved look/feel and no orange flashes. Residual white text is observer contention;
+the separate correction retains cached labels and reports stale after1s. It was backed-up/hash-
+deployed as ASIa1a7c98e...e07544c at20:19 after normal exit, preserving the verified FG runtime;
+the label change's visual acceptance remains pending. Evidence is
+`.local/rdr2-tools/xess-flicker-20261026/retirement-deployment.json`, its preceding log/state
+samples, and `rdr2-xess-retirement-verify.log`. The earlier timing-input experiment did not fix it.
+
+Live continuation: AB executed DLSS/FSR3/FSR4 INT8/XeSS and returned DLSS in one RDR2 process,
+with twenty original pixel outputs. Pause exposed a stale native NGX handle after RSF context
+shutdown. A persistent registration now outlives per-feature contexts; AC passed
+DLSS->FSR3->DLSS, twelve further outputs and actual Pause/Settings with native NGX success.
+Release VS2026 passed 67 executed tests/11 skips, fmt/Clippy; the corrected build is deployed
+with backed-up hashes in AC/deployment.json. New source brackets the engine's final output
+helper, identifies its real native backbuffer through the render-target cache, and observes
+native marker IDs through Present. Its GPU fixture passes fenced scene-copy pixels and state
+validation. ABI18 now connects native sleep/mode/markers to shared FG presentation and
+associates input, SR, scene submission and Present. Forty-frame DLSS/FSR3/XeSS GPU paths pass
+39 FG tags, Fixed mode1 and debug validation, including live provider transitions. FSR3 reports
+generation callbacks. Original final/HUD-less pixel copies match in the UI-free fixture.
+The bridge retains the engine queue and
+fence-joins Streamline's required proxy queue. A rejected raw-queue substitution crashed
+ExecuteCommandLists; its debugger evidence is retained. Release VS2026 passes67 executed
+tests/11 skips, fmt/Clippy. AD then exposed skipped loading inputs exhausting the six-token
+pool. Ordered native PresentEnd now retires skipped CPU inputs and the SDK's authoritative
+pool. A regression covers140 inputs without an image, CPU-ring wrap, then40 valid SR/FG
+frames. It passes39 tags and debug validation; the final full gate is
+`.local/rdr2-tools/rdr2-skipped-input-final-verify.log`.
+
+A byte-guarded diagnostic applied equivalent skipped-token retirement to the running AD
+session. DLSS FG2x/4x, Off/resume and DLSS->FSR3->DLSS SR with FG2x were accepted by real
+SDK activity and driver multiplier reports. Eight SR outputs are finite; projection/inverse
+residual is at most3.93483e-8. The actual scene/final2560x1600 pair differs in116394 HUD pixels
+and zero outside minimap/prompts. After normal exit, the permanent Runtime9a9d0fcc...b7d055ac
+was backed up and hash-deployed at18:13 with diagnostics off. Evidence is AD's
+`permanent-deployment.json`, logs and `hud-pixel-comparison.json`. The installed permanent
+build has not yet been cold game-tested; the game-control connection is unavailable.
+All-mode HUD separation, native FSR selection, engine resolution ownership and native options
+remain open. No generated-image quality or physical latency claim follows from activity.
+One requested menu agent
+completed and was released; [its report](../games/rdr2/NATIVE-OPTIONS-RESEARCH.md) now includes
+live stock-row identities. Incidental greyed AA controls are not implemented RSF controls.
+
+26 October implementation: native DLSS and FSR selections now normalize into one SR adapter
+and execute the shared D3D12 runtime. Game ABI 17 adds synchronous acceptance, actual submission
+and Present callbacks. The game plugin owns guarded hooks, current worker camera conversion,
+input states and native history reset; the runtime owns settings, vendor contexts and fenced
+retirement. Engine-sized inputs and supplied exposure are preserved. Standalone DLSS now forwards
+its application ID and receives required manual Present bookkeeping. DLSS, FSR3, FSR4 INT8 and
+XeSS passed actual GPU host fixtures with pixels, debug validation, unsubmitted-slot refusal,
+submission retirement/reuse and Present. Full Release VS2026 gate passed 67 executed tests and
+11 opt-in skips, fmt/Clippy (`.local/rdr2-tools/native-adapter-verify.log`). Backed-up deployment
+completed with diagnostics off; `.local/rdr2-tools/native-adapter-deployment.json` records hashes.
+Live game acceptance is pending. FG, PCL, native menu replacement and ownership of the render
+resolution producer remain unfinished. This supersedes the older source/deployment status below.
+
+Run AA completed 27 bundles, including 88 exact-call camera/colour/depth/motion/exposure/output
+sets. All camera conversions pass, maximum projection/inverse residual `4.68364e-8`. A visually
+selected static rock ROI in AA6/7 has median reprojection residuals 0.0427-0.1700 pixels, versus
+1.646-11.996 with the opposite sign. Full shader identities and original pixels resolve the
+previous stream-PSO gap. Pause has several scene-wide effect draws before final `BB74CEA4`
+and UI; a universal first-draw boundary remains invalid. Photo/cinematic/letterboxed cutscenes,
+visible Social Club overlay, full UI-only extraction and HDR remain unverified; the display has
+no HDR support. [Current evidence and producer sites](research/rdr2-renderer.md#run-aa-and-native-sr-adapter-26-october).
+
+Camera/HUD follow-up, 26 October: the guarded probe recorded 128 run-W, 320 run-X and 640 run-Z
+DLSS camera samples. Matrix/jitter relationships and 192 same-frame ScriptHook comparisons are
+measured; pause freezes projection while DLSS jitter advances, and one Z history reset makes
+previous view equal current view. RenderDoc captures establish shader topology but replay the 3D
+scene black. Native Z supplies 586 original pixel readbacks across 12 captures: normal gameplay
+has a HUD-less scene copy, while wheel/pause/log/Dead Eye add scene-wide changes afterward.
+Those modes cannot share an assumed first-draw HUD boundary. HDR, photo/cinematic/cutscene,
+nonzero motion reprojection and complete GPU frame association remain open.
+
+The Mor3a 0.82 source was belatedly inspected at revision `bc853d0b`; its DLSS input, frame
+association, HUD-history and diagnostic capture contracts are retained in
+[the integration handoff](../games/rdr2/RESEARCH-HANDOFF.md). Its nominal camera and heuristic
+Vulkan HUD capture do not replace measured DX12 proof. The latest stream-PSO/F10/final-draw
+probe passed the Release VS2026 gate (57 passed, eight opt-in skips, fmt/Clippy) and was deployed
+with matching hash `d480f183...`, diagnostics off. Those latest changes have no live acceptance.
+The complete single-request input/camera/UI capture bundle is still source work; finish it
+before requesting another run. All RSF providers must use DLSS-shaped inputs regardless of the
+native DLSS/FSR selection. Routing, RSF SR/FG execution and native menu replacement remain
+unimplemented. [Detailed research](research/rdr2-renderer.md).
+
+Crash investigation follow-up: removed the rejected ASI cache quarantine and its INI switch.
+The ASI leaves the pipeline library, warm-up cache and marker untouched. An exact-build HRESULT
+trace and unfiltered 32-frame D3D12 diagnostic stacks identified Social Club recording into a
+different backbuffer than RAGE's command list. Close first returns `E_INVALIDARG`; Reset repeats
+it later. A guarded in-process selector correction preserves RAGE's supplied buffer index for
+external command lists and retains Social Club's original selection for its own lists. The first
+corrected game run caught supplied index 1 versus current index 0, passed the prior crash point,
+wrote new caches and recorded no D3D12 errors with RTSS active. The final revision was then deployed
+and passed a cached Story-mode session with DLSS and FSR2, followed by another cache-reuse launch
+with census and tracing disabled. The Release VS2026 gate passed 57 tests with eight opt-in skips,
+formatting and Clippy. [Cause, exact bytes and run evidence](research/rdr2-renderer.md#social-club-frame-ownership-correction).
+The completed census records 4,900 DLSS evaluations, 4,412 FSR2 dispatches, 13,267 Presents and
+83,549 Reflex markers in its final periodic summary, with zero record drops. The user confirmed
+both Story-mode paths and a normal exit. Input descriptions and call sites now feed the six-step
+SR/FG sequence in the research note. Full RSF SR/FG execution, matrices, HUD separation and motion
+coverage remain future integration work. Census and tracing are disabled in the final game INI;
+forced DX12 and the guarded correction remain active. No changes were committed.
+
+Added `games/rdr2`: exact-build detection of Steam `RDR2.exe` 1.0.1491.50 (build 13773296) and
+a lifecycle that refuses preparation. `ReScaleFrame.RDR2.asi` is a new deployment mode: the game's
+ASI loader loads it, and it runs the plugin session off the loader lock without impersonating a
+system DLL. The target is forced DX12 with DLSS, FSR and XeSS SR/FG, inputs from the game's own
+NGX/FSR2 calls and translation of its native Reflex markers. The fingerprint shows encrypted code,
+so static analysis needed a runtime dump. At this initial scaffold checkpoint the entry had not
+been loaded by the game; later game evidence and the current result are recorded above.
+`eng/verify.ps1 -Configuration Release -VS2026` passed 46 native checks with eight opt-in skips,
+including the new `game_rdr2_plugin_contract`, followed by formatting and Clippy.
+
+Follow-up the same day: two user-run sessions produced decrypted-image dumps; the ASI loader runs
+modules during CRT startup, after decryption. A guarded pointer write of `"d3d12"` to the engine's
+API parameter (`ForceD3D12`, default on) made the game save `kSettingAPI_DX12` and build a D3D12
+pipeline cache after one self-restart. New tooling: `loader/census` (`rsf_vendor_census`), a
+pass-through probe recording D3D12/DXGI, Vulkan, NGX, FSR2/FFX API, XeSS, Streamline, NVAPI Reflex
+and related calls with caller RVAs, stacks and decoded arguments; and module dump sidecar schema 2
+(threads, MSVC RTTI, `.pdata` functions, section hashes, name lists) with IDA/Ghidra apply scripts in
+`tools/dump`. At that checkpoint both were synthetically tested only. The
+Release gate passed 57 native checks with eight opt-in skips, formatting and Clippy. The census is
+deployed behind `[RDR2] Census=1`; the completed gameplay census is recorded above.
+[Fingerprint, reference review, FG requirements and open research](research/rdr2-renderer.md).
 
 ## Drag'n Wash character motion, 20 October 2026
 

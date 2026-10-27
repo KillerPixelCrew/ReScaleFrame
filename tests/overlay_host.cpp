@@ -85,6 +85,16 @@ void present(void*, void* pointer)
         SendMessageW(chain_desc.OutputWindow, WM_KEYDOWN, VK_INSERT, 1);
         require(rsf_overlay_host_visible() != 0, "Insert reopens the panel for rendering");
         SendMessageW(chain_desc.OutputWindow, WM_KEYUP, VK_INSERT, 0xc0000001);
+        // RDR2's render worker hides until the count is negative and shows until
+        // nonnegative. A swallowed call must still advance a logical counter.
+        for (unsigned cycle=0;cycle<16;++cycle) {
+            int count=0;unsigned attempts=0;
+            do {count=ShowCursor(FALSE);} while(count>=0 && ++attempts<512);
+            require(count<0, "game cursor hide loop terminates while overlay remains visible");
+            attempts=0;
+            do {count=ShowCursor(TRUE);} while(count<0 && ++attempts<512);
+            require(count>=0, "game cursor show loop terminates while overlay remains visible");
+        }
     }
 
     ID3D11Texture2D* buffer = nullptr;

@@ -52,6 +52,17 @@ public:
     } catch (...) { directory.clear(); }
 
     bool enabled() const noexcept { return !directory.empty() && count; }
+    // Configure an owner explicitly before recording, without changing the process environment.
+    bool configure(const char* path, uint64_t first_frame, uint32_t frames) noexcept try {
+        if (!path || !*path || !frames || frames > 16) return false;
+        std::lock_guard lock(guard);
+        if (!images.empty()) return false;
+        auto selected = std::filesystem::path(reinterpret_cast<const char8_t*>(path));
+        if (!selected.is_absolute()) return false;
+        std::filesystem::create_directories(selected);
+        directory = std::move(selected); first = first_frame; count = frames;
+        return true;
+    } catch (...) { return false; }
     bool wants(uint64_t frame) const noexcept { return enabled() && frame >= first && frame - first < count; }
     bool force_sr_history_reset(uint64_t frame) const noexcept { return reset_sr && wants(frame); }
     bool pending() const { std::lock_guard lock(guard); return !images.empty(); }

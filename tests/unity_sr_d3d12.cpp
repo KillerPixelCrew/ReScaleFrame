@@ -6,6 +6,9 @@
 #endif
 #include <rescaleframe/unity_bridge.h>
 #include <rescaleframe/unity_sr_host.h>
+#include <rescaleframe/rdr2_sr_host.h>
+#include <rescaleframe/rdr2_frontend.h>
+#include <rescaleframe/native_fg_d3d12.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -47,6 +50,116 @@ static bool buffer(ID3D12Device* device, uint64_t size, D3D12_HEAP_TYPE type, D3
     D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width = size;
     desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&out)));
+}
+static bool validation(ID3D12Device* device)
+{
+    if (!std::getenv("RSF_UNITY_GPU_DEBUG")) return true;
+    ComPtr<ID3D12InfoQueue> info;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&info)))) return false;
+    bool ok = true;
+    const auto count = info->GetNumStoredMessagesAllowedByRetrievalFilter();
+    for (UINT64 i = 0; i < count; ++i) {
+        SIZE_T length = 0; info->GetMessage(i, nullptr, &length);
+        std::vector<unsigned char> storage(length);
+        auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+        if (SUCCEEDED(info->GetMessage(i, message, &length)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+            std::fprintf(stderr, "D3D12 validation: %s\n", message->pDescription); ok = false;
+        }
+    }
+    std::fprintf(stderr, "D3D12 debug validation %s\n", ok ? "passed" : "failed");
+    return ok;
+}
+static int rdr2_generation(ID3D12Device* device, ID3D12CommandQueue* queue,
+    ID3D12CommandAllocator* allocator, ID3D12GraphicsCommandList* list, rsf_game_host_services& host,
+    rsf_game_render_pass pass)
+{
+    WNDCLASSW type{}; type.lpfnWndProc = DefWindowProcW; type.hInstance = GetModuleHandleW(nullptr);
+    type.lpszClassName = L"sgaWindow";
+    if (!RegisterClassW(&type)) return 1;
+    HWND window = CreateWindowExW(0, type.lpszClassName, L"RDR2 integration fixture", WS_OVERLAPPEDWINDOW,
+        0, 0, 640, 360, nullptr, nullptr, type.hInstance, nullptr);
+    if (!window) return 1;
+    // Create after the RDR2 host installs interception, before its first SR registration.
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGISwapChain1> created;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 1;
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 640; desc.Height = 360; desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = 3; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    if (FAILED(factory->CreateSwapChainForHwnd(queue, window, &desc, nullptr, nullptr, &created))) return 1;
+    ComPtr<IDXGISwapChain3> chain;
+    if (FAILED(created.As(&chain))) return 1;
+    rsf_native_fg_status initial{}; initial.struct_size = sizeof(initial);
+    if (!rsf_fg12_status(&initial) || !initial.available) return 1;
+    D3D12_DESCRIPTOR_HEAP_DESC heap_desc{}; heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap_desc.NumDescriptors = 1;
+    ComPtr<ID3D12DescriptorHeap> rtv;
+    ComPtr<ID3D12Fence> completion;
+    if (FAILED(device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&rtv))) ||
+        FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&completion)))) return 1;
+    auto latency = [&](uint32_t kind, uint64_t frame) {
+        LARGE_INTEGER ticks{}, frequency{}; QueryPerformanceCounter(&ticks); QueryPerformanceFrequency(&frequency);
+        rsf_game_latency_event event{sizeof(event), kind, pass.session_id, frame,
+            static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)};
+        return host.process_latency && host.process_latency(host.user, &event) == 0;
+    };
+    pass.screen = RSF_SCREEN_FLIGHT; pass.flags = RSF_GAME_RENDER_PRIMARY;
+    // Loading may run more CPU inputs than the bookkeeping ring without producing an image.
+    // One later ordered Present must retire every older SDK token, including overwritten CPU entries.
+    for (uint64_t frame = 1; frame <= 140; ++frame)
+        for (uint32_t marker : {RSF_GAME_LATENCY_SLEEP, RSF_LATENCY_INPUT_SAMPLE, RSF_LATENCY_SIMULATION_START,
+            RSF_LATENCY_SIMULATION_END}) if (!latency(marker, frame)) return 1;
+    if (FAILED(chain->Present(0, 0)) || !latency(RSF_LATENCY_PRESENT_END, 140)) return 1;
+    for (uint64_t ordinal = 0; ordinal < 40; ++ordinal) {
+        const uint64_t frame = ordinal + 141;
+        if (ordinal && (FAILED(allocator->Reset()) || FAILED(list->Reset(allocator, nullptr)))) return 1;
+        pass.native_frame = pass.source_frame_id = frame;
+        for (uint32_t marker : {RSF_GAME_LATENCY_SLEEP, RSF_LATENCY_INPUT_SAMPLE, RSF_LATENCY_SIMULATION_START,
+            RSF_LATENCY_SIMULATION_END, RSF_LATENCY_RENDER_SUBMIT_START}) if (!latency(marker, frame)) return 1;
+        if (host.process_upscale(host.user, list, &pass) != 0) return 1;
+        ComPtr<ID3D12Resource> target;
+        if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&target)))) return 1;
+        device->CreateRenderTargetView(target.Get(), nullptr, rtv->GetCPUDescriptorHandleForHeapStart());
+        barrier(list, target.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const float color[] = {0.25f, 0.5f, 0.75f, 1};
+        list->ClearRenderTargetView(rtv->GetCPUDescriptorHandleForHeapStart(), color, 0, nullptr);
+        auto scene = pass; scene.role = RSF_GAME_RENDER_FINAL_SCENE; scene.pass_key = 1;
+        scene.color_input = scene.scene_surface = target.Get(); scene.swapchain = chain.Get();
+        host.render_pass(host.user, list, &scene, 0);
+        barrier(list, target.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        if (FAILED(list->Close())) return 1;
+        ID3D12CommandList* lists[] = {list}; void* pointers[] = {list};
+        host.submit(host.user, queue, frame, 1, pointers, 1); queue->ExecuteCommandLists(1, lists);
+        host.submit(host.user, queue, frame, 1, pointers, 0);
+        if (!latency(RSF_LATENCY_PRESENT_START, frame)) return 1;
+        scene.role = RSF_GAME_RENDER_WINDOW;
+        host.render_pass(host.user, nullptr, &scene, 1);
+        if (std::getenv("RSF_RDR2_TEST_OVERLAY") && (ordinal == 4 || ordinal == 20))
+            rsf_rdr2_overlay_toggle();
+        if (std::getenv("RSF_RDR2_TEST_OVERLAY") && ordinal>=4 && ordinal<20) {
+            if (!rsf_rdr2_overlay_visible()) return 1;
+            int count=0;unsigned attempts=0;
+            do {count=ShowCursor(FALSE);} while(count>=0 && ++attempts<512);
+            if (count>=0) {std::fprintf(stderr,"Overlay cursor hide loop failed to terminate.\n");return 1;}
+        }
+        host.present(host.user, chain.Get(), 0, 0, 1);
+        const auto presented = chain->Present(0, 0);
+        host.present(host.user, chain.Get(), 0, 0, 0);
+        if (FAILED(presented) || !latency(RSF_LATENCY_PRESENT_END, frame) || !latency(RSF_LATENCY_RENDER_SUBMIT_END, frame)) return 1;
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!event || FAILED(queue->Signal(completion.Get(), frame)) ||
+            FAILED(completion->SetEventOnCompletion(frame, event)) || WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) return 1;
+        CloseHandle(event);
+    }
+    rsf_native_fg_status status{}; status.struct_size = sizeof(status);
+    if (!rsf_fg12_status(&status)) return 1;
+    std::fprintf(stderr, "RDR2 cold FG: available=%u tagged=%llu mode=%u reason=%u result=%d.\n",
+        status.available, static_cast<unsigned long long>(status.tagged_frames),
+        status.vendor.configured_mode, status.reason, status.last_result);
+    // The host is process-owned, as in RDR2. Keep its presentation interface alive to exit.
+    (void)chain.Detach(); (void)created.Detach();
+    return validation(device) && status.available && status.tagged_frames && status.last_result == 0 &&
+        status.vendor.configured_mode != RSF_FG_OFF ? 0 : 1;
 }
 int main(int argc, char** argv)
 {
@@ -106,6 +219,10 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "Requested DLSS model preset %u\n", setup.dlss.preset);
     }
     setup.log = setup.dlss.log = logger;
+    if (std::getenv("RSF_SR_ENGINE_EXTENTS")) {
+        setup.abi_version = 2; setup.engine_input_extents = 1;
+        setup.render_width = 426; setup.render_height = 240;
+    }
     rsf_streamline_host* shared = nullptr;
     if (argc == 7) {
         rsf_streamline_host_setup registration{sizeof(registration), RSF_STREAMLINE_HOST_ABI_VERSION,
@@ -118,14 +235,27 @@ int main(int argc, char** argv)
         setup.streamline_host = shared;
     }
     rsf_sr12* sr = nullptr;
-    const auto created = rsf_sr12_create(&setup, &sr);
+    rsf_game_host_services rdr2{};
+    const char* host_ini = std::getenv("RSF_RDR2_HOST_INI");
+    const char* host_root = std::getenv("RSF_RDR2_HOST_ROOT");
+    int32_t created{};
+    if (host_ini && host_root) {
+        wchar_t ini[32768]{}, root[32768]{};
+        if (!MultiByteToWideChar(CP_UTF8, 0, host_ini, -1, ini, 32768) ||
+            !MultiByteToWideChar(CP_UTF8, 0, host_root, -1, root, 32768)) return 2;
+        rdr2.struct_size = sizeof(rdr2); rdr2.abi_version = RSF_GAME_ABI_VERSION;
+        rdr2.session_id = 7; rdr2.log = logger;
+        created = rsf_rdr2_sr_host_create(ini, root, &rdr2);
+    } else created = rsf_sr12_create(&setup, &sr);
     if (created != RSF_BACKEND_OK) { std::fprintf(stderr, "Provider %u preparation refused %d\n", setup.backend, created); return 77; }
-    uint32_t width = 0, height = 0; rsf_sr12_plan(sr, &width, &height);
+    uint32_t width = 426, height = 240;
+    if (sr) rsf_sr12_plan(sr, &width, &height);
+    if (setup.abi_version == 2 && (width != setup.render_width || height != setup.render_height)) return 1;
     std::array<ComPtr<ID3D12Resource>, 4> images;
     if (!texture(device.Get(), width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, images[0]) ||
         !texture(device.Get(), width, height, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, images[1]) ||
         !texture(device.Get(), width, height, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, images[2]) ||
-        !texture(device.Get(), 640, 360, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, images[3])) return 1;
+        !texture(device.Get(), 640, 360, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST, images[3])) return 1;
     std::array<ComPtr<ID3D12Resource>, 3> uploads;
     for (size_t i = 0; i < 3; ++i) {
         auto desc = images[i]->GetDesc(); D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{}; uint64_t total = 0;
@@ -145,9 +275,26 @@ int main(int argc, char** argv)
         list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         barrier(list.Get(), images[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+    ComPtr<ID3D12Resource> exposure, exposure_upload;
+    if (std::getenv("RSF_SR_EXTERNAL_EXPOSURE")) {
+        if (!texture(device.Get(), 1, 1, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE,
+            D3D12_RESOURCE_STATE_COPY_DEST, exposure) || !buffer(device.Get(), 256, D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ, exposure_upload)) return 1;
+        void* value{};
+        if (FAILED(exposure_upload->Map(0, nullptr, &value))) return 1;
+        *static_cast<float*>(value) = 1;
+        exposure_upload->Unmap(0, nullptr);
+        D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource = exposure_upload.Get();
+        from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; from.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, 1, 1, 1, 256};
+        D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource = exposure.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        barrier(list.Get(), exposure.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        std::fprintf(stderr, "Fixture supplies external 1x1 R32_FLOAT exposure=1.\n");
+    }
     rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR; pass.camera_valid = 1;
     pass.session_id = 7; pass.view_key = pass.history_key = 11; pass.native_frame = 1; pass.resource_generation = 1;
     pass.color_input = images[0].Get(); pass.depth = images[1].Get(); pass.motion = images[2].Get(); pass.color_output = images[3].Get();
+    pass.exposure = exposure.Get();
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1;
     pass.camera.struct_size = sizeof(pass.camera); pass.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     pass.camera.render_width = width; pass.camera.render_height = height; pass.camera.output_width = 640; pass.camera.output_height = 360;
@@ -166,8 +313,27 @@ int main(int argc, char** argv)
         barrier(list.Get(), images[0].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         pass.color_output = nullptr; pass.role = RSF_GAME_RENDER_FG_INPUTS;
     }
-    auto evaluated = rsf_sr12_evaluate(sr, list.Get(), &pass, 0);
+    if (rdr2.process_latency && std::getenv("RSF_RDR2_COLD_FG"))
+        return rdr2_generation(device.Get(), queue.Get(), allocator.Get(), list.Get(), rdr2, pass);
+    auto evaluated = rdr2.process_upscale ? rdr2.process_upscale(rdr2.user, list.Get(), &pass) :
+        rsf_sr12_evaluate(sr, list.Get(), &pass, 0);
     std::fprintf(stderr, "Provider %u: %ux%u -> 640x360, evaluate=%d\n", setup.backend, width, height, evaluated);
+    if (rdr2.render_pass && evaluated == 0) {
+        barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        auto scene = pass;
+        scene.role = RSF_GAME_RENDER_FINAL_SCENE; scene.color_input = scene.scene_surface = images[3].Get(); scene.pass_key = 1;
+        rdr2.render_pass(rdr2.user, list.Get(), &scene, 0);
+        barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+    }
+    if (rdr2.process_upscale && evaluated == 0) {
+        for (uint64_t frame = 2; frame <= 3; ++frame) {
+            pass.native_frame = frame;
+            if (rdr2.process_upscale(rdr2.user, list.Get(), &pass) != 0) return 1;
+        }
+        pass.native_frame = 4;
+        if (rdr2.process_upscale(rdr2.user, list.Get(), &pass) != RSF_ERROR_BUSY) return 1;
+        std::fprintf(stderr, "PASS: three unsubmitted recordings retained; fourth refused without a producer wait.\n");
+    }
 #if RSF_HAVE_STREAMLINE
     if (shared) {
         // FG has separate completed-frame constants on viewport zero. Setting them
@@ -196,10 +362,84 @@ int main(int argc, char** argv)
     D3D12_TEXTURE_COPY_LOCATION dst{}; dst.pResource = readback.Get(); dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dst.PlacedFootprint = footprint;
     list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     if (FAILED(list->Close())) return 1;
-    ID3D12CommandList* submitted[] = {list.Get()}; queue->ExecuteCommandLists(1, submitted);
+    ID3D12CommandList* submitted[] = {list.Get()};
+    void* submitted_pointers[] = {list.Get()};
+    if (rdr2.submit) rdr2.submit(rdr2.user, queue.Get(), 1, 1, submitted_pointers, 1);
+    queue->ExecuteCommandLists(1, submitted);
+    if (rdr2.submit) rdr2.submit(rdr2.user, queue.Get(), 1, 1, submitted_pointers, 0);
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event || FAILED(queue->Signal(fence.Get(), 1)) || FAILED(fence->SetEventOnCompletion(1, event)) || WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) return 1;
     CloseHandle(event);
+    if (rdr2.process_upscale && evaluated == 0) {
+        if (FAILED(allocator->Reset()) || FAILED(list->Reset(allocator.Get(), nullptr))) return 1;
+        barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        pass.native_frame = 5;
+        if (rdr2.process_upscale(rdr2.user, list.Get(), &pass) != 0) return 1;
+        barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        if (FAILED(list->Close())) return 1;
+        rdr2.submit(rdr2.user, queue.Get(), 2, 1, submitted_pointers, 1);
+        queue->ExecuteCommandLists(1, submitted);
+        rdr2.submit(rdr2.user, queue.Get(), 2, 1, submitted_pointers, 0);
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!event || FAILED(queue->Signal(fence.Get(), 2)) || FAILED(fence->SetEventOnCompletion(2, event)) ||
+            WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) return 1;
+        CloseHandle(event);
+        std::fprintf(stderr, "PASS: submitted recording slots retired and reused on a reset command list.\n");
+    }
+    if (rdr2.present && evaluated == 0) {
+        WNDCLASSW window_class{}; window_class.lpfnWndProc = DefWindowProcW;
+        window_class.hInstance = GetModuleHandleW(nullptr); window_class.lpszClassName = L"RSFRDR2SRHostFixture";
+        if (!RegisterClassW(&window_class)) return 1;
+        const auto window = CreateWindowExW(0, window_class.lpszClassName, L"RSF fixture", WS_OVERLAPPEDWINDOW,
+            0, 0, 640, 360, nullptr, nullptr, window_class.hInstance, nullptr);
+        if (!window) return 1;
+        DXGI_SWAP_CHAIN_DESC1 swap_desc{};
+        swap_desc.Width = 640; swap_desc.Height = 360; swap_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swap_desc.SampleDesc.Count = 1; swap_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swap_desc.BufferCount = 2; swap_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        ComPtr<IDXGISwapChain1> native_swapchain;
+        if (FAILED(factory->CreateSwapChainForHwnd(queue.Get(), window, &swap_desc, nullptr, nullptr, &native_swapchain))) return 1;
+        rdr2.present(rdr2.user, native_swapchain.Get(), 0, 0, 1);
+        const auto presented = native_swapchain->Present(0, 0);
+        rdr2.present(rdr2.user, native_swapchain.Get(), 0, 0, 0);
+        if (FAILED(presented)) return 1;
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!event || FAILED(queue->Signal(fence.Get(), 3)) || FAILED(fence->SetEventOnCompletion(3, event)) ||
+            WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) return 1;
+        CloseHandle(event);
+        native_swapchain.Reset(); DestroyWindow(window); UnregisterClassW(window_class.lpszClassName, window_class.hInstance);
+        std::fprintf(stderr, "PASS: host bookkeeping surrounds an actual DXGI Present.\n");
+    }
+    if (rdr2.process_upscale && evaluated == 0 && setup.backend == RSF_SR_DLSS && std::getenv("RSF_RDR2_HOST_SWITCHES")) {
+        const auto registration = GetModuleHandleW(L"sl.interposer.dll");
+        if (!registration) return 1;
+        wchar_t configuration[32768]{};
+        if (!MultiByteToWideChar(CP_UTF8, 0, host_ini, -1, configuration, 32768)) return 1;
+        uint64_t completion = 3;
+        for (uint32_t backend : {RSF_SR_FSR3, RSF_SR_DLSS}) {
+            const auto requested = std::to_wstring(backend);
+            if (!WritePrivateProfileStringW(L"RDR2", L"SRBackend", requested.c_str(), configuration)) return 1;
+            Sleep(1100); // Exercise the public live INI poll, not a fixture-only host shortcut.
+            if (FAILED(allocator->Reset()) || FAILED(list->Reset(allocator.Get(), nullptr))) return 1;
+            barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            ++pass.native_frame;
+            if (rdr2.process_upscale(rdr2.user, list.Get(), &pass) != 0 ||
+                GetModuleHandleW(L"sl.interposer.dll") != registration) return 1;
+            barrier(list.Get(), images[3].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            if (FAILED(list->Close())) return 1;
+            ++completion;
+            rdr2.submit(rdr2.user, queue.Get(), completion, 1, submitted_pointers, 1);
+            queue->ExecuteCommandLists(1, submitted);
+            rdr2.submit(rdr2.user, queue.Get(), completion, 1, submitted_pointers, 0);
+            event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!event || FAILED(queue->Signal(fence.Get(), completion)) ||
+                FAILED(fence->SetEventOnCompletion(completion, event)) || WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) return 1;
+            CloseHandle(event);
+            std::fprintf(stderr, "PASS: backend %u accepted after a live switch; the same NGX registration remains loaded.\n", backend);
+        }
+    }
     void* pixels = nullptr; if (FAILED(readback->Map(0, nullptr, &pixels))) return 1;
     auto* center = reinterpret_cast<uint16_t*>(static_cast<unsigned char*>(pixels) + footprint.Footprint.RowPitch*180) + 320*4;
     const float r = DirectX::PackedVector::XMConvertHalfToFloat(center[0]);
@@ -212,20 +452,6 @@ int main(int argc, char** argv)
             if (rsf_streamline_host_marker(shared, 1, marker, 0) != RSF_BACKEND_OK) return 1;
         rsf_streamline_host_destroy(shared);
     }
-    bool validation_ok = true;
-    if (debug_requested) {
-        ComPtr<ID3D12InfoQueue> info;
-        if (FAILED(device.As(&info))) return 1;
-        const auto count = info->GetNumStoredMessagesAllowedByRetrievalFilter();
-        for (UINT64 i = 0; i < count; ++i) {
-            SIZE_T length = 0; info->GetMessage(i, nullptr, &length);
-            std::vector<unsigned char> storage(length);
-            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
-            if (SUCCEEDED(info->GetMessage(i, message, &length)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
-                std::fprintf(stderr, "D3D12 validation: %s\n", message->pDescription); validation_ok = false;
-            }
-        }
-        std::fprintf(stderr, "D3D12 debug validation %s\n", validation_ok ? "passed" : "failed");
-    }
+    const bool validation_ok = validation(device.Get());
     return validation_ok && evaluated == RSF_BACKEND_OK && std::isfinite(r) && std::isfinite(g) && std::isfinite(b) && r > 0.1f && g > 0.2f && b > 0.3f ? 0 : 1;
 }

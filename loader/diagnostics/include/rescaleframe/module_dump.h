@@ -47,7 +47,19 @@ typedef struct rsf_dump_options {
     double entropy_threshold;
     /* When non-zero, refuse to write a dump whose code section is still above the threshold. */
     uint32_t require_decrypted;
+    /* Fields below were appended for sidecar schema 2. A caller built against the earlier header
+       passes a shorter struct_size and gets the defaults. */
+    /* Optional UTF-8 path of a TSV whose lines are `rva<TAB>name` (rva as 0x-hex or decimal,
+       `#` starts a comment). Accepted lines are merged into the sidecar's "names" section so a
+       game plugin can contribute engine-specific names. */
+    const char* name_list_path_utf8;
+    /* Wall-clock bound for the RTTI scan in milliseconds. Zero selects 20000. */
+    uint32_t rtti_budget_ms;
+    uint32_t reserved;
 } rsf_dump_options;
+
+/* Size of the options structure before the sidecar schema 2 fields were appended. */
+#define RSF_DUMP_OPTIONS_V1_SIZE offsetof(rsf_dump_options, name_list_path_utf8)
 
 typedef struct rsf_dump_report {
     uint32_t struct_size;
@@ -63,7 +75,20 @@ typedef struct rsf_dump_report {
     uint64_t load_base;
     uint64_t preferred_base;
     uint64_t bytes_written;
+    /* Appended for sidecar schema 2. Filled only when the caller's struct_size covers them. */
+    uint32_t rtti_classes;
+    uint32_t function_starts;
+    uint32_t threads_listed;
+    uint32_t reserved;
 } rsf_dump_report;
+
+/* Size of the report structure before the sidecar schema 2 fields were appended. */
+#define RSF_DUMP_REPORT_V1_SIZE offsetof(rsf_dump_report, rtti_classes)
+
+/* Version of the JSON sidecar layout, written as "schema_version". Schema 1 had no such field.
+   Schema 2 adds per-section hashes and entropy, threads, rtti, functions, names and timing; every
+   schema 1 field keeps its meaning. */
+#define RSF_MODULE_DUMP_SCHEMA_VERSION 2u
 
 /* Dump the module containing this process's main image. `module_base` may be null, in which case
    the process's own main module is used. Both output parameters may be null. */

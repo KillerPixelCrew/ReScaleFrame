@@ -9,7 +9,9 @@ recorded. Other Unity players, HDRP and built-in pipelines still need verified a
 
 [AC7](ac7/README.md) has the accepted native SR/UI/cloud integration and DLSS-G path.
 [Project Wingman](project-wingman/README.md) remains a detection/lifecycle scaffold with rendering
-unsupported. All native plugin APIs retain `rendering_ready = 0`; that flag is separate from
+unsupported. [Red Dead Redemption 2](rdr2/README.md) has a forced-DX12 ASI with a guarded Social Club
+correction and a completed gameplay input census; RSF SR/FG integration is pending.
+All native plugin APIs retain `rendering_ready = 0`; that flag is separate from
 individual deployed-path acceptance. [Current status](../docs/current-status.md) distinguishes
 source features, downloads and remaining validation.
 

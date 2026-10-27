@@ -7,7 +7,7 @@
 namespace {
 using rsf_game::equal_ascii;
 constexpr char renderer_status[] =
-    "Native temporal pass observer; GPU resource leases, SR, FG, latency and VR processing are unimplemented.";
+    "Native temporal GPU input leases; SR, FG, latency and VR processing are unimplemented.";
 
 rsf_detection detect(const rsf_game_probe* probe) noexcept
 {

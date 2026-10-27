@@ -3,6 +3,7 @@
 #include <rescaleframe/motion_decode.h>
 
 #include <rescaleframe/log.h>
+#include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/srv_cache.h>
 
@@ -14,6 +15,7 @@
 #include <wrl/client.h>
 
 #include <cstring>
+#include <cmath>
 
 namespace {
 
@@ -169,6 +171,17 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
     auto* texture = static_cast<ID3D11Texture2D*>(source);
 
+    if (!rsf::same_device(context, pass->device.Get()) ||
+        context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) {
+        return RSF_MOTION_DECODE_ERROR_SOURCE_MISMATCH;
+    }
+    if (!std::isfinite(params->scale_x) || !std::isfinite(params->scale_y) ||
+        !std::isfinite(params->bias_x) || !std::isfinite(params->bias_y) ||
+        !std::isfinite(params->output_scale_x) || !std::isfinite(params->output_scale_y) ||
+        !std::isfinite(params->invalid_value)) {
+        return RSF_MOTION_DECODE_ERROR_INVALID_ARGUMENT;
+    }
+
     // Same rule as the texture dump: a resource from another device faults rather than failing.
     if (!rsf::same_device(texture, pass->device.Get())) {
         rsf::say(pass->log, pass->log_user, "source belongs to another device");
@@ -177,7 +190,8 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
 
     D3D11_TEXTURE2D_DESC description{};
     texture->GetDesc(&description);
-    if (description.Width != pass->width || description.Height != pass->height) {
+    if (description.Width != pass->width || description.Height != pass->height ||
+        description.ArraySize != 1 || description.SampleDesc.Count != 1) {
         rsf::say(pass->log, pass->log_user, "source is %ux%u but this pass was built for %ux%u",
                  description.Width, description.Height, pass->width, pass->height);
         return RSF_MOTION_DECODE_ERROR_SOURCE_MISMATCH;
@@ -207,18 +221,14 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     std::memcpy(mapped.pData, &values, sizeof(values));
     context->Unmap(pass->constants.Get(), 0);
 
-    // This dispatch happens inside a frame the game is in the middle of. It did not ask for its
-    // compute bindings to change, so they are put back exactly as they were.
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> previous_shader;
-    ID3D11ClassInstance* previous_instances[D3D11_SHADER_MAX_INTERFACES] = {};
-    UINT previous_instance_count = D3D11_SHADER_MAX_INTERFACES;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> previous_source;
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> previous_target;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> previous_constants;
-    context->CSGetShader(&previous_shader, previous_instances, &previous_instance_count);
-    context->CSGetShaderResources(0, 1, &previous_source);
-    context->CSGetUnorderedAccessViews(0, 1, &previous_target);
-    context->CSGetConstantBuffers(0, 1, &previous_constants);
+    // Binding this persistent target for writing can implicitly unbind last frame's SRV from any
+    // stage. Preserve those bindings too, and ensure a game's predicate cannot skip the decode.
+    rsf_d3d11_state saved{};
+    if (!rsf_d3d11_state_save(context, &saved)) {
+        return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED;
+    }
+    context->SetPredication(nullptr, FALSE);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
 
     const UINT no_offset = static_cast<UINT>(-1);
     ID3D11UnorderedAccessView* target_view = pass->target_view.Get();
@@ -229,26 +239,9 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     context->CSSetConstantBuffers(0, 1, &constants);
     context->Dispatch((pass->width + 7) / 8, (pass->height + 7) / 8, 1);
 
-    // Unbind our own views before restoring, so a target that was bound elsewhere is not left
-    // fighting this one for the same slot.
-    ID3D11ShaderResourceView* no_source = nullptr;
     ID3D11UnorderedAccessView* no_target = nullptr;
-    context->CSSetShaderResources(0, 1, &no_source);
     context->CSSetUnorderedAccessViews(0, 1, &no_target, &no_offset);
-
-    context->CSSetShader(previous_shader.Get(), previous_instances, previous_instance_count);
-    ID3D11ShaderResourceView* restored_source = previous_source.Get();
-    ID3D11UnorderedAccessView* restored_target = previous_target.Get();
-    ID3D11Buffer* restored_constants = previous_constants.Get();
-    context->CSSetShaderResources(0, 1, &restored_source);
-    context->CSSetUnorderedAccessViews(0, 1, &restored_target, &no_offset);
-    context->CSSetConstantBuffers(0, 1, &restored_constants);
-
-    for (UINT index = 0; index < previous_instance_count; ++index) {
-        if (previous_instances[index]) {
-            previous_instances[index]->Release();
-        }
-    }
+    rsf_d3d11_state_restore(context, &saved);
     return RSF_MOTION_DECODE_OK;
 }
 

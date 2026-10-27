@@ -1,0 +1,274 @@
+{
+  "current_validation": {
+    "audited": "2026-10-26",
+    "scope": "Normal SDR native SR/FG has recorded acceptance. All five real input resolutions and runtime transitions are accepted in permanent PID140840 and user-confirmed. Native UI insertion cancelled. HDR, complete HUD modes and non-NVIDIA hardware remain unproven.",
+    "continuation_record": "RESEARCH-HANDOFF.md",
+    "game_abi": 19,
+    "frontend_validation": "Shared Rust/DX12 panel and runtime quality controls user-confirmed. FG-Off now displays Off while retaining the saved provider for re-enable; frontend regression passes. Busy settings observation and GPU-ring UI omissions corrected; native WARP backlog test passes.",
+    "frontend_evidence": ".local/rdr2-tools/quality-overlay-20261026/{permanent-game.log,permanent-result.json,deployment.json}; .local/rdr2-tools/rdr2-fg-off-selection-verify.log",
+    "plugin_rendering_ready": false,
+    "current_status": "../../docs/current-status.md",
+    "status": "Runtime quality presets implemented and game-tested. Final FG-Off selector mapping built, regression-tested and deployed; separate visual retest pending. Broad readiness remains zero.",
+    "research": "../../docs/research/rdr2-renderer.md",
+    "build_evidence": "Release VS2026:97 discovered,86 executed,11 optional skips; fmt/Clippy pass. Rust41+19 tests and release pass. Deliberate WARP full-ring UI regression passes with no D3D12 debug errors.",
+    "deployment_evidence": ".local/rdr2-tools/quality-overlay-20261026/deployment.json: ASI66e5b9a9...fb4d3d, Runtimed7b43b45...c0e6ad6, Rust14369273...03e43f; backed up/hash-verified, diagnostics off.",
+    "frontend_abi": 2,
+    "overlay_abi": 13,
+    "quality_controls": {
+      "status": "game_tested_user_confirmed",
+      "ini": "SRQuality0..4",
+      "names": [
+        "Native/DLAA",
+        "Quality",
+        "Balanced",
+        "Performance",
+        "Ultra Performance"
+      ],
+      "application": "ScriptHook game fiber writes the pending graphics owner (manager+b8) and requests native state9 graphics reconfiguration; native Apply copies pending into active manager+8.",
+      "guarded_sites": {
+        "manager": "0x2cf31f8",
+        "active_graphics": "0x2c76114",
+        "pending_group_lookup": "0x2c736f4",
+        "graphics_reconfigure": "0x2c7e8f4",
+        "dimension_observer": "0x58a908",
+        "dlss_optimal_table": "0x26f5270",
+        "fsr_dimensions": "0x26ecc3c"
+      },
+      "detail": "docs/research/rdr2-renderer.md shared overlay and quality section; .local/rdr2-menu-research/quality-decompilation.txt",
+      "failed_approaches": "Active-owner changes were overwritten from the unchanged pending tree. GUI/XML commit and notification-only calls also omitted native renderer reconfiguration. Correct implementation writes manager+b8 pending fields and requests state9.",
+      "diagnostic_evidence": ".local/rdr2-tools/quality-overlay-20261026/diagnostic-result.json; pending-probe*.log; live-settings.json",
+      "diagnostic_sizes": [
+        {
+          "tick": 370133796,
+          "backend": 1,
+          "quality": 0,
+          "width": 2560,
+          "height": 1600,
+          "output_width": 2560,
+          "output_height": 1600
+        },
+        {
+          "tick": 369981296,
+          "backend": 1,
+          "quality": 1,
+          "width": 1707,
+          "height": 1067,
+          "output_width": 2560,
+          "output_height": 1600
+        },
+        {
+          "tick": 370139640,
+          "backend": 1,
+          "quality": 2,
+          "width": 1485,
+          "height": 928,
+          "output_width": 2560,
+          "output_height": 1600
+        },
+        {
+          "tick": 370123156,
+          "backend": 1,
+          "quality": 3,
+          "width": 1280,
+          "height": 800,
+          "output_width": 2560,
+          "output_height": 1600
+        },
+        {
+          "tick": 370128343,
+          "backend": 1,
+          "quality": 4,
+          "width": 853,
+          "height": 533,
+          "output_width": 2560,
+          "output_height": 1600
+        }
+      ],
+      "permanent_evidence": ".local/rdr2-tools/quality-overlay-20261026/permanent-result.json",
+      "script_hook_required": true
+    }
+  },
+  "game": {
+    "id": "rdr2",
+    "title": "Red Dead Redemption 2",
+    "steam_appid": 1174180,
+    "build": "13773296",
+    "build_how": "Steam manifest TargetBuildID during installation; the executable was hashed from steamapps/downloading after all 86 MiB blocks were written",
+    "executable": "RDR2.exe",
+    "file_version": "1.0.1491.50",
+    "sha256": "b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e",
+    "bytes": 89562608,
+    "pe_machine": "0x8664",
+    "image_base": "0x140000000",
+    "entry_point_rva": "0x2e4fc44",
+    "pe_timestamp_utc": "2024-03-11T09:04:46Z",
+    "platform": "windows-x64",
+    "examined": "2026-10-25"
+  },
+  "plugin": {
+    "target": "rsf_game_rdr2",
+    "dll": "ReScaleFrame.Game.RDR2.dll",
+    "status": "Native SR and completed-scene/common-FG paths have recorded scoped game acceptance, including runtime performance presets; broad rendering_ready remains zero.",
+    "rendering_ready": false,
+    "contract_tested": true,
+    "hooks_implemented": true,
+    "game_tested": true,
+    "device_tested": true,
+    "entry": "ReScaleFrame.RDR2.asi (rsf_asi_rdr2), loaded by Alexander Blade's ASI loader during CRT startup before WinMain; runs the plugin session off the loader lock",
+    "entry_game_tested": true
+  },
+  "engine": {
+    "family": "RAGE",
+    "how": "executable strings (rage__fwSettings__eReflexSettings, rage__fwuiSettingsItemInfo_ReflexSettings)",
+    "version": null
+  },
+  "protection": {
+    "status": "measured",
+    "main_text_entropy_bits_per_byte": 7.998,
+    "second_text_entropy_bits_per_byte": 7.934,
+    "sections": [
+      ".text",
+      ".rdata",
+      ".data",
+      ".pdata",
+      ".msvcjmc",
+      "_RDATA",
+      "CPADinfo",
+      ".rsrc",
+      ".reloc",
+      ".idata",
+      ".text"
+    ],
+    "notes": "The 53 MB main .text is encrypted on disk and a second 20 MB .text follows .idata. Static code analysis needs a runtime image, as AC7 did. .rdata strings are readable.",
+    "runtime_dump": "Decrypted before ASI load: entropy 6.523, 2,816 import-table references (dumps/rdr2-20261025, rdr2-20261025-dx12)",
+    "rtti": "absent for engine types; 124 runtime-library classes only"
+  },
+  "graphics": {
+    "api_setting_strings": [
+      "kSettingAPI_DX11",
+      "kSettingAPI_DX12",
+      "kSettingAPI_Vulkan"
+    ],
+    "static_imports": "No D3D12, DXGI or Vulkan imports; d3d12.dll, dxgi.dll and vulkan-1.dll are named in strings and resolved at runtime",
+    "d3d12": "active device, command lists, submissions, Present and native pixel readbacks measured",
+    "vulkan": "game default on many systems; RSF does not target it",
+    "dx12_forcing": {
+      "status": "measured",
+      "method": "pointer write of \"d3d12\" to the engine API parameter at RVA 0x57abf10 before settings load, guarded by PE timestamp 0x65eec92e, SizeOfImage 0x7397600, four expected read sites and a null value",
+      "result": "engine wrote a D3D12 pipeline cache and saved kSettingAPI_DX12 after one self-restart",
+      "limits": "API forcing and active D3D12 device measured; not proof of RSF SR/FG implementation"
+    },
+    "api_selection": {
+      "enum": "rage::fwSettings::eAPILevel DX11=0 DX12=1 Vulkan=2",
+      "adapter_types": "D3D12=1 Vulkan=3",
+      "override_param_rva": "0x57abf10"
+    }
+  },
+  "upscalers": {
+    "rsf_input_source": "Game DLSS calls for every RSF backend, per user clarification on 2026-10-26; native FSR2 input validation is not a delivery gate",
+    "native_selection_routing": "Native DLSS entry is game-tested with RSF DLSS/FSR3/FSR4/XeSS. Native FSR dispatch normalizes through checked thunk 0x2ea0af5/IAT0x6032a98; live execution remains blocked by disabled native UI rows. No native-menu replacement implemented.",
+    "native_menu_controls": "Investigate replacing the game DLSS/FSR controls with RSF controls, making the RSF overlay optional; feasibility and implementation unproven",
+    "dlss": "NGX D3D12 creation/evaluation measured in Story mode: 4900 evaluations in the final periodic census; MaxQuality and Balanced contexts observed",
+    "fsr2": "imports ffx_fsr2_api_x64.dll (7 functions), ffx_fsr2_api_dx12_x64.dll (5) and ffx_fsr2_api_vk_x64.dll (5); ffxFsr2ContextCreate/Dispatch/Destroy, GetJitterOffset/PhaseCount and GetInterfaceDX12 named",
+    "inputs_measured": true,
+    "measurement_scope": "AA contains 88 exact-call colour/depth/motion/exposure/output pixel sets and camera bytes with submission fences. Static terrain motion verified; full motion-class coverage and FG ownership remain open.",
+    "fsr2_dispatch": "rdr2_Fsr2Api_Dispatch RVA 0x26efe24, FSR 2.1.x layout, game command list; passes reactive and transparency masks and camera near/far/vertical FOV",
+    "dlss_evaluate": "Measured export call return RVA 0x2e9c900 through 0x2e9ce30 and game wrapper 0x26f4199; NGX SDK static",
+    "fsr2_dispatch_call": "Measured return RVA 0x26f050a; FSR2 2.1.2 dispatch layout; 4412 dispatches in the final periodic census",
+    "rsf_gpu_host_fixtures": "DLSS, FSR3 3.1.5, FSR4 4.1.1 INT8 and XeSS 2.0.2 on RTX 4070 Laptop GPU: external exposure, 426x240 to 640x360 pixels, unsubmitted-slot refusal, retirement/reuse and actual DXGI Present. .local/rdr2-tools/sr-host-gpu-exposure-{1,3,4,5}.log",
+    "rsf_game_evidence": ".local/rdr2-tools/native-adapter-game-ab-20261026/attach.log, pixels/, sr-pixel-validation.json; AC rdr2.log and provider-cycle.log with pause/native NGX success after persistent registration fix",
+    "native_menu_live_metadata": "Read-only AC snapshot: system/graphics=8c463422/bc098ed9, 29 items. Live dlssIndex4de87d5b/fsr2Index58e23159 match persisted keys. Native AA rows currently disabled with both XML selectors nonzero; cause not yet decoded. NATIVE-OPTIONS-RESEARCH.md",
+    "native_ngx_lifetime": "One persistent DLSS registration outlives SR contexts. Context switches release only RSF feature resources; slShutdown is not called while the game retains native handles. Pause crash dump showed freed handle memory reused as JSON metadata. Fixed and pause-tested in AC."
+  },
+  "latency": {
+    "status": "Native Reflex wrapper RVA 0x26d4674 observed through return 0x26d46d6 and NVAPI stub return 0x1ea2c; nine sampled marker types, 83549 total calls; frame counter RVA 0x542904c located statically",
+    "settings": [
+      "kSettingReflex_Off",
+      "kSettingReflex_On",
+      "kSettingReflex_On_Boost"
+    ],
+    "dx12_route": "NVAPI static stubs resolving nvapi_QueryInterface: SetSleepMode, Sleep, SetLatencyMarker",
+    "vulkan_route": "imports NvLowLatencyVk.dll (5 functions), NvLL_VK_InitLowLatencyDevice",
+    "pcl_stats": "ReflexStatsInit, ReflexStatsEvent, ReflexStatsTraceLoggingProvider strings",
+    "non_nvidia_behaviour": null,
+    "rsf_source": "ABI18 process_latency callback owns exact native sleep/marker/mode boundaries when shared presentation is active. Sleep2687fb4 bytes40 53 48 83 ec 50 80 3d 06 3d 09 03 00 0f 84 c4; mode1e800 bytes48 89 74 24 10 57 48 83 ec 20 48 8b fa 48 8b f1; marker26d4674 bytes48 89 5c 24 08 48 89 54 24 10 55 48 8d 6c 24 a9. Input ID is DWORD542904c+1 at sleep. Native0/1/2/6 forwarded, late native3/4/5 replaced by correctly ordered actual Present markers. Built/fixture-tested, not game-tested."
+  },
+  "other_imports": {
+    "dinput8": "DirectInput8Create; the usual ASI loader carrier",
+    "version": "3 functions",
+    "winmm": "3 functions",
+    "bink2w64": "23 functions; video playback",
+    "amd_ags_x64": "1 function"
+  },
+  "temporal": {
+    "status": "Resource descriptions and vendor flags measured; texel encoding and motion coverage remain unknown",
+    "depth_format": "R32G8X24_TYPELESS resource; exact shader view unmeasured",
+    "depth_inverted": true,
+    "motion_format": "R16G16_FLOAT",
+    "motion_low_res": true,
+    "motion_jittered": false,
+    "motion_scale": [
+      1,
+      1
+    ],
+    "jitter_units": "input/render pixels, matched to the worker projection in active gameplay; paused projections can freeze"
+  },
+  "camera": {
+    "status": "W/X/Z plus 88 AA exact-call views measured. Compiled decoder inverse residual <=4.68364e-8; X ScriptHook and AA static-terrain motion agree. Frozen pause jitter, full FG ownership and motion-class coverage remain open.",
+    "render_thread_source": "RDR2 TLS index DWORD RVA 0x5b403e0; GS:[0x58][index] + 0x14d8 holds the active job view; observe at DLSS thunk 0x7bb60c or FSR2 thunk 0x7ba10c",
+    "worker_view_offsets": {
+      "view": "0x40",
+      "projection_jittered": "0x80",
+      "camera_to_world": "0xc0",
+      "previous_view": "0x140",
+      "previous_projection_current_jitter": "0x180",
+      "previous_camera_to_world": "0x1c0",
+      "near": "0x630",
+      "far": "0x634",
+      "vertical_fov_degrees": "0x640",
+      "aspect": "0x66c",
+      "base_projection_offsets": "0x65c/0x660",
+      "additional_jitter_offsets": "0x664/0x668",
+      "reverse_depth": "0x671, value 1 in all 88 AA sets",
+      "viewport": "0x674..0x688"
+    },
+    "matrix_evidence": ".local/rdr2-tools/camera-run-w/analysis.json; .local/rdr2-tools/camera-static-20261025.json",
+    "previous_projection_limit": "Run W previous projection contains current jitter; do not use it as the previous frame jittered projection",
+    "static_perspective_builder_rva": "0x26f63fc",
+    "public_reference_crosscheck": "Cfx 46de79bc viewport layout agrees at +0x40/+0x80/+0xc0; RedM global signature matches RVA 0x1507b2a -> 0x3ec2610; CyberFSR ed00f4a scalar signature matches 0x3212b7 -> 0x3ec2450; these global owners are not yet associated with the worker frame",
+    "public_camera_state_apply_rva": "0x170028, signature from rdr2-ultrawide-camera 0a000d93 matched statically only",
+    "motion_reprojection_verified": true,
+    "scripthook_comparison_verified": true,
+    "scripthook_comparison_scope": "Run X world/Eagle Eye/Dead Eye, 192 same-frame samples; position error <=5e-7 world units, FOV <=5e-8 degrees, forward <=1.92e-7",
+    "pause_jitter_limit": "Projection remains frozen while DLSS jitter advances; observed disagreement up to 0.84375 pixels",
+    "fsr2_camera_near": 0.14999111,
+    "fsr2_camera_far": 10000,
+    "fsr2_vertical_fov_radians": 0.659771383,
+    "motion_reprojection_scope": "Static foreground rock only: AA6/7, rectangle [85,896,938,128], 7520 texels per set, eight sets. Median residual 0.0427-0.1700 pixels versus opposite sign 1.646-11.996. .local/rdr2-tools/native-run-aa-20261026/static-rock-reprojection.json",
+    "convention": "Row-vector row-major, world Z-up, negative view Z forward. Position/clip distances in game world units, FOV at +640 in degrees. Physical metre scale not independently calibrated.",
+    "frame_identity_source": "TLS DWORD +0x61c & 6 selects uint32 at pointer RVA 0x5429058, otherwise direct RVA 0x542904c; matches render-submit producer at 0xa9f188. This alone is not final FG ownership.",
+    "frame_time_source": "Float RVA 0x59b393c, statically multiplied by 1000 at 0x5c7fca. Direct adapter sampling awaits game execution."
+  },
+  "hud": {
+    "status": "Z pixels and full AA draw sequences establish normal SDR scene-only output followed by localized HUD/RTSS. Pause scene effects A7D93689/A85DBFA9/2EACAA61 precede final BB74CEA4 and UI. Universal separation and native UI-only extraction remain unproven.",
+    "inference": "Run-X PSO/shader topology proves direct swapchain UI drawing in sampled DX12 paths; output shader LUT/PQ branches are source-inspected, but native HDR pixels and per-mode colour contracts remain unmeasured.",
+    "completed_hudless_surface_verified": false,
+    "normal_sdr_hudless_pixels_verified": true,
+    "adapter_hudless_pixels": "AD actual native output hook and matching final Present:2560x1600,116394 changed pixels confined to minimap/prompts, zero outside two documented ROIs. .local/rdr2-tools/native-adapter-game-ad-20261026/hud-pixel-comparison.json and pixels/fg-input-1-{hudless,final}.ppm. This is normal SDR acceptance only.",
+    "native_evidence": ".local/rdr2-tools/native-run-z-20261026/native-analysis.json and roi-analysis.json; .local/rdr2-tools/native-run-aa-20261026/native-analysis.json, draw-summary.txt, manifests and raw pixels",
+    "dx12_shader_leads": "AA stream PSOs identified. Normal final PS BB74CEA4/VS DB61C169 through 0x5c1254. UI CA8E18BF/2E866023/EE341D7A/1A0D957F through 0x596828. RGB SrcAlpha/InvSrcAlpha, alpha One/InvSrcAlpha. RTSS PS CB54F2A6/D70DAF42, VS 88A78FCD.",
+    "mor3a_reference": "references/rdr2-vulkan-frame-generation bc853d0b4a9e7ba23ee1fe00c2c107092ccd596d; useful DLSS input/frame/HUD-history contracts, nominal default camera and heuristic Vulkan HUD capture; full source map in RESEARCH-HANDOFF.md",
+    "public_ui_layout_leads": "ultrawide-camera 0a000d93 signatures match UI boxing RVA 0x1cbd30 and letterbox anchor store 0x320545 -> 0x39751b4; layout and eligibility leads, not a proven colour boundary",
+    "sdr_output": "B8G8R8A8_UNORM with signalled RGB_FULL_G22_NONE_P709. Linear temporal R16G16B16A16_FLOAT is distinct from presentation HDR.",
+    "unverified_modes": "Photo mode, cinematic camera, letterboxed cutscenes and visible Social Club overlay. No HDR display available; complete native UI-only extraction unverified.",
+    "scene_producer_source": "scene_boundary.cpp: postfx output scope 0x5f1e08 called at 0x5caafc/0x5cad96/0x5cadec, inline blit 0x5c1254; exact scene target matched to actual swapchain buffers. Marker0x26d4674 associates actual input/simulation/render/Present identities. Newly implemented, not game-tested.",
+    "render_target_owner": "TLS draw context +0xca48 colour-view array, +0xca94 count, +0xca88 depth view. Colour view+8 texture; texture+0x48 native ID3D12Resource. Live renderer vtable+0x248 resolves 0x26b4250 (48 8b 42 48 c3). Matched static cache writers 0x26d4964 and 0x26ddf80.",
+    "source_validation": ".local/rdr2-tools/scene-producer-fixture.log: later RT-state copy on accepted SR recording, original pixels identical to reinserted output, fenced retirement, debug-layer pass and retained NGX across DLSS/FSR3/DLSS. Engine hook execution and all-mode HUD separation remain unverified."
+  },
+  "presentation": {
+    "d3d12": "Present measured at return RVA 0x26df94f; CreateSwapChainForHwnd at 0x26bec9d through RTSS/Steam, DIRECT queue creation at 0x26beb46; 2560x1600 B8G8R8A8_UNORM, three buffers, interval 1",
+    "vulkan": "rdr2_Present_Vulkan RVA 0x26df458",
+    "rsf_fg_source": "RDR2Host installs FG12 before graphics for sgaWindow; the bridge fence-joins the game queue and required Streamline proxy queue. AD with guarded skipped-token retirement accepts normal SDR source/input/camera/scene/submission/Present association, DLSS active1 with driver multiplier2/4, Off/resume and SR-provider switching. RTSS and Social Club remain loaded. FSR/XeSS FG have GPU-fixture evidence only; generated-image quality, visible overlay and all-mode acceptance remain separate.",
+    "rsf_fg_evidence": ".local/rdr2-tools/native-adapter-game-ad-20261026/:live-tokens.json, token-fix.log, dlss-2x-rdr2.log, dlss-4x-rdr2.log, dlss-off-rdr2.log, dlss-resume-rdr2.log, fsr3-sr-dlss-fg-rdr2.log, returned-dlss-rdr2.log, hud-pixel-comparison.json and sr-pixel-validation.json"
+  }
+}

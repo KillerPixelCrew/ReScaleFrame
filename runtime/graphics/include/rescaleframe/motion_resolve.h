@@ -8,8 +8,9 @@ extern "C" {
 typedef struct rsf_motion_resolve rsf_motion_resolve;
 /* Resolve an already-decoded sparse field. Written vectors replace depth-derived camera motion;
    they are not added. The plugin supplies their direction and units through decoded_to_pixels.
-   Matrix is row-major current clip to previous clip, with jitter removed. Outputs are dense
-   R16G16_FLOAT pixel displacement and R32_FLOAT device depth. Origin-zero valid rectangle. */
+   Matrix is row-major current clip to previous clip, with both frames' jitter removed. Outputs are
+   dense previous-minus-current R16G16_FLOAT pixel displacement (X right, Y down) and R32_FLOAT
+   device depth. Motion is unjittered and undilated. Origin-zero valid rectangle. */
 typedef struct rsf_motion_resolve_params {
     uint32_t struct_size;
     float clip_to_previous[16];
@@ -20,6 +21,10 @@ typedef struct rsf_motion_resolve_params {
        Unwritten pixels reproject at the nearer of it and scene depth. The depth output stays the
        scene depth. Null for none. */
     void* depth_layer;
+    /* Current projection shift in render pixels (X right, Y down). Depth was rasterized at this
+       jittered sample location, so camera reconstruction removes the shift before applying the
+       unjittered matrix. Earlier call structures omit this field and retain zero jitter. */
+    float jitter_pixels[2];
 } rsf_motion_resolve_params;
 int rsf_motion_resolve_create(void* d3d11_device, uint32_t width, uint32_t height,
                              rsf_motion_resolve** out);

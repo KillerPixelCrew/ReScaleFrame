@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_observer.h"
+#include "native_execution.h"
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/log.h>
 #include <rescaleframe/sha256_file.h>
@@ -156,6 +157,10 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             MH_RemoveHook(target); original = nullptr; return RSF_ERROR_NATIVE_REFUSED;
         }
     }
+    if (!execution_prepare(*args->host)) {
+        reason = "Native temporal execution refused: queued-pass entry bytes differ or hooks could not be created.";
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     services = *args->host; samples = {}; serial = 0; prepared = true;
     reason = "Native temporal observer prepared; no graphics processing implemented.";
     return RSF_OK;
@@ -167,9 +172,12 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(guard);
     if (!prepared) return RSF_ERROR_NOT_READY;
-    if (!installed && MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
+    if (!execution_start()) return RSF_ERROR_NATIVE_REFUSED;
+    if (!installed && MH_EnableHook(target) != MH_OK) {
+        execution_stop(); return RSF_ERROR_NATIVE_REFUSED;
+    }
     installed = true; accepting.store(true, std::memory_order_release);
-    reason = "Native temporal observer active; GPU leases, SR, FG and latency remain unimplemented.";
+    reason = "Native temporal inputs leased on the RHI stream; SR, FG and latency execution remain unimplemented.";
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
@@ -178,6 +186,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     accepting.store(false, std::memory_order_release);
+    execution_quiesce();
     return RSF_OK;
 }
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -185,6 +194,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(guard);
     accepting.store(false, std::memory_order_release);
+    if (!execution_stop()) return RSF_ERROR_BUSY;
     if (installed) {
         if (MH_DisableHook(target) != MH_OK) return RSF_ERROR_BUSY;
         installed = false;

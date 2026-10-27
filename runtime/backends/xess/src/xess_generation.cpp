@@ -37,6 +37,11 @@ struct XegSession {
     decltype(&xellSleep) sleep{};
     decltype(&xellAddMarkerData) marker{};
     rsf_fg_status state{};
+    rsf_backend_log_fn log{};
+    void* log_user{};
+    uint32_t last_present_active = 0;
+    uint32_t prepared_reset = 0;
+    uint64_t prepared_gap = 0;
     rsf_fg_options options{};
     uint64_t last_begin = 0;
     struct FrameId { uint64_t source = 0; uint32_t sdk = 0; };
@@ -63,6 +68,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     if (setup->chain.ui_mode == RSF_UI_MODE_UI_LAYER) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (GetModuleHandleW(L"sl.dlss_g.dll") && !setup->streamline_host) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     auto* self = new (std::nothrow) XegSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
+    self->log = setup->chain.log; self->log_user = setup->chain.log_user;
     self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device);
     self->ui_mode = setup->chain.ui_mode;
     self->module = rsf::fg_library(*setup, L"libxess_fg.dll");
@@ -204,7 +210,10 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
     std::memcpy(constants.projectionMatrix, frame->record->camera.view_to_clip, sizeof(constants.projectionMatrix));
     constants.jitterOffsetX = frame->record->camera.jitter_pixels[0]; constants.jitterOffsetY = frame->record->camera.jitter_pixels[1];
     constants.motionVectorScaleX = frame->motion_scale_x; constants.motionVectorScaleY = frame->motion_scale_y;
-    constants.frameRenderTime = frame->record->frame_time_ms;
+    // Engine simulation delta is not measured presentation cadence. XeFG uses this
+    // optional value for pacing checks on non-Intel GPUs; its guide specifies zero
+    // when presentation timing is unavailable, and deprecates the field.
+    constants.frameRenderTime = 0;
     const rsf_backend_resource* resources[] = {&frame->depth, &frame->motion, &frame->hudless, &frame->ui};
     const xefg_swapchain_resource_type_t types[] = {XEFG_SWAPCHAIN_RES_DEPTH, XEFG_SWAPCHAIN_RES_MOTION_VECTOR, XEFG_SWAPCHAIN_RES_HUDLESS_COLOR, XEFG_SWAPCHAIN_RES_UI};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -220,6 +229,8 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
     if (self.constants(self.context, sdk, &constants) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
         self.enabled(self.context, self.options.mode != RSF_FG_OFF) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    self.prepared_reset = constants.resetHistory;
+    self.prepared_gap = id - self.last_prepare;
     self.last_prepare = id; self.history_valid = true; self.state.active = 0;
     self.state.effective_mode = self.options.mode;
     self.state.effective_generated_frames = self.options.generated_frames > self.reserved ? self.reserved : self.options.generated_frames;
@@ -231,14 +242,26 @@ rsf_backend_result after(void* pointer)
     auto& self = *static_cast<XegSession*>(pointer);
     xefg_swapchain_present_status_t status{};
     const auto result = self.present_status(self.context, &status);
-    self.state.vendor_status = result;
+    const auto previous_active = self.last_present_active;
+    const auto previous_result = self.state.vendor_status;
+    self.state.vendor_status = result == XEFG_SWAPCHAIN_RESULT_SUCCESS ? status.frameGenResult : result;
     self.state.active = 0;
+    if (result == XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        self.state.active = status.framesPresented > 1 && status.isFrameGenEnabled &&
+            status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS;
+    if (self.log && (previous_active != self.state.active || previous_result != self.state.vendor_status)) {
+        char message[256];
+        std::snprintf(message, sizeof(message), "XeSS FG present source=%llu query=%d interpolation=%d enabled=%u presented=%u active=%u reset=%u source_gap=%llu",
+            static_cast<unsigned long long>(self.last_prepare), static_cast<int>(result),
+            static_cast<int>(status.frameGenResult), status.isFrameGenEnabled, status.framesPresented, self.state.active,
+            self.prepared_reset, static_cast<unsigned long long>(self.prepared_gap));
+        self.log(self.log_user, message);
+    }
+    self.last_present_active = self.state.active;
     if (result < XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_OK;
     self.state.total_presented += status.framesPresented;
     self.state.valid_statistics |= RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_ACTIVITY;
-    self.state.active = status.framesPresented > 1 && status.isFrameGenEnabled &&
-        status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS;
     return RSF_BACKEND_OK;
 }
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)

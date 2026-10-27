@@ -22,6 +22,9 @@ constexpr Fixture fixtures[] = {
     {L"project-wingman", "project-wingman", "ProjectWingman-Win64-Shipping.exe",
      "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
      RSF_ERROR_NATIVE_REFUSED},
+    {L"rdr2", "rdr2", "RDR2.exe",
+     "b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e",
+     RSF_ERROR_NOT_READY},
     {L"unity-mono", "unity-mono", "DragNWash.exe",
      "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
      RSF_ERROR_NOT_READY}};

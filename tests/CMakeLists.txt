@@ -2,8 +2,12 @@ add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
 add_executable(rsf_plugin_contract plugin_contract.cpp)
+
+add_executable(rsf_wingman_camera wingman_camera.cpp ../games/project-wingman/src/native_camera.cpp)
+target_link_libraries(rsf_wingman_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_unity_mono)
+add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
@@ -12,6 +16,12 @@ if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     target_include_directories(rsf_unity_sr_d3d12_test SYSTEM PRIVATE "${RSF_STREAMLINE_INCLUDE}")
 endif()
 add_test(NAME unity_sr_d3d12_contract COMMAND rsf_unity_sr_d3d12_test)
+add_executable(rsf_rdr2_frontend_test rdr2_frontend.cpp)
+target_link_libraries(rsf_rdr2_frontend_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME rdr2_frontend_contract COMMAND rsf_rdr2_frontend_test)
+add_executable(rsf_rdr2_engine_settings_test rdr2_engine_settings.cpp)
+target_link_libraries(rsf_rdr2_engine_settings_test PRIVATE rsf_build_options)
+add_test(NAME rdr2_engine_settings COMMAND rsf_rdr2_engine_settings_test)
 add_executable(rsf_gpu_policy_test gpu_policy.cpp)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME gpu_sr_policy COMMAND rsf_gpu_policy_test)
@@ -42,6 +52,10 @@ add_test(NAME game_project_wingman_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_project_wingman>" project-wingman)
 set_tests_properties(game_project_wingman_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_project_wingman>")
+add_test(NAME game_rdr2_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_rdr2>" rdr2)
+set_tests_properties(game_rdr2_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_rdr2>")
 add_test(NAME game_unity_mono_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_unity_mono>" unity-mono)
 set_tests_properties(game_unity_mono_plugin_contract PROPERTIES
@@ -196,6 +210,12 @@ add_dependencies(rsf_overlay_host rsf_overlay_panel_fixture)
 add_test(NAME overlay_host COMMAND rsf_overlay_host "$<TARGET_FILE_NAME:rsf_overlay_panel_fixture>")
 set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_overlay_host>")
+add_executable(rsf_overlay_native12_test overlay_native12.cpp ../runtime/orchestrator/src/overlay_native12.cpp)
+target_include_directories(rsf_overlay_native12_test PRIVATE ../runtime/orchestrator/include)
+target_link_libraries(rsf_overlay_native12_test PRIVATE ReScaleFrame::Graphics rsf_build_options d3d12 d3dcompiler dxgi)
+add_dependencies(rsf_overlay_native12_test rsf_overlay_panel_fixture)
+add_test(NAME overlay_native12_backpressure COMMAND rsf_overlay_native12_test "$<TARGET_FILE:rsf_overlay_panel_fixture>")
+set_tests_properties(overlay_native12_backpressure PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
 add_executable(rsf_dlss_backend dlss_backend.cpp)
 target_link_libraries(rsf_dlss_backend PRIVATE ReScaleFrame::DLSS rsf_build_options)
@@ -450,4 +470,91 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     target_include_directories(rsf_native_fg_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
     target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
     add_test(NAME native_fg_dlss_vulkan_contract COMMAND rsf_native_fg_dlss_vulkan_test)
+endif()
+
+
+add_executable(rsf_module_dump_v2 module_dump_v2.cpp)
+target_link_libraries(rsf_module_dump_v2 PRIVATE ReScaleFrame::LoaderDiagnostics rsf_build_options bcrypt)
+add_test(NAME module_dump_v2 COMMAND rsf_module_dump_v2 "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(module_dump_v2 PROPERTIES TIMEOUT 120)
+
+# Vendor call census: fake vendor DLLs named like the real ones, a test that installs the census
+# and calls them, and a real DXGI/D3D12 (WARP) path. MSVC only, like the library.
+if(TARGET rsf_vendor_census)
+    function(rsf_census_fixture target define output)
+        add_library(${target} SHARED vendor_census_fixture.cpp)
+        target_compile_definitions(${target} PRIVATE ${define})
+        target_link_libraries(${target} PRIVATE rsf_build_options)
+        set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output}")
+        # Identical-function folding or incremental thunks would put two exports on one address.
+        target_link_options(${target} PRIVATE /OPT:NOICF /INCREMENTAL:NO)
+    endfunction()
+    rsf_census_fixture(rsf_census_fx_fsr2 FIXTURE_FSR2 ffx_fsr2_api_x64)
+    rsf_census_fixture(rsf_census_fx_ngx FIXTURE_NGX _nvngx)
+    rsf_census_fixture(rsf_census_fx_nvapi FIXTURE_NVAPI rsf_fixture_nvapi)
+    rsf_census_fixture(rsf_census_fx_xess FIXTURE_XESS libxess)
+    rsf_census_fixture(rsf_census_fx_vk FIXTURE_VK rsf_fixture_vulkan)
+    rsf_census_fixture(rsf_census_fx_sl FIXTURE_SL sl.interposer)
+    rsf_census_fixture(rsf_census_fx_ffx FIXTURE_FFX amd_fidelityfx_dx12)
+
+    add_library(rsf_census_asi SHARED vendor_census_asi.cpp)
+    target_link_libraries(rsf_census_asi PRIVATE ReScaleFrame::VendorCensus rsf_build_options)
+
+    add_executable(rsf_vendor_census_test vendor_census.cpp)
+    target_link_libraries(rsf_vendor_census_test PRIVATE ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)
+    add_dependencies(rsf_vendor_census_test rsf_census_fx_ngx rsf_census_fx_nvapi rsf_census_fx_xess rsf_census_fx_vk rsf_census_fx_sl rsf_census_fx_ffx rsf_census_asi)
+    add_test(NAME vendor_census COMMAND rsf_vendor_census_test functional "${CMAKE_CURRENT_BINARY_DIR}/census-functional")
+    add_test(NAME vendor_census_budget COMMAND rsf_vendor_census_test budget "${CMAKE_CURRENT_BINARY_DIR}/census-budget")
+    add_test(NAME vendor_census_vulkan_streamline COMMAND rsf_vendor_census_test vulkan "${CMAKE_CURRENT_BINARY_DIR}/census-vulkan")
+    add_test(NAME vendor_census_fidelityfx_api COMMAND rsf_vendor_census_test ffx "${CMAKE_CURRENT_BINARY_DIR}/census-ffx")
+    add_test(NAME vendor_census_dllmain COMMAND rsf_vendor_census_test dllmain "${CMAKE_CURRENT_BINARY_DIR}/census-dllmain")
+    set_tests_properties(vendor_census vendor_census_budget vendor_census_vulkan_streamline vendor_census_fidelityfx_api vendor_census_dllmain PROPERTIES TIMEOUT 120)
+
+    if(TARGET rsf_asi_rdr2)
+        add_executable(rsf_rdr2_camera rdr2_camera.cpp ../games/rdr2/src/render_camera.cpp)
+        target_link_libraries(rsf_rdr2_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+        add_test(NAME rdr2_camera COMMAND rsf_rdr2_camera)
+        add_executable(rsf_rdr2_capture rdr2_capture.cpp ../games/rdr2/src/native_capture.cpp)
+        target_compile_definitions(rsf_rdr2_capture PRIVATE RSF_RDR2_CAPTURE_TEST _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(rsf_rdr2_capture PRIVATE ReScaleFrame::VendorCensus minhook d3d12 dxgi d3dcompiler rsf_build_options)
+        add_dependencies(rsf_rdr2_capture rsf_census_fx_ngx)
+        add_test(NAME rdr2_capture COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture")
+        add_test(NAME rdr2_capture_rgb10 COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture-rgb10" rgb10)
+        set_tests_properties(rdr2_capture rdr2_capture_rgb10 PROPERTIES TIMEOUT 60)
+    endif()
+    # Hardware and desktop reproduction of the census next to an injected overlay; run by hand.
+    add_executable(rsf_census_present_coexistence census_present_coexistence.cpp)
+    target_link_libraries(rsf_census_present_coexistence PRIVATE ReScaleFrame::VendorCensus d3d12 dxgi rsf_build_options)
+
+    # The census restates vendor structure layouts so it builds without the vendor headers. These
+    # tests compare the restated offsets with the headers where an untracked checkout provides them.
+    function(rsf_census_layout_check suffix define probe)
+        if(EXISTS "${probe}")
+            add_executable(rsf_vendor_census_layouts_${suffix} vendor_census_layouts.cpp)
+            target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE ${define})
+            target_include_directories(rsf_vendor_census_layouts_${suffix} SYSTEM PRIVATE ${ARGN})
+            target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE rsf_build_options)
+            add_test(NAME vendor_census_layouts_${suffix} COMMAND rsf_vendor_census_layouts_${suffix})
+        else()
+            message(STATUS "vendor census layout check ${suffix} skipped: ${probe} not found")
+        endif()
+    endfunction()
+    set(RSF_VS "${CMAKE_SOURCE_DIR}/vendor")
+    rsf_census_layout_check(sl RSF_CENSUS_LAYOUT_SL "${RSF_VS}/streamline/include/sl.h" "${RSF_VS}/streamline/include")
+    rsf_census_layout_check(ffx RSF_CENSUS_LAYOUT_FFX "${RSF_VS}/fidelityfx/Kits/FidelityFX/api/include/ffx_api.h"
+        "${RSF_VS}/fidelityfx/Kits/FidelityFX/api/include"
+        "${RSF_VS}/fidelityfx/Kits/FidelityFX/upscalers/include"
+        "${RSF_VS}/fidelityfx/Kits/FidelityFX/framegeneration/include")
+    rsf_census_layout_check(xess RSF_CENSUS_LAYOUT_XESS "${RSF_VS}/xess/inc/xess/xess_d3d12.h" "${RSF_VS}/xess/inc/xess")
+    rsf_census_layout_check(fsr2 RSF_CENSUS_LAYOUT_FSR2
+        "${CMAKE_SOURCE_DIR}/references/OptiScaler/OptiScaler/include/fsr2_212/ffx_fsr2.h"
+        "${CMAKE_SOURCE_DIR}/references/OptiScaler/OptiScaler/include/fsr2_212")
+    if(Vulkan_INCLUDE_DIR)
+        rsf_census_layout_check(vk RSF_CENSUS_LAYOUT_VK "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.h" "${Vulkan_INCLUDE_DIR}")
+    endif()
+    foreach(rsf_layout IN ITEMS sl ffx xess fsr2 vk)
+        if(TEST vendor_census_layouts_${rsf_layout})
+            set_tests_properties(vendor_census_layouts_${rsf_layout} PROPERTIES SKIP_RETURN_CODE 77)
+        endif()
+    endforeach()
 endif()

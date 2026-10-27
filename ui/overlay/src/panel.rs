@@ -460,17 +460,31 @@ fn controls_section(
     }
 
     // Presets can be saved while disabled; startup applies the selected level.
-    ui.horizontal_wrapped(|ui| {
-        let mut choice = selection.quality;
-        for (index, level) in Quality::ALL.iter().enumerate() {
-            let response = ui.radio_value(&mut choice, *level, level.label());
-            controls.quality[index] = Some(response.rect);
-        }
-        if choice != selection.quality {
-            intent.quality = choice;
-            intent.quality_changed = true;
-        }
+    ui.add_enabled_ui(!stats.sr_quality_locked, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let mut choice = selection.quality;
+            for (index, level) in Quality::ALL.iter().enumerate() {
+                let label = if *level == Quality::Native && stats.backend == 1 {
+                    "DLAA"
+                } else {
+                    level.label()
+                };
+                let response = ui.radio_value(&mut choice, *level, label);
+                controls.quality[index] = Some(response.rect);
+            }
+            if choice != selection.quality {
+                intent.quality = choice;
+                intent.quality_changed = true;
+            }
+        });
     });
+    if stats.sr_quality_locked {
+        ui.label(
+            RichText::new("Input resolution is controlled by the game")
+                .small()
+                .color(MUTED),
+        );
+    }
 
     match (selection.requested_quality, stats.quality) {
         (Some(requested), effect) => {

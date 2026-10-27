@@ -140,6 +140,8 @@ pub struct Stats<'a> {
     pub dlss_preset: u32,
     /// The runtime implements DLSS model selection.
     pub dlss_preset_available: bool,
+    /// The host cannot change the engine's render resolution.
+    pub sr_quality_locked: bool,
     /// Whether reconstruction is currently enabled.
     pub enabled: bool,
     /// Effective SR backend.
@@ -171,6 +173,7 @@ impl Default for Stats<'_> {
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
             dlss_preset: 0,
             dlss_preset_available: false,
+            sr_quality_locked: false,
             enabled: false,
             backend: 1,
             backend_choices: 0,

@@ -74,6 +74,11 @@ for the resources and operations exposed through its host interface.
 
 ## The framework in use
 
+### Red Dead Redemption 2: integration in progress
+
+The forced-DX12 ASI and gameplay input census are implemented. RSF SR/FG execution
+remains pending. See the [RDR2 integration guide](games/rdr2/README.md).
+
 ### Minecraft: modern vendor processing behind an OpenGL renderer
 
 ReScaleFrameCraft connects Minecraft's Java/OpenGL renderer to ReScaleFrame's native runtime.

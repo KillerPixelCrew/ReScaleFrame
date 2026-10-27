@@ -27,7 +27,7 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 12u
+#define RSF_OVERLAY_ABI_VERSION 13u
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -136,6 +136,9 @@ typedef struct rsf_overlay_stats {
     uint32_t dlss_preset, dlss_preset_available;
     /* ABI 12. RTX 40 MFG unlock: 0 not applicable, 1 ready, 2 refused. */
     uint32_t fg_mfg_unlock_status;
+    /* ABI 13. The engine owns input resolution; quality is informational. Zero preserves
+       existing hosts' quality controls. */
+    uint32_t sr_quality_locked;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the

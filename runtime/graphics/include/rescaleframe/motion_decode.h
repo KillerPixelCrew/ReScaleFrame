@@ -64,10 +64,10 @@ typedef struct rsf_motion_decode_params {
     float scale_y;
     float bias_x;
     float bias_y;
-    /* Applied after the decode, to reach the backend's convention. Streamline wants motion in the
-       [-1,1] range Unreal already decodes to, so 1 and 1 leave it alone; the axis directions and
-       the sign of the difference are the part that has to be checked against a rendered result,
-       and this is where a flip belongs when it turns out to be needed. */
+    /* Applied after the decode. Direction, units, camera inclusion and jitter remain the plugin's
+       contract. Ordinary Unreal velocity is current-minus-previous NDC with Y up: conversion to
+       current-minus-previous UV is (0.5, -0.5). Leave these at (1, 1) when the caller converts later.
+       Written Unreal vectors already contain camera motion; do not add it again. */
     float output_scale_x;
     float output_scale_y;
     /* Written wherever the source held the clear value. Must be outside any real motion, and
@@ -89,8 +89,8 @@ rsf_motion_decode_result rsf_motion_decode_create(void* device,
 /* Decode `source` into the pass's own target. `context` is an `ID3D11DeviceContext*` and `source`
    an `ID3D11Texture2D*` of the size this pass was built for.
 
-   Compute state is saved and restored around the dispatch, because this runs inside a frame the
-   game is in the middle of and did not ask for its bindings to change. Nothing else is touched. */
+   Requires the device's immediate context. Graphics bindings and predication are saved and restored
+   around the dispatch, including bindings implicitly unbound by the decoded target's UAV. */
 rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pass, void* context,
                                                void* source,
                                                const rsf_motion_decode_params* params);

@@ -114,6 +114,8 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_AFTER_SIMULATION 4u
 /* TRANSLUCENCY scopes only: the pass renders an offscreen layer rather than into scene colour. */
 #define RSF_GAME_RENDER_TRANSLUCENCY_LAYER 8u
+/* This pass has usable SR inputs but cannot establish generation eligibility. */
+#define RSF_GAME_RENDER_NO_FG 16u
 /* The render or output configuration is changing; the pass carries no usable frame. Jitter lives in
    camera.jitter_pixels. */
 #define RSF_GAME_RENDER_RECONFIGURE 0x80000000u
@@ -163,6 +165,53 @@ typedef struct rsf_game_cpu_event {
    work may be performed here. FRAME_END closes CPU ownership, not GPU or Present ownership. */
 typedef void (*rsf_game_cpu_event_fn)(void* user, const rsf_game_cpu_event* event);
 
+/* Synchronous replacement of an engine upscale. Zero accepts the replacement only after the
+   host has recorded a complete output. Any other result leaves native evaluation enabled.
+   Inputs are NON_PIXEL_SHADER_RESOURCE and output is COPY_DEST during this callback. The
+   plugin restores their engine states; the enclosing engine wrapper restores pipeline state.
+   Even a refused evaluation may record GPU work and therefore needs submission retirement. */
+typedef int32_t (*rsf_game_process_upscale_fn)(void* user, void* native_command_list,
+                                              const rsf_game_render_pass* pass);
+/* The actual ExecuteCommandLists call, before (begin=1) and after (begin=0). Lists are borrowed
+   during this callback and cannot be retained as recording identities after engine recycling.
+   submission_id pairs these two callbacks, including nested submissions. */
+typedef void (*rsf_game_submit_fn)(void* user, void* native_queue, uint64_t submission_id,
+                                 uint32_t count, void* const* native_lists, uint32_t begin);
+/* Actual Present before/after, preserving the native swapchain and overlay call chain. The
+   callback observes bookkeeping boundaries; it cannot replace the engine's Present result. */
+typedef void (*rsf_game_present_fn)(void* user, void* native_swapchain, uint32_t sync_interval,
+                                  uint32_t flags, uint32_t begin);
+/* Native engine latency boundaries. Markers 0..6 follow game_frame.h; SLEEP precedes input.
+   MODE reports an attempted native pacing-policy write, which an active host may replace.
+   A zero callback result means the host owns this operation, including reporting its errors;
+   the plugin must not perform a second native sleep or duplicate the marker/mode write. */
+#define RSF_GAME_LATENCY_SLEEP 0x100u
+#define RSF_GAME_LATENCY_MODE 0x101u
+typedef struct rsf_game_latency_event {
+    uint32_t struct_size;
+    uint32_t marker;
+    uint64_t session_id;
+    uint64_t source_frame_id;
+    uint64_t timestamp_qpc;
+    uint64_t qpc_frequency;
+} rsf_game_latency_event;
+typedef int32_t (*rsf_game_process_latency_fn)(void* user, const rsf_game_latency_event* event);
+
+/* Current renderer admission, reported even when no usable pass can be published. */
+#define RSF_GAME_RENDER_FEEDBACK_ACCEPTED 0u
+#define RSF_GAME_RENDER_FEEDBACK_INPUT_UNSUPPORTED 1u
+#define RSF_GAME_RENDER_FEEDBACK_SUBRECT_UNSUPPORTED 2u
+#define RSF_GAME_RENDER_FEEDBACK_CAMERA_UNAVAILABLE 3u
+#define RSF_GAME_RENDER_FEEDBACK_OUTPUT_UNSUPPORTED 4u
+#define RSF_GAME_RENDER_FEEDBACK_CAMERA_JITTER_INVALID 5u
+#define RSF_GAME_RENDER_FEEDBACK_PRESENT_UNAVAILABLE 6u
+#define RSF_GAME_RENDER_FEEDBACK_HOST_REFUSED 7u
+typedef struct rsf_game_render_feedback {
+    uint32_t struct_size, reason;
+    uint64_t session_id, native_frame;
+} rsf_game_render_feedback;
+typedef void (*rsf_game_render_feedback_fn)(void* user, const rsf_game_render_feedback* feedback);
+
 typedef struct rsf_game_host_services {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -175,6 +224,11 @@ typedef struct rsf_game_host_services {
     /* Optional current-scope observer for diagnostics. At end it receives the restored parent
        (or a zero scope). render_pass still receives the pass that actually completed. */
     rsf_game_render_pass_fn scope_state;
+    rsf_game_process_upscale_fn process_upscale;
+    rsf_game_submit_fn submit;
+    rsf_game_present_fn present;
+    rsf_game_process_latency_fn process_latency;
+    rsf_game_render_feedback_fn render_feedback;
 } rsf_game_host_services;
 typedef struct rsf_game_prepare_args {
     uint32_t struct_size;

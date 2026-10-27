@@ -28,8 +28,8 @@ int refuse(void (*log)(void*,const char*), void* user, const char* message)
     return 0;
 }
 }
-int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain, const rsf_overlay_stats* stats,
-    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
+static int draw(void* device, void* native_queue, void* native_chain, const rsf_overlay_stats* stats,
+    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user, D3D12_RESOURCE_STATES boundary)
 {
     std::unique_lock<std::mutex> lock(drawing, std::try_to_lock);
     if (!lock.owns_lock()) return 0;
@@ -51,7 +51,7 @@ int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain
         if (!rsf_overlay_host_start_device(device11.Get(), desc.OutputWindow, log, user))
             return refuse(log, user, "Shared overlay did not start; it will not be retried.");
         ready = true; ready_tick = GetTickCount64();
-        if (log) log(user, "Shared overlay attached to Unity D3D12 queue and window; Insert opens presets.");
+        if (log) log(user, "Shared overlay attached to D3D12 queue and window; Insert opens presets.");
     }
     // Hidden, no HUD and past the startup hint: nothing will be drawn, so skip the wrap, view,
     // acquire/release and flush.
@@ -62,8 +62,8 @@ int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain
     if (FAILED(chain3->GetBuffer(chain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back)))) return 0;
     D3D11_RESOURCE_FLAGS flags{}; flags.BindFlags = D3D11_BIND_RENDER_TARGET;
     ComPtr<ID3D11Resource> wrapped;
-    if (FAILED(interop->CreateWrappedResource(back.Get(), &flags, D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_RENDER_TARGET, IID_PPV_ARGS(&wrapped)))) return 0;
+    if (FAILED(interop->CreateWrappedResource(back.Get(), &flags, boundary,
+        boundary, IID_PPV_ARGS(&wrapped)))) return 0;
     ComPtr<ID3D11RenderTargetView> target;
     if (FAILED(device11->CreateRenderTargetView(wrapped.Get(), nullptr, &target))) return 0;
     ID3D11Resource* acquired[] = {wrapped.Get()}; interop->AcquireWrappedResources(acquired, 1);
@@ -72,6 +72,12 @@ int rsf_overlay_d3d12_frame(void* device, void* native_queue, void* native_chain
     interop->ReleaseWrappedResources(acquired, 1); context11->Flush();
     return drawn;
 }
+int rsf_overlay_d3d12_frame(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
+    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
+{ return draw(device, queue, chain, stats, intent, log, user, D3D12_RESOURCE_STATE_RENDER_TARGET); }
+int rsf_overlay_d3d12_present(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
+    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
+{ return rsf_overlay_native12_present(device, queue, chain, stats, intent, log, user); }
 void rsf_overlay_d3d12_stop()
 {
     std::lock_guard<std::mutex> lock(drawing);

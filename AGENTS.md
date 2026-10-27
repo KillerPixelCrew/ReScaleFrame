@@ -97,6 +97,8 @@ remain scaffolds. AC7 links runtime objects into its proxy, while Unity loads th
 | `rsf_orchestrator` | `ReScaleFrame.Runtime.dll` | vendor SDKs, plugin lifecycle, GPU resources, presentation |
 | `rsf_game_ac7` | `ReScaleFrame.Game.AC7.dll` | native AC7 detection, hooks and engine data |
 | `rsf_game_project_wingman` | `ReScaleFrame.Game.ProjectWingman.dll` | exact-build detection scaffold, rendering refused |
+| `rsf_game_rdr2` | `ReScaleFrame.Game.RDR2.dll` | exact-build detection scaffold, rendering refused |
+| `rsf_asi_rdr2` | `ReScaleFrame.RDR2.asi` in `rdr2/bin/<Config>` | RDR2 entry loaded by the game's ASI loader |
 | `rsf_game_unity_mono` | `ReScaleFrame.Game.UnityMono.dll` | shared Mono/Harmony URP DX12 adapter |
 | `rsf_proxy_ac7` | `dinput8.dll` in `ac7/bin/<Config>` | dedicated AC7 carrier |
 | `rsf_proxy_dinput8` | `ReScaleFrame.Loader.dll`, `carriers/version.dll` aliases | shared Windows shim; Unity drop-in carrier |

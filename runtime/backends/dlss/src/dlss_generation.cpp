@@ -503,6 +503,13 @@ extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host* hos
     if (auto* slot = find_slot(*host, id)) slot->id = 0;
     return RSF_BACKEND_OK;
 }
+extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host* host, uint64_t id)
+{
+    if (!host || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(host->marker_guard);
+    for (auto& slot : host->tokens) if (slot.id && slot.id <= id) slot.id = 0;
+    return RSF_BACKEND_OK;
+}
 extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host* host, rsf_reflex_mode mode, uint32_t limit)
 {
     if (!host || mode > RSF_REFLEX_BOOST) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -601,7 +608,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
     constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
     constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = {camera.view_to_world[8], camera.view_to_world[9], camera.view_to_world[10]};
+    constants.cameraFwd = rsf::sl_camera_forward(camera,1.0f);
     constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane;
     constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = camera.view_to_clip[5] / camera.view_to_clip[0];
     constants.depthInverted = camera.depth_inverted ? sl::eTrue : sl::eFalse;
@@ -725,6 +732,15 @@ static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, vo
     if (host->upgrade(&upgraded) != sl::Result::eOk) { factory->Release(); dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
     host->factory.Attach(static_cast<IDXGIFactory2*>(upgraded));
     D3D12_COMMAND_QUEUE_DESC description{}; description.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    if (existing_queue) {
+        auto* queue = static_cast<ID3D12CommandQueue*>(existing_queue);
+        ComPtr<ID3D12Device> queue_device;
+        if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT || FAILED(queue->GetDevice(IID_PPV_ARGS(&queue_device))) ||
+            queue_device.Get() != host->native_device.Get()) { dispose(host); return RSF_BACKEND_ERROR_WRONG_API; }
+    }
+    // Streamline's device creates proxy command lists. Its queue must unwrap them and
+    // register the DLSS-G queue hooks; a native engine queue cannot consume those lists.
+    // The presentation bridge retains the adopted engine queue and joins the two queues.
     if (FAILED(host->device->CreateCommandQueue(&description, IID_PPV_ARGS(&host->queue)))) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
     native = nullptr;
     if (host->native(host->queue.Get(), &native) != sl::Result::eOk || !native) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -820,6 +836,7 @@ extern "C" rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host*, 
 extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, uint64_t, rsf_latency_marker, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t) { return 0; }
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t, uint32_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_generation_load(rsf_streamline_host*, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }

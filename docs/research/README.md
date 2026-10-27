@@ -24,6 +24,7 @@ route general Unreal 4, version-specific UE4.18 and TrueSky research.
 | [Drag'n Wash renderer](drag-n-wash-renderer.md) | First Unity case: 6000.3.14f1 Mono/URP, complete selected assembly decompiles, temporal/UI boundaries and unmeasured runtime limits |
 | [AC7 DLSS-G/Reflex MVP](ac7-dlss-fg-20261003.md) | Shared presentation/SR host, native CPU/Present identity, recorded flight/hangar activation, hybrid-laptop pacing investigation and limits |
 | [Project Wingman renderer](project-wingman-renderer.md) | UE4.27.2 fingerprint, Function ID results, temporal/widget hook map and remaining HUD/VR validation |
+| [Red Dead Redemption 2 renderer](rdr2-renderer.md) | RAGE fingerprint, encrypted code, native Reflex/FSR2/NGX leads, reference mod review, DX12 FG requirements and open research |
 | [Native AC7 renderer](ac7-native-renderer-refactor-20261001.md) | Native view/graph/UI ownership, copied RHI identity, shared-uniform crash correction and retirement |
 | [Reconstruction stability](ac7-stability-20261001.md) | Exact input rectangles, bloom/exposure order, TrueSky jitter and valid-zero motion |
 | [Aircraft and cloud corrections](ac7-plane-artifacts-20261002.md) | TrueSky x1 activation, actual Texture2D views, RG32F depth bounds, FP16 production and user acceptance |

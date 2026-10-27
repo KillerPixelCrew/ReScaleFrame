@@ -4,6 +4,7 @@
 #include "streamline_load.h"
 #include <windows.h>
 #include <d3d12.h>
+#include <dxgi.h>
 #include <wrl/client.h>
 #include <cstring>
 #include <cmath>
@@ -26,6 +27,7 @@ struct rsf_dlss_native12 {
     rsf_streamline_host* shared_host = nullptr;
     rsf_quality quality = RSF_QUALITY_QUALITY;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
+    std::shared_ptr<rsf_dlss_native12> registration_owner;
 #if RSF_HAVE_STREAMLINE
     PFun_slShutdown* shutdown = nullptr;
     PFun_slGetNewFrameToken* token = nullptr;
@@ -35,14 +37,20 @@ struct rsf_dlss_native12 {
     PFun_slFreeResources* free_resources = nullptr;
     PFun_slDLSSGetOptimalSettings* optimal = nullptr;
     PFun_slDLSSSetOptions* options = nullptr;
+    HRESULT (*present)(IDXGISwapChain*, UINT, UINT, bool&){};
+    HRESULT (*after_present)(UINT){};
 #endif
+};
+struct rsf_dlss_native12_registration {
+    std::shared_ptr<rsf_dlss_native12> owner;
 };
 static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared, rsf_dlss_native12** out) try
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
     if (!device || !setup || setup->struct_size < sizeof(*setup) || !setup->interposer_path_utf8 ||
-        !setup->plugin_directory_utf8 || !setup->engine_version_utf8 || !setup->project_id_utf8)
+        !setup->plugin_directory_utf8 || !setup->engine_version_utf8 ||
+        (!setup->application_id && !setup->project_id_utf8))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!rsf_dlss_preset_valid(setup->preset)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_DLSS_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
@@ -88,6 +96,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     preferences.featuresToLoad = features; preferences.numFeaturesToLoad = 1;
     preferences.pathsToPlugins = paths; preferences.numPathsToPlugins = 1;
     preferences.engine = setup->engine == RSF_DLSS_ENGINE_UNITY ? sl::EngineType::eUnity : sl::EngineType::eCustom;
+    preferences.applicationId = setup->application_id;
     preferences.engineVersion = setup->engine_version_utf8; preferences.projectId = setup->project_id_utf8;
     if (!shared) {
         if (init(preferences, sl::kSDKVersion) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -108,6 +117,14 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     context->optimal = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     context->options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
+    if (!shared) {
+        void* before = nullptr; void* after = nullptr;
+        if (feature(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
+            feature(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
+            return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+        context->present = reinterpret_cast<decltype(context->present)>(before);
+        context->after_present = reinterpret_cast<decltype(context->after_present)>(after);
+    }
     if (setup->log) setup->log(setup->log_user, "DLSS SR registered on the caller's native D3D12 device.");
     *out = context.release(); return RSF_BACKEND_OK;
 #else
@@ -116,6 +133,60 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
 #endif
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+rsf_backend_result rsf_dlss_native12_registration_create(void* device, const rsf_dlss_setup* setup,
+    rsf_dlss_native12_registration** out) try
+{
+    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out = nullptr;
+    auto registration = std::make_unique<rsf_dlss_native12_registration>();
+    rsf_dlss_native12* owner{};
+    const auto result = create_context(device, setup, nullptr, &owner);
+    if (result != RSF_BACKEND_OK) return result;
+    registration->owner = std::shared_ptr<rsf_dlss_native12>(owner, rsf_dlss_native12_destroy);
+    *out = registration.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+rsf_backend_result rsf_dlss_native12_create_registered(void* device, const rsf_dlss_setup* setup,
+    rsf_dlss_native12_registration* registration, rsf_dlss_native12** out) try
+{
+    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out = nullptr;
+    if (!setup || setup->struct_size < sizeof(*setup) || !registration || !registration->owner ||
+        device != registration->owner->device.Get() || !rsf_dlss_preset_valid(setup->preset))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (setup->abi_version != RSF_DLSS_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    auto context = std::make_unique<rsf_dlss_native12>(*registration->owner);
+    context->initialized = false;
+    context->registration_owner = registration->owner;
+    context->preset = setup->preset;
+    *out = context.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+rsf_backend_result rsf_dlss_native12_registration_present(rsf_dlss_native12_registration* registration,
+    void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin)
+{
+    return registration && registration->owner ? rsf_dlss_native12_present(registration->owner.get(), swapchain,
+        interval, flags, begin) : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+}
+void rsf_dlss_native12_registration_destroy(rsf_dlss_native12_registration* registration)
+{
+    delete registration;
+}
+rsf_backend_result rsf_dlss_native12_present(rsf_dlss_native12* context, void* swapchain,
+    uint32_t sync_interval, uint32_t flags, uint32_t begin)
+{
+    if (!context || !swapchain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (context->shared_host) return RSF_BACKEND_OK;
+#if RSF_HAVE_STREAMLINE
+    bool skip = false;
+    const auto result = begin ? context->present(static_cast<IDXGISwapChain*>(swapchain), sync_interval, flags, skip) :
+        context->after_present(flags);
+    return SUCCEEDED(result) && !skip ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+#else
+    (void)sync_interval; (void)flags; (void)begin;
+    return RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
+}
 rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* setup, rsf_dlss_native12** out) {
     return create_context(device, setup, nullptr, out);
 }
@@ -173,7 +244,7 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
     constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
     constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = {-camera.view_to_world[8], -camera.view_to_world[9], -camera.view_to_world[10]};
+    constants.cameraFwd = rsf::sl_camera_forward(camera,-1.0f);
     constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane;
     constants.cameraFOV = camera.vertical_fov_radians;
     constants.cameraAspectRatio = static_cast<float>(record.output_width) / record.output_height;
@@ -190,20 +261,23 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
     options.outputWidth = record.output_width; options.outputHeight = record.output_height;
     options.colorBuffersHDR = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
-    options.useAutoExposure = context->sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
+    options.useAutoExposure = context->sdr || frame->exposure.resource ? sl::Boolean::eFalse : sl::Boolean::eTrue;
     if (context->options(viewport, options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     sl::Resource input(sl::ResourceType::eTex2d, frame->color.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     sl::Resource depth(sl::ResourceType::eTex2d, frame->depth.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     sl::Resource motion(sl::ResourceType::eTex2d, frame->motion.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     sl::Resource output(sl::ResourceType::eTex2d, frame->output.resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    sl::Resource exposure(sl::ResourceType::eTex2d, frame->exposure.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     sl::Extent render{0, 0, record.render_width, record.render_height};
     sl::Extent presented{0, 0, record.output_width, record.output_height};
     sl::ResourceTag tags[] = {
         {&input, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &render},
         {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &render},
         {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &render},
-        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &presented}};
-    if (context->tags(*token, viewport, tags, 4, list) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &presented},
+        {&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eOnlyValidNow, nullptr}};
+    if (context->tags(*token, viewport, tags, frame->exposure.resource ? 5u : 4u, list) != sl::Result::eOk)
+        return RSF_BACKEND_ERROR_FEATURE_FAILED;
     const sl::BaseStructure* inputs[] = {&viewport};
     return context->evaluate(sl::kFeatureDLSS, *token, inputs, 1, list) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -222,7 +296,7 @@ void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
     }
     if (context->initialized && context->shutdown) context->shutdown();
 #endif
-    if (context->module && !context->shared_host) FreeLibrary(context->module);
+    if (context->module && !context->shared_host && !context->registration_owner) FreeLibrary(context->module);
     delete context;
 }
 void rsf_dlss_native12_set_sdr(rsf_dlss_native12* context, uint32_t sdr)

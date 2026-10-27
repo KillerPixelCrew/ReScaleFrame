@@ -1,5 +1,6 @@
 add_subdirectory(diagnostics)
 add_subdirectory(proxy)
+add_subdirectory(census)
 
 add_library(rsf_bootstrap SHARED src/bootstrap.cpp)
 target_link_libraries(rsf_bootstrap PRIVATE rsf_build_options)

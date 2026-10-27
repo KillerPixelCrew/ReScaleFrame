@@ -3,7 +3,10 @@ set(RSF_RENDERDOC_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/renderdoc" CACHE PATH
 
 add_library(rsf_loader_diagnostics STATIC
     src/entropy.c
-    src/module_dump.c)
+    src/module_dump.c
+    src/module_dump_rtti.c
+    src/module_dump_v2.c
+    src/sha256.c)
 target_include_directories(rsf_loader_diagnostics PUBLIC include)
 
 # The RenderDoc header is fetched into an untracked vendor directory, so capture support is

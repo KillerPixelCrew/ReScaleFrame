@@ -23,6 +23,16 @@ typedef struct rsf_sr12_setup {
     void* streamline_host;
     /* Zero preserves the existing HDR contract; OpenGL SDR scenes set this to one. */
     uint32_t input_sdr;
+    /* ABI 2 only: use the engine's active input extents instead of optimal-size rounding.
+       Vendor contexts still use the selected quality and output extent. Dynamic input sizes
+       must be supported by that provider. ABI 1 retains its original planning behavior. */
+    uint32_t engine_input_extents;
+    /* ABI 2: consume pass.exposure (R32_FLOAT, 1x1, NON_PIXEL_SHADER_RESOURCE) instead of
+       generating a separate exposure estimate. Fixed for the lifetime of this context. */
+    uint32_t external_exposure;
+    /* ABI 2: borrowed rsf_dlss_native12_registration, retained by its per-feature context.
+       Keeps the game's native NGX handles alive while SR backends/presets/resolution change. */
+    void* dlss_registration;
 } rsf_sr12_setup;
 
 #ifdef __cplusplus
@@ -36,6 +46,18 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr12_plan(const rsf_sr12*, uint32_t* widt
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_evaluate(rsf_sr12*, void* command_list,
     const rsf_game_render_pass*, uint32_t command_slot);
 RSF_RUNTIME_API void rsf_sr12_destroy(rsf_sr12*);
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_present(rsf_sr12*, void* swapchain,
+    uint32_t sync_interval, uint32_t flags, uint32_t begin);
+/* Optional bounded original-pixel evidence. Configure before evaluation; the ordinary slot
+   completion protocol also retires these readbacks. No work is recorded when unconfigured. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_capture(rsf_sr12*, const char* directory_utf8,
+    uint64_t first_frame, uint32_t frames);
+/* Caller has observed this slot's submitted fence completion, including failed evaluations. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_capture_flush(rsf_sr12*, uint32_t command_slot);
+/* Borrow the accepted SR slot's copied camera/frame identity for a later scene-output copy on
+   the same still-unsubmitted command-list recording. The ordinary slot fence retires it. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_capture_scene(rsf_sr12*, void* command_list,
+    const rsf_game_render_pass*, uint32_t command_slot);
 #ifdef __cplusplus
 }
 #endif

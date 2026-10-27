@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 12;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 13;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -170,6 +170,8 @@ pub struct RsfOverlayStats {
     pub dlss_preset_available: u32,
     /// RTX 40 MFG unlock: 0 not applicable, 1 ready, 2 refused.
     pub fg_mfg_unlock_status: u32,
+    /// Engine-owned input resolution; do not offer ineffective quality changes.
+    pub sr_quality_locked: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -410,7 +412,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 272);
+        assert_eq!(size_of::<RsfOverlayStats>(), 280);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -447,6 +449,7 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset), 260);
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset_available), 264);
         assert_eq!(offset_of!(RsfOverlayStats, fg_mfg_unlock_status), 268);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_quality_locked), 272);
     }
 
     #[test]

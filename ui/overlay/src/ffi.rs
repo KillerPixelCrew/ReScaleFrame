@@ -308,6 +308,7 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         backend: stats.backend,
         dlss_preset: stats.dlss_preset,
         dlss_preset_available: stats.dlss_preset_available != 0,
+        sr_quality_locked: stats.sr_quality_locked != 0,
         backend_choices: stats.sr_backend_choices,
         last_switch_result: stats.last_switch_result,
         generation: crate::model::GenerationStats {
@@ -458,6 +459,7 @@ mod tests {
             dlss_preset: 0,
             dlss_preset_available: 0,
             fg_mfg_unlock_status: 0,
+            sr_quality_locked: 0,
         }
     }
 
@@ -619,7 +621,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 12);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 13);
     }
 
     #[test]

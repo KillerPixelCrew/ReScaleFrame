@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <climits>
 #include <mutex>
 
 namespace {
@@ -420,15 +421,19 @@ BOOL WINAPI hooked_get_cursor_pos(LPPOINT point)
 int WINAPI hooked_show_cursor(BOOL show)
 {
     State& self = state();
-    if (!show && self.visible.load(std::memory_order_acquire)) {
-        // The game hiding the cursor, often every frame. Not applied; the count it would have seen
-        // is reported so its own bookkeeping stays consistent.
-        self.swallowed_hides.fetch_add(1, std::memory_order_relaxed);
-        const int count = self.cursor.show_cursor(TRUE);
-        self.cursor.show_cursor(FALSE);
-        return count - 1;
+    thread_local int game_count = 0;
+    if (self.visible.load(std::memory_order_acquire)) {
+        // RAGE loops until ShowCursor(FALSE) returns negative (+263cf2a..34).
+        // Querying the real counter with a show/hide pair leaves the overlay's
+        // visible counter unchanged, so that loop never terminates. Keep the
+        // game's logical counter separately and never touch user32 in this path.
+        if (show) { if (game_count < INT_MAX) ++game_count; }
+        else { if (game_count > INT_MIN) --game_count;
+            self.swallowed_hides.fetch_add(1, std::memory_order_relaxed); }
+        return game_count;
     }
-    return self.cursor.show_cursor(show);
+    game_count = self.cursor.show_cursor(show);
+    return game_count;
 }
 
 HCURSOR WINAPI hooked_set_cursor(HCURSOR handle)

@@ -26,10 +26,14 @@ struct rsf_sr12 {
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline;
     std::array<ComPtr<ID3D12DescriptorHeap>, 3> heaps;
+    std::array<rsf_frame_record, 3> captured_records{};
+    std::array<void*, 3> captured_lists{};
     std::array<ComPtr<ID3D12Resource>, 3> normalized;
     ComPtr<ID3D12Resource> output;
     ComPtr<ID3D12Resource> exposure, exposure_upload;
     bool exposure_initialized = false;
+    bool external_exposure = false;
+    ComPtr<ID3D12Resource> exposure_input;
     uint32_t width = 0, height = 0, output_width = 0, output_height = 0;
     uint32_t backend = 0, quality = 0;
     bool normalize_color = false;
@@ -156,6 +160,16 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
         return false;
     if (!(std::isfinite(pass.motion_to_uv[0]) && std::isfinite(pass.motion_to_uv[1]) &&
           pass.motion_to_uv[0] != 0 && pass.motion_to_uv[1] != 0)) return false;
+    if (self.external_exposure) {
+        if (!pass.exposure) return false;
+        auto* exposure = static_cast<ID3D12Resource*>(pass.exposure);
+        const auto desc = exposure->GetDesc();
+        ComPtr<ID3D12Device> owner;
+        if (FAILED(exposure->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get() != self.device.Get() ||
+            desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Width != 1 || desc.Height != 1 ||
+            desc.Format != DXGI_FORMAT_R32_FLOAT || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1) return false;
+        self.exposure_input = exposure;
+    }
     void* pointers[] = {pass.color_input, pass.depth, pass.motion, pass.color_output};
     // The resources' descriptions cannot change, and the extents they are checked against are
     // fixed at create, so a set already accepted in this generation needs no second look.
@@ -194,20 +208,29 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
-    if (!setup || setup->struct_size < sizeof(*setup) || !setup->device || !setup->output_width || !setup->output_height ||
+    if (!setup || setup->struct_size < offsetof(rsf_sr12_setup, engine_input_extents) || !setup->device || !setup->output_width || !setup->output_height ||
         setup->backend > RSF_SR_XESS || setup->quality > 5) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != 1) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (setup->abi_version != 1 && setup->abi_version != 2) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (setup->abi_version == 2 && setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const bool engine_extents = setup->abi_version == 2 && setup->engine_input_extents;
+    if (engine_extents && (!setup->render_width || !setup->render_height ||
+        setup->render_width > setup->output_width || setup->render_height > setup->output_height))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::unique_ptr<rsf_sr12, decltype(&rsf_sr12_destroy)> self(new rsf_sr12, rsf_sr12_destroy);
     self->device = static_cast<ID3D12Device*>(setup->device);
     self->diagnostic_log = setup->log; self->diagnostic_user = setup->user;
     self->backend = setup->backend; self->quality = setup->quality;
+    self->external_exposure = setup->abi_version == 2 && setup->external_exposure;
     self->output_width = setup->output_width; self->output_height = setup->output_height;
     rsf_backend_result result = RSF_BACKEND_OK;
     if (!setup->backend) {
         self->width = setup->render_width ? setup->render_width : setup->output_width;
         self->height = setup->render_height ? setup->render_height : setup->output_height;
     } else if (setup->backend == RSF_SR_DLSS) {
-        result = setup->streamline_host ? rsf_dlss_native12_create_shared(setup->device, &setup->dlss,
+        if (setup->abi_version == 2 && setup->dlss_registration) {
+            result = rsf_dlss_native12_create_registered(setup->device, &setup->dlss,
+                static_cast<rsf_dlss_native12_registration*>(setup->dlss_registration), &self->dlss);
+        } else result = setup->streamline_host ? rsf_dlss_native12_create_shared(setup->device, &setup->dlss,
             static_cast<rsf_streamline_host*>(setup->streamline_host), &self->dlss) : rsf_dlss_native12_create(setup->device, &setup->dlss, &self->dlss);
         if (result == RSF_BACKEND_OK) result = rsf_dlss_native12_plan(self->dlss, self->output_width, self->output_height,
             self->quality, &self->width, &self->height);
@@ -217,7 +240,8 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         alternate.open.struct_size = sizeof(alternate.open); alternate.open.abi_version = RSF_BACKEND_ABI_VERSION;
         alternate.open.api = RSF_API_D3D12; alternate.open.device = setup->device;
         alternate.open.output_width = self->output_width; alternate.open.output_height = self->output_height;
-        alternate.open.dynamic_resolution = 1; alternate.open.hdr = !setup->input_sdr; alternate.open.auto_exposure = !setup->input_sdr;
+        alternate.open.dynamic_resolution = 1; alternate.open.hdr = !setup->input_sdr;
+        alternate.open.auto_exposure = !setup->input_sdr && !self->external_exposure;
         alternate.open.inverted_depth = setup->inverted_depth; alternate.open.depth_infinite = 0;
         alternate.open.log = setup->log; alternate.open.log_user = setup->user;
         alternate.fsr2_directory_utf8 = setup->fsr2_directory_utf8; alternate.fsr3_directory_utf8 = setup->fsr3_directory_utf8;
@@ -231,6 +255,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         }
     }
     if (result != RSF_BACKEND_OK) return result;
+    if (engine_extents) { self->width = setup->render_width; self->height = setup->render_height; }
     self->normalize_color = self->backend || self->capture.enabled();
     self->input_sdr = setup->input_sdr != 0;
     if (!prepare_shader(*self) || !texture(*self, self->normalize_color ? self->width : 1u, self->normalize_color ? self->height : 1u, DXGI_FORMAT_R16G16B16A16_FLOAT, self->normalized[0]) ||
@@ -238,7 +263,7 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         !texture(*self, self->width, self->height, DXGI_FORMAT_R16G16_FLOAT, self->normalized[2]) ||
         (self->backend && !texture(*self, self->output_width, self->output_height, DXGI_FORMAT_R16G16B16A16_FLOAT, self->output)))
         return RSF_BACKEND_ERROR_INIT_FAILED;
-    if (setup->input_sdr && self->backend && self->backend != RSF_SR_DLSS) {
+    if (setup->input_sdr && !self->external_exposure && self->backend && self->backend != RSF_SR_DLSS) {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when
         // auto exposure is disabled; feed the actual constant scale, not HDR adaptation.
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -311,7 +336,8 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     record.frame_time_ms = pass->camera.frame_time_seconds * 1000;
     const bool reset = (pass->flags & RSF_GAME_RENDER_RESET) || self->last_frame + 1 != pass->native_frame ||
         self->last_view != pass->history_key || self->last_session != pass->session_id || self->last_generation != pass->resource_generation;
-    record.flags = reset ? RSF_FRAME_FLAG_RESET : 0;
+    record.flags = (reset ? RSF_FRAME_FLAG_RESET : 0u) |
+        ((pass->flags & RSF_GAME_RENDER_NO_FG) ? RSF_FRAME_FLAG_NO_FG : 0u);
     auto capture_identity = record;
     if (!pass->source_frame_id) capture_identity.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
     if (rsf_input_dump_begin_record(&capture_identity, self->backend)) {
@@ -328,6 +354,11 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     (void)self->capture.record(list, self->normalized[1].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-depth", slot);
     (void)self->capture.record(list, self->normalized[2].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-motion-pixels", slot);
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
+    if (self->external_exposure) {
+        frame.exposure.struct_size = sizeof(frame.exposure); frame.exposure.resource = self->exposure_input.Get();
+        frame.exposure.width = frame.exposure.height = 1; frame.exposure.generation = record.resource_generation;
+        frame.exposure.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
     if (self->exposure) {
         if (!self->exposure_initialized) {
             D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->exposure_upload.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -375,6 +406,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         list->CopyTextureRegion(&target, 0, 0, 0, &source, &rectangle);
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    self->captured_records[slot] = record; self->captured_lists[slot] = commands;
     self->last_frame = pass->native_frame; self->last_view = pass->history_key;
     self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
     return result;
@@ -384,4 +416,40 @@ extern "C" void rsf_sr12_destroy(rsf_sr12* self)
     if (!self) return;
     (void)self->capture.flush();
     rsf_sr_session_destroy(self->alternate); rsf_dlss_native12_destroy(self->dlss); delete self;
+}
+extern "C" rsf_backend_result rsf_sr12_present(rsf_sr12* self, void* swapchain,
+    uint32_t sync_interval, uint32_t flags, uint32_t begin)
+{
+    if (!self || !swapchain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return self->dlss ? rsf_dlss_native12_present(self->dlss, swapchain, sync_interval, flags, begin) : RSF_BACKEND_OK;
+}
+extern "C" rsf_backend_result rsf_sr12_capture(rsf_sr12* self, const char* directory,
+    uint64_t first_frame, uint32_t frames)
+{
+    return self && self->capture.configure(directory, first_frame, frames) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+}
+extern "C" rsf_backend_result rsf_sr12_capture_flush(rsf_sr12* self, uint32_t slot)
+{
+    if (!self || slot >= 3) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return self->capture.flush(slot) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+}
+extern "C" rsf_backend_result rsf_sr12_capture_scene(rsf_sr12* self, void* commands,
+    const rsf_game_render_pass* pass, uint32_t slot)
+{
+    if (!self || !commands || !pass || pass->struct_size < sizeof(*pass) || slot >= 3 || !pass->color_input)
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto& record = self->captured_records[slot];
+    if (record.frame_id != (pass->source_frame_id ? pass->source_frame_id : pass->native_frame) || record.session_id != pass->session_id ||
+        self->captured_lists[slot] != commands) return RSF_BACKEND_ERROR_STALE_RESOURCES;
+    auto* scene = static_cast<ID3D12Resource*>(pass->color_input);
+    const auto desc = scene->GetDesc();
+    ComPtr<ID3D12Device> owner;
+    if (FAILED(scene->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get() != self->device.Get())
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (desc.Width != record.output_width || desc.Height != record.output_height || desc.SampleDesc.Count != 1)
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!self->capture.wants(record.frame_id)) return RSF_BACKEND_ERROR_NOT_READY;
+    return self->capture.record(static_cast<ID3D12GraphicsCommandList*>(commands), scene,
+        D3D12_RESOURCE_STATE_RENDER_TARGET, record, "fg-scene-output", slot,
+        static_cast<uint32_t>(pass->pass_key)) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }

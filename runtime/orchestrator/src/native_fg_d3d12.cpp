@@ -29,6 +29,7 @@ rsf_native_fg_options options{sizeof(options), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0,
 rsf_native_fg_status state{};
 std::string directory;
 std::wstring log_path;
+std::wstring capture_directory;
 rsf::FrameCapture12 core_capture;
 bool installed = false;
 rsf_backend_log_fn logger = nullptr;
@@ -36,6 +37,7 @@ void* logger_user = nullptr;
 struct Cpu {
     uint64_t id = 0, input = 0, generation = 0, session = 0;
     bool begun = false, simulation = false, failed = false, render_started = false, completed = false;
+    bool native = false;
 };
 std::array<Cpu, 128> cpu;
 struct Slot {
@@ -111,13 +113,13 @@ void write_colors(std::unique_ptr<ColorPair> pair) {
     log(nullptr, "FG completed-colour and HUD-less input pair saved.");
 }
 void capture_colors(ID3D12GraphicsCommandList* list, ID3D12Resource* final, ID3D12Resource* hudless, uint64_t frame) {
-    if (log_path.empty()) return;
+    if (capture_directory.empty() && log_path.empty()) return;
     auto& capture = color_capture;
     if (capture.pending && capture.value && capture.completion && capture.completion->GetCompletedValue() >= capture.value) {
         // Two full-resolution files: a worker writes them so Present does not wait on the disk.
         auto pair = std::make_unique<ColorPair>();
         for (size_t i = 0; i < 2; ++i) { pair->buffers[i] = std::move(capture.buffers[i]); pair->footprints[i] = capture.footprints[i]; }
-        pair->root = log_path.substr(0, log_path.find_last_of(L"/\\") + 1);
+        pair->root = capture_directory.empty() ? log_path.substr(0, log_path.find_last_of(L"/\\") + 1) : capture_directory;
         pair->generation = capture.generation; pair->width = capture.width; pair->height = capture.height; pair->bgra = capture.bgra;
         capture.pending = false;
         try { std::thread(write_colors, std::move(pair)).detach(); } catch (...) {}
@@ -268,7 +270,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
             rsf::transition(list, slot.hudless.Get(), slot.hudless_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         slot.hudless_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
-    if (rsf_d3d11_present_backend() == RSF_FG_BACKEND_FSR3)
+    if (!capture_directory.empty() || rsf_d3d11_present_backend() == RSF_FG_BACKEND_FSR3)
         capture_colors(list, static_cast<ID3D12Resource*>(buffer), slot.hudless.Get(), record.frame_id);
     state.last_result = provider->prepare(context, commands, &frame);
     rsf_input_dump_fg_prepare(nullptr, &frame, state.last_result);
@@ -469,6 +471,70 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_capture(void* commands, const rsf_frame
         timing.failed |= rsf_d3d11_present_marker(timing.generation, record->frame_id, RSF_LATENCY_RENDER_SUBMIT_START, 0) != RSF_BACKEND_OK;
     }
 }
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_latency(const rsf_game_latency_event* event) try {
+    if (!event || event->struct_size < sizeof(*event) || !event->session_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!rsf_d3d11_present_has_owner()) return RSF_BACKEND_ERROR_NOT_READY;
+    if (event->marker == RSF_GAME_LATENCY_MODE) {
+        std::lock_guard lock(guard);
+        for (const auto& frame : cpu) if (frame.session == event->session_id && frame.native) return RSF_BACKEND_OK;
+        return RSF_BACKEND_ERROR_NOT_READY;
+    }
+    if (!event->source_frame_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto id = event->source_frame_id;
+    if (event->marker == RSF_GAME_LATENCY_SLEEP) {
+        rsf_fg_choice_resolve_auto(rsf_d3d11_present_backend());
+        uint64_t generation = rsf_d3d11_present_generation();
+        const auto acquired = rsf_d3d11_present_acquire(id);
+        const auto slept = acquired == RSF_BACKEND_OK ? rsf_d3d11_present_begin(id, &generation) : acquired;
+        std::lock_guard lock(guard);
+        auto& frame = cpu[id % cpu.size()]; frame = {};
+        frame.id = id; frame.session = event->session_id; frame.generation = generation; frame.native = true;
+        frame.begun = slept == RSF_BACKEND_OK; frame.failed = acquired != RSF_BACKEND_OK || !frame.begun;
+        if (frame.failed) { state.last_result = slept; state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED; }
+        return RSF_BACKEND_OK;
+    }
+    uint64_t generation{};
+    {
+        std::lock_guard lock(guard);
+        auto& frame = cpu[id % cpu.size()];
+        if (frame.id != id || frame.session != event->session_id || !frame.native) return RSF_BACKEND_ERROR_NOT_READY;
+        generation = frame.generation;
+        if (event->marker == RSF_LATENCY_INPUT_SAMPLE) frame.input = event->timestamp_qpc;
+        if (event->marker == RSF_LATENCY_SIMULATION_END) frame.simulation = true;
+        if (event->marker == RSF_LATENCY_RENDER_SUBMIT_START) frame.render_started = true;
+    }
+    // The presentation bridge emits RenderSubmitEnd/PresentStart/PresentEnd around its actual
+    // native Present. RAGE reports RenderSubmitEnd after Present; forwarding it would duplicate
+    // those markers and put the SDK's lifecycle out of order.
+    if (event->marker == RSF_LATENCY_RENDER_SUBMIT_END || event->marker == RSF_LATENCY_PRESENT_START)
+        return RSF_BACKEND_OK;
+    if (event->marker == RSF_LATENCY_PRESENT_END) {
+        // RAGE can simulate inputs that never produce a submitted frame, especially while
+        // loading. Actual ordered Present completion also retires those older skipped inputs.
+        // Waiting for a scene match leaks their SDK tokens and eventually blocks all SR/FG.
+        {
+            std::lock_guard lock(guard);
+            for (auto& frame : cpu) if (frame.native && frame.session == event->session_id &&
+                frame.id && frame.id <= id && !frame.completed) {
+                frame.completed = true;
+            }
+        }
+        // These are completed/skipped CPU inputs, not cancelled prepared GPU frames.
+        // Provider abort invalidates XeFG history even when the retired input never
+        // supplied interpolation resources. Only retire the shared token pool here.
+        // The SDK pool is authoritative even if loading has already wrapped the CPU ring.
+        if (auto* host = rsf_d3d11_present_host()) rsf_streamline_host_retire_through(host, id);
+        return RSF_BACKEND_OK;
+    }
+    if (event->marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto result = rsf_d3d11_present_marker(generation, id, event->marker, 0);
+    if (result != RSF_BACKEND_OK) {
+        std::lock_guard lock(guard);
+        auto& frame = cpu[id % cpu.size()]; if (frame.id == id) frame.failed = true;
+        state.last_result = result; state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED;
+    }
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t session, uint64_t id) try {
     if (!session || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(guard);
@@ -543,17 +609,32 @@ extern "C" RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session) {
     for (auto& window : windows) if (window.session == session) window = {};
     return 1;
 }
-extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) {
+static int status_snapshot(rsf_native_fg_status* output, bool wait) {
     if (!output || output->struct_size < sizeof(*output)) return 0;
-    std::lock_guard<std::mutex> lock(guard); *output = state; output->struct_size = sizeof(*output);
+    std::unique_lock<std::mutex> lock(guard, std::defer_lock);
+    if (wait) lock.lock(); else if (!lock.try_lock()) return 0;
+    *output = state; output->struct_size = sizeof(*output);
     output->requested = options; output->available = rsf_d3d11_present_has_owner() && rsf_d3d11_present_backend() != 0;
     // A drained provider switch can precede its first prepare. Never label the
     // retired provider's cached capabilities with the replacement backend.
     if (status_generation != rsf_d3d11_present_generation()) output->vendor = {};
     return 1;
 }
+extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) { return status_snapshot(output,true); }
+extern "C" RSF_RUNTIME_API int rsf_fg12_status_try(rsf_native_fg_status* output) { return status_snapshot(output,false); }
 extern "C" RSF_RUNTIME_API void rsf_fg12_options(const rsf_native_fg_options* request) {
     if (!request || request->struct_size < sizeof(*request) || request->mode > RSF_FG_FIXED ||
         request->reflex_mode > RSF_REFLEX_BOOST || !request->generated_frames) return;
     std::lock_guard<std::mutex> lock(guard); options = *request;
 }
+extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_capture_outputs(const char* path) try {
+    if (!path) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    wchar_t wide[32768]{};
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, 32768))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard lock(guard);
+    capture_directory = wide;
+    if (!capture_directory.empty() && capture_directory.back() != L'/' && capture_directory.back() != L'\\')
+        capture_directory += L'/';
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }

@@ -5,9 +5,8 @@
    The dump is for analysis and is never meant to run again. Nothing here repairs the entry point
    or rebuilds an import address table. */
 
-#include <rescaleframe/module_dump.h>
+#include "module_dump_internal.h"
 
-#include <windows.h>
 #include <tlhelp32.h>
 
 #include <stdio.h>
@@ -17,14 +16,6 @@
 
 #define RSF_ENTROPY_WINDOW 65536u
 #define RSF_ENTROPY_SAMPLES 16u
-
-typedef struct rsf_module_entry {
-    wchar_t path[MAX_PATH];
-    const unsigned char* base;
-    size_t size;
-} rsf_module_entry;
-
-#define RSF_MAX_MODULES 384
 
 static const IMAGE_NT_HEADERS64* nt_headers(const void* base)
 {
@@ -39,51 +30,6 @@ static const IMAGE_NT_HEADERS64* nt_headers(const void* base)
         return NULL;
     }
     return headers;
-}
-
-/* Copy from another module's memory, tolerating pages that are not committed or not readable.
-   A section's virtual size routinely exceeds what was loaded from disk, and reading blindly
-   would fault. Unreadable bytes become zeroes, which is what those pages hold anyway. */
-static size_t read_guarded(const unsigned char* source, unsigned char* destination, size_t size)
-{
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    const size_t page = info.dwPageSize ? (size_t)info.dwPageSize : 4096u;
-
-    memset(destination, 0, size);
-    size_t copied = 0;
-    size_t offset = 0;
-    while (offset < size) {
-        MEMORY_BASIC_INFORMATION region;
-        if (VirtualQuery(source + offset, &region, sizeof(region)) != sizeof(region)) {
-            break;
-        }
-        /* Measure from the region's end. The region can start before the address we asked about,
-           so subtracting its base from `source` can underflow. */
-        const unsigned char* region_end =
-            (const unsigned char*)region.BaseAddress + region.RegionSize;
-        size_t available = (size_t)(region_end - (source + offset));
-        if (available > size - offset) {
-            available = size - offset;
-        }
-        if (available == 0) {
-            available = page;
-            if (available > size - offset) {
-                available = size - offset;
-            }
-        }
-
-        const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                               PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-        const int usable = region.State == MEM_COMMIT && (region.Protect & readable) != 0 &&
-                           (region.Protect & PAGE_GUARD) == 0;
-        if (usable) {
-            memcpy(destination + offset, source + offset, available);
-            copied += available;
-        }
-        offset += available;
-    }
-    return copied;
 }
 
 static DWORD align_up(DWORD value, DWORD alignment)
@@ -226,7 +172,7 @@ rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy
     if (!buffer) {
         return RSF_DUMP_ERROR_WRITE_FAILED;
     }
-    read_guarded(base + chosen->VirtualAddress, buffer, size);
+    rsf_dump_read_guarded(base + chosen->VirtualAddress, buffer, size);
     *entropy = rsf_sampled_entropy(buffer, size, RSF_ENTROPY_WINDOW, RSF_ENTROPY_SAMPLES);
     free(buffer);
     return RSF_DUMP_OK;
@@ -280,33 +226,6 @@ static void write_json_number(FILE* stream, double value)
     fprintf(stream, "%lld.%04lld", scaled / 10000, scaled % 10000);
 }
 
-static void write_json_wide(FILE* stream, const wchar_t* text)
-{
-    for (const wchar_t* cursor = text; *cursor; ++cursor) {
-        if (*cursor == L'"' || *cursor == L'\\') {
-            fprintf(stream, "\\%c", (char)*cursor);
-        } else if (*cursor < 0x20 || *cursor > 0x7e) {
-            fprintf(stream, "\\u%04x", (unsigned)*cursor);
-        } else {
-            fputc((char)*cursor, stream);
-        }
-    }
-}
-
-static void write_json_ascii(FILE* stream, const char* text, size_t limit)
-{
-    for (size_t index = 0; index < limit && text[index]; ++index) {
-        const unsigned char value = (unsigned char)text[index];
-        if (value == '"' || value == '\\') {
-            fprintf(stream, "\\%c", (char)value);
-        } else if (value < 0x20 || value > 0x7e) {
-            fprintf(stream, "\\u%04x", (unsigned)value);
-        } else {
-            fputc((char)value, stream);
-        }
-    }
-}
-
 static void describe_imports(FILE* stream, const unsigned char* base,
                              const IMAGE_NT_HEADERS64* headers, const rsf_module_entry* modules,
                              size_t module_count, uint32_t* described)
@@ -333,7 +252,7 @@ static void describe_imports(FILE* stream, const unsigned char* base,
         for (size_t slot = 0; names[slot] != 0; ++slot) {
             fprintf(stream, "%s\n    {\"dll\": \"", first ? "" : ",");
             first = 0;
-            write_json_ascii(stream, library, 260);
+            rsf_json_ascii(stream, library, 260);
             fputs("\", ", stream);
 
             if (names[slot] & IMAGE_ORDINAL_FLAG64) {
@@ -342,7 +261,7 @@ static void describe_imports(FILE* stream, const unsigned char* base,
                 const IMAGE_IMPORT_BY_NAME* by_name =
                     (const IMAGE_IMPORT_BY_NAME*)(base + (DWORD)names[slot]);
                 fputs("\"name\": \"", stream);
-                write_json_ascii(stream, by_name->Name, 260);
+                rsf_json_ascii(stream, by_name->Name, 260);
                 fputc('"', stream);
             }
 
@@ -355,7 +274,7 @@ static void describe_imports(FILE* stream, const unsigned char* base,
                 module_for(modules, module_count, (const unsigned char*)(uintptr_t)values[slot]);
             if (owner) {
                 fputs(", \"resolves_into\": \"", stream);
-                write_json_wide(stream, owner->path);
+                rsf_json_wide(stream, owner->path);
                 fputc('"', stream);
             }
             fputc('}', stream);
@@ -367,7 +286,9 @@ static void describe_imports(FILE* stream, const unsigned char* base,
 static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* base,
                                      const IMAGE_NT_HEADERS64* headers, const wchar_t* module_path,
                                      const rsf_module_entry* modules, size_t module_count,
-                                     rsf_dump_report* report)
+                                     const rsf_dump_options* options,
+                                     const rsf_section_digest* digests, double hash_ms,
+                                     double started_ms, rsf_dump_report* report)
 {
     FILE* stream = _wfopen(path, L"wb");
     if (!stream) {
@@ -376,8 +297,9 @@ static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* b
 
     fputs("{\n  \"tool\": \"rescaleframe-module-dump\",\n", stream);
     fprintf(stream, "  \"abi_version\": %u,\n", RSF_MODULE_DUMP_ABI_VERSION);
+    fprintf(stream, "  \"schema_version\": %u,\n", RSF_MODULE_DUMP_SCHEMA_VERSION);
     fputs("  \"module\": {\"path\": \"", stream);
-    write_json_wide(stream, module_path);
+    rsf_json_wide(stream, module_path);
     fprintf(stream,
             "\", \"load_base\": \"0x%llx\", \"preferred_base\": \"0x%llx\", "
             "\"size_of_image\": %lu, \"entry_point_rva\": \"0x%lx\"},\n",
@@ -393,19 +315,27 @@ static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* b
     const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(headers);
     for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
         fprintf(stream, "%s\n    {\"name\": \"", index ? "," : "");
-        write_json_ascii(stream, (const char*)sections[index].Name, IMAGE_SIZEOF_SHORT_NAME);
+        rsf_json_ascii(stream, (const char*)sections[index].Name, IMAGE_SIZEOF_SHORT_NAME);
         fprintf(stream,
-                "\", \"rva\": \"0x%lx\", \"virtual_size\": %lu, \"characteristics\": \"0x%lx\"}",
+                "\", \"rva\": \"0x%lx\", \"virtual_size\": %lu, \"characteristics\": \"0x%lx\"",
                 (unsigned long)sections[index].VirtualAddress,
                 (unsigned long)sections[index].Misc.VirtualSize,
                 (unsigned long)sections[index].Characteristics);
+        if (digests && digests[index].valid) {
+            fprintf(stream, ", \"dumped_size\": %llu, \"readable_bytes\": %llu, \"entropy\": ",
+                    (unsigned long long)digests[index].dumped_size,
+                    (unsigned long long)digests[index].readable_bytes);
+            write_json_number(stream, digests[index].entropy);
+            fprintf(stream, ", \"sha256\": \"%s\"", digests[index].sha256);
+        }
+        fputc('}', stream);
     }
     fputs("\n  ],\n", stream);
 
     fputs("  \"modules\": [", stream);
     for (size_t index = 0; index < module_count; ++index) {
         fprintf(stream, "%s\n    {\"path\": \"", index ? "," : "");
-        write_json_wide(stream, modules[index].path);
+        rsf_json_wide(stream, modules[index].path);
         fprintf(stream, "\", \"base\": \"0x%llx\", \"size\": %llu}",
                 (unsigned long long)(uintptr_t)modules[index].base,
                 (unsigned long long)modules[index].size);
@@ -416,29 +346,59 @@ static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* b
     describe_imports(stream, base, headers, modules, module_count, &report->imports_described);
     fputs("\n  ],\n", stream);
 
+    const double structured = rsf_dump_now_ms();
+    report->threads_listed = rsf_dump_write_threads(stream, modules, module_count);
+    rsf_dump_write_rtti(stream, base, headers, options->rtti_budget_ms, &report->rtti_classes);
+    rsf_dump_write_functions(stream, base, headers, &report->function_starts);
+    rsf_dump_write_names(stream, options->name_list_path_utf8);
+    fprintf(stream,
+            "  \"timing_ms\": {\"section_hash_and_entropy\": %lu, \"structured_sections\": %lu, "
+            "\"total\": %lu},\n",
+            (unsigned long)(hash_ms + 0.5), (unsigned long)(rsf_dump_now_ms() - structured + 0.5),
+            (unsigned long)(rsf_dump_now_ms() - started_ms + 0.5));
+
     fputs("  \"limits\": \"Section raw offsets equal virtual addresses, so the dump maps one to "
           "one onto runtime addresses. It is not runnable: the entry point is unchanged and no "
           "import table was rebuilt. Import values are the addresses resolved in this process at "
-          "dump time.\"\n}\n", stream);
+          "dump time. Threads, RTTI and function starts describe the process at dump time.\"\n}\n", stream);
 
     const int failed = ferror(stream);
     fclose(stream);
     return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
 }
 
+/* Copy no more than the caller's structure can hold. */
+static void copy_report(rsf_dump_report* report, const rsf_dump_report* local)
+{
+    if (!report) {
+        return;
+    }
+    const uint32_t size = report->struct_size;
+    memcpy(report, local, size < sizeof(*local) ? size : sizeof(*local));
+    report->struct_size = size;
+}
+
 rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options* options,
                                 rsf_dump_report* report)
 {
-    if (!options || options->struct_size < sizeof(rsf_dump_options) ||
+    if (!options || options->struct_size < RSF_DUMP_OPTIONS_V1_SIZE ||
         !options->output_directory_utf8) {
         return RSF_DUMP_ERROR_INVALID_ARGUMENT;
     }
     if (options->abi_version != RSF_MODULE_DUMP_ABI_VERSION) {
         return RSF_DUMP_ERROR_ABI_MISMATCH;
     }
-    if (report && report->struct_size < sizeof(rsf_dump_report)) {
+    if (report && report->struct_size < RSF_DUMP_REPORT_V1_SIZE) {
         return RSF_DUMP_ERROR_INVALID_ARGUMENT;
     }
+    const double started_ms = rsf_dump_now_ms();
+
+    /* A caller built before the schema 2 fields existed supplies a shorter structure. */
+    rsf_dump_options effective;
+    memset(&effective, 0, sizeof(effective));
+    memcpy(&effective, options,
+           options->struct_size < sizeof(effective) ? options->struct_size : sizeof(effective));
+    options = &effective;
 
     const unsigned char* base = (const unsigned char*)resolve_base(module_base);
     const IMAGE_NT_HEADERS64* headers = nt_headers(base);
@@ -456,11 +416,7 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
         return RSF_DUMP_ERROR_NOT_A_PE;
     }
     if (options->require_decrypted && local.code_entropy >= options->entropy_threshold) {
-        if (report) {
-            const uint32_t size = report->struct_size;
-            memcpy(report, &local, sizeof(local));
-            report->struct_size = size;
-        }
+        copy_report(report, &local);
         return RSF_DUMP_ERROR_STILL_ENCRYPTED;
     }
 
@@ -496,7 +452,7 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     if (!header_copy) {
         return RSF_DUMP_ERROR_WRITE_FAILED;
     }
-    read_guarded(base, header_copy, header_size);
+    rsf_dump_read_guarded(base, header_copy, header_size);
 
     IMAGE_NT_HEADERS64* copied_headers =
         (IMAGE_NT_HEADERS64*)(header_copy + ((const IMAGE_DOS_HEADER*)header_copy)->e_lfanew);
@@ -548,6 +504,10 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
 
     unsigned char* buffer = NULL;
     size_t buffer_size = 0;
+    rsf_section_digest* digests = (rsf_section_digest*)calloc(
+        headers->FileHeader.NumberOfSections ? headers->FileHeader.NumberOfSections : 1u,
+        sizeof(rsf_section_digest));
+    double hash_ms = 0.0;
     for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
         DWORD size = sections[index].Misc.VirtualSize;
         if (size == 0) {
@@ -560,19 +520,33 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
             unsigned char* grown = (unsigned char*)realloc(buffer, size);
             if (!grown) {
                 free(buffer);
+                free(digests);
+                free(slots);
                 fclose(stream);
                 return RSF_DUMP_ERROR_WRITE_FAILED;
             }
             buffer = grown;
             buffer_size = size;
         }
-        read_guarded(base + sections[index].VirtualAddress, buffer, size);
+        const size_t readable_bytes =
+            rsf_dump_read_guarded(base + sections[index].VirtualAddress, buffer, size);
+        if (digests) {
+            const double hash_started = rsf_dump_now_ms();
+            digests[index].valid = 1;
+            digests[index].dumped_size = size;
+            digests[index].readable_bytes = readable_bytes;
+            digests[index].entropy =
+                rsf_sampled_entropy(buffer, size, RSF_ENTROPY_WINDOW, RSF_ENTROPY_SAMPLES);
+            rsf_sha256_hex(buffer, size, digests[index].sha256);
+            hash_ms += rsf_dump_now_ms() - hash_started;
+        }
         if (sections[index].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
             local.iat_references += count_iat_references(
                 buffer, size, sections[index].VirtualAddress, slots, slot_count, NULL);
         }
         if (fseek(stream, (long)sections[index].VirtualAddress, SEEK_SET) != 0) {
             free(buffer);
+            free(digests);
             free(slots);
             fclose(stream);
             return RSF_DUMP_ERROR_WRITE_FAILED;
@@ -585,6 +559,7 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     const int failed = ferror(stream);
     fclose(stream);
     if (failed) {
+        free(digests);
         return RSF_DUMP_ERROR_WRITE_FAILED;
     }
     local.bytes_written = (uint64_t)written;
@@ -597,14 +572,12 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     }
     local.modules_listed = (uint32_t)module_count;
     const rsf_dump_result sidecar =
-        write_sidecar(sidecar_path, base, headers, module_path, modules, module_count, &local);
+        write_sidecar(sidecar_path, base, headers, module_path, modules, module_count, options,
+                      digests, hash_ms, started_ms, &local);
     free(modules);
+    free(digests);
 
-    if (report) {
-        const uint32_t size = report->struct_size;
-        memcpy(report, &local, sizeof(local));
-        report->struct_size = size;
-    }
+    copy_report(report, &local);
     return sidecar;
 }
 

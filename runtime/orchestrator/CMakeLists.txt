@@ -28,8 +28,10 @@ add_library(rsf_orchestrator_core OBJECT
     src/gl_pipeline.cpp
     src/gpu_policy.cpp
     src/unity_sr_host.cpp
+    src/rdr2_sr_host.cpp
     src/unity_config.cpp
     src/overlay_d3d12.cpp
+    src/overlay_native12.cpp
     ../../loader/proxy/src/overlay_host.cpp
     src/native_regions.cpp
     src/frame_sequencer.cpp
@@ -137,7 +139,6 @@ if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     target_include_directories(rsf_native_vulkan SYSTEM PUBLIC "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_FRAME_DUMP_VULKAN=1)
 endif()
-
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
 target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)

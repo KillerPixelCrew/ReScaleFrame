@@ -847,6 +847,17 @@ mod tests {
     }
 
     #[test]
+    fn engine_owned_resolution_does_not_emit_quality_requests() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.sr_quality_locked = true;
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(!press.quality_changed && !release.quality_changed);
+    }
+
+    #[test]
     fn the_selection_survives_being_hidden() {
         let mut overlay = Overlay::new();
         let stats = stats_with_backend();
