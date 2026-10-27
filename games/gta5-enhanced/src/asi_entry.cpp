@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Opt-in ASI entry for GTA V Enhanced. It does not install renderer hooks or
-// alter graphics, launcher, anti-cheat, game settings or caches.
+// Opt-in ASI entry for GTA V Enhanced. Optional census forwards native calls;
+// this entry does not alter graphics, launcher, anti-cheat, settings or caches.
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/sha256_file.h>
+#ifdef RSF_HAVE_VENDOR_CENSUS
+#include <rescaleframe/vendor_census.h>
+#endif
+#include "build_identity.h"
 #include <windows.h>
 #include <cstdio>
 #include <cwchar>
@@ -38,12 +42,41 @@ DWORD WINAPI startup(void*) noexcept try
     const auto mod = root + L"ReScaleFrame\\";
     if (!CreateDirectoryW(mod.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return 1;
     log_path = mod + L"gta5-enhanced.log";
-    log(nullptr, "GTA V Enhanced scaffold started; graphics and vendor diagnostics are disabled.");
+    log(nullptr, "GTA V Enhanced entry started; RSF rendering is disabled.");
 
     const auto executable_length = GetModuleFileNameW(nullptr, path, 32768);
     if (!executable_length || executable_length >= 32768) return 1;
     std::string digest;
     if (!rsf::sha256_file(path, digest)) { log(nullptr, "Executable fingerprint could not be read."); return 1; }
+#ifdef RSF_HAVE_VENDOR_CENSUS
+    if (GetPrivateProfileIntW(L"GTA5Enhanced", L"Census", 0, config.c_str())) {
+        if (digest != rsf_gta5_enhanced::executable_sha256) {
+            log(nullptr, "Vendor census refused: unknown executable fingerprint.");
+        } else {
+            const auto directory = mod + L"gta5-enhanced-census\\" +
+                std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+            // The census copies this path during installation. Start on this worker
+            // after fingerprinting, before loading RSF's runtime or vendor modules.
+            const int size = WideCharToMultiByte(CP_UTF8, 0, directory.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string utf8(size > 0 ? static_cast<size_t>(size) : 0, '\0');
+            if (size > 0 && WideCharToMultiByte(CP_UTF8, 0, directory.c_str(), -1,
+                    utf8.data(), size, nullptr, nullptr)) {
+                rsf_census_options census{};
+                census.struct_size = sizeof(census); census.abi_version = RSF_CENSUS_ABI_VERSION;
+                census.output_dir_utf8 = utf8.c_str();
+                // The existing probe bounds its output to 64 MiB, samples after
+                // 32 full records per site, and periodically flushes its summary.
+                // Skip signatures for other games and the unselected Vulkan path.
+                census.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN | RSF_CENSUS_FLAG_NO_VULKAN;
+                const auto result = rsf_census_install(&census);
+                char message[128]{};
+                std::snprintf(message, sizeof(message), "Vendor census install result=%d flags=0x%x",
+                    int(result), census.flags);
+                log(nullptr, message);
+            } else log(nullptr, "Vendor census refused: invalid output path.");
+        }
+    }
+#endif
     const auto runtime_path = mod + L"ReScaleFrame.Runtime.dll";
     const auto runtime = LoadLibraryExW(runtime_path.c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -80,7 +113,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
-        wchar_t executable[32768]{};
+        // Census uses static TLS, so DisableThreadLibraryCalls can fail. Keep
+        // the entry's stack small even for DLL_THREAD_ATTACH on 64 KiB threads:
+        // an automatic path buffer is reserved by the prologue for every reason.
+        static wchar_t executable[32768]{};
         const auto length = GetModuleFileNameW(nullptr, executable, 32768);
         const auto* leaf = length && length < 32768 ? wcsrchr(executable, L'\\') : nullptr;
         if (leaf && !_wcsicmp(leaf + 1, L"GTA5_Enhanced.exe")) {

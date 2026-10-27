@@ -1426,6 +1426,19 @@ int vulkan_mode(const std::string& dir) {
     CHECK(reinterpret_cast<int (*)(unsigned, const void*)>(pcl_marker)(4, &token) == 0x32);
     unsigned char viewport[40] = {};
     put<uint32_t>(viewport, 32, 7);
+    auto sl_constants = proc<int (*)(const void*, const void*, const void*)>(sl, "slSetConstants");
+    CHECK(sl_constants);
+    // Exercise the v1-sized prefix, matrix order and camera axes. Deliberately
+    // distinct entries catch offset/transpose mistakes in the recorded arrays.
+    unsigned char constants[456] = {};
+    put<uint32_t>(constants, 24, 1);
+    for (size_t i = 0; i < 80; ++i) put<float>(constants, 32 + i * 4, static_cast<float>(i) - 17.25f);
+    for (size_t i = 0; i < 18; ++i) put<float>(constants, 352 + i * 4, static_cast<float>(i) + 0.125f);
+    put<float>(constants, 424, 0.1f);
+    put<float>(constants, 428, 10000.f);
+    put<float>(constants, 432, 1.1f);
+    put<uint8_t>(constants, 444, 1);
+    if (sl_constants) CHECK(sl_constants(constants, &token, viewport) == 0x34);
     unsigned char options[96] = {};
     put<uint32_t>(options, 32, 1);
     put<uint32_t>(options, 36, 2);
@@ -1508,6 +1521,32 @@ int vulkan_mode(const std::string& dir) {
         CHECK(a->get("path_to_logs_and_data")->is("C:\\census\\logs"));
     }
     if (const Json* a = one("slReflexSleep")) CHECK(a->get("frame")->n == 42);
+    if (const Json* a = one("slSetConstants")) {
+        CHECK(a->get("frame")->n == 42 && a->get("viewport")->n == 7);
+        const Json* c = a->get("constants");
+        CHECK(c && c->get("struct_version")->n == 1);
+        if (c) {
+            const char* matrices[] = {"camera_view_to_clip", "clip_to_camera_view", "clip_to_lens_clip",
+                "clip_to_prev_clip", "prev_clip_to_clip"};
+            for (size_t matrix = 0; matrix < std::size(matrices); ++matrix) {
+                const Json* values = c->get(matrices[matrix]);
+                CHECK(values && values->a.size() == 16);
+                if (values && values->a.size() == 16)
+                    for (size_t i = 0; i < 16; ++i)
+                        CHECK_NEAR(values->a[i].n, static_cast<float>(matrix * 16 + i) - 17.25f);
+            }
+            const char* vectors[] = {"camera_pos", "camera_up", "camera_right", "camera_fwd"};
+            for (size_t vector = 0; vector < std::size(vectors); ++vector) {
+                const Json* values = c->get(vectors[vector]);
+                CHECK(values && values->a.size() == 3);
+                if (values && values->a.size() == 3)
+                    for (size_t i = 0; i < 3; ++i) CHECK_NEAR(values->a[i].n, 6 + vector * 3 + i + 0.125);
+            }
+            CHECK_NEAR(c->get("camera_near")->n, 0.1);
+            CHECK_NEAR(c->get("camera_far")->n, 10000.0);
+            CHECK(c->get("depth_inverted")->b);
+        }
+    }
     if (const Json* a = one("slPCLSetMarker")) {
         CHECK(a->get("marker")->n == 4 && a->get("marker_name")->is("PresentStart") && a->get("frame")->n == 42);
     }
@@ -1761,6 +1800,29 @@ int dllmain_mode(const std::string& dir) {
     return g_failures ? 1 : 0;
 }
 
+// Creation pointers must remain stable even when resolved before post_load.
+// The functional WARP case separately verifies real export detours still record.
+int creation_mode(const std::string& dir) {
+    rsf_census_options opt{};
+    opt.struct_size = sizeof(opt); opt.abi_version = RSF_CENSUS_ABI_VERSION;
+    opt.output_dir_utf8 = dir.c_str(); opt.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN;
+    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
+    const HMODULE module = load_fixture(L"rsf_fixture_creation.dll");
+    CHECK(module);
+    if (!module) return 1;
+    const auto identity = proc<unsigned (*)()>(module, "fixture_creation_identity");
+    const auto raw = proc<void* (*)(unsigned)>(module, "fixture_creation_raw");
+    CHECK(identity && raw);
+    if (!identity || !raw) return 1;
+    CHECK(identity() == 15);
+    const char* names[] = {"CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "D3D12CreateDevice"};
+    for (unsigned i = 0; i < 4; ++i)
+        CHECK(reinterpret_cast<void*>(GetProcAddress(module, names[i])) == raw(i));
+    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
+    std::printf("vendor_census creation_identity: %d failure(s)\n", g_failures);
+    return g_failures ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1774,5 +1836,6 @@ int main(int argc, char** argv) {
     if (mode == "vulkan") return vulkan_mode(argv[2]);
     if (mode == "ffx") return ffx_mode(argv[2]);
     if (mode == "dllmain") return dllmain_mode(argv[2]);
+    if (mode == "creation") return creation_mode(argv[2]);
     return 2;
 }

@@ -1,14 +1,30 @@
 # Implementation tracker
 
-## GTA V Enhanced scaffold, 27 October 2026
+## GTA V Enhanced build identification and first-run probe, 27 October 2026
 
-Added the opt-in ASI entry and game-plugin lifecycle scaffold with strict unrecognized-build
-refusal. Steam app3240220 is downloading: its staged executable was zero-filled at inspection,
-so no executable fingerprint or renderer hook is accepted yet. Release VS2026 verification
-passed99 discovered tests, with11 optional skips, formatting and Clippy. The plugin contract
-and real ASI entry fixture verify unknown-build refusal, default-off behavior and Legacy exclusion.
-No SR, FG, latency, UI or reinsertion is implemented. Shared
-reuse leads and game-owned boundaries are in [renderer research](research/gta5-enhanced-renderer.md).
+The completed Steam build25971420 is1.0.1158.16. Its exact SHA-256 now enables detection while
+rendering preparation remains refused. Added an optional native-call census, gated by that
+fingerprint and default-off configuration. The shared decoder now records all five Streamline
+camera matrices and world-space axes alongside the existing frame/viewport, jitter, resource-tag,
+feature and presentation samples. This unlocks a combined first-run input survey; it is not an
+SR/FG implementation. Calls preceding the ASI worker's installation may be missed.
+
+Two initial startup defects are corrected: early graphics-creation thunks formed a recursive
+Steam hook chain, and the ASI entry reserved64 KiB on thread-attach notifications despite static
+TLS. Creation pointers now retain identity and the path buffer uses static storage. Regression
+fixtures cover both; a stand-in control fails the old ASI's small-stack thread test. Final Release
+VS2026:100 discovered,89 passed,11 optional skips, formatting and Clippy. The hash-verified ASI
+now reaches human-confirmed Story gameplay with Steam/RTSS, native DLSS/FG/Reflex settings.
+
+Native DLSS Quality inputs are1707x1067 into2560x1600. Constants from eight workers correlate by
+frame/viewport;201 projection/history inverse checks stay below9e-8, near/far/FOV are
+0.1/10000/50 degrees, and34 matched SL/NGX evaluations have identical jitter. Separate native
+HUDLessColor and UIColorAndAlpha resources are tagged, both BGRA8 at display resolution. They
+remain candidate pixel boundaries. No RSF SR, FG, latency control, UI or reinsertion is implemented;
+the game already owns Streamline2.9.1 and rendering preparation remains refused.
+The run ends normally with code0 after recorded present145237. Diagnostics are reset off for
+subsequent launches; game-native settings and caches are preserved.
+[Full evidence, return RVAs, lifetime limits and remaining work](research/gta5-enhanced-renderer.md).
 
 ## RDR2 shared overlay and quality controls, 26 October 2026
 

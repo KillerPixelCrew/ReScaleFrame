@@ -2,22 +2,18 @@
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/version.h>
-#include <array>
+#include "build_identity.h"
 
 namespace {
-// The Steam download currently contains a zero-filled placeholder. Add an exact
-// hash only after a completed executable has been fingerprinted and inspected.
-constexpr std::array<const char*, 0> known_sha256{};
 constexpr char reason[] =
-    "GTA V Enhanced scaffold: executable fingerprint, rendering hooks and runtime validation are pending.";
+    "GTA V Enhanced 1.0.1158.16 recognized; rendering hooks and runtime validation are pending.";
 
 rsf_detection detect(const rsf_game_probe* probe) noexcept
 {
     if (!probe || probe->struct_size < sizeof(*probe) || probe->pe_machine != 0x8664 ||
         !rsf_game::equal_ascii(probe->executable_name_utf8, "GTA5_Enhanced.exe")) return RSF_GAME_UNKNOWN;
-    for (const auto* hash : known_sha256)
-        if (rsf_game::equal_ascii(probe->sha256_hex, hash)) return RSF_GAME_RECOGNIZED;
-    return RSF_GAME_UNKNOWN;
+    return rsf_game::equal_ascii(probe->sha256_hex, rsf_gta5_enhanced::executable_sha256)
+        ? RSF_GAME_RECOGNIZED : RSF_GAME_UNKNOWN;
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept

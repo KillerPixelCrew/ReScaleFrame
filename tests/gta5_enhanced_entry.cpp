@@ -8,6 +8,8 @@
 
 namespace fs = std::filesystem;
 
+DWORD WINAPI small_stack_thread(void*) { return 0x52; }
+
 int child()
 {
     wchar_t executable[32768]{};
@@ -18,6 +20,17 @@ int child()
     GetPrivateProfileStringW(L"Fixture", L"Expected", L"", expected, 32, (root / L"ReScaleFrame.ini").c_str());
     const auto module = LoadLibraryW((root / L"ReScaleFrame.GTA5Enhanced.asi").c_str());
     if (!module) return 1;
+    // The linked census has static TLS, which requires DLL_THREAD_ATTACH even
+    // when diagnostics are disabled. A large DllMain local used to overflow
+    // Windows/media threads before the caller's thread procedure could run.
+    const HANDLE thread = CreateThread(nullptr, 64 * 1024, small_stack_thread, nullptr,
+        STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    if (!thread) return 1;
+    DWORD code = 0;
+    const bool stack_ok = WaitForSingleObject(thread, 5000) == WAIT_OBJECT_0 &&
+        GetExitCodeThread(thread, &code) && code == 0x52;
+    CloseHandle(thread);
+    if (!stack_ok) return 1;
     const auto log = root / L"ReScaleFrame" / L"gta5-enhanced.log";
     if (std::wstring(expected) != L"enabled") {
         Sleep(500);
@@ -47,6 +60,7 @@ bool run_case(const fs::path& base, const fs::path& executable, const fs::path& 
     fs::copy_file(plugin, mod / L"ReScaleFrame.Game.GTA5Enhanced.dll");
     const auto ini = root / L"ReScaleFrame.ini";
     if (!WritePrivateProfileStringW(L"Fixture", L"Expected", expected, ini.c_str()) ||
+        !WritePrivateProfileStringW(L"GTA5Enhanced", L"Census", L"1", ini.c_str()) ||
         (enabled && !WritePrivateProfileStringW(L"GTA5Enhanced", L"Enable", L"1", ini.c_str()))) return false;
     std::wstring command = L"\"" + program.wstring() + L"\" --child";
     STARTUPINFOW startup{}; startup.cb = sizeof(startup);
@@ -58,7 +72,7 @@ bool run_case(const fs::path& base, const fs::path& executable, const fs::path& 
     const bool passed = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &code) && code == 0;
     if (wait == WAIT_TIMEOUT) { TerminateProcess(process.hProcess, 1); WaitForSingleObject(process.hProcess, 1000); }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
-    return passed;
+    return passed && !fs::exists(mod / L"gta5-enhanced-census");
 }
 
 int wmain(int argc, wchar_t** argv) try

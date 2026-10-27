@@ -230,6 +230,40 @@ FIXTURE_EXPORT void fixture_vk_seen(void** queue, unsigned* submits, unsigned* p
     *present_info = g_vk.present_info;
 }
 
+#elif defined(FIXTURE_CREATION)
+
+// Resolve graphics exports from DllMain, before the census LoadLibrary wrapper
+// gets its post_load callback. Overlay installers can do exactly this.
+// Export aliases avoid redeclaring the Windows SDK's imported functions.
+#pragma comment(linker, "/export:CreateDXGIFactory=fixture_CreateDXGIFactory")
+#pragma comment(linker, "/export:CreateDXGIFactory1=fixture_CreateDXGIFactory1")
+#pragma comment(linker, "/export:CreateDXGIFactory2=fixture_CreateDXGIFactory2")
+#pragma comment(linker, "/export:D3D12CreateDevice=fixture_D3D12CreateDevice")
+FIXTURE_EXPORT int fixture_CreateDXGIFactory(const void*, void**) { return 0x51; }
+FIXTURE_EXPORT int fixture_CreateDXGIFactory1(const void*, void**) { return 0x52; }
+FIXTURE_EXPORT int fixture_CreateDXGIFactory2(unsigned, const void*, void**) { return 0x53; }
+FIXTURE_EXPORT int fixture_D3D12CreateDevice(void*, int, const void*, void**) { return 0x54; }
+static FARPROC early_creation[4]{};
+static const char* const creation_names[] = {
+    "CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "D3D12CreateDevice"};
+static FARPROC raw_creation[] = {
+    reinterpret_cast<FARPROC>(&fixture_CreateDXGIFactory), reinterpret_cast<FARPROC>(&fixture_CreateDXGIFactory1),
+    reinterpret_cast<FARPROC>(&fixture_CreateDXGIFactory2), reinterpret_cast<FARPROC>(&fixture_D3D12CreateDevice)};
+BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH)
+        for (unsigned i = 0; i < 4; ++i) early_creation[i] = GetProcAddress(module, creation_names[i]);
+    return TRUE;
+}
+FIXTURE_EXPORT unsigned fixture_creation_identity() {
+    unsigned matched = 0;
+    for (unsigned i = 0; i < 4; ++i)
+        if (early_creation[i] == raw_creation[i]) matched |= 1u << i;
+    return matched;
+}
+FIXTURE_EXPORT void* fixture_creation_raw(unsigned i) {
+    return i < 4 ? reinterpret_cast<void*>(raw_creation[i]) : nullptr;
+}
+
 #elif defined(FIXTURE_SL)
 
 static int sl_reflex_sleep(const void*) { return 0x31; }
@@ -237,6 +271,7 @@ static int sl_pcl_marker(unsigned, const void*) { return 0x32; }
 static int sl_dlssg_options(const void*, const void*) { return 0x33; }
 
 FIXTURE_EXPORT int slInit(const void*, unsigned long long) { return 0; }
+FIXTURE_EXPORT int slSetConstants(const void*, const void*, const void*) { return 0x34; }
 FIXTURE_EXPORT int slGetFeatureFunction(unsigned, const char* name, void*& function) {
     if (!std::strcmp(name, "slReflexSleep")) {
         function = reinterpret_cast<void*>(&sl_reflex_sleep);

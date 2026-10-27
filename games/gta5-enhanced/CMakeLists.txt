@@ -7,6 +7,10 @@ add_library(rsf_asi_gta5_enhanced SHARED src/asi_entry.cpp)
 target_include_directories(rsf_asi_gta5_enhanced PRIVATE ../../runtime/orchestrator/include)
 target_link_libraries(rsf_asi_gta5_enhanced PRIVATE
     ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
+if(TARGET rsf_vendor_census)
+    target_link_libraries(rsf_asi_gta5_enhanced PRIVATE ReScaleFrame::VendorCensus)
+    target_compile_definitions(rsf_asi_gta5_enhanced PRIVATE RSF_HAVE_VENDOR_CENSUS)
+endif()
 target_compile_definitions(rsf_asi_gta5_enhanced PRIVATE _CRT_SECURE_NO_WARNINGS)
 set_target_properties(rsf_asi_gta5_enhanced PROPERTIES
     OUTPUT_NAME "ReScaleFrame.GTA5Enhanced" PREFIX "" SUFFIX ".asi"

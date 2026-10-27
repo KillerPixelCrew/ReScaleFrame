@@ -75,7 +75,16 @@ Two mechanisms bind a recording wrapper to a function, and the first binding of 
    Streamline's `slGetFeatureFunction` hand out thunks for the functions they resolve. Because
    `kernel32!GetProcAddress` forwards to `kernelbase!GetProcAddressForCaller`, both are hooked.
 
-DXGI, D3D12 and swapchain methods have no export. They are detoured at the address a vtable slot holds
+Graphics creation exports (`CreateDXGIFactory`/`1`/`2`, `D3D12CreateDevice`) retain the exact pointer
+returned by the resolver, including during DLL initialization before the module-load callback.
+They use entry detours instead of resolver thunks. Otherwise an overlay can cache a census thunk
+as its original while the census forwards into that overlay, forming a recursive hook chain.
+The GTA V Enhanced startup failure and its correction are recorded in
+[renderer research](../../docs/research/gta5-enhanced-renderer.md). A stand-in DLL resolves these
+exports during its own DllMain to verify pointer identity; the WARP fixture checks that native
+graphics creation calls are still recorded.
+
+DXGI/D3D12 COM methods have no export. They are detoured at the address a vtable slot holds
 when the first factory, device, queue or swapchain appears.
 
 | Group | Functions | Decoded arguments |
@@ -87,7 +96,7 @@ when the first factory, device, queue or swapchain appears.
 | FidelityFX API (FSR 3.1, 4, frame generation) | `ffxCreateContext`, `ffxDestroyContext`, `ffxConfigure`, `ffxQuery`, `ffxDispatch` | the whole `pNext` chain by type; upscale create and dispatch, frame generation create, configure, dispatch and prepare V2, swapchain wrap, new and for-HWND descriptors |
 | XeSS | `xessD3D12CreateContext`/`Init`/`Execute`, `xessSetJitterScale`, `xessSetVelocityScale`, `xessSetExposureMultiplier`, `xessDestroyContext`, the D3D11 and Vulkan create/init/execute | init parameters, execute resources and scalars |
 | XeFG, XeLL | `xefgSwapChain*` creation, tagging and control; `xellD3D12CreateContext`, `SetSleepMode`, `GetSleepMode`, `Sleep`, `AddMarkerData`, `DestroyContext` | raw arguments; XeLL frame id and marker |
-| Streamline | `slInit`, `slShutdown`, `slSetTag`, `slSetTagForFrame`, `slSetConstants`, `slEvaluateFeature`, `slGetNewFrameToken`, `slGetFeatureFunction`, `slIsFeatureSupported`, `slSetD3DDevice`, `slUpgradeInterface`, `slAllocateResources`, `slFreeResources`; feature functions `slDLSSGSetOptions`, `slDLSSGGetState`, `slDLSSSetOptions`, `slReflexSleep`, `slReflexSetOptions`, `slPCLSetMarker`, `slPCLSetOptions` | preferences, tags by buffer type with resource descriptions, constants, DLSS-G and DLSS options, Reflex options, PCL marker and frame index |
+| Streamline | `slInit`, `slShutdown`, `slSetTag`, `slSetTagForFrame`, `slSetConstants`, `slEvaluateFeature`, `slGetNewFrameToken`, `slGetFeatureFunction`, `slIsFeatureSupported`, `slSetD3DDevice`, `slUpgradeInterface`, `slAllocateResources`, `slFreeResources`; feature functions `slDLSSGSetOptions`, `slDLSSGGetState`, `slDLSSSetOptions`, `slReflexSleep`, `slReflexSetOptions`, `slPCLSetMarker`, `slPCLSetOptions` | preferences, tags by buffer type with resource descriptions, constants including five matrices and camera axes, DLSS-G and DLSS options, Reflex options, PCL marker and frame index |
 | NVAPI Reflex | `nvapi_QueryInterface`, then ids `0xAC1CA9E0` SetSleepMode, `0x852CD1D2` Sleep, `0xD9984C05` SetLatencyMarker, `0x1A587F9C` GetLatency, `0x13C98F73` D3D12 SetAsyncFrameMarker | sleep mode flags and interval, marker type and frame id, whether a latency report came back |
 | NvLowLatencyVk | `NvLL_VK_Initialize`, `InitLowLatencyDevice`, `DestroyLowLatencyDevice`, `SetSleepMode`, `Sleep`, `SetLatencyMarker`, `GetLatency` | marker frame id and type (layout assumed) |
 | AMD | `AmdExtD3DCreateInterface` (Anti-Lag 2 path), `agsInitialize`, `agsDriverExtensionsDX12_CreateDevice` | interface id, raw arguments |

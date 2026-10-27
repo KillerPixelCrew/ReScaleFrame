@@ -87,6 +87,15 @@ int main() {
     OFFSET(sl::Resource, height, 72);
     OFFSET(sl::Resource, nativeFormat, 76);
     OFFSET(sl::Constants, jitterOffset, 352);
+    OFFSET(sl::Constants, cameraViewToClip, 32);
+    OFFSET(sl::Constants, clipToCameraView, 96);
+    OFFSET(sl::Constants, clipToLensClip, 160);
+    OFFSET(sl::Constants, clipToPrevClip, 224);
+    OFFSET(sl::Constants, prevClipToClip, 288);
+    OFFSET(sl::Constants, cameraPos, 376);
+    OFFSET(sl::Constants, cameraUp, 388);
+    OFFSET(sl::Constants, cameraRight, 400);
+    OFFSET(sl::Constants, cameraFwd, 412);
     OFFSET(sl::Constants, mvecScale, 360);
     OFFSET(sl::Constants, cameraNear, 424);
     OFFSET(sl::Constants, cameraFar, 428);

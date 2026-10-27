@@ -167,6 +167,14 @@ FARPROC intercept(FARPROC real, LPCSTR name) noexcept {
     if (!real || reinterpret_cast<uintptr_t>(name) <= 0xFFFF || tl_busy) return real;
     const Fn f = lookup_name(name);
     if (f == Fn::Count || !installed() || !fn_enabled(f)) return real;
+    // Graphics creation exports are hook-chain roots. An overlay may resolve
+    // them while their DLL is still initializing, before post_load can bind
+    // the native export. Returning our thunk here lets the overlay cache it
+    // as its original, while our original can already point to that overlay:
+    // the resulting cycle overflows the stack. Preserve the resolver's exact
+    // pointer; hook_module records these exports by detouring their entries.
+    if (f == Fn::CreateDXGIFactory || f == Fn::CreateDXGIFactory1 ||
+        f == Fn::CreateDXGIFactory2 || f == Fn::D3D12CreateDevice) return real;
     Busy busy;
     DWORD le = GetLastError();
     void* r = bind_thunk(f, reinterpret_cast<void*>(real));

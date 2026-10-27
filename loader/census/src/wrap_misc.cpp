@@ -299,12 +299,34 @@ void dec_sl_set_tag_frame(Json& j, const Q* a) noexcept {
 }
 
 void dec_sl_constants(Json& j, const Q* a) noexcept {
-    // sl::Constants v2: five float4x4 (320 bytes) after the header, then the fields below.
-    uint8_t c[464]{};
+    // sl::Constants v1/v2 share these fields. Capture values at the vendor call,
+    // not pointers into storage the game can overwrite on the next frame.
+    uint8_t c[456]{};
     if (plausible_ptr(reinterpret_cast<void*>(a[0])) && safe_read(reinterpret_cast<void*>(a[0]), c, sizeof(c))) {
         float f[18];
         std::memcpy(f, c + 352, sizeof(f)); // jitter, mvec scale, pinhole, pos, up, right, fwd
         j.obj("constants");
+        uint32_t version;
+        std::memcpy(&version, c + 24, sizeof(version));
+        j.u64("struct_version", version);
+        static constexpr const char* matrices[] = {"camera_view_to_clip", "clip_to_camera_view",
+            "clip_to_lens_clip", "clip_to_prev_clip", "prev_clip_to_clip"};
+        // Streamline specifies row-major, unjittered matrices. Whether the game
+        // actually honors that contract must be checked against these samples.
+        for (size_t matrix = 0; matrix < std::size(matrices); ++matrix) {
+            float values[16];
+            std::memcpy(values, c + kSlHeader + matrix * sizeof(values), sizeof(values));
+            j.arr(matrices[matrix]);
+            for (float value : values) j.f32(nullptr, value);
+            j.end_arr();
+        }
+        static constexpr const char* vectors[] = {"camera_pos", "camera_up", "camera_right", "camera_fwd"};
+        for (size_t vector = 0; vector < std::size(vectors); ++vector) {
+            j.arr(vectors[vector]);
+            for (size_t component = 0; component < 3; ++component)
+                j.f32(nullptr, f[6 + vector * 3 + component]);
+            j.end_arr();
+        }
         j.f32("jitter_x", f[0]);
         j.f32("jitter_y", f[1]);
         j.f32("mvec_scale_x", f[2]);
