@@ -5,6 +5,33 @@ instructions here rather than in tool-specific files.
 
 Use natural, concise language in documentation, code comments, issues, commits, and PRs. Avoid em dashes and filler.
 
+## Rule 1: enforce domain separation
+
+The orchestrator and shared runtime are general infrastructure. They must not contain game or
+engine integration policy. This boundary is mandatory for every adapter, including existing ones.
+
+- Keep executable detection, fingerprints, RVAs, expected patch bytes, native engine symbols and
+  layouts, engine startup, window-class selection, game settings translation, input conventions,
+  and game-specific quality, timing or lifecycle policy in `games/<id>/` or the relevant engine
+  integration under `integrations/`.
+- Keep vendor SDK ownership, GPU processing, resource retirement, presentation mechanisms,
+  plugin-session management, shared settings storage and the shared overlay generic. When a game
+  needs reusable functionality, implement it through a general, size/version-checked C ABI and
+  have the adapter supply its configuration, verified inputs and policy callbacks.
+- Do not add game-name or engine-name switches, named game profiles, known executable/window
+  classes, game INI mappings, native symbol lookups, or hidden game-specific fallback branches
+  to the orchestrator. Engine identity required by a vendor SDK may be passed as adapter-supplied
+  metadata; it must not select a game-specific implementation in the runtime.
+- Game/engine-named startup and control entry points belong to the integration DLL, not the
+  runtime DLL. The integration calls generic runtime services and never loads a second runtime.
+- Copying an existing game host, adding a profile parameter, or renaming its file does not make
+  it generic. Separate the reusable mechanism from the integration policy. If the behavior cannot
+  be expressed generally without knowing the game, keep it in the integration.
+- An existing violation is not a pattern to follow. Correct it in every affected adapter before
+  building another integration on it, while preserving the working implementations. Check actual
+  dependencies and callbacks and validate affected integrations; a rename or text search alone
+  is not proof of domain separation.
+
 ## Research and tool setup
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
