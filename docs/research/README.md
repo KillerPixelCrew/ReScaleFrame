@@ -1,5 +1,7 @@
 # Rendering research
 
+- [GTA V Enhanced renderer](gta5-enhanced-renderer.md): initial evidence, RDR2 reuse leads and unverified game-owned boundaries.
+
 Use [current status](../current-status.md) for implemented/released features and acceptance limits.
 These notes are dated evidence and development history. Older pending claims do not override later
 corrections, and a source inspection is not a new runtime test. Published evidence snapshots keep

@@ -13,21 +13,25 @@ struct Fixture {
     const char* executable;
     const char* sha256;
     rsf_result prepare_result;
+    rsf_detection expected_detection;
 };
 
 constexpr Fixture fixtures[] = {
     {L"ac7", "ac7", "Ace7Game.exe",
      "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
-     RSF_ERROR_NATIVE_REFUSED},
+     RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
     {L"project-wingman", "project-wingman", "ProjectWingman-Win64-Shipping.exe",
      "092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
-     RSF_ERROR_NATIVE_REFUSED},
+     RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
     {L"rdr2", "rdr2", "RDR2.exe",
      "b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e",
-     RSF_ERROR_NOT_READY},
+     RSF_ERROR_NOT_READY, RSF_GAME_RECOGNIZED},
+    {L"gta5-enhanced", "gta5-enhanced", "GTA5_Enhanced.exe",
+     "0000000000000000000000000000000000000000000000000000000000000000",
+     RSF_ERROR_NOT_READY, RSF_GAME_UNKNOWN},
     {L"unity-mono", "unity-mono", "DragNWash.exe",
      "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
-     RSF_ERROR_NOT_READY}};
+     RSF_ERROR_NOT_READY, RSF_GAME_RECOGNIZED}};
 
 bool check(bool condition, const char* message)
 {
@@ -109,8 +113,8 @@ int wmain(int argc, wchar_t* argv[])
     passed &= check(api.info.name && api.info.version && api.info.status,
                     "The plugin must supply its immutable metadata strings.");
     rsf_game_probe probe{sizeof(rsf_game_probe), 0x8664, 0, fixture->executable, fixture->sha256};
-    passed &= check(api.detect(&probe) == RSF_GAME_RECOGNIZED,
-                    "The researched executable must be recognized.");
+    passed &= check(api.detect(&probe) == fixture->expected_detection,
+                    "Detection must match the researched fingerprint or refuse an unverified scaffold.");
     passed &= check(api.info.rendering_ready == 0,
                     "Recognition must not advertise unimplemented rendering support.");
     if (!check(api.hooks.prepare && api.hooks.start && api.hooks.quiesce && api.hooks.stop && api.hooks.status,

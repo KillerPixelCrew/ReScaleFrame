@@ -1,5 +1,15 @@
 # Implementation tracker
 
+## GTA V Enhanced scaffold, 27 October 2026
+
+Added the opt-in ASI entry and game-plugin lifecycle scaffold with strict unrecognized-build
+refusal. Steam app3240220 is downloading: its staged executable was zero-filled at inspection,
+so no executable fingerprint or renderer hook is accepted yet. Release VS2026 verification
+passed99 discovered tests, with11 optional skips, formatting and Clippy. The plugin contract
+and real ASI entry fixture verify unknown-build refusal, default-off behavior and Legacy exclusion.
+No SR, FG, latency, UI or reinsertion is implemented. Shared
+reuse leads and game-owned boundaries are in [renderer research](research/gta5-enhanced-renderer.md).
+
 ## RDR2 shared overlay and quality controls, 26 October 2026
 
 All five performance presets now change real engine input resolution during play, including

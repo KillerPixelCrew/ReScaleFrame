@@ -1,0 +1,50 @@
+{
+  "game": {
+    "id": "gta5-enhanced",
+    "title": "Grand Theft Auto V Enhanced",
+    "platform": "windows-x64",
+    "steam_appid": 3240220,
+    "executable": "GTA5_Enhanced.exe",
+    "sha256": null,
+    "file_version": null,
+    "pe_timestamp": null,
+    "target_build_id": "25971420",
+    "target_build_id_status": "Steam download target observed 2026-10-27; not an installed or verified build"
+  },
+  "engine": {
+    "family": "RAGE",
+    "status": "inferred from the game's published engine family and adjacent RDR2 research; this executable has not been inspected",
+    "version": null
+  },
+  "plugin": {
+    "target": "rsf_game_gta5_enhanced",
+    "dll": "ReScaleFrame.Game.GTA5Enhanced.dll",
+    "entry_target": "rsf_asi_gta5_enhanced",
+    "entry": "ReScaleFrame.GTA5Enhanced.asi; external ASI loader required",
+    "detection": "refuses all fingerprints until a complete build is inspected",
+    "build_configuration": "Release VS2026",
+    "plugin_contract_tested": true,
+    "asi_entry_fixture_tested": true,
+    "rendering_ready": false,
+    "hooks_implemented": false,
+    "game_tested": false,
+    "device_tested": false
+  },
+  "rendering": {
+    "apis": {
+      "dx12": "game-supported; RSF adapter unimplemented",
+      "vulkan": "game-supported; RSF adapter unimplemented"
+    },
+    "native_upscalers": "DLSS and FSR are game features; exact inputs and versions are not verified on the target build",
+    "intended_controls": "RSF overlay owns SR/FG choices; canonical game inputs and native-FG suppression are unimplemented",
+    "sr_input": null,
+    "fg_input": null,
+    "camera": null,
+    "motion_vectors": null,
+    "jitter": null,
+    "hud_boundary": null,
+    "output_reinsertion": null,
+    "rtss_compatibility": "required; untested"
+  },
+  "research": "../../docs/research/gta5-enhanced-renderer.md"
+}

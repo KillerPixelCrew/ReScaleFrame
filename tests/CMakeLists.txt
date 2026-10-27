@@ -7,7 +7,7 @@ add_executable(rsf_wingman_camera wingman_camera.cpp ../games/project-wingman/sr
 target_link_libraries(rsf_wingman_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
+add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_gta5_enhanced rsf_game_unity_mono)
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
@@ -28,6 +28,13 @@ add_test(NAME gpu_sr_policy COMMAND rsf_gpu_policy_test)
 add_executable(rsf_unity_mono_runtime_test unity_mono_runtime.cpp)
 target_link_libraries(rsf_unity_mono_runtime_test PRIVATE rsf_build_options)
 if(MSVC)
+    add_executable(rsf_gta5_enhanced_entry_test gta5_enhanced_entry.cpp)
+    target_link_libraries(rsf_gta5_enhanced_entry_test PRIVATE rsf_build_options)
+    add_dependencies(rsf_gta5_enhanced_entry_test rsf_asi_gta5_enhanced)
+    add_test(NAME gta5_enhanced_entry_contract COMMAND rsf_gta5_enhanced_entry_test
+        "$<TARGET_FILE:rsf_asi_gta5_enhanced>" "$<TARGET_FILE:rsf_orchestrator>"
+        "$<TARGET_FILE:rsf_game_gta5_enhanced>" "${CMAKE_CURRENT_BINARY_DIR}/gta5-entry")
+    set_tests_properties(gta5_enhanced_entry_contract PROPERTIES TIMEOUT 30)
     add_executable(rsf_wingman_carrier_test wingman_carrier.cpp)
     target_link_libraries(rsf_wingman_carrier_test PRIVATE rsf_build_options)
     add_dependencies(rsf_wingman_carrier_test rsf_proxy_wingman)
@@ -56,6 +63,10 @@ add_test(NAME game_rdr2_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_rdr2>" rdr2)
 set_tests_properties(game_rdr2_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_rdr2>")
+add_test(NAME game_gta5_enhanced_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_gta5_enhanced>" gta5-enhanced)
+set_tests_properties(game_gta5_enhanced_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_gta5_enhanced>")
 add_test(NAME game_unity_mono_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_unity_mono>" unity-mono)
 set_tests_properties(game_unity_mono_plugin_contract PROPERTIES
