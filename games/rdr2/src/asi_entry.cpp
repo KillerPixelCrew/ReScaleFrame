@@ -9,7 +9,8 @@
 #endif
 #include <rescaleframe/vendor_census.h>
 #include <rescaleframe/plugin_session.h>
-#include <rescaleframe/rdr2_sr_host.h>
+#include <rescaleframe/render_host.h>
+#include "runtime_setup.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <MinHook.h>
@@ -310,9 +311,10 @@ DWORD WINAPI startup(void*) noexcept try
     options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = GetTickCount64() + 1;
     options.services.log = log;
-    const auto create_host = reinterpret_cast<decltype(&rsf_rdr2_sr_host_create)>(
-        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_rdr2_sr_host_create")));
-    if (!create_host || create_host(config.c_str(), mod.c_str(), &options.services) != RSF_OK) {
+    const auto create_host = reinterpret_cast<decltype(&rsf_render_host_create)>(
+        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_render_host_create")));
+    const auto setup = rsf_rdr2_runtime_setup(config.c_str(), mod.c_str());
+    if (!create_host || create_host(&setup, &options.services) != RSF_OK) {
         log(nullptr, "RDR2 SR runtime host initialization refused.");
         return 1;
     }

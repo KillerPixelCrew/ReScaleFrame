@@ -190,18 +190,10 @@ bool dispatch(State& self, ID3D11DeviceContext* context, ID3D11Texture2D* scene,
     rsf_d3d11_state_restore(context, &saved);
     return true;
 }
-// UE 4.27 SceneVisibility.cpp:3244-3245 under temporal upscaling: the view's material texture mip
-// bias is log2 of the resolution fraction plus r.ViewTextureMipBias.Offset (-0.3), no lower than
-// r.ViewTextureMipBias.Min (-2). 4.18 has no such bias, so 4.18 materials sample render-size mips.
-float material_mip_bias(const rsf_game_render_pass& pass)
-{
-    const int32_t render = pass.render_rect[2] - pass.render_rect[0], output = pass.output_rect[2] - pass.output_rect[0];
-    if (render <= 0 || output <= 0 || render > output) return 0;
-    return std::fmax(std::log2(float(render) / float(output)) - 0.3f, -2.0f);
-}
 void material_scope(const rsf_game_render_pass& pass, uint32_t begin)
 {
-    rsf_frame_tap_set_sampler_bias(begin ? material_mip_bias(pass) : 0.0f);
+    const auto bias = pass.material_texture_mip_bias;
+    rsf_frame_tap_set_sampler_bias(begin && std::isfinite(bias) ? bias : 0.0f);
 }
 bool inside(const D3D11_TEXTURE2D_DESC& desc, const int32_t rect[4])
 { return rect[0] >= 0 && rect[1] >= 0 && rect[2] > rect[0] && rect[3] > rect[1] &&

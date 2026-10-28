@@ -5,9 +5,10 @@
 #include <sl.h>
 #endif
 #include <rescaleframe/unity_bridge.h>
-#include <rescaleframe/unity_sr_host.h>
-#include <rescaleframe/rdr2_sr_host.h>
-#include <rescaleframe/rdr2_frontend.h>
+#include "../games/unity-mono/include/rescaleframe/unity_runtime_host.h"
+#include <rescaleframe/render_host.h>
+#include <rescaleframe/render_frontend.h>
+#include "../games/rdr2/src/runtime_setup.h"
 #include <rescaleframe/native_fg_d3d12.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -135,9 +136,9 @@ static int rdr2_generation(ID3D12Device* device, ID3D12CommandQueue* queue,
         scene.role = RSF_GAME_RENDER_WINDOW;
         host.render_pass(host.user, nullptr, &scene, 1);
         if (std::getenv("RSF_RDR2_TEST_OVERLAY") && (ordinal == 4 || ordinal == 20))
-            rsf_rdr2_overlay_toggle();
+            rsf_render_overlay_toggle();
         if (std::getenv("RSF_RDR2_TEST_OVERLAY") && ordinal>=4 && ordinal<20) {
-            if (!rsf_rdr2_overlay_visible()) return 1;
+            if (!rsf_render_overlay_visible()) return 1;
             int count=0;unsigned attempts=0;
             do {count=ShowCursor(FALSE);} while(count>=0 && ++attempts<512);
             if (count>=0) {std::fprintf(stderr,"Overlay cursor hide loop failed to terminate.\n");return 1;}
@@ -245,7 +246,8 @@ int main(int argc, char** argv)
             !MultiByteToWideChar(CP_UTF8, 0, host_root, -1, root, 32768)) return 2;
         rdr2.struct_size = sizeof(rdr2); rdr2.abi_version = RSF_GAME_ABI_VERSION;
         rdr2.session_id = 7; rdr2.log = logger;
-        created = rsf_rdr2_sr_host_create(ini, root, &rdr2);
+        const auto profile = rsf_rdr2_runtime_setup(ini, root);
+        created = rsf_render_host_create(&profile, &rdr2);
     } else created = rsf_sr12_create(&setup, &sr);
     if (created != RSF_BACKEND_OK) { std::fprintf(stderr, "Provider %u preparation refused %d\n", setup.backend, created); return 77; }
     uint32_t width = 426, height = 240;

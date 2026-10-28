@@ -73,7 +73,7 @@ void motion_diagnostic(rsf_sr12& self, ID3D12GraphicsCommandList* list, uint32_t
                 sum += magnitude; maximum = (std::max)(maximum, magnitude);
             }
             D3D12_RANGE written{0, 0}; buffer->Unmap(0, &written);
-            char text[160]; std::snprintf(text, sizeof(text), "Unity normalized motion samples: mean=%.6f max=%.6f render pixels invalid=%u", sum / 256, maximum, invalid);
+            char text[160]; std::snprintf(text, sizeof(text), "Normalized motion samples: mean=%.6f max=%.6f render pixels invalid=%u", sum / 256, maximum, invalid);
             self.diagnostic_log(self.diagnostic_user, text);
         }
         self.motion_pending[slot] = false;
@@ -102,15 +102,18 @@ constexpr char normalize_shader[] = R"(
 Texture2D<float4> scene : register(t0);
 Texture2D<float> depth : register(t1);
 Texture2D<float2> motion : register(t2);
+Texture2D<float> exposureInput : register(t3);
 RWTexture2D<float4> sceneOut : register(u0);
 RWTexture2D<float> depthOut : register(u1);
 RWTexture2D<float2> motionOut : register(u2);
-cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; uint inputsOnly; };
+RWTexture2D<float> exposureOut : register(u3);
+cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; uint inputsOnly; uint externalExposure; };
 [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= extent)) return;
     if (!inputsOnly) sceneOut[id.xy] = scene.Load(int3(id.xy,0));
     depthOut[id.xy] = depth.Load(int3(id.xy,0));
     motionOut[id.xy] = motion.Load(int3(id.xy,0)) * toPixels;
+    if (externalExposure && all(id.xy == 0)) exposureOut[uint2(0,0)] = exposureInput.Load(int3(0,0,0));
 })";
 bool texture(rsf_sr12& self, uint32_t width, uint32_t height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& out)
 {
@@ -119,13 +122,13 @@ bool texture(rsf_sr12& self, uint32_t width, uint32_t height, DXGI_FORMAT format
 bool prepare_shader(rsf_sr12& self)
 {
     D3D12_DESCRIPTOR_RANGE ranges[] = {
-        {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, 0},
-        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 3, 0, 0, 3}};
+        {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, 0, 0},
+        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 4, 0, 0, 4}};
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     parameters[0].DescriptorTable = {2, ranges};
     parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    parameters[1].Constants = {0, 0, 5};
+    parameters[1].Constants = {0, 0, 6};
     D3D12_ROOT_SIGNATURE_DESC desc{2, parameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> serialized, errors;
     std::vector<uint8_t> shader;
@@ -139,7 +142,7 @@ bool prepare_shader(rsf_sr12& self)
     if (FAILED(self.device->CreateComputePipelineState(&pipeline, IID_PPV_ARGS(&self.pipeline)))) return false;
     for (auto& heap : self.heaps) {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{}; heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap_desc.NumDescriptors = 6; heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        heap_desc.NumDescriptors = 8; heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(self.device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&heap)))) return false;
     }
     return true;
@@ -164,10 +167,14 @@ bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
         if (!pass.exposure) return false;
         auto* exposure = static_cast<ID3D12Resource*>(pass.exposure);
         const auto desc = exposure->GetDesc();
+        const auto format = rsf::srv_format(desc.Format);
+        const bool scalar_readable = format == DXGI_FORMAT_R32_FLOAT || format == DXGI_FORMAT_R16_FLOAT ||
+            format == DXGI_FORMAT_R32G32_FLOAT || format == DXGI_FORMAT_R16G16_FLOAT ||
+            format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R16G16B16A16_FLOAT;
         ComPtr<ID3D12Device> owner;
         if (FAILED(exposure->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get() != self.device.Get() ||
             desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Width != 1 || desc.Height != 1 ||
-            desc.Format != DXGI_FORMAT_R32_FLOAT || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1) return false;
+            !scalar_readable || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1) return false;
         self.exposure_input = exposure;
     }
     void* pointers[] = {pass.color_input, pass.depth, pass.motion, pass.color_output};
@@ -280,6 +287,10 @@ extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_s
         if (FAILED(self->exposure_upload->Map(0, &read, &mapped))) return RSF_BACKEND_ERROR_INIT_FAILED;
         *static_cast<float*>(mapped) = 1.0f; D3D12_RANGE written{0, sizeof(float)}; self->exposure_upload->Unmap(0, &written);
     }
+    if (self->external_exposure) {
+        if (!texture(*self, 1, 1, DXGI_FORMAT_R32_FLOAT, self->exposure)) return RSF_BACKEND_ERROR_INIT_FAILED;
+        self->exposure_initialized = true;
+    }
     *out = self.release(); return RSF_BACKEND_OK;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -312,19 +323,31 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
         self->device->CreateShaderResourceView(resource, &view, cpu); cpu.ptr += stride;
     }
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{}; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        view.Format = self->external_exposure ? rsf::srv_format(self->exposure_input->GetDesc().Format) : DXGI_FORMAT_R32_FLOAT;
+        view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
+        self->device->CreateShaderResourceView(self->external_exposure ? self->exposure_input.Get() : nullptr, &view, cpu); cpu.ptr += stride;
+    }
     const DXGI_FORMAT normalized_formats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT};
     for (size_t i = 0; i < self->normalized.size(); ++i) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC view{}; view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         view.Format = normalized_formats[i];
         self->device->CreateUnorderedAccessView(self->normalized[i].Get(), nullptr, &view, cpu); cpu.ptr += stride;
     }
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC view{}; view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; view.Format = DXGI_FORMAT_R32_FLOAT;
+        self->device->CreateUnorderedAccessView(self->external_exposure ? self->exposure.Get() : nullptr, nullptr, &view, cpu);
+    }
     list->SetDescriptorHeaps(1, &heap); list->SetComputeRootSignature(self->root.Get());
     list->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart()); list->SetPipelineState(self->pipeline.Get());
-    struct Constants { uint32_t width, height; float x, y; uint32_t inputs_only; } constants{self->width, self->height,
-        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], !self->normalize_color};
-    list->SetComputeRoot32BitConstants(1, 5, &constants, 0);
+    struct Constants { uint32_t width, height; float x, y; uint32_t inputs_only, external_exposure; } constants{self->width, self->height,
+        -static_cast<float>(self->width) * pass->motion_to_uv[0], -static_cast<float>(self->height) * pass->motion_to_uv[1], !self->normalize_color, self->external_exposure};
+    list->SetComputeRoot32BitConstants(1, 6, &constants, 0);
     list->Dispatch((self->width + 7) / 8, (self->height + 7) / 8, 1);
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (self->external_exposure) transition(list, self->exposure.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     // The caller joins a slot's previous GPU completion before entering this evaluation.
     motion_diagnostic(*self, list, slot);
@@ -354,11 +377,6 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     (void)self->capture.record(list, self->normalized[1].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-depth", slot);
     (void)self->capture.record(list, self->normalized[2].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "fg-motion-pixels", slot);
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
-    if (self->external_exposure) {
-        frame.exposure.struct_size = sizeof(frame.exposure); frame.exposure.resource = self->exposure_input.Get();
-        frame.exposure.width = frame.exposure.height = 1; frame.exposure.generation = record.resource_generation;
-        frame.exposure.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    }
     if (self->exposure) {
         if (!self->exposure_initialized) {
             D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = self->exposure_upload.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -388,12 +406,16 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     rsf_input_dump_sr_frame(&frame, self->backend, self->input_sdr ? 1u : 0u);
     if (frame.exposure.resource) (void)self->capture.record(list, static_cast<ID3D12Resource*>(frame.exposure.resource),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, record, "sr-exposure", slot);
-    const auto result = !self->backend ? RSF_BACKEND_OK : self->dlss ? rsf_dlss_native12_evaluate(self->dlss, list, &frame) :
+    const auto result = !self->backend ? RSF_BACKEND_OK : self->dlss ?
+        (pass->native_frame_context ? rsf_dlss_native12_evaluate_borrowed(self->dlss, list, &frame, pass->native_frame_context) :
+            rsf_dlss_native12_evaluate(self->dlss, list, &frame)) :
         rsf_sr_session_evaluate(self->alternate, list, &frame);
     rsf_input_dump_result(&record, "sr", self->backend, result);
     (void)self->capture.event(record, "sr-evaluate", record.frame_id, frame.reset != 0, result);
     if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (self->external_exposure) transition(list, self->exposure.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (result != RSF_BACKEND_OK) { self->last_frame = 0; return result; }
     if (self->backend) {
@@ -404,6 +426,9 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = static_cast<ID3D12Resource*>(pass->color_output); target.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         const D3D12_BOX rectangle{0, 0, 0, self->output_width, self->output_height, 1};
         list->CopyTextureRegion(&target, 0, 0, 0, &source, &rectangle);
+        (void)self->capture.record(list, static_cast<ID3D12Resource*>(pass->color_output),
+            D3D12_RESOURCE_STATE_COPY_DEST, record, "sr-engine-output", slot, 0, frame.reset ? 1u : 0u,
+            self->input_sdr ? RSF_DUMP_VIEW_RAW : RSF_DUMP_VIEW_HDR);
         transition(list, self->output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
     self->captured_records[slot] = record; self->captured_lists[slot] = commands;

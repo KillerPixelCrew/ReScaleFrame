@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "script_input.h"
 #include "engine_settings.h"
-#include <rescaleframe/rdr2_frontend.h>
+#include <rescaleframe/render_frontend.h>
 #include <rescaleframe/game_api.h>
 #include <windows.h>
 #include <cstdint>
@@ -13,7 +13,7 @@ uint64_t* (*native_call)(){};
 void (*wait)(DWORD){};
 uint32_t (*visible)(){};
 void (*toggle)(){};
-decltype(&rsf_rdr2_settings_get) settings_get{};
+decltype(&rsf_render_settings_get) settings_get{};
 bool installed{};
 template<class... Args> uint64_t invoke(uint64_t hash, Args... args)
 {
@@ -28,7 +28,7 @@ void script()
         const auto now=GetTickCount64();
         if (settings_get && now>=settings_tick) {
             settings_tick=now+250;
-            rsf_rdr2_settings prefs{sizeof(prefs),RSF_RDR2_FRONTEND_ABI_VERSION};
+            rsf_render_settings prefs{sizeof(prefs),RSF_RENDER_FRONTEND_ABI_VERSION};
             if (settings_get(&prefs)==RSF_OK) rsf_rdr2_engine_quality_tick(prefs.sr_quality);
         }
         DWORD process{}; GetWindowThreadProcessId(GetForegroundWindow(), &process);
@@ -64,9 +64,9 @@ bool rsf_rdr2_start_script_input(void* instance, void* runtime, const wchar_t* c
     native_push = reinterpret_cast<decltype(native_push)>(symbol("?nativePush64@@YAX_K@Z"));
     native_call = reinterpret_cast<decltype(native_call)>(symbol("?nativeCall@@YAPEA_KXZ"));
     wait = reinterpret_cast<decltype(wait)>(symbol("?scriptWait@@YAXK@Z"));
-    visible = reinterpret_cast<decltype(visible)>(GetProcAddress(static_cast<HMODULE>(runtime), "rsf_rdr2_overlay_visible"));
-    toggle = reinterpret_cast<decltype(toggle)>(GetProcAddress(static_cast<HMODULE>(runtime), "rsf_rdr2_overlay_toggle"));
-    settings_get=reinterpret_cast<decltype(settings_get)>(GetProcAddress(static_cast<HMODULE>(runtime),"rsf_rdr2_settings_get"));
+    visible = reinterpret_cast<decltype(visible)>(GetProcAddress(static_cast<HMODULE>(runtime), "rsf_render_overlay_visible"));
+    toggle = reinterpret_cast<decltype(toggle)>(GetProcAddress(static_cast<HMODULE>(runtime), "rsf_render_overlay_toggle"));
+    settings_get=reinterpret_cast<decltype(settings_get)>(GetProcAddress(static_cast<HMODULE>(runtime),"rsf_render_settings_get"));
     if (!register_script || !native_init || !native_push || !native_call || !wait || !visible || !toggle) return false;
     register_script(static_cast<HMODULE>(instance), script); installed = true;
     if (log) log(user, "RDR2 shared overlay input guard registered; Insert / F7 / both sticks opens the RSF panel.");

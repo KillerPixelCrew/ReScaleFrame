@@ -1,8 +1,10 @@
 set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
     "Unity native-plugin headers; untracked, see docs/dependencies.md")
-add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/mono_runtime.cpp)
+add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/mono_runtime.cpp src/runtime_host.cpp src/runtime_config.cpp)
 target_include_directories(rsf_game_unity_mono PRIVATE include)
 target_link_libraries(rsf_game_unity_mono PRIVATE ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
+target_link_libraries(rsf_game_unity_mono PRIVATE rsf_orchestrator)
+target_compile_definitions(rsf_game_unity_mono PRIVATE RSF_GAME_UNITY_HOST_BUILD _CRT_SECURE_NO_WARNINGS)
 if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     target_include_directories(rsf_game_unity_mono SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
     target_compile_definitions(rsf_game_unity_mono PRIVATE RSF_HAVE_UNITY_NATIVE=1)

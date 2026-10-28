@@ -2,7 +2,7 @@
 #ifndef RSF_OVERLAY_FG_STATS_H
 #define RSF_OVERLAY_FG_STATS_H
 /* The frame-generation half of rsf_overlay_stats, filled the same way for the D3D11 proxy
-   (dlss_bridge.c, C) and the Unity D3D12 host (unity_sr_host.cpp). Header-only and plain C so both
+   (dlss_bridge.c, C) and the generic D3D12 hosts. Header-only and plain C so both
    include it; the callers link the runtime that provides the choice and present-bridge queries.
 
    The caller owns everything else in `stats`, including display_refresh_mhz (only the D3D11

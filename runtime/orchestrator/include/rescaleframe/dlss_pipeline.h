@@ -247,9 +247,8 @@ RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 /* Load Streamline, hand over the game's device, and find out whether DLSS can run on it.
 
    `d3d11_device` is the `ID3D11Device*` the game renders with; it is retained until
-   `rsf_dlss_pipeline_stop`. The identity given to Streamline is Unreal 4.18, which is what Ace
-   Combat 7 is: without an identity the DLSS plugin loads and then refuses with a message that
-   reads exactly like unsupported hardware.
+   `rsf_dlss_pipeline_stop`. The integration supplies the engine/project identity
+   in setup. The runtime neither detects the engine nor chooses a game's identity.
 
    Refuses with `RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED` when the adapter cannot run DLSS, leaving
    nothing loaded. Call on the thread that will drive the frames. */

@@ -70,7 +70,9 @@ if (!$taskDeployment) {
         $taskDestination = Join-Path $taskGame $taskRelative
         New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null
         if ($taskRelative -eq 'ReScaleFrame.ini') {
-            [IO.File]::WriteAllLines($taskDestination, @('[UnitySR]','Backend=7','Quality=1',
+            [IO.File]::WriteAllLines($taskDestination, @('[Loader]',
+                'EntryModule=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','EntryPoint=rsf_unity_start',
+                '[UnitySR]','Backend=7','Quality=1',
                 'FrameGeneration=7','GeneratedFrames=1','GraphicsDebug=0',
                 'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
                 'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',

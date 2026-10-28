@@ -3,10 +3,12 @@
 // this entry does not alter graphics, launcher, anti-cheat, settings or caches.
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/sha256_file.h>
+#include <rescaleframe/render_host.h>
 #ifdef RSF_HAVE_VENDOR_CENSUS
 #include <rescaleframe/vendor_census.h>
 #endif
 #include "build_identity.h"
+#include "runtime_setup.h"
 #include <windows.h>
 #include <cstdio>
 #include <cwchar>
@@ -42,7 +44,7 @@ DWORD WINAPI startup(void*) noexcept try
     const auto mod = root + L"ReScaleFrame\\";
     if (!CreateDirectoryW(mod.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return 1;
     log_path = mod + L"gta5-enhanced.log";
-    log(nullptr, "GTA V Enhanced entry started; RSF rendering is disabled.");
+    log(nullptr, "GTA V Enhanced entry started; preparing the selected native renderer.");
 
     const auto executable_length = GetModuleFileNameW(nullptr, path, 32768);
     if (!executable_length || executable_length >= 32768) return 1;
@@ -93,6 +95,15 @@ DWORD WINAPI startup(void*) noexcept try
     options.plugin_path = plugin.c_str(); options.probe = &probe;
     options.services.struct_size = sizeof(options.services); options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = GetTickCount64() + 1; options.services.log = log;
+    if (digest == rsf_gta5_enhanced::executable_sha256) {
+        const auto create_host = reinterpret_cast<decltype(&rsf_render_host_create)>(
+            reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_render_host_create")));
+        const auto setup = rsf_gta5_runtime_setup(config.c_str(), mod.c_str());
+        if (!create_host || create_host(&setup, &options.services) != RSF_OK) {
+            log(nullptr, "GTA shared runtime host creation refused.");
+            FreeLibrary(runtime); return 1;
+        }
+    }
     const auto prepared = prepare(&options, &session);
     char message[192]{};
     std::snprintf(message, sizeof(message), "GTA V Enhanced prepare result=%d sha256=%s", int(prepared), digest.c_str());

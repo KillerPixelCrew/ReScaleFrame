@@ -14,7 +14,7 @@ typedef uint32_t rsf_sr_backend;
 #define RSF_SR_FSR3 3u
 #define RSF_SR_FSR4 4u
 #define RSF_SR_XESS 5u
-/* Engine spatial upscale (FSR1 in the Unity path): no jitter, no history. */
+/* Engine spatial upscale: no jitter, no history. */
 #define RSF_SR_SPATIAL 6u
 /* Settings value, not a backend: let the host choose per GPU. Never reaches a session. */
 #define RSF_SR_AUTO 7u

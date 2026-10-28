@@ -6,7 +6,7 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/gpu_policy.h>
-#include <rescaleframe/unity_config.h>
+#include <rescaleframe/unity_runtime_config.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
 #include <d3d12.h>

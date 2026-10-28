@@ -1,5 +1,24 @@
 # Implementation tracker
 
+## GTA V Enhanced active integration and domain repair, 28 October 2026
+
+The exact-build adapter now produces canonical frame/camera/resource inputs and executes shared
+SR using the game's existing Streamline owner. A captured2560x1600 frame has finite RSF output
+and byte-identical engine copyback. Shared overlay drawing is active; nested SDK/native Present
+callbacks are corrected. Native FG is suppressed while RSF FG/presentation, latency ownership,
+FSR input routing and live engine quality changes remain unfinished. Readiness stays0.
+
+The captured run later reported `ERR_GFX_STATE`. The subsequent explicit validation run reaches
+gameplay but reports a native shader-read/render-target state mismatch. Stable gameplay and
+scene/UI pixel acceptance are not established; identifying and correcting that contract is the
+current blocker. Release VS2026 has104 discovered cases,93 passes/11 optional skips, fmt/Clippy.
+[Current evidence and remaining requirements](research/gta5-enhanced-renderer.md).
+
+Game/engine policy has moved out of shared hosts: adapter setup supplies identity/configuration/
+window policy; Unity owns its startup/exports/configuration and AC7 produces material mip bias.
+Generic runtime mechanisms retain SDK/GPU/presentation ownership. Affected binaries build and
+contract tests pass; RDR2/Unity redeployment and live preservation checks remain outstanding.
+
 ## GTA V Enhanced build identification and first-run probe, 27 October 2026
 
 The completed Steam build25971420 is1.0.1158.16. Its exact SHA-256 now enables detection while

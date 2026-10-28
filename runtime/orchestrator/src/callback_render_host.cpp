@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include <rescaleframe/unity_sr_host.h>
+#include <rescaleframe/callback_render_host.h>
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
@@ -10,7 +10,6 @@
 #include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/sr_session.h>
-#include <rescaleframe/unity_config.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -35,6 +34,9 @@ struct Host {
     uint32_t backend = RSF_SR_DLSS, quality = 1;
     uint32_t requested_backend = RSF_SR_DLSS, requested_quality = 1;
     uint32_t preset = 0;
+    uint32_t sr_choices{};
+    uint32_t engine_type{};
+    std::string engine_version, project_id;
     std::wstring preferences;
     int (*policy)(uint32_t, uint32_t) = nullptr;
     bool dirty = false, enabled = true, show_performance = false;
@@ -64,8 +66,6 @@ const char* sr_name(uint32_t backend)
     }
 }
 // Every backend the plugin policy accepts, as the overlay's bit-per-ID choices mask.
-constexpr uint32_t kSrChoices = (1u << RSF_SR_DLSS) | (1u << RSF_SR_FSR2) | (1u << RSF_SR_FSR3) |
-    (1u << RSF_SR_FSR4) | (1u << RSF_SR_XESS) | (1u << RSF_SR_SPATIAL);
 // The plugin only learns whether the engine upscales spatially itself, never the vendor.
 bool apply_policy(const Host& self, uint32_t backend, uint32_t quality)
 {
@@ -115,7 +115,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats);
         stats.backend_loaded = 1; stats.backend_supported = self.plan.enabled;
         stats.backend_name = sr_name(self.backend); stats.backend = self.backend;
-        stats.sr_backend_choices = kSrChoices;
+        stats.sr_backend_choices = self.sr_choices;
         stats.requested_backend = self.requested_backend; stats.quality = self.quality;
         stats.dlss_preset = self.preset; stats.dlss_preset_available = 1;
         stats.enabled = self.enabled; stats.last_result = self.last_result;
@@ -191,7 +191,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
     if (pass->role != RSF_GAME_RENDER_SR && pass->role != RSF_GAME_RENDER_FG_INPUTS) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(command_list);
     if ((self.dirty && (pass->flags & RSF_GAME_RENDER_RECONFIGURE)) || self.width != pass->camera.output_width || self.height != pass->camera.output_height) {
-        // The Unity submission adapter joins its previous frame-fence values before this resize.
+        // The Native renderer submission adapter joins its previous frame-fence values before this resize.
         rsf_sr12_destroy(self.sr); self.sr = nullptr;
         rsf_sr12_destroy(self.inputs); self.inputs = nullptr; self.input_width = self.input_height = 0;
         self.width = pass->camera.output_width; self.height = pass->camera.output_height;
@@ -242,8 +242,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         const std::string interposer = self.streamline + "\\sl.interposer.dll";
         setup.dlss.struct_size = sizeof(setup.dlss); setup.dlss.abi_version = RSF_DLSS_ABI_VERSION;
         setup.dlss.interposer_path_utf8 = interposer.c_str(); setup.dlss.plugin_directory_utf8 = self.streamline.c_str();
-        setup.dlss.engine = RSF_DLSS_ENGINE_UNITY; setup.dlss.engine_version_utf8 = RSF_UNITY_ENGINE_VERSION;
-        setup.dlss.project_id_utf8 = RSF_UNITY_PROJECT_ID;
+        setup.dlss.engine = self.engine_type; setup.dlss.engine_version_utf8 = self.engine_version.c_str();
+        setup.dlss.project_id_utf8 = self.project_id.c_str();
         setup.dlss.preset = self.preset;
         setup.dlss.require_signature = 1; setup.dlss.log = log; setup.dlss.log_user = &self;
         const auto created = rsf_sr12_create(&setup, &self.sr);
@@ -297,7 +297,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
     if (result == RSF_BACKEND_OK) ++self.accepted; else ++self.refused;
     if (result == RSF_BACKEND_OK ? (self.accepted <= 3 || self.accepted % 600 == 0) : self.refused <= 3) {
         char text[160];
-        std::snprintf(text, sizeof(text), "Unity SR view %llu frame %llu result %d, accepted=%llu refused=%llu reset=%u jitter=%.3f,%.3f",
+        std::snprintf(text, sizeof(text), "Native renderer SR view %llu frame %llu result %d, accepted=%llu refused=%llu reset=%u jitter=%.3f,%.3f",
             static_cast<unsigned long long>(pass->view_key), static_cast<unsigned long long>(pass->native_frame), result,
             static_cast<unsigned long long>(self.accepted), static_cast<unsigned long long>(self.refused),
             pass->flags & RSF_GAME_RENDER_RESET, pass->camera.jitter_pixels[0], pass->camera.jitter_pixels[1]);
@@ -306,66 +306,53 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
 }
 void cpu_event(void*, const rsf_game_cpu_event* event) { rsf_fg12_cpu(event); }
 }
-extern "C" uint32_t __stdcall rsf_unity_sr_start(const wchar_t* path) try
+extern "C" uint32_t rsf_callback_host_start(const rsf_callback_host_setup* setup) try
 {
     std::lock_guard<std::mutex> lock(lifecycle);
-    if (host || !path || path[1] != L':' || (path[2] != L'\\' && path[2] != L'/')) return 1;
+    if (host || !setup || setup->struct_size < sizeof(*setup) ||
+        setup->abi_version != RSF_CALLBACK_HOST_ABI_VERSION || !setup->plugin_path ||
+        !setup->log_path || !setup->preferences_path || !setup->probe ||
+        !setup->engine_version_utf8 || !setup->project_id_utf8 || !setup->set_engine_spatial || !setup->sr_backend_choices) return 1;
     std::unique_ptr<Host> next(new Host);
-    if (!rsf_fg_choice_get().choices) rsf::unity_config::fg_choice_start(path);
-    next->backend = GetPrivateProfileIntW(L"UnitySR", L"Backend", RSF_SR_AUTO, path);
-    next->automatic = next->backend == RSF_SR_AUTO;
+    next->backend = setup->backend; next->automatic = next->backend == RSF_SR_AUTO;
     if (next->automatic) next->backend = 0;
-    next->preferences = rsf::unity_config::preferences_path(path);
-    next->preset = GetPrivateProfileIntW(L"Rendering", L"DlssPreset",
-        GetPrivateProfileIntW(L"UnitySR", L"DlssPreset", 0, path), next->preferences.c_str());
-    if (!rsf_dlss_preset_valid(next->preset)) next->preset = 0;
-    next->quality = GetPrivateProfileIntW(L"UnitySR", L"Quality", 1, path);
+    next->preferences = setup->preferences_path;
+    next->preset = setup->dlss_preset; next->quality = setup->quality;
+    next->sr_choices = setup->sr_backend_choices;
+    if (!rsf_dlss_preset_valid(next->preset) || next->backend > RSF_SR_SPATIAL || next->quality > 5 ||
+        (next->backend == RSF_SR_DLSS && next->quality > 4)) return 2;
     next->requested_backend = next->backend; next->requested_quality = next->quality;
-    if (next->backend > RSF_SR_SPATIAL || next->quality > 5 || (next->backend == RSF_SR_DLSS && next->quality > 4)) return 2;
-    using rsf::unity_config::path_setting;
-    using rsf::unity_config::utf8;
-    const auto plugin_path = path_setting(path, L"Plugin");
-    const auto log_path = path_setting(path, L"Log");
-    if (plugin_path.empty() || log_path.empty()) return 3;
-    next->log_file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    next->log_file = CreateFileW(setup->log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (next->log_file == INVALID_HANDLE_VALUE) return 4;
-    next->streamline = utf8(path_setting(path, L"Streamline")); next->fsr2 = utf8(path_setting(path, L"FSR2"));
-    next->fsr3 = utf8(path_setting(path, L"FSR3")); next->fsr4 = utf8(path_setting(path, L"FSR4")); next->xess = utf8(path_setting(path, L"XeSS"));
-    wchar_t executable[32768]{};
-    DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
-    if (!length || length >= 32768) return 5;
-    const auto executable_name = utf8(std::wstring(executable).substr(std::wstring(executable).find_last_of(L"/\\") + 1));
-    std::string hash;
-    if (!rsf::sha256_file(executable, hash)) return 6;
-    rsf_game_probe probe{sizeof(probe), 0x8664, 0, executable_name.c_str(), hash.c_str()};
-    HMODULE policy_module = LoadLibraryExW(plugin_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!policy_module) return 7;
-    using Policy = int (*)(uint32_t, uint32_t);
-    auto policy = reinterpret_cast<Policy>(reinterpret_cast<void*>(GetProcAddress(policy_module, "rsf_unity_set_engine_spatial")));
-    next->policy = policy;
-    if (!apply_policy(*next, next->backend, next->quality)) { FreeLibrary(policy_module); return 8; }
+    auto copy = [](const char* value) { return value ? std::string(value) : std::string{}; };
+    next->streamline = copy(setup->streamline_directory_utf8); next->fsr2 = copy(setup->fsr2_directory_utf8);
+    next->fsr3 = copy(setup->fsr3_directory_utf8); next->fsr4 = copy(setup->fsr4_directory_utf8);
+    next->xess = copy(setup->xess_directory_utf8);
+    next->engine_type = setup->engine_type; next->engine_version = setup->engine_version_utf8;
+    next->project_id = setup->project_id_utf8; next->policy = setup->set_engine_spatial;
+    if (!apply_policy(*next, next->backend, next->quality)) return 8;
     rsf_plugin_session_options options{}; options.struct_size = sizeof(options); options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION;
-    options.plugin_path = plugin_path.c_str(); options.probe = &probe;
+    options.plugin_path = setup->plugin_path; options.probe = setup->probe;
     options.services.struct_size = sizeof(options.services); options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = GetTickCount64() + 1; options.services.log = log; options.services.render_pass = render;
     options.services.render_config = configuration; options.services.user = next.get();
     options.services.cpu_event = cpu_event;
     auto result = rsf_plugin_session_prepare(&options, &next->plugin);
-    FreeLibrary(policy_module);
     if (result == RSF_OK) result = rsf_plugin_session_start(next->plugin);
     if (result != RSF_OK) {
-        log(next.get(), "Unity plugin preparation/activation refused.");
+        log(next.get(), "Native renderer plugin preparation/activation refused.");
         if (next->plugin) {
             rsf_plugin_session_quiesce(next->plugin);
             if (rsf_plugin_session_stop(next->plugin) != RSF_OK) { host = std::move(next); return 9; }
         }
         return 10;
     }
-    log(next.get(), "Unity Mono lifecycle activated; awaiting actual D3D12 render callback.");
+    log(next.get(), "Adapter lifecycle activated; awaiting actual D3D12 render callback.");
     host = std::move(next); return 0;
 }
 catch (...) { return 11; }
-extern "C" uint32_t __stdcall rsf_unity_sr_stop(void*) try
+extern "C" uint32_t rsf_callback_host_stop(void) try
 {
     std::lock_guard<std::mutex> lock(lifecycle);
     if (!host) return 0;
@@ -376,7 +363,7 @@ extern "C" uint32_t __stdcall rsf_unity_sr_stop(void*) try
     rsf_sr12_destroy(host->sr); host->sr = nullptr;
     rsf_sr12_destroy(host->inputs); host->inputs = nullptr;
     rsf_input_dump_cancel(0);
-    log(host.get(), "Unity SR stopped after managed/native/GPU retirement.");
+    log(host.get(), "Native renderer SR stopped after managed/native/GPU retirement.");
     host.reset(); return 0;
 }
 catch (...) { return 2; }

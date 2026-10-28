@@ -29,7 +29,6 @@ typedef struct rsf_fg12_setup {
 RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_setup*);
 /* Same shared host with explicit engine-owned swapchain creation, without detours. */
 RSF_RUNTIME_API rsf_backend_result rsf_fg12_install_explicit(const rsf_fg12_setup*);
-RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* configuration);
 RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event*);
 /* Exact engine markers with explicit native pacing ownership. A handled result suppresses
    the engine operation; SDK failures invalidate/report that frame rather than sleeping twice. */

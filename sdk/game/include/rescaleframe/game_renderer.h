@@ -73,6 +73,14 @@ typedef struct rsf_game_render_pass {
     /* Native mesh-element upper bound, in generated vertices before GS/tessellation expansion.
        Supplies storage for GPU-written indirect arguments without a CPU/GPU readback. */
     uint32_t geometry_capacity;
+    /* Optional engine-owned frame context, leased only during this callback.
+       Its interpretation is fixed by the adapter's host contract. Native-SDK
+       adapters use it to share the engine's existing token, never minting a
+       second identity for the same frame. It is not a retained resource lease. */
+    void* native_frame_context;
+    /* Adapter-selected material texture sampling bias. The runtime applies
+       this value; engine-specific derivation and clamps belong to the adapter. */
+    float material_texture_mip_bias;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u

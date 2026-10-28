@@ -34,53 +34,36 @@ DWORD WINAPI startup(void*) noexcept try
     const DWORD length = GetModuleFileNameW(self, file, 32768);
     if (!length || length >= 32768) return 1;
     std::wstring root(file, length); root.resize(root.find_last_of(L"/\\") + 1);
-    const std::wstring mod = root + L"ReScaleFrame\\";
-    const std::wstring runtime = mod + L"ReScaleFrame.Runtime.dll";
-    const std::wstring configuration = root + L"ReScaleFrame.ini";
-    const std::wstring log_path = mod + L"loader.log";
+    const auto mod = root + L"ReScaleFrame\\";
+    const auto configuration = root + L"ReScaleFrame.ini";
+    const auto log_path = mod + L"loader.log";
     auto note = [&](const char* message, DWORD result) {
-        FILE* stream = _wfopen(log_path.c_str(), L"ab");
-        if (stream) { std::fprintf(stream, "%s: %lu\n", message, result); std::fclose(stream); }
+        if (FILE* stream = _wfopen(log_path.c_str(), L"ab")) {
+            std::fprintf(stream, "%s: %lu\n", message, result); std::fclose(stream);
+        }
     };
-    if (GetFileAttributesW(configuration.c_str()) == INVALID_FILE_ATTRIBUTES) return 0;
-    if (!GetPrivateProfileIntW(L"UnitySR", L"AutoStart", 1, configuration.c_str())) return 0;
-    note("Version shim loaded; Windows API forwarding is independent of mod startup", 0);
-    // Vendor generation must own the first chain. Install its runtime interception before
-    // waiting for Mono; the worker still performs all loading outside DllMain's loader lock.
-    HMODULE module = nullptr;
-    {
-        module = LoadLibraryExW(runtime.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!module) { note("Early generation runtime load refused", GetLastError()); return 1; }
-        using FgStart = uint32_t (__stdcall*)(const wchar_t*);
-        auto fg_start = reinterpret_cast<FgStart>(reinterpret_cast<void*>(GetProcAddress(module, "rsf_unity_fg_start")));
-        note("Cold generation startup result", fg_start ? fg_start(configuration.c_str()) : 1);
-    }
-    // Unity initializes its scripting child domain after native libraries load. Nothing waits
-    // under the loader lock, and no graphics device is created by this worker.
-    const ULONGLONG deadline = GetTickCount64() + 90000;
-    while (GetTickCount64() < deadline && !GetModuleHandleW(L"mono-2.0-bdwgc.dll")) Sleep(100);
-    if (!GetModuleHandleW(L"mono-2.0-bdwgc.dll")) { note("Mono runtime did not appear", 1); return 1; }
-    note("Mono runtime appeared", GetCurrentProcessId());
-    Sleep(2000);
-    note("Loading RSF runtime", GetCurrentProcessId());
-    if (!module) module = LoadLibraryExW(runtime.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!module) { note("Runtime DLL load refused", GetLastError()); return 1; }
-    note("RSF runtime loaded", GetCurrentProcessId());
+    if (!GetPrivateProfileIntW(L"Loader", L"AutoStart", 1, configuration.c_str())) return 0;
+    wchar_t entry_path[32768]{}, entry_name[128]{};
+    GetPrivateProfileStringW(L"Loader", L"EntryModule", L"", entry_path, 32768, configuration.c_str());
+    GetPrivateProfileStringW(L"Loader", L"EntryPoint", L"", entry_name, 128, configuration.c_str());
+    if (!entry_path[0] || !entry_name[0]) return 0;
+    std::wstring integration(entry_path);
+    if (!(integration.size() > 1 && (integration[1] == L':' || integration[0] == L'\\'))) integration = root + integration;
+    const auto runtime_path = mod + L"ReScaleFrame.Runtime.dll";
+    const HMODULE runtime = LoadLibraryExW(runtime_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!runtime) { note("Runtime DLL load refused", GetLastError()); return 1; }
+    const HMODULE adapter = LoadLibraryExW(integration.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!adapter) { note("Integration DLL load refused", GetLastError()); return 1; }
+    char entry[384]{};
+    if (!WideCharToMultiByte(CP_UTF8, 0, entry_name, -1, entry, sizeof(entry), nullptr, nullptr)) return 1;
     using Start = uint32_t (__stdcall*)(const wchar_t*);
-    auto start = reinterpret_cast<Start>(reinterpret_cast<void*>(GetProcAddress(module, "rsf_unity_sr_start")));
-    if (!start) { note("Runtime entry point missing", GetLastError()); return 1; }
-    DWORD result = 10;
-    while (GetTickCount64() < deadline) {
-        note("Preparing Unity plugin", GetCurrentProcessId());
-        result = start(configuration.c_str());
-        if (result != 10) break;
-        Sleep(500);
-    }
-    note("Unity SR startup result", result);
-    // The runtime and its callback code remain loaded for the game process lifetime.
+    const auto start = reinterpret_cast<Start>(reinterpret_cast<void*>(GetProcAddress(adapter, entry)));
+    if (!start) { note("Integration entry point missing", GetLastError()); return 1; }
+    const auto result = start(configuration.c_str());
+    note("Integration startup result", result);
+    // Runtime, adapter and any callbacks stay loaded for the process lifetime.
     return result;
-}
-catch (...) { return 1; }
+} catch (...) { return 1; }
 }
 
 extern "C" FARPROC rsf_version_resolve(uint32_t index)

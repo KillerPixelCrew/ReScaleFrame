@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_fg_d3d12.h>
-#include <rescaleframe/unity_config.h>
 #include <rescaleframe/fg_choice.h>
-#include <rescaleframe/unity_sr_host.h>
 #include "../../backends/common/d3d12_helpers.h"
 #include "../../backends/common/frame_capture12.h"
 #include <windows.h>
@@ -28,7 +26,6 @@ std::mutex guard;
 rsf_native_fg_options options{sizeof(options), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
 rsf_native_fg_status state{};
 std::string directory;
-std::wstring log_path;
 std::wstring capture_directory;
 rsf::FrameCapture12 core_capture;
 bool installed = false;
@@ -58,7 +55,7 @@ struct Slot {
     bool hudless_submitted = false;
 };
 std::array<Slot, 6> slots;
-// Render callbacks and Present can run on different Unity graphics threads.
+// Render callbacks and Present can run on different Native renderer graphics threads.
 // Bind the producer identity to the engine buffer, rather than to callback TLS.
 struct Window { uint64_t frame = 0, session = 0; uint32_t view = 0; };
 std::array<Window, 8> windows;
@@ -79,9 +76,7 @@ struct ColorCapture {
     bool bgra = false, pending = false;
 } color_capture;
 void log(void*, const char* message) {
-    if (logger) { logger(logger_user, message); return; }
-    FILE* file = _wfopen(log_path.c_str(), L"ab");
-    if (file) { std::fprintf(file, "%s\n", message); std::fclose(file); }
+    if (logger) logger(logger_user, message);
 }
 // One completed readback pair, owned by the worker that writes it.
 struct ColorPair {
@@ -113,13 +108,13 @@ void write_colors(std::unique_ptr<ColorPair> pair) {
     log(nullptr, "FG completed-colour and HUD-less input pair saved.");
 }
 void capture_colors(ID3D12GraphicsCommandList* list, ID3D12Resource* final, ID3D12Resource* hudless, uint64_t frame) {
-    if (capture_directory.empty() && log_path.empty()) return;
+    if (capture_directory.empty()) return;
     auto& capture = color_capture;
     if (capture.pending && capture.value && capture.completion && capture.completion->GetCompletedValue() >= capture.value) {
         // Two full-resolution files: a worker writes them so Present does not wait on the disk.
         auto pair = std::make_unique<ColorPair>();
         for (size_t i = 0; i < 2; ++i) { pair->buffers[i] = std::move(capture.buffers[i]); pair->footprints[i] = capture.footprints[i]; }
-        pair->root = capture_directory.empty() ? log_path.substr(0, log_path.find_last_of(L"/\\") + 1) : capture_directory;
+        pair->root = capture_directory;
         pair->generation = capture.generation; pair->width = capture.width; pair->height = capture.height; pair->bgra = capture.bgra;
         capture.pending = false;
         try { std::thread(write_colors, std::move(pair)).detach(); } catch (...) {}
@@ -207,7 +202,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     auto& timing = cpu[window_frame % cpu.size()];
     window_generation = timing.id == window_frame ? timing.generation : 0;
     // Present has advanced beyond these unpresented CPU frames. Release their shared
-    // tokens even when Unity skipped a camera or input preparation refused that frame.
+    // tokens even when Native renderer skipped a camera or input preparation refused that frame.
     if (auto* host = rsf_d3d11_present_host())
         for (auto& older : cpu) if (older.id && older.id < window_frame && !older.completed) {
             rsf_streamline_host_abort(host, older.id); older.completed = true;
@@ -239,7 +234,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     state.reason = valid ? RSF_NATIVE_FG_REASON_NONE : !captured || !cpu_valid ? RSF_NATIVE_FG_REASON_NOT_PREPARED :
         reset ? RSF_NATIVE_FG_REASON_RESET : !allowed ? RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED : RSF_NATIVE_FG_REASON_HUDLESS_MISSING;
     if (diagnostics++ < 12 || diagnostics % 600 == 0) {
-        char text[384]; std::snprintf(text, sizeof(text), "Unity FG source=%llu captured=%llu view=%u/%u cpu=%u simulation=%u submitted=%u hudless=%u screen=%u allowed=%u generation=%llu/%llu valid=%u configure=%d",
+        char text[384]; std::snprintf(text, sizeof(text), "Native renderer FG source=%llu captured=%llu view=%u/%u cpu=%u simulation=%u submitted=%u hudless=%u screen=%u allowed=%u generation=%llu/%llu valid=%u configure=%d",
             static_cast<unsigned long long>(window_frame), static_cast<unsigned long long>(slot.record.frame_id), slot.record.view_id, window_view,
             timing.begun, timing.simulation, slot.submitted, slot.hudless_ready, slot.record.screen, allowed, static_cast<unsigned long long>(timing.generation),
             static_cast<unsigned long long>(rsf_d3d11_present_generation()), valid, state.last_result); log(nullptr, text);
@@ -270,7 +265,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
             rsf::transition(list, slot.hudless.Get(), slot.hudless_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         slot.hudless_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
-    if (!capture_directory.empty() || rsf_d3d11_present_backend() == RSF_FG_BACKEND_FSR3)
+    if (!capture_directory.empty())
         capture_colors(list, static_cast<ID3D12Resource*>(buffer), slot.hudless.Get(), record.frame_id);
     state.last_result = provider->prepare(context, commands, &frame);
     rsf_input_dump_fg_prepare(nullptr, &frame, state.last_result);
@@ -278,7 +273,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     // Vendors consume persistent inputs during asynchronous Present. Keep the declared
     // read states until retirement; the next capture transitions them for reuse.
     if (state.last_result != RSF_BACKEND_OK && prepare_failures++ < 8) {
-        char text[224]; std::snprintf(text, sizeof(text), "Unity FG prepare backend=%u source=%llu result=%d render=%ux%u output=%ux%u",
+        char text[224]; std::snprintf(text, sizeof(text), "Native renderer FG prepare backend=%u source=%llu result=%d render=%ux%u output=%ux%u",
             rsf_d3d11_present_backend(), static_cast<unsigned long long>(window_frame), state.last_result,
             record.render_width, record.render_height, record.output_width, record.output_height); log(nullptr, text);
     }
@@ -293,7 +288,7 @@ void retire(void*, void* context) {
     if (provider->status(context, &status) == RSF_BACKEND_OK) {
         state.vendor = status;
         if (++status_samples <= 3 || status_samples % 120 == 0) {
-            char text[256]; std::snprintf(text, sizeof(text), "Unity FG status backend=%u source=%llu prepare=%d mode=%u active=%u vendor=%d generated_callbacks=%llu presented=%llu valid_stats=0x%x",
+            char text[256]; std::snprintf(text, sizeof(text), "Native renderer FG status backend=%u source=%llu prepare=%d mode=%u active=%u vendor=%d generated_callbacks=%llu presented=%llu valid_stats=0x%x",
                 rsf_d3d11_present_backend(), static_cast<unsigned long long>(window_frame), state.last_result,
                 status.effective_mode, status.active, status.vendor_status, static_cast<unsigned long long>(status.generated_callbacks),
                 static_cast<unsigned long long>(status.total_presented), status.valid_statistics); log(nullptr, text);
@@ -348,18 +343,7 @@ void latency(void*, const rsf_observer_present_event* event) {
         if (timing.id == window_frame) timing.completed = true;
     }
 }
-int accept(void*, void* hwnd) {
-    DWORD process = 0; wchar_t name[64]{}; GetWindowThreadProcessId(static_cast<HWND>(hwnd), &process);
-    return process == GetCurrentProcessId() && GetClassNameW(static_cast<HWND>(hwnd), name, 64) &&
-        std::wcscmp(name, L"UnityWndClass") == 0;
-}
-// [UnitySR] SDK folder setting for a generation backend, as UTF-8. Empty when unset.
-std::string backend_directory(const wchar_t* ini, uint32_t backend) {
-    const auto* info = rsf_fg_backend_info_for(backend);
-    if (!info) return {};
-    const std::wstring key(info->ini_key, info->ini_key + std::strlen(info->ini_key));
-    return rsf::unity_config::utf8(rsf::unity_config::path_setting(ini, key.c_str()));
-}
+
 }
 static rsf_backend_result install(const rsf_fg12_setup* request, bool explicit_creation) try {
     if (!request || request->struct_size < sizeof(*request) || !request->runtime_directory_utf8 || !request->accept_window ||
@@ -396,39 +380,6 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_se
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install_explicit(const rsf_fg12_setup* request) {
     return install(request, true);
 }
-extern "C" RSF_RUNTIME_API uint32_t __stdcall rsf_unity_fg_start(const wchar_t* ini) try {
-    if (!ini || installed) return installed ? 0u : 1u;
-    const auto backend = rsf::unity_config::fg_choice_start(ini);
-    // Off still installs the switching facade, which loads from the FSR3 folder.
-    directory = backend_directory(ini, backend && backend != RSF_FG_BACKEND_AUTO ? backend : RSF_FG_BACKEND_FSR3);
-    if (directory.empty()) return 3;
-    log_path = rsf::unity_config::path_setting(ini, L"Log");
-    if (GetPrivateProfileIntW(L"UnitySR", L"GraphicsDebug", 0, ini)) {
-        ComPtr<ID3D12Debug> layer;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&layer)))) {
-            layer->EnableDebugLayer(); log(nullptr, "Unity D3D12 debug layer enabled before graphics creation.");
-        } else log(nullptr, "Unity D3D12 debug layer unavailable.");
-    }
-    options.mode = RSF_FG_FIXED; options.generated_frames = GetPrivateProfileIntW(L"UnitySR", L"GeneratedFrames", 1, ini);
-    if (!options.generated_frames || options.generated_frames > 15) return 4;
-    const auto limit = GetPrivateProfileIntW(L"UnitySR", L"FrameLimitFPS", 0, ini);
-    options.frame_limit_us = limit ? 1000000u / limit : 0;
-    rsf_fg12_setup setup{}; setup.struct_size = sizeof(setup);
-    setup.backend = backend; setup.max_generated_frames = UINT32_MAX;
-    setup.options = options; setup.depth_inverted = 1; setup.units_to_meters = 1; setup.accept_window = accept;
-    setup.runtime_switching = 1; setup.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
-    setup.engine_type = RSF_DLSS_ENGINE_UNITY; setup.engine_version_utf8 = RSF_UNITY_ENGINE_VERSION;
-    setup.project_id_utf8 = RSF_UNITY_PROJECT_ID;
-    const auto fsr3_path = backend_directory(ini, RSF_FG_BACKEND_FSR3), fsr4_path = backend_directory(ini, RSF_FG_BACKEND_FSR4);
-    const auto xess_path = backend_directory(ini, RSF_FG_BACKEND_XESS), streamline_path = backend_directory(ini, RSF_FG_BACKEND_DLSS);
-    setup.fsr3_directory_utf8 = fsr3_path.c_str(); setup.fsr4_directory_utf8 = fsr4_path.c_str(); setup.xess_directory_utf8 = xess_path.c_str();
-    setup.streamline_directory_utf8 = streamline_path.c_str();
-    const std::string stable_directory = directory; setup.runtime_directory_utf8 = stable_directory.c_str();
-    installed = rsf_fg12_install(&setup) == RSF_BACKEND_OK;
-    log(nullptr, installed ? "Shared FSR/XeSS generation installed before Unity graphics creation." : "Generation interception refused; engine presentation retained.");
-    return installed ? 0u : 5u;
-}
-catch (...) { return 5; }
 extern "C" RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event* event) {
     if (!event || !event->source_frame_id || !rsf_d3d11_present_has_owner()) return;
     rsf_fg_choice_resolve_auto(rsf_d3d11_present_backend());
@@ -504,13 +455,13 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_latency(const rsf_game_la
         if (event->marker == RSF_LATENCY_RENDER_SUBMIT_START) frame.render_started = true;
     }
     // The presentation bridge emits RenderSubmitEnd/PresentStart/PresentEnd around its actual
-    // native Present. RAGE reports RenderSubmitEnd after Present; forwarding it would duplicate
-    // those markers and put the SDK's lifecycle out of order.
+    // native Present. Do not forward duplicate producer markers into the
+    // SDK lifecycle owned by this presentation bridge.
     if (event->marker == RSF_LATENCY_RENDER_SUBMIT_END || event->marker == RSF_LATENCY_PRESENT_START)
         return RSF_BACKEND_OK;
     if (event->marker == RSF_LATENCY_PRESENT_END) {
-        // RAGE can simulate inputs that never produce a submitted frame, especially while
-        // loading. Actual ordered Present completion also retires those older skipped inputs.
+        // A producer can simulate inputs that never reach submission. Ordered
+        // Present completion also retires those older skipped inputs.
         // Waiting for a scene match leaks their SDK tokens and eventually blocks all SR/FG.
         {
             std::lock_guard lock(guard);

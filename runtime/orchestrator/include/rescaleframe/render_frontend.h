@@ -5,15 +5,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_RDR2_FRONTEND_ABI_VERSION 2u
-typedef struct rsf_rdr2_settings {
+#define RSF_RENDER_FRONTEND_ABI_VERSION 2u
+typedef struct rsf_render_settings {
     uint32_t struct_size, abi_version;
     uint32_t sr_enabled, sr_backend, dlss_preset;
     uint32_t fg_enabled, fg_backend, generated_frames;
     uint32_t latency, frame_limit_us, status_overlay;
     uint32_t sr_quality;
-} rsf_rdr2_settings;
-typedef struct rsf_rdr2_status {
+} rsf_render_settings;
+typedef struct rsf_render_status {
     uint32_t struct_size, abi_version;
     uint32_t sr_enabled, sr_requested_backend, sr_effective_backend;
     uint32_t render_width, render_height, output_width, output_height;
@@ -26,13 +26,13 @@ typedef struct rsf_rdr2_status {
     float base_fps, output_fps;
     uint64_t native_frame, source_frame, tagged_frames, application_presents, output_presents;
     char reason[160];
-} rsf_rdr2_status;
-/* Snapshots contain no borrowed strings or GPU objects. Safe from the ScriptHook fiber. */
-RSF_RUNTIME_API int32_t rsf_rdr2_status_get(rsf_rdr2_status*);
-RSF_RUNTIME_API int32_t rsf_rdr2_settings_get(rsf_rdr2_settings*);
-RSF_RUNTIME_API int32_t rsf_rdr2_settings_apply(const rsf_rdr2_settings*);
-RSF_RUNTIME_API uint32_t rsf_rdr2_overlay_visible(void);
-RSF_RUNTIME_API void rsf_rdr2_overlay_toggle(void);
+} rsf_render_status;
+/* Snapshots contain no borrowed strings or GPU objects. Safe from non-render threads. */
+RSF_RUNTIME_API int32_t rsf_render_status_get(rsf_render_status*);
+RSF_RUNTIME_API int32_t rsf_render_settings_get(rsf_render_settings*);
+RSF_RUNTIME_API int32_t rsf_render_settings_apply(const rsf_render_settings*);
+RSF_RUNTIME_API uint32_t rsf_render_overlay_visible(void);
+RSF_RUNTIME_API void rsf_render_overlay_toggle(void);
 #ifdef __cplusplus
 }
 #endif

@@ -11,7 +11,8 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
         rsf_unity_get_render_event=rsf_unity_d3d12_get_render_event rsf_unity_get_event_id=rsf_unity_d3d12_get_event_id
         rsf_unity_set_engine_spatial=rsf_unity_d3d12_set_engine_spatial)
     target_link_libraries(rsf_unity_package_bridge PRIVATE ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
-    add_library(rsf_unity_package SHARED native/package.cpp native/bridge.cpp native/preview.cpp native/vulkan_bridge.cpp $<TARGET_OBJECTS:rsf_unity_package_bridge>)
+    add_library(rsf_unity_package SHARED native/package.cpp native/bridge.cpp native/preview.cpp native/vulkan_bridge.cpp
+        ../../games/unity-mono/src/runtime_config.cpp $<TARGET_OBJECTS:rsf_unity_package_bridge>)
     target_compile_definitions(rsf_unity_package PRIVATE VK_USE_PLATFORM_WIN32_KHR RSF_STREAMLINE_HOST_BUILD)
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${Vulkan_INCLUDE_DIRS}")
     target_link_libraries(rsf_unity_package PRIVATE Vulkan::Vulkan)

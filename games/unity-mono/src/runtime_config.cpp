@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-#include <rescaleframe/unity_config.h>
+#include <rescaleframe/unity_runtime_config.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
 

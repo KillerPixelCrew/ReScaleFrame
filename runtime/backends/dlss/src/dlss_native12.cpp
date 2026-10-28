@@ -22,6 +22,7 @@
 struct rsf_dlss_native12 {
     HMODULE module = nullptr;
     bool initialized = false;
+    bool borrowed_engine = false;
     bool sdr = false;
     uint32_t preset = 0;
     rsf_streamline_host* shared_host = nullptr;
@@ -44,7 +45,8 @@ struct rsf_dlss_native12 {
 struct rsf_dlss_native12_registration {
     std::shared_ptr<rsf_dlss_native12> owner;
 };
-static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared, rsf_dlss_native12** out) try
+static rsf_backend_result create_context(void* device, const rsf_dlss_setup* setup, rsf_streamline_host* shared,
+    rsf_dlss_native12** out, HMODULE engine_module = nullptr) try
 {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
@@ -56,7 +58,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     if (setup->abi_version != RSF_DLSS_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
 #if RSF_HAVE_STREAMLINE
     // Shared SR borrows the presentation host; standalone SR owns one registration.
-    if (!shared && GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!shared && !engine_module && GetModuleHandleW(L"sl.interposer.dll")) return RSF_BACKEND_ERROR_NOT_READY;
     std::unique_ptr<rsf_dlss_native12, decltype(&rsf_dlss_native12_destroy)> context(new rsf_dlss_native12, rsf_dlss_native12_destroy);
     std::wstring path, directory;
     if (!rsf::widen_utf8(setup->interposer_path_utf8, path) || !rsf::widen_utf8(setup->plugin_directory_utf8, directory))
@@ -70,6 +72,17 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
         if (rsf_streamline_host_graphics(shared, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
             return RSF_BACKEND_ERROR_WRONG_API;
         context->module = static_cast<HMODULE>(rsf_streamline_host_module(shared));
+    } else if (engine_module) {
+        wchar_t existing_path[32768]{};
+        const auto length = GetModuleFileNameW(engine_module, existing_path, 32768);
+        if (!length || length >= 32768 || (setup->require_signature && !rsf_dlss_verify_runtime_signature(existing_path)))
+            return RSF_BACKEND_ERROR_LOAD_FAILED;
+        HMODULE retained{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                reinterpret_cast<const wchar_t*>(engine_module), &retained) || retained != engine_module)
+            return RSF_BACKEND_ERROR_LOAD_FAILED;
+        context->module = retained;
+        context->borrowed_engine = true;
     } else {
         context->module = rsf::load_interposer(path.c_str(), setup->require_signature != 0, setup->log, setup->log_user);
     }
@@ -98,7 +111,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     preferences.engine = setup->engine == RSF_DLSS_ENGINE_UNITY ? sl::EngineType::eUnity : sl::EngineType::eCustom;
     preferences.applicationId = setup->application_id;
     preferences.engineVersion = setup->engine_version_utf8; preferences.projectId = setup->project_id_utf8;
-    if (!shared) {
+    if (!shared && !engine_module) {
         if (init(preferences, sl::kSDKVersion) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
         context->initialized = true;
         if (set_device(device) != sl::Result::eOk) return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -117,7 +130,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     context->optimal = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     context->options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
-    if (!shared) {
+    if (!shared && !engine_module) {
         void* before = nullptr; void* after = nullptr;
         if (feature(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
             feature(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
@@ -129,6 +142,7 @@ static rsf_backend_result create_context(void* device, const rsf_dlss_setup* set
     *out = context.release(); return RSF_BACKEND_OK;
 #else
     (void)shared;
+    (void)engine_module;
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
@@ -141,6 +155,19 @@ rsf_backend_result rsf_dlss_native12_registration_create(void* device, const rsf
     auto registration = std::make_unique<rsf_dlss_native12_registration>();
     rsf_dlss_native12* owner{};
     const auto result = create_context(device, setup, nullptr, &owner);
+    if (result != RSF_BACKEND_OK) return result;
+    registration->owner = std::shared_ptr<rsf_dlss_native12>(owner, rsf_dlss_native12_destroy);
+    *out = registration.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+rsf_backend_result rsf_dlss_native12_registration_borrow(void* device, void* module,
+    const rsf_dlss_setup* setup, rsf_dlss_native12_registration** out) try
+{
+    if (!out || !module) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out = nullptr;
+    auto registration = std::make_unique<rsf_dlss_native12_registration>();
+    rsf_dlss_native12* owner{};
+    const auto result = create_context(device, setup, nullptr, &owner, static_cast<HMODULE>(module));
     if (result != RSF_BACKEND_OK) return result;
     registration->owner = std::shared_ptr<rsf_dlss_native12>(owner, rsf_dlss_native12_destroy);
     *out = registration.release();
@@ -176,7 +203,7 @@ rsf_backend_result rsf_dlss_native12_present(rsf_dlss_native12* context, void* s
     uint32_t sync_interval, uint32_t flags, uint32_t begin)
 {
     if (!context || !swapchain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (context->shared_host) return RSF_BACKEND_OK;
+    if (context->shared_host || context->borrowed_engine) return RSF_BACKEND_OK;
 #if RSF_HAVE_STREAMLINE
     bool skip = false;
     const auto result = begin ? context->present(static_cast<IDXGISwapChain*>(swapchain), sync_interval, flags, skip) :
@@ -210,7 +237,7 @@ rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t w
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 }
-rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame)
+static rsf_backend_result evaluate_frame(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame, void* engine_token)
 {
     if (!context || !list) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if RSF_HAVE_STREAMLINE
@@ -222,12 +249,13 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
     const auto& camera = record.camera;
     uint32_t index = static_cast<uint32_t>(record.frame_id);
     sl::FrameToken* token = nullptr;
-    if (context->shared_host) token = static_cast<sl::FrameToken*>(rsf_streamline_host_token(context->shared_host, record.frame_id));
+    if (context->borrowed_engine) token = static_cast<sl::FrameToken*>(engine_token);
+    else if (context->shared_host) token = static_cast<sl::FrameToken*>(rsf_streamline_host_token(context->shared_host, record.frame_id));
     else if (context->token(token, &index) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (!token) return RSF_BACKEND_ERROR_NOT_READY;
     // SR consumes pre-tonemap inputs and has independent history/reset constants.
     // The shared host reserves viewport zero for completed-frame generation.
-    sl::ViewportHandle viewport(context->shared_host ? 1u : 0u);
+    sl::ViewportHandle viewport(context->shared_host || context->borrowed_engine ? 1u : 0u);
     sl::Constants constants{};
     constants.cameraViewToClip = rsf::sl_matrix(camera.view_to_clip); constants.clipToCameraView = rsf::sl_matrix(camera.clip_to_view);
     constants.clipToPrevClip = rsf::sl_matrix(camera.clip_to_previous_clip);
@@ -283,15 +311,26 @@ rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* 
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 #else
     (void)frame;
+    (void)engine_token;
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
+}
+rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame)
+{
+    return evaluate_frame(context, list, frame, nullptr);
+}
+rsf_backend_result rsf_dlss_native12_evaluate_borrowed(rsf_dlss_native12* context, void* list,
+    const rsf_sr_frame* frame, void* native_token)
+{
+    if (!context || !context->borrowed_engine || !native_token) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return evaluate_frame(context, list, frame, native_token);
 }
 void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
 {
     if (!context) return;
 #if RSF_HAVE_STREAMLINE
     if (context->free_resources && context->module) {
-        const sl::ViewportHandle viewport(context->shared_host ? 1u : 0u);
+        const sl::ViewportHandle viewport(context->shared_host || context->borrowed_engine ? 1u : 0u);
         (void)context->free_resources(sl::kFeatureDLSS, viewport);
     }
     if (context->initialized && context->shutdown) context->shutdown();

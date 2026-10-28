@@ -77,7 +77,9 @@ foreach ($taskCopy in $taskCopies) {
     else {
         $taskId = @{ Off=0; DLSS=1; FSR2=2; FSR3=3; FSR4=4; XeSS=5; FSR1=6; Auto=7 }[$Backend]
         $taskFg = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5; Auto=7 }[$FrameGeneration]
-        [IO.File]::WriteAllLines($taskDestination, @('[UnitySR]',"Backend=$taskId","Quality=$Quality",
+        [IO.File]::WriteAllLines($taskDestination, @('[Loader]',
+            'EntryModule=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','EntryPoint=rsf_unity_start',
+            '[UnitySR]',"Backend=$taskId","Quality=$Quality",
             "FrameGeneration=$taskFg","GeneratedFrames=$GeneratedFrames","GraphicsDebug=$([int]$GraphicsDebug.IsPresent)",
             'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
             'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',

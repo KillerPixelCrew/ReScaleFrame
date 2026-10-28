@@ -2,7 +2,8 @@
 // Research-only late attachment after a guarded startup refusal. Load this helper by its
 // absolute staging path; never replace files in a running installation or load another runtime.
 #include <rescaleframe/plugin_session.h>
-#include <rescaleframe/rdr2_sr_host.h>
+#include <rescaleframe/render_host.h>
+#include "runtime_setup.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <cstdio>
@@ -45,8 +46,8 @@ DWORD WINAPI attach(void*) noexcept try
         reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_plugin_session_prepare")));
     auto start = reinterpret_cast<decltype(&rsf_plugin_session_start)>(
         reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_plugin_session_start")));
-    auto create = reinterpret_cast<decltype(&rsf_rdr2_sr_host_create)>(
-        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_rdr2_sr_host_create")));
+    auto create = reinterpret_cast<decltype(&rsf_render_host_create)>(
+        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_render_host_create")));
     if (!prepare || !start || !create || !GetModuleFileNameW(nullptr, path, 32768)) return 1;
     std::string digest;
     if (!rsf::sha256_file(path, digest)) return 1;
@@ -58,7 +59,8 @@ DWORD WINAPI attach(void*) noexcept try
     options.plugin_path = plugin; options.probe = &probe;
     options.services.struct_size = sizeof(options.services); options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = GetTickCount64() + 1; options.services.log = log;
-    auto result = create(ini, directory, &options.services);
+    const auto setup = rsf_rdr2_runtime_setup(ini, directory);
+    auto result = create(&setup, &options.services);
     if (result == RSF_OK) result = prepare(&options, &session);
     char message[160]{};
     std::snprintf(message, sizeof(message), "RDR2 research prepare result=%d sha256=%s", result, digest.c_str());

@@ -27,8 +27,9 @@ typedef struct rsf_sr12_setup {
        Vendor contexts still use the selected quality and output extent. Dynamic input sizes
        must be supported by that provider. ABI 1 retains its original planning behavior. */
     uint32_t engine_input_extents;
-    /* ABI 2: consume pass.exposure (R32_FLOAT, 1x1, NON_PIXEL_SHADER_RESOURCE) instead of
-       generating a separate exposure estimate. Fixed for the lifetime of this context. */
+    /* ABI 2: consume the first component of a 1x1 floating-point pass.exposure,
+       NON_PIXEL_SHADER_RESOURCE, normalized to R32_FLOAT for every backend.
+       Fixed for the lifetime of this context. */
     uint32_t external_exposure;
     /* ABI 2: borrowed rsf_dlss_native12_registration, retained by its per-feature context.
        Keeps the game's native NGX handles alive while SR backends/presets/resolution change. */

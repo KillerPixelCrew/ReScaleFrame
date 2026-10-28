@@ -27,9 +27,8 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_sr_d3d12.cpp
     src/gl_pipeline.cpp
     src/gpu_policy.cpp
-    src/unity_sr_host.cpp
-    src/rdr2_sr_host.cpp
-    src/unity_config.cpp
+    src/callback_render_host.cpp
+    src/render_host.cpp
     src/overlay_d3d12.cpp
     src/overlay_native12.cpp
     ../../loader/proxy/src/overlay_host.cpp

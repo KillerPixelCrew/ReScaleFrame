@@ -1,10 +1,10 @@
 # Grand Theft Auto V Enhanced integration
 
-This is an opt-in entry and game-plugin scaffold. It recognizes the fingerprinted Steam
-1.0.1158.16 executable, but does not provide SR, FG, Reflex, rendering hooks, UI, or output
-reinsertion. The entry/probe has Story gameplay evidence with Steam/RTSS; native camera,
-DLSS resources and candidate scene/UI tags are recorded in the linked research. Pixel boundaries
-and RSF rendering are still unverified.
+This is an opt-in integration under development for the fingerprinted Steam1.0.1158.16
+executable. Native DLSS inputs now reach shared RSF SR and the overlay. One captured SR output
+is byte-identical to its engine copyback, but a graphics-state defect prevents stable-gameplay
+acceptance. Integrated FG, latency ownership, native FSR routing and live engine quality changes
+remain unfinished. Scene/UI pixel boundaries and broader mode coverage remain unverified.
 
 The build produces `ReScaleFrame.GTA5Enhanced.asi` and
 `ReScaleFrame.Game.GTA5Enhanced.dll`. A compatible external ASI loader must load the former
@@ -17,7 +17,7 @@ Enable=1
 Census=0
 ```
 
-Even when enabled, rendering preparation remains refused. The entry checks
+When enabled, the fingerprinted adapter prepares its native input interception. The entry checks
 the process name, hashes that executable, and asks the shared runtime to prepare the plugin.
 It does not load the RDR2 plugin or use RDR2 addresses. Its log is `ReScaleFrame/gta5-enhanced.log`.
 No ASI loader or Script Hook binary is bundled.
@@ -26,7 +26,7 @@ For an explicit diagnostic run, set `Census=1`. Only the known executable can in
 It forwards native vendor calls and records bounded samples in
 `ReScaleFrame/gta5-enhanced-census/<pid>-<tick>/`, including Streamline camera matrices, camera axes, jitter,
 frame/viewport identity, resource tags, feature options, latency and DX12 presentation calls.
-It does not execute RSF backends or modify game-owned settings. Initialization is on the ASI
+The census itself does not execute RSF backends or modify game-owned settings. Initialization is on the ASI
 worker after hashing; earlier calls can be missed, so startup coverage must be checked in the log.
 Diagnostics default off and the first-run installation temporarily enables them. The shared
 probe is capped at64 MiB and samples after32 full records per call site.

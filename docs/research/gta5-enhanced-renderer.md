@@ -1,5 +1,59 @@
 # GTA V Enhanced renderer
 
+## Active SR implementation and graphics-state failure, 28 October 2026
+
+This section supersedes the scaffold-only status below. The fingerprinted adapter now intercepts
+the game's cached Streamline calls, associates constants/resources by its native frame token and
+viewport, and submits SR to the shared render host. The DLSS backend borrows the initialized
+game SDK on a separate SR viewport, without another initialization, device registration, shutdown
+or Present bookkeeping owner. Native FG is currently suppressed; integrated RSF FG, latency
+ownership, native FSR routing and engine quality transitions are still unfinished. Readiness stays0.
+
+RSF SR execution and reinsertion have limited game evidence. In
+`.local/gta5-enhanced/adapter-20261028-003738/capture/`, frame15096's
+`461572485-15096-sr-output-linear-0.raw` and `sr-engine-output-0.raw` are byte-identical.
+The output has12,288,000 finite RGB components at2560x1600; `sr-pixel-analysis.json` records the
+comparison. Its preview uses Reinhard/sRGB for inspection, not the game tonemapper. This proves
+that captured frame's copyback, not stable gameplay, correct native exit states, motion quality
+or the scene/UI boundary. That process subsequently reported `ERR_GFX_STATE`; the preserved
+game crash dump reaches its own graphics-error handler, not an access violation in RSF.
+
+Two concrete corrections preceded further validation. COM vtable shadows failed during native
+factory destruction and were replaced with shared method-entry observers, retaining native COM
+tables and Release behavior. Nested SDK/native Present and factory paths then produced duplicate
+callbacks, including double overlay drawing/counters. Per-thread outermost scopes now give one
+callback pair for a forwarded operation; the WARP observer fixture exercises nested Present and
+native destruction. External float exposure is normalized from the first component of the tagged
+1x1 float texture into R32F, including RGBA32F. A GPU fixture checks3.25 is preserved.
+
+The next deployed run, `.local/gta5-enhanced/adapter-20261028-005013/`, enables D3D12 validation
+and DRED explicitly. PID148748 reaches human-confirmed gameplay and RSF dispatch, but reports
+message527: a native resource alternates between declared shader-read state`0xc0` and expected
+render-target state`0x4`. Its resource role and responsible call site remain under investigation.
+Do not label this correction stable or attribute the earlier graphics failure solely to duplicate
+Present. The following build adds bounded resource identities and validation stacks, and clears
+explicitly null resource tags instead of retaining stale inputs. No cache files are changed.
+That build passed the gate and was backed up and hash-verified into the closed game installation
+under `.local/gta5-enhanced/adapter-20261028-005832/`. Its new traces have no gameplay acceptance
+yet. The next experiment is to correlate the first message527 stack/resource with the adapter's
+role0/1/2/3/4 identities (color/output/depth/motion/exposure), then correct the actual entry/exit
+state contract. The earlier full dump contains readable code for the native upscale function
+at RVA`0x49a550..0x49bd12`; bounded disassembly is saved as
+`.local/gta5-enhanced/code-49bb00.txt`. This is static runtime-dump evidence, not a verified patch.
+
+Release VS2026 validation is in `.local/gta5-enhanced/graphics-state-verify.log` and
+`resource-state-verify.log`:104 discovered cases,93 passes,11 optional skips, formatting/Clippy.
+The shared overlay runs with ABI13; use the freshly built `target/release` panel DLL, since the
+older CMake-bin copy rejects that ABI. Runtime quality/provider controls and broader UI/HDR
+acceptance remain separate requirements, not implied by these fixtures or dispatch logs.
+
+The orchestrator host and callback host now accept adapter-supplied configuration/metadata and
+policy callbacks. RDR2/GTA window and engine policy, Unity startup/configuration/exports, and
+AC7 material mip-bias production stay in their integrations. Shared GPU, SDK and presentation
+mechanisms remain generic. The carrier's `[Loader] EntryModule/EntryPoint` selects its integration;
+Unity deployment/package writers emit those entries. Affected native targets and export ownership
+are fixture/build-checked; existing RDR2/Unity installations have not yet been redeployed/reaccepted.
+
 ## Installed build and combined input probe, 27 October 2026
 
 The Steam download is complete. The installed manifest reports StateFlags4, build25971420 and

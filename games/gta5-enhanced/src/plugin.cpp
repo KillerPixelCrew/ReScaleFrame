@@ -3,10 +3,11 @@
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/version.h>
 #include "build_identity.h"
+#include "native_renderer.h"
 
 namespace {
 constexpr char reason[] =
-    "GTA V Enhanced 1.0.1158.16 recognized; rendering hooks and runtime validation are pending.";
+    "GTA V Enhanced native SR adapter; integrated FG and gameplay acceptance are in progress.";
 
 rsf_detection detect(const rsf_game_probe* probe) noexcept
 {
@@ -23,22 +24,26 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept
     result = rsf_game::validate(args->host);
     if (result != RSF_OK) return result;
     if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
-    if (args->host->log) args->host->log(args->host->user, reason);
-    return RSF_ERROR_NOT_READY;
+    return rsf_gta5_renderer_prepare(*args->host);
 }
 rsf_result start(const rsf_game_start_args* args) noexcept
 {
     const auto result = rsf_game::validate(args);
-    return result == RSF_OK ? RSF_ERROR_NOT_READY : result;
+    return result == RSF_OK ? rsf_gta5_renderer_start() : result;
 }
-rsf_result quiesce(const rsf_game_control_args* args) noexcept { return rsf_game::validate(args); }
-rsf_result stop(const rsf_game_control_args* args) noexcept { return rsf_game::validate(args); }
+rsf_result quiesce(const rsf_game_control_args* args) noexcept {
+    const auto valid = rsf_game::validate(args);
+    return valid == RSF_OK ? rsf_gta5_renderer_quiesce() : valid;
+}
+rsf_result stop(const rsf_game_control_args* args) noexcept {
+    const auto valid = rsf_game::validate(args);
+    return valid == RSF_OK ? rsf_gta5_renderer_stop() : valid;
+}
 rsf_result status(rsf_game_renderer_status* output) noexcept
 {
     const auto result = rsf_game::validate(output);
     if (result != RSF_OK) return result;
-    output->prepared = output->active = output->rendering_ready = 0;
-    output->reason = reason;
+    rsf_gta5_renderer_status(*output);
     return RSF_OK;
 }
 }

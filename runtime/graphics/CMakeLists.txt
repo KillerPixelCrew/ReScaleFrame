@@ -20,12 +20,13 @@ add_library(rsf_graphics STATIC
     src/ui_identify.cpp
     src/constant_twin.cpp
     src/d3d11_observer.cpp)
+target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side
 # the contract exists to constrain. The renderer and the input capture only consume it.
 target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/include")
 target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
-target_link_libraries(rsf_graphics PUBLIC d3d11 dxgi)
+target_link_libraries(rsf_graphics PUBLIC d3d11 d3d12 dxgi)
 target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32)
 target_link_libraries(rsf_graphics PRIVATE minhook)
 # Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.

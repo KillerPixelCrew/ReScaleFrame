@@ -23,12 +23,12 @@
     "dll": "ReScaleFrame.Game.GTA5Enhanced.dll",
     "entry_target": "rsf_asi_gta5_enhanced",
     "entry": "ReScaleFrame.GTA5Enhanced.asi; external ASI loader required",
-    "detection": "recognizes only the installed 1.0.1158.16 SHA-256; rendering preparation remains refused",
+    "detection": "recognizes only the installed 1.0.1158.16 SHA-256; native SR adapter active with limited gameplay/copyback evidence; graphics-state defect under investigation",
     "build_configuration": "Release VS2026",
     "plugin_contract_tested": true,
     "asi_entry_fixture_tested": true,
     "rendering_ready": false,
-    "hooks_implemented": false,
+    "hooks_implemented": true,
     "game_tested": false,
     "device_tested": false,
     "entry_game_tested": true,
@@ -54,11 +54,11 @@
   },
   "rendering": {
     "apis": {
-      "dx12": "observed in live gameplay; RSF adapter unimplemented",
+      "dx12": "RSF SR adapter dispatch and shared overlay observed; one captured engine copyback is byte-identical; native state mismatch and stable-gameplay acceptance remain unresolved",
       "vulkan": "game path unverified; RSF adapter unimplemented; earlier support wording was not established by runtime evidence"
     },
     "native_upscalers": "Native Streamline 2.9.1 DLSS SR dispatch observed. Native DLSS-G and Reflex On/Off requests and FG tags observed; continuous native FG is not established by the menu setting. FidelityFX DX12 1.0.1.41314 is installed but no FSR dispatch was tested",
-    "intended_controls": "RSF overlay owns SR/FG choices; canonical game inputs and native-FG suppression are unimplemented",
+    "intended_controls": "Shared overlay and canonical DLSS inputs are active; native FG is suppressed; live engine quality changes, native FSR routing and RSF FG/latency ownership remain unfinished",
     "sr_input": {
       "tag": "ScalingInputColor",
       "allocation": "1707x1067 R16G16B16A16_FLOAT",
@@ -116,10 +116,10 @@
       "examples": [[0.5, 0.5], [-0.0625, 0.462962955], [0.1875, 0.129629612]]
     },
     "hud_boundary": "native HUDLessColor and UIColorAndAlpha tags identified; pixels, alpha convention, post-HUD changes and UI-mode coverage unverified",
-    "output_reinsertion": null,
+    "output_reinsertion": "Frame15096 in .local/gta5-enhanced/adapter-20261028-003738/capture has byte-identical RSF linear output and engine output readbacks; later ERR_GFX_STATE prevents stable-gameplay acceptance",
     "rtss_compatibility": "native DX12 gameplay and SR coexistence observed, including successful swapchain creation through RTSSHooks64+0x71ffb; RSF presentation/FG unimplemented",
     "output": "SDR swapchain B8G8R8A8_UNORM, color space 0 (G22/P709); HDR untested",
-    "native_streamline_ownership": "game already owns SDK initialization/device/swapchain; adopting or upgrading that owner for RSF remains unimplemented"
+    "native_streamline_ownership": "RSF SR borrows the game's initialized SDK and native token on a separate SR viewport, without second init/device/shutdown/Present owner; RSF FG and latency ownership remain unfinished"
   },
   "research": "../../docs/research/gta5-enhanced-renderer.md"
 }

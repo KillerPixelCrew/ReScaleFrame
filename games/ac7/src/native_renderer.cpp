@@ -1349,6 +1349,12 @@ bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role,
         !read(storage, 0x70, scope.render_rect) || !read(storage, 0x80, scope.output_rect) ||
         !primary_view(storage, config)) return false;
     scope.view_key = storage; scope.native_frame = frame;
+    // UE4.18 lacks the temporal-upscale material mip policy used by later
+    // renderers. This compatibility policy belongs to the AC7 producer.
+    const auto render_width = scope.render_rect[2] - scope.render_rect[0];
+    const auto output_width = scope.output_rect[2] - scope.output_rect[0];
+    if (render_width > 0 && output_width > 0 && render_width <= output_width)
+        scope.material_texture_mip_bias = std::fmax(std::log2(float(render_width) / float(output_width)) - 0.3f, -2.0f);
     return true;
 }
 rsf_ac7_render_ticket* open_translucency(rsf_ac7_native_renderer& self, void* renderer, void* list,
