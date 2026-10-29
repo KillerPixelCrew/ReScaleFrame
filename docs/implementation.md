@@ -1,5 +1,13 @@
 # Implementation tracker
 
+## RDR2 0.1.1 package, 29 October 2026
+
+`tools/package-rdr2.py` builds the first RDR2 download from the post-migration Release outputs
+and the AC7 0.1.1 vendor runtimes. Release VS2026 passed 104 discovered/93 executed/11 optional
+skips with fmt/Clippy. The RDR2 shared-host GPU fixture passed against the staged package for
+four SR providers and three cold-FG providers with the overlay open. Built and synthetic-tested;
+this exact ASI/Runtime has not run in RDR2. [Build record](releases/v0.1.1-rdr2.md).
+
 ## GTA V Enhanced active integration and domain repair, 28 October 2026
 
 The exact-build adapter now produces canonical frame/camera/resource inputs and executes shared
