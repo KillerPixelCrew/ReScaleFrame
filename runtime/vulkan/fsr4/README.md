@@ -11,4 +11,4 @@ Build (Windows, `g++` and `gcc`, `VULKAN_SDK` set, `sdk/minhook` initialized); t
 
 At runtime it loads `amd_fidelityfx_upscaler_dx12.dll` from the same directory.
 
-NVIDIA and Intel run FSR 4 through the INT8 compatibility hook in `runtime/backends/fsr/src/fsr4_compat_core.cpp`, shared with the DX12 backend (GPL-3.0-only); it requires the pinned SDK 2.3.0 runtime (upscaler 4.1.1.2740) and otherwise refuses creation.
+NVIDIA and Intel run FSR 4 through the INT8 compatibility hook in `runtime/backends/fsr/src/fsr4_compat_core.cpp`, shared with the DX12 backend (GPL-3.0-only); it requires a pinned upscaler build, SDK 2.3.0 (4.1.1.2740) or SDK 2.4.0 (4.1.2.4555), and otherwise refuses creation.

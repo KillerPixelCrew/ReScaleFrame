@@ -26,7 +26,6 @@ ForceD3D12=1
 Census=0
 TraceD3D12=0
 SR=1
-SRBackend=1
 FG=0
 StatusOverlay=1
 """
@@ -51,7 +50,7 @@ def main() -> None:
     xess = args.xess_root / "bin/libxess.dll"
     # Same validated SR runtimes as AC7; the FSR4 compatibility hook recognizes this exact binary.
     for source, expected in (
-        (fsr, "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"),
+        (fsr, "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"),
         (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
     ):
         if digest(source) != expected:
@@ -101,7 +100,7 @@ def main() -> None:
     manifest = {
         "product": "ReScaleFrame for Red Dead Redemption 2", "version": version, "source_commit": revision,
         "platform": "Windows x64", "game": engine["game"], "streamline": "2.14.1",
-        "fidelityfx_sdk": "2.3.0", "xess_sdk": "3.0.2",
+        "fidelityfx_sdk": "2.4.0", "xess_sdk": "3.0.2",
         "carrier": "ASI loaded by the game's ASI loader",
         "super_resolution": ["DLSS", "FSR3", "FSR4", "XeSS"],
         "frame_generation": ["DLSS-G", "FSR3", "FSR4 when exposed by the device SDK", "XeSS FG"],

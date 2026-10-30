@@ -25,7 +25,9 @@ int main()
     const rsf_game_latency_event native_mode{sizeof(native_mode),RSF_GAME_LATENCY_MODE,7,0,0,0};
     if(!host.process_latency || host.process_latency(host.user,&native_mode)!=RSF_OK)return 1;
     rsf_render_settings settings{};settings.struct_size=sizeof(settings);settings.abi_version=RSF_RENDER_FRONTEND_ABI_VERSION;
-    if(rsf_render_settings_get(&settings)!=RSF_OK || settings.sr_backend!=1 || !settings.status_overlay)return 1;
+    // A fresh configuration is Auto (7), and saving other changes keeps it Auto.
+    if(rsf_render_settings_get(&settings)!=RSF_OK || settings.sr_backend!=7 || !settings.status_overlay)return 1;
+    if(rsf_render_settings_apply(&settings)!=RSF_OK || GetPrivateProfileIntW(L"RDR2",L"SRBackend",0,ini.c_str())!=7)return 1;
     settings.sr_backend=3;settings.fg_enabled=1;settings.fg_backend=1;settings.generated_frames=3;settings.latency=2;settings.sr_quality=4;
     if(rsf_render_settings_apply(&settings)!=RSF_OK)return 1;
     rsf_render_settings saved{};saved.struct_size=sizeof(saved);saved.abi_version=RSF_RENDER_FRONTEND_ABI_VERSION;
@@ -51,5 +53,5 @@ int main()
     status.abi_version++;
     if(rsf_render_status_get(&status)!=RSF_ERROR_ABI_MISMATCH)return 1;
     if(!DeleteFileW(ini.c_str()) || !RemoveDirectoryW(directory.c_str()))return 1;
-    std::puts("RDR2 frontend: settings transaction, unrelated keys, refusal visibility, unknown output FPS and ABI guards passed.");
+    std::puts("RDR2 frontend: Auto SR default, settings transaction, unrelated keys, refusal visibility, unknown output FPS and ABI guards passed.");
 }

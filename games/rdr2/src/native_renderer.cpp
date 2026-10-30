@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -47,12 +48,19 @@ using Pop = void* (*)(void*, void*);
 using Execute = void (STDMETHODCALLTYPE *)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 using Present = HRESULT (STDMETHODCALLTYPE *)(IDXGISwapChain*, UINT, UINT);
 using FsrDispatch = int32_t (*)(void*, const void*);
+using FsrCreate = int32_t (*)(void*, const void*);
 Evaluate native_evaluate{};
 Pop native_pop{};
 FsrDispatch native_fsr{};
-void** fsr_slot{};
+FsrCreate native_fsr_create{};
+// ffxFsr2ContextDispatch inside the game's own ffx_fsr2_api_x64.dll. Detouring the export, as
+// OptiScaler does, reaches every caller; the earlier import-slot patch at +6032a98 saw no call.
+unsigned char* fsr_export{};
+unsigned char* fsr_create_export{};
+std::atomic<uintptr_t> fsr_caller{};
 rsf_game_host_services host{};
 const unsigned char* image{};
+constexpr uintptr_t image_size = 0x7397600;
 std::mutex guard;
 std::atomic<bool> active{};
 std::atomic<uint32_t> callbacks{};
@@ -305,7 +313,26 @@ template<class T> T field(const std::array<unsigned char, 1352>& description, si
 int32_t fsr_dispatch(void* context, const void* pointer)
 {
     Callback callback;
-    if (_ReturnAddress() != image + 0x26f050a) return native_fsr(context, pointer);
+    // This private FSR 2.1.2 DLL serves only the game, but its wrapper call (+26f050a) need not be
+    // the immediate caller: another hook on the import slot forwards from its own module. Route
+    // every call and record each distinct caller module once.
+    const auto address = _ReturnAddress();
+    uintptr_t first{};
+    const auto caller = reinterpret_cast<uintptr_t>(address);
+    if (fsr_caller.compare_exchange_strong(first, caller) || (first != caller && fsr_caller.exchange(UINTPTR_MAX) != UINTPTR_MAX)) {
+        HMODULE owner{};
+        wchar_t path[MAX_PATH]{};
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCWSTR>(address), &owner);
+        if (owner) GetModuleFileNameW(owner, path, MAX_PATH);
+        const wchar_t* name = std::wcsrchr(path, L'\\') ? std::wcsrchr(path, L'\\') + 1 : path;
+        char message[256]{};
+        std::snprintf(message, sizeof(message), "RDR2 native FSR2 dispatch observed from %ls+%llx%s.",
+            *name ? name : L"<unknown>", static_cast<unsigned long long>(caller - reinterpret_cast<uintptr_t>(owner)),
+            owner == reinterpret_cast<HMODULE>(const_cast<unsigned char*>(image)) && caller - reinterpret_cast<uintptr_t>(image) == 0x26f050a ?
+                " (measured wrapper)" : "");
+        log(message);
+    }
     // FSR 2.1.2 ABI, independently checked against the pinned headers by vendor_census_layouts.
     // Normalize to the very same direct-resource DLSS descriptor, then use the common adapter.
     std::array<unsigned char, 1352> bytes{};
@@ -349,6 +376,50 @@ int32_t fsr_dispatch(void* context, const void* pointer)
     history.frame = 0;
     return result;
 }
+int32_t fsr_create(void* context, const void* description)
+{
+    Callback callback;
+    const auto result = native_fsr_create(context, description);
+    // FfxFsr2ContextDescription 2.1.2: flags, maxRenderSize, displaySize. Evidence only.
+    uint32_t fields[5]{};
+    static std::atomic<uint32_t> reports{};
+    if (reports++ < 4 && read(description, fields, sizeof(fields))) {
+        char message[192]{};
+        std::snprintf(message, sizeof(message), "RDR2 native FSR2 context create result=%d flags=0x%x max_render=%ux%u display=%ux%u.",
+            result, fields[0], fields[1], fields[2], fields[3], fields[4]);
+        log(message);
+    }
+    return result;
+}
+unsigned char* find_fsr_export(const char*& refusal)
+{
+    // The game's signed FSR 2.1.2 API, statically imported and resolved before the ASI loads.
+    auto* module = reinterpret_cast<unsigned char*>(GetModuleHandleW(L"ffx_fsr2_api_x64.dll"));
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS64 nt{};
+    refusal = "ffx_fsr2_api_x64.dll is not loaded";
+    if (!module) return nullptr;
+    refusal = "ffx_fsr2_api_x64.dll is not the 1491.50 build (timestamp 64907ede, image 0x10000)";
+    if (!read(module, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
+        !read(module + dos.e_lfanew, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+        nt.FileHeader.TimeDateStamp != 0x64907ede || nt.OptionalHeader.SizeOfImage != 0x10000) return nullptr;
+    auto* entry = reinterpret_cast<unsigned char*>(GetProcAddress(reinterpret_cast<HMODULE>(module), "ffxFsr2ContextDispatch"));
+    // Null checks, then renderSize.width at description+0x520 against the context's maximum.
+    constexpr unsigned char expected[] = {0x48,0x85,0xc9,0x74,0x36,0x48,0x85,0xd2,0x74,0x31,0x8b,0x41,0x04,0x39,0x82,0x20};
+    refusal = "ffxFsr2ContextDispatch is not at +3c70 with the expected entry bytes";
+    if (entry != module + 0x3c70 || std::memcmp(entry, expected, sizeof(expected))) return nullptr;
+    auto* create = reinterpret_cast<unsigned char*>(GetProcAddress(reinterpret_cast<HMODULE>(module), "ffxFsr2ContextCreate"));
+    constexpr unsigned char create_bytes[] = {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xda,0x41,0xb8,0x60};
+    if (create == module + 0x3ab0 && !std::memcmp(create, create_bytes, sizeof(create_bytes)) &&
+        MH_CreateHook(create, reinterpret_cast<void*>(&fsr_create), reinterpret_cast<void**>(&native_fsr_create)) == MH_OK)
+        fsr_create_export = create;
+    void* imported{};
+    char message[192]{};
+    std::snprintf(message, sizeof(message), "RDR2 FSR2 import slot +6032a98 %s ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch.",
+        read(image + 0x6032a98, &imported, sizeof(imported)) && imported == entry ? "resolves to" : "does NOT resolve to");
+    log(message);
+    return entry;
+}
 }
 
 rsf_result rsf_rdr2_renderer_prepare(const rsf_game_host_services& services) noexcept
@@ -360,13 +431,11 @@ rsf_result rsf_rdr2_renderer_prepare(const rsf_game_host_services& services) noe
     IMAGE_NT_HEADERS64 nt{};
     if (!read(image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
         !read(image + dos.e_lfanew, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
-        nt.FileHeader.TimeDateStamp != 0x65eec92e || nt.OptionalHeader.SizeOfImage != 0x7397600) return RSF_ERROR_NOT_READY;
+        nt.FileHeader.TimeDateStamp != 0x65eec92e || nt.OptionalHeader.SizeOfImage != image_size) return RSF_ERROR_NOT_READY;
     constexpr unsigned char eval_bytes[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57};
     constexpr unsigned char pop_bytes[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48};
-    constexpr unsigned char fsr_bytes[] = {0xff,0x25,0x9d,0x1f,0x19,0x03};
     if (std::memcmp(image + 0x26f3a3c, eval_bytes, sizeof(eval_bytes)) ||
-        std::memcmp(image + 0x26c97d4, pop_bytes, sizeof(pop_bytes)) ||
-        std::memcmp(image + 0x2ea0af5, fsr_bytes, sizeof(fsr_bytes))) return RSF_ERROR_NATIVE_REFUSED;
+        std::memcmp(image + 0x26c97d4, pop_bytes, sizeof(pop_bytes))) return RSF_ERROR_NATIVE_REFUSED;
     const auto initialized = MH_Initialize();
     if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return RSF_ERROR_NATIVE_REFUSED;
     host = services;
@@ -381,8 +450,18 @@ rsf_result rsf_rdr2_renderer_prepare(const rsf_game_host_services& services) noe
     }
     prepared = true;
     if (!rsf_rdr2_scene_prepare(image, host)) log("RDR2 completed-scene producer unavailable; SR remains available.");
-    fsr_slot = reinterpret_cast<void**>(const_cast<unsigned char*>(image + 0x6032a98));
-    native_fsr = reinterpret_cast<FsrDispatch>(*fsr_slot);
+    // The FSR route is independent of the DLSS route. A refusal leaves native FSR2 untouched.
+    const char* refusal{};
+    if (auto* entry = find_fsr_export(refusal)) {
+        if (MH_CreateHook(entry, reinterpret_cast<void*>(&fsr_dispatch), reinterpret_cast<void**>(&native_fsr)) == MH_OK)
+            fsr_export = entry;
+        else refusal = "MinHook could not create the export detour";
+    }
+    if (!fsr_export) {
+        char message[192]{};
+        std::snprintf(message, sizeof(message), "RDR2 FSR2 input route refused: %s. Native FSR2 is retained.", refusal);
+        log(message);
+    }
     log("RDR2 SR hooks prepared: expected bytes match +26f3a3c and +26c97d4.");
     return RSF_OK;
 }
@@ -396,25 +475,12 @@ rsf_result rsf_rdr2_renderer_start() noexcept
         MH_DisableHook(const_cast<unsigned char*>(image + 0x26c97d4));
         return RSF_ERROR_NATIVE_REFUSED;
     }
-    DWORD protection{};
-    if (!native_fsr || !VirtualProtect(fsr_slot, sizeof(void*), PAGE_READWRITE, &protection)) {
-        active.store(false);
-        MH_DisableHook(const_cast<unsigned char*>(image + 0x26f3a3c));
-        MH_DisableHook(const_cast<unsigned char*>(image + 0x26c97d4));
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    const auto replaced = InterlockedCompareExchangePointer(fsr_slot, reinterpret_cast<void*>(&fsr_dispatch),
-        reinterpret_cast<void*>(native_fsr));
-    DWORD ignored{};
-    VirtualProtect(fsr_slot, sizeof(void*), protection, &ignored);
-    if (replaced != reinterpret_cast<void*>(native_fsr)) {
-        active.store(false);
-        MH_DisableHook(const_cast<unsigned char*>(image + 0x26f3a3c));
-        MH_DisableHook(const_cast<unsigned char*>(image + 0x26c97d4));
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
+    const bool fsr = fsr_export && MH_EnableHook(fsr_export) == MH_OK;
+    if (fsr_create_export) MH_EnableHook(fsr_create_export);
+    if (fsr_export && !fsr) log("RDR2 FSR2 input route refused: export detour could not be enabled. Native FSR2 is retained.");
     if (!rsf_rdr2_scene_start()) log("RDR2 completed-scene producer did not activate.");
-    log("RDR2 DLSS and FSR selections route to the common SR adapter; FG acceptance remains pending.");
+    log(fsr ? "RDR2 DLSS and FSR2 (ffxFsr2ContextDispatch export) selections route to the common SR adapter." :
+        "RDR2 DLSS selection routes to the common SR adapter; native FSR2 is not intercepted.");
     return RSF_OK;
 }
 rsf_result rsf_rdr2_renderer_quiesce() noexcept
@@ -430,15 +496,14 @@ rsf_result rsf_rdr2_renderer_stop() noexcept
     // process teardown owns it until a later explicit queue-drain/unhook protocol is provided.
     if (queue || swapchain) return RSF_ERROR_BUSY;
     rsf_rdr2_scene_stop();
-    if (fsr_slot && *fsr_slot == reinterpret_cast<void*>(&fsr_dispatch)) {
-        DWORD protection{};
-        if (!VirtualProtect(fsr_slot, sizeof(void*), PAGE_READWRITE, &protection)) return RSF_ERROR_BUSY;
-        InterlockedCompareExchangePointer(fsr_slot, reinterpret_cast<void*>(native_fsr), reinterpret_cast<void*>(&fsr_dispatch));
-        DWORD ignored{}; VirtualProtect(fsr_slot, sizeof(void*), protection, &ignored);
-    }
+    if (fsr_export) MH_DisableHook(fsr_export);
+    if (fsr_create_export) MH_DisableHook(fsr_create_export);
     MH_DisableHook(const_cast<unsigned char*>(image + 0x26f3a3c));
     MH_DisableHook(const_cast<unsigned char*>(image + 0x26c97d4));
     if (callbacks.load()) return RSF_ERROR_BUSY;
+    if (fsr_export) MH_RemoveHook(fsr_export);
+    if (fsr_create_export) MH_RemoveHook(fsr_create_export);
+    fsr_export = fsr_create_export = nullptr;
     MH_RemoveHook(const_cast<unsigned char*>(image + 0x26f3a3c));
     MH_RemoveHook(const_cast<unsigned char*>(image + 0x26c97d4));
     prepared = false;
@@ -450,5 +515,5 @@ void rsf_rdr2_renderer_status(rsf_game_renderer_status& status) noexcept
     status.prepared = prepared ? 1u : 0u;
     status.active = active.load() ? 1u : 0u;
     status.rendering_ready = 0;
-    status.reason = "Native DLSS SR replacement implemented; live acceptance, FSR routing and FG remain pending.";
+    status.reason = "Native DLSS SR replacement implemented; FSR2 export routing, live acceptance and FG remain pending.";
 }

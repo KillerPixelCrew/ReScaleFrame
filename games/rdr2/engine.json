@@ -166,7 +166,7 @@
   },
   "upscalers": {
     "rsf_input_source": "Game DLSS calls for every RSF backend, per user clarification on 2026-10-26; native FSR2 input validation is not a delivery gate",
-    "native_selection_routing": "Native DLSS entry is game-tested with RSF DLSS/FSR3/FSR4/XeSS. Native FSR dispatch normalizes through checked thunk 0x2ea0af5/IAT0x6032a98; live execution remains blocked by disabled native UI rows. No native-menu replacement implemented.",
+    "native_selection_routing": "Native DLSS entry is game-tested with RSF DLSS/FSR3/FSR4/XeSS. Native FSR dispatch normalizes through a detour of ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch (+0x3c70, timestamp 64907ede); the earlier IAT0x6032a98 patch saw no dispatch on Intel Arc B370 (30 October 2026). Export route game-run on Intel Arc B370 30 October 2026: dispatch from 0x26f050a, RSF XeSS SR accepted. No native-menu replacement implemented.",
     "native_menu_controls": "Investigate replacing the game DLSS/FSR controls with RSF controls, making the RSF overlay optional; feasibility and implementation unproven",
     "dlss": "NGX D3D12 creation/evaluation measured in Story mode: 4900 evaluations in the final periodic census; MaxQuality and Balanced contexts observed",
     "fsr2": "imports ffx_fsr2_api_x64.dll (7 functions), ffx_fsr2_api_dx12_x64.dll (5) and ffx_fsr2_api_vk_x64.dll (5); ffxFsr2ContextCreate/Dispatch/Destroy, GetJitterOffset/PhaseCount and GetInterfaceDX12 named",

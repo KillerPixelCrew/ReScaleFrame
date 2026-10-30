@@ -214,8 +214,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
                 log(&self, "Automatic SR refused: owning D3D12 adapter could not be identified.");
                 return;
             }
-            self.backend = self.requested_backend = rsf_gpu_default_sr_backend(description.VendorId,
-                (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+            self.backend = self.requested_backend = rsf_gpu_select_sr_backend(description.VendorId,
+                (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0, self.sr_choices);
             if (!apply_policy(self, self.backend, self.quality)) return;
             char detail[160];
             std::snprintf(detail, sizeof(detail), "Auto SR selected backend %u from owning D3D12 adapter vendor=0x%x device=0x%x",
