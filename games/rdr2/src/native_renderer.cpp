@@ -333,7 +333,7 @@ int32_t fsr_dispatch(void* context, const void* pointer)
                 " (measured wrapper)" : "");
         log(message);
     }
-    // FSR 2.1.2 ABI, independently checked against the pinned headers by vendor_census_layouts.
+    // FSR 2.1.2 prefix of the game's FSR 2.2 description, checked against the pinned 2.1.2 headers by vendor_census_layouts.
     // Normalize to the very same direct-resource DLSS descriptor, then use the common adapter.
     std::array<unsigned char, 1352> bytes{};
     if (!read(pointer, bytes.data(), bytes.size())) return native_fsr(context, pointer);
@@ -363,12 +363,18 @@ int32_t fsr_dispatch(void* context, const void* pointer)
         history.native_gap = true;
         return 0; // FFX_OK; the outer game wrapper performs its normal cache restoration.
     }
-    if (history.native_gap) bytes[1336] = 1;
-    const auto result = native_fsr(context, bytes.data());
+    // The game's DLL is FSR 2.2 (r_input_opaque_only/rw_output_autoreactive, ffxFsr2ResourceIsNull):
+    // its description extends past the 1,352-byte 2.1.2 prefix read above with enableAutoReactive
+    // and a colorOpaqueOnly resource. Native FSR2 must receive the game's own description; a
+    // truncated copy let it register stack garbage and crash in GetDesc after a preset change.
+    // Only the shared-prefix reset flag is changed, and only after RSF skipped native frames.
+    auto* original = static_cast<unsigned char*>(const_cast<void*>(pointer));
+    if (history.native_gap) original[1336] = 1;
+    const auto result = native_fsr(context, pointer);
     if (history.native_gap || history.native_result != static_cast<uint32_t>(result)) {
         char message[128]{};
         std::snprintf(message, sizeof(message), "RDR2 native FSR fallback result=%d context=%p reset=%u.",
-            result, context, bytes[1336] ? 1u : 0u);
+            result, context, original[1336] ? 1u : 0u);
         log(message);
         history.native_result = static_cast<uint32_t>(result);
     }

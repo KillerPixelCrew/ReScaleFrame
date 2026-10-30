@@ -45,5 +45,18 @@ int main()
         rsf_rdr2_pin_engine_settings(original.data(), original.size() - 1, 0x10de) ||
         rsf_rdr2_pin_engine_settings(nullptr, original.size(), 0x10de) ||
         rsf_rdr2_pin_engine_settings(invalid.data(),invalid.size(),0x10de,5)) return 1;
-    std::puts("Native carrier stays enabled for NVIDIA/AMD/Intel/unknown; unrelated fields and invalid objects stay unchanged.");
+    // Measured Arc B370 panel: 120 Hz is 31550000/262912, which RAGE saved as 262144/262144.
+    uint32_t n = 31550000, d = 262912;
+    if (!rsf_rdr2_storable_refresh(n, d, 120) || n != 12000 || d != 100) return 1;
+    n = d = rsf_rdr2_refresh_limit;
+    if (!rsf_rdr2_storable_refresh(n, d, 120) || n != 12000 || d != 100) return 1;
+    n = d = rsf_rdr2_refresh_limit;
+    if (rsf_rdr2_storable_refresh(n, d, 0) || n != rsf_rdr2_refresh_limit) return 1;
+    for (const auto mode : {std::array<uint32_t, 2>{3000, 100}, {6000, 100}, {120, 1}, {0, 0}}) {
+        n = mode[0]; d = mode[1];
+        if (rsf_rdr2_storable_refresh(n, d, 120) || n != mode[0] || d != mode[1]) return 1;
+    }
+    n = 400000; d = 0;
+    if (rsf_rdr2_storable_refresh(n, d, 120)) return 1;
+    std::puts("Native carrier stays enabled for NVIDIA/AMD/Intel/unknown; unrelated fields and invalid objects stay unchanged; refresh rationals stay storable.");
 }

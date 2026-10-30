@@ -599,16 +599,26 @@ public:
                 if (FAILED(direct_queue->Signal(complete.Get(), source_ready)) ||
                     FAILED(present_queue->Wait(complete.Get(), source_ready))) return DXGI_ERROR_DEVICE_REMOVED;
             }
-            if (SUCCEEDED(wait(complete.Get(), slot.fence)) && SUCCEEDED(slot.allocator->Reset()) &&
-                SUCCEEDED(slot.list->Reset(slot.allocator.Get(), nullptr))) {
+            // Each step before the physical Present keeps its own HRESULT for the failure report.
+            const char* step = "slot fence wait";
+            HRESULT stage = wait(complete.Get(), slot.fence);
+            if (SUCCEEDED(stage)) { step = "allocator reset"; stage = slot.allocator->Reset(); }
+            if (SUCCEEDED(stage)) { step = "command list reset"; stage = slot.list->Reset(slot.allocator.Get(), nullptr); }
+            if (SUCCEEDED(stage)) {
                 ComPtr<ID3D12Resource> buffer;
-                if (SUCCEEDED(physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) {
+                step = "physical GetBuffer";
+                stage = physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer));
+                if (SUCCEEDED(stage) && settings.runtime_switching && !render_buffers[render_index]) {
+                    step = "render buffer missing"; stage = E_UNEXPECTED;
+                }
+                if (SUCCEEDED(stage)) {
                     if (settings.runtime_switching)
                         rsf::copy_transitioned(slot.list.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
                             render_buffers[render_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
                     void* command = provider_list(slot.list.Get());
                     if (settings.prepare) settings.prepare(settings.user, this, nullptr, command, buffer.Get(), host, provider, sync);
-                    if (SUCCEEDED(slot.list->Close())) {
+                    step = "command list Close"; stage = slot.list->Close();
+                    if (SUCCEEDED(stage)) { step = "physical Present";
                         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; present_queue->ExecuteCommandLists(1, lists);
                         if (joined) {
                             const auto copied = ++serial;
@@ -616,10 +626,17 @@ public:
                                 FAILED(direct_queue->Wait(complete.Get(), copied))) return DXGI_ERROR_DEVICE_REMOVED;
                         }
                         result = present_physical(event, sync, physical_flags, ticks);
+                        stage = result;
                     }
                 }
                 slot.fence = ++serial;
                 if (FAILED(present_queue->Signal(complete.Get(), slot.fence))) result = DXGI_ERROR_DEVICE_REMOVED;
+            }
+            if (FAILED(result)) {
+                char text[192]; std::snprintf(text, sizeof(text), "Native D3D12 presentation step '%s' failed HRESULT=%08lx render_index=%u buffers=%u size=%ux%u",
+                    step, static_cast<unsigned long>(stage), render_index, description.BufferCount,
+                    description.BufferDesc.Width, description.BufferDesc.Height);
+                log(text);
             }
             notify_presented(event, result);
             if (SUCCEEDED(result) && settings.runtime_switching) {
@@ -716,7 +733,12 @@ public:
             }
             if (count > render_buffers.size()) return DXGI_ERROR_INVALID_CALL;
         }
-        const auto result = physical->ResizeBuffers(native12 ? count : 3, width, height, format,
+        // With runtime switching the application renders into render_buffers, never the physical
+        // chain, so the physical count stays as created (0 keeps it). Changing it under an FG
+        // provider's proxy chain broke its back-buffer index: after RDR2's VSync change (app
+        // count 2) XeSS FG's GetBuffer(GetCurrentBackBufferIndex()) failed with E_INVALIDARG.
+        const UINT physical_count = !native12 ? 3u : settings.runtime_switching ? 0u : count;
+        const auto result = physical->ResizeBuffers(physical_count, width, height, format,
             tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
         if (FAILED(result)) return result;
         if (!native12) {
@@ -748,7 +770,17 @@ public:
         return query_physical([&](IDXGISwapChain4* chain) { return chain->GetLastPresentCount(out); });
     }
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override { if (!out) return E_POINTER; const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); }); if (SUCCEEDED(result) && (!native12 || settings.runtime_switching)) { out->BufferCount = description.BufferCount; out->SwapEffect = description.SwapEffect; out->Flags = description.Flags; } return result; }
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); }); }
+    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override {
+        const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); });
+        // A provider's proxy chain was not created with the application's mode. Report the
+        // application's own refresh, scanline order and scaling, as DXGI would for its chain.
+        if (SUCCEEDED(result) && out && (!native12 || settings.runtime_switching)) {
+            out->RefreshRate = description.BufferDesc.RefreshRate;
+            out->ScanlineOrdering = description.BufferDesc.ScanlineOrdering;
+            out->Scaling = description.BufferDesc.Scaling;
+        }
+        return result;
+    }
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetHwnd(out); }); }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void** out) override { if (out) *out = nullptr; return E_NOINTERFACE; }
     HRESULT STDMETHODCALLTYPE Present1(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) override { if (params && (params->DirtyRectsCount || params->pScrollRect)) return DXGI_ERROR_INVALID_CALL; return Present(sync, flags); }
@@ -816,6 +848,12 @@ HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_
     creating = true;
     auto* bridge = new(std::nothrow) Bridge;
     HRESULT result = bridge ? bridge->initialize(factory, unknown, desc) : E_OUTOFMEMORY;
+    if (SUCCEEDED(result)) {
+        char text[192]; std::snprintf(text, sizeof(text), "presentation bridge: application chain %ux%u refresh=%u/%u windowed=%d buffers=%u flags=0x%x",
+            desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator,
+            desc.Windowed, desc.BufferCount, desc.Flags);
+        log(text);
+    }
     if (SUCCEEDED(result)) *out = bridge;
     else if (bridge) bridge->Release();
     creating = false;
@@ -828,7 +866,12 @@ HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, D
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HWND hwnd,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output, IDXGISwapChain1** out) {
     if (desc && !output && !desc->Stereo) {
-        DXGI_SWAP_CHAIN_DESC translated{}; translated.BufferDesc = {desc->Width, desc->Height, {}, desc->Format, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_MODE_SCALING_UNSPECIFIED};
+        // Keep the application's fullscreen mode. Dropping its refresh rate made GetDesc report
+        // 0/0, which RDR2 matched to its lowest listed mode (30 Hz on a 30-120 Hz panel).
+        DXGI_SWAP_CHAIN_DESC translated{}; translated.BufferDesc = {desc->Width, desc->Height,
+            fullscreen ? fullscreen->RefreshRate : DXGI_RATIONAL{}, desc->Format,
+            fullscreen ? fullscreen->ScanlineOrdering : DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
+            fullscreen ? fullscreen->Scaling : DXGI_MODE_SCALING_UNSPECIFIED};
         translated.SampleDesc = desc->SampleDesc; translated.BufferUsage = desc->BufferUsage; translated.BufferCount = desc->BufferCount;
         translated.OutputWindow = hwnd; translated.Windowed = fullscreen ? fullscreen->Windowed : TRUE; translated.SwapEffect = desc->SwapEffect; translated.Flags = desc->Flags;
         ComPtr<IDXGISwapChain> bridge;

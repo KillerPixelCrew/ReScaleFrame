@@ -37,3 +37,23 @@ inline bool rsf_rdr2_pin_engine_settings(void* collection, size_t bytes, uint32_
     std::memcpy(data + 0x15c, &markers, 4);
     return true;
 }
+// Collection video group at +124: refreshRateNumerator +24, refreshRateDenominator +28 (member
+// order in system.xml, all 4-byte; ReflexSettings +38 confirms the layout). RAGE saves these
+// clamped to 262144, so a panel mode such as 31550000/262912 (120.002 Hz) comes back as
+// 262144/262144 and boots at the first listed mode. The game matches a centihertz rational to
+// the real mode, so store that instead. A value already clamped takes the desktop refresh.
+inline constexpr size_t rsf_rdr2_refresh_numerator = 0x148, rsf_rdr2_refresh_denominator = 0x14c;
+inline constexpr uint32_t rsf_rdr2_refresh_limit = 262144;
+inline bool rsf_rdr2_storable_refresh(uint32_t& numerator, uint32_t& denominator, uint32_t desktop_hz) noexcept
+{
+    if (numerator == rsf_rdr2_refresh_limit && denominator == rsf_rdr2_refresh_limit) {
+        if (!desktop_hz || desktop_hz > 1000) return false;
+        numerator = desktop_hz * 100; denominator = 100;
+        return true;
+    }
+    if (!denominator || (numerator <= rsf_rdr2_refresh_limit && denominator <= rsf_rdr2_refresh_limit)) return false;
+    const auto centihertz = (uint64_t(numerator) * 100 + denominator / 2) / denominator;
+    if (!centihertz || centihertz > rsf_rdr2_refresh_limit) return false;
+    numerator = static_cast<uint32_t>(centihertz); denominator = 100;
+    return true;
+}

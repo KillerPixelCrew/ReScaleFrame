@@ -25,7 +25,7 @@ uintptr_t image{};
 std::atomic<uint64_t> requested_selection{(uint64_t(UINT32_MAX)<<32)|2};
 uint32_t requested_quality() { return static_cast<uint32_t>(requested_selection.load()); }
 std::atomic<uint64_t> adapter_vendor{UINT64_MAX};
-std::atomic<uint32_t> overrides{}, failures{};
+std::atomic<uint32_t> overrides{}, failures{}, refresh_fixes{};
 bool installed{};
 std::atomic<rsf_game_log_fn> logger{};
 std::atomic<void*> logger_user{};
@@ -73,6 +73,20 @@ void own(void* collection)
     for (const auto offset : {kDlss,kDlssQuality,kFsr,kReflex})
         std::memcpy(static_cast<unsigned char*>(collection)+offset,expected.data()+offset,4);
     const auto log = logger.load(std::memory_order_acquire);
+    uint32_t numerator = word(collection, rsf_rdr2_refresh_numerator), denominator = word(collection, rsf_rdr2_refresh_denominator);
+    const auto old_numerator = numerator, old_denominator = denominator;
+    DEVMODEW desktop{}; desktop.dmSize = sizeof(desktop);
+    const uint32_t desktop_hz = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &desktop) ? desktop.dmDisplayFrequency : 0;
+    if (rsf_rdr2_storable_refresh(numerator, denominator, desktop_hz)) {
+        std::memcpy(static_cast<unsigned char*>(collection) + rsf_rdr2_refresh_numerator, &numerator, 4);
+        std::memcpy(static_cast<unsigned char*>(collection) + rsf_rdr2_refresh_denominator, &denominator, 4);
+        if (refresh_fixes++ < 16 && log) {
+            char text[160]; std::snprintf(text, sizeof(text),
+                "RDR2 refresh rate stored as %u/%u (was %u/%u, desktop %u Hz) so the saved mode survives RAGE's 262144 limit.",
+                numerator, denominator, old_numerator, old_denominator, desktop_hz);
+            log(logger_user.load(), text);
+        }
+    }
     if (changed && ++overrides <= 32 && log) {
         char text[192]; std::snprintf(text, sizeof(text),
             "RDR2 input carrier enforced: vendor=%x DLSS=%u->%u quality=%u->%u FSR2=%u->%u native_marker_mode=%u->1; RSF settings unchanged.",

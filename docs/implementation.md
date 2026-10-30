@@ -1,5 +1,38 @@
 # Implementation tracker
 
+## RDR2 on Intel: settings-change crashes and the 30 Hz boot, 30 October 2026
+
+Three faults surfaced once SR ran on the Arc B370; each has a log or dump behind it.
+
+- **VSync toggle crash (ERR_GFX_STATE).** New per-step Present logging showed
+  `physical GetBuffer failed 80070057` right after the game resized its chain to 2 buffers. With
+  runtime switching the application renders into `render_buffers`, so the physical chain now
+  keeps its created count (`ResizeBuffers(0, ...)`). XeSS FG's proxy had kept an index past the new
+  count. Change in `runtime/presentation/src/d3d11_present_bridge.cpp`.
+- **Upscaling-preset crash.** Crashpad dump `0e3dc899...`: AV in `ffx_fsr2_api_dx12_x64.dll+3163`
+  calling `GetDesc` through `RDR2.exe+5730b08`, reached from the RSF native-FSR fallback. The
+  game's FSR library is 2.2 (`r_input_opaque_only`, `rw_output_autoreactive`,
+  `ffxFsr2ResourceIsNull`), whose description extends past the 1,352-byte 2.1.2 prefix with
+  `enableAutoReactive` and `colorOpaqueOnly`. The fallback passed a truncated stack copy; it now
+  passes the game's description and only sets the prefix `reset` byte after skipped frames.
+- **30 Hz at every boot.** The panel's 120 Hz DXGI mode is `31550000/262912` (index 5). RAGE saves
+  the rational clamped to 262144, so `system.xml` held `262144/262144`; the game then fell back to
+  mode 0 (30 Hz). This also happens with `Enable=0`, so it is a base-game fault. Boot requests
+  were read from the new bridge log: saved `12000/100`, `120/1` or the exact rational all produce
+  `31550000/262912`. The RDR2 settings hook now stores a centihertz rational when the value exceeds
+  the limit and replaces an already clamped value with the desktop refresh. Offsets: video group
+  +124, numerator +148, denominator +14c, from `system.xml` member order with `ReflexSettings` +38
+  as the existing calibration. Game-tested at boot from the broken file: the chain was created at
+  `31550000/262912`. The save-and-reboot round trip is pending.
+- The bridge also kept the application's fullscreen refresh, scanline order and scaling in
+  `CreateSwapChainForHwnd` translation and reports them from `GetFullscreenDesc`. It used to report
+  0/0. This did not cause the 30 Hz boot, which also happens without RSF.
+
+Release VS2026 build and 84/84 ctest (11 opt-in skips, `rdr2_capture*` excluded as above); the RDR2
+settings test covers the refresh policy; XeSS FG cold fixture 39 tags/result 0. In game after the fixes: a
+settings apply that previously failed and three preset changes (1280x800 inputs) completed without
+a presentation failure or crash. Repeated VSync toggling has not been separately confirmed.
+
 ## RDR2 on Intel: FSR2 input route, orchestrator Auto SR and FidelityFX 2.4.0, 30 October 2026
 
 The 0.1.1 package on an Intel Arc B370 (vendor 0x8086, device 0xb083, driver 32.0.101.9150) ran
