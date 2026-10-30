@@ -1,5 +1,19 @@
 # Implementation tracker
 
+## Latency owner in the overlay, 30 October 2026
+
+On Intel the overlay greyed out Reflex and the frame limit because both sat under the provider's
+`low_latency_available`, which the XeSS provider never set, although it already runs XeLL sleep and
+markers and the orchestrator passes the frame limit to XeLL's `minimumIntervalUs`. The XeSS
+provider now reports availability once its XeLL context is bound. Both XeSS and DLSS providers
+count frames their pacing owner accepted (`rsf_fg_status.latency_paced_frames`). Overlay ABI 14
+adds `latency_pacing_owner` and `latency_paced_frames`. The panel shows the Reflex radio only for
+Reflex and shows a live XeLL status line for XeLL, with the frame limit enabled for either. The count
+is evidence that the SDK accepted sleep calls, not a latency measurement. Rust 41+19 tests,
+Clippy and fmt with the pinned 1.94.1 toolchain (rustup installed on this device); C++ 84/84.
+The save-and-reboot round trip for the refresh fix passed: after an in-game apply and normal exit
+`system.xml` holds `12000/100` at index 5.
+
 ## RDR2 on Intel: settings-change crashes and the 30 Hz boot, 30 October 2026
 
 Three faults surfaced once SR ran on the Arc B370; each has a log or dump behind it.
@@ -23,7 +37,7 @@ Three faults surfaced once SR ran on the Arc B370; each has a log or dump behind
   the limit and replaces an already clamped value with the desktop refresh. Offsets: video group
   +124, numerator +148, denominator +14c, from `system.xml` member order with `ReflexSettings` +38
   as the existing calibration. Game-tested at boot from the broken file: the chain was created at
-  `31550000/262912`. The save-and-reboot round trip is pending.
+  `31550000/262912`; the save-and-reboot round trip then stored `12000/100`.
 - The bridge also kept the application's fullscreen refresh, scanline order and scaling in
   `CreateSwapChainForHwnd` translation and reports them from `GetFullscreenDesc`. It used to report
   0/0. This did not cause the 30 Hz boot, which also happens without RSF.

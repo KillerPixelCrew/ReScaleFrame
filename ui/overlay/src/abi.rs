@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 13;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 14;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -172,6 +172,12 @@ pub struct RsfOverlayStats {
     pub fg_mfg_unlock_status: u32,
     /// Engine-owned input resolution; do not offer ineffective quality changes.
     pub sr_quality_locked: u32,
+    /// ABI 14. Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL.
+    pub latency_pacing_owner: u32,
+    /// Keeps the following counter eight-byte aligned, as in the header.
+    pub latency_reserved: u32,
+    /// Frames the pacing owner has paced; a rising count shows the latency SDK is running.
+    pub latency_paced_frames: u64,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
@@ -412,7 +418,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 280);
+        assert_eq!(size_of::<RsfOverlayStats>(), 296);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -450,6 +456,9 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset_available), 264);
         assert_eq!(offset_of!(RsfOverlayStats, fg_mfg_unlock_status), 268);
         assert_eq!(offset_of!(RsfOverlayStats, sr_quality_locked), 272);
+        // ABI 14's first field takes the four bytes of tail padding after sr_quality_locked.
+        assert_eq!(offset_of!(RsfOverlayStats, latency_pacing_owner), 276);
+        assert_eq!(offset_of!(RsfOverlayStats, latency_paced_frames), 288);
     }
 
     #[test]

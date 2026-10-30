@@ -27,7 +27,7 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 13u
+#define RSF_OVERLAY_ABI_VERSION 14u
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -139,6 +139,11 @@ typedef struct rsf_overlay_stats {
     /* ABI 13. The engine owns input resolution; quality is informational. Zero preserves
        existing hosts' quality controls. */
     uint32_t sr_quality_locked;
+    /* ABI 14. Latency technology that owns pacing (0 none, 1 NVIDIA Reflex, 2 Intel XeLL) and the
+       frames it has actually paced. A rising count shows the SDK is running. */
+    uint32_t latency_pacing_owner;
+    uint32_t latency_reserved;
+    uint64_t latency_paced_frames;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the

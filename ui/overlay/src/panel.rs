@@ -16,6 +16,9 @@ use crate::performance::Rates;
 const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3a);
 /// Detail that is true but not load bearing.
 const MUTED: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
+/// Pacing owners, matching `RSF_PACING_REFLEX` and `RSF_PACING_XELL`.
+const LATENCY_REFLEX: u32 = 1;
+const LATENCY_XELL: u32 = 2;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
 const SR_BACKENDS: [(u32, &str); 6] = [
@@ -320,24 +323,54 @@ fn controls_section(
         ui.label(RichText::new(reason).color(MUTED));
     }
     ui.add_enabled_ui(generation.reflex_available, |ui| {
-        if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex {
+        if generation.latency_owner == LATENCY_XELL {
+            // XeLL has no user mode: its low-latency sleep follows frame generation. Show that it
+            // is pacing frames instead of a Reflex control it would ignore.
+            let status = if generation.latency_paced_frames == 0 {
+                "Intel XeLL: waiting for paced frames".to_owned()
+            } else {
+                format!(
+                    "Intel XeLL active, {} frames paced",
+                    generation.latency_paced_frames
+                )
+            };
+            ui.label(status);
             ui.label(
-                RichText::new("DLSS-G requires Reflex On while generating frames.")
+                RichText::new("Low-latency mode follows frame generation.")
                     .small()
                     .color(MUTED),
             );
+        } else {
+            if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex
+            {
+                ui.label(
+                    RichText::new("DLSS-G requires Reflex On while generating frames.")
+                        .small()
+                        .color(MUTED),
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label("Reflex");
+                let mut mode = generation.requested_reflex;
+                for (id, name) in [(0, "Off"), (1, "On"), (2, "On + Boost")] {
+                    ui.radio_value(&mut mode, id, name);
+                }
+                if mode != generation.requested_reflex {
+                    intent.reflex_changed = true;
+                    intent.reflex_mode = mode;
+                }
+            });
+            if generation.latency_owner == LATENCY_REFLEX && generation.latency_paced_frames > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "Reflex active, {} frames paced",
+                        generation.latency_paced_frames
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
+            }
         }
-        ui.horizontal(|ui| {
-            ui.label("Reflex");
-            let mut mode = generation.requested_reflex;
-            for (id, name) in [(0, "Off"), (1, "On"), (2, "On + Boost")] {
-                ui.radio_value(&mut mode, id, name);
-            }
-            if mode != generation.requested_reflex {
-                intent.reflex_changed = true;
-                intent.reflex_mode = mode;
-            }
-        });
         // Reflex's own limiter. The value is rendered frames, so generation multiplies it.
         // The panel receives the mouse only: the value is dragged, never typed.
         let presents = if generation.requested_mode != 0 {

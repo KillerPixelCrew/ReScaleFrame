@@ -31,6 +31,8 @@ static inline void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf
     stats->fg_max_generated = fg->vendor.max_generated_frames;
     stats->fg_mfg_unlock_status = fg->vendor.mfg_unlock_status;
     stats->reflex_available = fg->vendor.low_latency_available;
+    stats->latency_pacing_owner = fg->vendor.pacing_owner;
+    stats->latency_paced_frames = fg->vendor.latency_paced_frames;
     stats->reflex_requested_mode = fg->requested.reflex_mode;
     stats->reflex_effective_mode = fg->vendor.effective_reflex;
     stats->fg_reason = fg->reason;

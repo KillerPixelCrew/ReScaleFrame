@@ -101,6 +101,8 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     self->state.struct_size = sizeof(self->state); self->state.supported = 1;
     self->state.max_generated_frames = self->reserved; self->state.vsync_supported = 1;
     self->state.pacing_owner = RSF_PACING_XELL;
+    // The XeLL context exists and is bound to the swap chain; its sleep owns frame pacing.
+    self->state.low_latency_available = 1;
     xefg_swapchain_version_t version{}; self->version(&version);
     self->state.version_id = (uint64_t(version.major) << 32) | (uint64_t(version.minor) << 16) | version.patch;
     std::snprintf(self->state.version_name, sizeof(self->state.version_name), "XeFG %u.%u.%u", version.major, version.minor, version.patch);
@@ -165,7 +167,10 @@ rsf_backend_result begin(void* pointer, uint64_t id)
     if (self.sdk_frame == UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
     const uint32_t sdk = ++self.sdk_frame;
     const auto result = self.sleep(self.xell, sdk);
-    if (result == XELL_RESULT_SUCCESS) { self.last_begin = id; self.frame_ids[id % self.frame_ids.size()] = {id, sdk}; }
+    if (result == XELL_RESULT_SUCCESS) {
+        self.last_begin = id; self.frame_ids[id % self.frame_ids.size()] = {id, sdk};
+        ++self.state.latency_paced_frames;
+    }
     return result == XELL_RESULT_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t)
