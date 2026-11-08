@@ -1,0 +1,19 @@
+{
+  "id": "vulkan-static-pipeline-line-width-one",
+  "sdkCommit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+  "correctionCommit": "d5902250e8c52e797475ffe629f9c2bbec80efbf",
+  "before": "rasterizationStateCreateInfo.lineWidth                              = 0.0f;",
+  "after": "rasterizationStateCreateInfo.lineWidth                              = 1.0f;",
+  "files": [
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp",
+      "beforeSha256": "9B4A97B1CDC5B7CF431077ADB1B64DE9679635028446CC6D1F0E43A0D941558B",
+      "afterSha256": "3D069FF0A550BDF951048BC978192BEADE0437E5A4B5A5E692F703B6CA8AB9C2"
+    },
+    {
+      "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp",
+      "beforeSha256": "BB87AB25474FC29920506D12E462A08180271181FC53987E453E04F1E72C3E58",
+      "afterSha256": "5224ED631AB885A8CF81EADE0E487D7B1C344362585314FA0B39FAB83D157930"
+    }
+  ]
+}

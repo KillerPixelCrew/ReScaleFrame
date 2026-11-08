@@ -1,5 +1,20 @@
 # Implementation tracker
 
+## FidelityFX Vulkan static line width, 8 November 2026
+
+The SDK export recipe now reproduces the two approved zero-to-one line-width
+edits from `d590225`, keeping the original source pin and all previous corrections.
+Both full-file hashes are checked before either export is patched. Schema 2
+receipts bind exact correction/source identities and reject stale or mutated
+exports; Godot staging/build identities include the correction.
+
+The complete Release SDK/API runtime built with VS2026. RSF verification passed
+(92 executed, 11 optional skips), three actual SDK graphics pipelines passed with
+`wideLines` disabled, and 24 FSR2/FSR3 SR frames passed pixel/reset/ownership tests
+with zero core/synchronization errors. The initial long-path build failure is
+preserved. Built and synthetic/device-tested; guarded WSI/FG, game and VR
+acceptance remain separate. [Research, artifact path and limits](research/fidelityfx-vulkan-line-width.md).
+
 ## Public FSR4 Vulkan recording API, 8 November 2026
 
 The generic `native_sr_split_vulkan.h` C ABI exposes the existing FSR4

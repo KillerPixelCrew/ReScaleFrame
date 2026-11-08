@@ -81,6 +81,8 @@ if ($StageRuntime) {
     $taskVulkan = if ($Fsr3RuntimeDirectory) { (Resolve-Path -LiteralPath $Fsr3RuntimeDirectory).Path } else { Join-Path $taskRoot '.local/godot/vulkan/runtime' }
     if (Test-Path -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')) {
         $taskReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskVulkan 'fsr3-sdk-build.json') | ConvertFrom-Json
+        . (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/line-width.ps1')
+        Assert-RsfFfxLineWidthReceipt $taskReceipt
         if ($taskReceipt.sdkCommit -ne $taskLock.vendor.fidelityfx_vulkan.revision -or
             $taskReceipt.buildRecipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/build-sdk.ps1')).Hash -or
             $taskReceipt.swapchainLifetimePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json')).Hash -or

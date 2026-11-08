@@ -1,4 +1,9 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+find_program(RSF_PWSH_EXECUTABLE pwsh)
+if(RSF_PWSH_EXECUTABLE)
+    add_test(NAME ffx_line_width_patch COMMAND "${RSF_PWSH_EXECUTABLE}" -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/ffx_line_width_patch.ps1" -SdkRoot "${RSF_FFX_VK_INCLUDE}/../..")
+    set_tests_properties(ffx_line_width_patch PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+endif()
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
 add_executable(rsf_plugin_contract plugin_contract.cpp)

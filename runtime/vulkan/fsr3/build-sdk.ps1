@@ -20,6 +20,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../../eng/godot-artifacts.ps1')
+. (Join-Path $PSScriptRoot 'sdk-fixes/line-width.ps1')
 $projectRoot = (Resolve-Path -LiteralPath $HostRoot).Path
 $sdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
@@ -33,6 +34,10 @@ $commit = (& git -C $sdkRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $commit -ne $fix.sdkCommit) { throw 'The FSR3 correction requires the pinned FidelityFX SDK commit.' }
 $dirty = & git -C $sdkRoot status --porcelain --untracked-files=no
 if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'FidelityFX SDK tracked sources must be unchanged before staging.' }
+$lineWidthFix = Get-RsfFfxLineWidthFix
+if ($lineWidthFix.sdkCommit -ne $commit) { throw 'Pipeline line-width correction requires the pinned SDK commit.' }
+$lineWidthFixHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/line-width.json')).Hash
+$lineWidthHelperHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/line-width.ps1')).Hash
 $recipeHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
 $wsiHeader = Join-Path $PSScriptRoot 'wsi-dispatch.h'
 $wsiHeaderHash = (Get-FileHash -LiteralPath $wsiHeader).Hash
@@ -67,7 +72,8 @@ if (Test-Path -LiteralPath $output) {
     if ((Test-Path -LiteralPath $cachedReceiptPath -PathType Leaf) -and
         (Test-Path -LiteralPath $cachedBinaryPath -PathType Leaf)) {
         $cached = Get-Content -LiteralPath $cachedReceiptPath -Raw | ConvertFrom-Json
-        if ($cached.schema -eq 1 -and $cached.sdkCommit -eq $commit -and
+        Assert-RsfFfxLineWidthReceipt $cached (Join-Path $output 'source')
+        if ($cached.schema -eq 2 -and $cached.sdkCommit -eq $commit -and
             $cached.configuration -eq $Configuration -and $cached.patchSha256 -eq $fixHash -and
             $cached.buildRecipeSha256 -eq $recipeHash -and $cached.swapchainLifetimePatchSha256 -eq $lifetimeFixHash -and
             $cached.fsr2StoragePatchSha256 -eq $storageFixHash -and $cached.shaderCompilerSha256 -eq $glslangHash -and
@@ -116,6 +122,7 @@ foreach ($relative in $tracked) {
     New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $sdkRoot $relative) -Destination $destination
 }
+Set-RsfFfxLineWidth $source $commit
 $callback = Join-Path $source $fix.file
 $beforeHash = (Get-FileHash -LiteralPath $callback -Algorithm SHA256).Hash
 $text = [IO.File]::ReadAllText($callback)
@@ -185,6 +192,7 @@ if ($threadAnchors -ne 1) { throw 'The pinned SDK shader scheduling function cha
 $threadReplacement = 'set(SC_ARGS -num-threads=' + $ShaderThreads + ' "-glslangexe=' + $glslang + '" ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})'
 [IO.File]::WriteAllText($shaderCommands, $commandsText.Replace($threadAnchor, $threadReplacement), [Text.UTF8Encoding]::new($false))
 $previousVulkanSdk = $env:VULKAN_SDK
+$lineWidthSources = Get-RsfFfxLineWidthSources $source
 try {
     $env:VULKAN_SDK = $vulkanRoot
     & $cmake -S (Join-Path $source 'ffx-api') -B $build -G $generator -A x64 `
@@ -202,7 +210,9 @@ New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 $destination = Join-Path $runtime 'amd_fidelityfx_vk.dll'
 Copy-RsfGodotArtifact $built $destination
 $receipt = [ordered]@{
-    schema=1; fix=$fix.id; upstream=$fix.upstream; sdkCommit=$commit; configuration=$Configuration
+    schema=2; fix=$fix.id; upstream=$fix.upstream; sdkCommit=$commit; configuration=$Configuration
+    lineWidthSourceCommit=$lineWidthFix.sdkCommit; lineWidthCorrectionCommit=$lineWidthFix.correctionCommit
+    lineWidthPatchSha256=$lineWidthFixHash; lineWidthHelperSha256=$lineWidthHelperHash; lineWidthSources=$lineWidthSources
     callback=$fix.file; sourceBeforeSha256=$beforeHash; sourceAfterSha256=$afterHash
     patchSha256=$fixHash; buildRecipeSha256=$recipeHash; swapchainLifetimePatchSha256=$lifetimeFixHash
     fsr2StoragePatchSha256=$storageFixHash
@@ -217,7 +227,8 @@ $receipt = [ordered]@{
     parallel=$Parallel; shaderThreads=$ShaderThreads
     shaderCompiler=$glslang; shaderCompilerSha256=$glslangHash
 }
-$receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtime 'fsr3-sdk-build.json') -Encoding utf8
+Assert-RsfFfxLineWidthReceipt ($receipt | ConvertTo-Json -Depth 5 | ConvertFrom-Json) $source
+$receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runtime 'fsr3-sdk-build.json') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $sdkRoot 'LICENSE.txt') -Destination (Join-Path $runtime 'LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $sdkRoot 'sdk/LICENSE.txt') -Destination (Join-Path $runtime 'sdk-LICENSE.txt')
 Write-Host "Corrected FidelityFX runtime and hash receipt: $runtime"

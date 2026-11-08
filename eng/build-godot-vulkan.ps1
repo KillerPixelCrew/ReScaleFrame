@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not create the Vulkan loader import libr
 $taskHost = Join-Path $taskLocal 'host'
 New-Item -ItemType Directory -Force -Path $taskHost | Out-Null
 $taskInputHashes = @($taskRecipeHash)
-foreach ($taskInput in @('wsi-dispatch.h','sdk-fixes/luma-history-format.json','sdk-fixes/swapchain-lifetime.json','sdk-fixes/fsr2-storage-formats.json','sdk-fixes/descriptor-pool-size.json','sdk-fixes/presenter-cpu-drain.json','sdk-fixes/swapchain-trace.json','sdk-fixes/swapchain-trace.h')) {
+foreach ($taskInput in @('wsi-dispatch.h','sdk-fixes/luma-history-format.json','sdk-fixes/swapchain-lifetime.json','sdk-fixes/fsr2-storage-formats.json','sdk-fixes/descriptor-pool-size.json','sdk-fixes/presenter-cpu-drain.json','sdk-fixes/line-width.json','sdk-fixes/line-width.ps1','sdk-fixes/swapchain-trace.json','sdk-fixes/swapchain-trace.h')) {
     $taskInputHashes += (Get-FileHash -LiteralPath (Join-Path (Split-Path $taskRecipe) $taskInput)).Hash
 }
 $taskBuildKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($taskInputHashes -join ':'))))

@@ -15,6 +15,20 @@ not signal a binary semaphore that no present will consume. The exact replacemen
 pinned staged sources; the vendor submodule stays unchanged. Runtime receipts
 and packaging verify both correction manifests.
 
+`line-width.json` reproduces the two approved `lineWidth = 0.0f` to `1.0f`
+corrections from vendor commit `d5902250e8c52e797475ffe629f9c2bbec80efbf`.
+The original SDK stays pinned to `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`.
+`line-width.ps1` checks both complete source files against their normalized-LF
+SHA-256 values before changing either exported file. It refuses changed source,
+wrong revisions and duplicate application. All other corrections still apply.
+
+Build receipt schema 2 binds the correction/source revisions, manifest/helper
+hashes, reviewed before/after file hashes, final staged file hashes and runtime
+hash. Cache reuse verifies the staged files too; staging rejects stale or altered
+correction identities. Both correction files enter the Godot runtime build key.
+Consumers that require schema 1 must adopt the schema 2 identity checks before
+accepting the new runtime. [Build and device evidence](../../../../docs/research/fidelityfx-vulkan-line-width.md).
+
 Build from the ReScaleFrame repository root, passing the VulkanStory host checkout:
 
 ```powershell
