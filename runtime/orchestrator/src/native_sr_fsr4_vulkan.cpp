@@ -30,7 +30,8 @@ struct rsf_fsr4vk {
     std::array<Image, 4> images{}; // color, depth, motion, output
     uint32_t width{}, height{};
     uint64_t last_frame{}, last_done{}, session{};
-    bool initialized{}, terminal{};
+    uint32_t view{}, generation{};
+    bool initialized{}, terminal{}, usable{};
     rsf::FrameCaptureVk capture;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 image_properties{};
     PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
@@ -133,10 +134,10 @@ int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff*
     if (!output) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     *output = nullptr;
     if (!setup || setup->struct_size < sizeof(*setup) || !handoff || handoff->struct_size < sizeof(*handoff)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION || handoff->abi_version != 1) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
+    if (setup->abi_version != RSF_SRVK_ABI_VERSION || handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
     if (setup->backend != 4 || setup->quality > 4 || !setup->instance || !setup->physical_device || !setup->device ||
         !setup->instance_proc || !setup->device_proc || !setup->output_width || !setup->output_height ||
-        !setup->runtime_directory_utf8 || handoff->timeline_enabled != 1 || !handoff->split_record ||
+        !setup->runtime_directory_utf8 || handoff->timeline_enabled != 1 || !handoff->split_record || handoff->queue_family >= VK_QUEUE_FAMILY_FOREIGN_EXT ||
         setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, nullptr, 0);
     if (length <= 1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
@@ -168,6 +169,8 @@ int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff*
     getProperties(self->physical, &properties);
     uint64_t luid = 0; std::memcpy(&luid, identity.deviceLUID, sizeof(luid));
     if (!identity.deviceLUIDValid || !luid) { delete self; return VK_ERROR_INVALID_EXTERNAL_HANDLE; }
+    // From here an exception or refused checked cleanup must retain the owner.
+    *output = self;
     rsf_fsr4_bridge_create create{sizeof(create), 1, luid, reinterpret_cast<const uint16_t*>(directory.c_str()),
         setup->output_width, setup->output_height, setup->output_width, setup->output_height,
         setup->depth_inverted, setup->depth_infinite, setup->motion_jittered, 0};
@@ -207,12 +210,13 @@ int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff*
     for (uint32_t i = 0; i < self->images.size() && !result; ++i)
         result = create_image(*self, self->images[i], formats[i], i == 3 ? setup->output_width : self->width,
             i == 3 ? setup->output_height : self->height, i == 3);
-    if (result) { if (rsf_fsr4vk_destroy(self)) *output = self; return result; }
-    *output = self; return 0;
+    if (result) { if (!rsf_fsr4vk_destroy(self)) *output = nullptr; return result; }
+    self->usable = true;
+    return 0;
 }
 
 int32_t rsf_fsr4vk_plan(const rsf_fsr4vk* self, uint32_t* width, uint32_t* height) {
-    if (!self || !width || !height) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    if (!self || !self->usable || self->terminal || !width || !height) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     *width = self->width; *height = self->height; return 0;
 }
 int32_t rsf_fsr4vk_info(const rsf_fsr4vk* self, rsf_fsr4_bridge_info* info) {
@@ -221,14 +225,18 @@ int32_t rsf_fsr4vk_info(const rsf_fsr4vk* self, rsf_fsr4_bridge_info* info) {
 
 int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_srvk_frame* frame, void** continuation_commands) {
     if (!continuation_commands) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    *continuation_commands = nullptr;
+    if (self && (self->terminal || !self->usable)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     *continuation_commands = current_commands;
-    if (!self || !current_commands || self->terminal || !frame || frame->struct_size < sizeof(*frame) || !frame->record)
+    if (!self || !current_commands || !frame || frame->struct_size < sizeof(*frame) || !frame->record)
         return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     if (frame->abi_version != RSF_SRVK_ABI_VERSION) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
     const auto& record = *frame->record;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        !record.frame_id || record.frame_id <= self->last_frame || !record.session_id || (self->session && self->session != record.session_id) ||
+        !record.frame_id || record.frame_id <= self->last_frame || !record.session_id || !record.view_id || !record.resource_generation ||
+        (self->session && (self->session != record.session_id || self->view != record.view_id)) ||
+        self->last_done > UINT64_MAX - 2 || frame->reactive.image || frame->composition.image ||
         record.render_width != self->width || record.render_height != self->height ||
         record.output_width != self->setup.output_width || record.output_height != self->setup.output_height ||
         record.camera.render_width != self->width || record.camera.render_height != self->height ||
@@ -245,6 +253,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         !std::isfinite(frame->pre_exposure) || frame->pre_exposure <= 0 ||
         !input_valid(*self, frame->color, VK_FORMAT_R16G16B16A16_SFLOAT) || !input_valid(*self, frame->depth, VK_FORMAT_R32_SFLOAT) ||
         !input_valid(*self, frame->motion, VK_FORMAT_R16G16_SFLOAT) || frame->output.device != self->setup.device || !frame->output.image ||
+        frame->output.image == frame->color.image || frame->output.image == frame->depth.image || frame->output.image == frame->motion.image ||
         frame->output.format != VK_FORMAT_R16G16B16A16_SFLOAT || frame->output.width != record.output_width ||
         frame->output.height != record.output_height || frame->output.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
@@ -273,9 +282,16 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     }
     const uint64_t ready = self->last_done + 1, done = ready + 1;
     *continuation_commands = nullptr;
-    int result = self->handoff.split_record(self->handoff.user, current_commands, reinterpret_cast<uint64_t>(self->timeline),
-        self->last_done, ready, done, continuation_commands);
+    int result = 0;
+    try {
+        result = self->handoff.split_record(self->handoff.user, current_commands, reinterpret_cast<uint64_t>(self->timeline),
+            self->last_done, ready, done, continuation_commands);
+    } catch (...) {
+        self->terminal = true; *continuation_commands = nullptr;
+        return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    }
     if (result || !*continuation_commands || *continuation_commands == current_commands) {
+        *continuation_commands = nullptr;
         self->terminal = true; return result ? result : VK_ERROR_INITIALIZATION_FAILED;
     }
     self->last_done = done; self->last_frame = record.frame_id; self->session = record.session_id; self->initialized = true;
@@ -288,7 +304,9 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     dispatch.motion_scale_x = frame->motion_scale_x; dispatch.motion_scale_y = frame->motion_scale_y;
     dispatch.delta_ms = record.frame_time_ms; dispatch.near_plane = record.camera.near_plane;
     dispatch.far_plane = record.camera.far_plane; dispatch.vertical_fov = record.camera.vertical_fov_radians;
-    dispatch.pre_exposure = frame->pre_exposure; dispatch.reset = (record.flags & RSF_FRAME_FLAG_RESET) ? 1u : 0u;
+    dispatch.pre_exposure = frame->pre_exposure;
+    dispatch.reset = (record.flags & RSF_FRAME_FLAG_RESET) || self->generation != record.resource_generation ? 1u : 0u;
+    self->view = record.view_id; self->generation = record.resource_generation;
     dispatch.ready_value = ready; dispatch.done_value = done;
     result = RsfFsr4BridgeEvaluate(self->bridge, &dispatch);
     if (result) return result; // Host records fallback in the returned continuation.
@@ -317,12 +335,15 @@ int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
     if (!result && self->bridge) result = VulkanStoryFsr4PrepareDestroy(self->bridge);
     if (!result && !self->capture.flush()) result = VK_ERROR_UNKNOWN;
     if (result) return result;
+    self->usable = false;
     for (auto& image : self->images) {
         if (image.image) self->destroy_image(self->device, image.image, nullptr);
         if (image.memory) self->free_memory(self->device, image.memory, nullptr);
         if (image.dx12) VulkanStoryFsr4ReleaseImage(image.dx12);
+        image = {};
     }
     if (self->timeline) self->destroy_semaphore(self->device, self->timeline, nullptr);
+    self->timeline = VK_NULL_HANDLE;
     result = VulkanStoryFsr4DestroyChecked(self->bridge);
     if (result) return result;
     delete self; return 0;

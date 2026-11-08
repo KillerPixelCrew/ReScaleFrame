@@ -1,5 +1,23 @@
 # Implementation tracker
 
+## Public FSR4 Vulkan recording API, 8 November 2026
+
+The generic `native_sr_split_vulkan.h` C ABI exposes the existing FSR4
+Vulkan/DX12 split-record owner through create/plan/evaluate/checked destroy,
+with size/version checks, explicit not-compiled refusal and leased continuation
+preservation. Native SR ABI 1 and existing SR/FG/PCL/provider selection remain
+unchanged. The Runtime DLL exports the four public calls and keeps the embedded
+bridge's legacy entry points private. No integration policy was added.
+
+Built with Windows VS2026 Debug: `eng/verify.ps1 -VS2026` passed (102 discovered,
+91 executed, 11 optional skips, fmt/Clippy). C11 and DLL-import contract tests
+passed. The public route completed six 426x240 to 640x360 evaluations on RTX 4070
+Laptop GPU with INT8 compatibility, six duplicate-frame refusals and zero
+core/synchronization validation errors. An initial default-adapter create refusal
+is preserved separately. Built, synthetic-tested and GPU-fixture-tested;
+no game, visual-quality, stereo, FG, RTSS or headset acceptance. DLSS retains
+single-owner/viewport-one SR. [Contract, evidence and limits](research/public-fsr4-vulkan-api.md).
+
 ## RDR2 0.1.1 package, 29 October 2026
 
 `tools/package-rdr2.py` builds the first RDR2 download from the post-migration Release outputs

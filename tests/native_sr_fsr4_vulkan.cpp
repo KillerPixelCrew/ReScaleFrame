@@ -49,8 +49,10 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 1) { std::puts("{\"contract_checks\":\"passed\",\"device_test\":false}"); return 0; }
     if (argc != 3 || std::wcscmp(argv[1], L"--device")) return 4;
     rsf_fixture::Device device;
-    int result = device.init();
+    int result = device.init(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
     if (result) { std::printf("{\"device_create\":%d}\n", result); device.close(); return 5; }
+    std::printf("FSR4 public API fixture: %s (vendor %u, device %u)\n",
+        device.properties.deviceName, device.properties.vendorID, device.properties.deviceID);
     int length = WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, nullptr, 0, nullptr, nullptr);
     std::string directory(static_cast<size_t>(length), '\0');
     WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, directory.data(), length, nullptr, nullptr);
@@ -61,11 +63,11 @@ int wmain(int argc, wchar_t** argv) {
     Handoff state{&device};
     rsf_fsr4vk_handoff handoff{sizeof(handoff), 1, 1, device.family, &state, split};
     rsf_fsr4vk* owner = nullptr;
-    result = rsf_fsr4vk_create(&graphics, &handoff, &owner);
+    result = rsf_srvk_fsr4_create(&graphics, &handoff, &owner);
     const int create_result = result;
     uint32_t width = 0, height = 0;
     rsf_fsr4_bridge_info info{sizeof(info), 1};
-    if (!result) result = rsf_fsr4vk_plan(owner, &width, &height);
+    if (!result) result = rsf_srvk_fsr4_plan(owner, &width, &height);
     if (!result) result = rsf_fsr4vk_info(owner, &info);
     std::array<rsf_fixture::Image, 4> images{};
     const uint32_t formats[] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
@@ -117,10 +119,23 @@ int wmain(int argc, wchar_t** argv) {
         input.output = images[3].input(device, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         input.motion_scale_x = static_cast<float>(width); input.motion_scale_y = static_cast<float>(height); input.pre_exposure = 1;
         void* continuation = nullptr;
-        const int provider_result = rsf_fsr4vk_evaluate(owner, commands[0], &input, &continuation);
+        // Exercise public and actual private admission before it can record or
+        // invoke the host's graph split. This command buffer is still recording.
+        const auto before_splits = state.splits;
+        input.color.copy_source = 0;
+        const auto capability_result = rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &continuation);
+        if (capability_result != RSF_BACKEND_ERROR_INVALID_ARGUMENT || continuation != commands[0] || state.splits != before_splits) return 20;
+        input.color.copy_source = 1;
+        if (frame > 1) {
+            record.view_id = 2;
+            const auto view_result = rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &continuation);
+            if (view_result != RSF_BACKEND_ERROR_INVALID_ARGUMENT || continuation != commands[0] || state.splits != before_splits) return 21;
+            record.view_id = 1;
+        }
+        const int provider_result = rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &continuation);
         if (!continuation || continuation == commands[0]) { result = provider_result ? provider_result : -1; break; }
         void* duplicate = nullptr;
-        if (rsf_fsr4vk_evaluate(owner, commands[0], &input, &duplicate) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT) ++duplicate_refused;
+        if (rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &duplicate) == RSF_BACKEND_ERROR_INVALID_ARGUMENT) ++duplicate_refused;
         if (provider_result) {
             VkClearColorValue fallback{}; fallback.float32[3] = 1;
             VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -145,7 +160,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!result && !provider_result) ++completed;
         if (!result) result = provider_result;
     }
-    int release = rsf_fsr4vk_destroy(owner);
+    int release = rsf_srvk_fsr4_destroy(owner);
     std::printf("{\"contract_checks\":\"passed\",\"device_test\":true,\"create_result\":%d,\"evaluate_result\":%d,"
         "\"completed_frames\":%u,\"deferred_splits\":%u,\"duplicate_frames_refused\":%u,\"render_width\":%u,\"render_height\":%u,"
         "\"provider_version\":%llu,\"vendor_id\":%u,\"int8_compatibility\":%u,\"release_result\":%d}\n",

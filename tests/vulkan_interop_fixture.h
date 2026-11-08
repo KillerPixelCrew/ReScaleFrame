@@ -25,7 +25,7 @@ struct Device {
     uint32_t family{};
     VkPhysicalDeviceProperties properties{};
     template<typename T> T function(const char* name) const { return reinterpret_cast<T>(device_proc(device, name)); }
-    int init() {
+    int init(VkPhysicalDeviceType preferred_type = VK_PHYSICAL_DEVICE_TYPE_OTHER) {
         loader = LoadLibraryW(L"vulkan-1.dll");
         if (!loader) return 10;
         instance_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(loader, "vkGetInstanceProcAddr"));
@@ -41,7 +41,14 @@ struct Device {
         result = enumerate(instance, &count, devices.data());
         if (result || !count) return result ? result : 12;
         physical = devices[0];
-        reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(instance_proc(instance, "vkGetPhysicalDeviceProperties"))(physical, &properties);
+        auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(instance_proc(instance, "vkGetPhysicalDeviceProperties"));
+        if (preferred_type != VK_PHYSICAL_DEVICE_TYPE_OTHER) {
+            for (uint32_t i = 0; i < count; ++i) {
+                VkPhysicalDeviceProperties candidate{}; getProperties(devices[i], &candidate);
+                if (candidate.deviceType == preferred_type) { physical = devices[i]; break; }
+            }
+        }
+        getProperties(physical, &properties);
         auto queues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(instance_proc(instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
         count = 32; std::array<VkQueueFamilyProperties, 32> families{}; queues(physical, &count, families.data());
         while (family < count && !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;

@@ -59,6 +59,7 @@ set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/v
 set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
 add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.cpp)
 target_include_directories(rsf_native_vulkan PUBLIC include)
+target_sources(rsf_native_vulkan PRIVATE src/native_sr_split_vulkan.cpp)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump PRIVATE rsf_build_options)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
@@ -86,7 +87,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")
     target_sources(rsf_native_vulkan PRIVATE src/native_sr_fsr4_vulkan.cpp ../vulkan/fsr4/bridge.cpp)
-    target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1)
+    target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1 PRIVATE RSF_FSR4_VULKAN_STATIC=1)
     target_include_directories(rsf_native_vulkan PRIVATE ../backends/fsr/src)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}/../..")
     target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR bcrypt)
@@ -141,5 +142,9 @@ endif()
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
 target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)
+# Compile the tiny public facade into the DLL as well as the embedded-host
+# library. A normal archive link then pulls only its FSR4 implementation.
+target_sources(rsf_orchestrator PRIVATE src/native_sr_split_vulkan.cpp)
+target_link_libraries(rsf_orchestrator PRIVATE ReScaleFrame::NativeVulkan)
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
