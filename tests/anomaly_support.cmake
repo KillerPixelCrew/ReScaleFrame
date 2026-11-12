@@ -235,3 +235,17 @@ set_tests_properties(anomaly_sr_pass_contract anomaly_sr_pass_unknown_selection 
 # Stage 5 is part of sr_stage.cpp, which the hooks contract links.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/sr_temporal.cpp")
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
+
+# Profile-dependent fixtures once more against the AVX executable's tables (build_profile.h selects them by name and
+# SHA-256 in the game; here the argument selects them). anomaly_sr_profile_contract checks both tables at compile time.
+add_test(NAME anomaly_geometry_hooks_avx_contract COMMAND rsf_anomaly_geometry_hooks_test avx)
+add_test(NAME anomaly_sr_hooks_avx_contract COMMAND rsf_anomaly_sr_hooks_test avx)
+set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_contract PROPERTIES TIMEOUT 120)
+
+# Shadow-frustum jitter suspension and restoration, including fault rollback and no-jitter paths.
+add_test(NAME anomaly_sr_sun_cascades_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_cascades)
+set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
+
+# Jitter-only receiver-depth margin: base ownership, live console edits, exits and partial writes.
+add_test(NAME anomaly_sr_sun_depth_margin_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_depth_margin)
+set_tests_properties(anomaly_sr_sun_depth_margin_contract PROPERTIES TIMEOUT 30)

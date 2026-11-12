@@ -2,7 +2,7 @@
 
 FG adds no new detour. It is driven from guarded boundaries the native observer already hooks
 (games/anomaly/src/native_profile.h) and reads HW.pBaseZB (games/anomaly/src/sr_profile.h) for the SR-off depth.
-This script proves, on the installed STANDARD AnomalyDX11.exe, that those sites are what the FG timeline assumes:
+This script proves, on --exe standard (default) or --exe avx, that those sites are what the FG timeline assumes:
 
   dxRenderDeviceRender::Begin      render begin (simulation end, FRAME/SUBMISSION begin)
   dxRenderDeviceRender::End        contains the only engine Present: HW.m_pSwapChain->Present (vtable +0x40),
@@ -35,11 +35,11 @@ FG_SITES = ('IRenderDeviceRender::Begin', 'IRenderDeviceRender::End', 'IRenderDe
 
 
 def native_sites():
-    text = NATIVE.read_text()
+    text = sr.geometry.legacy_profile(NATIVE)
     sites = {}
     for name, rva, hexbytes in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text):
         sites[name] = (int(rva, 16), bytes.fromhex(hexbytes))
-    size = int(re.search(r'native_image_size = (0x[0-9a-f]+)', text).group(1), 16)
+    size = int(re.search(r'image_size = (0x[0-9a-f]+)', text).group(1), 16)
     return sites, size
 
 
@@ -69,12 +69,15 @@ def verify(pe):
     sites, size = native_sites()
     nt = struct.unpack_from('<I', pe.data, 60)[0]
     assert struct.unpack_from('<I', pe.data, nt + 24 + 56)[0] == size, 'SizeOfImage'
-    for name in FG_SITES:
+    all_sites = [(n, r, h.hex()) for n, (r, h) in sites.items()]
+    sr.geometry.verify_unique_guards(pe, sr.geometry.profile_text(NATIVE), 'native', all_sites)
+    sr.geometry.verify_detour_prefix(pe, all_sites)
+    for name in sites:
         rva, expected = sites[name]
         actual = pe.read(rva, 16)
         assert actual == expected, f'{name} at {rva:#x}: {actual.hex()} != {expected.hex()}'
         log.append(f'{name:36} {rva:#08x} guard {expected.hex()} OK')
-    profile = SR_PROFILE.read_text()
+    profile = sr.geometry.legacy_profile(SR_PROFILE)
     chain = ints(profile, 'hw_swap_chain_rva')
     base_zb = ints(profile, 'hw_base_zb_rva')
     # End: the only Present, HW.m_pSwapChain->Present(...), is an indirect call at vtable +0x40.
@@ -124,13 +127,17 @@ def verify(pe):
     log.append(f'HW.pBaseZB {base_zb:#x} read by CRender::Render; HW.m_pSwapChain {chain:#x}')
     for line in log:
         print(line)
-    print(f'PASS: {len(FG_SITES)} FG boundary guards, End owns the one Present, RenderUI follows the only scope copy '
+    print(f'PASS: {len(sites)} native guards, {len(FG_SITES)} FG boundaries, End owns the one Present, RenderUI follows the only scope copy '
           'in CLevel::OnRender, HW.pBaseZB')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--exe', choices=sorted(sr.geometry.BUILDS), default=sr.geometry.BUILD)
+    parser.add_argument('--profile', type=pathlib.Path)
     args = parser.parse_args()
+    if args.profile:
+        NATIVE = args.profile
     if args.verify:
         verify(sr.Image())

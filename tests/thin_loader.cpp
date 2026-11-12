@@ -195,8 +195,11 @@ void startup_test(const wchar_t* mode, const wchar_t* carrier_path,
 {
     namespace fs = std::filesystem;
     const fs::path source(carrier_path);
+    // Fixtures retain loaded DLLs until exit. A reused PID must not select an older root.
+    const auto nonce=std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64());
+    const std::wstring wide_nonce(nonce.begin(),nonce.end());
     const auto root = source.parent_path() / (std::wstring(L"fixture-") + mode + L"-" +
-        std::to_wstring(GetCurrentProcessId()) + L"-\u00e9");
+        wide_nonce + L"-\u00e9");
     require(fs::create_directories(root / L"ReScaleFrame"), "create isolated Unicode fixture root");
     fs::copy_file(source, root / L"dinput8.dll");
     fs::copy_file(runtime_path, root / L"ReScaleFrame" / L"RuntimeOne.dll");
@@ -209,18 +212,18 @@ void startup_test(const wchar_t* mode, const wchar_t* carrier_path,
     const bool escape = std::wcscmp(mode, L"escape") == 0;
     const bool reparse = std::wcscmp(mode, L"junction") == 0;
     if (reparse) {
-        const auto outside = root.parent_path() / (L"outside-" + std::to_wstring(GetCurrentProcessId()));
+        const auto outside = root.parent_path() / (L"outside-" + wide_nonce);
         require(fs::create_directory(outside), "create outside junction target");
         fs::copy_file(runtime_path, outside / L"RuntimeOne.dll");
         junction(root / L"Linked", outside);
         require(fs::exists(root / L"Linked" / L"RuntimeOne.dll"), "junction really resolves to outside DLL");
     }
-    const auto outside_name = L"OutsideRuntime-" + std::to_wstring(GetCurrentProcessId()) + L".dll";
+    const auto outside_name = L"OutsideRuntime-" + wide_nonce + L".dll";
     if (escape) fs::copy_file(runtime_path, root.parent_path() / outside_name);
     {
         std::ofstream ini(configuration, std::ios::binary);
         ini << "[Loader]\nAutoStart=" << (malformed ? "1trailing" : "1") << "\nRuntimeModule=";
-        if (escape) ini << "../OutsideRuntime-" << GetCurrentProcessId() << ".dll\n";
+        if (escape) ini << "../OutsideRuntime-" << nonce << ".dll\n";
         else if (reparse) ini << "Linked/RuntimeOne.dll\n";
         else ini << "ReScaleFrame/RuntimeOne.dll\n";
         ini << "EntryModule=ReScaleFrame/AdapterOne.dll\nEntryPoint=ThinFixtureStart\n";

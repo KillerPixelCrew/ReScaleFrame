@@ -18,6 +18,7 @@
 // over namespace, root, defines, target, entry, flags and the original bytecode hash; a cache entry is still
 // reflection-checked. No shader body is embedded in RSF: both trees are generated locally by
 // tools/anomaly_motion_deploy.py from the user's own installation and read from the deployment directory.
+#include "motion_profile.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -76,9 +77,10 @@ struct ShaderRequest {
 using FrameReader = std::function<bool(const void* address, void* out, std::size_t size)>;
 enum class FrameStatus : std::uint8_t { Ok, UnknownCaller, Unreadable, BadSource, BadDefines };
 // `return_address` is create_shader's return address, `caller_rsp` the caller's rsp at the call. `module` is the
-// executable base. Only the two verified call sites in motion_profile.h are accepted.
-FrameStatus read_request(const std::byte* module, const void* return_address, const std::byte* caller_rsp,
-    const FrameReader&, ShaderRequest&);
+// executable base of the build `profile` describes. Only that build's two verified call sites are accepted, and the
+// frame is read at that build's caller-frame offsets.
+FrameStatus read_request(const MotionProfile& profile, const std::byte* module, const void* return_address,
+    const std::byte* caller_rsp, const FrameReader&, ShaderRequest&);
 
 // One compile through the engine's d3dcompiler with an include handler rooted at `tree`/r3.
 class Compiler {

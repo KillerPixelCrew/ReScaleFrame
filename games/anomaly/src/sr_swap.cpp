@@ -266,6 +266,22 @@ bool SwapController::open_temporal(const FrameFacts& facts) noexcept {
             ++counters_.jittered;
         }
     }
+    if (p.applied && facts.sun_depth_margin) {
+        if (facts.sun_depth_margin > 20) return false;
+        // Read both bases before changing either. No adjacency assumption: each build supplies both verified owners.
+        for (std::size_t i = 0; i < sun_depth_.size(); ++i) {
+            auto& depth = sun_depth_[i];
+            depth.field = facts.sun_depth_scale[i];
+            if (!depth.field || !host_.read(depth.field, &depth.saved, sizeof(float)) ||
+                !std::isfinite(depth.saved) || depth.saved <= 0.0f) return false;
+            depth.window = depth.saved * (1.0f - float(facts.sun_depth_margin) / 10000.0f);
+        }
+        for (auto& depth : sun_depth_) {
+            depth.applied = true;   // a partial write must be rolled back too
+            if (!host_.write(depth.field, &depth.window, sizeof(float))) return false;
+            ++counters_.sun_depth_applied;
+        }
+    }
     if (facts.mip_bias && facts.sampler_bias) {
         auto& b = bias_;
         b.field = facts.sampler_bias;
@@ -286,9 +302,9 @@ void SwapController::restore_temporal(Restore reason) noexcept {
     auto& p = projection_;
     if (p.written) {
         EngineMatrix current{};
-        // Inside the window only the first-person sites change Device.mProject, and each puts the jittered main
-        // projection back. Anything else is foreign: restore anyway and refuse further swaps.
-        if (!rollback && host_.read(p.project, current.data(), sizeof(current)) && current != p.jittered) {
+        // Outside the temporary sun window, first-person sites restore the jittered main projection themselves.
+        // Anything else is foreign: restore anyway and refuse further swaps.
+        if (!rollback && !p.sun_suspended && host_.read(p.project, current.data(), sizeof(current)) && current != p.jittered) {
             ++counters_.foreign_changes;
             refuse("Device.mProject changed inside the world window.");
         }
@@ -298,7 +314,24 @@ void SwapController::restore_temporal(Restore reason) noexcept {
         if (ok && p.uploaded && reason != Restore::Shutdown) ok = host_.upload_projection(p.project);
         if (ok) ++counters_.projection_restores;
         else { ++counters_.write_faults; refuse("Device.mProject could not be restored."); }
-        p.written = p.uploaded = false;
+        p.written = p.uploaded = p.sun_suspended = false;
+    }
+    for (auto& depth : sun_depth_) {
+        if (!depth.applied) continue;
+        float current{};
+        const bool readable = host_.read(depth.field, &current, sizeof(float));
+        // Console writes are a new user base, not an error. Keep them and read them afresh at the next H1.
+        // On rollback an untouched saved value can mean our write failed, so it is still ours to restore.
+        if (readable && current != depth.window && (!rollback || current != depth.saved)) {
+            ++counters_.sun_depth_foreign;
+        } else if (host_.write(depth.field, &depth.saved, sizeof(float))) {
+            ++counters_.sun_depth_restored;
+        } else {
+            ++counters_.write_faults;
+            refuse("A sun shadow depth scale could not be restored.");
+        }
+        if (!readable) { ++counters_.write_faults; refuse("A sun shadow depth scale could not be read at restore."); }
+        depth.applied = false;
     }
     auto& b = bias_;
     if (b.applied) {
@@ -348,6 +381,7 @@ bool SwapController::prepare(const FrameFacts& facts) noexcept {
     close_stale();
     projection_ = {};   // after close_stale, which needs the previous window's values
     bias_ = {};
+    sun_depth_ = {};
     const auto skip = [this](Skip reason) { ++counters_.skipped[static_cast<std::size_t>(reason)]; return false; };
     if (!swap_enabled_ || refusal_) return skip(Skip::Off);
     if (facts.scope) return skip(Skip::Scope);
@@ -495,11 +529,51 @@ void SwapController::frame_end() noexcept {
     refuse("A world window was still open at the end of the frame.");
 }
 
+bool SwapController::sun_cascades_begin() noexcept {
+    ++counters_.sun_calls;
+    auto& p = projection_;
+    if (!open_ || !p.applied || !p.written) return false;
+    // A reentrant call borrows the already unjittered camera and must not restore the outer call's token.
+    if (p.sun_suspended) return false;
+    EngineMatrix current{};
+    bool ok = host_.read(p.project, current.data(), sizeof(current)) && current == p.jittered &&
+        host_.read(p.full, p.sun_full.data(), sizeof(p.sun_full));
+    if (ok) {
+        p.sun_suspended = true;   // rollback restores partial writes too
+        const bool project = host_.write(p.project, p.saved_project.data(), sizeof(EngineMatrix));
+        const bool full = host_.write(p.full, p.saved_full.data(), sizeof(EngineMatrix));
+        ok = project && full;
+    }
+    if (ok) { ++counters_.sun_unjittered; return true; }
+    ++counters_.sun_refused;
+    ++counters_.write_faults;
+    refuse("The sun cascade camera could not be unjittered.");
+    p.sun_suspended = false;
+    restore(Restore::Rollback);   // refuse further SR; run the original with the stock engine state
+    return false;
+}
+void SwapController::sun_cascades_end(bool suspended) noexcept {
+    if (!suspended) return;
+    auto& p = projection_;
+    if (!p.sun_suspended) return;
+    p.sun_suspended = false;
+    // The original leaves RCache with its unjittered Device projection. set_P rebuilds the derived engine matrices;
+    // writing Device alone would leave the following world passes with the wrong constants.
+    const bool project = host_.write(p.project, p.jittered.data(), sizeof(EngineMatrix));
+    const bool full = host_.write(p.full, p.sun_full.data(), sizeof(EngineMatrix));
+    const bool uploaded = project && full && host_.upload_projection(p.project);
+    if (uploaded) { ++counters_.sun_restored; return; }
+    ++counters_.sun_refused;
+    ++counters_.write_faults;
+    refuse("The jittered camera could not be restored after sun cascades.");
+    restore(Restore::Rollback);
+}
+
 void SwapController::rm_near() noexcept {
     if (!open_) return;
     ++counters_.rm_near_in_window;
     auto& p = projection_;
-    if (!p.written || !p.applied) return;
+    if (!p.written || !p.applied || p.sun_suspended) return;
     EngineMatrix current{}, view{};
     if (!host_.read(p.project, current.data(), sizeof(current)) || !host_.read(p.view, view.data(), sizeof(view))) {
         ++counters_.fp_foreign;

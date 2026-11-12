@@ -638,6 +638,7 @@ void compatibility_rules()
 }
 
 struct FakeFrame {
+    const MotionProfile* profile = &motion_standard;
     std::vector<std::byte> module = std::vector<std::byte>(0x900000);
     std::vector<std::byte> stack = std::vector<std::byte>(0x2000);
     std::string source, entry = "main", flags_text;
@@ -651,37 +652,39 @@ struct FakeFrame {
         const std::uint32_t length = static_cast<std::uint32_t>(source.size());
         const char* e = entry.c_str();
         const std::uint32_t flags = 8;   // D3D10_SHADER_PACK_MATRIX_ROW_MAJOR
-        put(frame_source_offset, &src, 8);
-        put(frame_length_offset, &length, 4);
-        put(frame_entry_offset, &e, 8);
-        put(frame_flags_offset, &flags, 4);
+        put(profile->frame.source_offset, &src, 8);
+        put(profile->frame.length_offset, &length, 4);
+        put(profile->frame.entry_offset, &e, 8);
+        put(profile->frame.flags_offset, &flags, 4);
         storage.clear();
         storage.reserve(defines.size() * 2);
         std::size_t i = 0;
         for (const auto& [name, value] : defines) {
             storage.push_back(name); storage.push_back(value);
             const char* pair[2]{storage[storage.size() - 2].c_str(), storage.back().c_str()};
-            put(frame_defines_offset + i++ * 16, pair, 16);
+            put(profile->frame.defines_offset + i++ * 16, pair, 16);
         }
         const char* none[2]{terminate ? nullptr : "X", "1"};
         for (std::size_t j = i; j < frame_defines_capacity; ++j) {
-            put(frame_defines_offset + j * 16, none, 16);
+            put(profile->frame.defines_offset + j * 16, none, 16);
             if (terminate) break;
         }
     }
-    const void* return_address(std::size_t call) const { return module.data() + create_shader_calls[call].rva + call_length; }
+    const void* return_address(std::size_t call) const { return module.data() + profile->create_shader_calls[call].rva + call_length; }
 };
 FrameReader direct = [](const void* a, void* o, std::size_t s) { if (!a) return false; std::memcpy(o, a, s); return true; };
 
-void caller_frame()
+// Both exact builds (build_profile.h): each accepts only its own two call sites and reads its own frame offsets.
+void caller_frame(const MotionProfile& profile, const MotionProfile& other)
 {
     FakeFrame frame;
+    frame.profile = &profile;
     frame.source = "#include \"common.h\"\nmain body";
     frame.defines = {{"SMAP_size", "2048"}, {"SKIN_2", "1"}, {"USE_SUNFILTER", "1"}};
     frame.build();
-    for (std::size_t call = 0; call < create_shader_calls.size(); ++call) {
+    for (std::size_t call = 0; call < profile.create_shader_calls.size(); ++call) {
         ShaderRequest request;
-        require(read_request(frame.module.data(), frame.return_address(call), frame.stack.data(), direct, request) == FrameStatus::Ok,
+        require(read_request(profile, frame.module.data(), frame.return_address(call), frame.stack.data(), direct, request) == FrameStatus::Ok,
             "both create_shader call sites are accepted");
         require(std::string(reinterpret_cast<const char*>(request.source.data()), request.source.size()) == frame.source, "source");
         require(request.entry == "main" && request.flags == 8, "entry and flags");
@@ -690,24 +693,33 @@ void caller_frame()
         require(skin_mode(request.defines) == 2, "skin mode from defines");
     }
     ShaderRequest request;
-    require(read_request(frame.module.data(), frame.module.data() + 0x1234, frame.stack.data(), direct, request) ==
+    require(read_request(profile, frame.module.data(), frame.module.data() + 0x1234, frame.stack.data(), direct, request) ==
         FrameStatus::UnknownCaller, "any other return address is refused");
-    require(read_request(frame.module.data(), static_cast<const std::byte*>(frame.return_address(0)) - 5, frame.stack.data(), direct,
+    require(read_request(profile, frame.module.data(), static_cast<const std::byte*>(frame.return_address(0)) - 5, frame.stack.data(), direct,
         request) == FrameStatus::UnknownCaller, "the call instruction itself is not a return address");
     FakeFrame unterminated = frame;
     unterminated.build(false);
-    require(read_request(unterminated.module.data(), unterminated.return_address(0), unterminated.stack.data(), direct, request) ==
+    require(read_request(profile, unterminated.module.data(), unterminated.return_address(0), unterminated.stack.data(), direct, request) ==
         FrameStatus::BadDefines, "a define list without terminator is refused");
     const FrameReader faulting = [&](const void* a, void* o, std::size_t s) {
-        if (a == frame.stack.data() + frame_entry_offset) return false;
+        if (a == frame.stack.data() + profile.frame.entry_offset) return false;
         std::memcpy(o, a, s); return true;
     };
-    require(read_request(frame.module.data(), frame.return_address(1), frame.stack.data(), faulting, request) == FrameStatus::Unreadable,
+    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), faulting, request) == FrameStatus::Unreadable,
         "unreadable frame");
     std::uint32_t zero = 0;
-    std::memcpy(frame.stack.data() + frame_length_offset, &zero, 4);
-    require(read_request(frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
+    std::memcpy(frame.stack.data() + profile.frame.length_offset, &zero, 4);
+    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
         "empty source");
+    // The other build's profile names other call sites: a return address of this build is an unknown caller there.
+    require(read_request(other, frame.module.data(), frame.return_address(0), frame.stack.data(), direct, request) ==
+        FrameStatus::UnknownCaller, "a call site of one build is refused under the other build's profile");
+}
+
+void caller_frames()
+{
+    caller_frame(motion_standard, motion_avx);
+    caller_frame(motion_avx, motion_standard);
 }
 
 void manifest_rules()
@@ -1416,7 +1428,7 @@ const std::map<std::string, void (*)()> cases{
     {"tess-linkage", tess_linkage_rules}, {"tess-manifest", tess_manifest_rules},
     {"layouts", layouts_match_readmes}, {"core-vertex", core_vertex_packing}, {"pixel", pixel_packing},
     {"matrix", matrix_convention}, {"policy", core_policy}, {"mover", moving_character}, {"history", history_rules}, {"binder", binder_state_machine},
-    {"compatibility", compatibility_rules}, {"frame", caller_frame}, {"manifest", manifest_rules}, {"loader", loader_contract},
+    {"compatibility", compatibility_rules}, {"frame", caller_frames}, {"manifest", manifest_rules}, {"loader", loader_contract},
     {"foliage-layout-readme", foliage_layout_readme}, {"foliage-layout-reflection", foliage_layout_from_reflection},
     {"foliage-packing", foliage_packing}, {"foliage-identity", foliage_identity_remap}, {"foliage-policy", foliage_policy},
     {"far-character", far_character_diagnostics}};

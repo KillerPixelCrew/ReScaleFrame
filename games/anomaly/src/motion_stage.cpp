@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "motion_stage.h"
+#include "adapter_options.h"
 #include "geometry_feed.h"
 #include "motion_d3d11.h"
 #include "motion_foliage.h"
 #include "motion_history.h"
 #include "motion_policy.h"
-#include "motion_profile.h"
+#include "build_profile.h"
 #include "motion_target.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
@@ -73,6 +74,12 @@ bool guarded_write(void* output, const void* input, std::size_t size) noexcept {
     __try { std::memcpy(output, input, size); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// The exact build install() was given (build_profile.h), set together with `image`. Until then every read fails on the null
+// image and the empty tables are never dereferenced into engine memory.
+const BuildProfile* build{};
+const MotionProfile& mp() noexcept { static constexpr MotionProfile none{}; return build ? *build->motion : none; }
+const sr::SrProfile& srp() noexcept { static constexpr sr::SrProfile none{}; return build ? *build->sr : none; }
+const NativeProfile& np() noexcept { static constexpr NativeProfile none{}; return build ? *build->native : none; }
 template<class T> bool read_global(uint32_t rva, T& value) noexcept { return image && guarded_copy(&value, image + rva, sizeof(T)); }
 bool bytes_match(const std::byte* address, const char* hex) noexcept {
     const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
@@ -166,7 +173,7 @@ MotionCounters reported{};
 std::atomic<bool> hooks_active{};
 std::atomic<float> jitter[4]{};
 HookSet hooks;
-std::array<void*, motion_sites.size()> originals{};
+std::array<void*, motion_site_count> originals{};
 using Unary = void(__fastcall*)(void*);
 using CreateShader = long long(__fastcall*)(const char*, const void*, unsigned, const char*, void**, char);
 
@@ -367,7 +374,7 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
     }
     remember_name(result, request.file_name);
     const auto reader = [](const void* address, void* out, std::size_t bytes) { return guarded_copy(out, address, bytes); };
-    const auto frame = read_request(image, return_address, caller_rsp, reader, request);
+    const auto frame = read_request(mp(), image, return_address, caller_rsp, reader, request);
     std::unique_lock lock(loader_guard);
     if (!loader) return;
     if (frame != FrameStatus::Ok) {
@@ -383,7 +390,7 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
         void* engine_object{};
         IUnknown* stock{};
         ID3D11Device* device{};
-        read_global(sr::hw_device_rva, device);
+        read_global(srp().hw_device_rva, device);
         if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
             !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock || !device) {
             prepared.outcome = Outcome::CreateFailed;
@@ -504,7 +511,7 @@ void bind_dump() noexcept try {
         if (!size || size >= 32768) { say("Anomaly motion capture refused: LOCALAPPDATA unavailable."); return; }
         directory = std::wstring(root) + L"\\ReScaleFrame\\Anomaly";
     }
-    dump.configure(utf8(directory).c_str(), "Anomaly", dx11_hash, log_fn, log_user);
+    dump.configure(utf8(directory).c_str(), "Anomaly", build->sha256, log_fn, log_user);
     dump_ready = true;
     capture.remaining = configured.capture_count;
     capture.next = configured.capture_start;
@@ -516,8 +523,8 @@ void window_open(void* target) noexcept try {
     ID3D11Device* device{};
     ID3D11DeviceContext* context{};
     std::byte* engine_target{};
-    if (!read_global(sr::hw_device_rva, device) || !read_global(sr::hw_context_rva, context) || !device || !context ||
-        !read_global(sr::render_implementation_rva + sr::render_target_offset, engine_target) || engine_target != target) return;
+    if (!read_global(srp().hw_device_rva, device) || !read_global(srp().hw_context_rva, context) || !device || !context ||
+        !read_global(srp().render_implementation_rva + sr::render_target_offset, engine_target) || engine_target != target) return;
     if (!install_draw_hooks(context)) return;
     if (device_state.device() != device) {
         device_state.reset();
@@ -534,8 +541,8 @@ void window_open(void* target) noexcept try {
         !guarded_copy(&rtv, crt + sr::crt_rtv_offset, sizeof(rtv)) || !guarded_copy(&surface, crt + sr::crt_surface_offset, sizeof(surface)) ||
         !rtv || !surface) return;
     uint32_t frame{};
-    read_global(device_frame_rva, frame);
-    const auto view = geometry::current_render_view(image);
+    read_global(np().device_frame_rva, frame);
+    const auto view = geometry::current_render_view(image, *build);
     if (!view) return;
     window.context = context;
     binder_host.context = context;
@@ -550,7 +557,7 @@ void window_open(void* target) noexcept try {
         NativeObservation observation{sizeof(observation), observation_abi};
         const uint64_t generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
         uint32_t options3{};
-        const bool msaa = !read_global(sr::render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit);
+        const bool msaa = !read_global(srp().render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit);
         window.target_ok = false;
         ComPtr<ID3D11Texture2D> texture;
         if (!msaa && SUCCEEDED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) {
@@ -581,7 +588,7 @@ void window_close() noexcept {
     if (!window.open) return;
     window.open = false;
     if (device_state.rtv()) {
-        const auto action = binder.close(image + sr::backend_rva, device_state.rtv());
+        const auto action = binder.close(image + srp().backend_rva, device_state.rtv());
         if (action == BindAction::Unbound) ++stats.close_unbinds;
         else if (action == BindAction::Fault) ++stats.binder_faults;
     }
@@ -606,7 +613,7 @@ std::shared_ptr<const Variant> find_variant(const void* shader) noexcept {
 }
 bool read_camera(CameraSample& out) noexcept {
     float view[16], projection[16];
-    const auto* xforms = image + sr::backend_rva + sr::backend_xforms_offset;
+    const auto* xforms = image + srp().backend_rva + sr::backend_xforms_offset;
     if (!guarded_copy(view, xforms + sr::xforms_view_offset, sizeof(view)) ||
         !guarded_copy(projection, xforms + sr::xforms_project_offset, sizeof(projection))) return false;
     out.view = from_engine(view);
@@ -776,7 +783,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         ++stats.stale_restores;
     }
     if (!hooks_active.load(std::memory_order_relaxed) || !image) return;
-    auto* backend = image + sr::backend_rva;
+    auto* backend = image + srp().backend_rva;
     if (!window.open) {
         if (window.cache_may_hold_motion && device_state.rtv()) {
             const auto action = binder.on_draw(backend, false, nullptr, device_state.rtv());
@@ -785,7 +792,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         }
         if (facts.detail) {
             ID3D11DeviceContext* engine_context{};
-            if (read_global(sr::hw_context_rva, engine_context)) poison_only(engine_context);
+            if (read_global(srp().hw_context_rva, engine_context)) poison_only(engine_context);
         }
         return;
     }
@@ -985,26 +992,28 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     pending = {true, context, false, true, vs, ps, staged, stages.hs, stages.ds};
 } catch (...) {}
 
-bool guards_match(std::byte* module, uint32_t image_size, const char** failed) noexcept {
-    for (const auto& site : motion_sites) {
+bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {
+    for (const auto& site : profile.motion_sites) {
         std::array<std::byte, 16> bytes{};
         if (site.rva > image_size - bytes.size() || !guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) {
             *failed = site.name; return false;
         }
+        for (const auto& guard : profile.motion_unique_guards)
+            if (guard.rva == site.rva && !bytes_match(module + guard.rva, guard.expected_hex)) { *failed = site.name; return false; }
     }
-    for (const auto& site : create_shader_calls) {
+    for (const auto& site : profile.create_shader_calls) {
         std::array<std::byte, 16> bytes{};
         if (!guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) { *failed = site.name; return false; }
     }
-    if (!bytes_match(module + shader_compile_rva, shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
-    if (!bytes_match(module + d3dcompile_setup_rva, d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
-    if (!bytes_match(module + tess_dispatch_rva, tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
-    for (const auto& site : tess_create_sites) {
+    if (!bytes_match(module + profile.shader_compile_rva, profile.shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
+    if (!bytes_match(module + profile.d3dcompile_setup_rva, profile.d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
+    if (!bytes_match(module + profile.tess_dispatch_rva, profile.tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
+    for (const auto& site : profile.tess_create_sites) {
         if (!bytes_match(module + site.rva, site.prologue)) { *failed = site.name; return false; }
         if (!bytes_match(module + site.wrapper_rva, site.wrapper)) { *failed = "CreateHWShader (hull/domain)"; return false; }
     }
     char name{1};
-    if (!guarded_copy(&name, module + source_name_rva, 1) || name != 0) { *failed = "D3DCompile pSourceName"; return false; }
+    if (!guarded_copy(&name, module + profile.source_name_rva, 1) || name != 0) { *failed = "D3DCompile pSourceName"; return false; }
     return true;
 }
 }
@@ -1031,6 +1040,16 @@ MotionOptions read_options(const wchar_t* ini) noexcept try {
 void configure(const MotionOptions& value, rsf_game_log_fn log, void* user) noexcept try {
     if (hooks_active.load()) return;
     configured = value;
+    options::add({"Tree and grass motion", true, 0, 1, 1, 1, false,
+        []() noexcept { return configured.foliage ? 1 : 0; },
+        [](int32_t v) noexcept {
+            configured.foliage = v != 0;
+            geometry::geometry_enable_foliage_identity(configured.foliage);
+            options::write_int(L"MotionFoliage", v ? 1 : 0);
+        }});
+    options::add({"Invalidate motion under stock draws", true, 0, 1, 1, 1, false,
+        []() noexcept { return configured.invalidate ? 1 : 0; },
+        [](int32_t v) noexcept { configured.invalidate = v != 0; options::write_int(L"MotionInvalidate", v ? 1 : 0); }});
     log_fn = log;
     log_user = user;
 } catch (...) {}
@@ -1045,16 +1064,19 @@ void set_jitter_uv(float current_u, float current_v, float previous_u, float pre
     jitter[0] = current_u; jitter[1] = current_v; jitter[2] = previous_u; jitter[3] = previous_v;
 }
 
-bool install(std::byte* module, uint32_t image_size) noexcept try {
+bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept try {
     if (!configured.enabled) return true;
     if (hooks_active.load()) return true;
-    if (!module || image_size != native_image_size) { say("Anomaly motion refused: image size differs from the verified build."); return false; }
+    if (!module || image_size != selected.image_size()) { say("Anomaly motion refused: image size differs from the verified build."); return false; }
+    // Trampolines are process-lifetime: a re-start must be the build the first install verified.
+    if (hooks.created() && build != &selected) { say("Anomaly motion refused: a different build than the installed hooks."); return false; }
     const char* failed = "unknown";
-    if (!hooks.created() && !guards_match(module, image_size, &failed)) {
+    if (!hooks.created() && !guards_match(module, image_size, *selected.motion, &failed)) {
         sayf("Anomaly motion refused, shaders stay stock: guard mismatch at %s", failed);
         return false;
     }
     if (!geometry::geometry_hooks_active()) { say("Anomaly motion refused: geometry hooks (draw-time site) are not active."); return false; }
+    build = &selected;
     image = module;
     {
         std::lock_guard lock(loader_guard);
@@ -1076,7 +1098,8 @@ bool install(std::byte* module, uint32_t image_size) noexcept try {
                 loader->manifest().name_space.substr(0, 16).c_str(), cache.string().c_str());
         }
     }
-    const std::array<HookSite, motion_sites.size()> sites{{
+    const auto& motion_sites = mp().motion_sites;
+    const std::array<HookSite, motion_site_count> sites{{
         {motion_sites[site_create_shader].name, motion_sites[site_create_shader].rva, motion_sites[site_create_shader].expected,
             reinterpret_cast<void*>(&create_shader_hook), &originals[site_create_shader]},
         {motion_sites[site_phase_scene_begin].name, motion_sites[site_phase_scene_begin].rva, motion_sites[site_phase_scene_begin].expected,

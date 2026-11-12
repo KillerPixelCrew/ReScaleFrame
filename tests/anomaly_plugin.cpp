@@ -34,6 +34,14 @@ int wmain(int argc, wchar_t** argv) {
     check(api.detect(&probe) == RSF_GAME_UNKNOWN, "Names and digests must not cross-match");
     probe.sha256_hex = "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
     check(api.detect(&probe) == RSF_GAME_RECOGNIZED, "Exact vanilla AVX build must match");
+    probe.executable_name_utf8 = "AnomalyDX11.exe";
+    check(api.detect(&probe) == RSF_GAME_UNKNOWN, "The AVX digest must not match the standard name");
+    probe.executable_name_utf8 = "ANOMALYDX11AVX.EXE";
+    probe.sha256_hex = "2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12";
+    check(api.detect(&probe) == RSF_GAME_RECOGNIZED, "Exact AVX build matches regardless of case");
+    probe.executable_name_utf8 = "AnomalyDX10AVX.exe";
+    check(api.detect(&probe) == RSF_GAME_UNKNOWN, "Unprofiled DX10 AVX renderer must refuse");
+    probe.sha256_hex = "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
     probe.executable_name_utf8 = "VerifiedDX11.exe";
     check(api.detect(&probe) == RSF_GAME_UNKNOWN, "Unmapped debug build must refuse");
     probe.executable_name_utf8 = "AnomalyDX11AVX.exe";

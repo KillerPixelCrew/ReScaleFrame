@@ -148,7 +148,7 @@ void mip_bias() {
     CHECK(near(window_mip_bias_delta(1920, 1920, -0.3f), -0.3, 1e-7));
     CHECK(window_mip_bias_delta(960, 1920, -5.0f) == -3.0f);                       // offset clamped to -2, total -3
     CHECK(window_mip_bias_delta(1920, 1920, 5.0f) == 1.0f);                        // offset clamped to +1
-    CHECK(near(window_mip_bias_delta(1286, 1920, std::numeric_limits<float>::quiet_NaN()), std::log2(1286.0 / 1920.0) - 0.3, 1e-6));
+    CHECK(near(window_mip_bias_delta(1286, 1920, std::numeric_limits<float>::quiet_NaN()), std::log2(1286.0 / 1920.0), 1e-6));   // default offset 0
     CHECK(window_mip_bias_delta(0, 1920, 0.0f) == 0.0f && window_mip_bias_delta(1286, 0, 0.0f) == 0.0f);
     CHECK(clamp_mip_bias_offset(-0.75f) == -0.75f && clamp_mip_bias_offset(-9.0f) == -2.0f && clamp_mip_bias_offset(3.0f) == 1.0f);
 }

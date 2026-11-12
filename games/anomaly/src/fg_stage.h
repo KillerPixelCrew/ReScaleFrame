@@ -8,7 +8,8 @@
 // INI ([Anomaly], all optional except FG):
 //   FG=1                  generate frames from startup. FG=1 or FGBridge=1 installs the bridge at cold start (before
 //                         device creation; it cannot be added later). The overlay's FG switch then toggles generation.
-//   FGBridge=1            install the bridge with FG initially off (the overlay can turn it on)
+//   FGBridge              default 1: install the bridge with FG initially off (the overlay can turn it on); 0 keeps
+//                         presentation stock unless FG=1
 //   FGBackend=7           1 DLSS-G, 3 FSR3, 4 FSR4, 5 XeSS, 7 Auto (by the rendering adapter's vendor)
 //   FGGeneratedFrames=1   generated frames per rendered frame, clamped by the provider (1..3)
 //   Latency=1             0 off, 1 on, 2 boost (Reflex for DLSS-G; the provider's own pacing otherwise)
@@ -25,6 +26,7 @@
 //
 // Threads: everything except configure/install/status runs on the engine thread, which renders and Presents.
 #include "overlay_hooks.h"
+#include "build_profile.h"
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
@@ -38,7 +40,7 @@ struct IDXGISwapChain;
 
 namespace rsf::anomaly::fg {
 struct Options {
-    bool bridge{};                    // FG=1 or FGBridge=1
+    bool bridge{};                    // FG=1 or FGBridge (default 1)
     bool enabled{};                   // FG
     uint32_t backend{7};              // FGBackend (RSF_FG_BACKEND_AUTO)
     uint32_t generated{1};            // FGGeneratedFrames
@@ -58,7 +60,8 @@ const Options& options() noexcept;
 
 // Cold start, before the engine creates its device: binds both Runtime tables and installs the bridge's swap-chain
 // interception. False leaves presentation stock (logged). One call per process.
-bool install(HMODULE runtime) noexcept;
+// `build` is the exact executable profile bootstrap selected (build_profile.h); the SR-off pass reads its HW.pBaseZB.
+bool install(HMODULE runtime, const BuildProfile& build) noexcept;
 bool installed() noexcept;
 
 // Test seam: tables supplied directly instead of resolved from the Runtime module (validated the same way).

@@ -5,13 +5,16 @@
 #include "fg_policy.h"
 #include "motion_stage.h"
 #include "sr_pass.h"
-#include "sr_profile.h"
+#include "build_profile.h"
+#include "sr_settings.h"
 #include "sr_stage.h"
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <wrl/client.h>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -69,11 +72,15 @@ struct State {
     Status status{};
 };
 State& state() noexcept { static auto* value = new State; return *value; }
-// HW.pBaseZB of the verified executable: the hooks that call into this stage only exist on that image.
+// HW.pBaseZB of the verified executable: the hooks that call into this stage only exist on that image. The build is
+// the one bootstrap selected by exact SHA-256 (install); without it there is no depth view.
+std::atomic<const BuildProfile*> engine_build{};
 void* engine_depth_view() noexcept {
+    const auto* build = engine_build.load(std::memory_order_acquire);
+    if (!build) return nullptr;
     auto* image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     void* view = nullptr;
-    std::memcpy(&view, image + sr::hw_base_zb_rva, sizeof(view));
+    std::memcpy(&view, image + build->sr->hw_base_zb_rva, sizeof(view));
     return view;
 }
 
@@ -117,7 +124,65 @@ bool engine_window(HWND window) noexcept {
 }
 
 // ---- bridge callbacks (engine thread, inside the engine's Present on the bridge) --------------------------------------
-int accept_window(void*, void* window) noexcept { return engine_window(static_cast<HWND>(window)) ? 1 : 0; }
+void keep_borderless_placement(HWND window) noexcept;
+int accept_window(void*, void* window) noexcept {
+    if (!engine_window(static_cast<HWND>(window))) return 0;
+    state().window = static_cast<HWND>(window);
+    keep_borderless_placement(static_cast<HWND>(window));
+    return 1;
+}
+
+// ---- borderless placement ------------------------------------------------------------------------------------------
+// X-Ray's borderless mode (rs_screenmode borderless) makes the window WS_POPUP, sizes it to the monitor and moves it to
+// the monitor origin (xray-monolith Device_create.cpp:205, Device_destroy.cpp:98, xr_ioc_cmd.cpp:545); it never puts a
+// borderless window anywhere else. With the presentation bridge the game presents through a flip-model chain, so DWM
+// switches the window's non-client rendering and posts WM_DWMNCRENDERINGCHANGED. uxtheme handles it before the window
+// procedure (ThemePreWndProc -> OnOwpPreDwmNcRenderingChanged -> CThemeWnd::EnableDwmNcRendering, a SetWindowPos with
+// SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED), and the window lands back at its CW_USEDEFAULT creation position
+// (game trace: 0,0 after the engine's call, then 76,76 / 190,190 / 304,304 after uxtheme). The stock blt-model chain never
+// changes non-client rendering, so this only happens with the bridge.
+// The subclass restores the engine's placement at that moment: a WS_POPUP window without caption that exactly covers a
+// monitor but is not at its origin goes back to the origin, synchronously, before the next frame. Windowed mode (caption)
+// and exclusive fullscreen (already at the origin) never match.
+constexpr UINT_PTR borderless_subclass_id = 0x52534642;   // "RSFB"
+bool borderless_off_origin(HWND window, RECT& monitor_rect, RECT& rect) noexcept {
+    const auto style = GetWindowLongPtrW(window, GWL_STYLE);
+    if (!(style & WS_POPUP) || (style & WS_CAPTION) == WS_CAPTION || IsIconic(window) || !IsWindowVisible(window)) return false;
+    MONITORINFO monitor{sizeof(monitor)};
+    if (!GetWindowRect(window, &rect) || !GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+    monitor_rect = monitor.rcMonitor;
+    const auto& m = monitor_rect;
+    return rect.right - rect.left == m.right - m.left && rect.bottom - rect.top == m.bottom - m.top &&
+        (rect.left != m.left || rect.top != m.top);
+}
+LRESULT CALLBACK borderless_subclass(HWND window, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR) {
+    const auto result = DefSubclassProc(window, message, wparam, lparam);
+    if (message == WM_DWMNCRENDERINGCHANGED || message == WM_WINDOWPOSCHANGED) {
+        static bool correcting = false;
+        static uint32_t corrections = 0;
+        RECT m{}, rect{};
+        if (!correcting && borderless_off_origin(window, m, rect)) {
+            correcting = true;
+            const bool moved = SetWindowPos(window, nullptr, m.left, m.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+            correcting = false;
+            if (++corrections <= 8)
+                say("Anomaly window: borderless window moved to %ld,%ld (%s); restored to its monitor origin %ld,%ld, moved=%d.",
+                    rect.left, rect.top, message == WM_DWMNCRENDERINGCHANGED ? "DWM non-client rendering change" : "position change",
+                    m.left, m.top, moved ? 1 : 0);
+        }
+    }
+    return result;
+}
+// The bridge accepts the window on the engine's thread, which owns the window (SetWindowSubclass requires that).
+void keep_borderless_placement(HWND window) noexcept {
+    static HWND subclassed{};
+    if (!window || window == subclassed) return;
+    if (SetWindowSubclass(window, &borderless_subclass, borderless_subclass_id, 0)) {
+        subclassed = window;
+        say("Anomaly window: borderless placement guard installed on the engine window.");
+    }
+}
+
 void before_present(void*, void* chain) noexcept {
     auto& s = state();
     if (s.overlay_set.load(std::memory_order_acquire) && s.overlay.before_present)
@@ -303,7 +368,9 @@ Options read_options(const wchar_t* ini) noexcept try {
     if (!ini) return o;
     const auto number = [&](const wchar_t* key, uint32_t fallback) { return uint32_t(GetPrivateProfileIntW(L"Anomaly", key, int(fallback), ini)); };
     o.enabled = number(L"FG", 0) != 0;
-    o.bridge = o.enabled || number(L"FGBridge", 0) != 0;
+    // The bridge installs by default so the overlay can turn FG on live (a saved FG=0 used to leave no bridge and no FG
+    // choices for the whole session). FGBridge=0 keeps presentation stock unless FG=1.
+    o.bridge = o.enabled || number(L"FGBridge", 1) != 0;
     o.backend = number(L"FGBackend", RSF_FG_BACKEND_AUTO);
     if (!rsf_fg_backend_known(o.backend) && o.backend != RSF_FG_BACKEND_AUTO) o.backend = RSF_FG_BACKEND_AUTO;
     o.generated = std::clamp(number(L"FGGeneratedFrames", 1), 1u, 3u);
@@ -322,9 +389,10 @@ Options read_options(const wchar_t* ini) noexcept try {
         GetPrivateProfileStringW(L"Anomaly", key, L"", value, MAX_PATH, ini);
         return value[0] ? std::wstring(value) : fallback.wstring();
     };
-    o.streamline_dir = text(L"SRStreamlineDir", base / L"ReScaleFrame" / L"streamline");
-    o.fidelityfx_dir = text(L"SRFidelityFXDir", base / L"ReScaleFrame" / L"fidelityfx");
-    o.xess_dir = text(L"SRXeSSDir", base / L"ReScaleFrame" / L"xess");
+    // Same normalisation as SR: Streamline cannot load plugins from an extended-length "\\?\" directory.
+    o.streamline_dir = sr::plain_directory(text(L"SRStreamlineDir", base / L"ReScaleFrame" / L"streamline"));
+    o.fidelityfx_dir = sr::plain_directory(text(L"SRFidelityFXDir", base / L"ReScaleFrame" / L"fidelityfx"));
+    o.xess_dir = sr::plain_directory(text(L"SRXeSSDir", base / L"ReScaleFrame" / L"xess"));
     std::time_t now = std::time(nullptr);
     std::tm local{};
     localtime_s(&local, &now);
@@ -414,9 +482,10 @@ bool start_bridge() noexcept {
 }
 }
 
-bool install(HMODULE runtime) noexcept try {
+bool install(HMODULE runtime, const BuildProfile& build) noexcept try {
     auto& s = state();
     if (!s.options.selected() || s.install_attempted.exchange(true)) return false;
+    engine_build.store(&build, std::memory_order_release);
     const auto present_query = reinterpret_cast<rsf_get_d3d11_present_api_fn>(
         reinterpret_cast<void*>(GetProcAddress(runtime, RSF_D3D11_PRESENT_API_ENTRY_POINT)));
     const auto fg_query = reinterpret_cast<rsf_get_d3d11_fg_api_fn>(

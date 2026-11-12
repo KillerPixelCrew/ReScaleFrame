@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_geometry.h"
-#include "geometry_profile.h"
+#include "build_profile.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -209,6 +209,8 @@ std::mutex native_lifecycle;
 GeometrySink sink;
 DrawSink draw_sink;
 std::atomic<std::byte*> native_module{};
+// The exact build the module was installed (or test-bound) with; its geometry table is the only one read.
+std::atomic<const BuildProfile*> native_build{};
 std::atomic<bool> capture_enabled{};
 std::atomic<bool> hooks_enabled{};
 HookSet native_hooks;
@@ -229,7 +231,8 @@ std::size_t coverage_index(DrawPass pass, VisualType type, DrawVerdict verdict) 
 DrawPass read_pass(const std::byte* module) noexcept
 {
     std::uint32_t phase{};
-    if (!module || !safe_copy(&phase, module + render_phase_rva, sizeof(phase))) return DrawPass::Unknown;
+    const auto* build = native_build.load();
+    if (!module || !build || !safe_copy(&phase, module + build->geometry->render_phase_rva, sizeof(phase))) return DrawPass::Unknown;
     return phase == phase_normal ? DrawPass::Main : phase == phase_smap ? DrawPass::Shadow : DrawPass::Unknown;
 }
 bool is_identity_matrix(const float (&values)[16]) noexcept
@@ -251,14 +254,15 @@ std::vector<std::uint64_t> visual_tree(void* root)
     if (!root) return result;
     result.push_back(reinterpret_cast<std::uintptr_t>(root));
     const auto module = native_module.load();
-    if (!module) return result;
+    const auto* build = native_build.load();
+    if (!module || !build) return result;
     for (std::size_t i = 0; i < result.size(); ++i) {
         if (result.size() > 4096) throw std::bad_alloc{}; // Fail capture closed, leave engine untouched.
         const auto visual = reinterpret_cast<const std::byte*>(result[i]);
         const std::byte* vtable{};
         if (!safe_copy(&vtable, visual, sizeof(vtable))) throw std::bad_alloc{};
         bool hierarchy = false;
-        for (const auto rva : hierarchy_vtables) hierarchy |= vtable == module + rva;
+        for (const auto rva : build->geometry->hierarchy_vtables) hierarchy |= vtable == module + rva;
         if (!hierarchy) continue;
         std::int32_t borrowed_children{};
         if (!safe_copy(&borrowed_children, visual + 120, sizeof(borrowed_children))) throw std::bad_alloc{};
@@ -334,7 +338,8 @@ void __fastcall delete_hook(void* self, void** reference, std::int32_t discard)
 }
 void render_visual(std::size_t index, void* self, float lod, DrawKind kind, VisualType type, std::uint32_t skeleton_offset = 0)
 {
-    const auto module = native_module.load();
+    const auto* build = native_build.load();
+    const auto module = build ? native_module.load() : nullptr;
     DrawFacts facts;
     facts.type = type;
     facts.capturing = capture_enabled.load() && !factory_depth;
@@ -357,14 +362,14 @@ void render_visual(std::size_t index, void* self, float lod, DrawKind kind, Visu
     // insert_static) from an unregistered moving object. It is never used as a motion input.
     if (module && facts.capturing && facts.lookup == VisualLookup::Missing && facts.pass != DrawPass::Shadow) {
         float values[16];
-        facts.world_readable = safe_copy(values, module + world_matrix_rva, sizeof(values));
+        facts.world_readable = safe_copy(values, module + build->geometry->world_matrix_rva, sizeof(values));
         facts.world_identity = facts.world_readable && is_identity_matrix(values);
     }
     const DrawClassification classification{facts.pass, type, classify_draw(facts)};
     coverage_draws[coverage_index(classification.pass, type, classification.verdict)].fetch_add(1);
     (key || classification.verdict == DrawVerdict::IdentifiedFoliage ? draws_identified : draws_unidentified).fetch_add(1);
     DrawScope scope(native_identities, key, kind,
-        module ? reinterpret_cast<const float*>(module + world_matrix_rva) : nullptr, skeleton, classification,
+        module ? reinterpret_cast<const float*>(module + build->geometry->world_matrix_rva) : nullptr, skeleton, classification,
         reinterpret_cast<std::uintptr_t>(self));
     reinterpret_cast<Render>(originals[index])(self, lod);
 }
@@ -521,12 +526,13 @@ const std::byte* vertex_constant_data(std::uint32_t slot, std::uint32_t expected
     std::uint32_t bytes) noexcept
 {
     const auto module = native_module.load();
-    if (!module || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
+    const auto* build = native_build.load();
+    if (!module || !build || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
         offset > expected_size - bytes) return nullptr;
     const std::byte* object{};
     std::uint32_t size{};
     const std::byte* data{};
-    if (!safe_copy(&object, module + vertex_constant_buffers_rva + slot * sizeof(object), sizeof(object)) || !object ||
+    if (!safe_copy(&object, module + build->geometry->vertex_constant_buffers_rva + slot * sizeof(object), sizeof(object)) || !object ||
         !safe_copy(&size, object + constant_buffer_size_offset, sizeof(size)) || size != expected_size ||
         !safe_copy(&data, object + constant_buffer_data_offset, sizeof(data)) || !data) return nullptr;
     return data + offset;
@@ -549,24 +555,27 @@ bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std
 bool read_world_matrix(float (&out)[16]) noexcept
 {
     const auto module = native_module.load();
-    return module && safe_copy(out, module + world_matrix_rva, sizeof(out));
+    const auto* build = native_build.load();
+    return module && build && safe_copy(out, module + build->geometry->world_matrix_rva, sizeof(out));
 }
-std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept
+std::optional<temporal::ViewId> current_render_view(const std::byte* module, const BuildProfile& build) noexcept
 {
     if (!module) return {};
     bool active{};
     std::uint8_t delay{};
     std::uint32_t frame{};
-    if (!safe_copy(&active, module + second_viewport_rva, sizeof(active)) ||
-        !safe_copy(&delay, module + second_viewport_rva + second_viewport_delay_offset, sizeof(delay)) ||
-        !safe_copy(&frame, module + device_frame_rva, sizeof(frame))) return {};
+    const auto viewport = build.geometry->second_viewport_rva;
+    if (!safe_copy(&active, module + viewport, sizeof(active)) ||
+        !safe_copy(&delay, module + viewport + second_viewport_delay_offset, sizeof(delay)) ||
+        !safe_copy(&frame, module + build.native->device_frame_rva, sizeof(frame))) return {};
     // Same expression as CSecondVPParams::IsSVPFrame; a zero delay would divide by zero in the engine, so it is "main".
     return active && delay && frame % delay == 0 ? temporal::ViewId::Scope : temporal::ViewId::Main;
 }
 RenderViewScope::RenderViewScope() noexcept
 {
     if (!capture_enabled.load()) return;
-    const auto view = current_render_view(native_module.load());
+    const auto* build = native_build.load();
+    const auto view = build ? current_render_view(native_module.load(), *build) : std::nullopt;
     if (!view) return;
     (*view == temporal::ViewId::Scope ? views_scope : views_main).fetch_add(1);
     scope_.emplace(view, temporal::ProjectionDomain::World);
@@ -577,9 +586,10 @@ void geometry_set_draw_sink(DrawSink value) noexcept
     const std::lock_guard lock(native_lifecycle);
     draw_sink = value;
 }
-std::span<const HookSite> native_geometry_hook_sites() noexcept
+std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) noexcept
 {
-    static const auto result = [] {
+    static std::array<HookSite, geometry_site_count> result;
+    result = [&build] {
         const std::array<void*, 17> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
             reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook), reinterpret_cast<void*>(&rigid_hook),
             reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook), reinterpret_cast<void*>(&skeleton_pm_hook),
@@ -587,7 +597,8 @@ std::span<const HookSite> native_geometry_hook_sites() noexcept
             reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
             reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook), reinterpret_cast<void*>(&rm_normal_hook),
             reinterpret_cast<void*>(&detail_render_hook)};
-        std::array<HookSite, 17> sites;
+        std::array<HookSite, geometry_site_count> sites;
+        const auto& geometry_sites = build.geometry->geometry_sites;
         for (std::size_t i = 0; i < sites.size(); ++i)
             sites[i] = {geometry_sites[i].name, geometry_sites[i].rva, geometry_sites[i].expected, replacements[i], &originals[i]};
         return sites;
@@ -603,25 +614,25 @@ void geometry_set_sink(GeometrySink value) noexcept
     const std::lock_guard lock(native_lifecycle);
     sink = value;
 }
-bool install_native_geometry(std::byte* module, std::uint32_t image_size, std::string_view hash) noexcept
+bool install_native_geometry(std::byte* module, std::uint32_t image_size, const BuildProfile& build) noexcept
 {
-    if (!module || image_size != native_image_size || hash != dx11_hash || hooks_enabled.load()) return false;
-    for (const auto& site : geometry_layout_sites) {
+    if (!module || image_size != build.image_size() || hooks_enabled.load()) return false;
+    const auto& profile = *build.geometry;
+    const auto guarded = [&](const NativeSite& site) {
         std::array<std::byte, 16> bytes;
-        if (site.rva > image_size - bytes.size() || !safe_copy(bytes.data(), module + site.rva, bytes.size()) ||
-            bytes != site.expected) return false;
-    }
-    for (const auto& site : geometry_sites) {
-        std::array<std::byte, 16> bytes;
-        if (site.rva > image_size - bytes.size() || !safe_copy(bytes.data(), module + site.rva, bytes.size()) ||
-            bytes != site.expected) return false;
-    }
-    if (native_hooks.created() && native_module.load() != module) return false;
+        return site.rva <= image_size - bytes.size() && safe_copy(bytes.data(), module + site.rva, bytes.size()) &&
+            bytes == site.expected && unique_guards_match(module, image_size, profile.geometry_unique_guards, site.rva);
+    };
+    for (const auto& site : profile.geometry_layout_sites) if (!guarded(site)) return false;
+    for (const auto& site : profile.geometry_sites) if (!guarded(site)) return false;
+    // Trampolines are process-lifetime: a re-enable must be the same module and the same build.
+    if (native_hooks.created() && (native_module.load() != module || native_build.load() != &build)) return false;
     geometry_retire_all(); // A new capture epoch never inherits identities that missed deletes while disabled.
+    native_build = &build;
     native_module = module;
     capture_enabled = true;
     const bool installed = native_hooks.created() ? native_hooks.enable()
-        : native_hooks.install(module, image_size, native_geometry_hook_sites());
+        : native_hooks.install(module, image_size, native_geometry_hook_sites(build));
     hooks_enabled = installed;
     if (!installed) capture_enabled = false;
     return installed;
@@ -726,6 +737,11 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
     emit(user, text);
 }
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
-void geometry_test_bind_module(std::byte* module) noexcept { native_module = module; capture_enabled = true; }
+void geometry_test_bind_module(std::byte* module, const BuildProfile& build) noexcept
+{
+    native_build = &build;
+    native_module = module;
+    capture_enabled = true;
+}
 #endif
 }

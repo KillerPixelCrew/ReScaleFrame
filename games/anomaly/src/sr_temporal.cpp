@@ -130,6 +130,14 @@ bool TemporalDriver::bind(HMODULE runtime) noexcept {
         reinterpret_cast<void*>(GetProcAddress(runtime, RSF_D3D11_SR_API_ENTRY_POINT))) : nullptr;
     const char* reason = nullptr;
     bound_ = bind_sr_api(query, api_, &reason) == ApiStatus::Bound;
+    // The colour encoding DLSS receives is this adapter's choice, not the Runtime's default.
+    using SetTransport = void (*)(uint32_t);
+    if (const auto set = runtime ? reinterpret_cast<SetTransport>(reinterpret_cast<void*>(
+            GetProcAddress(runtime, "rsf_dlss_pipeline_set_colour_transport"))) : nullptr) {
+        set(options_.colour_transport ? 1u : 0u);
+        say(options_.colour_transport ? "Anomaly SR: DLSS colour as display-range encoding, HDR off (SRColourTransport=1)."
+                                      : "Anomaly SR: DLSS colour as exposed linear, HDR on (SRColourTransport=0).");
+    }
     LARGE_INTEGER qpc{};
     QueryPerformanceCounter(&qpc);
     session_ = static_cast<uint64_t>(qpc.QuadPart) | 1u;

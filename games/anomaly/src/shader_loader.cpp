@@ -173,22 +173,23 @@ std::string sha256_hex(std::span<const std::byte> data)
     return text;
 }
 
-FrameStatus read_request(const std::byte* module, const void* return_address, const std::byte* caller_rsp,
-    const FrameReader& read, ShaderRequest& request)
+FrameStatus read_request(const MotionProfile& profile, const std::byte* module, const void* return_address,
+    const std::byte* caller_rsp, const FrameReader& read, ShaderRequest& request)
 {
     if (!module || !caller_rsp || !read) return FrameStatus::UnknownCaller;
     bool known = false;
-    for (const auto& call : create_shader_calls)
-        known |= return_address == module + call.rva + call_length;
+    for (const auto& call : profile.create_shader_calls)
+        known |= call.rva && return_address == module + call.rva + call_length;
+    const auto& frame = profile.frame;
     if (!known) return FrameStatus::UnknownCaller;
     const char* source{};
     std::uint32_t length{};
     const char* entry{};
     std::uint32_t flags{};
-    if (!read(caller_rsp + frame_source_offset, &source, sizeof(source)) ||
-        !read(caller_rsp + frame_length_offset, &length, sizeof(length)) ||
-        !read(caller_rsp + frame_entry_offset, &entry, sizeof(entry)) ||
-        !read(caller_rsp + frame_flags_offset, &flags, sizeof(flags))) return FrameStatus::Unreadable;
+    if (!read(caller_rsp + frame.source_offset, &source, sizeof(source)) ||
+        !read(caller_rsp + frame.length_offset, &length, sizeof(length)) ||
+        !read(caller_rsp + frame.entry_offset, &entry, sizeof(entry)) ||
+        !read(caller_rsp + frame.flags_offset, &flags, sizeof(flags))) return FrameStatus::Unreadable;
     if (!source || !length || length > 16u * 1024 * 1024 || !entry) return FrameStatus::BadSource;
     const auto read_string = [&](const char* text, std::string& out) {
         out.clear();
@@ -206,7 +207,7 @@ FrameStatus read_request(const std::byte* module, const void* return_address, co
     request.defines.clear();
     for (std::uint32_t i = 0; i < frame_defines_capacity; ++i) {
         const char* pair[2]{};
-        if (!read(caller_rsp + frame_defines_offset + i * sizeof(pair), pair, sizeof(pair))) return FrameStatus::BadDefines;
+        if (!read(caller_rsp + frame.defines_offset + i * sizeof(pair), pair, sizeof(pair))) return FrameStatus::BadDefines;
         if (!pair[0]) return FrameStatus::Ok;
         Define define;
         if (!read_string(pair[0], define.name) || !pair[1] || !read_string(pair[1], define.value)) return FrameStatus::BadDefines;

@@ -105,6 +105,8 @@ struct FrameFacts {
     std::byte* device_view{};      // &Device.mView, &Device.mProject, &Device.mFullTransform (Fmatrix, 64 bytes each)
     std::byte* device_project{};
     std::byte* device_full_transform{};
+    uint32_t sun_depth_margin{};   // scale multiplier 1 - margin/10000, only while jitter is applied
+    std::array<std::byte*, 2> sun_depth_scale{};   // near/far console-owned floats
     bool mip_bias{};               // add mip_bias_delta to the sampler cache's bias for the window
     float mip_bias_delta{};
     std::byte* sampler_bias{};     // &SSManager.m_uiMipLODBias: read only, changed through SwapHost::set_mip_bias
@@ -182,6 +184,8 @@ struct SwapCounters {
     // (jittered a freshly built first-person projection / found one the adapter already wrote / left an unknown one).
     uint64_t jittered{}, jitter_invalid{}, fp_jittered{}, fp_already{}, fp_foreign{}, projection_restores{};
     uint64_t mip_applied{}, mip_restored{}, mip_unchanged{};
+    uint64_t sun_calls{}, sun_unjittered{}, sun_restored{}, sun_refused{};
+    uint64_t sun_depth_applied{}, sun_depth_restored{}, sun_depth_foreign{};
     std::array<uint64_t, static_cast<std::size_t>(Skip::Count)> skipped{};
     std::array<uint64_t, static_cast<std::size_t>(Restore::Count)> restores{};
 };
@@ -209,6 +213,10 @@ public:
     // CRender::rmNear, after the original (the shared geometry slot). Counted inside the window; with Stage 3 jitter
     // it jitters a freshly built first-person projection once (first_person_action, sr_jitter.h).
     void rm_near() noexcept;
+    // Around CRender::render_sun_cascades: fit shadows to the saved main camera, then restore the exact jittered pair
+    // and upload it through set_P. The token is true only when begin suspended jitter; pass it once to end.
+    bool sun_cascades_begin() noexcept;
+    void sun_cascades_end(bool suspended) noexcept;
     // Stage 3 state of the open (or last) window.
     bool jitter_applied() const noexcept { return projection_.applied; }
     bool mip_bias_applied() const noexcept { return bias_.applied; }
@@ -263,12 +271,14 @@ private:
         std::byte* view{};
         std::byte* project{};
         std::byte* full{};
-        bool written{};                       // Device.mProject/mFullTransform hold the jittered values
+        bool written{};                       // this window changed Device.mProject/mFullTransform
         bool uploaded{};                      // RCache holds the jittered projection
         bool applied{};                       // the window's main projection carries the jitter
         float x{}, y{};
         std::array<float, 16> saved_project{}, saved_full{}, jittered{}, last_first_person{};
         bool have_first_person{};
+        bool sun_suspended{};
+        EngineMatrix sun_full{};
     };
     struct Bias {
         std::byte* field{};
@@ -306,6 +316,12 @@ private:
     Globals globals_{};
     Projection projection_{};
     Bias bias_{};
+    struct SunDepth {
+        std::byte* field{};
+        float saved{}, window{};
+        bool applied{};
+    };
+    std::array<SunDepth, 2> sun_depth_{};
     SwapCounters counters_{};
 };
 }

@@ -17,9 +17,9 @@ void scales() {
     CHECK(clamp_scale(std::numeric_limits<float>::quiet_NaN()) == default_scale);
     CHECK(clamp_scale(std::numeric_limits<float>::infinity()) == default_scale);
     CHECK(clamp_scale(-1.0f) == default_scale && clamp_scale(0.0f) == default_scale);
-    CHECK(clamp_scale(0.3f) == min_scale && clamp_scale(0.5f) == 0.5f && clamp_scale(0.67f) == 0.67f);
+    CHECK(clamp_scale(0.3f) == min_scale && clamp_scale(0.33f) == 0.33f && clamp_scale(0.5f) == 0.5f && clamp_scale(0.67f) == 0.67f);
     CHECK(clamp_scale(1.0f) == 1.0f && clamp_scale(1.5f) == max_scale && clamp_scale(100.0f) == max_scale);
-    CHECK(default_scale == 0.67f && min_scale == 0.5f && max_scale == 1.0f);
+    CHECK(default_scale == 0.67f && min_scale == 0.33f && max_scale == 1.0f);
 }
 
 void rounding() {
@@ -31,17 +31,20 @@ void rounding() {
     // Odd outputs.
     CHECK(render_extent(1919, 0.67f) == 1286 && render_extent(1079, 0.67f) == 723);   // 1285.73, 722.93
     CHECK(render_extent(1921, 0.5f) == 961 && render_extent(1081, 0.5f) == 541);     // x.5 rounds up, = ceil(output/2)
-    // Limits: 0.5 is exactly half (rounded up), 1.0 is the output, nothing below 1.
-    CHECK(render_extent(1920, 0.5f) == 960 && render_extent(1920, 1.0f) == 1920 && render_extent(1920, 0.3f) == 960);
+    // Limits: 0.5 is exactly half (rounded up), 1.0 is the output, 0.33 the floor (ceil 633.6), nothing below 1.
+    CHECK(render_extent(1920, 0.5f) == 960 && render_extent(1920, 1.0f) == 1920 && render_extent(1920, 0.3f) == 634);
+    CHECK(render_extent(2560, 1.0f / 3) == 853 && render_extent(1600, 1.0f / 3) == 533);   // DLSS ultra performance
     CHECK(render_extent(1, 0.5f) == 1 && render_extent(2, 0.5f) == 1 && render_extent(3, 0.5f) == 2 && render_extent(0, 0.67f) == 0);
     CHECK(render_extent(1, 0.67f) == 1 && render_extent(7, 2.0f) == 7);
-    // Every size and a range of scales: inside [ceil(output/2), output], within half a pixel of output * scale.
+    // Every size and a range of scales: inside [ceil(output * min_scale), output], within half a pixel of output * scale
+    // unless the floor lifted it (tiny outputs at low scales).
     int bad = 0;
-    for (const float scale : {0.5f, 0.55f, 0.6f, 0.6667f, 0.67f, 0.75f, 0.77f, 0.9f, 1.0f})
+    for (const float scale : {0.34f, 0.4f, 0.5f, 0.55f, 0.6f, 0.6667f, 0.67f, 0.75f, 0.77f, 0.9f, 1.0f})
         for (uint32_t output = 1; output <= 8192; ++output) {
             const auto render = render_extent(output, scale);
             const double exact = double(output) * double(scale);
-            if (render < 1 || render > output || render < uint32_t(std::ceil(output * 0.5)) || std::fabs(double(render) - exact) > 0.5 + 1e-9)
+            const auto lowest = uint32_t(std::ceil(output * double(min_scale)));
+            if (render < 1 || render > output || render < lowest || (std::fabs(double(render) - exact) > 0.5 + 1e-9 && render != lowest))
                 ++bad;
         }
     CHECK(bad == 0);

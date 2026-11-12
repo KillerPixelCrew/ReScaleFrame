@@ -44,7 +44,7 @@ int main()
         auto* base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
         const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-        HookSite redirect = native_geometry_hook_sites()[geometry_site_flush];
+        HookSite redirect = native_geometry_hook_sites(standard_build)[geometry_site_flush];   // only the replacement is used
         redirect.rva = static_cast<std::uint32_t>(reinterpret_cast<std::byte*>(&flush_fixture) - base);
         std::memcpy(redirect.expected.data(), reinterpret_cast<const void*>(&flush_fixture), 16);
         HookSet hooks;

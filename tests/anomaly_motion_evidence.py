@@ -1,6 +1,6 @@
 """Motion MRT sites: read-only check of every games/anomaly/src/motion_profile.h value against the installed exe.
 
-Needs the installed STANDARD AnomalyDX11.exe (D:/Anomaly 1.5.3) and capstone, so it is not registered in CTest
+Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3) and capstone, so it is not registered in CTest
 (same as tests/anomaly_sr_evidence.py). Nothing is patched or executed; the file is only read and disassembled.
 Run: py -3 -I tests/anomaly_motion_evidence.py --verify
 Every check raises AssertionError naming the site that does not match.
@@ -36,9 +36,10 @@ _spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 
-CRENDER_RENDER = 0x8977c0
+geometry.build_from_args()
+CRENDER_RENDER = geometry.CRENDER_RENDER
 COMPILER = 'd3dcompiler_43.dll'   # games/anomaly/src/motion_profile.h engine_compiler_module
-SET_MAX_ANISOTROPY = 0x7fe060
+SET_MAX_ANISOTROPY = 0x7f7a70 if geometry.BUILD == "avx" else 0x7fe060
 
 
 def parse_profile(text):
@@ -139,7 +140,12 @@ def mem(op):
 
 
 def verify(pe, log):
-    sites, ints, hexes = parse_profile(PROFILE.read_text())
+    sites, ints, hexes = parse_profile(geometry.legacy_profile(PROFILE))
+    for name, h in hexes.items():
+        assert pe.code.count(bytes.fromhex(h)) == 1, ('non-unique code guard', name)
+    all_sites = [(n, r, h.hex()) for n, (r, h) in sites.items()]
+    geometry.verify_unique_guards(pe, geometry.profile_text(PROFILE), 'motion', all_sites)
+    geometry.verify_detour_prefix(pe, all_sites[:3])
     names = ['create_shader', 'CRenderTarget::phase_scene_begin', 'CRenderTarget::phase_scene_end']
     for name in names:
         rva, expected = sites[name]
@@ -164,7 +170,7 @@ def verify(pe, log):
     outparams = [i for i in code if i.mnemonic == 'lea' and mem(i.operands[1]) and i.operands[1].mem.base == x86.X86_REG_R15
                  and i.operands[1].mem.disp == shader_offset]
     assert len(outparams) >= 3, ('shader object out-parameter lea [r15+0x10]', len(outparams))
-    compiler = re.search(r'engine_compiler_module\[\] = L"([^"]+)"', PROFILE.read_text())[1].lower()
+    compiler = re.search(r'engine_compiler_module\[\] = L"([^"]+)"', geometry.legacy_profile(PROFILE))[1].lower()
     assert compiler == COMPILER, ('engine compiler', compiler)
     imported = [pe.import_of(i) for i in code if i.mnemonic == 'call']
     assert imported.count((COMPILER, 'D3DReflect')) >= 3, ('D3DReflect calls', imported)
@@ -284,7 +290,7 @@ def verify_tessellation(pe, log, ints, hexes):
     """Hull/domain shader creation (r4_enable_tessellation). The create_shader detour sees 'hs_5_0'/'ds_5_0' too; these
     guards prove that create_shader hands them to create_shader<SHS>/<SDS>, which leave the D3D11 object at
     shader_object_offset of the engine object like the VS/PS paths."""
-    text = PROFILE.read_text()
+    text = geometry.legacy_profile(PROFILE)
     sites = [(m[1], m[2], int(m[3], 16), ''.join(re.findall(r'"([0-9a-f]+)"', m[4])), int(m[5], 16), m[6])
              for m in TESS_SITE.finditer(text)]
     assert sorted(s[1] for s in sites) == ['D', 'H'], ('tess_create_sites', sites)
@@ -319,6 +325,7 @@ def verify_tessellation(pe, log, ints, hexes):
                 and i.operands[1].type == x86.X86_OP_IMM]
         assert [i.operands[1].imm for i in dest] == [RC_DEST[stage]], ('constant table destination', name)
         assert pe.read(wrapper_rva, len(wrapper) // 2).hex() == wrapper, ('wrapper guard', name)
+        assert pe.code.count(bytes.fromhex(prologue)) == 1 and pe.code.count(bytes.fromhex(wrapper)) == 1, ('non-unique tessellation guard', name)
         wrapped = pe.disasm(*pe.function(wrapper_rva))
         vcall = next(i for i in wrapped if i.mnemonic == 'call')
         assert mem(vcall.operands[0]) and vcall.operands[0].mem.disp == DEVICE_SLOT[stage], ('device slot', name)
@@ -331,7 +338,12 @@ def verify_tessellation(pe, log, ints, hexes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--verify', action='store_true', required=True)
-    parser.parse_args()
+    parser.add_argument('--exe', choices=sorted(geometry.BUILDS), default=geometry.BUILD)
+    parser.add_argument('--profile', type=pathlib.Path)
+    args = parser.parse_args()
+    global PROFILE
+    if args.profile:
+        PROFILE = args.profile
     pe = Image()
     verify(pe, print)
     print('anomaly motion evidence: all motion_profile.h sites verified against', geometry.EXE)

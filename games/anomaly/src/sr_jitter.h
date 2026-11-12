@@ -181,7 +181,9 @@ inline FirstPersonAction first_person_action(const EngineMatrix& current, const 
 // Added to the sampler cache's current bias (the user's r__tf_mipbias) for the world window: log2(render / output)
 // plus `offset` (SRMipBias), clamped to [-3, 1]. Rendering at a fraction of the output samples mips chosen for that
 // fraction; log2 of the ratio restores the output's mip selection, the offset is the reconstruction policy.
-inline constexpr float min_mip_bias_offset = -2.0f, max_mip_bias_offset = 1.0f, default_mip_bias_offset = -0.3f;
+// Default 0: with -0.3 the ground texture aliased into per-frame grain under the jitter, and DLSS presets J and K
+// kept the history of far walking characters on that grain as a trail behind them (FSR and XeSS did not).
+inline constexpr float min_mip_bias_offset = -2.0f, max_mip_bias_offset = 1.0f, default_mip_bias_offset = 0.0f;
 inline float clamp_mip_bias_offset(float value) noexcept {
     if (!std::isfinite(value)) return default_mip_bias_offset;
     return value < min_mip_bias_offset ? min_mip_bias_offset : value > max_mip_bias_offset ? max_mip_bias_offset : value;

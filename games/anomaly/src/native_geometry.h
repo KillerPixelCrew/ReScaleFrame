@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 #include "native_hooks.h"
+#include "build_profile.h"
 
 namespace rsf::anomaly::geometry {
 using temporal::InstanceKey;
@@ -174,8 +175,8 @@ void geometry_set_flush_callback(FlushCallback) noexcept;
 using RmNearCallback = void (*)(void* render) noexcept;
 void geometry_set_rm_near_callback(RmNearCallback) noexcept;
 // Main or scope frame, from the engine's own IsSVPFrame predicate (isActive && dwFrame % frameDelay == 0).
-// Empty when the bytes are unreadable. `module` is the executable base.
-std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept;
+// Empty when the bytes are unreadable. `module` is the executable base of the exact `build`.
+std::optional<temporal::ViewId> current_render_view(const std::byte* module, const BuildProfile& build) noexcept;
 // Opens the view/World context for one CRender::Render. Inert when geometry hooks are not active.
 class RenderViewScope {
 public:
@@ -223,13 +224,15 @@ bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std
     std::uint32_t bytes) noexcept;
 // The world matrix in force for this draw (RCache.xforms.m_w), row-vector Fmatrix floats. False when unreadable.
 bool read_world_matrix(float (&out)[16]) noexcept;
-std::span<const HookSite> native_geometry_hook_sites() noexcept;
-bool install_native_geometry(std::byte* module, std::uint32_t image_size,
-    std::string_view verified_executable_sha256) noexcept;
+// The detour table of `build` (geometry_profile.h order). Valid until the next call.
+std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) noexcept;
+// `build` is the profile selected for the running executable by its exact name and SHA-256 (build_profile.h);
+// `image_size` must be that build's SizeOfImage. Every site and unique guard of that build is checked first.
+bool install_native_geometry(std::byte* module, std::uint32_t image_size, const BuildProfile& build) noexcept;
 bool disable_native_geometry() noexcept;
 bool geometry_hooks_active() noexcept;
 void geometry_retire_all() noexcept; // Device/session teardown. Generation never resets.
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
-void geometry_test_bind_module(std::byte*) noexcept;
+void geometry_test_bind_module(std::byte*, const BuildProfile&) noexcept;
 #endif
 }

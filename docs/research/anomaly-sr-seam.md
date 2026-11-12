@@ -486,7 +486,7 @@ Find RVAs and 16-byte guards for H1, H2a/b, H4, `R_xforms::set_P`, `CTexture::su
 fields and the `CBackend` texture/constant cache fields.
 Tests without the game: a manifest test that reads the installed exe file and checks every guard,
 in the same pattern as the existing `native_profile` checks.
-Live acceptance: Observe mode logs per-frame order `prepare → seam → Render exit` exactly once per
+Live acceptance: Observe mode logs per-frame order `prepare Ã¢â€ â€™ seam Ã¢â€ â€™ Render exit` exactly once per
 world frame, with zero on menu and SVP frames. Do not run IDA/Ghidra jobs during game runs.
 
 **Stage 1: twin swap at scale 1.0 (render size = output size).** Built; see section 9 for what was
@@ -603,15 +603,15 @@ bytes are not unique in `.text`, the profile adds the shortest unique prefix (`s
 | `PS::CParticleEffect::Render` | `0x8d8420` | `40534881ec80010000488bd9e87fa40f` (16) | `this`, `xmm1=float` | `ParticleEffect.cpp:575` | RTTI `CParticleEffect@PS` slot 7 |
 | `CRenderTarget::accum_point` | `0x90dca0` | `488bc45553488da8d8feffff4881ec18` (16) | `this, rdx=light*` | `r4_rendertarget_accum_point.cpp:3` | Direct `rmNear` caller after `set_P(&Device.mProject)` with a psHUD_FOV projection |
 
-Real call instructions (`sr_call_sites`, 16 bytes from the `E8`): `Render → phase_scene_prepare` at
-`0x897d2c` (z-prepass, `r4_R_render.cpp:278`) and `0x897d66` (285); `Render → phase_combine` at `0x8985bf` (538);
-`phase_combine → phase_sunshafts` at `0x8bf273` (374); `phase_combine → phase_blur` at `0x8bf27b` (378). Each
+Real call instructions (`sr_call_sites`, 16 bytes from the `E8`): `Render Ã¢â€ â€™ phase_scene_prepare` at
+`0x897d2c` (z-prepass, `r4_R_render.cpp:278`) and `0x897d66` (285); `Render Ã¢â€ â€™ phase_combine` at `0x8985bf` (538);
+`phase_combine Ã¢â€ â€™ phase_sunshafts` at `0x8bf273` (374); `phase_combine Ã¢â€ â€™ phase_blur` at `0x8bf27b` (378). Each
 callee has exactly these callers in `.text`, and each passes `this` from `CRender+0x768` (`Render`) or `r14`
 (`phase_combine`). LTCG inlined none of them, and no duplicate bodies exist.
 
-First-person `set_P → rmNear` pairs (`sr_first_person_sites`): hud `0x850410 → 0x85041b`, hud_ui
-`0x8509b5 → 0x850ab4`, sorted `0x851135 → 0x851140`, emissive `0x84f0f5 → 0x84f100`, particles
-`0x8d8a8e → 0x8d8a9a`, point lights `0x90e16c → 0x90e178`. `psHUD_FOV = 0x140D37F78`.
+First-person `set_P Ã¢â€ â€™ rmNear` pairs (`sr_first_person_sites`): hud `0x850410 Ã¢â€ â€™ 0x85041b`, hud_ui
+`0x8509b5 Ã¢â€ â€™ 0x850ab4`, sorted `0x851135 Ã¢â€ â€™ 0x851140`, emissive `0x84f0f5 Ã¢â€ â€™ 0x84f100`, particles
+`0x8d8a8e Ã¢â€ â€™ 0x8d8a9a`, point lights `0x90e16c Ã¢â€ â€™ 0x90e178`. `psHUD_FOV = 0x140D37F78`.
 
 Globals and layouts (all re-derived by the verifier): `Device.dwWidth/dwHeight 0xd37668/0xd3766c`,
 `Device.mView/mProject/mFullTransform 0xd376c8/0xd37708/0xd37748`; `HW.pDevice/pContext/m_pSwapChain/pBaseRT/pBaseZB
@@ -716,7 +716,7 @@ Anomaly SR stage totals stage= swapped= restores= round_trips= twin_generation= 
 
 `twin_refs_at_drop` is diagnostic. Stock `phase_combine` calls `surface_get()` (an AddRef) on both copy
 operands and never releases them, so the engine leaks references on its own targets every frame, and during the window on the
-twins too. Dropped twins are therefore never actually freed until the process ends: about 2 × 8 bytes
+twins too. Dropped twins are therefore never actually freed until the process ends: about 2 Ãƒâ€” 8 bytes
 per pixel per reset.
 
 **Capture** (`SRStageCapture=1`, the core frame dump service, default directory
@@ -904,7 +904,7 @@ rendering-readiness flags stay 0.
 **Selection.** `[Anomaly] SRStage=3` is Stage 2 (same keys, same swap, same bilinear seam pass) plus, inside the world
 window: a subpixel jitter of every world and first-person projection, and a lowered texture mip bias. Extra keys:
 `SRJitter=0` keeps the mip bias and drops the jitter (default 1); `SRMipBias=<offset>` is added to `log2(render/output)`
-(decimal, clamped to [-2, 1], missing or unparsable -0.3), `SRMipBias=off` leaves the bias alone. `SRStageCapture=1`
+(decimal, clamped to [-2, 1], missing or unparsable 0; -0.3 until DLSS J/K left a trail behind far characters on the aliased ground), `SRMipBias=off` leaves the bias alone. `SRStageCapture=1`
 with Stage 3 takes a burst of `SRStageCaptureCount` (default 8, at most 32) consecutive main-view world frames from
 world frame `SRStageCaptureStart`; F10 still takes a single core dump.
 
@@ -1035,6 +1035,140 @@ Open or **UNVERIFIED**: the sampler rebind lag above; the jittered `mFullTransfo
 (subpixel); motion-blur matrices with `r2_mblur > 0` (section 4); `pos_decompression_params` ignoring the jitter (lighting
 offset of at most half a render pixel); jittered PDA and item-attached UI drawn through the first-person sites; and the
 jittered final image flickering by up to half a render pixel until temporal SR (Stage 5) consumes it.
+
+### Sun cascade camera correction (12 November 2026)
+
+The user reproduced distant sun-lit flicker with Stage 5 and removed it by turning the live Subpixel jitter option off.
+Source review then found a producer-side consequence of the world-window jitter: `CRender::render_sun_cascade` copies
+`Device.mProject`, multiplies by `Device.mView`, inverts that camera matrix and fits the shadow cascade to its frustum
+(`r2_R_sun.cpp:1127-1136`, xray-monolith 028ccf5f5189b393396480076b11e40852ba3ecd). Its position snapping does not
+stabilize jitter-dependent frustum extents. This corrects the earlier broad assumption that every sun pass should simply
+inherit the jittered Device camera. Rasterized world geometry still uses that camera; shadow fitting now temporarily uses
+the saved main camera.
+
+The detour wraps `CRender::render_sun_cascades` once around its entire cascade loop, with `this` in rcx. It is the modern
+sun branch's sole call in `CRender::Render`; the legacy `R2FLAGEXT_SUN_OLD` branch is unchanged. The source's sunshafts
+check, last-cascade reset-chain save/restore, vector begin/end at CRender+0x970/+0x978, stride 0x68 and indexed loop call
+identify the wrapper independently of prologue similarity. Each cascade reads the complete Device projection; neither
+build directly reads Device.mFullTransform in this function. The end of each cascade restores RCache from Device.mView
+and Device.mProject, which is why restoring Device alone is insufficient.
+
+| Build | Wrapper RVA | Sole main-render call | Cascade fit RVA | Call expected16 |
+| --- | --- | --- | --- | --- |
+| Standard AnomalyDX11.exe | 0x815a30 | 0x8984a8 | 0x813170 | `e883d5f7ffeb15e8ecd6f7ff488bcee8` |
+| AVX AnomalyDX11AVX.exe | 0x80dfd0 | 0x88e0d6 | 0x80be60 | `e8f5fef7ffeb15e85e00f8ff488bcee8` |
+
+Both wrapper entries have expected16 `48895c240848896c2410488974241848`; this is not unique. The checked shortest unique
+prefix is 30 bytes: `48895c240848896c2410488974241848897c242041564883ec20488bd948`. MinHook relocates the first five-byte
+integer instruction (`mov [rsp+8],rbx`), with no RIP operand or VEX instruction. The cascade fit itself differs considerably:
+standard uses four 16-byte projection loads; AVX uses two 32-byte loads, with a different frame. No fit-frame offset is read
+by the adapter. Discovery and decoded operands are retained in `.local/anomaly/sun-cascade/{locate,decode,guards}.py`,
+`sites.json` and `disassembly.txt`; the permanent checks are in `tests/anomaly_sr_evidence.py`. REA had no open database
+and its Ghidra Java runtime was unavailable, so this bounded read used the existing PE/Capstone tools rather than opening
+an additional database or changing tool installation.
+
+While an SR world window actually carries jitter, `SwapController::sun_cascades_begin` saves the current jittered full
+matrix, verifies the current projection against the window's jittered main projection, and writes the saved unjittered
+Device.mProject and Device.mFullTransform. The original loop runs without the stage mutex, allowing existing draw
+callbacks. `rm_near` does not inject first-person jitter during the shadow window. On return, `sun_cascades_end` restores
+the exact jittered projection/full pair and invokes the existing guarded set_P path, rebuilding RCache.m_p/m_vp/m_wvp.
+No RCache matrix is written directly. Scoped cleanup covers C++ unwind; reentrant calls borrow the suspended camera;
+quiesce invalidates the pending restoration token. A failed matrix write or projection upload closes the SR window through
+the existing rollback, restores stock state and refuses further swaps. Scope frames, SR off and jitter off are pass-through.
+Matrix units, render-frame identity, vendor inputs and GPU resource leases are unchanged. No new option is added.
+
+The report line is `Anomaly SR sun cascades calls=... unjittered=... restored=... refused=...`. In a steady main view with
+sunlight and jitter, `unjittered == restored`, both advance with sun wrapper calls, and `refused=0`. With jitter off,
+`calls` may advance while `unjittered/restored` stop. A sunless frame need not call the wrapper. Existing SR jitter/restore,
+foreign-change and write-fault counters should remain clean.
+
+Synthetic tests cover three cascade observations of an invariant unjittered camera, exact Device and RCache restoration,
+no-jitter pass-through, reentrant borrowing, quiesce during the call and five write/upload fault paths. Both profile hook
+fixtures reject altered entry/extended guards and the call displacement. Static evidence passes on both executable hashes,
+including these new sites and negative mutations. This is a built and fixture-tested correction; the visual flicker fix
+still needs the coordinator's game run at the same sun-lit view with jitter on, followed by scope/HUD and moving-camera
+checks. No game was launched and the game installation was not modified by this task.
+
+
+Validation for this correction: MSVC Release configure and the full build in `build/wk-avx` passed; the requested
+`ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 93/93 without skips
+(104.53 seconds). `py -3 -I tests/anomaly_profile_evidence.py` passed 36/36, including all four evidence scripts for
+both executables and 28 negative mutations. `git diff --check` passed for the affected files. Logs and bounded binary
+analysis are under `.local/anomaly/sun-cascade/` (`configure.log`, `build-all.log`, `ctest.log`, `evidence-suite.log`,
+`sites.json`, `disassembly.txt`). The assigned-directory restriction prevents using the hardcoded shared build directory
+in `eng/verify.ps1`; the explicit configure/full build/requested tests above are the native checks for this task.
+No Rust behavior or public ABI changed. Visual acceptance remains pending.
+
+### Jitter-aware sun receiver-depth margin (12 November 2026)
+
+The coordinator reports that the unjittered-cascade correction works in game (`calls=unjittered=restored`, `refused=0`).
+Remaining distant sun-lit flicker was removed by setting both `r2_sun_depth_near_scale` and `r2_sun_depth_far_scale` to
+0.9995 in the console. This is a separate receiver self-shadowing boundary: jitter changes the G-buffer positions sampled
+against the sun shadow map even when the fitted cascades themselves are stable. Source revision
+028ccf5f5189b393396480076b11e40852ba3ecd uses these scales for `m_TexelAdjust[2][2]` in
+`r4_rendertarget_accum_direct.cpp:479`, and a small per-cascade bias in `r2_R_sun.cpp:1090-1103`. The console experiment
+is game evidence for that scene, not acceptance of every automatic lifecycle path below.
+
+`SRSunDepthMargin` is an integer in [0,20], default 5. The live shared-overlay control **Sun shadow margin with jitter**
+shows the integer divided by 10000 (0.0000..0.0020). It saves the integer to the Anomaly INI section and applies at the next
+world window. The multiplier is `1 - margin/10000`, so the default multiplies each user's near/far base by 0.9995; it does
+not replace a non-default base with 0.9995. Zero disables the adjustment. Parsing clamps integer values and defaults invalid
+text to 5. All option registration, translation and native ownership remain in `games/anomaly`.
+
+| Owner | Standard RVA | AVX RVA |
+| --- | --- | --- |
+| ps_r2_sun_depth_near_scale (float) | 0xceb32c | 0xcd932c |
+| ps_r2_sun_depth_far_scale (float) | 0xceb324 | 0xcd9324 |
+| accum_direct_cascade selection guard | 0x85e69c | 0x85494b |
+| near console registration guard | 0x7f9569 | 0x7f2f47 |
+| far console registration guard | 0x7f943d | 0x7f2e11 |
+
+These were found from the console name strings, then corroborated independently in accum_direct_cascade, reached from the
+already proven cascade fit. The registration stores the value pointer at CCC_Float+0x30 and the 0.5/1.5 bounds at +0x38/
++0x3c (`xrRender_console.cpp:236-239,1001-1004`). The reader preserves sub_phase in r14d and selects near when zero,
+otherwise far, then stores fRange into the texel-adjust matrix. Standard loads xmm9 with movss; AVX loads xmm14 with
+vmovss. Both file-backed globals default to 1.0. Three standard code guards and five AVX guards cover the selection,
+registrations and AVX's shared range constants. Full exact bytes are in `sr_profile.h` and the
+[AVX profile note](anomaly-avx-profile.md#sun-depth-scale-globals-and-guards); none of these guards patches engine code.
+They are validated at temporal-stage install even when the margin initially starts at zero, since it can be enabled live.
+
+When and only when the world window successfully applied projection jitter, the controller reads both bases, applies the
+multiplier and tracks each changed float independently. The scales remain adjusted through the unjittered shadow-fit wrap,
+so cascade accumulation uses the margin. The SR seam and every existing close path (stale prepare, combine/frame end,
+shutdown and fault rollback) restore the values still owned by the window. If a console command changes one during the
+window, that value is preserved and read as the new base at the next H1; the other scale is still restored. This is normal
+ownership transfer, counted as `foreign`, and does not refuse SR. No multiplier compounds across frames. Ownership uses
+value comparison and does not intercept console commands. SR off, jitter off, scopes and margin zero leave the scales alone.
+Projection jitter, camera identities, vendor inputs and GPU resource leases are unchanged.
+
+The periodic log adds `Anomaly SR sun depth margin applied=... restored=... foreign=... units=... scale=...`.
+Counters count individual floats: normally applied=restored=2 per adjusted world window and foreign=0. A console edit can
+replace a restore with a foreign count, without write faults or SR refusal. The existing sun cascade counters remain useful
+and should still balance. A failed read/write uses the existing rollback/refusal path; it is not described as a successful
+restoration.
+
+New fixtures cover unequal user bases, margin bounds, non-compounding windows, all normal and emergency closes, independent
+foreign near-scale edits during seam/quiesce and between windows, no-jitter/scope/off/zero pass-through, partial near/far
+writes and a later mip-bias failure. Both profile hook fixtures reject every altered new guard even with margin initially zero.
+The option test exercises the actual registered live getter/setter, range/divisor metadata, saved INI round trip, clamping,
+missing-key default and invalid text. Static evidence checks both complete hashes, the two registrations, defaults and
+reader branch; negative tests alter each global RVA and the reader/registration guards. Bounded analysis and logs are under
+`.local/anomaly/sun-depth/`; no new database, game launch or install write was used.
+
+The console remedy is user-tested. The automatic window lifecycle still needs an in-game check with the default 5, then
+0/5 live switching, console edits to distinct near/far bases, scope alternation and quiesce; verify the counters and the
+same sun-lit wall/terrain view, plus shadow detachment at contact edges. Rendering-readiness flags remain unchanged.
+
+
+Validation for the automatic depth margin: `cmake --preset windows-x64-vs18 -B build/wk-avx` and the full MSVC Release
+build passed. `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 94/94,
+without skips, in 114.32 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 44/44 (eight originals, 36 negative
+mutations), including both executable hashes and the new global/reader/registration mutations. The focused margin,
+standard/AVX hook and profile fixtures also passed. `git diff --check` passed for the affected files. Logs are
+`.local/anomaly/sun-depth/{configure,build-all,ctest,evidence-suite}.log`; bounded analysis is in the same directory.
+The explicit assigned-directory build/tests replace the hardcoded shared build directory in `eng/verify.ps1` for this
+worker; no Rust behavior or public ABI changed. No game was launched or installed file changed. The automatic lifecycle
+is built and fixture-tested; its visual acceptance remains pending.
 
 ## 12. Stages 4 and 5 implementation (SR inputs and temporal SR at the seam)
 
