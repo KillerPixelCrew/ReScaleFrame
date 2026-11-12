@@ -1,4 +1,4 @@
-# ReScaleFrameCraft 1.1.9
+# ReScaleFrameCraft 1.1.15
 
 Minecraft 1.21.1, NeoForge 21.1.262 or newer in the 21.1 line, Sodium 0.8.13.
 Windows x64 with an OpenGL driver supporting external Win32 memory/semaphores and a
@@ -7,7 +7,7 @@ D3D12 device on the same GPU. Java 21 or newer is required by Minecraft.
 ## Install
 
 1. Close Minecraft and remove older ReScaleFrameCraft JARs from the instance's `mods` folder.
-2. Disable or remove MetalUpscaler, then place `rescaleframecraft-1.1.9.jar` in `mods`.
+2. Disable or remove MetalUpscaler, then place `rescaleframecraft-1.1.15.jar` in `mods`.
 3. Launch normally. Native runtimes and their notices are included and extract automatically.
 4. Open Video Settings and the ReScaleFrame page. Reese's Sodium Options 2.2.4 is supported.
    F8 opens the temporal settings screen; F3 includes native processing status.
@@ -19,15 +19,13 @@ DLSS requires a supported NVIDIA RTX GPU. Other SDK features depend on GPU/drive
 DLSS model presets Default, E, F, J, K, L and M are available independently of quality.
 The driver can override the requested model.
 
-## Changes since 1.1.5
+## Changes since 1.1.9
 
-- Iris and Colorwheel integration, including Complementary Unbound with Euphoria Patches.
-- Fixed missing world geometry and depth-format errors with shaders enabled.
-- Fixed grainy stationary clouds by preserving Complementary's temporal sampling.
-- Iris hand shading and effects stay in the reconstructed scene; the 2D HUD stays separate.
-- Added GPU motion history for Flywheel/Create and Colorwheel instanced geometry.
-- Added DLSS model preset controls and reduced per-frame CPU allocations.
-
+- Sharpening: RCAS (with motion-adaptive sharpening), depth-aware RCAS and DAS, or FSR's own sharpening, on the ReScaleFrame page.
+- Distant Horizons depth and camera are used for reconstruction.
+- Multi-frame generation on RTX 40 GPUs, limited to what the selected provider supports.
+- Motion vectors for Sodium terrain and water, entities, particles and Iris hands.
+- Fixed visibility of moving surfaces with raw TAA and Iris.
 ## Included
 
 - Stable temporal antialiasing with sky, foliage and cloud history handling.
