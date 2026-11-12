@@ -4,6 +4,7 @@
 // shader-loader hook contract (caller frame, manifest, original-bytecode proof, reflection rules, disk cache) with
 // fake engine frames, a fake compiler and a fake reflector.
 #include "motion_constants.h"
+#include "motion_foliage.h"
 #include "motion_history.h"
 #include "motion_policy.h"
 #include "motion_profile.h"
@@ -608,10 +609,363 @@ void loader_contract()
     std::filesystem::remove_all(root);
 }
 
+// ---- foliage (trees and grass) ---------------------------------------------------------------------------------
+// One detail group as the engine writes it: rows 0..2 are the rotation columns times the effective scale plus the world
+// translation, row 3 is (sun, sun, sun, hemisphere).
+std::array<float, 16> detail_group(float tx, float ty, float tz, float scale, float sun, float hemi)
+{
+    return {scale, 0, 0, tx, 0, scale, 0, ty, 0, 0, scale, tz, sun, sun, sun, hemi};
+}
+void put_group(DetailRows& rows, std::size_t slot, const std::array<float, 16>& group)
+{
+    std::memcpy(rows.data() + slot * 16, group.data(), sizeof(float) * 16);
+}
+DetailRows empty_batch()
+{
+    DetailRows rows;
+    poison_detail_rows(rows);
+    return rows;
+}
+FoliageConstants wind(float time, float x)
+{
+    FoliageConstants c;
+    const float consts[4] = {1.0f / 16384, 1.0f / 16384, 0.5f, 0.25f};
+    const float wave[4] = {0.2f, 0.14f, 0.33f, time};
+    const float dir[4] = {x, 0, 0.5f, 0};
+    std::memcpy(c.consts, consts, sizeof(consts));
+    std::memcpy(c.wave, wave, sizeof(wave));
+    std::memcpy(c.wind, dir, sizeof(dir));
+    return c;
+}
+bool same(const float* a, const float* b, std::size_t count) { return std::memcmp(a, b, count * sizeof(float)) == 0; }
+
+void foliage_layout_readme()
+{
+    const std::filesystem::path root = RSF_SOURCE_DIR;
+    const auto readme = read_text(root / "games/anomaly/shaders/foliage/README.md");
+    const auto header = read_text(root / "games/anomaly/shaders/foliage/rsf_anomaly_foliage.h");
+    const auto row = [&](const std::string& pattern) {
+        std::smatch m;
+        require(std::regex_search(readme, m, std::regex(pattern)), "README row not found: " + pattern);
+        return std::stoul(m[1]);
+    };
+    require(row(R"(\| (\d+) \| row_major float4x4 rsf_previous_clip_from_world \| 64)") == foliage_clip_offset, "clip offset");
+    require(row(R"(\| (\d+) \| row_major float3x4 rsf_previous_tree_xform \| 48)") == foliage_tree_xform_offset, "xform offset");
+    require(row(R"(\| (\d+) \| float4 rsf_previous_consts \| 16)") == foliage_consts_offset, "consts offset");
+    require(row(R"(\| (\d+) \| float4 rsf_previous_wave \| 16)") == foliage_wave_offset, "wave offset");
+    require(row(R"(\| (\d+) \| float4 rsf_previous_wind, tree wind / detail dir2D \| 16)") == foliage_wind_offset, "wind offset");
+    require(row(R"(\| (\d+) \| uint4 rsf_foliage_history \| 16)") == foliage_history_offset, "history offset");
+    require(row(R"(\| (\d+) \| float4 rsf_previous_rows\[244\] \| 3904)") == foliage_rows_offset, "rows offset");
+    require(row(R"(\| (\d+) \| float4 rsf_previous_item_state\[61\] \| 976)") == foliage_item_state_offset, "item state offset");
+    require(foliage_rows_offset + foliage_detail_rows * 16 == foliage_item_state_offset &&
+        foliage_item_state_offset + foliage_detail_groups * 16 == foliage_vs_bytes, "tight tail");
+    require(header.find("register(b13)") != std::string::npos && header.find("rsf_previous_rows[61 * 4]") != std::string::npos &&
+        header.find("rsf_previous_item_state[61]") != std::string::npos, "HLSL header shape");
+    require(foliage_detail_groups == 61 && foliage_detail_rows == 244 && foliage_detail_floats == 976, "detail dimensions");
+}
+
+void foliage_layout_from_reflection()
+{
+    // A tree VS: m_xform float3x4 (48 bytes, three registers), wave/wind/consts float4; the engine indexes constant
+    // buffers by the reflection's order.
+    Reflection tree;
+    tree.buffers = {{"dynamic_transforms", 256, {{"m_VP", 0, 64}}},
+        {"$Globals", 144, {{"m_xform", 0, 48}, {"consts", 48, 16}, {"c_scale", 64, 16}, {"wind", 80, 16}, {"wave", 96, 16}}}};
+    auto layout = make_foliage_layout(Family::FoliageTree, tree);
+    require(layout.usable && layout.xform.buffer == 1 && layout.xform.offset == 0 && layout.xform.size == 48 &&
+        layout.xform.buffer_size == 144 && layout.wave.offset == 96 && layout.wind.offset == 80 && layout.consts.offset == 48,
+        "tree layout");
+    // USE_TREEWAVE: wave, wind and consts may vanish; the tree is still usable.
+    tree.buffers[1].variables = {{"m_xform", 0, 48}};
+    layout = make_foliage_layout(Family::FoliageTree, tree);
+    require(layout.usable && !layout.wave.present && !layout.wind.present && !layout.consts.present, "removed variables are absent");
+    tree.buffers[1].variables = {{"consts", 48, 16}};
+    require(!make_foliage_layout(Family::FoliageTree, tree).usable, "no xform is unusable");
+    tree.buffers[1].variables = {{"m_xform", 120, 48}};
+    require(!make_foliage_layout(Family::FoliageTree, tree).usable, "variable past its buffer is unusable");
+
+    Reflection detail;
+    detail.buffers = {{"$Globals", 4048, {{"consts", 0, 16}, {"wave", 16, 16}, {"dir2D", 32, 16}, {"array", 48, 3904}}}};
+    layout = make_foliage_layout(Family::FoliageDetail, detail);
+    require(layout.usable && layout.array.offset == 48 && layout.array.size == 3904 && layout.wind.offset == 32 &&
+        layout.wave.present, "detail wave layout");
+    detail.buffers[0].variables = {{"consts", 0, 16}, {"array", 16, 3904}};   // the still route has no wave or dir2D
+    layout = make_foliage_layout(Family::FoliageDetail, detail);
+    require(layout.usable && !layout.wave.present && !layout.wind.present, "detail still layout");
+    detail.buffers[0].variables = {{"array", 16, 3000}};
+    require(!make_foliage_layout(Family::FoliageDetail, detail).usable, "a short array is unusable");
+    require(!make_foliage_layout(Family::CoreStatic, detail).usable, "core family has no foliage layout");
+}
+
+void foliage_packing()
+{
+    const auto clip = sample_matrix(0.5);
+    const float xform[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const auto previous = wind(3.5f, 0.75f);
+    FoliageVertexBytes bytes;
+    require(pack_foliage_tree(clip, xform, previous, bytes), "tree pack");
+    for (std::size_t r = 0; r < 4; ++r)
+        for (std::size_t c = 0; c < 4; ++c)
+            require(f32(bytes.data(), foliage_clip_offset + (r * 4 + c) * 4) == static_cast<float>(clip.values[r * 4 + c]), "clip rows");
+    for (std::size_t i = 0; i < 12; ++i) require(f32(bytes.data(), foliage_tree_xform_offset + i * 4) == xform[i], "xform registers verbatim");
+    require(same(reinterpret_cast<const float*>(bytes.data() + foliage_consts_offset), previous.consts, 4) &&
+        same(reinterpret_cast<const float*>(bytes.data() + foliage_wave_offset), previous.wave, 4) &&
+        same(reinterpret_cast<const float*>(bytes.data() + foliage_wind_offset), previous.wind, 4), "consts, wave, wind");
+    std::uint32_t history[4];
+    std::memcpy(history, bytes.data() + foliage_history_offset, 16);
+    require(history[0] == 1 && history[1] == 0 && history[2] == 1 && history[3] == 0, "tree history uint4 (complete, 0, ABI 1, 0)");
+    for (std::size_t i = foliage_rows_offset; i < foliage_vs_bytes; ++i) require(bytes[i] == std::byte{}, "tree has no rows or item state");
+    float bad_xform[12];
+    std::memcpy(bad_xform, xform, sizeof(xform));
+    bad_xform[5] = std::nanf("");
+    require(!pack_foliage_tree(clip, bad_xform, previous, bytes), "NaN xform refused");
+    std::memcpy(history, bytes.data() + foliage_history_offset, 16);
+    require(history[0] == 0 && history[2] == 0, "a refusal leaves the all-zero invalid buffer");
+    auto bad_wind = previous;
+    bad_wind.wind[2] = INFINITY;
+    require(!pack_foliage_tree(clip, xform, bad_wind, bytes), "infinite wind refused");
+
+    // Detail: only the matched groups carry rows and a state.
+    std::array<FoliageItem, foliage_detail_groups> items{};
+    const auto g1 = detail_group(10, 20, 30, 0.5f, 0.3f, 0.7f), g3 = detail_group(-4, 5, 6, 1.5f, 0.2f, 0.9f);
+    items[1] = {true, 0.5f, 1.0f, {}};
+    std::memcpy(items[1].rows, g1.data(), sizeof(float) * 16);
+    items[3] = {true, 1.5f, 0.5f, {}};
+    std::memcpy(items[3].rows, g3.data(), sizeof(float) * 16);
+    require(pack_foliage_detail(clip, previous, items, 5, bytes), "detail pack");
+    std::memcpy(history, bytes.data() + foliage_history_offset, 16);
+    require(history[0] == 1 && history[1] == 5 && history[2] == 1 && history[3] == 0, "detail history (complete, live groups, ABI 1, 0)");
+    require(same(reinterpret_cast<const float*>(bytes.data() + foliage_rows_offset + 1 * 64), g1.data(), 16), "group 1 rows");
+    require(same(reinterpret_cast<const float*>(bytes.data() + foliage_rows_offset + 3 * 64), g3.data(), 16), "group 3 rows");
+    require(f32(bytes.data(), foliage_item_state_offset + 1 * 16) == 1 && f32(bytes.data(), foliage_item_state_offset + 1 * 16 + 4) == 0.5f &&
+        f32(bytes.data(), foliage_item_state_offset + 1 * 16 + 8) == 1.0f && f32(bytes.data(), foliage_item_state_offset + 1 * 16 + 12) == 0,
+        "state (1, scale, fade, 0)");
+    require(f32(bytes.data(), foliage_item_state_offset + 0 * 16) == 0 && f32(bytes.data(), foliage_rows_offset) == 0, "unmatched group 0 is zero");
+    require(f32(bytes.data(), foliage_item_state_offset + 4 * 16) == 0, "unmatched group 4 is zero");
+    items[3].fade = 1.5f;   // outside (0, 1]
+    require(pack_foliage_detail(clip, previous, items, 5, bytes) && f32(bytes.data(), foliage_item_state_offset + 3 * 16) == 0 &&
+        f32(bytes.data(), foliage_rows_offset + 3 * 64) == 0, "a state the shader would reject is not bound");
+    require(!pack_foliage_detail(clip, previous, items, 62, bytes), "more than 61 groups refused");
+    // Jitter: removing it from a jittered projection restores the unjittered one (column vectors, NDC (2u, -2v)).
+    temporal::Mat4 p;
+    p.values = {1.2, 0, 0, 0, 0, 2.1, 0, 0, 0, 0, 1.001, -0.1, 0, 0, 1, 0};
+    const float ju = 0.003f, jv = -0.002f;
+    auto jittered = p;
+    for (std::size_t c = 0; c < 4; ++c) {
+        jittered.values[0 * 4 + c] += 2.0 * ju * p.values[3 * 4 + c];
+        jittered.values[1 * 4 + c] -= 2.0 * jv * p.values[3 * 4 + c];
+    }
+    const auto restored = remove_jitter(jittered, ju, jv);
+    for (std::size_t i = 0; i < 16; ++i) require(std::abs(restored.values[i] - p.values[i]) < 1e-12, "jitter removed");
+    require(remove_jitter(p, 0, 0) == p, "zero jitter is the identity");
+}
+
+void foliage_identity_remap()
+{
+    using temporal::ViewId;
+    FoliageHistory h;
+    const std::uint64_t route = 0x1111, other_route = 0x2222;
+    const auto w0 = wind(1.0f, 0.5f), w1 = wind(1.1f, 0.6f);
+    // Frame 10: two batches of one route. Items are identified by what they are, not by where the engine put them.
+    require(!h.begin_frame(ViewId::Main, 10, 0, 640, 360), "first frame has no previous");
+    DetailRows batch = empty_batch();
+    put_group(batch, 0, detail_group(1, 0, 1, 1.0f, 0.1f, 0.5f));
+    put_group(batch, 1, detail_group(2, 0, 2, 0.9f, 0.1f, 0.5f));
+    put_group(batch, 2, detail_group(3, 0, 3, 0.8f, 0.2f, 0.6f));
+    auto remap = h.record_detail(ViewId::Main, route, w0, batch);
+    require(remap.live == 3 && remap.matched == 0 && remap.unmatched == 3 && !remap.route_found, "frame one: nothing to remap");
+    DetailRows second = empty_batch();
+    put_group(second, 0, detail_group(4, 0, 4, 0.7f, 0.2f, 0.6f));
+    put_group(second, 1, detail_group(5, 0, 5, 0.6f, 0.3f, 0.7f));
+    h.record_detail(ViewId::Main, route, w0, second);
+    require(h.recorded_items(ViewId::Main) == 5, "five instances recorded, the poisoned tails are not");
+
+    // Frame 11: the same plants land in other batches and other groups (the camera moved, items culled and added), the
+    // wind and fade changed. Previous rows are bound to the CURRENT group of the same plant.
+    require(h.begin_frame(ViewId::Main, 11, 0, 640, 360), "continuous frame");
+    DetailRows now = empty_batch();
+    put_group(now, 0, detail_group(5, 0, 5, 0.65f, 0.3f, 0.7f));   // was batch 2 group 1
+    put_group(now, 1, detail_group(9, 0, 9, 1.0f, 0.4f, 0.4f));    // new plant: no history
+    put_group(now, 2, detail_group(1, 0, 1, 0.95f, 0.1f, 0.5f));   // was batch 1 group 0
+    put_group(now, 3, detail_group(3, 0, 3, 0.75f, 0.2f, 0.6f));   // was batch 1 group 2
+    remap = h.record_detail(ViewId::Main, route, w1, now);
+    require(remap.live == 4 && remap.route_found && remap.matched == 3 && remap.unmatched == 1, "three of four remapped");
+    require(remap.previous == w0, "previous consts, wave and wind of the route");
+    const auto p5 = detail_group(5, 0, 5, 0.6f, 0.3f, 0.7f), p1 = detail_group(1, 0, 1, 1.0f, 0.1f, 0.5f),
+               p3 = detail_group(3, 0, 3, 0.8f, 0.2f, 0.6f);
+    require(remap.items[0].valid && same(remap.items[0].rows, p5.data(), 16) && remap.items[0].scale == 0.6f, "group 0 gets plant 5's previous rows");
+    require(!remap.items[1].valid, "a new plant has no history");
+    require(remap.items[2].valid && same(remap.items[2].rows, p1.data(), 16) && remap.items[2].scale == 1.0f, "group 2 gets plant 1's previous rows");
+    require(remap.items[3].valid && same(remap.items[3].rows, p3.data(), 16), "group 3 gets plant 3's previous rows");
+    require(remap.items[2].fade == 1.0f && !remap.items[4].valid, "fade gate, groups past the batch are invalid");
+    // Pack it: the shader sees exactly those rows at the current groups.
+    FoliageVertexBytes bytes;
+    require(pack_foliage_detail(compose(sample_matrix(0.2), sample_matrix(0.1)), remap.previous, remap.items, remap.live, bytes), "pack");
+    require(same(reinterpret_cast<const float*>(bytes.data() + foliage_rows_offset + 2 * 64), p1.data(), 16) &&
+        f32(bytes.data(), foliage_item_state_offset + 1 * 16) == 0, "bound rows follow the current slots");
+
+    // Frame 12: a plant that changed route (nearer, now the other wave set) must not borrow the other route's constants;
+    // an unknown route has no previous at all; a repeated identical group is harmless, a contradictory one a conflict.
+    require(h.begin_frame(ViewId::Main, 12, 0, 640, 360), "frame 12");
+    DetailRows moved = empty_batch();
+    put_group(moved, 0, detail_group(5, 0, 5, 0.66f, 0.3f, 0.7f));
+    DetailRows foreign = empty_batch();
+    put_group(foreign, 0, detail_group(50, 0, 50, 1.0f, 0.1f, 0.1f));
+    remap = h.record_detail(ViewId::Main, other_route, w1, foreign);
+    require(!remap.route_found && remap.matched == 0, "a route not drawn last frame has no history");
+    remap = h.record_detail(ViewId::Main, route, w1, moved);
+    require(remap.route_found && remap.matched == 1, "same plant, same route matches");
+    DetailRows again = moved;
+    require(h.record_detail(ViewId::Main, route, w1, again).conflicts == 0, "an identical repeat (second pass) is not a conflict");
+    put_group(again, 0, detail_group(5, 0, 5, 0.5f, 0.3f, 0.7f));
+    require(h.record_detail(ViewId::Main, route, w1, again).conflicts == 1 && h.conflicts() == 1, "contradicting repeat is a conflict");
+    // That plant now has no usable history for the next frame; a route whose constants differ in one frame has none either.
+    require(h.begin_frame(ViewId::Main, 13, 0, 640, 360), "frame 13");
+    remap = h.record_detail(ViewId::Main, route, w1, moved);
+    require(remap.route_found && remap.matched == 0, "the conflicted plant is not history");
+    remap = h.record_detail(ViewId::Main, other_route, w1, foreign);
+    require(remap.route_found && remap.matched == 1, "the other route and its plant were drawn in frame 12");
+    DetailRows tail = empty_batch();
+    require(h.record_detail(ViewId::Main, route, w1, tail).live == 0, "a fully poisoned batch has no live groups");
+    DetailRows garbage = empty_batch();
+    put_group(garbage, 0, detail_group(7, 0, 7, 1.0f, 0.1f, 0.1f));
+    garbage[16 * 1 + 5] = std::nanf("");   // a half-written second group
+    require(count_live_groups(garbage) == 1, "a non-finite group ends the batch");
+    require(detail_group_scale(detail_group(0, 0, 0, 0.75f, 0, 0).data()) == 0.75f, "effective scale from the first row");
+
+    // Frame rules shared with the core history.
+    require(h.begin_frame(ViewId::Main, 14, 0, 640, 360), "frame 14");
+    require(h.record_detail(ViewId::Main, route, w1, moved).route_found, "history steady");
+    require(!h.begin_frame(ViewId::Main, 15, 0, 1280, 720), "a resize drops history");
+    require(!h.record_detail(ViewId::Main, route, w1, moved).route_found, "resized: no previous");
+    require(h.begin_frame(ViewId::Main, 16, 0, 1280, 720), "frame 16");
+    require(!h.begin_frame(ViewId::Main, 17, 1, 1280, 720), "a reset generation drops history");
+    require(h.begin_frame(ViewId::Main, 18, 1, 1280, 720) && h.begin_frame(ViewId::Main, 18, 1, 1280, 720), "split scene re-open keeps it");
+    require(!h.begin_frame(ViewId::Main, 3, 1, 1280, 720), "an older frame number restarts history");
+    require(!h.active(ViewId::Scope), "scope view independent");
+    h.begin_frame(ViewId::Scope, 20, 0, 320, 180);
+    require(h.record_detail(ViewId::Scope, route, w1, moved).live == 1 && !h.record_detail(ViewId::Scope, route, w1, moved).route_found,
+        "scope has its own frames");
+    h.reset_all();
+    require(!h.active(ViewId::Main), "reset forgets everything");
+
+    // Trees: the visual's address, its xform bytes and its slide window.
+    TreeRecord tree;
+    const float xform[12] = {1, 0, 0, 5, 0, 1, 0, 6, 0, 0, 1, 7};
+    std::memcpy(tree.xform, xform, sizeof(xform));
+    tree.constants = w0;
+    tree.lod = 3;
+    h.begin_frame(ViewId::Main, 30, 0, 640, 360);
+    require(h.record_tree(ViewId::Main, 0xabc0, tree) == nullptr, "first sight of a tree");
+    require(h.begin_frame(ViewId::Main, 31, 0, 640, 360), "frame 31");
+    auto tree_now = tree;
+    tree_now.constants = w1;
+    const auto* before = h.record_tree(ViewId::Main, 0xabc0, tree_now);
+    require(before && *before == tree && before->constants == w0, "the same visual's previous record (previous wind and time)");
+    require(h.record_tree(ViewId::Main, 0xabc0, tree_now) == before, "identical repeat");
+    auto contradicting = tree_now;
+    contradicting.lod = 4;
+    const auto conflicts_before = h.conflicts();
+    require(h.record_tree(ViewId::Main, 0xabc0, contradicting) == nullptr && h.conflicts() == conflicts_before + 1, "same-frame contradiction");
+    require(h.record_tree(ViewId::Main, 0xdef0, tree_now) == nullptr, "another tree has its own history");
+    require(h.begin_frame(ViewId::Main, 32, 0, 640, 360), "frame 32");
+    require(h.record_tree(ViewId::Main, 0xabc0, tree_now) == nullptr, "a conflicted tree is not history");
+}
+
+void foliage_policy()
+{
+    using geometry::DrawKind;
+    using geometry::DrawVerdict;
+    CameraSample camera{sample_matrix(0.1), sample_matrix(0.2)};
+    TreeRecord previous;
+    const float xform[12] = {1, 0, 0, 5, 0, 1, 0, 6, 0, 0, 1, 7};
+    std::memcpy(previous.xform, xform, sizeof(xform));
+    previous.constants = wind(1.0f, 0.5f);
+    previous.lod = 2;
+    TreeDrawInput tree;
+    tree.family = Family::FoliageTree;
+    tree.in_visual = true;
+    tree.kind = DrawKind::Tree;
+    tree.verdict = DrawVerdict::IdentifiedFoliage;
+    tree.context = true;
+    tree.previous_camera = &camera;
+    tree.constants_ok = true;
+    tree.current = previous;
+    tree.current.constants = wind(1.1f, 0.6f);
+    tree.previous = &previous;
+    auto d = decide_tree(tree);
+    require(d.reason == HistoryReason::Valid && d.previous_clip == compose(camera.projection, camera.view), "tree valid: previous P*V");
+    auto t = tree; t.family = Family::CoreStatic;
+    require(decide_tree(t).reason == HistoryReason::KindMismatch, "core VS on a tree draw");
+    t = tree; t.in_visual = false;
+    require(decide_tree(t).reason == HistoryReason::NoVisual, "outside a visual");
+    t = tree; t.verdict = DrawVerdict::UnidentifiedDeformed;
+    require(decide_tree(t).reason == HistoryReason::Unidentified, "not identified");
+    t = tree; t.context = false;
+    require(decide_tree(t).reason == HistoryReason::NoContext, "no context");
+    t = tree; t.constants_ok = false;
+    require(decide_tree(t).reason == HistoryReason::FoliageNoConstants, "constants unreadable");
+    t = tree; t.camera_conflict = true;
+    require(decide_tree(t).reason == HistoryReason::CameraConflict, "camera conflict");
+    t = tree; t.previous_camera = nullptr;
+    require(decide_tree(t).reason == HistoryReason::NoPreviousCamera, "first frame");
+    t = tree; t.previous = nullptr;
+    require(decide_tree(t).reason == HistoryReason::FoliageNoPrevious, "tree not drawn last frame");
+    t = tree; t.current.lod = 3;
+    require(decide_tree(t).reason == HistoryReason::FoliageLodChanged, "slide window changed");
+    t = tree; t.current.xform[3] = 9;
+    require(decide_tree(t).reason == HistoryReason::FoliageXformChanged, "a recycled address with another xform");
+    t = tree; t.previous_jitter_u = 0.004f; t.previous_jitter_v = -0.001f;
+    auto jittered = camera;
+    for (std::size_t c = 0; c < 4; ++c) {
+        jittered.projection.values[0 * 4 + c] += 2.0 * 0.004 * camera.projection.values[3 * 4 + c];
+        jittered.projection.values[1 * 4 + c] -= 2.0 * -0.001 * camera.projection.values[3 * 4 + c];
+    }
+    t.previous_camera = &jittered;
+    d = decide_tree(t);
+    require(d.reason == HistoryReason::Valid && d.previous_clip == compose(remove_jitter(jittered.projection, 0.004f, -0.001f), camera.view),
+        "the previous projection is unjittered for foliage");
+
+    DetailDrawInput detail;
+    detail.family = Family::FoliageDetail;
+    detail.detail_window = true;
+    detail.context = true;
+    detail.previous_camera = &camera;
+    detail.constants_ok = true;
+    detail.world_readable = true;
+    detail.world_identity = true;
+    detail.route_found = true;
+    detail.live_groups = 12;
+    auto dd = decide_detail(detail);
+    require(dd.reason == HistoryReason::Valid && dd.previous_clip == compose(camera.projection, camera.view), "detail valid");
+    auto x = detail; x.family = Family::FoliageTree;
+    require(decide_detail(x).reason == HistoryReason::KindMismatch, "tree VS on a detail draw");
+    x = detail; x.detail_window = false;
+    require(decide_detail(x).reason == HistoryReason::NoVisual, "outside CDetailManager::Render");
+    x = detail; x.context = false;
+    require(decide_detail(x).reason == HistoryReason::NoContext, "no context");
+    x = detail; x.live_groups = 0;
+    require(decide_detail(x).reason == HistoryReason::FoliageNoConstants, "no live instances");
+    x = detail; x.world_identity = false;
+    require(decide_detail(x).reason == HistoryReason::FoliageWorld, "the transform assumes an identity world");
+    x = detail; x.world_readable = false;
+    require(decide_detail(x).reason == HistoryReason::FoliageWorld, "unreadable world");
+    x = detail; x.camera_conflict = true;
+    require(decide_detail(x).reason == HistoryReason::CameraConflict, "camera conflict");
+    x = detail; x.previous_camera = nullptr;
+    require(decide_detail(x).reason == HistoryReason::NoPreviousCamera, "first frame");
+    x = detail; x.route_found = false;
+    require(decide_detail(x).reason == HistoryReason::FoliageNoPrevious, "route not drawn last frame");
+    require(std::string(history_reason_name(HistoryReason::FoliageXformChanged)) == "foliage_xform_changed" &&
+        static_cast<std::size_t>(HistoryReason::Count) == 16, "reason names and counter width (MotionCounters::reasons)");
+}
+
 const std::map<std::string, void (*)()> cases{
     {"layouts", layouts_match_readmes}, {"core-vertex", core_vertex_packing}, {"pixel", pixel_packing},
     {"matrix", matrix_convention}, {"policy", core_policy}, {"history", history_rules}, {"binder", binder_state_machine},
-    {"compatibility", compatibility_rules}, {"frame", caller_frame}, {"manifest", manifest_rules}, {"loader", loader_contract}};
+    {"compatibility", compatibility_rules}, {"frame", caller_frame}, {"manifest", manifest_rules}, {"loader", loader_contract},
+    {"foliage-layout-readme", foliage_layout_readme}, {"foliage-layout-reflection", foliage_layout_from_reflection},
+    {"foliage-packing", foliage_packing}, {"foliage-identity", foliage_identity_remap}, {"foliage-policy", foliage_policy}};
 }
 
 int main(int argc, char** argv)

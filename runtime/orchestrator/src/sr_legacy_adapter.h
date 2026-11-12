@@ -6,7 +6,8 @@
 struct rsf_sr_legacy_adapter;
 rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
     const char* fsr2, const char* fsr3, const char* fsr4, const char* xess,
-    float units_to_meters, rsf_backend_log_fn log, void* user, rsf_sr_legacy_adapter** out);
+    float units_to_meters, uint32_t standard_depth, rsf_backend_log_fn log, void* user,
+    rsf_sr_legacy_adapter** out);
 rsf_backend_result rsf_sr_legacy_select(rsf_sr_legacy_adapter* adapter, uint32_t backend,
     rsf_quality quality, uint32_t* width, uint32_t* height);
 /* `frame` motion times its motion scale is current-minus-previous UV, the pipeline's canonical unit. */

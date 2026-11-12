@@ -555,6 +555,190 @@ def verify_stage2(pe, p, log):
                f'static viewport {viewport:#x} (.data), guard {guard:#x} (.bss), callers {[hex(c) for c in sorted(calls)]}')
 
 
+def verify_stage3(pe, f, p, log):
+    """SR Stage 3 data: the adapter writes Device.mProject/mFullTransform and reads mView as three adjacent Fmatrix
+    globals, calls R_xforms::set_P (the extended guard) and SetMipLODBias (xmm1), and at install checks every
+    first-person site for `call set_P` then `call [rax+0x1b8]` (slot 55) or a direct `call rmNear`."""
+    view, project, full = ints(TEXT, 'device_view_rva'), ints(TEXT, 'device_project_rva'), ints(TEXT, 'device_full_transform_rva')
+    assert project == view + 64 and full == project + 64, 'Device.mView, mProject, mFullTransform are adjacent Fmatrix'
+    assert ints(TEXT, 'rm_near_slot') * 8 == 0x1b8, 'slot 55 is call [rax+0x1b8]'
+    set_p, rm_near, rm_far = f['R_xforms::set_P'], f['CRender::rmNear'], f['CRender::rmFar']
+    unique = {name: (rva, h) for name, rva, h in p['unique']}
+    assert unique['R_xforms::set_P'][0] == set_p and pe.read(set_p, len(bytes.fromhex(unique['R_xforms::set_P'][1]))).hex() == \
+        unique['R_xforms::set_P'][1], 'set_P extended guard'
+    forms = {'slot55': 0, 'direct': 0}
+    for name, start, set_p_call, near_call in p['first_person']:
+        assert pe.read(set_p_call, 1) == b'\xe8' and pe.call_target(set_p_call) == set_p, ('set_P call', name)
+        raw = pe.read(near_call, 6)
+        if raw == b'\xff\x90\xb8\x01\x00\x00':
+            forms['slot55'] += 1
+        else:
+            assert raw[0] == 0xe8 and pe.call_target(near_call) == rm_near != rm_far, ('rmNear call', name)
+            forms['direct'] += 1
+        assert 0 < near_call - set_p_call < 0x120, name
+    assert forms == {'slot55': 4, 'direct': 2}, forms
+    # The bias parameter really is xmm1: SetMipLODBias compares it with the cached field first (`movss xmm0,[rcx+field]`
+    # then ucomiss xmm0,xmm1), so an unchanged value returns without rebuilding the samplers.
+    set_bias = f['dx10SamplerStateCache::SetMipLODBias']
+    body = pe.read(set_bias, 0x20)
+    assert b'\x0f\x2e\xc1' in body or b'\x0f\x2e\xc8' in body, ('ucomiss with xmm1', body.hex())
+    log.append(f'Stage 3: Device.mView/mProject/mFullTransform {view:#x}/{project:#x}/{full:#x} adjacent; set_P {set_p:#x} '
+               f'extended guard; first-person sites {forms["slot55"]} via slot 55, {forms["direct"]} direct rmNear; '
+               f'SetMipLODBias {set_bias:#x} compares xmm1 with the cached bias')
+
+
+# ---- Stage 3 jitter burst measurement (no executable needed) -------------------------------------------------------
+def _np():
+    try:
+        import numpy
+    except ImportError:
+        return None
+    return numpy
+
+
+def _upsampled_dft(np, data, size, factor, offsets):
+    """Matrix-multiply DFT of `data` (frequency domain) upsampled by `factor` in a size x size window at `offsets`
+    (Guizar-Sicairos, Thurman and Fienup 2008, as in scikit-image's phase_cross_correlation)."""
+    rows, cols = data.shape
+    col_kernel = np.exp((-1j * 2 * np.pi / (cols * factor)) *
+                        (np.fft.ifftshift(np.arange(cols))[:, None] - np.floor(cols / 2)) * (np.arange(size) - offsets[1])[None, :])
+    row_kernel = np.exp((-1j * 2 * np.pi / (rows * factor)) *
+                        (np.arange(size)[:, None] - offsets[0]) * (np.fft.ifftshift(np.arange(rows))[None, :] - np.floor(rows / 2)))
+    return row_kernel @ data @ col_kernel
+
+
+def image_shift(np, reference, moving, factor=100):
+    """Displacement (dx, dy) in pixels of the content of `moving` relative to `reference` (+x right, +y down), from
+    cross-correlation of Hann-windowed, mean-removed images with 1/factor pixel refinement."""
+    window = np.outer(np.hanning(reference.shape[0]), np.hanning(reference.shape[1]))
+    a = (reference - reference.mean()) * window
+    b = (moving - moving.mean()) * window
+    # Plain (not whitened) cross-correlation: whitening equalises the noise floor (film grain, rain) with the signal
+    # and biases the subpixel peak; the band-limited correlation peak of a pure translation sits at the offset.
+    product = np.fft.fft2(a) * np.conj(np.fft.fft2(b))
+    correlation = np.fft.ifft2(product)
+    peak = np.array(np.unravel_index(np.argmax(np.abs(correlation)), correlation.shape), dtype=float)
+    shape = np.array(correlation.shape, dtype=float)
+    peak[peak > np.trunc(shape / 2)] -= shape[peak > np.trunc(shape / 2)]
+    region = np.ceil(factor * 1.5)
+    centre = np.trunc(region / 2)
+    shift = np.round(peak * factor) / factor
+    refined = np.conj(_upsampled_dft(np, np.conj(product), int(region), factor, centre - shift * factor))
+    fine = np.array(np.unravel_index(np.argmax(np.abs(refined)), refined.shape), dtype=float)
+    shift = shift + (fine - centre) / factor
+    # `shift` registers moving onto reference; the content moved by its negative.
+    return -shift[1], -shift[0]
+
+
+def _luminance(np, path, width, height, dxgi):
+    raw = path.read_bytes()
+    if dxgi == 10:   # R16G16B16A16_FLOAT
+        rgba = np.frombuffer(raw, dtype='<f2').astype(np.float64).reshape(height, width, 4)
+    elif dxgi in (24,):   # R10G10B10A2_UNORM
+        words = np.frombuffer(raw, dtype='<u4').reshape(height, width)
+        rgba = np.stack([(words >> s) & 0x3ff for s in (0, 10, 20)] + [words >> 30], axis=-1).astype(np.float64) / 1023.0
+    elif dxgi in (28, 29, 87, 91):   # R8G8B8A8 / B8G8R8A8 UNORM(_SRGB)
+        rgba = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4).astype(np.float64) / 255.0
+        if dxgi in (87, 91):
+            rgba = rgba[..., [2, 1, 0, 3]]
+    else:
+        raise AssertionError(('unsupported DXGI format', dxgi, path.name))
+    rgb = np.nan_to_num(np.clip(rgba[..., :3], 0.0, 65504.0))
+    return rgb @ np.array([0.2126, 0.7152, 0.0722])
+
+
+def measure_burst(directory, region=None, final_region=None, tolerance=0.15, out=None):
+    """Reads a Stage 3 burst (burst.json, world_NN.bin, final_NN.bin) and compares the measured displacement of every
+    world frame against frame 0 with the jitter difference the adapter recorded. Returns the summary dict; `ok` is
+    False when any world error exceeds `tolerance` render pixels or a final region moved more than `tolerance`."""
+    import json
+    np = _np()
+    if np is None:
+        raise SystemExit('numpy is required for --measure-jitter')
+    directory = pathlib.Path(directory)
+    index = json.loads((directory / 'burst.json').read_text())
+    frames = [f for f in index['frames'] if f['world']]
+    assert len(frames) >= 2, 'need at least two world frames'
+    def crop(image, box, border=4):
+        if box:
+            x0, y0, x1, y1 = box
+            return image[y0:y1, x0:x1]
+        return image[border:-border, border:-border]
+    base = frames[0]
+    reference = crop(_luminance(np, directory / f'world_{base["index"]:02d}.bin', *base['world_size'], base['world_dxgi']), region)
+    final_reference = None
+    if final_region and base['final']:
+        final_reference = crop(_luminance(np, directory / f'final_{base["index"]:02d}.bin', *base['final_size'], base['final_dxgi']),
+                               final_region)
+    rows, worst, worst_final = [], 0.0, 0.0
+    for f in frames[1:]:
+        moving = crop(_luminance(np, directory / f'world_{f["index"]:02d}.bin', *f['world_size'], f['world_dxgi']), region)
+        dx, dy = (float(v) for v in image_shift(np, reference, moving))
+        jx = (f['jitter_px'][0] if f['applied'] else 0.0) - (base['jitter_px'][0] if base['applied'] else 0.0)
+        jy = (f['jitter_px'][1] if f['applied'] else 0.0) - (base['jitter_px'][1] if base['applied'] else 0.0)
+        error = max(abs(dx - jx), abs(dy - jy))
+        worst = max(worst, error)
+        row = {'index': f['index'], 'sequence_index': f['sequence_index'], 'expected': [round(jx, 4), round(jy, 4)],
+               'measured': [round(dx, 4), round(dy, 4)], 'error_px': round(error, 4)}
+        if final_reference is not None and f['final']:
+            fdx, fdy = (float(v) for v in image_shift(np, final_reference, crop(_luminance(np, directory / f'final_{f["index"]:02d}.bin',
+                                                                        *f['final_size'], f['final_dxgi']), final_region)))
+            row['final_region_shift'] = [round(fdx, 4), round(fdy, 4)]
+            worst_final = max(worst_final, abs(fdx), abs(fdy))
+        rows.append(row)
+    summary = {'directory': str(directory), 'region': region, 'final_region': final_region, 'frames': rows,
+               'worst_world_error_px': round(float(worst), 4), 'tolerance_px': tolerance,
+               'worst_final_region_shift_px': round(float(worst_final), 4) if final_reference is not None else None}
+    summary['ok'] = bool(worst <= tolerance and (final_reference is None or worst_final <= tolerance))
+    text = json.dumps(summary, indent=1)
+    print(text)
+    if out:
+        pathlib.Path(out).write_text(text)
+    return summary
+
+
+def measure_self_test():
+    """Synthetic burst: a band-limited random image shifted by Fourier translation by the first 8 Halton(2,3) samples
+    (mean-free noise added), plus a static 'UI' image. The measurement must recover each offset within 0.03 px."""
+    import json
+    import tempfile
+    np = _np()
+    if np is None:
+        print('SKIP: numpy unavailable')
+        return 77
+    rng = np.random.default_rng(7)
+    h, w = 96, 144
+    spectrum = np.fft.fft2(rng.standard_normal((h, w)))
+    fy, fx = np.fft.fftfreq(h)[:, None], np.fft.fftfreq(w)[None, :]
+    spectrum *= np.exp(-(fx ** 2 + fy ** 2) / (2 * 0.08 ** 2))   # smooth, band-limited content
+    def halton(i, b):
+        r, f = 0.0, 1.0
+        while i:
+            f /= b
+            r += f * (i % b)
+            i //= b
+        return r
+    samples = [(halton(i + 1, 2) - 0.5, halton(i + 1, 3) - 0.5) for i in range(8)]
+    ui = (rng.random((h * 2, w * 2)) > 0.5).astype(np.float64)
+    with tempfile.TemporaryDirectory() as temp:
+        root = pathlib.Path(temp)
+        frames = []
+        for i, (jx, jy) in enumerate(samples):
+            shifted = np.real(np.fft.ifft2(spectrum * np.exp(-2j * np.pi * (fx * jx + fy * jy))))
+            shifted = 0.5 + 0.1 * shifted / np.abs(shifted).max() + rng.normal(0, 0.002, shifted.shape)
+            rgba = np.stack([shifted, shifted, shifted, np.ones_like(shifted)], axis=-1).astype('<f2')
+            (root / f'world_{i:02d}.bin').write_bytes(rgba.tobytes())
+            final = np.stack([ui * 255] * 3 + [np.full_like(ui, 255)], axis=-1).astype(np.uint8)
+            (root / f'final_{i:02d}.bin').write_bytes(final.tobytes())
+            frames.append({'index': i, 'sequence_index': i, 'applied': True, 'jitter_px': [jx, jy], 'world': True,
+                           'world_size': [w, h], 'world_dxgi': 10, 'final': True, 'final_size': [w * 2, h * 2], 'final_dxgi': 28})
+        (root / 'burst.json').write_text(json.dumps({'frames': frames}))
+        summary = measure_burst(root, final_region=[10, 10, 200, 150], tolerance=0.03)
+    assert summary['ok'], summary
+    print(f'PASS: measured {len(summary["frames"])} synthetic subpixel offsets, worst error {summary["worst_world_error_px"]} px')
+    return 0
+
+
 def verify(pe):
     assert PROFILE.exists(), 'missing games/anomaly/src/sr_profile.h'
     p = parse(TEXT)
@@ -571,11 +755,13 @@ def verify(pe):
     verify_backend(pe, f, log)
     verify_samplers(pe, f, log)
     verify_stage2(pe, p, log)
+    verify_stage3(pe, f, p, log)
     for line in log:
         print(line)
     print(f'PASS: {len(p["functions"])} function guards, {len(p["calls"])} call-site guards, {len(p["unique"])} '
           f'extended unique guards, {len(p["first_person"])} first-person sites, {len(p["slots"])} CRenderTarget slots, '
-          'CRT/CTexture/RCache/R_xforms/SSManager layouts, Stage 2 world targets and SSAO viewport static')
+          'CRT/CTexture/RCache/R_xforms/SSManager layouts, Stage 2 world targets and SSAO viewport static, Stage 3 '
+          'projection/first-person/mip-bias sites')
 
 
 TEXT = PROFILE.read_text() if PROFILE.exists() else ''
@@ -585,10 +771,22 @@ if __name__ == '__main__':
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--read', nargs=2)
     parser.add_argument('--profile', help='verify another copy of sr_profile.h (negative tests)')
+    parser.add_argument('--measure-jitter', metavar='DIR', help='measure a Stage 3 burst (sr-jitter-* folder); no exe needed')
+    parser.add_argument('--region', nargs=4, type=int, metavar=('X0', 'Y0', 'X1', 'Y1'),
+                        help='world sub-rectangle in render pixels (for example the first-person weapon)')
+    parser.add_argument('--final-region', nargs=4, type=int, metavar=('X0', 'Y0', 'X1', 'Y1'),
+                        help='back-buffer sub-rectangle that must not move (HUD/UI), output pixels')
+    parser.add_argument('--tolerance', type=float, default=0.15, help='pass threshold in pixels (default 0.15)')
+    parser.add_argument('--out', help='also write the measurement summary JSON here')
+    parser.add_argument('--measure-self-test', action='store_true', help='synthetic check of the burst measurement')
     args = parser.parse_args()
     if args.profile:
         PROFILE = pathlib.Path(args.profile)
         TEXT = PROFILE.read_text()
+    if args.measure_self_test:
+        raise SystemExit(measure_self_test())
+    if args.measure_jitter:
+        raise SystemExit(0 if measure_burst(args.measure_jitter, args.region, args.final_region, args.tolerance, args.out)['ok'] else 1)
     image = Image()
     if args.verify:
         verify(image)

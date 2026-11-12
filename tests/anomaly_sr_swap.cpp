@@ -8,7 +8,9 @@
 
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <cstring>
 #include <string_view>
 #include <utility>
@@ -38,6 +40,9 @@ struct Engine {
     alignas(8) std::array<std::byte, 8> base_rt{};
     alignas(8) std::array<std::byte, 24> viewport{};
     alignas(8) std::array<std::byte, 4> guard{};
+    // Stage 3: Device.mView/mProject/mFullTransform (X-Ray Fmatrix, row vectors) and SSManager.m_uiMipLODBias.
+    EngineMatrix view{}, project{}, full{};
+    float sampler_bias = 0.25f;   // the user's r__tf_mipbias
     std::array<int, 64> objects{};   // addresses stand in for D3D objects
     uint32_t width = 1920, height = 1080;
     std::array<bool, slot_count> present{};
@@ -71,6 +76,15 @@ struct Engine {
         put<void*>(base_zb.data(), 0, &objects[60]);
         put<void*>(base_rt.data(), 0, &objects[63]);
         put<float>(viewport.data(), 0x14, 1.0f);   // MaxDepth: the .data initialiser
+        project = perspective(1.2f, float(w) / float(h));
+        // A camera rotated about Y and moved (Fmatrix::build_camera_dir-like rows, translation in the last row).
+        view = {0.8f, 0.0f, -0.6f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.6f, 0.0f, 0.8f, 0.0f, -3.0f, -1.5f, 7.25f, 1.0f};
+        full = engine_mul(project, view);
+    }
+    // Fmatrix::build_projection(fov, aspect, near 0.2, far 1000): LH, D3D depth, _34 = 1.
+    static EngineMatrix perspective(float fov, float aspect, float near_plane = 0.2f, float far_plane = 1000.0f) {
+        const float h = 1.0f / std::tan(fov * 0.5f), w = h / aspect, q = far_plane / (far_plane - near_plane);
+        return {w, 0, 0, 0, 0, h, 0, 0, 0, 0, q, 1, 0, 0, -q * near_plane, 0};
     }
     void size_targets() {
         for (std::size_t i = 0; i < slot_count; ++i) {
@@ -108,6 +122,19 @@ struct Engine {
         f.ssao_viewport_guard = guard.data();
         return f;
     }
+    FrameFacts facts3(float scale = 0.67f, float jx = 0.25f, float jy = -1.0f / 6.0f, bool jitter = true, bool mip = true) {
+        auto f = facts2(scale);
+        f.jitter = jitter;
+        f.jitter_x = jx;
+        f.jitter_y = jy;
+        f.device_view = reinterpret_cast<std::byte*>(view.data());
+        f.device_project = reinterpret_cast<std::byte*>(project.data());
+        f.device_full_transform = reinterpret_cast<std::byte*>(full.data());
+        f.mip_bias = mip;
+        f.mip_bias_delta = window_mip_bias_delta(f.render_width, f.device_width, default_mip_bias_offset);
+        f.sampler_bias = reinterpret_cast<std::byte*>(&sampler_bias);
+        return f;
+    }
     std::vector<std::byte> snapshot() const {
         std::vector<std::byte> bytes;
         for (const auto& c : crt) bytes.insert(bytes.end(), c.begin(), c.end());
@@ -116,6 +143,12 @@ struct Engine {
         for (const auto* g : {&device_size, &base_zb, &base_rt}) bytes.insert(bytes.end(), g->begin(), g->end());
         bytes.insert(bytes.end(), viewport.begin(), viewport.end());
         bytes.insert(bytes.end(), guard.begin(), guard.end());
+        for (const auto* m : {&view, &project, &full}) {
+            const auto* raw = reinterpret_cast<const std::byte*>(m->data());
+            bytes.insert(bytes.end(), raw, raw + sizeof(EngineMatrix));
+        }
+        const auto* bias = reinterpret_cast<const std::byte*>(&sampler_bias);
+        bytes.insert(bytes.end(), bias, bias + sizeof(float));
         return bytes;
     }
     bool texture_cache_cleared() const {
@@ -200,6 +233,23 @@ struct FakeHost final : SwapHost {
         return !fail_round_trip;
     }
     void set_viewport(uint32_t w, uint32_t h) noexcept override { viewports.emplace_back(w, h); }
+    // Stage 3: R_xforms::set_P records the matrix it was given; SetMipLODBias stores the value as the engine does.
+    int upload_calls = 0, fail_upload_at = -1, bias_calls = 0, fail_bias_at = -1;
+    std::vector<EngineMatrix> uploaded;
+    std::vector<float> biases;
+    bool upload_projection(const void* matrix) noexcept override {
+        if (upload_calls++ == fail_upload_at) return false;
+        EngineMatrix m{};
+        std::memcpy(m.data(), matrix, sizeof(m));
+        uploaded.push_back(m);
+        return true;
+    }
+    bool set_mip_bias(float value) noexcept override {
+        if (bias_calls++ == fail_bias_at) return false;
+        biases.push_back(value);
+        if (engine) engine->sampler_bias = value;
+        return true;
+    }
 };
 
 bool slot_points_at_twin(const Engine& engine, const SwapController& controller, std::size_t i) {
@@ -792,6 +842,218 @@ void stage2_lifecycle() {
     c.controller.shutdown();
     CHECK(c.stock() && c.controller.counters().twin_drops == uint64_t(c.host.drops));
 }
+
+// ---- Stage 3 (jitter and mip bias inside the Stage 2 window) --------------------------------------------------------
+// What the first-person sites do between their set_xform_project and rmNear: rebuild Device.mProject with psHUD_FOV
+// (_31 = _32 = 0) and mFullTransform = mProject * mView. They restore the saved (jittered) main pair afterwards.
+EngineMatrix build_first_person(Engine& e) {
+    e.project = Engine::perspective(0.9f, float(e.width) / float(e.height), 0.05f, 1000.0f);
+    e.full = engine_mul(e.project, e.view);
+    return e.project;
+}
+bool near(float a, float b, float tolerance = 1e-6f) { return std::fabs(a - b) <= tolerance; }
+
+void stage3_normal() {
+    Case c;
+    c.engine.init_viewport(960.0f, 540.0f);
+    c.rebase();
+    const EngineMatrix main = c.engine.project, view = c.engine.view;
+    const float user = c.engine.sampler_bias;
+    const auto facts = c.engine.facts3();
+    const float jx = facts.jitter_x, jy = facts.jitter_y;
+    CHECK(c.controller.prepare(facts) && c.controller.jitter_applied() && c.controller.mip_bias_applied());
+    // Device.mProject: _31 += 2 jx / W_r * _34, _32 -= 2 jy / H_r * _34 (row vectors); nothing else changes.
+    const auto expected = jitter_engine_projection(main, jx, jy, 1286, 724);
+    CHECK(expected && c.engine.project == *expected);
+    CHECK(near(c.engine.project[8], 2.0f * jx / 1286.0f) && near(c.engine.project[9], -2.0f * jy / 724.0f));
+    for (const std::size_t i : {0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15}) CHECK(c.engine.project[i] == main[i]);
+    CHECK(c.engine.full == engine_mul(*expected, view) && c.engine.view == view);
+    CHECK(c.host.uploaded.size() == 1 && c.host.uploaded[0] == *expected);
+    // Mip bias: user + log2(1286 / 1920) - 0.3, through SetMipLODBias.
+    const float window = user + float(std::log2(1286.0 / 1920.0) - 0.3);
+    CHECK(near(c.engine.sampler_bias, window, 1e-6f) && c.host.biases.size() == 1 && c.controller.window_mip_bias() == c.engine.sampler_bias);
+    c.controller.prepared();
+    // r_dsgraph_render_hud: a fresh first-person projection gets the same pixel offset once.
+    const EngineMatrix saved_main = c.engine.project, saved_full = c.engine.full;
+    const auto hud = build_first_person(c.engine);
+    c.controller.rm_near();
+    const auto hud_jittered = jitter_engine_projection(hud, jx, jy, 1286, 724);
+    CHECK(hud_jittered && c.engine.project == *hud_jittered && c.engine.full == engine_mul(*hud_jittered, view));
+    CHECK(c.host.uploaded.size() == 2 && c.host.uploaded[1] == *hud_jittered);
+    // A second rmNear without a rebuild (no double jitter), then the site's own restore.
+    c.controller.rm_near();
+    CHECK(c.engine.project == *hud_jittered && c.host.uploaded.size() == 2);
+    c.engine.project = saved_main;
+    c.engine.full = saved_full;
+    // An rmNear while the jittered main projection is current (no rebuild): left alone.
+    c.controller.rm_near();
+    CHECK(c.engine.project == saved_main && c.host.uploaded.size() == 2);
+    // A projection the adapter did not write and that is not freshly built: left alone.
+    auto odd = hud;
+    odd[8] = 0.01f;
+    c.engine.project = odd;
+    c.controller.rm_near();
+    CHECK(c.engine.project == odd && c.host.uploaded.size() == 2);
+    c.engine.project = saved_main;
+    // Five more sites in the same window, each rebuilding: each is jittered exactly once.
+    for (int site = 0; site < 5; ++site) {
+        build_first_person(c.engine);
+        c.controller.rm_near();
+        CHECK(c.engine.project == *hud_jittered);
+        c.engine.project = saved_main;
+        c.engine.full = saved_full;
+    }
+    const auto& n = c.controller.counters();
+    CHECK(n.jittered == 1 && n.fp_jittered == 6 && n.fp_already == 2 && n.fp_foreign == 1 && n.rm_near_in_window == 9);
+    CHECK(c.controller.seam());
+    // The seam restores the stock matrices and bias and re-uploads the unjittered projection before the seam pass.
+    CHECK(c.stock() && c.host.uploaded.back() == main && c.host.biases.back() == user);
+    CHECK(n.projection_restores == 1 && n.mip_applied == 1 && n.mip_restored == 1 && !c.controller.refused());
+    // rmNear outside the window (after the seam): counted nowhere, nothing written.
+    c.controller.rm_near();
+    CHECK(c.stock() && n.rm_near_in_window == 9);
+    c.controller.combine_end();
+    c.controller.frame_end();
+    CHECK(c.stock() && !c.controller.refused());
+    // Next frames with other samples: each window starts from the stock projection (no accumulation).
+    for (const auto& s : {jitter_sample(1, 18), jitter_sample(2, 18), jitter_sample(17, 18)}) {
+        CHECK(c.controller.prepare(c.engine.facts3(0.67f, s.x, s.y)));
+        CHECK(c.engine.project == *jitter_engine_projection(main, s.x, s.y, 1286, 724));
+        CHECK(c.controller.seam() && c.stock());
+    }
+    c.controller.shutdown();
+    CHECK(c.stock());
+}
+
+void stage3_exits() {
+    const EngineMatrix stock_project = Case{}.engine.project;
+    // Every non-seam exit restores the matrices and the bias.
+    for (int path = 0; path < 4; ++path) {
+        Case c;
+        const float user = c.engine.sampler_bias;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        c.controller.prepared();
+        build_first_person(c.engine);
+        c.controller.rm_near();   // a first-person site, which then puts the jittered main pair back
+        c.engine.project = *jitter_engine_projection(stock_project, 0.25f, -1.0f / 6.0f, 1286, 724);
+        c.engine.full = engine_mul(c.engine.project, c.engine.view);
+        const int uploads = c.host.upload_calls;
+        switch (path) {
+        case 0: c.controller.combine_end(); CHECK(restores(c.controller, Restore::CombineEnd) == 1 && c.controller.refused()); break;
+        case 1: c.controller.frame_end(); CHECK(restores(c.controller, Restore::FrameEnd) == 1 && c.controller.refused()); break;
+        case 2: c.controller.close_stale(); CHECK(restores(c.controller, Restore::StalePrepare) == 1 && !c.controller.refused()); break;
+        default:
+            // Shutdown: engine memory only for the projection (the next SetCacheXform uploads it again); the bias must
+            // still go back through SetMipLODBias, nothing else would ever restore it.
+            c.controller.shutdown();
+            CHECK(restores(c.controller, Restore::Shutdown) == 1 && c.host.upload_calls == uploads);
+            break;
+        }
+        CHECK(c.stock() && c.engine.sampler_bias == user && c.host.biases.back() == user);
+        if (path < 3) CHECK(c.host.upload_calls == uploads + 1 && c.host.uploaded.back() == stock_project);
+        CHECK(c.controller.counters().projection_restores == 1 && c.controller.counters().mip_restored == 1);
+    }
+    // A write fault at each Stage 3 write (Device.mProject, then mFullTransform) rolls the whole window back.
+    Case probe;
+    probe.host.write_count = 0;
+    CHECK(probe.controller.prepare(probe.engine.facts2()));
+    const int stage2_writes = probe.host.write_count;
+    for (int extra = 0; extra < 2; ++extra) {
+        Case c;
+        c.host.fail_write_at = stage2_writes + extra;
+        CHECK(!c.controller.prepare(c.engine.facts3()));
+        CHECK(c.stock() && c.controller.refused() && restores(c.controller, Restore::Rollback) == 1 && !c.controller.window_open());
+        CHECK(c.host.upload_calls == 0 && c.host.bias_calls == 0 && !c.controller.jitter_applied());
+    }
+    {
+        // set_P faults: the restore still re-uploads the stock projection.
+        Case c;
+        c.host.fail_upload_at = 0;
+        CHECK(!c.controller.prepare(c.engine.facts3()) && c.stock() && c.controller.refused());
+        CHECK(c.host.upload_calls == 2 && c.host.uploaded.size() == 1 && c.host.uploaded[0] == stock_project);
+    }
+    {
+        // SetMipLODBias faults: the restore calls it again with the user's value.
+        Case c;
+        const float user = c.engine.sampler_bias;
+        c.host.fail_bias_at = 0;
+        CHECK(!c.controller.prepare(c.engine.facts3()) && c.stock() && c.controller.refused());
+        CHECK(c.host.bias_calls == 2 && c.host.biases.size() == 1 && c.host.biases[0] == user);
+        CHECK(c.host.uploaded.back() == stock_project);   // the projection, applied first, went back too
+    }
+    {
+        // Restoring the bias faults at the seam: the matrices are back, further swaps refused.
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        c.host.fail_bias_at = c.host.bias_calls;
+        CHECK(c.controller.seam() && c.controller.refused() && c.controller.counters().mip_restored == 0);
+        CHECK(c.engine.project == stock_project);
+    }
+}
+
+void stage3_foreign_and_ineligible() {
+    {
+        // Something other than a first-person site leaves Device.mProject changed: restored, then refused.
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        c.engine.project[0] *= 1.01f;
+        CHECK(c.controller.seam() && c.stock() && c.controller.refused() && c.controller.counters().foreign_changes == 1);
+    }
+    {
+        // The sampler bias changed inside the window (a console r__tf_mipbias cannot run mid-frame): restored, refused.
+        Case c;
+        const float user = c.engine.sampler_bias;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        c.engine.sampler_bias = 2.0f;
+        CHECK(c.controller.seam() && c.engine.sampler_bias == user && c.controller.refused());
+    }
+    {
+        // Scope, MSAA and swap-off frames: no matrix, bias or upload change, rmNear does nothing.
+        Case c;
+        auto facts = c.engine.facts3();
+        facts.scope = true;
+        CHECK(!c.controller.prepare(facts) && !c.controller.jitter_applied());
+        build_first_person(c.engine);
+        c.rebase();
+        c.controller.rm_near();
+        facts.scope = false;
+        facts.msaa = true;
+        CHECK(!c.controller.prepare(facts));
+        c.controller.rm_near();
+        c.controller.set_swap_enabled(false);
+        CHECK(!c.controller.prepare(c.engine.facts3()));
+        CHECK(c.stock() && c.host.upload_calls == 0 && c.host.bias_calls == 0 && c.controller.counters().fp_jittered == 0);
+    }
+    {
+        // SRJitter=0: mip bias only; rmNear leaves the first-person projection alone.
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3(0.67f, 0.25f, 0.1f, false)) && !c.controller.jitter_applied());
+        CHECK(c.controller.mip_bias_applied() && c.host.upload_calls == 0);
+        const auto fp = build_first_person(c.engine);
+        c.controller.rm_near();
+        CHECK(c.engine.project == fp && c.controller.counters().fp_jittered == 0);
+        c.engine.project = Case{}.engine.project;
+        c.engine.full = Case{}.engine.full;
+        CHECK(c.controller.seam() && c.stock());
+    }
+    {
+        // SRMipBias=off, and a delta of exactly zero: SetMipLODBias is never called.
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3(0.67f, 0.25f, 0.1f, true, false)) && !c.controller.mip_bias_applied());
+        CHECK(c.controller.seam() && c.stock() && c.host.bias_calls == 0);
+        auto facts = c.engine.facts3();
+        facts.mip_bias_delta = 0.0f;
+        CHECK(c.controller.prepare(facts) && c.controller.seam() && c.stock() && c.host.bias_calls == 0);
+        CHECK(c.controller.counters().mip_unchanged == 1);
+    }
+    {
+        // A non-finite projection is not jittered (the window still opens) and is put back unchanged.
+        Case c;
+        c.engine.project[0] = std::numeric_limits<float>::quiet_NaN();
+        CHECK(c.controller.prepare(c.engine.facts3()) && !c.controller.jitter_applied() && c.controller.counters().jitter_invalid == 1);
+        CHECK(c.host.upload_calls == 0 && c.controller.seam() && !c.controller.refused());
+    }
+}
 }
 
 int main(int argc, char** argv) {
@@ -802,7 +1064,8 @@ int main(int argc, char** argv) {
         {"round_trip_failure", round_trip_failure}, {"reset_resize", reset_and_resize}, {"names", names},
         {"stage2_normal", stage2_normal}, {"stage2_optional_odd", stage2_optional_and_odd}, {"stage2_layout", stage2_layout},
         {"stage2_exits", stage2_exits}, {"stage2_foreign", stage2_foreign}, {"stage2_ssao_viewport", stage2_ssao_viewport},
-        {"stage2_write_faults", stage2_write_faults}, {"stage2_lifecycle", stage2_lifecycle}};
+        {"stage2_write_faults", stage2_write_faults}, {"stage2_lifecycle", stage2_lifecycle}, {"stage3_normal", stage3_normal},
+        {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;

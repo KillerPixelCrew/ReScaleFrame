@@ -2,8 +2,11 @@
 
 Status: source and retained-binary research plus a design. Stage 1 (section 9) is built,
 fixture-tested and game-tested in Observe mode (`.local/anomaly/wave4-game/result.json`). Stage 2
-(section 10) is built and fixture-tested behind `SRStage=2`; it has not been injected or
-game-tested. With the keys off, no hook below changes rendering. Every statement is either cited
+(section 10) is built and game-accepted at 3ac6cb0 (`.local/anomaly/wave5-game/result.json`). Stage 3
+(section 11) is built and fixture-tested behind `SRStage=3`; it has not been injected or
+game-tested. Stages 4 and 5 (section 12) are built and fixture-tested behind `SRStage=4` and `SRStage=5`,
+with real DLSS, FSR3, FSR4 and XeSS evaluations through the adapter's input path on an RTX 4070 Laptop GPU;
+they have not been injected or game-tested. With the keys off, no hook below changes rendering. Every statement is either cited
 to source/binary evidence or marked **UNVERIFIED**.
 
 - Reference engine: `D:/xray-monolith`, commit `028ccf5` ("X-Ray Monolith Engine for
@@ -505,14 +508,14 @@ Live acceptance: geometry and lighting are registered (no offset G-buffer or cor
 HUD, PDA content and scope stay sharp at output size. Item-attached UI scales correctly (1.5
 hazard). Fluid levels are checked or refused. GPU time is measured against stock.
 
-**Stage 3: jitter and mip bias (spatial upscale still active).**
+**Stage 3: jitter and mip bias (spatial upscale still active).** Built; see section 11.
 Tests without the game: the Halton sequence and NDC-offset formula, and the first-person no-double-jitter
 rule, in temporal CPU tests.
 Live acceptance: on a stationary scene, the per-frame raw world capture moves by the expected subpixel
 offsets. The first-person weapon moves with the same offset (no relative shimmer). Shadow maps and UI
 do not move. Texture sharpness matches the native-resolution reference.
 
-**Stage 4: motion and depth inputs.**
+**Stage 4: motion and depth inputs.** Built; see section 12.
 Depends on the core/foliage MRT2 binding (`PROGRESS.md` checklist).
 - The pipeline's decode treats a stored zero as "unwritten" only through `zero_means_unwritten`
   (`motion_decode.h:57-80`). Anomaly's valid stationary vector is `(0, 0, 1, 0)`, so a stationary
@@ -529,7 +532,7 @@ shared-host test before any deploy, because ctest skips the D3D11-to-D3D12 Strea
 Live acceptance: raw-guide dumps (`rsf_input_dump`) for a camera pan, a strafing NPC, the weapon at
 rest and in sway, sky, and particles.
 
-**Stage 5: temporal SR.**
+**Stage 5: temporal SR.** Built; see section 12.
 `rsf_dlss_pipeline_start` from the adapter, with Anomaly motion parameters,
 `RSF_DLSS_ENGINE_CUSTOM` and `view_space_to_meters = 1`. The AC7 equivalent is
 `loader/proxy/src/dlss_bridge.c:3740-3774`. Per frame, `rsf_native_sr_evaluate` at the seam.
@@ -561,10 +564,12 @@ policy to disable SMAA and engine AA while SR is active, as a settings decision.
 6. P consumers of `generic0.a`; tracer depth test against `pBaseZB`; use of `SE_SUN_LUMINANCE`.
 7. Visual effect of unclamped FP16 writes before saturation; motion-blur jitter; lighting
    reconstruction offset.
-8. D3D11 pipeline depth format acceptance; the meaning of `motion_camera_included` for sparse
-   resolve; the first-person `d < 0.02` heuristic.
-9. RSF matrix convention conversion from X-Ray row-vector storage (see the temporal README: native
-   bytes must be converted, not copied).
+8. Resolved by fixture (section 12): the D3D11 pipeline accepts the R24G8 depth twin (the dense resolve reads it
+   through `R24_UNORM_X8` and hands backends an `R32_FLOAT` copy), and `motion_camera_included = 0` makes the
+   resolve reconstruct camera motion for sentinel pixels while written vectors replace it. Still open: the
+   first-person `d < 0.02` heuristic in game.
+9. Resolved (section 12): `rsf_camera_frame` is row-major with row vectors, like X-Ray's `Fmatrix`, so the
+   CPU-side `Device.mView`/`mProject` bytes are copied; only the uploaded shader constants are transposed.
 10. Exposure choice (2.6); SVP cost at native size.
 11. That source `028ccf5` matches the shipped binary for every function not mapped in section 8. The
     mapped functions match source structurally, with two differences: the sixth first-person site,
@@ -891,6 +896,358 @@ Open or **UNVERIFIED**: everything marked so in the table; whether lower-resolut
 `$user$generic0`/`generic_temp` (glass, `distort.s`) behave like the Stage 1 glass-pane finding; texture sharpness
 (no mip bias until Stage 3); and the effect of the bilinear filter on the alpha channel consumers (none known).
 
+## 11. Stage 3 implementation (jitter and mip bias, spatial upscale still active)
+
+12 November 2026. Built and tested without the game. Not injected, not game-tested. No SR provider is called and
+rendering-readiness flags stay 0.
+
+**Selection.** `[Anomaly] SRStage=3` is Stage 2 (same keys, same swap, same bilinear seam pass) plus, inside the world
+window: a subpixel jitter of every world and first-person projection, and a lowered texture mip bias. Extra keys:
+`SRJitter=0` keeps the mip bias and drops the jitter (default 1); `SRMipBias=<offset>` is added to `log2(render/output)`
+(decimal, clamped to [-2, 1], missing or unparsable -0.3), `SRMipBias=off` leaves the bias alone. `SRStageCapture=1`
+with Stage 3 takes a burst of `SRStageCaptureCount` (default 8, at most 32) consecutive main-view world frames from
+world frame `SRStageCaptureStart`; F10 still takes a single core dump.
+
+**Jitter source and units** (`games/anomaly/src/sr_jitter.h`). Halton(2,3) at index `i mod N` + 1, minus 0.5, so samples
+lie in [-0.5, 0.5) render pixels; `N = ceil(8 * (output/render)^2)`, clamped to [8, 64] (18 at 0.67, 32 at 0.5, 8 at 1.0).
+The sequence restarts at index 0 on a change of render size, output size or scale, a device reset (`resets` generation)
+and a history break: any frame without a world since the last main-view H1 (level load, loading screens, menu). Scope
+frames neither take nor advance a sample. The unit is RSF's: render pixels, +X right, +Y down, the rasterized image
+moves by `(+x, +y)`. That is `rsf_camera_frame::jitter_pixels` unchanged (`sdk/game/include/rescaleframe/game_frame.h`;
+the AC7 producer derives the same quantity as `clip_x * W/2, clip_y * -H/2`, `games/ac7/src/view_uniforms.cpp:254-257`),
+so the future SR pass needs no conversion. NDC offset `(2x/W, -2y/H)`; PS b13 UV `(x/W, y/H)`.
+
+**Main projection (H1).** After the twin exchange, `Device.mProject` becomes the jittered copy: for X-Ray row vectors
+every row `i` gets `M[i][0] += 2x/W * M[i][3]`, `M[i][1] -= 2y/H * M[i][3]` (for `build_projection`, only `_31`, `_32`);
+this is `temporal::jitter_projection` applied to the transpose. `Device.mFullTransform = mul(mProject, mView)` is recomputed
+in `Fmatrix::mul` order (`_matrix.h:116`), and `R_xforms::set_P(&RCache.xforms, &Device.mProject)` (`0x83ecd0`) re-uploads
+it, which also recomputes `m_vp`/`m_wvp` (`R_Backend_xform.cpp:32-42`). The z-prepass, G-buffer, lights, forward and
+emissive phases all bind `Device.mProject` (every `set_xform_project` in R4 restores from it: `r2_R_sun.cpp:833,1077,1430`,
+`accum_spot.cpp:42,299`, `accum_reflected.cpp:17`, `WallmarksEngine.cpp:379,506`, `r4_R_render.cpp:506`), so they are
+jittered together. Shadow maps use the light's own matrices (`r2_R_sun.cpp:799,1041,1385`, `r2_R_lights.cpp:118`) and stay
+unjittered. Sun cascades read `Device.mProject` only for the caster-culling frustum rays (`r2_R_sun.cpp:1134-1219`); their
+placement follows the camera position snapped to shadow texels (`:1175,1252`), so shadow maps do not move.
+
+**First person (H4, the shared rmNear slot).** The six sites (section 4) rebuild `Device.mProject` with `psHUD_FOV`
+(so `_31 = _32 = 0`), compute `mFullTransform`, `set_xform_project`, then call `rmNear`. The geometry detour calls the SR
+slot after the original `rmNear`. Rule (`first_person_action`): a matrix equal to the jittered main projection, or to the
+last first-person matrix the adapter wrote, is never jittered again; a matrix with `_31 = _32 = 0` is jittered by the same
+pixel offset, `mFullTransform` recomputed with the current `mView`, and uploaded through `set_P`; any other matrix is
+counted `fp_foreign` and left alone. Each site restores the jittered main pair itself (`Pold`, `FTold`). The particle
+site's `ApplyTexgen(Device.mFullTransform)` (`ParticleEffect.cpp:612`) therefore sees the jittered transform too. Without
+the slot (geometry hooks refused) Stage 3 turns jitter off, since a weapon without jitter would shimmer against the world.
+
+**Mip bias.** `SetMipLODBias(&SSManager, saved + delta)` (`0x7fe170`, bias in `xmm1`) in the H1 prologue, `delta =
+clamp(log2(render_w/output_w) + SRMipBias, -3, 1)`; `saved` is `SSManager.m_uiMipLODBias` (`+0x19C`, the user's
+`r__tf_mipbias`) read at that moment. 1286/1920 with the default gives -0.878. SetMipLODBias returns early on an unchanged
+value and otherwise recreates every sampler from its own description (`dx10SamplerStateCache.cpp:201-222`), as
+`phase_scene_begin`'s per-frame `SetMaxAnisotropy` already does; both rebuilds preserve each other's field. A delta of 0
+calls nothing (`mip unchanged`). Default offset -0.3 is the repo's AC7 policy (`games/ac7/src/native_renderer.cpp:1357`);
+guidance elsewhere ranges from 0 (XeSS) to -1 (FSR 2). Already-bound samplers keep the previous bias until the engine
+rebinds them (**UNVERIFIED** magnitude; the main pass changes sampler lists constantly).
+
+**Restore on every exit.** `SwapController::restore` restores the projection and the bias before the twins on every path:
+seam, `combine_end`, stale prepare, `frame_end`, shutdown and rollback. The saved `Device.mProject`/`mFullTransform` bytes
+are written back and `set_P` re-uploads them (not on shutdown, which writes engine memory only; the next frame's
+`SetCacheXform` uploads `Device.mProject`). The bias goes back through `SetMipLODBias` on every path including shutdown,
+because nothing else would restore it. A `Device.mProject` or bias that differs from the adapter's value at restore counts
+as `foreign` and refuses further swaps. A write or call fault while applying rolls the whole window back. A non-finite
+projection is not jittered (`jitter_invalid`); the window still opens.
+
+**Motion and SR coordination.** At every H1 the adapter publishes a `JitterState` (`sr::current_jitter()`: main-view
+frame counter, sequence index and phase count, current and previous applied jitter in pixels, render sizes, reset flag)
+and its UV form (`sr::current_jitter_uv()`, lock-free). The motion history records the camera from RCache, so its previous
+camera carries the previous jitter; the core PS b13 `rsf_jitter` is `(current.xy, previous.zw)` from this state and
+removes both (`shaders/core/rsf_core_pixel.h`). Scope frames publish zeros (separate, unjittered history). A main frame
+whose window did not open publishes current 0 and the real previous value. The only edit in the motion files is
+`motion_stage.cpp`'s PS b13 fill reading `sr::current_jitter_uv()` (foliage draws keep previous 0, as before); the
+foliage worker's tree path also reads `previous_u/v` from it. `motion::set_jitter_uv` is no longer the source.
+
+**Guards.** Stage 3 adds no detour; it calls two engine functions and relies on six call sites. Before installing it
+requires the 28-byte `set_P` unique guard, the 16-byte `SetMipLODBias` guard (it encodes the `+0x19C` field), and at each
+of the six `sr_first_person_sites` an `E8` to `set_P` followed within 0x120 bytes by `call [rax+0x1b8]` (slot 55) or an `E8`
+to `rmNear` (`0x83a450`). `tests/anomaly_sr_evidence.py --verify` adds: `Device.mView/mProject/mFullTransform` adjacency,
+slot 55 = `+0x1b8`, the call forms (4 virtual, 2 direct) and that `SetMipLODBias` compares `xmm1` with the cached bias.
+
+**Diagnostics.** Every 120 frames, with `SRStage=3`, a third line:
+
+```text
+Anomaly SR stage 3 window jittered= jitter_invalid= fp_jittered= fp_already= fp_foreign= projection_restores= | mip applied= restored= unchanged= | sequence frame= index=i/N resets= last=(x,y) previous=(x,y) applied= | mip window= user= | burst n/N
+```
+
+Expected in a steady world view: `jittered == swapped == projection_restores == mip applied == mip restored`;
+`fp_jittered` about one per first-person site per frame (weapon, hud_ui, sorted, emissive, HUD particles, HUD lights, as
+present); `fp_foreign = jitter_invalid = 0`; `resets` grows only on load, menu, `vid_restart` or a scale or resolution change.
+
+**Burst capture.** Stage 3 `SRStageCapture=1` copies, for each of the consecutive frames, the render-size FP16 `generic0`
+twin at the seam and the back buffer before Present into staging textures, maps them three frames after the last one and
+writes `<dump dir>/sr-jitter-<session>/world_NN.bin` (RGBA16F, rows packed), `final_NN.bin` (back buffer format) and
+`burst.json` (per frame: engine frame, jitter frame, sequence index and phase count, applied jitter and previous jitter
+in pixels, render size, window mip bias, `fp_jittered`, sizes and DXGI formats). `py -3 -I tests/anomaly_sr_evidence.py
+--measure-jitter <dir> [--region x0 y0 x1 y1] [--final-region x0 y0 x1 y1]` measures each world frame's displacement
+against frame 0 (Hann-windowed cross-correlation, 1/100 px refinement) and compares it with the recorded jitter
+difference; `--region` restricts it to, for example, the weapon, `--final-region` checks that a HUD rectangle does not
+move. `--measure-self-test` recovers synthetic Halton offsets within 0.015 px.
+
+**Tests without the game** (`build/wk-sr3`, Release; `tests/anomaly_support.cmake`):
+
+- `anomaly_sr_jitter_contract`: Halton values and stratification, phase counts, sequence wrap and every reset trigger;
+  the NDC offset (only `_31/_32` change for a perspective matrix, bit-exact elsewhere, points at several depths move by
+  exactly `(+x, +y)` pixels, orthographic matrices shift through the last row, equal to `temporal::jitter_projection`);
+  `Fmatrix::mul` order; the first-person rule (including that a second application would double the offset); the mip bias
+  delta and clamps; the published state (scope zeros, previous carried across a scope frame and across a frame without a
+  window, previous UV in the previous render size); the CPU motion PS on a static scene over 19 frames.
+- `anomaly_sr_swap_contract` gains three cases on fake `Device` matrices and a fake sampler cache: the jittered window,
+  six first-person sites each jittered once, rmNear without rebuild, rmNear on the main matrix and on a foreign matrix,
+  restore at the seam with the stock projection re-uploaded; every non-seam exit (combine_end, frame_end, stale prepare,
+  shutdown) and every apply fault (each matrix write, `set_P`, `SetMipLODBias`) restoring the exact engine bytes and the
+  user's bias; foreign projection or bias changes; scope/MSAA/off frames untouched; `SRJitter=0`, `SRMipBias=off`, zero
+  delta and a non-finite projection.
+- `anomaly_sr_hooks_contract`: `SRStage=3`, `SRJitter`, `SRMipBias` parsing; install refusals for a changed `set_P` or
+  `SetMipLODBias` byte and for each first-person call form (wrong `set_P` target, slot 56 instead of 55, direct `rmFar`).
+- `anomaly_sr_jitter_device` on Intel UHD Graphics (hardware, debug layer on): the unchanged `rsf_core_pixel.h` writer with
+  production `pack_pixel` bytes and the production jitter state, 18 consecutive frames of a static tilted plane at 96x54:
+  worst motion 3.5e-5 UV (0.003 render px) over 93,312 pixels; with the b13 jitter zeroed the motion equals the jitter
+  difference (worst error 4.3e-5 UV); a (+3, -2) px pan between frames survives the jitter removal (worst 5.0e-5 UV).
+- `anomaly_sr_measure_self_test`: the burst measurement on a synthetic burst.
+- `py -3 -I tests/anomaly_sr_evidence.py --verify` passes (`.local/anomaly/sr-stage3/verify.txt`).
+
+**Live acceptance (to run).** Same save and standing view as Stage 2, no movement, weather and time fixed if possible.
+Runs: A `SRStage=2` (0.67, `SRStageCapture=1`); B `SRStage=3 SRJitter=0` (mip bias only); C `SRStage=3` with
+`SRStageCapture=1` (burst of 8; `SRStageCaptureCount=18` covers a whole sequence at 0.67); D as C with `SRMipBias=0`;
+E as C with `Motion=1` and F10 motion captures. Check:
+
+1. C burst: `--measure-jitter` world displacement equals the recorded jitter difference (expected within 0.1 px on static
+   content; animated foliage, rain and grain add noise, so pick a static `--region`).
+2. Weapon: `--region` on the weapon gives the same displacement as the world (no relative shimmer); `fp_jittered` > 0.
+3. Shadows and UI: shadow edges move with the surfaces they fall on (same displacement, no extra crawl); `--final-region`
+   on a HUD element measures 0.
+4. Texture sharpness: B and D at 0.67 against stock 1.0 (A at `SRScale=1.0`) on distant ground textures; default C is
+   meant to be slightly sharper than native (offset -0.3).
+5. Motion: E on the static view gives zero motion apart from animated content, and the same vectors as Stage 2 for a pan.
+6. Counters as above; a level load, the menu, `vid_restart` and a scale change each add one `resets`.
+
+Open or **UNVERIFIED**: the sampler rebind lag above; the jittered `mFullTransform` in culling, HOM and the light scissor
+(subpixel); motion-blur matrices with `r2_mblur > 0` (section 4); `pos_decompression_params` ignoring the jitter (lighting
+offset of at most half a render pixel); jittered PDA and item-attached UI drawn through the first-person sites; and the
+jittered final image flickering by up to half a render pixel until temporal SR (Stage 5) consumes it.
+
+## 12. Stages 4 and 5 implementation (SR inputs and temporal SR at the seam)
+
+12 November 2026. Built and tested without the game, including real DLSS, FSR3, FSR4 and XeSS evaluations through the
+adapter's input path on an RTX 4070 Laptop GPU. Not injected, not game-tested. Rendering-readiness flags stay 0.
+
+**Selection.** `Mode=Observe`, as for Stages 1 to 3. `Motion=1` should be on: without a motion target every pixel is
+reconstructed from depth and the camera (counted as `motion_missing`).
+
+- `SRStage=4`: Stage 3 plus the SR inputs prepared at the seam (linear colour, depth twin, motion with the first-person
+  rule) and dumped by `SRStageCapture`. The output is still the bilinear pass and no provider is called.
+- `SRStage=5`: Stage 4 plus the shared RSF SR pipeline at the seam. Any refusal draws the bilinear pass instead.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `SR`, `SRBackend`, `SRQuality`, `DLSSPreset` | 1, 1, 1, 0 | Shared frontend keys, read at startup and persisted by the overlay. Backends 1 DLSS, 3 FSR3, 4 FSR4, 5 XeSS; qualities 0 Native to 3 Performance. Ultra performance (a third of the output) is below the window's half-size floor and is not offered. `SR=0` keeps the world window closed, so the frame renders stock at output size. `DLSSPreset` is forwarded only as the user's choice |
+| `SRExposure` | `constant` | `constant`: a 1x1 `R32_FLOAT` exposure of 1.0 with the exposure-scaled `x` (2.6 default). `auto`: no exposure texture, so each backend auto-exposes. This is the exposure A/B |
+| `SRFirstPersonZero` | 1 | Unwritten pixels with depth below 0.02 (the `rmNear` range) get a valid zero vector instead of world-camera reconstruction |
+| `SRCutDistance`, `SRCutAngle` | 4 m, 45 degrees | Camera cut: a larger move or turn between consecutive main-view frames resets history. Clamped to [0.1, 1000] m and [1, 180] degrees |
+| `SRStreamlineDir`, `SRFidelityFXDir`, `SRXeSSDir` | `<ini dir>\ReScaleFrame\{streamline,fidelityfx,xess}` | Vendor runtimes, in the AC7/RDR2 package layout. FSR3 and FSR4 both load from `fidelityfx` |
+| `SRRequireSignature` | 0 | Refuse an unsigned `sl.interposer.dll` |
+| `SRScale`, `SRJitter`, `SRMipBias` | as Stage 3 | In Stage 5 `SRScale` is used only while no backend plans the render size. Stage 5 refuses every pass without jitter |
+| `SRStageCapture` and its keys | as Stage 2 | Scheduled single frames (count at most 16) and F10 |
+
+**Runtime access (Rule 1).** The adapter borrows the carrier-loaded Runtime through a new generic export,
+`rsf_get_d3d11_sr_api` (`runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h`, API version 1). It has the same
+size/version contract as `rsf_get_d3d11_present_api` and `rsf_get_overlay_api`: a short capacity gives
+`INVALID_ARGUMENT` without reading the version, a mismatch gives `ABI_MISMATCH`, and a failure writes nothing. The table
+carries `pipeline_abi_version` and the existing pipeline entries AC7 drives: `start` (`rsf_dlss_pipeline_start`), `evaluate`
+(`rsf_native_sr_evaluate`), `reset`, `stop`, `status`, `select_backend`, `set_quality`, `set_preset`, `resize_output`,
+`output_texture` and `request_dump`. Nothing is forked. `reset` adds `RSF_GAME_RENDER_RESET` to evaluates until one
+reaches a backend. Engine identity is adapter data: `RSF_DLSS_ENGINE_CUSTOM`, the engine version string, project id
+`8d3b6f52-1c4e-4f7a-b0d9-2e6a51c7f3a4` and `view_space_to_meters = 1` (`sr_pass.h`).
+
+The shared pipeline needed two generic corrections. Both leave AC7's behaviour unchanged:
+
+1. A decode marked by the validity channel never reached a backend correctly. `has_motion_sentinel` (DLSS) and the
+   legacy adapter's `has_sentinel` (FSR, XeSS) followed `zero_means_unwritten` alone. With `validity_enabled`, DLSS therefore
+   skipped the dense resolve and received the decode's `R32G32` field with -1000 in every unwritten pixel, and the FSR/XeSS
+   resolve read -1000 as real motion. Both sites now use `zero_means_unwritten || validity_enabled`
+   (`dlss_pipeline.cpp` `marks_unwritten`). A negative fixture run with the old rule fails: wrong format and 108,080 wrong pixels.
+2. FSR and XeSS contexts were always opened with reversed, infinite-far depth. `rsf_dlss_pipeline_setup.standard_depth` is
+   appended (pipeline ABI 5); non-zero opens them with standard, finite depth. Zero keeps the old convention. DLSS
+   reads the per-frame `camera.depth_inverted` either way.
+
+**Adapter flow** (`sr_temporal.{h,cpp}`, `sr_pass.h`, `sr_settings.h`, `sr_overlay.h`, `sr_stage.cpp`,
+`shaders/sr/rsf_sr_upscale.hlsl`):
+
+- Install (Stage 5): the table is resolved by name from `ReScaleFrame.Runtime.dll`. Its size, version, pipeline ABI and
+  every entry are checked; a refusal leaves the seam bilinear.
+- H1, main view only: `Device.mView` and the still unjittered `Device.mProject` are read before Stage 3 jitters them,
+  together with the cut test against the previous main-view frame and the frame time.
+- Render size (Stage 5): the size the selected backend plans for its quality (pipeline status), held to
+  [ceil(output / 2), output]. A quality or backend change resizes the twins at the next H1. `SRScale` applies only while no
+  backend plans.
+- Seam, after the restore: one render-size draw (`rsf_prepare_ps`) writes the SR colour, f^-1 of the FP16 `generic0`
+  twin, and the SR motion. The motion is this frame's main-view motion target (`motion::frame_target()`; the frame,
+  view and size must match) with the first-person rule, or an all-invalid zero texture when there is no target. Stage 5
+  then builds the pass (`build_pass`) and calls `evaluate`. On success the output-size pass (`rsf_reinsert_ps`) writes
+  `saturate(f(SR))` into the engine's UNORM8 `generic0`, with Stage 2's nearest `rt_Position`, bilinear `generic1` and
+  nearest depth. Every other outcome draws the Stage 2 bilinear pass, so the post chain always receives a world image.
+- Frame boundary (`IRenderDeviceRender::End`, after the frame's SR work, before Present): this is the drained boundary.
+  The pipeline starts here on `HW.pDevice`; a refused start is not retried until the settings or the device change. A
+  new device stops the pipeline and starts it again. A new output size calls `resize_output`, so the next H1 plans for it.
+  Requested settings apply here (`select_backend`, `set_quality`, `set_preset`), and a backend this GPU refuses is not
+  asked for again until the request changes. `SR=0` closes the window.
+- Quiesce: `stop` before the engine's device goes, and the SR targets are dropped.
+
+**What the pipeline receives, and who reads it.**
+
+| Input | Value | Read by |
+| --- | --- | --- |
+| Colour | Render-size RGBA16F f^-1(`generic0` twin): exposure-scaled linear radiance | All backends; DLSS through RSF colour transport (pipeline default) |
+| Depth | `R24G8_TYPELESS` depth twin: standard device depth, finite far, first person in [0, 0.02] | Dense resolve (`R24_UNORM_X8` view), then an `R32_FLOAT` copy to every backend; `standard_depth = 1` for FSR/XeSS |
+| Motion | Prepared RGBA16F. Decode: scale 1, bias 0, output scale 1, sentinel -1000, validity channel 2 above 0.5, `zero_means_unwritten = 0`. `motion_to_uv = (1, 1)`, `motion_camera_included = 0` | Pipeline decode and dense resolve. Every backend receives dense previous-minus-current pixels: written vectors as given, sentinel pixels from depth and `clip_to_previous_clip` |
+| Jitter | `sr::current_jitter()` current (render pixels, +X right, +Y down), unchanged; previous jitter in the camera record | All backends (the D3D11 pipeline does not read the previous jitter) |
+| Exposure | `constant`: 1x1 `R32_FLOAT` 1.0. `auto`: none. Pre-exposure is 1 | DLSS (colour transport encode/decode); FSR and XeSS switch between a manual and an auto-exposure context |
+| Reset | `RSF_GAME_RENDER_RESET` on the first pass of a pipeline session or device, a settings change, a jitter-sequence restart (level load, menu, loading, `vid_restart`, scale or resolution change) and a camera cut | All. The pipeline also restarts history on a size, rectangle, session or non-consecutive `native_frame` change; scope frames do not advance `native_frame` |
+| Rectangles | Render `{0, 0, rw, rh}`, output `{0, 0, ow, oh}`; inputs are origin-zero, so no region copy | All |
+| Camera | `view_to_clip` = unjittered `mProject` (copied: X-Ray and RSF are both row-major with row vectors), `clip_to_view`, `view_to_world`, `world_to_view`, `clip_to_previous_clip` = inv(V P) Vp Pp of the previous main-view frame (identity on a reset) and its inverse, near `-_43/_33`, far `_43/(1-_33)`, FOV `2 atan(1/_22)`, `depth_inverted = 0`, `motion_jittered = 0`, frame time | DLSS: matrices, planes, FOV, camera basis. FSR: near, far, FOV, frame time, `view_space_to_meters`. The resolve: `clip_to_previous_clip` |
+
+Not supplied yet (Stage 6, next): opaque-only colour (`generic_temp` through f^-1; DLSS `ColorBeforeTransparency`,
+FSR opaque-only), reactive (FSR reactive, XeSS responsive mask), transparency and composition (FSR T&C, DLSS transparency
+hint) and the DLSS bias mask. The D3D11 `rsf_native_sr_evaluate` path takes these only through the
+`RSF_GAME_RENDER_TRANSLUCENCY` scope protocol (`native_translucency`). A cheap Stage 6 therefore needs either that scope
+protocol from the adapter or a generic per-pass entry for the masks. Neither was cheap enough to add here.
+
+**Overlay.** With `SRStage=5` the adapter offers the backends whose runtime DLLs are in the configured directories:
+`sl.interposer.dll` and `nvngx_dlss.dll` for DLSS, the FidelityFX upscaler and loader for FSR3 and FSR4, and `libxess.dll`
+for XeSS. Qualities are Native to Performance, and the DLSS preset is available as the user's choice. The overlay fixes
+its choices when it configures, cold and before a device exists, so whether a backend runs on this GPU is reported later
+through `sr_report`. The report gives the effective backend and quality, the render and output sizes, frame counts, the
+inputs the pass actually carried (colour, depth and jitter; motion only with a target; exposure only when supplied) and
+the jitter. It also gives a reason, for example "XeSS refused on this GPU", "The SR pipeline needs DLSS support on this
+GPU", "SR disabled by setting" or the pipeline refusal code. Settings apply at the frame boundary. FG stays unavailable.
+Without `SRStage=5` the panel still reports SR as unavailable. `overlay_service.cpp` reaches the SR stage through the
+header-only `sr_overlay.h` link, so neither compiles against the other.
+
+**Diagnostics.** Every 120 frames with `SRStage=4` or `5`, after the Stage 2 and 3 lines:
+
+```text
+Anomaly SR stage 5 evaluated dlss= fsr3= fsr4= xess= | refused not_running= disabled= prepare= pass= (sizes= camera= projection= jitter= resources=) pipeline= (invalid= abi= not_running= streamline= not_supported= resource= decode= frame= evaluate= other=) reinsert= | resets first= device= settings= sequence= cut= | prepared= bilinear= motion_missing=
+Anomaly SR stage 5 pipeline bound= running= backend= requested= switch= quality=applied/requested preset= render=WxH output=WxH frames_evaluated= frames_refused= last= (name) | starts= start_failed= (last r) stops= selects=ok/total qualities=ok/total presets= resizes=ok/total | SR= exposure= first_person_zero= | reason
+```
+
+Expected in a steady world view with SR on: the active backend's `evaluated` equals `swapped`, `prepared == swapped`,
+`bilinear = 0`, every `refused` counter 0, `motion_missing = 0` with `Motion=1`, and resets only at load, menu,
+`vid_restart`, settings changes and cuts. The pipeline's own lines (start, backend, render size, first evaluate) go to the
+same adapter log.
+
+**Capture** (`SRStageCapture=1` or F10, the core frame dump service): `anomaly_seam_fp16_input`, `anomaly_sr_color`
+(HDR), `anomaly_sr_depth`, `anomaly_sr_motion` (prepared motion, dense x20), `anomaly_motion_target` (raw RTV2),
+`anomaly_sr_output` (the reconstruction, Stage 5), `anomaly_seam_generic0` and `final_color`. In Stage 5 a captured frame
+also asks the pipeline for its own guides through `request_dump`. They are written to
+`<dump dir>\sr-pipeline-<session>\frame_<id>_{input,output,motion,motion_decoded,motion_submitted,depth,exposure}.bin`
+with `_frame.json`, which holds the submitted jitter, motion scale, reset and clip-to-previous matrix. The pipeline's
+`rsf_input_dump_texture` guides do not join the adapter's record, because they need an SR pass scope.
+
+**Tests without the game** (`build/wk-sr5`, Release; `tests/anomaly_support.cmake`):
+
+- `anomaly_sr_pass_contract`, 7 cases:
+  - The decode parameters, and their CPU reference on (0,0,1,0) against (0,0,0,0) and on the 0.5 threshold.
+  - The X-Ray projection planes.
+  - The camera handed over: `clip_to_previous_clip` reprojects a world point exactly, and a reset gives identity.
+  - Jitter units, the depth convention, rectangles and flags.
+  - Every `build_pass` refusal: sizes, resources, camera, projection, and jitter (not applied, scope, stale size, non-finite).
+  - The reset order, the cut rule, the settings sanitiser and the plan bounds.
+- `anomaly_sr_runtime_api_contract`, 4 cases. It is a client that imports the Runtime DLL:
+  - The export's refusals, with nothing written on failure.
+  - The idle pipeline's answers, and argument refusals before any device use (short pass, short setup, ABI 4 setup,
+    zero decode scale).
+  - The adapter's table validation on tampered tables.
+  - The driver lifecycle on a fake table. It checks the start setup (engine, project, `standard_depth`, validity decode,
+    directories) and settings at the boundary only. It checks that a refused FSR4 is not retried, that SR=0 and a
+    resolution change behave as above, and that a device change stops and restarts. It checks the reset reasons in the
+    submitted flags, counted pipeline and build refusals, the overlay report reasons and the log lines. A Stage 4 driver
+    never starts.
+- `anomaly_sr_temporal_device` (Intel UHD Graphics, debug layer on, 0 errors), with the production parameters on the Runtime
+  graphics library's decode and resolve:
+  - Decode: (0,0,1,0) decodes to a valid (0, 0), and (0,0,0,0) and any validity of 0.5 or below decode to (-1000, -1000).
+    The stored-zero rule misreads (0,0,1,0) as unwritten.
+  - Resolve: valid zero stays (0, 0), and the unwritten texel gets -0.366 px of camera motion, equal to the CPU
+    reprojection.
+  - Prepare: f^-1 worst relative error 8.7e-4. The motion mapping, with the first-person rule on and off, matches in all
+    128 texels.
+  - Reinsert: worst difference 0 UNORM8 codes against `saturate(f(x))`.
+- `anomaly_sr_provider_device`: an RTX 4070 Laptop GPU, with the vendor runtimes of
+  `build/releases/rdr2/stage-rdr2-a2bcc0c3/ReScaleFrame`. It is registered when `RSF_ANOMALY_SR_VENDOR_ROOT` (default: the
+  newest RDR2 stage) exists. The fixture follows the seam sequence: `TemporalDriver` bound by name, start at the boundary,
+  `make_temporal_targets`, prepare, `build_pass`, Runtime evaluate, reinsert into an engine-like UNORM8 `generic0`. It
+  renders 24 jittered frames per backend at 960x540 output:
+
+  | Run | Render | Frames evaluated | Converged error, mean / worst UNORM8 codes |
+  | --- | --- | --- | --- |
+  | DLSS | 640x360 | 24/24 | 0.28 / 0.9 |
+  | DLSS, auto exposure | 640x360 | 24/24 | 0.28 / 0.9 |
+  | FSR3 | 640x360 | 24/24 | 0.34 / 1.2 |
+  | FSR4 (INT8 compatibility path) | 640x360 | 24/24 | 0.31 / 1.1 |
+  | XeSS | 565x318 | 24/24 | 0.25 / 0.7 |
+  | DLSS again | 640x360 | 24/24 | 0.28 / 0.9 |
+
+  End to end, one DLSS frame after a 0.5 m camera move was checked against the pipeline's dump of the dense motion it
+  submitted (`R16G16_FLOAT`). All 122,320 valid-zero and first-person pixels stayed zero, all 108,080 unwritten pixels
+  matched the camera reconstruction, and no sentinel reached DLSS.
+- `anomaly_sr_hooks_contract`: Stage 4 and 5 key parsing, plus the earlier cases.
+- `ctest -R "anomaly|thin|motion|overlay|present_api|dlss|sr_"`: 102 of 102 passed, with 3 opt-in skips. The full `ctest`
+  passed 192 of 192, with 11 opt-in skips.
+- Opt-in fixtures that ctest skips:
+  - `rsf_sr_pipeline_test` with the same runtimes (AC7 conventions, `standard_depth = 0`): every backend evaluates.
+  - The shared-host D3D11-to-D3D12 Streamline fixture, `fixtures/fg/Release/rsf_d3d11_present_bridge_test.exe <streamline>
+    0x10de`, and its `--switch <fidelityfx> <xess>` form, with `RSF_OVERLAY_DLL` set to `target/release/rescaleframe_overlay.dll`:
+    PASS.
+  - The RDR2 D3D12 shared-host fixture, `rsf_unity_sr_d3d12_test` for backends 1, 3, 4 and 5 with `RSF_RDR2_HOST_INI`,
+    `RSF_RDR2_HOST_ROOT` and `RSF_OVERLAY_DLL`: PASS.
+- `py -3 -I tests/anomaly_sr_evidence.py --verify` and `--measure-self-test`, and `tests/anomaly_motion_evidence.py --verify`:
+  PASS.
+
+Logs: `.local/anomaly/sr-stage5/`.
+
+**Live acceptance (to run).** Use the same save in l01_escape as Stages 2 and 3, with `Mode=Observe`, `Motion=1` and
+`SRStage=5`. Compare with native (`SRStage=0`) and with spatial (`SRStage=3`) at the same view, and take an
+`SRStageCapture`/F10 of each check:
+
+1. Stationary convergence: on a still view, distant fences, wires and foliage edges settle within about a second, with no
+   residual Halton crawl. The counters show `evaluated == swapped` and `bilinear = 0`.
+2. Panning: a slow and a fast mouse pan, with no smearing of static geometry. The sky, and terrain with motion validity 0,
+   follow the camera reconstruction.
+3. Weapon ghosting: the weapon at rest, in sway and in an aim transition, with no trail behind it against the sky or
+   walls. Repeat with `SRFirstPersonZero=0` to see what the rule changes.
+4. Foliage: trees and grass in wind, with no ghosting or shimmer worse than native. `MotionFoliage=1`.
+5. PDA text: the PDA open and scrolled, with legible text and no smear while scrolling. No reactive mask yet (Stage 6).
+6. Scope alternation: scope in and out repeatedly. Scope frames stay stock (`skipped scope`), and after a scope frame the
+   main view resumes without a history reset or contamination: `resets` does not grow per scope frame.
+7. Reset on load and teardown: a level load, the menu and `vid_restart` each add one `resets sequence` (or `device`). A
+   quit or quiesce logs the pipeline stop with no fault.
+8. Exposure A/B: `SRExposure=constant` against `auto` during eye adaptation (dark interior to daylight). Compare history
+   stability and banding.
+9. Each backend: DLSS, FSR3, FSR4 and XeSS from the panel at each quality. Check the render size the counters report, the
+   panel's effective backend and reason, and the absence of a hitch beyond the switch frame.
+
+Before any deploy, run the shared-host fixture above, as it was run here.
+
+**Open or UNVERIFIED.**
+
+- The shared D3D11 pipeline starts only where DLSS is supported. On a GPU without DLSS it refuses at start, and FSR and
+  XeSS are not reachable through it. This is an existing property of `rsf_dlss_pipeline_start`, reported rather than
+  changed.
+- Streamline logs "presentCommon() was not observed" in the fixture. The D3D11 pipeline loads Streamline with manual
+  hooking and no Present hook, which is AC7's D3D11 path too. Whether its bookkeeping or garbage collection matters over
+  a long session is UNVERIFIED.
+- The dense resolve is called without the current jitter at both pipeline sites, so camera-reconstructed pixels carry
+  up to half a render pixel of offset. This is a generic follow-up.
+- RSF colour transport for DLSS was designed against AC7's dark HDR. Its effect on Anomaly's `x` range is UNVERIFIED.
+- The first-person `d < 0.02` rule, the exposure choice (2.6), the cut thresholds, and the interaction of unclamped FP16
+  writes with the reconstruction all need game measurements.
+- SVP (scope) frames render at native size, and their cost is unmeasured.
+
 ## Sources
 
 Engine source (read-only, `D:/xray-monolith`): `src/Layers/xrRenderPC_R4/{r4_rendertarget.cpp,
@@ -907,8 +1264,8 @@ Shaders (local, not redistributed): `combine_1.{ps,vs}`, `combine_2_naa.ps`, `co
 `common_defines.h`, `sky2.{ps,vs}`, `clouds.{ps,vs}`, `combine_volumetric.ps`, `bloom_build.ps`,
 `gbuffer_stage.h`, `stub_screen_space.vs`, `depth_of_field.ps`, `ogse_sunshafts_mask.ps`, `distort.s`.
 
-RSF: `runtime/orchestrator/include/rescaleframe/{native_sr.h, dlss_pipeline.h, sr_bridge.h,
-native_sr_d3d12.h, d3d11_present_api.h}`, `runtime/orchestrator/src/{native_sr.cpp, dlss_pipeline.cpp,
+RSF: `runtime/orchestrator/include/rescaleframe/{native_sr.h, dlss_pipeline.h, d3d11_sr_api.h, sr_bridge.h,
+native_sr_d3d12.h, d3d11_present_api.h, overlay_api.h}`, `runtime/orchestrator/src/{native_sr.cpp, dlss_pipeline.cpp,
 sr_bridge.cpp, sr_legacy_adapter.cpp, native_sr_d3d12.cpp}`, `runtime/graphics/include/rescaleframe/
 {motion_decode.h, motion_resolve.h}`, `sdk/game/include/rescaleframe/{game_renderer.h, game_frame.h}`,
 `loader/proxy/src/dlss_bridge.c`, `games/anomaly/shaders/core/README.md`,

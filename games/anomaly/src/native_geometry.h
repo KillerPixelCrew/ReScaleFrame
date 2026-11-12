@@ -48,6 +48,8 @@ enum class DrawVerdict : std::uint8_t {
     UnidentifiedAmbiguous,  // The visual address is live under more than one owner.
     UnidentifiedUnreadable, // The world matrix could not be read to classify an unregistered draw.
     UnidentifiedNoCapture,  // Capture latched off, or the draw ran inside a model factory.
+    IdentifiedFoliage,      // Unregistered tree visual named by its address (foliage identity enabled): the motion stage
+                            // reads the draw's constants and keeps the previous frame's by that address.
     Count
 };
 struct DrawFacts {
@@ -57,6 +59,7 @@ struct DrawFacts {
     bool capturing{true};       // Capture enabled and not inside a model factory.
     bool world_readable{};
     bool world_identity{};
+    bool foliage_identity{};    // geometry_enable_foliage_identity(): an unregistered tree is identified by address.
 };
 // Pure classification. Only the unregistered rigid, non-shadow path depends on the world matrix.
 DrawVerdict classify_draw(const DrawFacts&) noexcept;
@@ -76,6 +79,7 @@ struct DrawIdentity {
     const float* world{}; // Borrowed native row-vector Fmatrix, read again at the actual D3D draw.
     const std::byte* skeleton{}; // Actual CSkeletonX subobject, not the complete visual.
     DrawClassification classification{};
+    std::uint64_t visual{};       // Address of the visual being rendered (a level tree's identity).
 };
 struct DrawCapture {
     InstanceKey key{};
@@ -108,7 +112,7 @@ private:
 class DrawScope {
 public:
     DrawScope(const IdentityRegistry&, std::optional<InstanceKey>, DrawKind, const float*,
-        const std::byte* skeleton = nullptr, DrawClassification = {}) noexcept;
+        const std::byte* skeleton = nullptr, DrawClassification = {}, std::uint64_t visual = 0) noexcept;
     ~DrawScope();
     DrawScope(const DrawScope&) = delete;
     DrawScope& operator=(const DrawScope&) = delete;
@@ -151,6 +155,13 @@ struct DrawTimeFacts {
     std::optional<temporal::ViewId> view;      // from the draw scope, else the enclosing context scope
     std::optional<temporal::ProjectionDomain> domain;
     const DrawCapture* capture{};              // the identified main-pass capture of this draw, else null
+    // Foliage. A tree draw names its visual (stable address) and, for a progressive tree, the slide-window index it
+    // draws with (tree_lod, -1 when not applicable or unreadable). A detail draw is any draw inside
+    // CDetailManager::Render (grass batches), whatever the pass.
+    std::uint64_t visual{};
+    VisualType type{VisualType::Static};       // valid only with in_visual
+    std::int64_t tree_lod{-1};
+    bool detail{};
 };
 // Shared CBackend::constants.flush slot. Called on the render thread AFTER the original flush returned, i.e. after
 // every native constant upload and state apply and immediately before the engine's D3D draw call, whether or not
@@ -190,12 +201,28 @@ struct GeometryCoverage {
     // Draw-time call site (CBackend::constants.flush: every draw or dispatch, hooked visual or not).
     std::uint64_t flush_total[passes]{}, flush_in_visual[passes]{};
     std::uint64_t captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
+    // CDetailManager::Render windows and the draw-time flushes inside them, by pass.
+    std::uint64_t detail_renders[passes]{}, flush_in_detail[passes]{};
     // Context producers.
     std::uint64_t views_main{}, views_scope{}, hud_scopes{}, near_windows{};
 };
 GeometryCoverage geometry_coverage() noexcept;
 // Writes the coverage as log lines through `emit`. Rows with no draws are omitted.
 void geometry_report_coverage(void (*emit)(void*, const char*), void*) noexcept;
+// Foliage identity and constants. Trees are level visuals that never enter the model registry; with this enabled an
+// unregistered FTreeVisual is classified IdentifiedFoliage (named by its address) instead of UnidentifiedDeformed.
+// Off by default so the geometry hooks alone keep their earlier verdicts. Set only with native hooks quiescent.
+void geometry_enable_foliage_identity(bool) noexcept;
+bool geometry_foliage_identity_enabled() noexcept;
+// Guarded access to the CPU copy the engine stages for vertex-stage constant buffer `slot` (the reflection's
+// constant-buffer index of the shader bound for this draw). `expected_size` is that buffer's reflected size; the engine
+// object must report the same size or nothing is read or written. Returns false on any mismatch or fault.
+bool read_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, void* out,
+    std::uint32_t bytes) noexcept;
+bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, const void* in,
+    std::uint32_t bytes) noexcept;
+// The world matrix in force for this draw (RCache.xforms.m_w), row-vector Fmatrix floats. False when unreadable.
+bool read_world_matrix(float (&out)[16]) noexcept;
 std::span<const HookSite> native_geometry_hook_sites() noexcept;
 bool install_native_geometry(std::byte* module, std::uint32_t image_size,
     std::string_view verified_executable_sha256) noexcept;

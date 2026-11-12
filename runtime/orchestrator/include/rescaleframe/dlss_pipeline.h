@@ -40,8 +40,9 @@
 extern "C" {
 #endif
 
-/* 2: a second feature for a layer at one to one, and its counts in the status. */
-#define RSF_DLSS_PIPELINE_ABI_VERSION 4u
+/* 2: a second feature for a layer at one to one, and its counts in the status.
+   5: setup.standard_depth. */
+#define RSF_DLSS_PIPELINE_ABI_VERSION 5u
 
 typedef int32_t rsf_dlss_pipeline_result;
 #define RSF_DLSS_PIPELINE_OK ((rsf_dlss_pipeline_result)0)
@@ -130,6 +131,12 @@ typedef struct rsf_dlss_pipeline_setup {
     const char* fsr4_directory_utf8;
     const char* xess_directory_utf8;
     float view_space_to_meters;
+    /* Appended in ABI 5. The game's depth convention, for the backends that fix it when their
+       context is created (FSR and XeSS through the D3D12 bridge). Zero keeps the reversed-Z,
+       infinite-far convention those contexts have always been opened with. Non-zero declares
+       standard depth (0 at the near plane, 1 at a finite far plane). DLSS reads the per-frame
+       camera.depth_inverted either way, so this must agree with it. */
+    uint32_t standard_depth;
 } rsf_dlss_pipeline_setup;
 
 /* One frame's inputs, all borrowed for the duration of the call and none of them retained.

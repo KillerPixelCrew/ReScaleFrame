@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "sr_swap.h"
 #include "sr_profile.h"
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <string_view>
@@ -239,8 +240,83 @@ void SwapController::restore_globals(bool rollback) noexcept {
     if (!ok) { ++counters_.write_faults; refuse("An engine global could not be restored."); }
 }
 
+bool SwapController::open_temporal(const FrameFacts& facts) noexcept {
+    auto& p = projection_;
+    if (facts.jitter && facts.device_view && facts.device_project && facts.device_full_transform) {
+        p.view = facts.device_view;
+        p.project = facts.device_project;
+        p.full = facts.device_full_transform;
+        EngineMatrix view{};
+        if (!host_.read(p.project, p.saved_project.data(), sizeof(EngineMatrix)) || !host_.read(p.view, view.data(), sizeof(view)) ||
+            !host_.read(p.full, p.saved_full.data(), sizeof(EngineMatrix)))
+            return false;
+        const auto jittered = jitter_engine_projection(p.saved_project, facts.jitter_x, facts.jitter_y, render_width_, render_height_);
+        if (!jittered) ++counters_.jitter_invalid;   // a non-finite projection: this window renders unjittered
+        else {
+            p.jittered = *jittered;
+            const auto full = engine_mul(p.jittered, view);
+            p.written = true;    // before the writes: a partial write is restored too
+            if (!host_.write(p.project, p.jittered.data(), sizeof(EngineMatrix)) || !host_.write(p.full, full.data(), sizeof(full)))
+                return false;
+            p.uploaded = true;   // before the call: a faulting upload is still followed by the restoring upload
+            if (!host_.upload_projection(p.project)) return false;
+            p.applied = true;
+            p.x = facts.jitter_x;
+            p.y = facts.jitter_y;
+            ++counters_.jittered;
+        }
+    }
+    if (facts.mip_bias && facts.sampler_bias) {
+        auto& b = bias_;
+        b.field = facts.sampler_bias;
+        if (!host_.read(b.field, &b.saved, sizeof(float)) || !std::isfinite(b.saved)) return false;
+        b.window = b.saved + facts.mip_bias_delta;
+        if (b.window == b.saved) ++counters_.mip_unchanged;   // SetMipLODBias would return early: nothing to restore
+        else {
+            b.applied = true;
+            float now{};
+            if (!host_.set_mip_bias(b.window) || !host_.read(b.field, &now, sizeof(now)) || now != b.window) return false;
+            ++counters_.mip_applied;
+        }
+    }
+    return true;
+}
+void SwapController::restore_temporal(Restore reason) noexcept {
+    const bool rollback = reason == Restore::Rollback;
+    auto& p = projection_;
+    if (p.written) {
+        EngineMatrix current{};
+        // Inside the window only the first-person sites change Device.mProject, and each puts the jittered main
+        // projection back. Anything else is foreign: restore anyway and refuse further swaps.
+        if (!rollback && host_.read(p.project, current.data(), sizeof(current)) && current != p.jittered) {
+            ++counters_.foreign_changes;
+            refuse("Device.mProject changed inside the world window.");
+        }
+        bool ok = host_.write(p.project, p.saved_project.data(), sizeof(EngineMatrix)) &&
+            host_.write(p.full, p.saved_full.data(), sizeof(EngineMatrix));
+        // Shutdown writes engine memory only; the next frame's SetCacheXform uploads Device.mProject again.
+        if (ok && p.uploaded && reason != Restore::Shutdown) ok = host_.upload_projection(p.project);
+        if (ok) ++counters_.projection_restores;
+        else { ++counters_.write_faults; refuse("Device.mProject could not be restored."); }
+        p.written = p.uploaded = false;
+    }
+    auto& b = bias_;
+    if (b.applied) {
+        float current{};
+        if (!rollback && host_.read(b.field, &current, sizeof(current)) && current != b.window) {
+            ++counters_.foreign_changes;
+            refuse("The sampler mip bias changed inside the world window.");
+        }
+        // Also on shutdown: nothing else would ever put the user's bias back.
+        if (host_.set_mip_bias(b.saved)) ++counters_.mip_restored;
+        else { ++counters_.write_faults; refuse("The sampler mip bias could not be restored."); }
+        b.applied = false;
+    }
+}
+
 void SwapController::restore(Restore reason) noexcept {
     if (!open_) return;
+    restore_temporal(reason);
     for (std::size_t i = 0; i < slots(); ++i) {
         if (!engine_[i].present) continue;
         TargetFields current{};
@@ -270,6 +346,8 @@ void SwapController::close_stale() noexcept {
 bool SwapController::prepare(const FrameFacts& facts) noexcept {
     ++counters_.prepares;
     close_stale();
+    projection_ = {};   // after close_stale, which needs the previous window's values
+    bias_ = {};
     const auto skip = [this](Skip reason) { ++counters_.skipped[static_cast<std::size_t>(reason)]; return false; };
     if (!swap_enabled_ || refusal_) return skip(Skip::Off);
     if (facts.scope) return skip(Skip::Scope);
@@ -361,6 +439,12 @@ bool SwapController::prepare(const FrameFacts& facts) noexcept {
         return false;
     }
     invalidate_caches();
+    if (stage_ == 2 && !open_temporal(facts)) {
+        ++counters_.write_faults;
+        refuse("The Stage 3 projection or mip bias could not be applied.");
+        restore(Restore::Rollback);
+        return false;
+    }
     ++counters_.swapped;
     return true;
 }
@@ -412,7 +496,34 @@ void SwapController::frame_end() noexcept {
 }
 
 void SwapController::rm_near() noexcept {
-    if (open_) ++counters_.rm_near_in_window;
+    if (!open_) return;
+    ++counters_.rm_near_in_window;
+    auto& p = projection_;
+    if (!p.written || !p.applied) return;
+    EngineMatrix current{}, view{};
+    if (!host_.read(p.project, current.data(), sizeof(current)) || !host_.read(p.view, view.data(), sizeof(view))) {
+        ++counters_.fp_foreign;
+        return;
+    }
+    switch (first_person_action(current, p.jittered, p.have_first_person ? &p.last_first_person : nullptr)) {
+    case FirstPersonAction::AlreadyJittered: ++counters_.fp_already; return;
+    case FirstPersonAction::Foreign: ++counters_.fp_foreign; return;
+    case FirstPersonAction::Jitter: break;
+    }
+    // The site built Device.mProject (psHUD_FOV), mFullTransform = mProject * mView, and uploaded it; it restores
+    // the jittered main projection itself afterwards. Apply the same pixel offset to the fresh matrix.
+    const auto jittered = jitter_engine_projection(current, p.x, p.y, render_width_, render_height_);
+    if (!jittered) { ++counters_.jitter_invalid; return; }
+    const auto full = engine_mul(*jittered, view);
+    if (!host_.write(p.project, jittered->data(), sizeof(EngineMatrix)) || !host_.write(p.full, full.data(), sizeof(full)) ||
+        !host_.upload_projection(p.project)) {
+        ++counters_.write_faults;
+        refuse("A first-person projection could not be jittered.");
+        return;
+    }
+    p.last_first_person = *jittered;
+    p.have_first_person = true;
+    ++counters_.fp_jittered;
 }
 
 void SwapController::shutdown() noexcept {

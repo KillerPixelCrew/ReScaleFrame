@@ -79,6 +79,8 @@ struct Pipeline {
     int32_t last_switch_result = 0;
     std::string sdk_directories[4];
     float units_to_meters = 1;
+    // setup.standard_depth: the convention the alternate backends' contexts are opened with.
+    uint32_t standard_depth = 0;
 
 
     /* Consecutive evaluate failures, and whether evaluating has been given up on.
@@ -270,7 +272,7 @@ rsf_backend_result create_alternate(Pipeline& self, uint32_t width, uint32_t hei
 {
     return rsf_sr_legacy_create(self.device, width, height, self.sdk_directories[0].c_str(),
         self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(), self.sdk_directories[3].c_str(),
-        self.units_to_meters, self.log, self.log_user, out);
+        self.units_to_meters, self.standard_depth, self.log, self.log_user, out);
 }
 
 /* Input conditioning this pipeline does for a backend before it evaluates. The alternate backends
@@ -283,6 +285,15 @@ struct BackendNeeds {
     bool colour_transport;
     bool colour_correction;
 };
+/* Whether the decode writes the sentinel for some pixels: a stored zero under the original rule, or
+   an invalid validity channel. Either way those pixels need camera motion reconstructed, and a
+   validity-marked decode leaves zero for valid stationary pixels, which must not be read as
+   unwritten. */
+constexpr bool marks_unwritten(const rsf_motion_decode_params& motion)
+{
+    return motion.zero_means_unwritten != 0 || motion.validity_enabled != 0;
+}
+
 constexpr BackendNeeds needs_of(uint32_t backend)
 {
     return backend == RSF_SR_DLSS ? BackendNeeds{true, true, true} : BackendNeeds{false, false, false};
@@ -416,6 +427,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device_pointer
                               setup->fsr4_directory_utf8, setup->xess_directory_utf8};
     for (uint32_t i = 0; i < 4; ++i) self.sdk_directories[i] = sdk_paths[i] ? sdk_paths[i] : "";
     self.units_to_meters = setup->view_space_to_meters;
+    self.standard_depth = setup->standard_depth ? 1u : 0u;
 
     self.motion.struct_size = uint32_t(sizeof(rsf_motion_decode_params));
     // Per axis, not as a pair. A zero on one axis alone decodes that axis to no motion at all,
@@ -682,7 +694,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     // After the decode a stored zero is an ordinary value that real motion can take, so the marker
     // for "nothing wrote this pixel" is whatever the decode wrote instead, and only exists if the
     // encoding reserved a clear value in the first place.
-    camera.has_motion_sentinel = self.motion.zero_means_unwritten ? 1u : 0u;
+    camera.has_motion_sentinel = marks_unwritten(self.motion) ? 1u : 0u;
     camera.motion_sentinel = self.motion.invalid_value;
     // A caller that gives a scale gives canonical current-minus-previous UV (the native path's
     // producer measures it). Left at zero, the decode's output is used as it stands.
@@ -826,7 +838,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             alternate_frame.motion_scale_y *= -0.5f;
         }
         evaluated = rsf_sr_legacy_evaluate(self.alternate, context_pointer, &alternate_frame,
-                                           self.motion.zero_means_unwritten);
+                                           marks_unwritten(self.motion) ? 1u : 0u);
     }
     // Every backend offers its frame to FG capture, which keeps one copy per frame: DLSS through a
     // Streamline host has already filled the slot in its evaluate. The alternate backends hand over

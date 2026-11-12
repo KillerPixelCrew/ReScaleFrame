@@ -99,7 +99,8 @@ DrawContextScope::DrawContextScope(InheritView, std::optional<temporal::Projecti
 DrawContextScope::~DrawContextScope() { current_ = previous_; }
 thread_local DrawScope* DrawScope::current_{};
 DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey> key,
-    DrawKind kind, const float* world, const std::byte* skeleton, DrawClassification classification) noexcept
+    DrawKind kind, const float* world, const std::byte* skeleton, DrawClassification classification,
+    std::uint64_t visual) noexcept
     : registry_(registry), previous_(current_)
 {
     identity_.key = key.value_or(InstanceKey{});
@@ -107,6 +108,7 @@ DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey
     identity_.world = world;
     identity_.skeleton = skeleton;
     identity_.classification = classification;
+    identity_.visual = visual;
     if (const auto context = DrawContextScope::current_) {
         identity_.view = context->view_;
         identity_.domain = context->domain_;
@@ -160,6 +162,9 @@ DrawVerdict classify_draw(const DrawFacts& facts) noexcept
     if (!facts.capturing) return DrawVerdict::UnidentifiedNoCapture;
     if (facts.lookup == VisualLookup::Unique) return DrawVerdict::Identified;
     if (facts.lookup == VisualLookup::Ambiguous) return DrawVerdict::UnidentifiedAmbiguous;
+    // A level tree is never in the model registry. Its address names it and the motion stage keeps its constants.
+    if (facts.foliage_identity && (facts.type == VisualType::TreeST || facts.type == VisualType::TreePM))
+        return DrawVerdict::IdentifiedFoliage;
     // From here the visual is unregistered. A skinned visual always needs its bone palette, so it is never static.
     if (facts.type == VisualType::SkeletonST || facts.type == VisualType::SkeletonPM) return DrawVerdict::UnidentifiedDynamic;
     if (!facts.world_readable) return DrawVerdict::UnidentifiedUnreadable;
@@ -183,7 +188,8 @@ const char* visual_type_name(VisualType type) noexcept
 const char* verdict_name(DrawVerdict verdict) noexcept
 {
     static constexpr const char* names[] = {"identified", "ignored_shadow", "ignored_static_world", "unidentified_dynamic",
-        "unidentified_deformed", "unidentified_ambiguous", "unidentified_unreadable", "unidentified_nocapture"};
+        "unidentified_deformed", "unidentified_ambiguous", "unidentified_unreadable", "unidentified_nocapture",
+        "identified_foliage"};
     const auto index = static_cast<std::size_t>(verdict);
     return index < std::size(names) ? names[index] : "unknown";
 }
@@ -197,7 +203,7 @@ using Delete = void(__fastcall*)(void*, void**, std::int32_t);
 using Render = void(__fastcall*)(void*, float);
 using Flush = void(__fastcall*)();
 using Unary = void(__fastcall*)(void*);
-std::array<void*, 16> originals{};
+std::array<void*, 17> originals{};
 IdentityRegistry native_identities;
 std::mutex native_lifecycle;
 GeometrySink sink;
@@ -212,6 +218,8 @@ std::array<std::atomic<std::uint64_t>, coverage_cells> coverage_draws{};
 std::array<std::atomic<std::uint64_t>, GeometryCoverage::passes> flush_total{}, flush_in_visual{};
 std::atomic<std::uint64_t> captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
 std::atomic<std::uint64_t> views_main{}, views_scope{}, hud_scopes{}, near_windows{};
+std::array<std::atomic<std::uint64_t>, GeometryCoverage::passes> detail_renders{}, flush_in_detail{};
+std::atomic<bool> foliage_identity{};
 std::size_t coverage_index(DrawPass pass, VisualType type, DrawVerdict verdict) noexcept
 {
     return (static_cast<std::size_t>(pass) * GeometryCoverage::types + static_cast<std::size_t>(type)) *
@@ -330,6 +338,7 @@ void render_visual(std::size_t index, void* self, float lod, DrawKind kind, Visu
     DrawFacts facts;
     facts.type = type;
     facts.capturing = capture_enabled.load() && !factory_depth;
+    facts.foliage_identity = foliage_identity.load(std::memory_order_relaxed);
     facts.pass = read_pass(module);
     std::optional<InstanceKey> key;
     if (facts.capturing) {
@@ -353,9 +362,10 @@ void render_visual(std::size_t index, void* self, float lod, DrawKind kind, Visu
     }
     const DrawClassification classification{facts.pass, type, classify_draw(facts)};
     coverage_draws[coverage_index(classification.pass, type, classification.verdict)].fetch_add(1);
-    (key ? draws_identified : draws_unidentified).fetch_add(1);
+    (key || classification.verdict == DrawVerdict::IdentifiedFoliage ? draws_identified : draws_unidentified).fetch_add(1);
     DrawScope scope(native_identities, key, kind,
-        module ? reinterpret_cast<const float*>(module + world_matrix_rva) : nullptr, skeleton, classification);
+        module ? reinterpret_cast<const float*>(module + world_matrix_rva) : nullptr, skeleton, classification,
+        reinterpret_cast<std::uintptr_t>(self));
     reinterpret_cast<Render>(originals[index])(self, lod);
 }
 void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, DrawKind::Rigid, VisualType::Static); }
@@ -436,6 +446,19 @@ void __fastcall rm_normal_hook(void* self)
     close_near_window();
     reinterpret_cast<Unary>(originals[geometry_site_rm_normal])(self);
 }
+// CDetailManager::Render. hw_Render fills the VS `array` rows and issues every grass draw before it returns, in the
+// G-buffer and in the shadow passes, so a draw-time flush with this depth set belongs to a detail batch.
+thread_local std::uint32_t detail_window_depth{};
+void __fastcall detail_render_hook(void* self)
+{
+    struct Window {
+        Window() noexcept { ++detail_window_depth; }
+        ~Window() { --detail_window_depth; }
+    } window;
+    if (capture_enabled.load(std::memory_order_relaxed))
+        detail_renders[static_cast<std::size_t>(read_pass(native_module.load()))].fetch_add(1);
+    reinterpret_cast<Unary>(originals[geometry_site_detail_render])(self);
+}
 }
 
 void observe_draw_facts(DrawTimeFacts& facts, std::optional<DrawCapture>& kept) noexcept
@@ -447,14 +470,23 @@ void observe_draw_facts(DrawTimeFacts& facts, std::optional<DrawCapture>& kept) 
         facts.kind = scope->identity_.kind;
         facts.view = scope->identity_.view;
         facts.domain = scope->identity_.domain;
+        facts.visual = scope->identity_.visual;
+        facts.type = scope->identity_.classification.type;
+        if (facts.type == VisualType::TreePM && facts.visual) {
+            std::uint32_t lod{};
+            if (safe_copy(&lod, reinterpret_cast<const std::byte*>(facts.visual) + tree_pm_last_lod_offset, sizeof(lod)))
+                facts.tree_lod = lod;
+        }
     } else if (const auto context = DrawContextScope::current_) {
         facts.view = context->view_;
         facts.domain = context->domain_;
     }
     const auto pass = read_pass(native_module.load());
     facts.pass = pass;
+    facts.detail = detail_window_depth != 0;
     if (!capture_enabled.load(std::memory_order_relaxed)) return;
     flush_total[static_cast<std::size_t>(pass)].fetch_add(1);
+    if (facts.detail) flush_in_detail[static_cast<std::size_t>(pass)].fetch_add(1);
     if (!scope) return;
     flush_in_visual[static_cast<std::size_t>(pass)].fetch_add(1);
     const auto& classification = scope->identity_.classification;
@@ -480,6 +512,44 @@ void geometry_observe_draw() noexcept
 void geometry_set_flush_callback(FlushCallback value) noexcept
 {
     flush_callback.store(value, std::memory_order_release);
+}
+void geometry_enable_foliage_identity(bool value) noexcept { foliage_identity.store(value, std::memory_order_relaxed); }
+bool geometry_foliage_identity_enabled() noexcept { return foliage_identity.load(std::memory_order_relaxed); }
+namespace {
+// The dx10ConstantBuffer behind CBackend::m_aVertexConstants[slot], only when it reports the reflected size.
+const std::byte* vertex_constant_data(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset,
+    std::uint32_t bytes) noexcept
+{
+    const auto module = native_module.load();
+    if (!module || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
+        offset > expected_size - bytes) return nullptr;
+    const std::byte* object{};
+    std::uint32_t size{};
+    const std::byte* data{};
+    if (!safe_copy(&object, module + vertex_constant_buffers_rva + slot * sizeof(object), sizeof(object)) || !object ||
+        !safe_copy(&size, object + constant_buffer_size_offset, sizeof(size)) || size != expected_size ||
+        !safe_copy(&data, object + constant_buffer_data_offset, sizeof(data)) || !data) return nullptr;
+    return data + offset;
+}
+}
+bool read_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, void* out,
+    std::uint32_t bytes) noexcept
+{
+    const auto source = vertex_constant_data(slot, expected_size, offset, bytes);
+    return source && safe_copy(out, source, bytes);
+}
+bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, const void* in,
+    std::uint32_t bytes) noexcept
+{
+    const auto target = const_cast<std::byte*>(vertex_constant_data(slot, expected_size, offset, bytes));
+    if (!target || !in) return false;
+    __try { std::memcpy(target, in, bytes); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool read_world_matrix(float (&out)[16]) noexcept
+{
+    const auto module = native_module.load();
+    return module && safe_copy(out, module + world_matrix_rva, sizeof(out));
 }
 std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept
 {
@@ -510,13 +580,14 @@ void geometry_set_draw_sink(DrawSink value) noexcept
 std::span<const HookSite> native_geometry_hook_sites() noexcept
 {
     static const auto result = [] {
-        const std::array<void*, 16> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
+        const std::array<void*, 17> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
             reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook), reinterpret_cast<void*>(&rigid_hook),
             reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook), reinterpret_cast<void*>(&skeleton_pm_hook),
             reinterpret_cast<void*>(&tree_st_hook), reinterpret_cast<void*>(&tree_pm_hook), reinterpret_cast<void*>(&flush_hook),
             reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
-            reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook), reinterpret_cast<void*>(&rm_normal_hook)};
-        std::array<HookSite, 16> sites;
+            reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook), reinterpret_cast<void*>(&rm_normal_hook),
+            reinterpret_cast<void*>(&detail_render_hook)};
+        std::array<HookSite, 17> sites;
         for (std::size_t i = 0; i < sites.size(); ++i)
             sites[i] = {geometry_sites[i].name, geometry_sites[i].rva, geometry_sites[i].expected, replacements[i], &originals[i]};
         return sites;
@@ -591,6 +662,10 @@ GeometryCoverage geometry_coverage() noexcept
         result.flush_total[pass] = flush_total[pass].load();
         result.flush_in_visual[pass] = flush_in_visual[pass].load();
     }
+    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass) {
+        result.detail_renders[pass] = detail_renders[pass].load();
+        result.flush_in_detail[pass] = flush_in_detail[pass].load();
+    }
     result.captured = captured.load(); result.capture_stale = capture_stale.load();
     result.capture_no_world = capture_no_world.load(); result.capture_no_palette = capture_no_palette.load();
     result.capture_no_context = capture_no_context.load(); result.sunk = sunk.load();
@@ -603,7 +678,7 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
     if (!emit) return;
     const auto c = geometry_coverage();
     using ull = unsigned long long;
-    char text[640];
+    char text[900];
     std::uint64_t by_verdict[GeometryCoverage::verdicts]{}, by_pass[GeometryCoverage::passes]{};
     for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass)
         for (std::size_t type = 0; type < GeometryCoverage::types; ++type)
@@ -613,10 +688,11 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
             }
     // identified + ignored_* are covered; unidentified_* is the measured gap that matters for motion vectors.
     std::snprintf(text, sizeof(text),
-        "Anomaly geometry coverage render-entries main=%llu shadow=%llu other=%llu | identified=%llu ignored_shadow=%llu ignored_static_world=%llu "
-        "| unidentified dynamic=%llu deformed=%llu ambiguous=%llu unreadable=%llu nocapture=%llu",
+        "Anomaly geometry coverage render-entries main=%llu shadow=%llu other=%llu | identified=%llu (foliage=%llu) ignored_shadow=%llu "
+        "ignored_static_world=%llu | unidentified dynamic=%llu deformed=%llu ambiguous=%llu unreadable=%llu nocapture=%llu",
         static_cast<ull>(by_pass[0]), static_cast<ull>(by_pass[1]), static_cast<ull>(by_pass[2]),
-        static_cast<ull>(by_verdict[0]), static_cast<ull>(by_verdict[1]), static_cast<ull>(by_verdict[2]),
+        static_cast<ull>(by_verdict[0] + by_verdict[8]), static_cast<ull>(by_verdict[8]),
+        static_cast<ull>(by_verdict[1]), static_cast<ull>(by_verdict[2]),
         static_cast<ull>(by_verdict[3]), static_cast<ull>(by_verdict[4]), static_cast<ull>(by_verdict[5]),
         static_cast<ull>(by_verdict[6]), static_cast<ull>(by_verdict[7]));
     emit(user, text);
@@ -628,22 +704,25 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
             if (!sum) continue;
             std::snprintf(text, sizeof(text),
                 "Anomaly geometry coverage pass=%s type=%s identified=%llu ignored_shadow=%llu ignored_static_world=%llu "
-                "unidentified_dynamic=%llu unidentified_deformed=%llu unidentified_other=%llu",
+                "unidentified_dynamic=%llu unidentified_deformed=%llu unidentified_other=%llu identified_foliage=%llu",
                 pass_name(static_cast<DrawPass>(pass)), visual_type_name(static_cast<VisualType>(type)),
                 static_cast<ull>(row[0]), static_cast<ull>(row[1]), static_cast<ull>(row[2]), static_cast<ull>(row[3]),
-                static_cast<ull>(row[4]), static_cast<ull>(row[5] + row[6] + row[7]));
+                static_cast<ull>(row[4]), static_cast<ull>(row[5] + row[6] + row[7]), static_cast<ull>(row[8]));
             emit(user, text);
         }
     std::snprintf(text, sizeof(text),
         "Anomaly geometry draw-time flush main=%llu(in_visual=%llu) shadow=%llu(in_visual=%llu) other=%llu(in_visual=%llu) "
         "| captured=%llu sunk=%llu stale=%llu no_world=%llu no_palette=%llu no_context=%llu "
-        "| views main=%llu scope=%llu hud_scopes=%llu near_windows=%llu",
+        "| views main=%llu scope=%llu hud_scopes=%llu near_windows=%llu "
+        "| detail renders main=%llu shadow=%llu other=%llu flush main=%llu shadow=%llu other=%llu",
         static_cast<ull>(c.flush_total[0]), static_cast<ull>(c.flush_in_visual[0]),
         static_cast<ull>(c.flush_total[1]), static_cast<ull>(c.flush_in_visual[1]),
         static_cast<ull>(c.flush_total[2]), static_cast<ull>(c.flush_in_visual[2]),
         static_cast<ull>(c.captured), static_cast<ull>(c.sunk), static_cast<ull>(c.capture_stale),
         static_cast<ull>(c.capture_no_world), static_cast<ull>(c.capture_no_palette), static_cast<ull>(c.capture_no_context),
-        static_cast<ull>(c.views_main), static_cast<ull>(c.views_scope), static_cast<ull>(c.hud_scopes), static_cast<ull>(c.near_windows));
+        static_cast<ull>(c.views_main), static_cast<ull>(c.views_scope), static_cast<ull>(c.hud_scopes), static_cast<ull>(c.near_windows),
+        static_cast<ull>(c.detail_renders[0]), static_cast<ull>(c.detail_renders[1]), static_cast<ull>(c.detail_renders[2]),
+        static_cast<ull>(c.flush_in_detail[0]), static_cast<ull>(c.flush_in_detail[1]), static_cast<ull>(c.flush_in_detail[2]));
     emit(user, text);
 }
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING

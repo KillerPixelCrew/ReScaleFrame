@@ -33,7 +33,8 @@ struct rsf_sr_legacy_adapter {
 };
 rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
     const char* fsr2, const char* fsr3, const char* fsr4, const char* xess,
-    float units_to_meters, rsf_backend_log_fn log, void* user, rsf_sr_legacy_adapter** out)
+    float units_to_meters, uint32_t standard_depth, rsf_backend_log_fn log, void* user,
+    rsf_sr_legacy_adapter** out)
 {
     if (!out || !std::isfinite(units_to_meters) || units_to_meters <= 0) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
@@ -46,8 +47,10 @@ rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t h
     setup.open.struct_size = sizeof(setup.open); setup.open.abi_version = RSF_BACKEND_ABI_VERSION;
     setup.open.api = RSF_API_D3D11; setup.open.device = device;
     setup.open.output_width = width; setup.open.output_height = height;
-    setup.open.hdr = setup.open.inverted_depth = setup.open.dynamic_resolution = setup.open.auto_exposure = 1;
-    setup.open.depth_infinite = 1;
+    setup.open.hdr = setup.open.dynamic_resolution = setup.open.auto_exposure = 1;
+    // FSR and XeSS fix the depth convention at context creation. Reversed, infinite-far depth is
+    // the established default; a game with standard depth declares it in the pipeline setup.
+    setup.open.inverted_depth = setup.open.depth_infinite = standard_depth ? 0u : 1u;
     setup.open.log = log; setup.open.log_user = user;
     setup.fsr2_directory_utf8 = fsr2; setup.fsr3_directory_utf8 = fsr3; setup.fsr4_directory_utf8 = fsr4;
     setup.xess_directory_utf8 = xess;

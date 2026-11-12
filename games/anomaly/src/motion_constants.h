@@ -14,10 +14,17 @@ namespace rsf::anomaly::motion {
 inline constexpr std::size_t core_vs_bytes = 3824;
 inline constexpr std::size_t core_wvp_offset = 0, core_bones_offset = 64, core_history_offset = 3808;
 inline constexpr std::size_t core_bone_rows = 234, core_max_bones = core_bone_rows / 3;  // 78 affine bones
-// VS b13, foliage family (RSFFoliagePrevious). RSF currently supplies no foliage history, so only the
-// all-zero "unsupported draw" buffer is produced; its history uint4 at @160 is zero and therefore invalid.
+// VS b13, foliage family (RSFFoliagePrevious, games/anomaly/shaders/foliage/rsf_anomaly_foliage.h and README):
+// rsf_previous_clip_from_world @0 (64), rsf_previous_tree_xform float3x4 @64 (48), rsf_previous_consts @112,
+// rsf_previous_wave @128, rsf_previous_wind (tree wind / detail dir2D) @144, rsf_foliage_history uint4 @160
+// (complete, detail group count, ABI 1, 0), rsf_previous_rows[244] @176 (3904), rsf_previous_item_state[61] @4080 (976).
+// An unsupported draw gets the all-zero buffer: its history uint4 is zero and therefore invalid.
 inline constexpr std::size_t foliage_vs_bytes = 5056;
-inline constexpr std::size_t foliage_history_offset = 160;
+inline constexpr std::size_t foliage_clip_offset = 0, foliage_tree_xform_offset = 64, foliage_consts_offset = 112,
+    foliage_wave_offset = 128, foliage_wind_offset = 144, foliage_history_offset = 160, foliage_rows_offset = 176,
+    foliage_item_state_offset = 4080;
+inline constexpr std::size_t foliage_detail_groups = 61, foliage_detail_rows = foliage_detail_groups * 4;
+inline constexpr std::size_t foliage_detail_floats = foliage_detail_rows * 4;
 // PS b13 (RSFCorePixel): rsf_viewport @0, rsf_jitter @16, rsf_pixel_control @32.
 inline constexpr std::size_t ps_bytes = 48;
 inline constexpr std::size_t ps_viewport_offset = 0, ps_jitter_offset = 16, ps_control_offset = 32;
@@ -45,6 +52,31 @@ bool pack_core_vertex(const temporal::Mat4& previous_wvp, std::span<const tempor
 void pack_core_invalid(CoreVertexBytes& out) noexcept;
 // The initialized zero foliage buffer the foliage README requires for unsupported draws.
 void pack_foliage_invalid(FoliageVertexBytes& out) noexcept;
+
+// Previous-frame wind state of one foliage draw: tree consts/wave/wind, or detail consts/wave/dir2D.
+struct FoliageConstants {
+    float consts[4]{}, wave[4]{}, wind[4]{};
+    bool operator==(const FoliageConstants&) const = default;
+};
+// One detail instance remapped to a CURRENT group of four rows. rows are the previous frame's rows 0..3 verbatim (they
+// already contain the previous effective scale including fade, and the colour/hemisphere row).
+struct FoliageItem {
+    bool valid{};
+    float scale{}, fade{};
+    float rows[16]{};
+};
+// previous_clip is the unjittered previous projection * view (column-vector, mul(M, v)); xform holds the three float4
+// registers of the engine's m_xform exactly as the engine staged them. Both return false and write an all-invalid buffer
+// when a value is not finite.
+bool pack_foliage_tree(const temporal::Mat4& previous_clip, const float (&xform)[12], const FoliageConstants& previous,
+    FoliageVertexBytes& out) noexcept;
+// `groups` is the number of live groups in the current batch (at most 61); items[g] is the remap of current group g.
+bool pack_foliage_detail(const temporal::Mat4& previous_clip, const FoliageConstants& previous,
+    std::span<const FoliageItem> items, std::uint32_t groups, FoliageVertexBytes& out) noexcept;
+// A projection that carries sub-pixel jitter (normalized viewport UV, Y down, added to clip.xy / clip.w as
+// (2u, -2v)) without it: P' = P with row0 -= 2u * row3 and row1 += 2v * row3. The foliage shader contract wants an
+// unjittered previous projection.
+temporal::Mat4 remove_jitter(const temporal::Mat4& projection, float jitter_u, float jitter_v) noexcept;
 
 struct PixelInputs {
     float viewport_x{}, viewport_y{}, viewport_width{}, viewport_height{};  // current viewport in RT pixels

@@ -91,7 +91,7 @@ bit-exact, static geometry would show as `unidentified_dynamic` in the next run,
 | Any hooked type, `pass=shadow` | 100% `ignored_shadow` (includes identified models drawn into shadow maps) |
 | `pass=main`, static, progressive | Almost all `ignored_static_world`; a small `unidentified_dynamic` tail (LOD sprites of pool models) |
 | `pass=main`, skeleton ST/PM | Mostly `identified` with `FirstPerson` for hands and weapon; a small `unidentified_dynamic` tail |
-| `pass=main`, tree ST/PM | `unidentified_deformed` (level trees); any registered tree is `identified` but refused by `feed` as `UnsupportedKind` |
+| `pass=main`, tree ST/PM | `unidentified_deformed` (level trees); any registered tree is `identified` but refused by `feed` as `UnsupportedKind`. With `Motion=1` (foliage identity on) level trees are `identified_foliage`, named by address; see `anomaly-foliage-motion.md` |
 | Main-pass flushes outside a visual | Particles, grass, LOD billboards, wallmarks, sky, UI, light volumes, post; not split yet |
 
 ## What the next live run must measure

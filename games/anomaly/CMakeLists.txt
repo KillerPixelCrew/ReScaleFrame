@@ -29,6 +29,11 @@ set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game
 
 # Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time
 # history and the invalidation replay. Inert unless [Anomaly] Motion=1.
-target_sources(rsf_game_anomaly PRIVATE src/motion_constants.cpp src/motion_history.cpp src/motion_policy.cpp
+target_sources(rsf_game_anomaly PRIVATE src/motion_constants.cpp src/motion_history.cpp src/motion_foliage.cpp src/motion_policy.cpp
     src/motion_target.cpp src/motion_d3d11.cpp src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
 target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
+
+# SR Stages 4 and 5 (src/sr_temporal.h): the Runtime's shared D3D11 SR pipeline through rsf_get_d3d11_sr_api. The
+# pipeline headers name the DLSS backend's frame types; nothing links the backend.
+target_sources(rsf_game_anomaly PRIVATE src/sr_temporal.cpp)
+target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")

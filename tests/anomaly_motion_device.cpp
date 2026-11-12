@@ -11,7 +11,14 @@
 //    WVP; missing history must write all-zero motion.
 // 3. The invalidation replay: a stock-shader occluder drawn over the valid motion leaves stale vectors; the replay
 //    zeroes exactly the samples it won; an occluder behind the surface changes nothing; the OM state is restored.
+// 4. Foliage. Every deployed tree/detail root exposes the constants the draw-time reader locates from the stock
+//    reflection. A real deffer_tree_flat variant draws a sheared crown with wind history (production packer): the motion
+//    equals the CPU model of the wind difference, the base does not move, an unchanged wind is valid zero, a camera pan
+//    is the camera vector, and missing history is zero. A real deffer_detail_w_flat variant draws two plants whose
+//    previous rows were batched into other groups: the production FoliageHistory remaps them to the current groups, the
+//    motion equals the CPU model including the plant that grew, and a plant without history stays zero.
 #include "motion_d3d11.h"
+#include "motion_foliage.h"
 #include "shader_d3d.h"
 #include "shader_loader.h"
 #include <d3d11.h>
@@ -25,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -490,6 +498,440 @@ void draw_scene()
     std::printf("draw: %u covered, %u invalidated by replay, %u kept, uploads=%llu skipped=%llu\n", covered, invalidated, kept,
         static_cast<unsigned long long>(motion.uploads()), static_cast<unsigned long long>(motion.upload_skips()));
 }
+
+// ---- foliage (trees and grass) ------------------------------------------------------------------------------------
+// Every deployed foliage root must expose what the draw-time reader needs under the engine's compile flags.
+void foliage_layouts(const std::vector<Root>& list)
+{
+    unsigned trees = 0, details = 0;
+    for (const auto& root : list) {
+        if (root.family != "foliage_tree" && root.family != "foliage_detail") continue;
+        const auto built = build(root, engine_defines(root));
+        require(built.prepared.outcome == Outcome::Replaced, root.name + ": " + built.prepared.detail);
+        const bool tree = root.family == "foliage_tree";
+        const auto layout = make_foliage_layout(tree ? Family::FoliageTree : Family::FoliageDetail, built.prepared.stock);
+        require(layout.usable, root.name + ": the engine's staged constants cannot be located from the stock reflection");
+        if (tree) {
+            require(layout.xform.size >= 48 && layout.xform.present, root.name + " m_xform is three registers");
+            // Which of wave, wind and consts survive depends on the permutation (the compiler drops unused uniforms); the
+            // reader treats a missing one as zero, and consts is always needed for the texture coordinates.
+            require(layout.consts.present, root.name + " consts");
+            ++trees;
+        } else {
+            require(layout.array.size == 3904 && layout.consts.present, root.name + " array[61 * 4]");
+            const bool still = root.name == "deffer_detail_s_flat.vs";
+            require(layout.wave.present == !still && layout.wind.present == !still, root.name + " wave set");
+            ++details;
+        }
+        // The variant keeps the stock buffer indices, so the engine's own table index addresses the same buffer.
+        for (const auto& buffer : built.prepared.stock.buffers) {
+            const auto found = std::find_if(built.prepared.reflection.buffers.begin(), built.prepared.reflection.buffers.end(),
+                [&](const Buffer& b) { return b.name == buffer.name; });
+            require(found != built.prepared.reflection.buffers.end() && found->size == buffer.size, root.name + " buffer kept");
+        }
+    }
+    require(trees >= 10 && details == 2, "all deployed foliage roots checked");
+    std::printf("foliage roots: %u tree, %u detail layouts usable\n", trees, details);
+}
+
+float cyclic(float x)
+{
+    const float f = 2.8284271f * (x - std::floor(x)) - 1.4142136f;
+    return f * f - 1.0f;
+}
+
+struct FoliageRig {
+    ComPtr<ID3D11VertexShader> stock_vs, motion_vs;
+    ComPtr<ID3D11PixelShader> stock_ps, motion_ps;
+    ComPtr<ID3D11InputLayout> layout;
+    ComPtr<ID3D11ShaderReflection> vs_reflection, ps_reflection;
+    Built vs, ps;
+    UINT stride{};
+    Target position, albedo;
+    ComPtr<ID3D11Texture2D> depth_texture;
+    ComPtr<ID3D11DepthStencilView> depth;
+    ComPtr<ID3D11DepthStencilState> less;
+    ComPtr<ID3D11RasterizerState> raster;
+    Scene engine;   // keeps the engine constant buffers alive
+};
+FoliageRig make_rig(const Root& vs_root, const Root& ps_root)
+{
+    FoliageRig r;
+    r.vs = build(vs_root, engine_defines(vs_root));
+    r.ps = build(ps_root, engine_defines(ps_root));
+    require(r.vs.prepared.outcome == Outcome::Replaced && r.ps.prepared.outcome == Outcome::Replaced, vs_root.name + " pair variants");
+    require(linkable(r.vs.prepared.reflection, r.ps.prepared.reflection), vs_root.name + " variant links to the core pixel variant");
+    hr(device->CreateVertexShader(r.vs.stock.data(), r.vs.stock.size(), nullptr, &r.stock_vs), "stock VS");
+    hr(device->CreateVertexShader(r.vs.prepared.variant.data(), r.vs.prepared.variant.size(), nullptr, &r.motion_vs), "motion VS");
+    hr(device->CreatePixelShader(r.ps.stock.data(), r.ps.stock.size(), nullptr, &r.stock_ps), "stock PS");
+    hr(device->CreatePixelShader(r.ps.prepared.variant.data(), r.ps.prepared.variant.size(), nullptr, &r.motion_ps), "motion PS");
+    r.vs_reflection = reflect(r.vs.stock);
+    r.ps_reflection = reflect(r.ps.stock);
+    D3D11_SHADER_DESC desc{};
+    r.vs_reflection->GetDesc(&desc);
+    std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
+    std::vector<std::string> names;
+    names.reserve(desc.InputParameters);
+    for (UINT i = 0; i < desc.InputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC in{};
+        r.vs_reflection->GetInputParameterDesc(i, &in);
+        names.emplace_back(in.SemanticName);
+        const DXGI_FORMAT format = in.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32 ? DXGI_FORMAT_R32G32B32A32_FLOAT :
+            in.ComponentType == D3D_REGISTER_COMPONENT_UINT32 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32G32B32A32_SINT;
+        elements.push_back({names.back().c_str(), in.SemanticIndex, format, 0, i * 16, D3D11_INPUT_PER_VERTEX_DATA, 0});
+    }
+    hr(device->CreateInputLayout(elements.data(), static_cast<UINT>(elements.size()), r.vs.stock.data(), r.vs.stock.size(), &r.layout), "layout");
+    r.stride = desc.InputParameters * 16;
+    r.position = target(DXGI_FORMAT_R16G16B16A16_FLOAT);
+    r.albedo = target(DXGI_FORMAT_R8G8B8A8_UNORM);
+    D3D11_TEXTURE2D_DESC dd{};
+    dd.Width = dd.Height = size; dd.MipLevels = dd.ArraySize = 1; dd.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    dd.SampleDesc.Count = 1; dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    hr(device->CreateTexture2D(&dd, nullptr, &r.depth_texture), "depth");
+    hr(device->CreateDepthStencilView(r.depth_texture.Get(), nullptr, &r.depth), "dsv");
+    D3D11_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = TRUE; ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; ds.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    hr(device->CreateDepthStencilState(&ds, &r.less), "depth state");
+    D3D11_RASTERIZER_DESC rd{};
+    rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
+    hr(device->CreateRasterizerState(&rd, &r.raster), "raster");
+    return r;
+}
+// A quad of two triangles in the vertex layout of the foliage VS: POSITION float4, TEXCOORD0 int4 (0, 0, frac, row offset).
+ComPtr<ID3D11Buffer> foliage_quad(const FoliageRig& rig, float x0, float x1, float y0, float y1, float z, int frac, int row)
+{
+    D3D11_SHADER_DESC desc{};
+    rig.vs_reflection->GetDesc(&desc);
+    const float corners[6][2]{{x0, y0}, {x0, y1}, {x1, y0}, {x1, y0}, {x0, y1}, {x1, y1}};
+    std::vector<std::byte> data(6 * desc.InputParameters * 16);
+    for (UINT v = 0; v < 6; ++v)
+        for (UINT i = 0; i < desc.InputParameters; ++i) {
+            D3D11_SIGNATURE_PARAMETER_DESC in{};
+            rig.vs_reflection->GetInputParameterDesc(i, &in);
+            float f[4]{0.5f, 0.5f, 0.5f, 0.5f};
+            std::int32_t n[4]{};
+            if (std::string(in.SemanticName) == "POSITION") { f[0] = corners[v][0]; f[1] = corners[v][1]; f[2] = z; f[3] = 1; }
+            if (std::string(in.SemanticName) == "TEXCOORD") { n[2] = frac; n[3] = row; }
+            auto* out = data.data() + (v * desc.InputParameters + i) * 16;
+            if (in.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) std::memcpy(out, f, 16);
+            else std::memcpy(out, n, 16);
+        }
+    D3D11_BUFFER_DESC bd{};
+    bd.ByteWidth = static_cast<UINT>(data.size());
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA init{data.data()};
+    ComPtr<ID3D11Buffer> buffer;
+    hr(device->CreateBuffer(&bd, &init, &buffer), "foliage vertex buffer");
+    return buffer;
+}
+using Overrides = std::map<std::string, std::vector<float>>;
+void apply_overrides(ID3D11ShaderReflection* reflection, const Overrides& overrides, std::vector<ComPtr<ID3D11Buffer>>& keep)
+{
+    D3D11_SHADER_DESC desc{};
+    reflection->GetDesc(&desc);
+    for (UINT i = 0; i < desc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC binding{};
+        reflection->GetResourceBindingDesc(i, &binding);
+        if (binding.Type != D3D_SIT_CBUFFER || std::string(binding.Name).starts_with("RSF")) continue;
+        auto* cb = reflection->GetConstantBufferByName(binding.Name);
+        D3D11_SHADER_BUFFER_DESC bd{};
+        cb->GetDesc(&bd);
+        // Read back what bind_engine_constants uploaded, patch the named variables, upload again.
+        ID3D11Buffer* current{};
+        context->VSGetConstantBuffers(binding.BindPoint, 1, &current);
+        require(current != nullptr, "engine constant buffer bound");
+        D3D11_BUFFER_DESC cd{};
+        current->GetDesc(&cd);
+        std::vector<float> values(cd.ByteWidth / 4);
+        cd.Usage = D3D11_USAGE_STAGING; cd.BindFlags = 0; cd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Buffer> staging;
+        hr(device->CreateBuffer(&cd, nullptr, &staging), "staging");
+        context->CopyResource(staging.Get(), current);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        hr(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map cb");
+        std::memcpy(values.data(), mapped.pData, cd.ByteWidth);
+        context->Unmap(staging.Get(), 0);
+        current->Release();
+        for (UINT v = 0; v < bd.Variables; ++v) {
+            D3D11_SHADER_VARIABLE_DESC vd{};
+            cb->GetVariableByIndex(v)->GetDesc(&vd);
+            const auto found = overrides.find(vd.Name);
+            if (found == overrides.end()) continue;
+            require(found->second.size() * 4 <= vd.Size, std::string("override fits ") + vd.Name);
+            std::memcpy(values.data() + vd.StartOffset / 4, found->second.data(), found->second.size() * 4);
+        }
+        D3D11_BUFFER_DESC nb{};
+        nb.ByteWidth = static_cast<UINT>(values.size() * 4);
+        nb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA init{values.data()};
+        ComPtr<ID3D11Buffer> buffer;
+        hr(device->CreateBuffer(&nb, &init, &buffer), "patched cb");
+        ID3D11Buffer* p = buffer.Get();
+        context->VSSetConstantBuffers(binding.BindPoint, 1, &p);
+        keep.push_back(buffer);
+    }
+}
+struct FoliageDraw {
+    std::vector<Half4> position, vectors;
+    std::vector<uint32_t> albedo;
+};
+// Draws `vertex_buffers` (one quad each, 6 vertices) with the stock pair or the variant pair and `overrides` as the
+// engine's VS constants. The variant draw uploads `vbytes` as VS b13 and a unit-viewport PS b13.
+FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool variant, const Overrides& overrides,
+    const std::vector<ComPtr<ID3D11Buffer>>& quads, const FoliageVertexBytes* vbytes)
+{
+    context->ClearState();
+    const float sentinel[4]{-999, -999, -999, -999}, zero[4]{};
+    context->ClearRenderTargetView(rig.position.rtv.Get(), sentinel);
+    context->ClearRenderTargetView(rig.albedo.rtv.Get(), zero);
+    context->ClearDepthStencilView(rig.depth.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
+    motion.clear(context.Get());
+    context->IASetInputLayout(rig.layout.Get());
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(variant ? rig.motion_vs.Get() : rig.stock_vs.Get(), nullptr, 0);
+    context->PSSetShader(variant ? rig.motion_ps.Get() : rig.stock_ps.Get(), nullptr, 0);
+    bind_engine_constants(rig.engine, rig.vs_reflection.Get(), true);
+    std::vector<ComPtr<ID3D11Buffer>> keep;
+    apply_overrides(rig.vs_reflection.Get(), overrides, keep);
+    bind_engine_constants(rig.engine, rig.ps_reflection.Get(), false);
+    ID3D11RenderTargetView* views[3]{rig.position.rtv.Get(), rig.albedo.rtv.Get(), variant ? motion.rtv() : nullptr};
+    context->OMSetRenderTargets(variant ? 3 : 2, views, rig.depth.Get());
+    context->OMSetDepthStencilState(rig.less.Get(), 0);
+    context->RSSetState(rig.raster.Get());
+    const D3D11_VIEWPORT viewport{0, 0, float(size), float(size), 0, 1};
+    context->RSSetViewports(1, &viewport);
+    if (variant) {
+        PixelBytes pbytes;
+        require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
+        require(vbytes && motion.set_foliage_vertex(context.Get(), *vbytes) && motion.set_pixel(context.Get(), pbytes), "foliage b13 upload");
+    }
+    for (const auto& quad : quads) {
+        ID3D11Buffer* vb = quad.Get();
+        UINT stride = rig.stride, offset = 0;
+        context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+        context->Draw(6, 0);
+    }
+    FoliageDraw out;
+    out.position = read_back<Half4>(rig.position.texture.Get());
+    out.albedo = read_back<uint32_t>(rig.albedo.texture.Get());
+    if (variant) out.vectors = read_back<Half4>(motion.texture());
+    debug_errors();
+    return out;
+}
+float ndc_x(UINT i) { return (float(i) + 0.5f) / size * 2 - 1; }
+float ndc_y(UINT j) { return 1 - (float(j) + 0.5f) / size * 2; }
+
+void draw_tree()
+{
+    const Root vs_root{'v', "foliage_tree", "deffer_tree_flat.vs"}, ps_root{'p', "core_pixel", "deffer_base_flat.ps"};
+    auto rig = make_rig(vs_root, ps_root);
+    const auto layout = make_foliage_layout(Family::FoliageTree, rig.vs.prepared.stock);
+    require(layout.usable, "tree layout");
+    MotionDevice motion;
+    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice create");
+    D3D11_TEXTURE2D_DESC position_desc{};
+    rig.position.texture->GetDesc(&position_desc);
+    require(motion.ensure_target(position_desc) == TargetResult::Created, "motion target");
+    const std::vector<ComPtr<ID3D11Buffer>> quads{foliage_quad(rig, -1, 1, -1, 1, 0.5f, 1024, 0)};
+    // Engine constants as FTreeVisual::Render stages them: scale 1/2048, wave (0, 0, 0, time), wind (amplitude, 0, 0, 0).
+    // m_xform and the matrices stay identity, so the quad's y is the height above the trunk base (m_xform._24 = 0).
+    const auto constants = [](float time, float amplitude) {
+        FoliageConstants c;
+        const float consts[4] = {1.0f / 2048, 1.0f / 2048, 0, 0}, wave[4] = {0, 0, 0, time}, dir[4] = {amplitude, 0, 0, 0};
+        std::memcpy(c.consts, consts, sizeof(consts));
+        std::memcpy(c.wave, wave, sizeof(wave));
+        std::memcpy(c.wind, dir, sizeof(dir));
+        return c;
+    };
+    const auto overrides = [](const FoliageConstants& c) {
+        return Overrides{{"consts", {c.consts, c.consts + 4}}, {"wave", {c.wave, c.wave + 4}}, {"wind", {c.wind, c.wind + 4}}};
+    };
+    const float identity_xform[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    const auto now = constants(0.30f, 0.6f), before = constants(0.80f, 0.4f);
+
+    const auto stock = draw_foliage_pair(rig, motion, false, overrides(now), quads, nullptr);
+    FoliageVertexBytes bytes;
+    // 1. Wind in the previous frame differs: the crown moves, the base (y = 0) does not, native targets are untouched.
+    require(pack_foliage_tree(temporal::Mat4::identity(), identity_xform, before, bytes), "pack tree history");
+    auto drawn = draw_foliage_pair(rig, motion, true, overrides(now), quads, &bytes);
+    const float frac = 1024.0f * (1.0f / 2048);
+    unsigned moving = 0, still = 0;
+    float largest = 0;
+    for (UINT j = 0; j < size; ++j)
+        for (UINT i = 0; i < size; ++i) {
+            const auto k = j * size + i;
+            require(std::memcmp(&drawn.position[k], &stock.position[k], sizeof(Half4)) == 0 && drawn.albedo[k] == stock.albedo[k],
+                "native MRT0/1 bit-identical for the tree");
+            if (half(stock.position[k].c[0]) == -999) {   // the sway shears the quad, so a corner can stay uncovered
+                require(drawn.vectors[k].c[2] == 0, "uncovered tree pixels stay invalid");
+                continue;
+            }
+            const float y = ndc_y(j);
+            const float expected = ((now.wind[0] * y * cyclic(now.wave[3]) * frac) - (before.wind[0] * y * cyclic(before.wave[3]) * frac)) / 2;
+            const float mx = half(drawn.vectors[k].c[0]), my = half(drawn.vectors[k].c[1]);
+            require(std::abs(mx - expected) < 4e-4f && std::abs(my) < 2e-4f && half(drawn.vectors[k].c[2]) == 1 && half(drawn.vectors[k].c[3]) == 0,
+                "tree wind motion at " + std::to_string(i) + "," + std::to_string(j) + ": " + std::to_string(mx) + " vs " + std::to_string(expected) +
+                " valid " + std::to_string(half(drawn.vectors[k].c[2])) + " y " + std::to_string(my));
+            largest = std::max(largest, std::abs(mx));
+            (std::abs(expected) > 2e-3f ? moving : still) += 1;
+        }
+    require(largest > 5e-3f && moving > size * size / 4, "the wind produced real motion across the crown");
+    require(still >= 1, "rows near the trunk base barely move");
+    // 2. Same wind and a static camera: valid and exactly zero. The trunk is not wind.
+    require(pack_foliage_tree(temporal::Mat4::identity(), identity_xform, now, bytes), "pack still");
+    drawn = draw_foliage_pair(rig, motion, true, overrides(now), quads, &bytes);
+    unsigned covered = 0;
+    for (UINT k = 0; k < size * size; ++k) {
+        if (half(stock.position[k].c[0]) == -999) continue;
+        ++covered;
+        require(std::abs(half(drawn.vectors[k].c[0])) < 1e-4f && std::abs(half(drawn.vectors[k].c[1])) < 1e-4f &&
+            half(drawn.vectors[k].c[2]) == 1, "static tree with unchanged wind is valid zero motion");
+    }
+    require(covered > size * size / 2, "the tree covers most of the target");
+    // 3. A camera pan with the same wind is the camera vector (previous clip x = x + 0.1: -0.05), crown and base alike.
+    auto panned = temporal::Mat4::identity();
+    panned.values[3] = 0.1;
+    require(pack_foliage_tree(panned, identity_xform, now, bytes), "pack pan");
+    drawn = draw_foliage_pair(rig, motion, true, overrides(now), quads, &bytes);
+    for (UINT k = 0; k < size * size; ++k) {
+        if (half(stock.position[k].c[0]) == -999) continue;
+        require(std::abs(half(drawn.vectors[k].c[0]) + 0.05f) < 2e-4f && std::abs(half(drawn.vectors[k].c[1])) < 2e-4f &&
+            half(drawn.vectors[k].c[2]) == 1, "camera pan on a tree");
+    }
+    // 4. No history: native output unchanged, motion all zero.
+    pack_foliage_invalid(bytes);
+    drawn = draw_foliage_pair(rig, motion, true, overrides(now), quads, &bytes);
+    for (UINT k = 0; k < size * size; ++k) {
+        require(drawn.vectors[k].c[0] == 0 && drawn.vectors[k].c[1] == 0 && drawn.vectors[k].c[2] == 0 && drawn.vectors[k].c[3] == 0,
+            "tree without history is zero");
+        require(std::memcmp(&drawn.position[k], &stock.position[k], sizeof(Half4)) == 0, "native unchanged without history");
+    }
+    std::printf("tree: wind motion up to %.4f UV over %u crown pixels, static/pan/no-history cases pass\n", largest, moving);
+}
+
+void draw_detail()
+{
+    const Root vs_root{'v', "foliage_detail", "deffer_detail_w_flat.vs"}, ps_root{'p', "core_pixel", "deffer_base_flat.ps"};
+    auto rig = make_rig(vs_root, ps_root);
+    const auto layout = make_foliage_layout(Family::FoliageDetail, rig.vs.prepared.stock);
+    require(layout.usable, "detail layout");
+    MotionDevice motion;
+    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice create");
+    D3D11_TEXTURE2D_DESC position_desc{};
+    rig.position.texture->GetDesc(&position_desc);
+    require(motion.ensure_target(position_desc) == TargetResult::Created, "motion target");
+
+    struct Plant { float tx, scale, sun, hemi; };
+    const Plant a{-0.5f, 1.0f, 0.3f, 0.7f}, b{0.5f, 1.0f, 0.2f, 0.6f};
+    const auto empty_batch_rows = [] {
+        DetailRows rows;
+        poison_detail_rows(rows);
+        return rows;
+    };
+    const auto group = [](const Plant& p, float scale) {
+        return std::array<float, 16>{scale, 0, 0, p.tx, 0, scale, 0, 0, 0, 0, scale, 0.5f, p.sun, p.sun, p.sun, p.hemi};
+    };
+    const auto put = [](DetailRows& rows, std::size_t slot, const std::array<float, 16>& g) {
+        std::memcpy(rows.data() + slot * 16, g.data(), sizeof(float) * 16);
+    };
+    const auto constants = [](float time, float amplitude) {
+        FoliageConstants c;
+        const float consts[4] = {1.0f / 16384, 1.0f / 16384, 0.5f, 0.25f}, wave[4] = {0, 0, 0, time}, dir[4] = {amplitude, 0, 0, 0};
+        std::memcpy(c.consts, consts, sizeof(consts));
+        std::memcpy(c.wave, wave, sizeof(wave));
+        std::memcpy(c.wind, dir, sizeof(dir));
+        return c;
+    };
+    const auto overrides = [](const FoliageConstants& c, const DetailRows& rows) {
+        return Overrides{{"consts", {c.consts, c.consts + 4}}, {"wave", {c.wave, c.wave + 4}}, {"dir2D", {c.wind, c.wind + 4}},
+            {"array", {rows.begin(), rows.end()}}};
+    };
+    const auto now = constants(0.30f, 0.08f), before = constants(0.80f, 0.05f);
+    const std::uint64_t route = 0xfeed;
+    // The previous frame drew plant A in group 0 (scale 0.8: it has grown since) and plant B in group 1. This frame the
+    // engine batches them the other way round: B in group 0, A in group 1. Quad B reads rows at offset 0, quad A at 4.
+    FoliageHistory history;
+    const auto upload_for = [&](bool include_b) {
+        history.reset_all();
+        history.begin_frame(temporal::ViewId::Main, 1, 0, size, size);
+        DetailRows previous = empty_batch_rows();
+        put(previous, 0, group(a, 0.8f));
+        if (include_b) put(previous, 1, group(b, 1.0f));
+        history.record_detail(temporal::ViewId::Main, route, before, previous);
+        history.begin_frame(temporal::ViewId::Main, 2, 0, size, size);
+        DetailRows current = empty_batch_rows();
+        put(current, 0, group(b, 1.0f));
+        put(current, 1, group(a, 1.0f));
+        const auto remap = history.record_detail(temporal::ViewId::Main, route, now, current);
+        return std::make_pair(current, remap);
+    };
+    const std::vector<ComPtr<ID3D11Buffer>> quads{foliage_quad(rig, -0.5f, 0.5f, -1, 1, 0, 8192, 0),   // plant B (offset 0)
+        foliage_quad(rig, -0.5f, 0.5f, -1, 1, 0, 8192, 4)};                                          // plant A (offset 4)
+    // Quad B must land on the right half and quad A on the left: shift each by its own translation via the rows (tx = 0.5 / -0.5).
+    auto [current, remap] = upload_for(true);
+    require(remap.live == 2 && remap.matched == 2 && remap.route_found, "both plants remapped");
+    FoliageVertexBytes bytes;
+    require(pack_foliage_detail(temporal::Mat4::identity(), remap.previous, remap.items, remap.live, bytes), "pack detail history");
+    const auto stock = draw_foliage_pair(rig, motion, false, overrides(now, current), quads, nullptr);
+    const auto drawn = draw_foliage_pair(rig, motion, true, overrides(now, current), quads, &bytes);
+    const float frac = 8192.0f / 16384;
+    unsigned left = 0, right = 0;
+    float largest = 0;
+    for (UINT j = 0; j < size; ++j)
+        for (UINT i = 0; i < size; ++i) {
+            const auto k = j * size + i;
+            require(std::memcmp(&drawn.position[k], &stock.position[k], sizeof(Half4)) == 0 && drawn.albedo[k] == stock.albedo[k],
+                "native MRT0/1 bit-identical for the grass");
+            if (half(stock.position[k].c[0]) == -999) {
+                require(drawn.vectors[k].c[2] == 0, "uncovered pixels stay invalid");
+                continue;
+            }
+            const float X = ndc_x(i), Y = ndc_y(j);
+            if (std::abs(X) < 0.1f) continue;   // the two quads may overlap there once the sway shears them
+            const bool is_a = X < 0;   // plant A (tx = -0.5, previous scale 0.8) is the left half, B the right half
+            const Plant& plant = is_a ? a : b;
+            const float s_now = 1.0f, s_prev = is_a ? 0.8f : 1.0f;
+            const float y_obj = Y / s_now;
+            const float res_now = now.wind[0] * (s_now * y_obj) * cyclic(now.wave[3]) * frac;
+            const float x_obj = (X - plant.tx - res_now) / s_now;
+            const float prev_x = s_prev * x_obj + plant.tx + before.wind[0] * (s_prev * y_obj) * cyclic(before.wave[3]) * frac;
+            const float prev_y = s_prev * y_obj;
+            const float ex = (X - prev_x) / 2, ey = -(Y - prev_y) / 2;
+            const float mx = half(drawn.vectors[k].c[0]), my = half(drawn.vectors[k].c[1]);
+            require(std::abs(mx - ex) < 5e-4f && std::abs(my - ey) < 5e-4f && half(drawn.vectors[k].c[2]) == 1,
+                "grass motion at " + std::to_string(i) + "," + std::to_string(j) + ": " + std::to_string(mx) + "," + std::to_string(my) +
+                " vs " + std::to_string(ex) + "," + std::to_string(ey));
+            largest = std::max(largest, std::abs(mx));
+            ++(is_a ? left : right);
+        }
+    require(left > 100 && right > 100 && largest > 4e-3f, "both plants moved with the wind");
+
+    // A plant the previous frame did not draw has no history; its neighbour keeps its own.
+    auto [current2, remap2] = upload_for(false);
+    require(remap2.live == 2 && remap2.matched == 1 && remap2.unmatched == 1, "only plant A has history");
+    require(pack_foliage_detail(temporal::Mat4::identity(), remap2.previous, remap2.items, remap2.live, bytes), "pack partial history");
+    const auto partial = draw_foliage_pair(rig, motion, true, overrides(now, current2), quads, &bytes);
+    unsigned a_valid = 0, b_zero = 0;
+    for (UINT j = 0; j < size; ++j)
+        for (UINT i = 0; i < size; ++i) {
+            const auto k = j * size + i;
+            if (half(stock.position[k].c[0]) == -999 || std::abs(ndc_x(i)) < 0.1f) continue;
+            if (ndc_x(i) < 0) { require(half(partial.vectors[k].c[2]) == 1, "plant A valid"); ++a_valid; }
+            else {
+                require(partial.vectors[k].c[0] == 0 && partial.vectors[k].c[1] == 0 && partial.vectors[k].c[2] == 0 && partial.vectors[k].c[3] == 0,
+                    "a plant without history is zero, not a guess");
+                require(std::memcmp(&partial.position[k], &stock.position[k], sizeof(Half4)) == 0, "native unchanged");
+                ++b_zero;
+            }
+        }
+    require(a_valid > 100 && b_zero > 100, "partial batch covered both plants");
+    // Whole batch without history (first frame, route change): all zero.
+    pack_foliage_invalid(bytes);
+    const auto none = draw_foliage_pair(rig, motion, true, overrides(now, current), quads, &bytes);
+    for (UINT k = 0; k < size * size; ++k)
+        require(none.vectors[k].c[0] == 0 && none.vectors[k].c[1] == 0 && none.vectors[k].c[2] == 0 && none.vectors[k].c[3] == 0, "no history is zero");
+    std::printf("grass: remapped batch motion up to %.4f UV (%u + %u pixels), partial and empty history cases pass\n", largest, left, right);
+}
 }
 
 int main()
@@ -538,7 +980,10 @@ int main()
         const auto list = roots(deployment / "manifest.txt");
         require(list.size() == manifest->by_original.size(), "manifest roots");
         every_root(list);
+        foliage_layouts(list);
         draw_scene();
+        draw_tree();
+        draw_detail();
         std::printf("anomaly motion device: %d checks passed\n", checks);
         return 0;
     } catch (const std::exception& error) {

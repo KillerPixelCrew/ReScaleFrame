@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "overlay_service.h"
+#include "sr_overlay.h"
 #include <rescaleframe/frame_generation.h>
 #include <rescaleframe/sr_session.h>
 #include <d3d11.h>
@@ -71,11 +72,23 @@ uint32_t capture_bits(void*) noexcept { return query_capture(); }
 
 int accept_window(void*, void* window) noexcept { return is_engine_window(static_cast<HWND>(window)) ? 1 : 0; }
 
+// SR Stage 5 (sr_overlay.h). Null when SRStage=5 is not configured: SR is then unavailable in the panel.
+const sr::OverlayLink* sr_link() noexcept { return sr::overlay_link.load(std::memory_order_acquire); }
+sr::SrSettings sr_settings_of(const rsf_render_settings& value) noexcept {
+    return {value.sr_enabled != 0, value.sr_backend, value.sr_quality, value.dlss_preset};
+}
+int sr_report(void*, rsf_overlay_sr_report* report) noexcept {
+    const auto* link = sr_link();
+    return link && link->report ? link->report(report) : 0;
+}
+
 void settings_changed(void*, const rsf_render_settings* applied) noexcept {
     if (!applied) return;
-    say("Anomaly overlay settings applied: SR=%u SRBackend=%u SRQuality=%u FG=%u StatusOverlay=%u Latency=%u",
-        applied->sr_enabled, applied->sr_backend, applied->sr_quality, applied->fg_enabled,
+    say("Anomaly overlay settings applied: SR=%u SRBackend=%u SRQuality=%u DLSSPreset=%u FG=%u StatusOverlay=%u Latency=%u",
+        applied->sr_enabled, applied->sr_backend, applied->sr_quality, applied->dlss_preset, applied->fg_enabled,
         applied->status_overlay, applied->latency);
+    // The SR stage applies them at its next frame boundary (drained: after the frame's SR work, before Present).
+    if (const auto* link = sr_link(); link && link->request) link->request(sr_settings_of(*applied));
 }
 
 bool read_diagnostics(rsf_overlay_diagnostics& out) noexcept {
@@ -218,9 +231,12 @@ void on_resize(void*, IDXGISwapChain* chain) noexcept {
     if (s.started.load(std::memory_order_acquire)) (void)s.api.notify(chain, RSF_OVERLAY_NOTIFY_RESIZE);
 }
 
-// What this adapter can apply today: nothing of SR or FG. Zero SR choices tell the Runtime that SR is
-// unavailable, so the panel offers none, a request to enable it is refused and status says so.
+// What this adapter can apply: FG never; SR only with SRStage=5, as the backends whose vendor runtime is installed and
+// the qualities Native to Performance. Zero SR choices tell the Runtime that SR is unavailable, so the panel offers
+// none, a request to enable it is refused and status says so. Requested and effective SR status come from sr_report.
 rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
+    const auto* link = sr_link();
+    const auto sr = link && link->choices ? link->choices() : sr::OverlayChoices{};
     rsf_overlay_service_setup setup{};
     setup.struct_size = sizeof(setup);
     setup.abi_version = RSF_OVERLAY_API_VERSION;
@@ -236,15 +252,21 @@ rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
     setup.defaults.latency = RSF_REFLEX_OFF;
     setup.defaults.status_overlay = 0;
     setup.defaults.sr_quality = 0;
-    setup.sr_backend_choices = 0;
-    setup.sr_quality_choices = 0;
+    setup.sr_backend_choices = sr.backends;
+    setup.sr_quality_choices = sr.backends ? sr.qualities : 0u;
+    if (sr.backends) {
+        setup.defaults.sr_enabled = sr.defaults.enabled ? 1u : 0u;
+        setup.defaults.sr_backend = sr.defaults.backend;
+        setup.defaults.sr_quality = sr.defaults.quality;
+        setup.defaults.dlss_preset = sr.defaults.preset;
+    }
     setup.fg_backend_choices = 0;
     setup.latency_choices = 1u << RSF_REFLEX_OFF;
     setup.max_generated_frames = 1;
-    setup.dlss_preset_available = 0;
+    setup.dlss_preset_available = sr.backends && sr.preset ? 1u : 0u;
     setup.log = options.log;
     setup.accept_window = &accept_window;
-    setup.sr_report = nullptr;
+    setup.sr_report = sr.backends ? &sr_report : nullptr;
     setup.settings_changed = &settings_changed;
     setup.user = options.log_user;
     return setup;
@@ -371,9 +393,18 @@ StartStatus start(const StartOptions& options, const char** reason) noexcept try
     s.key_poll = GetPrivateProfileIntW(settings_section, L"OverlayKeyPoll", 1, options.configuration) != 0;
     configure_capture(options);
     rsf_render_settings saved{sizeof(saved), RSF_RENDER_FRONTEND_ABI_VERSION};
-    if (api.settings_get(&saved) == RSF_OK)
-        say("Anomaly overlay configured: saved SR=%u FG=%u StatusOverlay=%u. SR and FG are not wired in this adapter; "
-            "the panel offers FG Off only and reports SR as unavailable.", saved.sr_enabled, saved.fg_enabled, saved.status_overlay);
+    if (api.settings_get(&saved) == RSF_OK) {
+        if (setup.sr_backend_choices) {
+            say("Anomaly overlay configured: saved SR=%u SRBackend=%u SRQuality=%u DLSSPreset=%u FG=%u StatusOverlay=%u. SR choices: "
+                "backends 0x%x, qualities 0x%x (SRStage=5); FG is not wired in this adapter and stays Off.", saved.sr_enabled,
+                saved.sr_backend, saved.sr_quality, saved.dlss_preset, saved.fg_enabled, saved.status_overlay,
+                setup.sr_backend_choices, setup.sr_quality_choices);
+            // The persisted (and validated) choice is what SR starts with.
+            if (const auto* link = sr_link(); link && link->request) link->request(sr_settings_of(saved));
+        } else
+            say("Anomaly overlay configured: saved SR=%u FG=%u StatusOverlay=%u. SR and FG are not wired in this adapter; "
+                "the panel offers FG Off only and reports SR as unavailable.", saved.sr_enabled, saved.fg_enabled, saved.status_overlay);
+    }
     if (options.install_hooks) {
         // Input first: a panel that cannot keep the game from acting on mouse and keyboard must not open.
         if (!install_input_hooks(s.gate, reason)) {

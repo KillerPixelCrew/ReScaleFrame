@@ -134,6 +134,7 @@ struct Prepared {
     int skin{-2};                      // -1 SKIN_NONE, 0..4 SKIN_n, -2 none of the skin defines
     std::vector<std::byte> variant;
     Reflection reflection;             // of the variant
+    Reflection stock;                  // of the engine's own bytecode (its constant-buffer indices are the engine's)
     Compatibility compatibility{};
     std::string detail;
 };

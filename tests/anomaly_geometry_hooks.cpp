@@ -97,6 +97,34 @@ __declspec(noinline) void __fastcall skin_pm_fixture(void* instance, float lod)
 }
 std::uint32_t flush_calls{};
 __declspec(noinline) void __fastcall flush_fixture() { ++flush_calls; if (flush_calls == 0xffffffffu) std::abort(); }
+// Foliage fixtures: a tree visual and CDetailManager::Render, both reaching the D3D draw through the flush.
+std::array<std::byte, 512> tree_visual{};
+__declspec(noinline) void __fastcall tree_st_fixture(void* instance, float lod)
+{
+    CHECK(instance == tree_visual.data() && lod == 0.5f);
+    flush_target();
+}
+__declspec(noinline) void __fastcall tree_pm_fixture(void* instance, float lod)
+{
+    CHECK(instance == tree_visual.data() && lod == 0.25f);
+    flush_target();
+}
+std::uint32_t detail_calls{};
+bool flush_inside_detail{};
+__declspec(noinline) void __fastcall detail_fixture(void* self)
+{
+    CHECK(self == &detail_calls);
+    ++detail_calls;
+    flush_target();
+    flush_target();
+}
+std::vector<DrawTimeFacts> seen_facts;
+void collect_facts(const DrawTimeFacts& facts) noexcept
+{
+    DrawTimeFacts copy = facts;
+    copy.capture = nullptr;
+    seen_facts.push_back(copy);
+}
 struct Context {
     std::optional<temporal::ViewId> view;
     std::optional<temporal::ProjectionDomain> domain;
@@ -181,19 +209,22 @@ int main()
     int owner{};
     expected_owner = &owner;
     const auto sites = native_geometry_hook_sites();
-    CHECK(sites.size() == geometry_sites.size() && sites.size() == 16);
+    CHECK(sites.size() == geometry_sites.size() && sites.size() == 17);
     auto base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    const std::array<void*, 12> fixtures{reinterpret_cast<void*>(&create_fixture), reinterpret_cast<void*>(&duplicate_fixture),
+    const std::array<void*, 15> fixtures{reinterpret_cast<void*>(&create_fixture), reinterpret_cast<void*>(&duplicate_fixture),
         reinterpret_cast<void*>(&delete_fixture), reinterpret_cast<void*>(&render_fixture),
         reinterpret_cast<void*>(&skin_st_fixture), reinterpret_cast<void*>(&skin_pm_fixture),
         reinterpret_cast<void*>(&flush_fixture), reinterpret_cast<void*>(&hud_fixture),
         reinterpret_cast<void*>(&sorted_fixture), reinterpret_cast<void*>(&emissive_fixture),
-        reinterpret_cast<void*>(&near_fixture), reinterpret_cast<void*>(&normal_fixture)};
-    const std::array<std::size_t, 12> indexes{0, 2, 3, 4, 6, 7, geometry_site_flush, geometry_site_render_hud,
-        geometry_site_render_sorted, geometry_site_render_emissive, geometry_site_rm_near, geometry_site_rm_normal};
-    std::array<HookSite, 12> redirects;
+        reinterpret_cast<void*>(&near_fixture), reinterpret_cast<void*>(&normal_fixture),
+        reinterpret_cast<void*>(&tree_st_fixture), reinterpret_cast<void*>(&tree_pm_fixture),
+        reinterpret_cast<void*>(&detail_fixture)};
+    const std::array<std::size_t, 15> indexes{0, 2, 3, 4, 6, 7, geometry_site_flush, geometry_site_render_hud,
+        geometry_site_render_sorted, geometry_site_render_emissive, geometry_site_rm_near, geometry_site_rm_normal,
+        8, 9, geometry_site_detail_render};
+    std::array<HookSite, 15> redirects;
     for (std::size_t i = 0; i < redirects.size(); ++i) {
         redirects[i] = sites[indexes[i]];
         redirects[i].rva = static_cast<std::uint32_t>(reinterpret_cast<std::byte*>(fixtures[i]) - base);
@@ -211,6 +242,9 @@ int main()
     const auto emissive = reinterpret_cast<Unary>(fixtures[9]);
     near_target = reinterpret_cast<Unary>(fixtures[10]);
     normal_target = reinterpret_cast<Unary>(fixtures[11]);
+    const auto tree_st = reinterpret_cast<Render>(fixtures[12]);
+    const auto tree_pm = reinterpret_cast<Render>(fixtures[13]);
+    const auto detail_render = reinterpret_cast<Unary>(fixtures[14]);
     CHECK(create(&owner, expected_name, expected_reader) == visual.data());
     CHECK(duplicate(&owner, visual.data()) == duplicate_visual.data());
     {
@@ -374,6 +408,101 @@ int main()
     }
     call_flush = false;
     geometry_set_draw_sink({});
+
+    // Foliage. A level tree never enters the model registry. Without foliage identity it is the measured gap
+    // (unidentified_deformed); with it the tree is named by its address, nothing is captured, and the flush facts carry
+    // the visual, its type and the progressive tree's slide window.
+    {
+        expect_identity = false;
+        geometry_set_flush_callback(&collect_facts);
+        const std::uint32_t lod5 = 5;
+        std::memcpy(tree_visual.data() + tree_pm_last_lod_offset, &lod5, sizeof(lod5));
+        CHECK(!geometry_foliage_identity_enabled());
+        auto before = geometry_coverage();
+        seen_facts.clear();
+        tree_st(tree_visual.data(), 0.5f);
+        auto after = geometry_coverage();
+        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
+            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) + 1);
+        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
+            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage));
+
+        geometry_enable_foliage_identity(true);
+        CHECK(geometry_foliage_identity_enabled());
+        before = geometry_coverage();
+        const auto stats_before = geometry_stats();
+        seen_facts.clear();
+        tree_st(tree_visual.data(), 0.5f);
+        tree_pm(tree_visual.data(), 0.25f);
+        after = geometry_coverage();
+        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
+            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) + 1);
+        CHECK(cell(after, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) ==
+            cell(before, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) + 1);
+        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
+            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed));
+        CHECK(geometry_stats().draws_identified == stats_before.draws_identified + 2);
+        CHECK(after.captured == before.captured);   // a foliage identity is not a registry capture
+        CHECK(seen_facts.size() == 2);
+        const auto address = reinterpret_cast<std::uintptr_t>(tree_visual.data());
+        CHECK(seen_facts[0].in_visual && seen_facts[0].kind == DrawKind::Tree && seen_facts[0].visual == address &&
+            seen_facts[0].type == VisualType::TreeST && seen_facts[0].tree_lod == -1 && !seen_facts[0].detail &&
+            seen_facts[0].classification.verdict == DrawVerdict::IdentifiedFoliage && !seen_facts[0].capture);
+        CHECK(seen_facts[1].visual == address && seen_facts[1].type == VisualType::TreePM && seen_facts[1].tree_lod == 5);
+        // A shadow-map tree needs nothing.
+        const std::uint32_t smap = phase_smap;
+        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        before = geometry_coverage();
+        tree_st(tree_visual.data(), 0.5f);
+        after = geometry_coverage();
+        CHECK(cell(after, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) ==
+            cell(before, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) + 1);
+        const std::uint32_t normal_phase = phase_normal;
+        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+
+        // CDetailManager::Render: every flush inside it is a detail draw in its pass; outside it none is.
+        before = geometry_coverage();
+        seen_facts.clear();
+        detail_render(&detail_calls);
+        flush_target();
+        after = geometry_coverage();
+        CHECK(seen_facts.size() == 3 && seen_facts[0].detail && seen_facts[1].detail && !seen_facts[2].detail);
+        CHECK(!seen_facts[0].in_visual && seen_facts[0].pass == DrawPass::Main);
+        CHECK(after.detail_renders[0] == before.detail_renders[0] + 1 && after.flush_in_detail[0] == before.flush_in_detail[0] + 2);
+        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        detail_render(&detail_calls);
+        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+        const auto shadow = geometry_coverage();
+        CHECK(shadow.detail_renders[1] == after.detail_renders[1] + 1 && shadow.flush_in_detail[1] == after.flush_in_detail[1] + 2);
+        geometry_set_flush_callback(nullptr);
+        geometry_enable_foliage_identity(false);
+        expect_identity = true;
+    }
+    // The engine's staged vertex constants: CBackend::m_aVertexConstants[slot] -> dx10ConstantBuffer { size +0x58,
+    // data +0x60 }. Reads and writes are refused unless the object reports the reflected size.
+    {
+        std::array<std::byte, 0x80> object{};
+        std::array<float, 64> staged{};
+        for (std::size_t i = 0; i < staged.size(); ++i) staged[i] = static_cast<float>(i + 1);
+        const std::uint32_t size = sizeof(staged);
+        const auto data = reinterpret_cast<std::uintptr_t>(staged.data());
+        std::memcpy(object.data() + constant_buffer_size_offset, &size, sizeof(size));
+        std::memcpy(object.data() + constant_buffer_data_offset, &data, sizeof(data));
+        const auto object_pointer = reinterpret_cast<std::uintptr_t>(object.data());
+        std::memcpy(module.data() + vertex_constant_buffers_rva + 3 * sizeof(object_pointer), &object_pointer, sizeof(object_pointer));
+        float out[4]{};
+        CHECK(read_vertex_constants(3, size, 16, out, sizeof(out)) && out[0] == 5.0f && out[3] == 8.0f);
+        CHECK(!read_vertex_constants(3, size + 16, 16, out, sizeof(out)));          // reflected size differs
+        CHECK(!read_vertex_constants(3, size, size - 8, out, sizeof(out)));         // runs past the buffer
+        CHECK(!read_vertex_constants(constant_buffer_slots, size, 0, out, sizeof(out)));
+        CHECK(!read_vertex_constants(4, size, 0, out, sizeof(out)));                // no buffer in that slot
+        const float poison[4]{-1, -2, -3, -4};
+        CHECK(write_vertex_constants(3, size, 32, poison, sizeof(poison)) && staged[8] == -1.0f && staged[11] == -4.0f &&
+            staged[7] == 8.0f && staged[12] == 13.0f);
+        CHECK(!write_vertex_constants(3, size + 4, 32, poison, sizeof(poison)) && staged[8] == -1.0f);
+        float matrix[16]{};
+        CHECK(read_world_matrix(matrix));
+    }
 
     // Context producers: the engine's IsSVPFrame predicate selects the view, render_hud and the rmNear window the
     // first-person domain.

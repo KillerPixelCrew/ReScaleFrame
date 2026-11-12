@@ -1,5 +1,26 @@
 # Implementation tracker
 
+## Anomaly SR Stages 3-5 and foliage motion, 12 November 2026
+
+SR Stage 3 adds Halton jitter to the world and the six first-person projections once each, and
+a world-window mip bias, all restored on every exit; a static scene under jitter gives 0.003 px
+worst motion in the device fixture. Tree and grass motion history uses a CDetailManager window
+hook and the engine's staged VS constants. SR Stage 5 evaluates the shared RSF pipeline at the
+seam through a new generic `rsf_get_d3d11_sr_api` export. The generic pipeline gained validity
+sentinel handling and a `standard_depth` option for FSR/XeSS (pipeline ABI 5; AC7 unchanged).
+Fixtures: DLSS, FSR3, FSR4 and XeSS evaluated 24/24 frames each on the RTX 4070; the D3D11 to
+D3D12 shared-host and RDR2 host fixtures passed. Release VS2026: 192 discovered, 181 passed, 11
+optional skips, fmt/Clippy. Stages 3-5 and foliage motion are not yet game-tested.
+
+## Anomaly Stage 2 and motion game run, 12 November 2026
+
+At 3ac6cb0, SR Stage 2 and Motion were accepted in game with their counters consistent and 0
+faults: scale 1.0 matches stock, 0.67 and 0.5 are registered and only softer, motion vectors are
+plausible and the motion target follows render size. PDA, scope, item-attached UI, fluid and a
+moving NPC were not exercised; the laptop is CPU-bound, so no GPU gain was measurable. The stock
+engine crashes with `r2_ssao_mode` default plus `r2_ssao_blur` even with RSF disabled.
+Evidence: `.local/anomaly/wave5-game/result.json`.
+
 ## Anomaly SR Stage 2 and motion MRT, 12 November 2026
 
 The ae714a2 game run accepted the overlay panel (seen through adapter captures, click applied

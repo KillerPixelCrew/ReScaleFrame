@@ -246,6 +246,69 @@ def verify_context(pe, text):
     return {'flush_callers': len(callers[FLUSH]), 'draw_flush_sites': flush_before_draw, 'phase': hex(phase), 'RImplementation': hex(crender),
             'viewport': hex(viewport), 'psHUD_FOV': hex(next(iter(fov))), 'Fidentity': hex(identity)}
 
+DETAIL_RENDER, HW_RENDER, HW_RENDER_DUMP, CONSTANT_BUFFER_FLUSH = 0x86a8c0, 0x8aa320, 0x8aa6c0, 0x83de40
+TREE_PM_RENDER, TREE_ST_RENDER, TREE_BASE_RENDER = 0x8d5a40, 0x8d5d20, 0x8d5600
+
+def verify_foliage(pe, text):
+    """Tree and grass sites: the staged vertex constants, the detail render window and the progressive tree's slide window."""
+    number = lambda name: int(re.search(name + r' = (0x[0-9a-f]+|\d+)', text).group(1), 0)
+    callers = pe.callers(FLUSH, CONSTANT_BUFFER_FLUSH, HW_RENDER, HW_RENDER_DUMP, TREE_BASE_RENDER)
+
+    # CBackend::constants.flush walks six per-stage tables of 14 ref_cbuffer pointers (R_constants::flush_cache order:
+    # VS, PS, GS, HS, DS, CS), each entry calling dx10ConstantBuffer::Flush. The VS table is the first, 0x70 bytes below
+    # the `lea rbx` base.
+    body = pe.read(FLUSH, 0x70)
+    assert body[10:13] == b'\x48\x8d\x1d', 'flush: lea rbx,[rip+table]'
+    base = FLUSH + 10 + 7 + struct.unpack_from('<i', body, 13)[0]
+    vertex_table = number('vertex_constant_buffers_rva')
+    assert base - 0x70 == vertex_table, (hex(base), hex(vertex_table))
+    assert number('constant_buffer_slots') == 14 and b'\xbf\x0e\x00\x00\x00' in body, 'flush: 14 slots'
+    loads = [b'\x48\x8b\x4b\x90', b'\x48\x8b\x0b', b'\x48\x8b\x4b\x70', b'\x48\x8b\x8b\xe0\x00\x00\x00',
+             b'\x48\x8b\x8b\x50\x01\x00\x00', b'\x48\x8b\x8b\xc0\x01\x00\x00']
+    at = 0
+    for load in loads:
+        at = body.find(load, at)
+        assert at >= 0, ('flush table load', load.hex())
+        at += len(load)
+    assert sorted(callers[CONSTANT_BUFFER_FLUSH]) == [FLUSH + 0x1f, FLUSH + 0x2c, FLUSH + 0x3a, FLUSH + 0x4b, FLUSH + 0x5c, FLUSH + 0x6d], \
+        [hex(c) for c in callers[CONSTANT_BUFFER_FLUSH]]
+    # dx10ConstantBuffer::Flush: `if (m_bChanged +0x68) { UpdateSubresource(m_pBuffer +0x50, 0, 0, m_pBufferData +0x60, 0, 0) }`;
+    # UpdateSubresource is ID3D11DeviceContext vtable slot 48 (+0x180). It copies at call time, so the CPU copy is
+    # free again the moment the flush returns.
+    flush = pe.read(CONSTANT_BUFFER_FLUSH, 0x50).hex()
+    for part in ('80796800', '488b5350', '488b4360', '41ff9280010000', 'c6436800'):
+        assert part in flush, ('Flush body', part)
+    assert number('constant_buffer_data_offset') == 0x60 and number('constant_buffer_size_offset') == 0x58
+    # m_uiBufferSize (+0x58) sits between those two pointers in the source layout (xr_resource_named 0x10, shared_str,
+    # type, crc, two vectors = 0x50 m_pBuffer, u32 size, void* data, bool changed); +0x50/+0x60/+0x68 are proven above and
+    # the draw-time reader additionally refuses any buffer whose reported size differs from the shader reflection's.
+
+    # CDetailManager::Render -> hw_Render -> hw_Render_dump (called for wave 0, wave 1 and still): the only two flush
+    # sites of the dump (full batch, last partial batch) are each followed by DrawIndexed, so every grass draw is inside
+    # CDetailManager::Render.
+    render_end = pe.function_end(DETAIL_RENDER, 0x400)
+    assert HW_RENDER in [target for _, target in pe.calls_in(DETAIL_RENDER, render_end)], 'Render calls hw_Render'
+    assert sorted(callers[HW_RENDER]) == [0x86aa4d], [hex(c) for c in callers[HW_RENDER]]
+    hw_end = pe.function_end(HW_RENDER, 0x600)
+    dump_calls = [site for site, target in pe.calls_in(HW_RENDER, hw_end) if target == HW_RENDER_DUMP]
+    assert len(dump_calls) == 3, [hex(c) for c in dump_calls]
+    assert sorted(callers[HW_RENDER_DUMP]) == sorted(dump_calls), 'hw_Render_dump is only called from hw_Render'
+    dump_end = pe.function_end(HW_RENDER_DUMP, 0x2000)
+    sites = [site for site in callers[FLUSH] if HW_RENDER_DUMP <= site < dump_end]
+    assert len(sites) == 2, [hex(c) for c in sites]
+    for site in sites:
+        assert 'ff5060' in pe.read(site + 5, 48).hex(), ('DrawIndexed after the dump flush', hex(site))
+
+    # FTreeVisual_PM::Render calls FTreeVisual::Render, then reads `last_lod` (+0x108) and writes it back when the LOD
+    # argument is non-negative (pSWI +0x100). FTreeVisual_ST::Render draws the whole mesh (no slide window; the stage
+    # reports lod -1 for it).
+    pm = pe.read(TREE_PM_RENDER, 0x200).hex()
+    assert number('tree_pm_last_lod_offset') == 0x108
+    assert '448b8b08010000' in pm and '44898b08010000' in pm and '488b8300010000' in pm, 'PM last_lod'
+    assert TREE_BASE_RENDER in [target for _, target in pe.calls_in(TREE_PM_RENDER, TREE_PM_RENDER + 0x30)]
+    return {'vs_constant_table': hex(vertex_table), 'flush_table_entries': 6, 'hw_Render_dump': hex(HW_RENDER_DUMP),
+            'dump_flush_sites': [hex(s) for s in sites], 'tree_pm_last_lod': '+0x108'}
+
 def verify(pe):
     profile = ROOT / 'games/anomaly/src/geometry_profile.h'
     assert profile.exists(), 'missing installed geometry profile'
@@ -278,9 +341,10 @@ def verify(pe):
     assert pe.read(0x803d90, 10).hex() == '0fb7c24869c0a8000000', 'bone instance stride'
     assert '4883c040' in pe.read(0x803da0, 20).hex(), 'render transform offset'
     context = verify_context(pe, text)
+    foliage = verify_foliage(pe, text)
     print(f'PASS: installed standard hash, {len(sites)} expected16 guards, lifecycle/visual/rmNear/rmNormal RTTI slots, '
           f'{len(found_tables)} hierarchy vtables, world matrix {hex(world)} ({callers[world]} set_W callers), '
-          f'bone stride/render-transform offset; draw-time/context: {context}')
+          f'bone stride/render-transform offset; draw-time/context: {context}; foliage: {foliage}')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -266,6 +266,15 @@ bool UpscalePass::create(ID3D11Device* device, void (*log)(void*, const char*), 
         reset();
         return false;
     }
+    // Stages 4 and 5. A failure here leaves the Stage 2 pass usable (temporal_ready() stays false).
+    ComPtr<ID3D11RasterizerState> unused_raster;
+    ComPtr<ID3D11BlendState> unused_blend;
+    if (!rsf::compile_pixel(device, source, "rsf_sr_upscale.hlsl", "rsf_prepare_ps", &prepare_, log, user) ||
+        !rsf::compile_pixel(device, source, "rsf_sr_upscale.hlsl", "rsf_reinsert_ps", &reinsert_, log, user) ||
+        FAILED(device->CreateBuffer(&buffer, nullptr, &prepare_constants_)) ||
+        !create_states(device, false, unused_raster, unused_blend, no_depth_)) {
+        prepare_.Reset(); reinsert_.Reset(); prepare_constants_.Reset(); no_depth_.Reset();
+    }
     device_ = device;
     return true;
 } catch (...) { reset(); return false; }
@@ -273,7 +282,95 @@ bool UpscalePass::create(ID3D11Device* device, void (*log)(void*, const char*), 
 void UpscalePass::reset() noexcept {
     device_.Reset(); vertex_.Reset(); pixel_.Reset(); constants_.Reset();
     raster_.Reset(); blend_.Reset(); depth_.Reset();
+    prepare_.Reset(); reinsert_.Reset(); prepare_constants_.Reset(); no_depth_.Reset();
 }
+
+bool UpscalePass::prepare(ID3D11DeviceContext* context, const PrepareViews& v) noexcept {
+    if (!temporal_ready() || !context || !v.colour || !v.motion || !v.depth || !v.colour_target || !v.motion_target ||
+        !v.width || !v.height)
+        return false;
+    struct { uint32_t width, height; float depth; uint32_t zero; } constants{v.width, v.height, v.first_person_depth,
+        v.first_person_zero ? 1u : 0u};
+    static_assert(sizeof(constants) == 16);
+    return draw_full_screen(context, vertex_.Get(), prepare_.Get(), constants_.Get(), raster_.Get(), blend_.Get(), no_depth_.Get(),
+        v.width, v.height, [&](ID3D11DeviceContext* ctx) {
+            ctx->UpdateSubresource(prepare_constants_.Get(), 0, nullptr, &constants, 0, 0);
+            ID3D11Buffer* b1 = prepare_constants_.Get();
+            ctx->PSSetConstantBuffers(1, 1, &b1);
+            ID3D11RenderTargetView* targets[2]{v.colour_target, v.motion_target};
+            ctx->OMSetRenderTargetsAndUnorderedAccessViews(2, targets, nullptr, 0, 0, nullptr, nullptr);
+            ID3D11ShaderResourceView* null6[6]{};
+            ctx->PSSetShaderResources(0, 6, null6);
+            ID3D11ShaderResourceView* colour = v.colour;
+            ID3D11ShaderResourceView* depth = v.depth;
+            ID3D11ShaderResourceView* motion = v.motion;
+            ctx->PSSetShaderResources(0, 1, &colour);
+            ctx->PSSetShaderResources(3, 1, &depth);
+            ctx->PSSetShaderResources(5, 1, &motion);
+        });
+}
+
+bool UpscalePass::reinsert(ID3D11DeviceContext* context, const UpscaleViews& v, ID3D11ShaderResourceView* reconstructed) noexcept {
+    if (!temporal_ready() || !context || !reconstructed || !v.colour || !v.position || !v.distort || !v.depth || !v.colour_target ||
+        !v.position_target || !v.distort_target || !v.depth_target || !v.width || !v.height || !v.source_width ||
+        !v.source_height || v.source_width > v.width || v.source_height > v.height)
+        return false;
+    const uint32_t constants[4]{v.width, v.height, v.source_width, v.source_height};
+    return draw_full_screen(context, vertex_.Get(), reinsert_.Get(), constants_.Get(), raster_.Get(), blend_.Get(), depth_.Get(),
+        v.width, v.height, [&](ID3D11DeviceContext* ctx) {
+            ctx->UpdateSubresource(constants_.Get(), 0, nullptr, constants, 0, 0);
+            ctx->ClearDepthStencilView(v.depth_target, D3D11_CLEAR_STENCIL, 1.0f, 0);
+            ID3D11RenderTargetView* targets[3]{v.colour_target, v.position_target, v.distort_target};
+            ctx->OMSetRenderTargetsAndUnorderedAccessViews(3, targets, v.depth_target, 0, 0, nullptr, nullptr);
+            ID3D11ShaderResourceView* inputs[5]{v.colour, v.position, v.distort, v.depth, reconstructed};
+            ctx->PSSetShaderResources(0, 5, inputs);
+        });
+}
+
+bool TemporalTargets::matches(ID3D11Device* device, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, DXGI_FORMAT format) const noexcept {
+    if (!colour || !motion || !output || !exposure || !empty_motion) return false;
+    ComPtr<ID3D11Device> owner;
+    colour->GetDevice(&owner);
+    return owner.Get() == device && render_width == rw && render_height == rh && output_width == ow && output_height == oh &&
+        output_format == format;
+}
+
+TwinError make_temporal_targets(ID3D11Device* device, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, DXGI_FORMAT output_format,
+    TemporalTargets& out) noexcept try {
+    out = {};
+    if (!device || !rw || !rh || !ow || !oh || rw > ow || rh > oh || output_format == DXGI_FORMAT_UNKNOWN) return TwinError::Shape;
+    D3D11_TEXTURE2D_DESC desc{rw, rh, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &out.colour)) || FAILED(device->CreateTexture2D(&desc, nullptr, &out.motion)) ||
+        FAILED(device->CreateRenderTargetView(out.colour.Get(), nullptr, &out.colour_rtv)) ||
+        FAILED(device->CreateRenderTargetView(out.motion.Get(), nullptr, &out.motion_rtv)) ||
+        FAILED(device->CreateShaderResourceView(out.colour.Get(), nullptr, &out.colour_srv)) ||
+        FAILED(device->CreateShaderResourceView(out.motion.Get(), nullptr, &out.motion_srv))) {
+        out = {};
+        return TwinError::Create;
+    }
+    // Zero-initialised: every pixel invalid, so the pipeline reconstructs camera motion everywhere.
+    std::unique_ptr<uint16_t[]> zeros(new uint16_t[std::size_t(rw) * rh * 4]());
+    D3D11_TEXTURE2D_DESC empty = desc;
+    empty.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    empty.Usage = D3D11_USAGE_IMMUTABLE;
+    const D3D11_SUBRESOURCE_DATA zero_data{zeros.get(), rw * 8u, 0};
+    D3D11_TEXTURE2D_DESC output{ow, oh, 1, 1, output_format, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    const float one = 1.0f;
+    const D3D11_SUBRESOURCE_DATA exposure_data{&one, sizeof(one), 0};
+    D3D11_TEXTURE2D_DESC exposure{1, 1, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    if (FAILED(device->CreateTexture2D(&empty, &zero_data, &out.empty_motion)) ||
+        FAILED(device->CreateShaderResourceView(out.empty_motion.Get(), nullptr, &out.empty_motion_srv)) ||
+        FAILED(device->CreateTexture2D(&output, nullptr, &out.output)) ||
+        FAILED(device->CreateShaderResourceView(out.output.Get(), nullptr, &out.output_srv)) ||
+        FAILED(device->CreateTexture2D(&exposure, &exposure_data, &out.exposure))) {
+        out = {};
+        return TwinError::Create;
+    }
+    out.render_width = rw; out.render_height = rh; out.output_width = ow; out.output_height = oh;
+    out.output_format = output_format;
+    return TwinError::None;
+} catch (...) { out = {}; return TwinError::Create; }
 
 bool UpscalePass::run(ID3D11DeviceContext* context, const UpscaleViews& v) noexcept {
     if (!ready() || !context || !v.colour || !v.position || !v.distort || !v.depth || !v.colour_target ||

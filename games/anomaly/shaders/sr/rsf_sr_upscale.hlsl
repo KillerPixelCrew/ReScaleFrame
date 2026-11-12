@@ -88,3 +88,56 @@ rsf_upscale_output rsf_upscale_ps(float4 position : SV_Position)
     result.depth = rsf_depth.Load(int3(nearest, 0));
     return result;
 }
+
+// ---- Stages 4 and 5 (section 12) ------------------------------------------------------------------------------------
+// rsf_prepare_ps, one draw at render size before the SR evaluation:
+//   SV_Target0  SR colour   = (f^-1(y), a) of the FP16 generic0 twin: exposure-scaled linear radiance, the space the
+//                             Stage 2 filter already works in. Same clamp as rsf_linear.
+//   SV_Target1  SR motion   = the motion target (UV x, UV y down, validity, 0), except that an invalid pixel whose
+//                             depth is inside the first-person range [0, rsf_first_person_depth) becomes a valid zero
+//                             vector when rsf_first_person_zero is set: HUD geometry must not be reconstructed with
+//                             the world camera.
+// rsf_reinsert_ps, one draw at output size after a successful evaluation: rsf_upscale_ps with the colour taken from the
+// reconstructed linear image instead of the bilinear filter, re-tonemapped with the stock curve into UNORM8 generic0.
+Texture2D<float4> rsf_reconstructed : register(t4);
+Texture2D<float4> rsf_motion : register(t5);
+
+cbuffer rsf_prepare : register(b1)
+{
+    uint2 rsf_prepare_size;
+    float rsf_first_person_depth;
+    uint rsf_first_person_zero;
+};
+
+struct rsf_prepare_output
+{
+    float4 colour : SV_Target0;
+    float4 motion : SV_Target1;
+};
+
+rsf_prepare_output rsf_prepare_ps(float4 position : SV_Position)
+{
+    int2 pixel = int2(position.xy);
+    rsf_prepare_output result;
+    float4 y = rsf_colour.Load(int3(pixel, 0));
+    result.colour = float4(rsf_linear(pixel), y.a);
+    float4 m = rsf_motion.Load(int3(pixel, 0));
+    bool valid = m.z > 0.5 && all(isfinite(m.xy));
+    float depth = rsf_depth.Load(int3(pixel, 0));
+    if (valid)
+        result.motion = float4(m.xy, 1.0, 0.0);
+    else if (rsf_first_person_zero != 0 && depth < rsf_first_person_depth)
+        result.motion = float4(0.0, 0.0, 1.0, 0.0);
+    else
+        result.motion = float4(0.0, 0.0, 0.0, 0.0);
+    return result;
+}
+
+rsf_upscale_output rsf_reinsert_ps(float4 position : SV_Position)
+{
+    rsf_upscale_output result = rsf_upscale_ps(position);
+    uint2 pixel = uint2(position.xy);
+    float3 x = min(max(rsf_reconstructed.Load(int3(pixel, 0)).rgb, 0.0), 65504.0);
+    result.colour.rgb = saturate(rsf_tonemap_forward(x));
+    return result;
+}

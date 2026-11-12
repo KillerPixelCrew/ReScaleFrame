@@ -49,6 +49,25 @@ inline bool make_plan(uint32_t output_width, uint32_t output_height, float scale
     return true;
 }
 
+// Stage 5: the render size a backend planned for this output (its quality level), held to the same window rules: one
+// size per axis inside [ceil(output * min_scale), output]. False for a zero size or a plan outside those bounds, which
+// the caller then does not use (the world window falls back to SRScale and the pipeline refuses that frame's size).
+inline bool make_plan_for_render(uint32_t output_width, uint32_t output_height, uint32_t render_width, uint32_t render_height,
+    ScalePlan& out) noexcept {
+    out = {};
+    if (!output_width || !output_height || !render_width || !render_height) return false;
+    const auto lowest = [](uint32_t output) { return static_cast<uint32_t>(std::ceil(double(output) * min_scale)); };
+    if (render_width > output_width || render_height > output_height || render_width < lowest(output_width) ||
+        render_height < lowest(output_height))
+        return false;
+    out.output_width = output_width;
+    out.output_height = output_height;
+    out.render_width = render_width;
+    out.render_height = render_height;
+    out.scale = float(double(render_width) / double(output_width));
+    return true;
+}
+
 // Size rule of a twinned engine target, from its created extent relative to the output extent.
 enum class Extent : uint8_t { Full, Half };
 // The twin extent for one axis: Full -> render, Half -> render / 2 (engine integer division). False when the engine

@@ -5,6 +5,10 @@
 //   MotionShaderDir=<path>             deployment from tools/anomaly_motion_deploy.py
 //                                      (default: <directory of ReScaleFrame.ini>\ReScaleFrame\anomaly-motion)
 //   MotionInvalidate=1                 replay occluding draws without a variant as invalid motion (default 1)
+//   MotionFoliage=1                    tree and grass history (default 1): reads each foliage draw's staged VS constants,
+//                                      keeps the previous frame's by stable identity and binds it in b13. 0 binds the
+//                                      all-invalid foliage buffer (validity 0). Grass also needs the engine's unused
+//                                      instance rows poisoned after each read (see motion_foliage.h).
 //   MotionCapture=1                    dump the motion target and G-buffer through the core frame dump service;
 //   MotionCaptureStart=600, MotionCaptureCount=3 (max 16), MotionCaptureInterval=300 (main-view frames), and F10
 //                                      (refused while SRStageCapture owns the dump service)
@@ -34,6 +38,7 @@ struct MotionOptions {
     bool enabled{};
     std::wstring shader_dir;
     bool invalidate{true};
+    bool foliage{true};
     bool capture{};
     std::uint32_t capture_start{600}, capture_count{3}, capture_interval{300};
 };
@@ -52,7 +57,7 @@ void report(void (*emit)(void*, const char*), void* user) noexcept;
 void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept;
 
 struct MotionCounters {
-    static constexpr std::size_t families = 6, outcomes = 10, reasons = 11;
+    static constexpr std::size_t families = 6, outcomes = 10, reasons = 16;
     std::uint64_t shaders[families][outcomes]{};      // create_shader results per family (index 0: not allowlisted)
     std::uint64_t frame_refusals{};                    // allowlisted root but the caller frame was not accepted
     std::uint64_t frames{}, windows{}, clears{}, target_created{}, target_failed{}, msaa_frames{};
@@ -61,6 +66,24 @@ struct MotionCounters {
     std::uint64_t rebinds{}, already_bound{}, unbinds{}, close_unbinds{}, conflicts{}, binder_faults{};
     std::uint64_t restores{}, stale_restores{}, snapshots{}, camera_conflicts{}, retirements{}, upload_failures{};
     std::uint64_t captures{}, images{}, capture_failed{};
+    // Foliage. Draws are counted when the variant pair was swapped in (replaced) or when the foliage draw ran with the
+    // stock shaders (VS or PS without a linkable variant). Valid/invalid is the draw-level history decision; the reason
+    // is in reasons_by. Detail instances are counted per live group of a replaced detail draw.
+    std::uint64_t tree_replaced{}, tree_stock{}, tree_valid{}, tree_invalid{};
+    std::uint64_t detail_replaced{}, detail_stock{}, detail_valid{}, detail_invalid{};
+    std::uint64_t detail_items{}, detail_items_matched{}, detail_items_unmatched{}, detail_conflicts{};
+    std::uint64_t foliage_poisoned{}, foliage_poison_failed{}, foliage_table_overflows{};
 };
 MotionCounters counters() noexcept;
+
+// Read-only view of the motion target the last G-buffer window cleared and wrote, for the SR seam. Render thread
+// only. `texture` is the R16G16B16A16_FLOAT target (ID3D11Texture2D*, owned here, not reference counted, valid until
+// the next window resizes it or quiesce); `frame` and `main` identify that window (engine frame, main view);
+// `written` is false when the window did not get a usable target. All zero while the stage is inactive.
+struct FrameTarget {
+    void* texture{};
+    std::uint32_t width{}, height{}, frame{};
+    bool main{}, written{};
+};
+FrameTarget frame_target() noexcept;
 }

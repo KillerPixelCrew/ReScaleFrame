@@ -14,10 +14,14 @@
 // viewport is set to render size.
 // At the seam everything is restored, then the host upscales generic0 (bilinear in linear space), and nearest-copies
 // rt_Position, generic1 and depth into the engine's output-size originals, and the viewport returns to output size.
+// Stage 3 (section 11) adds, inside the same window: Device.mProject/mFullTransform jittered and re-uploaded through
+// R_xforms::set_P, the six first-person projections jittered once each from the rmNear slot, and the sampler mip
+// bias lowered through SetMipLODBias. Every exit path restores them with the twins.
 //
 // Every other exit (end of phase_combine without a seam, a stale window at the next prepare, end of frame, shutdown, a
 // failed write) also restores. This file has no D3D or Windows dependency so the state machine is tested on fake
 // layouts (tests/anomaly_sr_swap.cpp).
+#include "sr_jitter.h"
 #include "sr_plan.h"
 #include <array>
 #include <cstddef>
@@ -95,6 +99,15 @@ struct FrameFacts {
     std::byte* base_rt{};          // &HW.pBaseRT
     std::byte* ssao_viewport{};    // &set_viewport's static D3D11_VIEWPORT; null leaves it alone
     std::byte* ssao_viewport_guard{};
+    // Stage 3 (section 11), applied only when the stage 2 window opens. stage stays 2: the swap is identical.
+    bool jitter{};                 // jitter Device.mProject by (jitter_x, jitter_y) render pixels (+X right, +Y down)
+    float jitter_x{}, jitter_y{};
+    std::byte* device_view{};      // &Device.mView, &Device.mProject, &Device.mFullTransform (Fmatrix, 64 bytes each)
+    std::byte* device_project{};
+    std::byte* device_full_transform{};
+    bool mip_bias{};               // add mip_bias_delta to the sampler cache's bias for the window
+    float mip_bias_delta{};
+    std::byte* sampler_bias{};     // &SSManager.m_uiMipLODBias: read only, changed through SwapHost::set_mip_bias
 };
 
 // What the host must create on a twin-key change.
@@ -152,6 +165,11 @@ public:
     virtual bool upscale(const UpscaleInputs&) noexcept = 0;
     // Stage 2: the D3D11 viewport {0, 0, width, height, 0, 1}, what CRender::rmNormal sets for a bound target.
     virtual void set_viewport(uint32_t width, uint32_t height) noexcept = 0;
+    // Stage 3: R_xforms::set_P(&RCache.xforms, matrix), re-uploading the projection the engine binds from `matrix`
+    // (always &Device.mProject). False when the call faulted.
+    virtual bool upload_projection(const void* matrix) noexcept = 0;
+    // Stage 3: dx10SamplerStateCache::SetMipLODBias(&SSManager, value). Rebuilds every sampler when the value changes.
+    virtual bool set_mip_bias(float value) noexcept = 0;
 protected:
     ~SwapHost() = default;
 };
@@ -160,6 +178,10 @@ struct SwapCounters {
     uint64_t prepares{}, eligible{}, swapped{}, seams{}, seams_without_window{}, round_trips{}, round_trip_failures{};
     uint64_t combine_ends{}, rm_near_in_window{}, twin_generations{}, twin_drops{}, foreign_changes{}, write_faults{};
     uint64_t allocation_failures{}, viewports{}, ssao_viewport_swaps{};
+    // Stage 3. jittered: windows whose main projection carries the jitter. fp_*: rmNear calls inside a jittered window
+    // (jittered a freshly built first-person projection / found one the adapter already wrote / left an unknown one).
+    uint64_t jittered{}, jitter_invalid{}, fp_jittered{}, fp_already{}, fp_foreign{}, projection_restores{};
+    uint64_t mip_applied{}, mip_restored{}, mip_unchanged{};
     std::array<uint64_t, static_cast<std::size_t>(Skip::Count)> skipped{};
     std::array<uint64_t, static_cast<std::size_t>(Restore::Count)> restores{};
 };
@@ -184,8 +206,14 @@ public:
     void combine_end() noexcept;
     // Before IRenderDeviceRender::End. Restores and refuses when a window survived the whole frame.
     void frame_end() noexcept;
-    // CRender::rmNear inside the window (first-person projection). Counted only; Stage 3 jitters here.
+    // CRender::rmNear, after the original (the shared geometry slot). Counted inside the window; with Stage 3 jitter
+    // it jitters a freshly built first-person projection once (first_person_action, sr_jitter.h).
     void rm_near() noexcept;
+    // Stage 3 state of the open (or last) window.
+    bool jitter_applied() const noexcept { return projection_.applied; }
+    bool mip_bias_applied() const noexcept { return bias_.applied; }
+    float window_mip_bias() const noexcept { return bias_.window; }
+    float saved_mip_bias() const noexcept { return bias_.saved; }
     // Restore if open, then drop the twins. Safe at any time on the render thread.
     void shutdown() noexcept;
     bool window_open() const noexcept { return open_; }
@@ -230,6 +258,25 @@ private:
         bool viewport_guard_was_set{};       // the static was initialised when the window opened
         float viewport_width{}, viewport_height{};
     };
+    // Stage 3: the projection and sampler bias the window changed, with the values to restore.
+    struct Projection {
+        std::byte* view{};
+        std::byte* project{};
+        std::byte* full{};
+        bool written{};                       // Device.mProject/mFullTransform hold the jittered values
+        bool uploaded{};                      // RCache holds the jittered projection
+        bool applied{};                       // the window's main projection carries the jitter
+        float x{}, y{};
+        std::array<float, 16> saved_project{}, saved_full{}, jittered{}, last_first_person{};
+        bool have_first_person{};
+    };
+    struct Bias {
+        std::byte* field{};
+        bool applied{};
+        float saved{}, window{};
+    };
+    bool open_temporal(const FrameFacts&) noexcept;
+    void restore_temporal(Restore) noexcept;
     std::size_t slots() const noexcept { return stage_ == 1 ? stage1_slot_count : slot_count; }
     bool read_targets(const FrameFacts&, std::array<EngineTarget, slot_count>&, TwinRequest&) noexcept;
     bool twins_match(const TwinRequest&) const noexcept;
@@ -257,6 +304,8 @@ private:
     std::array<EngineTarget, slot_count> engine_{};
     TwinSet twins_{};
     Globals globals_{};
+    Projection projection_{};
+    Bias bias_{};
     SwapCounters counters_{};
 };
 }

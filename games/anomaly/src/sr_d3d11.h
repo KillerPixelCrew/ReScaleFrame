@@ -68,6 +68,33 @@ private:
     ComPtr<ID3D11DepthStencilState> depth_;
 };
 
+// Stages 4 and 5 (section 12): the render-size SR inputs the prepare pass writes, the output-size texture the
+// pipeline copies its reconstruction into, and the constant 1x1 exposure.
+struct TemporalTargets {
+    ComPtr<ID3D11Texture2D> colour, motion, output, exposure, empty_motion;
+    ComPtr<ID3D11RenderTargetView> colour_rtv, motion_rtv;
+    ComPtr<ID3D11ShaderResourceView> colour_srv, motion_srv, output_srv, empty_motion_srv;
+    uint32_t render_width{}, render_height{}, output_width{}, output_height{};
+    DXGI_FORMAT output_format{};
+    bool matches(ID3D11Device* device, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, DXGI_FORMAT format) const noexcept;
+};
+// colour and motion: render size, R16G16B16A16_FLOAT, RTV + SRV. output: output size in `output_format` (the
+// pipeline's output texture format), SRV. exposure: 1x1 R32_FLOAT = 1.0. empty_motion: render size, all zero (every
+// pixel invalid), bound when no motion target exists this frame.
+TwinError make_temporal_targets(ID3D11Device*, uint32_t render_width, uint32_t render_height, uint32_t output_width,
+    uint32_t output_height, DXGI_FORMAT output_format, TemporalTargets& out) noexcept;
+
+struct PrepareViews {
+    ID3D11ShaderResourceView* colour{};      // FP16 generic0 twin (engine low tonemap space)
+    ID3D11ShaderResourceView* motion{};      // motion target, or TemporalTargets::empty_motion_srv
+    ID3D11ShaderResourceView* depth{};       // depth twin, R24_UNORM_X8
+    uint32_t width{}, height{};              // render size
+    ID3D11RenderTargetView* colour_target{}; // TemporalTargets::colour_rtv
+    ID3D11RenderTargetView* motion_target{}; // TemporalTargets::motion_rtv
+    float first_person_depth{0.02f};
+    bool first_person_zero{true};
+};
+
 // Stage 2 seam pass (shaders/sr/rsf_sr_upscale.hlsl): render-size twins in, engine output-size targets out.
 struct UpscaleViews {
     ID3D11ShaderResourceView* colour{};      // FP16 generic0 twin
@@ -87,12 +114,18 @@ public:
     bool ready() const noexcept { return pixel_ != nullptr; }
     ID3D11Device* device() const noexcept { return device_.Get(); }
     bool run(ID3D11DeviceContext*, const UpscaleViews&) noexcept;
+    // Stages 4 and 5. The prepare pass at render size, and the output-size seam pass with the colour taken from the
+    // reconstructed linear image (`reconstructed`, output size) instead of the bilinear filter.
+    bool temporal_ready() const noexcept { return prepare_ && reinsert_; }
+    bool prepare(ID3D11DeviceContext*, const PrepareViews&) noexcept;
+    bool reinsert(ID3D11DeviceContext*, const UpscaleViews&, ID3D11ShaderResourceView* reconstructed) noexcept;
     void reset() noexcept;
 private:
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11VertexShader> vertex_;
-    ComPtr<ID3D11PixelShader> pixel_;
-    ComPtr<ID3D11Buffer> constants_;
+    ComPtr<ID3D11PixelShader> pixel_, prepare_, reinsert_;
+    ComPtr<ID3D11Buffer> constants_, prepare_constants_;
+    ComPtr<ID3D11DepthStencilState> no_depth_;
     ComPtr<ID3D11RasterizerState> raster_;
     ComPtr<ID3D11BlendState> blend_;
     ComPtr<ID3D11DepthStencilState> depth_;

@@ -2,6 +2,7 @@
 #include "motion_stage.h"
 #include "geometry_feed.h"
 #include "motion_d3d11.h"
+#include "motion_foliage.h"
 #include "motion_history.h"
 #include "motion_policy.h"
 #include "motion_profile.h"
@@ -121,6 +122,7 @@ struct Variant {
     Family family{};
     int skin{-2};
     Reflection reflection;
+    FoliageLayout foliage;             // foliage VS only: where the engine stages its constants (from the STOCK reflection)
 };
 std::shared_mutex registry_guard;
 std::unordered_map<const void*, std::shared_ptr<const Variant>> registry;
@@ -133,6 +135,7 @@ uint32_t refusal_logs{}, replace_logs{};
 // ---- D3D11 and engine state --------------------------------------------------------------------------------------
 MotionDevice device_state;
 MotionHistory history;
+FoliageHistory foliage_history;
 geometry::RetirementQueue retirements;
 MotionCounters stats{};
 MotionCounters reported{};
@@ -325,6 +328,14 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
                 variant.reset();
             } else {
                 variant->reflection = std::move(prepared.reflection);
+                if (stage == 'v' && (entry->family == Family::FoliageTree || entry->family == Family::FoliageDetail)) {
+                    variant->foliage = make_foliage_layout(entry->family, prepared.stock);
+                    if (!variant->foliage.usable && refusal_logs < 32) {
+                        ++refusal_logs;
+                        sayf("Anomaly motion foliage layout unusable for %s (variables missing from the stock reflection); "
+                             "its draws keep the all-invalid foliage buffer.", entry->name.c_str());
+                    }
+                }
                 std::unique_lock r(registry_guard);
                 registry[stock] = variant;
             }
@@ -432,6 +443,7 @@ void window_open(void* target) noexcept try {
     if (device_state.device() != device) {
         device_state.reset();
         history.reset_all();
+        foliage_history.reset_all();
         link_cache.clear();
         if (!device_state.create(device, log_fn, log_user)) { say("Anomaly motion: device resources could not be created."); return; }
     }
@@ -475,6 +487,8 @@ void window_open(void* target) noexcept try {
             device_state.clear(context);
             ++stats.clears;
             history.begin_frame(*view, frame, generation, device_state.width(), device_state.height());
+            foliage_history.begin_frame(*view, frame, generation, device_state.width(), device_state.height());
+            stats.foliage_table_overflows = foliage_history.table_overflows();
         }
         ++stats.frames;
         if (window.target_ok && *view == temporal::ViewId::Main && configured.capture) capture_arm(frame);
@@ -524,6 +538,116 @@ void count_reason(HistoryReason reason) noexcept {
     if (i < MotionCounters::reasons) ++stats.reasons_by[i];
     (reason == HistoryReason::Valid ? stats.valid_draws : stats.invalid_draws) += 1;
 }
+// ---- foliage (trees and grass) -------------------------------------------------------------------------------------
+// The VS constants of a foliage draw are read from the engine's staged copy after the flush uploaded them, so they are
+// exactly what the draw uses. See motion_foliage.h for identity and the grass row hygiene.
+bool read_constant(const ConstantRef& ref, void* out, std::uint32_t max_bytes) noexcept {
+    if (!ref.present) return true;   // a variable the compiler removed stays zero in the record and in b13
+    return geometry::read_vertex_constants(ref.buffer, ref.buffer_size, ref.offset, out, ref.size < max_bytes ? ref.size : max_bytes);
+}
+bool read_foliage_constants(const FoliageLayout& layout, FoliageConstants& out) noexcept {
+    return read_constant(layout.consts, out.consts, 16) && read_constant(layout.wave, out.wave, 16) &&
+        read_constant(layout.wind, out.wind, 16);
+}
+// Marks every instance row the engine has not filled for the NEXT batch. The batch just read was already uploaded by the
+// flush (UpdateSubresource copies at call time), the engine writes groups 0..n-1 again before its next draw and the
+// vertices of a draw only address those groups, so the unwritten tail is never read; poisoned it identifies itself.
+void poison_batch(const FoliageLayout& layout) noexcept {
+    DetailRows rows;
+    poison_detail_rows(rows);
+    if (geometry::write_vertex_constants(layout.array.buffer, layout.array.buffer_size, layout.array.offset, rows.data(),
+            static_cast<std::uint32_t>(sizeof(float) * foliage_detail_floats))) ++stats.foliage_poisoned;
+    else ++stats.foliage_poison_failed;
+}
+// A grass flush whose rows are not otherwise consumed (shadow passes, draws outside the motion pass): keep the engine's
+// staged batch marked so the first G-buffer batch of the next frame does not inherit stale groups.
+void poison_only(ID3D11DeviceContext* context) noexcept {
+    if (!configured.foliage || !context) return;
+    ID3D11VertexShader* vs{};
+    context->VSGetShader(&vs, nullptr, nullptr);
+    if (vs) vs->Release();
+    const auto variant = find_variant(vs);
+    if (variant && variant->family == Family::FoliageDetail && variant->foliage.usable) poison_batch(variant->foliage);
+}
+bool is_identity(const float (&values)[16]) noexcept {
+    static constexpr float identity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    return std::memcmp(values, identity, sizeof(identity)) == 0;
+}
+// Everything a foliage draw's history needs. Records the draw for the next frame whether or not the pair gets swapped.
+HistoryReason prepare_foliage(const geometry::DrawTimeFacts& facts, const Variant& vertex, const void* vs_key,
+    bool context_known, CameraStatus camera, FoliageVertexBytes& bytes) noexcept {
+    pack_foliage_invalid(bytes);
+    if (!configured.foliage || !vertex.foliage.usable) return HistoryReason::Foliage;
+    const auto& layout = vertex.foliage;
+    const auto previous_jitter = sr::current_jitter_uv();
+    const CameraSample* previous_camera = context_known ? history.previous_camera(*facts.view, *facts.domain) : nullptr;
+    const bool active = context_known && foliage_history.active(*facts.view);
+    if (vertex.family == Family::FoliageTree) {
+        TreeDrawInput in;
+        in.family = vertex.family;
+        in.in_visual = facts.in_visual;
+        in.kind = facts.kind;
+        in.verdict = facts.classification.verdict;
+        in.context = context_known;
+        in.camera_conflict = camera == CameraStatus::Conflict;
+        in.previous_camera = previous_camera;
+        in.previous_jitter_u = previous_jitter.previous_u;
+        in.previous_jitter_v = previous_jitter.previous_v;
+        in.current.lod = facts.tree_lod;
+        const bool tree = facts.in_visual && facts.kind == geometry::DrawKind::Tree && facts.visual;
+        in.constants_ok = tree && read_constant(layout.xform, in.current.xform, sizeof(in.current.xform)) &&
+            read_foliage_constants(layout, in.current.constants);
+        if (in.constants_ok && active) in.previous = foliage_history.record_tree(*facts.view, facts.visual, in.current);
+        const auto decision = decide_tree(in);
+        if (decision.reason != HistoryReason::Valid) return decision.reason;
+        if (!pack_foliage_tree(decision.previous_clip, in.previous->xform, in.previous->constants, bytes))
+            return HistoryReason::FoliageNoConstants;
+        return HistoryReason::Valid;
+    }
+    DetailDrawInput in;
+    in.family = vertex.family;
+    in.detail_window = facts.detail;
+    in.context = context_known;
+    in.camera_conflict = camera == CameraStatus::Conflict;
+    in.previous_camera = previous_camera;
+    in.previous_jitter_u = previous_jitter.previous_u;
+    in.previous_jitter_v = previous_jitter.previous_v;
+    float world[16];
+    in.world_readable = geometry::read_world_matrix(world);
+    in.world_identity = in.world_readable && is_identity(world);
+    DetailRows rows;
+    FoliageConstants current;
+    in.constants_ok = facts.detail && read_foliage_constants(layout, current) &&
+        geometry::read_vertex_constants(layout.array.buffer, layout.array.buffer_size, layout.array.offset, rows.data(),
+            static_cast<std::uint32_t>(sizeof(float) * foliage_detail_floats));
+    DetailRemap remap;
+    if (in.constants_ok) {
+        // Route: the shader permutation and its wave set (the wave 0 and wave 1 batches share one permutation).
+        std::uint64_t route = reinterpret_cast<std::uintptr_t>(vs_key);
+        for (const float w : {current.wave[0], current.wave[1], current.wave[2]}) {
+            std::uint32_t bits;
+            std::memcpy(&bits, &w, sizeof(bits));
+            route = (route ^ bits) * 1099511628211ull;
+        }
+        if (active) remap = foliage_history.record_detail(*facts.view, route, current, rows);
+        else remap.live = count_live_groups(rows);
+        poison_batch(layout);
+        stats.detail_items += remap.live;
+        stats.detail_items_matched += remap.matched;
+        stats.detail_items_unmatched += remap.unmatched;
+        stats.detail_conflicts += remap.conflicts;
+    }
+    in.live_groups = remap.live;
+    in.route_found = remap.route_found;
+    const auto decision = decide_detail(in);
+    if (decision.reason != HistoryReason::Valid) return decision.reason;
+    // The route existed last frame but none of this batch's instances did: nothing to bind.
+    if (remap.matched == 0) return HistoryReason::FoliageNoPrevious;
+    if (!pack_foliage_detail(decision.previous_clip, remap.previous, remap.items, remap.live, bytes))
+        return HistoryReason::FoliageNoConstants;
+    return HistoryReason::Valid;
+}
+
 void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (pending.active) {
         // A flush without the draw call it precedes (a compute dispatch): put the stock shaders back now.
@@ -541,6 +665,10 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
             const auto action = binder.on_draw(backend, false, nullptr, device_state.rtv());
             if (action == BindAction::Unbound) ++stats.unbinds;
             window.cache_may_hold_motion = false;
+        }
+        if (facts.detail) {
+            ID3D11DeviceContext* engine_context{};
+            if (read_global(sr::hw_context_rva, engine_context)) poison_only(engine_context);
         }
         return;
     }
@@ -573,7 +701,10 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
             }
         }
     }
-    if (!binder.motion_bound() || !context) return;
+    if (!binder.motion_bound() || !context) {
+        if (facts.detail) poison_only(context);
+        return;
+    }
     ID3D11VertexShader* vs{};
     ID3D11PixelShader* ps{};
     context->VSGetShader(&vs, nullptr, nullptr);
@@ -583,6 +714,16 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (ps) ps->Release();
     const auto vertex = find_variant(vs);
     const auto pixel = find_variant(ps);
+    const bool tree_draw = facts.in_visual && facts.kind == geometry::DrawKind::Tree;
+    const bool detail_draw = facts.detail;
+    // A foliage VS variant's history is prepared (and recorded for the next frame) whether or not the pixel shader has a
+    // variant to pair with; the swap below only decides what this draw writes.
+    FoliageVertexBytes foliage_bytes;
+    HistoryReason foliage_reason = HistoryReason::Foliage;
+    const bool foliage_vertex = vertex && (vertex->family == Family::FoliageTree || vertex->family == Family::FoliageDetail);
+    if (foliage_vertex) foliage_reason = prepare_foliage(facts, *vertex, vs, context_known, camera, foliage_bytes);
+    else pack_foliage_invalid(foliage_bytes);
+    if (detail_draw && !foliage_vertex) poison_only(context);
     bool paired = vertex && pixel && vertex->vs && pixel->ps && vertex->device == device_state.device() &&
         pixel->device == device_state.device();
     if (paired) {
@@ -592,6 +733,8 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         paired = found->second;
     }
     if (!paired) {
+        if (tree_draw) ++stats.tree_stock;
+        if (detail_draw) ++stats.detail_stock;
         ++stats.unpaired_draws;
         pending = {true, context, configured.invalidate, false, nullptr, nullptr};
         return;
@@ -599,10 +742,11 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     const bool foliage = vertex->family == Family::FoliageTree || vertex->family == Family::FoliageDetail;
     bool uploaded = false;
     if (foliage) {
-        FoliageVertexBytes bytes;
-        pack_foliage_invalid(bytes);
-        uploaded = device_state.set_foliage_vertex(context, bytes);
-        count_reason(HistoryReason::Foliage);
+        uploaded = device_state.set_foliage_vertex(context, foliage_bytes);
+        count_reason(foliage_reason);
+        const bool valid = foliage_reason == HistoryReason::Valid;
+        if (vertex->family == Family::FoliageTree) ++(valid ? stats.tree_valid : stats.tree_invalid);
+        else ++(valid ? stats.detail_valid : stats.detail_invalid);
     } else {
         CoreDrawInput input;
         input.family = vertex->family;
@@ -628,18 +772,22 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     D3D11_VIEWPORT viewport{};
     UINT viewports = 1;
     context->RSGetViewports(&viewports, &viewport);
+    // SR Stage 3 publishes the jitter of this frame's world and first-person projections (and of the previous main-view
+    // frame, whose jittered camera the history recorded) at phase_scene_prepare; zero below Stage 3 and on scope frames.
+    const auto sr_jitter = sr::current_jitter_uv();
     PixelInputs inputs{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height,
-        jitter[0].load(std::memory_order_relaxed), jitter[1].load(std::memory_order_relaxed),
-        foliage ? 0.0f : jitter[2].load(std::memory_order_relaxed), foliage ? 0.0f : jitter[3].load(std::memory_order_relaxed)};
+        sr_jitter.current_u, sr_jitter.current_v, foliage ? 0.0f : sr_jitter.previous_u, foliage ? 0.0f : sr_jitter.previous_v};
     PixelBytes pixel_bytes;
     pack_pixel(inputs, pixel_bytes);   // an unusable viewport writes control 0: invalid motion, native shading intact
     uploaded = uploaded && device_state.set_pixel(context, pixel_bytes);
     if (!uploaded) {
+        if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_stock : stats.detail_stock);
         ++stats.upload_failures;
         pending = {true, context, configured.invalidate, false, nullptr, nullptr};
         return;
     }
     ++stats.motion_draws;
+    if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_replaced : stats.detail_replaced);
     context->VSSetShader(vertex->vs.Get(), nullptr, 0);
     context->PSSetShader(pixel->ps.Get(), nullptr, 0);
     pending = {true, context, false, true, vs, ps};
@@ -673,6 +821,7 @@ MotionOptions read_options(const wchar_t* ini) noexcept try {
     if (path[0]) result.shader_dir = path;
     else result.shader_dir = (std::filesystem::path(ini).parent_path() / L"ReScaleFrame" / L"anomaly-motion").wstring();
     result.invalidate = GetPrivateProfileIntW(L"Anomaly", L"MotionInvalidate", 1, ini) != 0;
+    result.foliage = GetPrivateProfileIntW(L"Anomaly", L"MotionFoliage", 1, ini) != 0;
     result.capture = GetPrivateProfileIntW(L"Anomaly", L"MotionCapture", 0, ini) != 0;
     result.capture_start = GetPrivateProfileIntW(L"Anomaly", L"MotionCaptureStart", 600, ini);
     result.capture_count = GetPrivateProfileIntW(L"Anomaly", L"MotionCaptureCount", 3, ini);
@@ -734,19 +883,21 @@ bool install(std::byte* module, uint32_t image_size) noexcept try {
             reinterpret_cast<void*>(&scene_end_hook), &originals[site_phase_scene_end]}}};
     geometry::geometry_set_sink({&retirements, &geometry::RetirementQueue::sink});
     geometry::geometry_set_flush_callback(&on_flush);
+    geometry::geometry_enable_foliage_identity(configured.foliage);
     hooks_active = true;
     const bool installed = hooks.created() ? hooks.enable() : hooks.install(module, image_size, sites);
     if (!installed) {
         hooks_active = false;
         geometry::geometry_set_flush_callback(nullptr);
+        geometry::geometry_enable_foliage_identity(false);
         say("Anomaly motion refused: guarded detour installation failed; shaders stay stock.");
         return false;
     }
     if (configured.capture) bind_dump();
     sayf("Anomaly motion hooks installed: create_shader, phase_scene_begin/end, constants.flush slot; MotionInvalidate=%d "
-         "MotionCapture=%d (start=%u count=%u interval=%u). No SR/FG consumer reads the target.",
+         "MotionCapture=%d (start=%u count=%u interval=%u) MotionFoliage=%d. No SR/FG consumer reads the target.",
         configured.invalidate ? 1 : 0, configured.capture ? 1 : 0, configured.capture_start, configured.capture_count,
-        configured.capture_interval);
+        configured.capture_interval, configured.foliage ? 1 : 0);
     return true;
 } catch (...) { return false; }
 
@@ -754,6 +905,7 @@ bool quiesce() noexcept {
     if (!hooks.created()) return true;
     hooks_active = false;
     geometry::geometry_set_flush_callback(nullptr);
+    geometry::geometry_enable_foliage_identity(false);
     const bool disabled = hooks.disable();
     window.open = false;
     if (dump_ready) { capture_abandon(); dump.cancel(capture.record.session_id); }
@@ -764,6 +916,12 @@ bool quiesce() noexcept {
 MotionCounters counters() noexcept {
     std::lock_guard lock(stats_guard);
     return stats;
+}
+
+FrameTarget frame_target() noexcept {
+    if (!hooks_active.load(std::memory_order_acquire) || !window.have_frame) return {};
+    return {device_state.texture(), device_state.width(), device_state.height(), window.frame,
+        window.view == temporal::ViewId::Main, window.target_ok && device_state.texture() != nullptr};
 }
 
 void report(void (*emit)(void*, const char*), void* user) noexcept try {
@@ -793,6 +951,17 @@ void report(void (*emit)(void*, const char*), void* user) noexcept try {
         reasons += item;
     }
     emit(user, reasons.c_str());
+    std::snprintf(text, sizeof(text),
+        "Anomaly motion foliage tree replaced=%llu stock=%llu valid=%llu invalid=%llu | detail replaced=%llu stock=%llu valid=%llu "
+        "invalid=%llu | detail items=%llu matched=%llu unmatched=%llu conflicts=%llu | rows poisoned=%llu poison_failed=%llu "
+        "table_overflows=%llu",
+        d(&MotionCounters::tree_replaced), d(&MotionCounters::tree_stock), d(&MotionCounters::tree_valid),
+        d(&MotionCounters::tree_invalid), d(&MotionCounters::detail_replaced), d(&MotionCounters::detail_stock),
+        d(&MotionCounters::detail_valid), d(&MotionCounters::detail_invalid), d(&MotionCounters::detail_items),
+        d(&MotionCounters::detail_items_matched), d(&MotionCounters::detail_items_unmatched),
+        d(&MotionCounters::detail_conflicts), d(&MotionCounters::foliage_poisoned), d(&MotionCounters::foliage_poison_failed),
+        d(&MotionCounters::foliage_table_overflows));
+    emit(user, text);
     std::string shaders = "Anomaly motion shaders (totals)";
     for (std::size_t f = 0; f < MotionCounters::families; ++f)
         for (std::size_t o = 0; o < MotionCounters::outcomes; ++o) {

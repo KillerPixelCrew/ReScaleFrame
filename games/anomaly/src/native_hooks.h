@@ -22,7 +22,7 @@ public:
     bool disable() noexcept;
     bool created() const noexcept { return count_ != 0; }
 private:
-    std::array<void*, 16> targets_{};
+    std::array<void*, 24> targets_{};
     size_t count_{};
     bool enabled_{};
 };

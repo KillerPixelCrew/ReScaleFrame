@@ -282,6 +282,7 @@ Prepared ShaderLoader::prepare(const ShaderRequest& request)
         result.detail = "stock bytecode does not reflect";
         return result;
     }
+    result.stock = stock;
     const auto check = [&](std::vector<std::byte> variant, Outcome success) {
         Reflection reflection;
         if (!reflector_.reflect(variant, reflection)) {
@@ -308,6 +309,7 @@ Prepared ShaderLoader::prepare(const ShaderRequest& request)
             if (auto bytes = read_file(cached_path); bytes && !bytes->empty() && check(std::move(*bytes), Outcome::ReplacedFromCache))
                 return result;
             result = Prepared{Outcome::NotAllowlisted, entry, result.skin};   // a bad cache entry falls back to compiling
+            result.stock = stock;
         }
     }
     std::vector<std::byte> original;

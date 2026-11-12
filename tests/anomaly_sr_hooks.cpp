@@ -5,8 +5,10 @@
 //  * sr::install refuses and installs nothing when any Stage 1 guard differs (function prologues, the 17-byte
 //    phase_blur guard, the five real call sites), and when the guarded bytes are not inside a real PE image;
 //  * Stage 2 also requires the SSAO set_viewport code that encodes its static viewport and guard addresses;
+//  * Stage 3 also requires the set_P and SetMipLODBias guards and, at all six first-person sites, `call set_P` followed
+//    by an rmNear call (slot 55 or direct);
 //  * frame_end/report/quiesce are inert while nothing is installed;
-//  * SRStage/SRScale parsing (Stage 2 keys, clamping, defaults).
+//  * SRStage/SRScale/SRJitter/SRMipBias parsing (Stage 2 and 3 keys, clamping, defaults).
 #include "geometry_profile.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
@@ -16,6 +18,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -154,17 +157,125 @@ void options_from_ini() {
         CHECK(sr::read_options(path).scale == item.scale);
     }
     CHECK(sr::read_scale(nullptr) == 0.67f);
-    for (const auto* stage : {L"3", L"-1", L"x"}) {
-        WritePrivateProfileStringW(L"Anomaly", L"SRStage", stage, path);   // only Stages 1 and 2 exist
+    for (const auto* stage : {L"6", L"-1", L"x"}) {
+        WritePrivateProfileStringW(L"Anomaly", L"SRStage", stage, path);   // only Stages 1 to 5 exist
         CHECK(!sr::read_options(path).selected());
     }
+    // Stages 4 and 5: SR inputs and temporal SR keys, the vendor layout beside the INI, the shared frontend SR keys.
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"5", path);
+    options = sr::read_options(path);
+    CHECK(options.stage == 5 && options.world_window() && options.temporal() && options.sr_inputs() && options.selected());
+    CHECK(!options.exposure_auto && options.first_person_zero && options.cut.distance == 4.0f && options.cut.degrees == 45.0f &&
+        !options.require_signature && options.capture_count == 16);
+    const auto beside = (std::filesystem::path(path).parent_path() / L"ReScaleFrame").wstring();
+    CHECK(options.streamline_dir == beside + L"\\streamline" && options.fidelityfx_dir == beside + L"\\fidelityfx" &&
+        options.xess_dir == beside + L"\\xess");
+    CHECK(options.settings.enabled && options.settings.backend == sr::backend_dlss && options.settings.quality == 1 && options.settings.preset == 0);
+    WritePrivateProfileStringW(L"Anomaly", L"SRExposure", L"auto", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRFirstPersonZero", L"0", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRCutDistance", L"0.001", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRCutAngle", L"x", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStreamlineDir", L"C:\\sl", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SR", L"0", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"5", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRQuality", L"4", path);    // ultra performance: not offered, kept at Quality
+    WritePrivateProfileStringW(L"Anomaly", L"DLSSPreset", L"6", path);
+    options = sr::read_options(path);
+    CHECK(options.exposure_auto && !options.first_person_zero && options.cut.distance == 0.1f && options.cut.degrees == 45.0f &&
+        options.streamline_dir == L"C:\\sl" && options.xess_dir == beside + L"\\xess");
+    CHECK(!options.settings.enabled && options.settings.backend == sr::backend_xess && options.settings.quality == 1 &&
+        options.settings.preset == 6);
+    WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"2", path);    // FSR2: not offered by this adapter
+    CHECK(sr::read_options(path).settings.backend == sr::backend_dlss);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"4", path);
+    options = sr::read_options(path);
+    CHECK(options.stage == 4 && options.sr_inputs() && options.temporal() && options.world_window());
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
+    CHECK(!sr::read_options(path).sr_inputs());
+    // Stage 3: SRJitter (default 1), SRMipBias (offset, default -0.3, clamped [-2, 1], "off"), consecutive capture count.
+    WritePrivateProfileStringW(L"Anomaly", L"SRScale", L"0.67", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", nullptr, path);
+    options = sr::read_options(path);
+    CHECK(options.stage == 3 && options.world_window() && options.selected() && options.jitter && options.mip_bias &&
+        options.mip_bias_offset == -0.3f && options.capture_count == 8);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", L"99", path);
+    WritePrivateProfileStringW(L"Anomaly", L"SRJitter", L"0", path);
+    options = sr::read_options(path);
+    CHECK(options.capture_count == 32 && !options.jitter);
+    const struct { const wchar_t* text; float offset; bool enabled; } biases[] = {
+        {L"-0.3", -0.3f, true}, {L"0", 0.0f, true}, {L" -1 ", -1.0f, true}, {L"-5", -2.0f, true}, {L"3", 1.0f, true},
+        {L"off", -0.3f, false}, {L" OFF ", -0.3f, false}, {L"offset", -0.3f, true}, {L"abc", -0.3f, true}, {L"-0.5x", -0.3f, true},
+        {L"nan", -0.3f, true}, {L"", -0.3f, true}};
+    for (const auto& item : biases) {
+        WritePrivateProfileStringW(L"Anomaly", L"SRMipBias", item.text, path);
+        bool enabled = !item.enabled;
+        const float offset = sr::read_mip_bias(path, &enabled);
+        if (offset != item.offset || enabled != item.enabled) std::printf("SRMipBias=%ls -> %f (enabled %d)\n", item.text, offset, enabled);
+        CHECK(offset == item.offset && enabled == item.enabled);
+        options = sr::read_options(path);
+        CHECK(options.mip_bias_offset == item.offset && options.mip_bias == item.enabled);
+    }
+    CHECK(sr::read_mip_bias(nullptr) == -0.3f);
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);   // Stage 2 keeps its single-frame capture limit
+    CHECK(sr::read_options(path).capture_count == 16);
     DeleteFileW(path);
+}
+
+void stage3_install_refusals() {
+    sr::StageOptions options{};
+    options.stage = 3;
+    sr::configure(options, &collect, nullptr);
+    std::vector<std::byte> image(native_image_size);
+    const auto refused_at = [&](const char* text) {
+        lines.clear();
+        const bool ok = !sr::install(image.data(), native_image_size) && !sr::active() && logged(text);
+        if (!ok) for (const auto& line : lines) std::printf("  log: %s\n", line.c_str());
+        return ok;
+    };
+    // set_P is called from the adapter: its 28-byte unique guard must match.
+    fill_guards(image);
+    image[sr::sr_function_sites[sr::site_set_p].rva + 20] ^= std::byte{0x01};
+    CHECK(refused_at("guard mismatch at R_xforms::set_P"));
+    fill_guards(image);
+    image[sr::sr_function_sites[sr::site_set_mip_lod_bias].rva + 12] ^= std::byte{0x01};   // the m_uiMipLODBias displacement
+    CHECK(refused_at("guard mismatch at dx10SamplerStateCache::SetMipLODBias"));
+    // Each first-person site must still upload with `call set_P` and then call rmNear.
+    const auto put_call = [&](uint32_t at, uint32_t target) {
+        image[at] = std::byte{0xe8};
+        const int32_t displacement = static_cast<int32_t>(static_cast<int64_t>(target) - (static_cast<int64_t>(at) + 5));
+        std::memcpy(image.data() + at + 1, &displacement, sizeof(displacement));
+    };
+    const auto fill_sites = [&] {
+        fill_guards(image);
+        for (const auto& site : sr::sr_first_person_sites) {
+            put_call(site.set_p_call, sr::sr_function_sites[sr::site_set_p].rva);
+            if (site.function_rva == 0x8d8420 || site.function_rva == 0x90dca0) put_call(site.rm_near_call, sr::sr_function_sites[sr::site_rm_near].rva);
+            else put_hex(image.data() + site.rm_near_call, "ff90b8010000");
+        }
+    };
+    fill_sites();
+    CHECK(refused_at("guarded detour installation failed"));   // every Stage 3 guard matched; the heap buffer is refused later
+    fill_sites();
+    put_call(sr::sr_first_person_sites[2].set_p_call, sr::sr_function_sites[sr::site_set_p].rva + 0x10);   // calls elsewhere
+    CHECK(refused_at("guard mismatch at r_dsgraph_render_sorted"));
+    fill_sites();
+    image[sr::sr_first_person_sites[0].rm_near_call + 2] = std::byte{0xc0};   // call [rax+0x1c0]: slot 56, rmFar
+    CHECK(refused_at("guard mismatch at r_dsgraph_render_hud "));
+    fill_sites();
+    put_call(sr::sr_first_person_sites[5].rm_near_call, sr::sr_function_sites[sr::site_rm_far].rva);   // direct call to rmFar
+    CHECK(refused_at("guard mismatch at CRenderTarget::accum_point"));
+    // Inert while not installed: no jitter is published.
+    const auto uv = sr::current_jitter_uv();
+    CHECK(uv.current_u == 0 && uv.current_v == 0 && uv.previous_u == 0 && uv.previous_v == 0 && !sr::current_jitter().applied);
+    sr::configure({}, nullptr, nullptr);
 }
 }
 
 int main() {
     rm_near_slot();
     install_refusals();
+    stage3_install_refusals();
     options_from_ini();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
