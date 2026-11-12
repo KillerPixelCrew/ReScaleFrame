@@ -1,0 +1,1296 @@
+{
+  "schema": 1,
+  "sources": {
+    "accum_base.ps": "9811551a062662e5066d7a7d64aaa849705308d31ed8b63741a5dde9be9a59f0",
+    "accum_emissive.ps": "4cd7aa65d04cd0411d69bc6a70a793529ec2446c97ef7caa61c5996e5bd7dd9f",
+    "accum_emissive_det.ps": "eaff0ae8813366651b2ffef997297f0ece4ed7beb58e2443fa3528ed08f7313d",
+    "accum_emissivel.ps": "5f7000455d19e0d03cda972998fb44a99b7ca0316acf0c2e8e1f6db689a315f7",
+    "accum_indirect.ps": "7694e60929101accd9db5342973f40d4db723d7f7cd2d3ee314fefd8bbc22cc8",
+    "accum_indirect_msaa.ps": "eac05a6506316f16b886b91c748d82895dfeb815cd17a63ac0656d9bbd0df2d0",
+    "accum_indirect_nomsaa.ps": "065e1efcc27f6a8bdab7706e70998c76e1cb3533ab3e6c662e24db967be96b76",
+    "accum_mask.vs": "6fee1f37acfd675e6567392421e4ac56ff490ccdaf3070b276dcc7528ff25403",
+    "accum_omni_normal.ps": "f068b8291d4e11b1d55d85049085ea5b1a5bd5176b8606dd43d950d1f9d365a0",
+    "accum_omni_normal_msaa.ps": "854fa5484677c9da0fb735465fadf1ec1ff3b0aa0e26a6b9eacd03d9459d411c",
+    "accum_omni_normal_nomsaa.ps": "3412652b2f20bfb9678c54974db18ae591c50e78421ef5a6c47d71d93779ff1a",
+    "accum_omni_transluent.ps": "1596c6195f4f1c777436fbf16a2a8388d60f363399de39520492957a432ecb71",
+    "accum_omni_transluent_msaa.ps": "12044dcbbcb09eb8502fc547caa76b3aca2001c9b687740a8c2971c8c8b0cc85",
+    "accum_omni_transluent_nomsaa.ps": "c7fa62ecb279ffebf6b19e8b30c09a52ea73af3595b43f8e187695b68d4c6359",
+    "accum_omni_unshadowed.ps": "24ed483044556fd3c0f729808d56ec17b30d9f3fb58393776712dba81bb82d68",
+    "accum_omni_unshadowed_msaa.ps": "cff463524863742002dace838a3fa5bbfe2e3e202c4a85558a2e8888a1252fb9",
+    "accum_omni_unshadowed_nomsaa.ps": "c60c1ebb38a88386b2eb616072c49d51cd6900ad9f64ef1ba15809a3e578f0a2",
+    "accum_spot_fullsize.ps": "1596c6195f4f1c777436fbf16a2a8388d60f363399de39520492957a432ecb71",
+    "accum_spot_fullsize_msaa.ps": "cfff35a84236709df527078e342b0fd54905de07e78fc8d4e5ca1383003b1c3e",
+    "accum_spot_fullsize_nomsaa.ps": "994ce3a50d9f41f47de25b53ef16fa93285cc7b9a85a95f116c625102ae61712",
+    "accum_spot_normal.ps": "8328e0b4e8f605d179034b11138cd79532052c0062ee73471c3836918025b44e",
+    "accum_spot_normal_msaa.ps": "c4de240c5170eabe15a892eae565121b7c96453b82d3063dd80a4cb4fe1abbc3",
+    "accum_spot_normal_nomsaa.ps": "cc53d5bf5a900789966bd5dc69c9809003c6a2cbbdb8d2a0564520f7cfedfcf2",
+    "accum_spot_unshadowed.ps": "80fc1e43be40635001c7ff80878e5b00f289b9cb17d224f0a19d64ca6b6a1d46",
+    "accum_spot_unshadowed_msaa.ps": "051e70286e0c73f62b40b5677d55b5e9ca4421b51b37b3cba107de65f125f7ce",
+    "accum_spot_unshadowed_nomsaa.ps": "a69f78021a62ef6cc6a60384d3785d767b3cc2bd458fed13f21c70ee68013a7a",
+    "accum_sun.ps": "637bc605c4f3aa6fd6e0f61c27e07e063d8dc6c159e9abc3d2a4b669f5bc21ef",
+    "accum_sun.vs": "cdd554eb83e5749ac4002e06adbd92493176be17eb06f3f696d7a19ee504e321",
+    "accum_sun_far.ps": "b47251a30834b8b8fd4f5239045d6048649c9db6d8dc27f95d7edc16f26128cc",
+    "accum_sun_far_msaa.ps": "baf9122d8fd2a8d8db404590c8682be89f71801e8079a01824c5a37490051970",
+    "accum_sun_far_nomsaa.ps": "baf9122d8fd2a8d8db404590c8682be89f71801e8079a01824c5a37490051970",
+    "accum_sun_mask.ps": "a5633291a4fbe1e9f32d143096f26298bd9fe899ea30e0f741851ad8a7363a19",
+    "accum_sun_mask_msaa.ps": "52a5708d1b1952fa9cfafcebe32f9363dbb62802ca3df5201a2967ae56bcb0df",
+    "accum_sun_mask_nomsaa.ps": "5852a01611c492c68133e76614478ab9718bedd68906e0a9b969fa327c82537a",
+    "accum_sun_msaa.ps": "79488fe0a54e109d9c283b83e84f1af3c386d99f807c2a28382beb21bdc07746",
+    "accum_sun_near.ps": "93d79d4a293659ee6543c882e9808e3bd1bc47bd93084f8281bdfa2e9a11b92b",
+    "accum_sun_near_msaa.ps": "bc8150335100684fa0001e9a5e44a7f1476ad3555e00e9e268315dfddfe05e8f",
+    "accum_sun_near_msaa_minmax.ps": "fdee4064e182257b6822468dc9444710fe8ad2a4860c579a70419e6f8d14cc03",
+    "accum_sun_near_msaa_nominmax.ps": "e8ed1e1df9a449342231f6c21a28caca056094bda90bd6f4ea857af4fd2f9b70",
+    "accum_sun_near_nomsaa.ps": "fd36e1a62b8f0ab26423817982857507f4ebadfb55a1aae931589a9f9899e524",
+    "accum_sun_near_nomsaa_minmax.ps": "3ae67c9d42987932b2bfa25c70ff58f7f653797ed13572946da8cfd8adb47885",
+    "accum_sun_near_nomsaa_nominmax.ps": "2e73321b87022dbd144cfad668dd3fc03b4791cd2984c1cf4b175865fcb0242c",
+    "accum_sun_near_old.ps": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "accum_sun_nomsaa.ps": "2bb30a451032d218f0d0f0e20b7896fcc0b9b1273f416a28de61a3d43a3ab1c7",
+    "accum_volume.vs": "cdd554eb83e5749ac4002e06adbd92493176be17eb06f3f696d7a19ee504e321",
+    "accum_volumetric.ps": "32a78a5453fa61b9b909cd9b57cc67bae9cb16cda53ab4d3021cf7aec514cfc5",
+    "accum_volumetric.s": "c5982d5d1bc5daafa264155fc797cc9fa73781d32bd2c19abcde29670e54659e",
+    "accum_volumetric.vs": "ea135d5b2725d9cd32d3edc306e03fc99433275abcbc8e55fea45e8405d01f8f",
+    "accum_volumetric_msaa.ps": "1afcb4a23aa139b6b3ced88e5cadd1c6c1567bcb1ec623f636094755e52703d6",
+    "accum_volumetric_nomsaa.ps": "508b97adeefebd58174f16df281253b695abeb66998e47490ccdb9e5af9fe393",
+    "accum_volumetric_nomsaa.s": "187f67733b77fb97236f60de88ea07a357c6886a7b464d7884eedcabdd0a34ee",
+    "accum_volumetric_nomsaa.vs": "0e2b4fa03c8c22b4fb1bcedf307c99bb3a21a18586546db27a971c30ecc2d239",
+    "accum_volumetric_sun.ps": "0e030e3b6bda5da8819212db1656c1615ae0c0dd4d2290bbf789ed4bf5878b29",
+    "accum_volumetric_sun.s": "d51c17c91d9045d99f963dc82e02c9a58111751d813ecb007a463651f238d0a8",
+    "accum_volumetric_sun_minmax.ps": "ed515396258ab82792ef432d5c2f03ed8ed595b55c7f75d9215d6ea4d949e02e",
+    "accum_volumetric_sun_minmax.s": "c6a31bc1fe41303aaf296e707d5143ff70721575385092b9bcf96f2203b58b63",
+    "accum_volumetric_sun_msaa.ps": "2d49e866fa05af40c274d1469c413adc2366eb8b506c09b6fce019f7326291cf",
+    "accum_volumetric_sun_msaa0.ps": "0151b0e28feba8bbbb1dd896902eeea730befaaf4999e520aabee40b03930d44",
+    "accum_volumetric_sun_msaa0.s": "2dc42d4d0fa16838c4b7e79797f316c4f416532d6068af2cf04b6bcf948a36f2",
+    "accum_volumetric_sun_msaa1.ps": "8b8f8cf4c4a398c797dea0d78a6027847ea7e4b18611dd25a8604a26fda3a1c4",
+    "accum_volumetric_sun_msaa1.s": "2fa2ca3096291c8a763711077765aee89fd8fb05decd8c735fd683263fcccb9f",
+    "accum_volumetric_sun_msaa2.ps": "7656658d6e6b003a65478f1dfcd9ecea7749cf14b24a7a9699de4a73f2560623",
+    "accum_volumetric_sun_msaa2.s": "77591808f3705c0c5041ce8a6ee21afb02c1d2231ef6a828268dcb68333a952a",
+    "accum_volumetric_sun_msaa3.ps": "f23e851790d5c94b4cc47571cff7ce4cd893d32ee21dedfeaaa25638dac9738b",
+    "accum_volumetric_sun_msaa3.s": "d939849b758659a93c35d3b7616cbaf462b7b54cff53001c1370ab7e606af6fd",
+    "accum_volumetric_sun_msaa4.ps": "ad0c118c5cc61e712767d13b38654215445a43fb238d2a5dad1d27695cbcc634",
+    "accum_volumetric_sun_msaa4.s": "56e9bbfc72b9f8a7c19772053c2adb38decc675cd692e578839eae656b5b1393",
+    "accum_volumetric_sun_msaa5.ps": "646b10f351ba8ff0e4d2595f63e91d4deceaa982f286d7295819e09bb78b0899",
+    "accum_volumetric_sun_msaa5.s": "f93be79fce658be4cb2320edc30f6830aeddf8861c5719eaf940381afde8fe3d",
+    "accum_volumetric_sun_msaa6.ps": "31421a006a97333b4589d198b606dbbba38391f6c8711bb6476d89dce5efd02b",
+    "accum_volumetric_sun_msaa6.s": "f0d38b5cf3a892641e1117984050477e38df5d0238bc757dcf485c3265e042ae",
+    "accum_volumetric_sun_msaa7.ps": "4885f46fbc299df4f0632fec396173fd4ac052b671cfbc012c0c8190d49cdfb6",
+    "accum_volumetric_sun_msaa7.s": "957d8fba10f5bde3c33e4cd477f36365e023e23874cc0fc790acda24db04ccf0",
+    "accum_volumetric_sun_nomsaa.ps": "94a2b41e54a3c708a20ed00c1261f38e45ed7e07fbf791e71ac8d8a83a1f7eb7",
+    "accum_volumetric_sun_nomsaa.s": "a1fb1487b2510a8c0ba114fce74b9d26d7a8c62d980fd12f21b95ba6c4eeb3c7",
+    "accum_volumetric_sun_nomsaa_minmax.s": "c6a31bc1fe41303aaf296e707d5143ff70721575385092b9bcf96f2203b58b63",
+    "accum_volumetric_sun_normal .ps": "8ca09aeea967037b3e775e583680e9229d63ca07c9c2344b272d51133798a1b4",
+    "anomaly_shaders.h": "c831f802586646308b0a5297e73460c3e57960751f7c9f3cf85e60d97f490a81",
+    "base_lplanes.ps": "393e4be133486ca1b1dc931e34a83f98d06401b467b8463c64f5808e7813c10b",
+    "base_lplanes.vs": "4d16e0faed772f48000c7dcad2c4f5cd8bb7d398aaa52a97cc06d2bec75c14dd",
+    "bloom_build.ps": "0402f8a809f3e73486a101de2f1f735e6a36986ca0d630b69162f015fab35af3",
+    "bloom_filter.ps": "8e1c1a981720d4a566d830c36e1ee10f36e48431e6ef06258cda76a7564a8866",
+    "bloom_filter_f.ps": "3a6168b2202ede52f1d3c4401ba03a2cac177e71c776300bd44ceae63dbe5401",
+    "bloom_luminance_1.ps": "0571943aee6600bb77f544af57c0c6f577062f82f6e9f4743df3394f618d5227",
+    "bloom_luminance_2.ps": "7cea1d09e140a83a9a0efdc7fe7b507e502f15dbfc74914fba69fe76f87a73bc",
+    "bloom_luminance_3.ps": "3b1379b111c650cfa02b9dd55df6a92970b0883e38a0c933f2789255666abad5",
+    "bokeh_blur.ps": "6161dda0a452461c89a60ac3c861086d03e7505e54c75ba5bc1587db68a15f58",
+    "clouds.ps": "3656d65df5fc1937f50c0917eaecdf572c4b0819d10a1b2582b060bc10dc06c6",
+    "clouds.s": "f53de46e1620631ed0bfea31969863f4c4b15d361176bd6ae71d9ed264769cf3",
+    "clouds.vs": "7ee26962a2b1bfa254f1b927863b5bc0d626d74e9e8af4ef8a6a65ce12a2fc62",
+    "combine_1.ps": "21b2c942068e27a4b24a7a1bfdb9147a7e3621678a84a715d14448077ae6462f",
+    "combine_1.vs": "2647f74d80b2ccb53f92bbd984fcf57c459341a9ec68a4a79b8d856733e746af",
+    "combine_1_msaa.ps": "1107129c74b5c703ed792799b36c9a6de0b39fce090dc28689caea913a7844fd",
+    "combine_1_nomsaa.ps": "93e56e823ad9a9f77d961b9028d69be45f571cdfb4ab555cb11d998297cf39b1",
+    "combine_2_aa.ps": "f7dc15fe8436c60ff80ae083b8f3349dc39ea621bc45233f1241ce9bd7980532",
+    "combine_2_aa_d.ps": "a530c1dc281980989a87850195872c7868910e334cb61c6da8fe12ee7571a55c",
+    "combine_2_naa.ps": "01a76b424116f8183cde71fc2cfe466f349f94a251dbf1a3a3d2a91f764f0551",
+    "combine_2_naa_d.ps": "02bce42dd69e2446cbc26825a4e0e67b3e48359525150e89aa76db76802e46ab",
+    "combine_volumetric.ps": "6b07f7993453766f270c8344b9fe689aa22ef3e67db1a5c91350dc38fa2e02c3",
+    "combine_volumetric.s": "4e371beed35bc7846889a7242be9ee85d449dfcf812cd727939238497a3b6339",
+    "common.h": "0f64d764e3c84639bf82e2698940f5e6152e81661017dcfe67e7c2b5f4773215",
+    "common_brdf.h": "77ff5170c3d39e36474cce6305a2c30d79d456ce00517b7f1da186e8db06e4fd",
+    "common_cbuffers.h": "0250592f68b89e97f3aada3969b7f1733e58cac2f417affd65f7af4c48c5f5de",
+    "common_defines.h": "8a9a82c9a4ee299d369aeab150428c4128cac51b1bfb9f5aac02bdaa56750141",
+    "common_functions.h": "d524396540f585d83d2abad6a989a923bdd8af24e73ecc49981babae97df0ac0",
+    "common_iostructs.h": "fa5366177c07479f0df6fde929f6faddc249cb55e340fba2861bb2bcdf747dff",
+    "common_policies.h": "b0fee443e6d9ff135c30befc84732379dc2702f674d79c7835010596a70b062a",
+    "common_samplers.h": "3862d0d39cae680136a62e7ad3bd5821fa2776b74f53fd673a7791f159759ec0",
+    "copy.ps": "d6ac5a61fdf4794fe4649129200ef1a1d529e930afe7eece3ed190ffc16db240",
+    "copy_msaa.ps": "9cb452d9982b4ecd1d8dc1fd27ff0d31f3af6a4c7fa77a190485c57d1e9910af",
+    "copy_nomsaa.ps": "6ee4fd04a7a7e3675de8f97f277f6055cd143d12e1a69bc577b7a05152fde0f5",
+    "copy_p.ps": "55daaf9ccb0d5212071f72691b0ca14e1beee4a0cd1d686ce5179522f524e7e5",
+    "copy_p_msaa.ps": "2d78db811bb9966b6f709c4c94093b97c602c38ba57c0addfde96ef3fccb9b26",
+    "copy_p_nomsaa.ps": "088be109912330a32bee822747294151ee97fd1d26f8bc910b59b36bd8768478",
+    "create_minmax_sm.ps": "2d8038c75198cd7be901b8767413c3ebbb4b90c99c80f3554fe6beee5dbe44a1",
+    "deffer_base_aref_bump-hq.ps": "7a85d78889292ce6a81f284d3a2f6f816cc6d1a0819fea2c8101e4994cb2721c",
+    "deffer_base_aref_bump.ps": "74830ddaa5053799b093eb654cd5c6599bc08dfaf847c2a076b102a4770a4b8a",
+    "deffer_base_aref_bump_d-hq.ps": "f565a78d5ee6ed6c183a1a4b3cf0de0f9fabed8f7158de546113b0dfc7676ff8",
+    "deffer_base_aref_bump_d.ps": "592067cb047ef09e9b23cc63f81055e386a217017dfaa28b321d94484b746dfe",
+    "deffer_base_aref_bump_db-hq.ps": "ab7c7fababaaeb8c12d803bb5e68620fe817b1b2be0b4d4385b4fe01b799fa46",
+    "deffer_base_aref_flat.ps": "5b84f82ebd1f4eaf79292f942e39b347e3c22c834e3959c343404816e0d672b7",
+    "deffer_base_aref_flat_d.ps": "98d8fa1d19f6f8bf005b9b4103e3e65278a7739b17d1bdd4597f0f5f73a22006",
+    "deffer_base_aref_steep-hq.ps": "3fe12391dcbcac4d14c05b3ba7f49def102e22f80705710ad4566c11375be7ab",
+    "deffer_base_aref_steep_d-hq.ps": "5bb049b261b643324153ffbef77b45a60de6d5c5cf75455b6a599209902203ac",
+    "deffer_base_aref_steep_db-hq.ps": "34c0cb01ed0e01f2ff1056473b7f3a32bdab6ebdcff331152847713435cc38b9",
+    "deffer_base_atoc_aref_bump-hq.ps": "4f6a577bc021db4c27586750f070d28a4b77868ed3f2c7eaa3988ef9cbcbccba",
+    "deffer_base_atoc_aref_bump.ps": "8bd56d49f806f5573cd8060430fefd812c8490e29c73e29695c9c118790b65f8",
+    "deffer_base_atoc_aref_bump_d-hq.ps": "5874c165e8200758e75c94ba19621a0141318632188dde62bce55c92034b6102",
+    "deffer_base_atoc_aref_bump_d.ps": "ef1169999a9a28283eb0856b6e389390e44bd5c8048e9b1768b7026e16cfb7b7",
+    "deffer_base_atoc_aref_bump_db-hq.ps": "dcf302029e4b9140903fd7fda94106bb6f0a2f9297cb0aae10a948bbaec7249d",
+    "deffer_base_atoc_aref_flat.ps": "59f147c9e3f24cbe0cc04626a5efeb10c9c5ce8fe454681a55d4606e8862745a",
+    "deffer_base_atoc_aref_flat_d.ps": "55961ac9a00d58c127b82d2c83b165f7c7a354a71d74f72f847c527000991520",
+    "deffer_base_atoc_aref_steep-hq.ps": "b071ff1e703a741730819a1732cde4804d47ef01356a108239a5da911c6926ec",
+    "deffer_base_atoc_aref_steep_d-hq.ps": "efb95f7b137ec55d52234cc579d55621ce5c83ce2624d35501859050a2522cbe",
+    "deffer_base_atoc_aref_steep_db-hq.ps": "1bf3629e184025501af38acf9adffe23787d83e73f5c8efa8d70e9cecfc38cd2",
+    "deffer_base_atoc_lmh_aref_bump-hq.ps": "bda338481498fc9452b88b55ed48f4469540ff4a7e8779205f6b733f8e3c64d3",
+    "deffer_base_atoc_lmh_aref_bump.ps": "6c9f578f32a3effaeeb3eb26746926a97eaf04db4df352f72152a7f6e4443ca4",
+    "deffer_base_atoc_lmh_aref_bump_d-hq.ps": "a800e034a40c1a763e59e5d40bba16cf45dcc1250332b158674711113d62ec0c",
+    "deffer_base_atoc_lmh_aref_bump_d.ps": "a4fdde32e20976c9b34f9f306db7054c482ede4e3bde343a64afcb99bea35d36",
+    "deffer_base_atoc_lmh_aref_bump_db-hq.ps": "6091c15a43fb3064d8364f9c1a67e0838f4f66c8c97ec2c62b8224da23bfecd5",
+    "deffer_base_atoc_lmh_aref_flat.ps": "8ff3421334702266813919a077e6b5d1bc08dce9781b345696ed37dff474580d",
+    "deffer_base_atoc_lmh_aref_flat_d.ps": "25bc863aff4af85c7a0e6c4ff2c9130860f4a8b31a4c98732e6663209bc9b366",
+    "deffer_base_atoc_lmh_aref_steep-hq.ps": "f38c83270a7d56fdf4103073712f59561816e7db89b7ade0eba20d6dd475a815",
+    "deffer_base_atoc_lmh_aref_steep_d-hq.ps": "0d2856043d6a8df1778e73be56bebf33a2b52cb33fb81f117cc055f6a5059d1d",
+    "deffer_base_atoc_lmh_aref_steep_db-hq.ps": "e3fd973e7eeacc4a5429a70aacd2df20b3503a72745f5784fb159e15e257fa68",
+    "deffer_base_bump-hq.ps": "365b97b001ca3afd364803b15d5415b14f305fe8ab428aedcb65a13b34654426",
+    "deffer_base_bump-hq.vs": "4e194507da68374ff3abfcda2a3ed3e8d2c6289b3587646a945803362bf5e01e",
+    "deffer_base_bump.ps": "b198222d01fde3a854b8e74d50b24a94c6b8de9836361612e104ac9764670d3d",
+    "deffer_base_bump.vs": "34f2688f5b12e7b5070d34b8785b80d6e25961a869cc5b6982de6bd12f0ad7ef",
+    "deffer_base_bump_d-hq.ps": "15c145a6fd8e707102685d330a5c810dd9a0bdd6e28e7adb518a11c451731e90",
+    "deffer_base_bump_d-hq.vs": "cb90809f09234e2587797e0e5bb9e25dd0d2a1a1775696c0f10a525b5e227164",
+    "deffer_base_bump_d.ps": "4345410a46abf16b3fb97ce6b7b47fa4ae11b178e91bfd839c5868925141d3cc",
+    "deffer_base_bump_d.vs": "6eae8549cc66b91ebce8cf047f893550ce0e9125a0cb069e9eb9944e37aebca3",
+    "deffer_base_bump_db-hq.ps": "6afffa0ba5e88a3b79f929dd11949f63a4d3675f8e47757f621090cdc25966df",
+    "deffer_base_flat.ps": "dbc13b9889b6a10d073789e052223833077248a0e38b2fd1c142ec37b3a7c714",
+    "deffer_base_flat.vs": "dc375abde0ac871e96d77634863ef9eaebb1f2d236f7fa9366ec9df790f93a6d",
+    "deffer_base_flat_d.ps": "e0655424fc58a2ba54809b9110da7f31797271d5b21e31c7ba482596a7934f45",
+    "deffer_base_flat_d.vs": "1136c96372927a751aec6f411cfe60862859992c7842fd054f65af850a4b00a6",
+    "deffer_base_lmh_aref_bump-hq.ps": "db3c9a8e5348e84eb5a2c142efee8f8d6d6b1a351ac3e449db6416a0147b1d84",
+    "deffer_base_lmh_aref_bump.ps": "de10f7d81489a79ae28e249d9a07c6b222a82fc6deba3ca74ecd6b7e0039fdb2",
+    "deffer_base_lmh_aref_bump_d-hq.ps": "21d77d0f6c8754d0e6aaa0212545ed5892e522e53e2f481c42f1e7d716b5cc92",
+    "deffer_base_lmh_aref_bump_d.ps": "2f644cf285daee9db7898bdeb5eb4256a102cb08762f4471ac6b59e5297fc674",
+    "deffer_base_lmh_aref_bump_db-hq.ps": "8de14f030f04c13935097c767c696f14fe7ce7df7c3a650c91e04e5b7c97dc41",
+    "deffer_base_lmh_aref_flat.ps": "f74b47b34abe1eacd9885685ed21bb7878f242fbab0bccf2b64edc6ec0c4ab14",
+    "deffer_base_lmh_aref_flat_d.ps": "958a10a0bb2d73f43f06677a20061df9d0acf25c3f2a626aea5e81d9c099ed4c",
+    "deffer_base_lmh_aref_steep-hq.ps": "82733ec87bbf4cea004772b92832a61d772f6d740adcdab0cbdd7e9383194e45",
+    "deffer_base_lmh_aref_steep_d-hq.ps": "e427bc1aa4e84c9d771d936d7302f24f7e0ad3bffaa70ac54226a5bbf360fb31",
+    "deffer_base_lmh_aref_steep_db-hq.ps": "8bfe8586126e8a05f3423b571aba08410ad21523f562dc237ab033275dc33b03",
+    "deffer_base_lmh_bump-hq.ps": "b5822aa68f71172f14601c3da686ed7be0b28c808b8966e5134d7ecb0b627b55",
+    "deffer_base_lmh_bump-hq.vs": "b5c45822fd1e039f1b744c945f9ddb245f3fdfab633c621d3bff6696353eee58",
+    "deffer_base_lmh_bump.ps": "73ac784ed2d664679ad0643c860cb42b74e2729caf0c2a7f82b0cf3126d5ffa8",
+    "deffer_base_lmh_bump.vs": "9a3219887b61eb1a42265b8737ef0cf701307c9bf8d1ecf57cf7d5ec738c0154",
+    "deffer_base_lmh_bump_d-hq.ps": "091fa2f220db51e0b20238264d7e5ed0d65ee1cea2a381e1a74e9d565651396e",
+    "deffer_base_lmh_bump_d-hq.vs": "40506bc84c4a3ec85d97538a9e4eb33e79db896a3b1687f87e5854db4eb680d0",
+    "deffer_base_lmh_bump_d.ps": "7686818a97e31520a254d7d53b491c9c6b0679f0d40af92ad1874b4f86f6ddec",
+    "deffer_base_lmh_bump_d.vs": "dac3e5fef531d88ffae4c34643a4982929233f0c25fcd807b0b009f6adf86078",
+    "deffer_base_lmh_bump_db-hq.ps": "49dd448f173813ab94de0bde8ae7127ed1ad4e3736d843dc38f219db11d72223",
+    "deffer_base_lmh_flat.ps": "2e52ee96c4f587671f8a4a3fcfaee3745f6e688f3a29cefb97e38f7cf97fb4db",
+    "deffer_base_lmh_flat.vs": "dc054e39ed652cea6f8a4e7ace6b65e7aaef9d2927209f99a7f5954286a888a3",
+    "deffer_base_lmh_flat_d.ps": "9f3a2ae98ba1ad412b2d7f74b1f78f238176dc62be72e5ceab0b3616408d265c",
+    "deffer_base_lmh_flat_d.vs": "fae151eadce66b7d413eb45befc10fb7e4cae8a07497c2536524eaff028be2b7",
+    "deffer_base_lmh_steep-hq.ps": "d116d336f0ed73e7bde16b615488992bb26303e5a18d4fb6910f091852225f66",
+    "deffer_base_lmh_steep_d-hq.ps": "ac4ce40063aa1d37f72484aabb0f2bccda0243a8f7de294334439e9c56b80c4d",
+    "deffer_base_lmh_steep_db-hq.ps": "767184bd6aca06a14b4db9df16a8a2373fdf111ca70335fd483c4a90d8682624",
+    "deffer_base_steep-hq.ps": "8b4ec953a4a419574da2819a553b14cd4d48b5ff9751a77accb4c76a7aafe44d",
+    "deffer_base_steep_d-hq.ps": "0d84c6a816780588010ac491035e4bd0cd5e55aff09d123ef005d0a175cc55e5",
+    "deffer_base_steep_db-hq.ps": "28adcfbe0268e914ce385fa0490613d215e7ebce787aceffc7016935d65d386e",
+    "deffer_detail_s_flat.vs": "0339ead39e8a414faa6f3f009e0f5c76c141bc20dd643cc57a7cc026618cc33d",
+    "deffer_detail_w_flat.vs": "868bfb7cdf2eabff47f61a23145805021f27856af8a4c5d6a1ecbaa48d09e9d1",
+    "deffer_impl_flat.ps": "71cc9b4e0d92bdf8ccd004080d02c5fbbb9152c06d54dd1dec07d1e0a4ed1773",
+    "deffer_impl_flat.vs": "dedee97814b4d78f99420ef80f6717516756482141e51ce2d2a0c3ec1d351e77",
+    "deffer_impl_flat_d.ps": "c902748de30a6e441adfc5364709d6c0fa40f0fe05aed2b812b60a91b9461f57",
+    "deffer_impl_flat_d.vs": "dedee97814b4d78f99420ef80f6717516756482141e51ce2d2a0c3ec1d351e77",
+    "deffer_model_bump-hq.vs": "a3caf64d9bafa78312441e8fd5cde1462a2d7ebd097a20014114161274bdb665",
+    "deffer_model_bump.vs": "97410d36d713d1c490e064b6a3a9880d158d6e1b4f7db55ebeace16f325229c5",
+    "deffer_model_bump_d-hq.vs": "07fd33360110402698440db4cf5c3661c5ee063caf17ec1c2faf7daf6e0de3cc",
+    "deffer_model_bump_d.vs": "7a42cf974114c6709a35897d5989f316063381afc7f90fa2062cef8f1ab4becc",
+    "deffer_model_flat.vs": "bd53bfbead3a00762c2a78d9a606d9ca37eb6e31ad5639f35645055f2c2d06bb",
+    "deffer_model_flat_d.vs": "1a3d7ec4ceab33fbfc7647b39e8537cd7b8780970273c6c8f35c1e534abf24ec",
+    "deffer_particle.ps": "71aea6602befce5284c8c58adf4ec928fb39da9879750f19587bf0ac24a95bfc",
+    "deffer_particle.vs": "55f7a475af65d769548b167c752d49e816d79c8258ee4346d73ed5750dd8b8a4",
+    "deffer_tree_bump-hq.vs": "14167737788928c0394adb9216bcabecb6106af53ee6feda583074ae1339196f",
+    "deffer_tree_bump.vs": "283ffe86e21841acc66c36d6fa2120f17045f7bcee674ec1a25f51b2871aa971",
+    "deffer_tree_bump_d-hq.vs": "8678a062fe50c3ae7c83d3887c189740e81b1c3a7f37bb7ce1bd6876a5dd8376",
+    "deffer_tree_bump_d.vs": "0a900df4b8afe5bf61032cc2c0b7d1b661ddcff35dad614a51ab1d603b55348f",
+    "deffer_tree_flat.vs": "acfa56dc4802156bba06a177d8567a1e5da1f4764ea3c36510839088884e2d97",
+    "deffer_tree_flat_d.vs": "40bbd46ce05482c4eb5e368e0b4c257a26f845e6f086a8e607c757cfd143c7c8",
+    "deffer_tree_s_bump-hq.vs": "056207293b0c103bda382a1decb2ba80c5e40a0511dc42c79e0eaf9ac8bd6889",
+    "deffer_tree_s_bump.vs": "32cea24ab297ba15fd43f1bc0e1130510f0e6436c51752089dbd7bb1d39c4b5f",
+    "deffer_tree_s_bump_d-hq.vs": "69c3e9149fb340d03b242a9e43d7678590cf41be5263d934a3994475f344eea0",
+    "deffer_tree_s_bump_d.vs": "a6d050da616acdc2e09923f7ce20578259edf81dabfe056e15bce93cbecb7a5d",
+    "deffer_tree_s_flat.vs": "e66acb8df6b1c2e38f2a362eaa986afdec8cd83897a784153f3710516b837393",
+    "deffer_tree_s_flat_d.vs": "00f1570210e3356646a2719b9d0121f2a01840e7daab9117620c55f5d697cfb2",
+    "depth_downs.ps": "62ee3668f09cc001a3f3fb33d7dda94591b4db58fc801f9b81d7950e112083cb",
+    "depth_of_field.ps": "809625867d28123582bdf661ed4b6945bab4cc750243503185acec674b8a97cc",
+    "details_lod.s": "34da4b163264ee5c00f28cdbc0e325272a6435867e3a38cbab40759f0a0e421f",
+    "distort.ps": "df50ad1f4f3044e31023430b3c058cf02ddd69084c863ee2718fee1282179938",
+    "distort.s": "07d96150ced5ca12650964d193ba5b049f471a5ccc3a9a9943d7fb3b7cf07b5a",
+    "dumb.ps": "5e6002d15ed4cb2870165fce928441b1ee182008754c36829e88aef31a8482c8",
+    "dumb.vs": "06f0332568ccb13b356cfd13fcd9b9b9910a66fe17799a21a3b92db8bda44c16",
+    "dx11/tess.ds": "75a7be72fc4e36286a0b2ae69321ea99e2030e65ee7ddf04c29c0cbb6f28b096",
+    "dx11/tess.h": "cb1266d0e5738c605bf88e94bc4ddac9247f2e83ed382b943e441d45ca206fd9",
+    "dx11/tess.hs": "8c4df3462f1c4587a297d49aee9f3a4dc06e47e04a48af8d946216219078f0e3",
+    "dx11/tess_shadow.ds": "cedda76a6c5e4fcac433a789e3874d85beb781c745b62116888b8da13b79e8a1",
+    "editor.vs": "005f62fbdb388637ab67beaeaa1669c36350cee936816bf418b33e1c4c42bfa4",
+    "effects_bullet_tracer.s": "f34416cc4696033234e60355727241ca448d9b7be1957f41c30056cbda0a8218",
+    "effects_flare.s": "14b52ae68ebc142ab1521adf5f8e2fd9970454969d54f5146a004c751f394c24",
+    "effects_lightning.s": "64ebdc28999968b3214c1d2992dd80fe59eb1f93d2eb853ca1b9ace8b8acff46",
+    "effects_lightplanes.s": "1ffb4a39c82821cc4f1ca2935d961f50abed82b7e72864ee81305e47765a10b6",
+    "effects_rain.s": "acdb03a93df9bd6cc9c70ed0088d199f3d183f09991b946085e642c3416119da",
+    "effects_sun.s": "83b0e14243b53ade2ea7b84d24a2f3047a43742bfb8f1a37b3a061df204e5889",
+    "effects_sun.vs": "62eaeee40b2b421e6ced19cfa525b5bb33e42ce5fe239b646f89f8a93b7d2efa",
+    "effects_wallmark.s": "1d7bd0cd02f2db23351558473d4e4fcaef61240f75644199ec089e8042793478",
+    "effects_wallmark.vs": "9e28f3bbed6a338168f4cd9b3f051e8c3a13f1c2a5939a80c749ead883a54dfe",
+    "effects_wallmarkblend.s": "2b94dd43d6d2101b714370595832aee858ec6d6eaf628b89e2e28895240d1419",
+    "effects_wallmarkmult.s": "0ca1277781c18251f1c1a556bf1c2a64561bc250bfc60cb611d455caffdc2a5b",
+    "effects_wallmarkset.s": "689785c8fb1663fd92fcad756566b5f9185c5a0597c35017d8f03ee292ac23fd",
+    "effects_water.s": "4046b25d356451c216677a2fbb9371840fa09ff046fb763b96d15896e3a1188f",
+    "effects_waterryaska.s": "47efc4874f2a4d7aec8455630113d2923f3be0595086db5d5b2d32a3e85a243b",
+    "effects_waterstuden.s": "6c94f0ef07fd376f714f7a3388fb2eb46d804794c8fcbe49ff27ae3d4d490d00",
+    "effects_waterunderground.s": "ae9ee316c34e498421e329dc8788b4792b50a00aaa1e4b4090cdf025b2412837",
+    "fluid3d_stub.s": "f8c6ea481130fce0fcd39d1a47e5c52cb332f416ea9e993547408ae0ebcbf7bb",
+    "fluid_advect.ps": "baf24ccf3d716d636872f5ed36f54526864be3ad3197f133277ddf436fb51300",
+    "fluid_advect_bfecc.ps": "1d12dee34c94f2679aa8e60626c0e07c99e60c52d23958d0e5d97b88d58af018",
+    "fluid_advect_bfecc_temp.ps": "fe4a216ef37921357c1e88926007a5e242d8ec15304541fc615e454d5d077601",
+    "fluid_advect_temp.ps": "b50c07bee51b6a702a828fba7295a12b2a3aa8c4bc9b26323b1b8eb42b115128",
+    "fluid_advect_vel.ps": "699bd7cbef260410db99550c10fc9453773a8f226c42e14ddf10a0e17b9fa2c5",
+    "fluid_advect_vel_g.ps": "58109b08614ef5b161f46dc34e2fbe779530b6840fffee8bc5481d01f1d67e0c",
+    "fluid_array.gs": "22a09d3223229a3e78d230bacb7c66e776c78387884cac1db17d2c165f7ee78f",
+    "fluid_array_dyn_oobb.gs": "aa2e51cba958afbc538d4751a12159203351353043f9e7492c0827dad478a5f4",
+    "fluid_array_oobb.gs": "4b144fe42e2b3a2a1c74509886284b837a8232e4ac9b0d2307abf5b2eb7f1083",
+    "fluid_common.h": "d70b45902c9e607d078a3fd2696acc2889395c97fbe3cc594bcd97cff45b1c5d",
+    "fluid_common_render.h": "f2ba4ab3026f1ddd760a21ffeff213fa2a88513cc93b39e05f5b13d680a063da",
+    "fluid_common_tricubic.h": "12bedce7ee151321700a088def9f8a11e18d8286784f37cf2e46e08d55c7b135",
+    "fluid_confinement.ps": "46c16d7f6247eb2145caceb716a899673a48011f2d774a2e45c62bbfae4d987e",
+    "fluid_divergence.ps": "cd87b53f5c7da80136b4499864d448eb21238390bcb2a0d269fd22800da6c08b",
+    "fluid_draw_texture.ps": "fd7916d9b287056fb11acdfc9c1e7c97d3bf086d5e8be479318f7b9032461360",
+    "fluid_edge_detect.ps": "88257c503a25f5375fb847fb6f8309e307718e1bbeccb8bdefee8d55b3c087a1",
+    "fluid_edge_detect.vs": "36dc1084ce16118402f76407fd2d5f5e95c81fe60dee17f1f15fd93b241f024a",
+    "fluid_gaussian.ps": "a9f9f50c61ced82e11bc18494509e1d326cffd8152e5c691be4c241b7e1e1308",
+    "fluid_grid.vs": "d7205c1c6c38b4100bdc8bf394d7e56f070bea1e9be3e7d0a9f07941be9efaad",
+    "fluid_grid_dyn_oobb.vs": "f14a86ae640048872fb10e43a811266a0f0ad669650eb2d49642f815b6228964",
+    "fluid_grid_oobb.vs": "78612157a1d6652a4ff528cb6bfa707f51f9d444424051c5f2d2d53e47a1a4a3",
+    "fluid_jacobi.ps": "1a6429f16fc1c95acdd02cac4112550460db5c0c3c5ccaa548696ed9520e0c86",
+    "fluid_obst_dynamic_oobb.ps": "715b76cea84cdfac4a88aefc59402f3941f304e14561e9fae06283df9f2b9f21",
+    "fluid_obst_static_oobb.ps": "79d23cc484299a57ccbe7c798b8be42b1965f6f3e00c3349eccbbd0e2ba95063",
+    "fluid_obststaticbox.ps": "d5a6730affbd5e2e4d04b25840cbd212a0aaf08c5a15282e217a17024d28df04",
+    "fluid_project.ps": "a56dad41aecea612ab58caaa88b2abf061ddfe4a826e6dc1da7dcc9dab164ec4",
+    "fluid_raycast_quad.ps": "ea6387bc47dad06ec6c585d7cd65bcd42bcf0c211574b0bfbded4dfde250f369",
+    "fluid_raycast_quad.vs": "761ccf5eb5437295622a114078493d327d1c788d046d1e1a5e326c27e3ceb8a1",
+    "fluid_raycast_quad_fire.ps": "9d97a0998e94a803856dd628b1b572cca43165d33ea339f3b6a7cc74f69af1f2",
+    "fluid_raycastcopy_quad.ps": "d0d1f75d5772413f03010a0772d2940139b90ed45a430a3ec15a0d9355124df2",
+    "fluid_raycastcopy_quad_fire.ps": "8b0f7748734f4d236376d9f9f0dcc85eb974e73adbacbc8a1877c0c7210a01ad",
+    "fluid_raydata_back.ps": "40794e9f98719486e125f21133d464f5881e3485f89032cdabfa95f3b1a8ab14",
+    "fluid_raydata_back.vs": "03e8a005d183109825e41c8c77e4eac48af22ccaf1a329fc62303eac95eb0475",
+    "fluid_raydata_front.ps": "c755b4f6b8d656b9fdc8f961d71e7fa01004d28f3a5160c6977b7eebce2d82a8",
+    "fluid_raydata_front.vs": "8e3600e9688c1bc7f70a75a1a3c963eeeb80dce06c9a3aebd31919a7352f37d0",
+    "fluid_raydatacopy_quad.ps": "7b3552cd4abd2eb7b75336fbcb6d79f4a7471ed7b196e25827653d74e6ec7f53",
+    "fluid_vorticity.ps": "9f1275db5042990daa36e382e52c7a38b90e93467b8ecc4008e95cf45e156c07",
+    "font2.ps": "dbf4d2f55d02526a392d5bfcb02fcc180e2c915527d9cccd619053317418ecc4",
+    "friendly_indicator.s": "e8b02fb5f166c4c9866adec402c03d3d31f8173c84986f301cb5d6ea8f9d6391",
+    "gasmask_common.h": "897c97af7612bd920671123b77f2140e53a6740a9c844e25af6754eb30443cb5",
+    "gasmask_drops.ps": "ef7b335cc76bea223f4c57d2969f77ad62db751dddc102e93d9f8da0375a9999",
+    "gasmask_dudv.ps": "34a705889dfffba7c15d8436bfcbfbf0bf282dfd21910e5de24a51dc7bb91789",
+    "gather.ps": "9d3a1ad85f28441660ac09e95cb34a04ad8550b7b0a8df781ac16d590cf1cc94",
+    "gbuffer_stage.h": "8b10e73d92e3f4c174f78cf4c9cf3c0b3977afe25a7686d9705c4587cfb45fbf",
+    "hmodel.h": "ddb9019d51823d6e96ed16aa973dc3a551789689b14443286614d4ce784938ae",
+    "hud3d.ps": "bd8505164c87248e9c81580518af865627f1d4d1137a0ca3dba9128e56acfa30",
+    "hud3d.vs": "87918ceea410676e2c023b367db2ab2aa3c47df7645778c69954534e8800eace",
+    "hud_crosshair.s": "20b821bef86cd20890b35ee06aa16faa51c180a98b07dce41b15c222b99a13e3",
+    "hud_crosshair.vs": "015406a6aec50d5975283db2350cd7c0f4a6ac507ab4e4e356f77e540f06117a",
+    "hud_font.ps": "d243da8388aa8fc4e91b85f5813d9a743ec7578ba17017285e0ba84538dcd7bf",
+    "hud_font.s": "6c7b973657222cab532d326b3bd704af847c73f81cf7e88bc07fb6c22ce14904",
+    "hud_font2.s": "5b21e19f6d552723d112474fd762032d78bd89cfe0946c31e9e42374e5b47b91",
+    "hud_movie.s": "85feff451c6ef69309e2c2c1f1adc303ad950ff2296632bb5e5d11f947791d61",
+    "hud_p3d.s": "d56420c57d6800a82e9883e6124a4c625e024eb9ba5aa044448f0a003da6b23c",
+    "img_corrections.h": "7b4d4dce042b95ec796557444a8b29b04c6dae5111598ff9ae7c26cffd1319c6",
+    "lmape.ps": "01ff3a4d93da66da144278b2e1d8456dd5ae614e2d63d6ace2b2fe664e789ece",
+    "lmape.vs": "0a59c63504af4075bc7260453a378acb508beb24b81dc9b70f3b50b0714c14e7",
+    "lmodel.h": "80903893557326d867054220b0146e3ac69f841d705a13e8d014257aad7e91c4",
+    "lod.ps": "feaa7209257880cbcfae2e1f1bc3ae8031b626f5dd28965efc6d71c8e59b1a16",
+    "lod.vs": "cae991f7ef4400fba479d9bcbd268c1fd6e2a555da1d2bc4ee396ac8e5f5768c",
+    "lut.ps": "728487879b9582535ea0fbc56948cd4c438b514484cdc8c7c475dcae8d105a28",
+    "mark_msaa_edges.ps": "0357cb090deb25685c23dcf6bfb30ef823e00645e9fd53ff3b608dcfb0427e72",
+    "mblur.h": "4c2eaeea49f408e71fedd0da5fa53fdb4fb0d2ed340d0b4c82b234d12f5c33a7",
+    "model_def_lplanes.vs": "23a06dda4fff83280789b415fbdc0bd7032442cbdb2b6ba65fafe2c4b9d319ae",
+    "model_def_lq.ps": "b71a191f1b54a9009cd0b5bcd8b1c315b0fa1cdf2c96f4c1e16abd0fbcb9b528",
+    "model_def_lq.vs": "ade85757df64531c945f97c66681aaa4dbf370c56e3c985f8860d99aa993f38b",
+    "model_distort.vs": "d4cb56a3bc714959017f166a35b771399ec6667716dd00501350f84e31791386",
+    "model_distort4ghost.vs": "2411f8d8abdb8ef7a0853818596e17866c2851ffff0a376aa1de604988929b0b",
+    "model_distort4glass.vs": "46fc80e70fe9c3e474759a91a526f6ca3fa8ec8bab5392424c5403cd3b1a99d4",
+    "model_distort_inv.vs": "fa17a6937eedb8fc1f6f3f50026b6e0ece0f04e9d910474f107c792db0edcad0",
+    "model_env_lq.ps": "f79cade65c989a1aee01f3e7c1e68ba7d9eec6e4586c437838fb719f4231f57a",
+    "model_env_lq.vs": "9102a4a87321f6cb06326d6f2bc8e16d0f217d03f719ae2adf37cdd171a82a9d",
+    "model_scope_lense.ps": "2714314db77c9db6cb4b14833982bd2ae48ac3b06a3e5d4a34c7f8009a5b2c05",
+    "model_scope_lense.s": "02dddec5fc7969ef834bf981b0b55c9196e88c95f3a79ed23f478bf507cb807d",
+    "models_lfo_light_dot_weapons.ps": "edff489264b46590e0fb546a3a755ed47a7cc20b3d0896221c313550a61dd5bb",
+    "models_lfo_light_dot_weapons.s": "19a950ffb57d53cbd2fa9a88ddef5611c9095b60f4fce13509b1b7e0634cd5d5",
+    "models_lfo_light_dot_weapons_old.s": "7289500461ea1fd9047d889468053e46a6f5cdd9717023f69b2c892c1a4d42f8",
+    "models_lightplanes.s": "7289500461ea1fd9047d889468053e46a6f5cdd9717023f69b2c892c1a4d42f8",
+    "models_pautina.s": "8efeee2c1739061e771900c3babdf0b9dc8010af54d0af7feb98769f340d43b8",
+    "models_selflight.s": "5cfa851aae35b5d6738beef5cd68fcfdd5269c4a79a286cecc7d4d94bc4f1c2c",
+    "models_selflight_det.s": "ba763c824231e2d20f62cc5ee6408ebba59bcf4bcc3703ceff9a39c8891a1902",
+    "models_selflightl.s": "f7404f92ce76bc416c5ce9d971034187122099e9cef74e5d15a9852846a54af5",
+    "models_xanomaly.s": "8450f42fa859d5f179eee0ac8a696ada234e1c76cd8c79e144d03c5c84715f08",
+    "models_xdistort.s": "bf977af845a0a23e219f703171deb39fcc105d979af04723e0ac43dab6d0c62b",
+    "models_xdistortcolor.s": "d4dcd37dda6168f25131471c39dcd5a2a8a8d5b164d511eab80ccebd11132876",
+    "models_xdistortcolorl.s": "3474ff4174540370f7ee95bc3fcef4e5f575e1863e8a234d6c31db029746cde0",
+    "models_xdistortcolorlinv.s": "296781a0742add0de0aceee1cfa6e8a6fe2108fff34704babe7d5c240410fe34",
+    "models_xdistortinv.s": "c32274cc3cc1b82624c415eaac83a4941d647d948b5008835fadd9f4c33f291f",
+    "models_xmonolith.s": "43d76dd7eeb4850d8f6457eb439e836af74f4ed70053ccdf742a9bc3ce5a7fec",
+    "models_xwindows.s": "c7537c0b354b862e024bd0b17ad6fa6c7d5fda8828c146bee706f406603e4325",
+    "nightvision_gen_1.ps": "7a6a7c9c1c3a3f430cc75112f9b8515c2dd32d1484321079894db75f0b868122",
+    "nightvision_gen_2.ps": "7a6a7c9c1c3a3f430cc75112f9b8515c2dd32d1484321079894db75f0b868122",
+    "nightvision_gen_3.ps": "7a6a7c9c1c3a3f430cc75112f9b8515c2dd32d1484321079894db75f0b868122",
+    "ogse_sunshafts_blur.ps": "ac701b2dbe8738f1690175cd0319bfb1c6dcb21bc4e455b0bfe2666a538a491d",
+    "ogse_sunshafts_final.ps": "1e0a7a843e4e905667a879ccae6dd74f6725554d47871a0b19ba280491b9c239",
+    "ogse_sunshafts_mask.ps": "3f39ec3d9341928edab65e438a06bfa5f85fc7fb4654a97cc971c1001b523b9b",
+    "particle-clip.vs": "af1713f2b0959d1bdebe706e6f2c32b64acce9b8e30edcf9ff05cd21f25de8ee",
+    "particle.ps": "b7dde6f70f3e82d07ab6190b6cea2bf7e3efa65d147a278a5e3eff3f942f8ed9",
+    "particle.vs": "673010bc8e658796de7267f9d6bc258281db9b25cd6a5f59574823a2f9bd8b13",
+    "particle_alphaonly.ps": "5b28804db5127cfa52331c90feba9aa9464e329e2c52b8d5bfa364b8f64a8029",
+    "particle_distort.ps": "c80a26258e0686958210bc6b9f55a3f59b2f59ea947a335db5df2b4bf643a341",
+    "particle_distort_hard.ps": "0664b606194e5187fba67f0fc6289a124fd88dcd7d62e3e15356dd77afbc5000",
+    "particle_hard.ps": "8dc1c76623e9a92a2ec9aee6bfc3831f402fe72e6e30776ee48fb847f26d5acc",
+    "particle_s-aadd.ps": "3e3311fe95abe16a2a712faa569080c84dca811058d85082ba64880ac2b72724",
+    "particle_s-add.ps": "120f07719927efcacaac2697aa8a278c86820556c6c74981884479b155151019",
+    "particle_s-blend.ps": "2542d4a9998e66ae3e1c0f90fe5e0ce90989d276ec3877e6e32e437c12ed16f1",
+    "particles_xadd.s": "5f4d510cfdf81858077cdc572e5a23eba9bd97b4d15e446ddda9eccd1d8a61c3",
+    "particles_xdistort.s": "7748bfc463d8d13a56086b641018669c5a80f7a2af149a9b36fae2e9ee3aff0a",
+    "pda_overlay.ps": "cacf06d99ac055494224b9de6949b7aade2d3a75243e869d4280a2c8feb7d15e",
+    "pda_overlay.s": "d88b82f25595c578866a4f42a6230eff4c33a45d1b53e210cf8db25aeca3400e",
+    "portal.ps": "a40c665f791a9fa58ef36604336c35e549384f7db0da178c576c78d2bcfbb657",
+    "portal.s": "1ce4aee4de67006ae838645b693d02257e870b6af7fb94645f54320815e1ef03",
+    "portal.vs": "936bbc23aacf0269852e1456344749e1a4d7cb82b47a50492a7a06922e26dbbe",
+    "post_processing.ps": "c8e73d674d3ff6f2182a3286e1f722870cb3e7cc8436cd376cb41855cbfa8d64",
+    "postprocess.ps": "6d4cf0dc6785be5d0b5d075fefe4bed7d1eaec0c8bae133dd56b2e30c7b8a0e0",
+    "postprocess.s": "b1811d98be34949ba1ebc183e2750b60914c1fb3a4cb423f8458a98bd4d0df46",
+    "postprocess_cm.ps": "feac93711830282dd9910b0a1a040d56589980dd8af698ec41e6fdf1314be75f",
+    "pp_bloom.ps": "7a6a7c9c1c3a3f430cc75112f9b8515c2dd32d1484321079894db75f0b868122",
+    "pp_blur.ps": "91c972e697cd2e10b86604670a7a8beb08e8fc8b06bcf840e522e9b9ed84aaee",
+    "pp_lut.ps": "7a6a7c9c1c3a3f430cc75112f9b8515c2dd32d1484321079894db75f0b868122",
+    "pp_smaa_bc.ps": "1488ac31cfde9a61f30b437491f7771d358a95ce385017cf51b98f410bdb1891",
+    "pp_smaa_bc.vs": "b50f316b0a2a406a3c51c825228c290c2d776bc83e1ed342f36551c5cda71780",
+    "pp_smaa_ed.ps": "1fa56aeab16543de4e2eca9a85abd29399ff2be22f33b0170b9e0264d0fe14b2",
+    "pp_smaa_ed.vs": "66c879dcc3c0594cf1646f072898613f94d992a98b6d57a76b4fccb4466df263",
+    "pp_smaa_nb.ps": "484253370e24c223640cded1db98184473125910a9bd159c71acd7b2f33ac72c",
+    "pp_smaa_nb.vs": "0612b4c6fcc901eabef2e0ceae6495e7911064c6ed8d53803affe09dc649aca7",
+    "rain_apply_gloss.ps": "0974ef9952ec04a4b1114e0f825e988d3b74fb4a4bbebb8f8bc106ff8af2cc19",
+    "rain_apply_gloss_msaa.ps": "cd8d9c300d21c571650f4bd12b53ada1f118052a70b644e0ed31b17439d7823e",
+    "rain_apply_gloss_nomsaa.ps": "46e976ddec2f48194ad26edb01712fb3011644bfd21cc3073bc8a0dacb6b98f7",
+    "rain_apply_normal.ps": "74ee52e27285acd15585ffee88d56a11324fb21050a6935d63c3c0ee033eb27e",
+    "rain_apply_normal_msaa.ps": "5276c4137abe7dead40d433d538383428a878b971f0152f11380571e4f0234be",
+    "rain_apply_normal_nomsaa.ps": "9cc46a9f9282d2adef7c51bb039f086bbd2ab821a12f000e6ba8745aed72d5e0",
+    "rain_layer.ps": "9bf2b5bec1b939655d091693a2a9792602eebff46c7df2470eaa435d59d41ef4",
+    "rain_patch_normal.ps": "c845f0ecf7bc47b5c06ed1514943b40191d43c9d706c1f4356689843f21cd712",
+    "rain_patch_normal_msaa.ps": "69f099db279ad36cdf72160391781a7dcd4b36dbc4a9382d161b11f80997fcc1",
+    "rain_patch_normal_new.ps": "78484c2ebcd927f17f73cfe6ac564f06970aba790cb20de249e4af7b3f630435",
+    "rain_patch_normal_nomsaa.ps": "30eb67c2566d8a8aea5ee76b3c5cb61ab4a21e644f3768da27ac5252b5eb8221",
+    "reflections.h": "091590587f53cebca23d375304496db98d2e65f52026d0279a61634514762506",
+    "selflight.s": "65e992e585feb36434b28242ace9d4a95e4b5dde52406dfa1d2888b0d32b4c04",
+    "shadow.h": "a9616b08beb9e0e05ff7f5d32c1042f6636e57fadd5268754428f8bda96a94b5",
+    "shadow_direct_base.ps": "6e08f8018d69fb787ec945dde90093713396750a3d6e5630e9202e668d887a7a",
+    "shadow_direct_base.vs": "7132e3052140383adc6fc081b583b8f8b576a34c15581c42cb07c5ee0af7bf59",
+    "shadow_direct_base_aref.ps": "4b5de39dc6a373fa58d91dc66e99c0e64ac51c4dfec1c48ad46c0681d688bd0a",
+    "shadow_direct_base_aref.vs": "1627ec1ffc4d17c7d1a0163b855ca09667a485b864b54c57150ec71d4429308a",
+    "shadow_direct_model.vs": "d513fb1391b840bceff90d62923f1b4bde600f9676797a4171a9b3320ffde7e6",
+    "shadow_direct_model_aref.vs": "f069dfc33a40a3e80977355bb1703d5087b63a9095b72552a4d22abaa819b0a5",
+    "shadow_direct_tree.vs": "42ddc27eb6a374e23af6cc5b602da450db9d3a7df0b0d29698a516339066c973",
+    "shadow_direct_tree_aref.vs": "c43be7c9aee4b9266934c75287e1f026ea5d3264af5b9b73fe0f1eaf8b865046",
+    "shadow_direct_tree_s.vs": "97812d04ac2bc114508defba02090a7b390a59bffd945536c29433cc39daf89e",
+    "shadow_direct_tree_s_aref.vs": "bcd3439e62215523f8c29deba8a61ec3710e3e11cc680214e1482c18548772f5",
+    "shared/cloudconfig.h": "8712a0eb58c4f795d9c20e06ed37c4e65b62e41f0587a285617e987cf08fedfa",
+    "shared/common.h": "02f41ef69e7ccd11ffefd5043bc9203faf6c3930c9eef0dabf5c213a750a8e62",
+    "shared/waterconfig.h": "93fdd659e0fc61f468bae173f89c0a04ee80e8df929ed047638b3f8d2a69d30d",
+    "shared/watermove.h": "694212e5df11f32812bcb6be081dcbae0f0b64e4190e6b9974d0bf1c87991fb9",
+    "shared/wmark.h": "445c271aac4b57e56d4e30765b9ecd4d760bda2374fd0ab797b4f6ff963b6282",
+    "simple.ps": "3e718dc351a01873271a8bc233e43400faa086c7cf23e882cd4e0ec3156cc6ab",
+    "simple_color.ps": "a40c665f791a9fa58ef36604336c35e549384f7db0da178c576c78d2bcfbb657",
+    "skin.h": "872971d2ee9b4d7f2be11b7e8ad13543bf7fc040bd14ca936b1b09e8c4741ac3",
+    "sky2.ps": "8f4b37bc229479eaffb6976dda1c2846a37cb611256869f4c27e05a9bee2ad2b",
+    "sky2.vs": "3c2f774a2a6b33ce5f559fb45734d8f9ee58689d78a642cc12da9c1ad1b66419",
+    "sload.h": "abfec8af0c79a65c8714ec193fd66df8f5567574a61fb72e828ae39508855f4f",
+    "smaa.h": "6e77431d926d2abcede8860fe3ce057e0c0294ce0bcb3f998937f6740140a3a3",
+    "ssao.ps": "808995b17ee23f75767bc15499c68cca0234845f064829fdc07d3f609e687bfc",
+    "ssao_blur.ps": "deaf7bd9239c7f21ca08264fd17bbfbe690568f2b66af7e979fe4e22047d8173",
+    "ssao_calc.ps": "2f10e699a82054a6c10617385ab93edb7e174dd2e61e4e577a9e4ff8c3108ad5",
+    "ssao_calc_msaa.ps": "ce32bfecf9335bd6af4217bd5ca77077475d48d205c8bb1011732177f1d4979d",
+    "ssao_calc_nomsaa.ps": "a78719b86b0b053a0ba0609749de384eb6984eb5bdc6e90d067d51809e87e851",
+    "ssao_hbao.ps": "ef144ca7472596c0b4652df60ee1ae149cb96ea605dd2cb41aadfeae5b674d34",
+    "ssao_hdao.cs": "d7fc05ce367533ada41cf76610c157a07ffee29187c76626c807dbf0b99f1fc6",
+    "ssao_hdao.ps": "9ac52397d4b6c950665a1212d9805e1e1c9be799fe8bdf8575b5d65b92133df5",
+    "ssao_hdao_msaa.cs": "c2131c89196e20f256e82b578d11df758adab84e83482bf878455bb55ee9f6d5",
+    "ssao_hdao_new.ps": "b7eacf332d00e1e60f8840280db784016da9947b39024a8d3851ec4825afd4bd",
+    "ssdo.ps": "bddb3de6e26021b284e675182bd51afdca35b437e0b5e3fa2a3d7f5a7b7718c3",
+    "ssss_notransform.vs": "281ee816fdb0d43bab1835b80f904f0b9c7cca6e27d6ce2464ba6adec04d4d2c",
+    "stub_default.ps": "d796e83ada5bf2ac065a0bcd2f49f90f42a453a60f0121f4f383516692003354",
+    "stub_default.s": "f04c52ffd1e1881504fbf790900dee95c4cfce734070ade94e1ee6f5a3ff4202",
+    "stub_default.vs": "cf89f13ac446dcc550b78bfaf8ba232fbca6c816acb0a8872a76b5bc3d0628af",
+    "stub_default_ma.ps": "336b1fabce1bcf9e179fa69228d04623c5b8534a9711375229f533afe19aca04",
+    "stub_notransform.vs": "7e0f1165f07abaff59fddd8a8a72912a79fad5bb779d4a3ddfd9e9cfaa4a7e63",
+    "stub_notransform_2uv.vs": "0eaf8ea701f8ee74b41beb7ebef5aa289a35a1f57df43b4caa7faf49cd35a1b6",
+    "stub_notransform_aa_aa.vs": "aec863217428827e5c2367f5cc8ddbb50e60d1eee4590225a8ca5f3fb88fc24e",
+    "stub_notransform_build.vs": "d48c441236201f07ed8ecc57376e9861edadfcbfcf10b4d777059c720e925208",
+    "stub_notransform_filter.vs": "941a393cc900ef9baba9a6aa695af1630b1b233ee20f97e1db69fe4fee0d180b",
+    "stub_notransform_postpr.vs": "1b484a9dc1e2e9838a461215d0dc51db5a97778b7aa1b77ce78448e932b2b929",
+    "stub_notransform_t.vs": "d098a2680f23676ff20a0b2b8e445d77a29af12b057a961c924086b48cecb3ff",
+    "stub_notransform_t_m2.vs": "c0d6d27a58661983b672c1d637a7d7898384b3769408d386e50f894ac03e3e94",
+    "stub_notransform_t_m4.vs": "75f818e050a0f6900fe5832e775d7195c056c6f31955386d5ee09708ffc0aac0",
+    "stub_notransform_t_ma.vs": "18e015bab69960060ded038b3db7b1260b19a0c8321bac18cab7bee9dd1fb274",
+    "stub_screen_space.vs": "52aa5acf1b3f3a630b2ebb44640e2f58ddfd71be80388e6b46a8deb830d63b15",
+    "test.gs": "82fa87b125e3c13702be0d5d2350651b7daba6b0be0470a4d9a8eb20d4d9ba28",
+    "tonemapping.h": "2a0f50b7ac6dc12ea2d54e4401a641e6db90ef76bd81e9d4be2f2dd6b999f606",
+    "vert.ps": "bad5c47ec0722fa88786773629165be359ef91d6ed23c57e850076c27e473c69",
+    "vert.vs": "61344e32b91797c5f9866a392dbe3fd171ac4f38c4d055e31532cdcdabc4baf0",
+    "water.ps": "3416d2ad283cfa82b5784346b5897751f7b681359b3dc82d27e57361d4dbc893",
+    "water.vs": "0e96b322072180e5e116cb3d84d2613956d85122a1b2125aeb16d54b99de3b7b",
+    "water_regular.ps": "7e9ce6fdf6676d196fba7e6a3f71241b16eb2a6e3553b593416fa32311284045",
+    "water_regular.vs": "79cae788b3b7b2b9309337088b437df9012c9ebeee6e7c910d051880c78b2e04",
+    "water_ryaska.ps": "ca7d4b5c0c0837f7ef993cd2d4eeec8ba18cdee355a682f075b569a4766eda00",
+    "water_ryaska.vs": "79cae788b3b7b2b9309337088b437df9012c9ebeee6e7c910d051880c78b2e04",
+    "water_studen.ps": "d48fb9a3c1b8ff15e9bcffed6a92ad7eabb27fa9c8df385996457856b00886a2",
+    "water_studen.vs": "79cae788b3b7b2b9309337088b437df9012c9ebeee6e7c910d051880c78b2e04",
+    "water_underground.ps": "a193c3fd186da9a59fa57a522ac2f2f4f5327e570f66e8a2dad10e86830a02ae",
+    "water_underground.vs": "79cae788b3b7b2b9309337088b437df9012c9ebeee6e7c910d051880c78b2e04",
+    "waterd.ps": "66081de381b4bfa87628c55d87dbb9e755ca580adcffa973f49003d7f5acf5ed",
+    "waterd.vs": "a3e2ce883af0fc8207bf3c93d755e168ecc1ae709ec01d3d02870814c688af91",
+    "wmark.vs": "1ffbca8773d5289d4fd6adca3b97b045f8af96d47f123f3368a8e761a333dc8b",
+    "yuv2rgb.ps": "33070230592786428e87e26d0d042bf6e697769e7a57e8a53b3ce1cc3b21a561"
+  },
+  "roots": [
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_bump-hq.ps",
+      "original_sha256": "7a85d78889292ce6a81f284d3a2f6f816cc6d1a0819fea2c8101e4994cb2721c",
+      "tag": "core_pixel",
+      "patched_sha256": "7a85d78889292ce6a81f284d3a2f6f816cc6d1a0819fea2c8101e4994cb2721c"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_bump.ps",
+      "original_sha256": "74830ddaa5053799b093eb654cd5c6599bc08dfaf847c2a076b102a4770a4b8a",
+      "tag": "core_pixel",
+      "patched_sha256": "638f328435dd4e1869b285e2e8dcf708257dca7db062c6e1fd0d303677e29440"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_bump_d-hq.ps",
+      "original_sha256": "f565a78d5ee6ed6c183a1a4b3cf0de0f9fabed8f7158de546113b0dfc7676ff8",
+      "tag": "core_pixel",
+      "patched_sha256": "f565a78d5ee6ed6c183a1a4b3cf0de0f9fabed8f7158de546113b0dfc7676ff8"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_bump_d.ps",
+      "original_sha256": "592067cb047ef09e9b23cc63f81055e386a217017dfaa28b321d94484b746dfe",
+      "tag": "core_pixel",
+      "patched_sha256": "592067cb047ef09e9b23cc63f81055e386a217017dfaa28b321d94484b746dfe"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_bump_db-hq.ps",
+      "original_sha256": "ab7c7fababaaeb8c12d803bb5e68620fe817b1b2be0b4d4385b4fe01b799fa46",
+      "tag": "core_pixel",
+      "patched_sha256": "ab7c7fababaaeb8c12d803bb5e68620fe817b1b2be0b4d4385b4fe01b799fa46"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_flat.ps",
+      "original_sha256": "5b84f82ebd1f4eaf79292f942e39b347e3c22c834e3959c343404816e0d672b7",
+      "tag": "core_pixel",
+      "patched_sha256": "40e5b5ca03a12ad4030a8e1dfd978306e87b4dfd4bc1777570c14a04701656a0"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_flat_d.ps",
+      "original_sha256": "98d8fa1d19f6f8bf005b9b4103e3e65278a7739b17d1bdd4597f0f5f73a22006",
+      "tag": "core_pixel",
+      "patched_sha256": "98d8fa1d19f6f8bf005b9b4103e3e65278a7739b17d1bdd4597f0f5f73a22006"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_steep-hq.ps",
+      "original_sha256": "3fe12391dcbcac4d14c05b3ba7f49def102e22f80705710ad4566c11375be7ab",
+      "tag": "core_pixel",
+      "patched_sha256": "3fe12391dcbcac4d14c05b3ba7f49def102e22f80705710ad4566c11375be7ab"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_steep_d-hq.ps",
+      "original_sha256": "5bb049b261b643324153ffbef77b45a60de6d5c5cf75455b6a599209902203ac",
+      "tag": "core_pixel",
+      "patched_sha256": "5bb049b261b643324153ffbef77b45a60de6d5c5cf75455b6a599209902203ac"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_aref_steep_db-hq.ps",
+      "original_sha256": "34c0cb01ed0e01f2ff1056473b7f3a32bdab6ebdcff331152847713435cc38b9",
+      "tag": "core_pixel",
+      "patched_sha256": "34c0cb01ed0e01f2ff1056473b7f3a32bdab6ebdcff331152847713435cc38b9"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_bump-hq.ps",
+      "original_sha256": "365b97b001ca3afd364803b15d5415b14f305fe8ab428aedcb65a13b34654426",
+      "tag": "core_pixel",
+      "patched_sha256": "365b97b001ca3afd364803b15d5415b14f305fe8ab428aedcb65a13b34654426"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_bump-hq.vs",
+      "original_sha256": "4e194507da68374ff3abfcda2a3ed3e8d2c6289b3587646a945803362bf5e01e",
+      "tag": "core_static",
+      "patched_sha256": "4e194507da68374ff3abfcda2a3ed3e8d2c6289b3587646a945803362bf5e01e"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_bump.ps",
+      "original_sha256": "b198222d01fde3a854b8e74d50b24a94c6b8de9836361612e104ac9764670d3d",
+      "tag": "core_pixel",
+      "patched_sha256": "25575d99c53d36fcd309157581eaa7ea0c2d8d886d043fcbcd11e17cf2edb8fc"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_bump.vs",
+      "original_sha256": "34f2688f5b12e7b5070d34b8785b80d6e25961a869cc5b6982de6bd12f0ad7ef",
+      "tag": "core_static",
+      "patched_sha256": "f6a713ae376f88e5b3a0687d7b3fcc55e1575eca1032f1d018fc69732ee1ff3a"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_bump_d-hq.ps",
+      "original_sha256": "15c145a6fd8e707102685d330a5c810dd9a0bdd6e28e7adb518a11c451731e90",
+      "tag": "core_pixel",
+      "patched_sha256": "15c145a6fd8e707102685d330a5c810dd9a0bdd6e28e7adb518a11c451731e90"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_bump_d-hq.vs",
+      "original_sha256": "cb90809f09234e2587797e0e5bb9e25dd0d2a1a1775696c0f10a525b5e227164",
+      "tag": "core_static",
+      "patched_sha256": "cb90809f09234e2587797e0e5bb9e25dd0d2a1a1775696c0f10a525b5e227164"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_bump_d.ps",
+      "original_sha256": "4345410a46abf16b3fb97ce6b7b47fa4ae11b178e91bfd839c5868925141d3cc",
+      "tag": "core_pixel",
+      "patched_sha256": "4345410a46abf16b3fb97ce6b7b47fa4ae11b178e91bfd839c5868925141d3cc"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_bump_d.vs",
+      "original_sha256": "6eae8549cc66b91ebce8cf047f893550ce0e9125a0cb069e9eb9944e37aebca3",
+      "tag": "core_static",
+      "patched_sha256": "6eae8549cc66b91ebce8cf047f893550ce0e9125a0cb069e9eb9944e37aebca3"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_bump_db-hq.ps",
+      "original_sha256": "6afffa0ba5e88a3b79f929dd11949f63a4d3675f8e47757f621090cdc25966df",
+      "tag": "core_pixel",
+      "patched_sha256": "6afffa0ba5e88a3b79f929dd11949f63a4d3675f8e47757f621090cdc25966df"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_flat.ps",
+      "original_sha256": "dbc13b9889b6a10d073789e052223833077248a0e38b2fd1c142ec37b3a7c714",
+      "tag": "core_pixel",
+      "patched_sha256": "3db4d21a73e1548d0a49f0fb8df3a606ec50a7b60beaa815eca1a2ffdb2dd6ff"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_flat.vs",
+      "original_sha256": "dc375abde0ac871e96d77634863ef9eaebb1f2d236f7fa9366ec9df790f93a6d",
+      "tag": "core_static",
+      "patched_sha256": "2b995ffce86eeea81e8f3e4b28c764849b1551d6eb7e278b7ff578b537c2e47c"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_flat_d.ps",
+      "original_sha256": "e0655424fc58a2ba54809b9110da7f31797271d5b21e31c7ba482596a7934f45",
+      "tag": "core_pixel",
+      "patched_sha256": "e0655424fc58a2ba54809b9110da7f31797271d5b21e31c7ba482596a7934f45"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_flat_d.vs",
+      "original_sha256": "1136c96372927a751aec6f411cfe60862859992c7842fd054f65af850a4b00a6",
+      "tag": "core_static",
+      "patched_sha256": "1136c96372927a751aec6f411cfe60862859992c7842fd054f65af850a4b00a6"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_bump-hq.ps",
+      "original_sha256": "db3c9a8e5348e84eb5a2c142efee8f8d6d6b1a351ac3e449db6416a0147b1d84",
+      "tag": "core_pixel",
+      "patched_sha256": "db3c9a8e5348e84eb5a2c142efee8f8d6d6b1a351ac3e449db6416a0147b1d84"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_bump.ps",
+      "original_sha256": "de10f7d81489a79ae28e249d9a07c6b222a82fc6deba3ca74ecd6b7e0039fdb2",
+      "tag": "core_pixel",
+      "patched_sha256": "de10f7d81489a79ae28e249d9a07c6b222a82fc6deba3ca74ecd6b7e0039fdb2"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_bump_d-hq.ps",
+      "original_sha256": "21d77d0f6c8754d0e6aaa0212545ed5892e522e53e2f481c42f1e7d716b5cc92",
+      "tag": "core_pixel",
+      "patched_sha256": "21d77d0f6c8754d0e6aaa0212545ed5892e522e53e2f481c42f1e7d716b5cc92"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_bump_d.ps",
+      "original_sha256": "2f644cf285daee9db7898bdeb5eb4256a102cb08762f4471ac6b59e5297fc674",
+      "tag": "core_pixel",
+      "patched_sha256": "2f644cf285daee9db7898bdeb5eb4256a102cb08762f4471ac6b59e5297fc674"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_bump_db-hq.ps",
+      "original_sha256": "8de14f030f04c13935097c767c696f14fe7ce7df7c3a650c91e04e5b7c97dc41",
+      "tag": "core_pixel",
+      "patched_sha256": "8de14f030f04c13935097c767c696f14fe7ce7df7c3a650c91e04e5b7c97dc41"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_flat.ps",
+      "original_sha256": "f74b47b34abe1eacd9885685ed21bb7878f242fbab0bccf2b64edc6ec0c4ab14",
+      "tag": "core_pixel",
+      "patched_sha256": "f74b47b34abe1eacd9885685ed21bb7878f242fbab0bccf2b64edc6ec0c4ab14"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_flat_d.ps",
+      "original_sha256": "958a10a0bb2d73f43f06677a20061df9d0acf25c3f2a626aea5e81d9c099ed4c",
+      "tag": "core_pixel",
+      "patched_sha256": "958a10a0bb2d73f43f06677a20061df9d0acf25c3f2a626aea5e81d9c099ed4c"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_steep-hq.ps",
+      "original_sha256": "82733ec87bbf4cea004772b92832a61d772f6d740adcdab0cbdd7e9383194e45",
+      "tag": "core_pixel",
+      "patched_sha256": "82733ec87bbf4cea004772b92832a61d772f6d740adcdab0cbdd7e9383194e45"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_steep_d-hq.ps",
+      "original_sha256": "e427bc1aa4e84c9d771d936d7302f24f7e0ad3bffaa70ac54226a5bbf360fb31",
+      "tag": "core_pixel",
+      "patched_sha256": "e427bc1aa4e84c9d771d936d7302f24f7e0ad3bffaa70ac54226a5bbf360fb31"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_aref_steep_db-hq.ps",
+      "original_sha256": "8bfe8586126e8a05f3423b571aba08410ad21523f562dc237ab033275dc33b03",
+      "tag": "core_pixel",
+      "patched_sha256": "8bfe8586126e8a05f3423b571aba08410ad21523f562dc237ab033275dc33b03"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_bump-hq.ps",
+      "original_sha256": "b5822aa68f71172f14601c3da686ed7be0b28c808b8966e5134d7ecb0b627b55",
+      "tag": "core_pixel",
+      "patched_sha256": "b5822aa68f71172f14601c3da686ed7be0b28c808b8966e5134d7ecb0b627b55"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_bump-hq.vs",
+      "original_sha256": "b5c45822fd1e039f1b744c945f9ddb245f3fdfab633c621d3bff6696353eee58",
+      "tag": "core_static",
+      "patched_sha256": "b5c45822fd1e039f1b744c945f9ddb245f3fdfab633c621d3bff6696353eee58"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_bump.ps",
+      "original_sha256": "73ac784ed2d664679ad0643c860cb42b74e2729caf0c2a7f82b0cf3126d5ffa8",
+      "tag": "core_pixel",
+      "patched_sha256": "73ac784ed2d664679ad0643c860cb42b74e2729caf0c2a7f82b0cf3126d5ffa8"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_bump.vs",
+      "original_sha256": "9a3219887b61eb1a42265b8737ef0cf701307c9bf8d1ecf57cf7d5ec738c0154",
+      "tag": "core_static",
+      "patched_sha256": "9a3219887b61eb1a42265b8737ef0cf701307c9bf8d1ecf57cf7d5ec738c0154"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_bump_d-hq.ps",
+      "original_sha256": "091fa2f220db51e0b20238264d7e5ed0d65ee1cea2a381e1a74e9d565651396e",
+      "tag": "core_pixel",
+      "patched_sha256": "091fa2f220db51e0b20238264d7e5ed0d65ee1cea2a381e1a74e9d565651396e"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_bump_d-hq.vs",
+      "original_sha256": "40506bc84c4a3ec85d97538a9e4eb33e79db896a3b1687f87e5854db4eb680d0",
+      "tag": "core_static",
+      "patched_sha256": "40506bc84c4a3ec85d97538a9e4eb33e79db896a3b1687f87e5854db4eb680d0"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_bump_d.ps",
+      "original_sha256": "7686818a97e31520a254d7d53b491c9c6b0679f0d40af92ad1874b4f86f6ddec",
+      "tag": "core_pixel",
+      "patched_sha256": "7686818a97e31520a254d7d53b491c9c6b0679f0d40af92ad1874b4f86f6ddec"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_bump_d.vs",
+      "original_sha256": "dac3e5fef531d88ffae4c34643a4982929233f0c25fcd807b0b009f6adf86078",
+      "tag": "core_static",
+      "patched_sha256": "dac3e5fef531d88ffae4c34643a4982929233f0c25fcd807b0b009f6adf86078"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_bump_db-hq.ps",
+      "original_sha256": "49dd448f173813ab94de0bde8ae7127ed1ad4e3736d843dc38f219db11d72223",
+      "tag": "core_pixel",
+      "patched_sha256": "49dd448f173813ab94de0bde8ae7127ed1ad4e3736d843dc38f219db11d72223"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_flat.ps",
+      "original_sha256": "2e52ee96c4f587671f8a4a3fcfaee3745f6e688f3a29cefb97e38f7cf97fb4db",
+      "tag": "core_pixel",
+      "patched_sha256": "2e52ee96c4f587671f8a4a3fcfaee3745f6e688f3a29cefb97e38f7cf97fb4db"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_flat.vs",
+      "original_sha256": "dc054e39ed652cea6f8a4e7ace6b65e7aaef9d2927209f99a7f5954286a888a3",
+      "tag": "core_static",
+      "patched_sha256": "dc054e39ed652cea6f8a4e7ace6b65e7aaef9d2927209f99a7f5954286a888a3"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_flat_d.ps",
+      "original_sha256": "9f3a2ae98ba1ad412b2d7f74b1f78f238176dc62be72e5ceab0b3616408d265c",
+      "tag": "core_pixel",
+      "patched_sha256": "9f3a2ae98ba1ad412b2d7f74b1f78f238176dc62be72e5ceab0b3616408d265c"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_base_lmh_flat_d.vs",
+      "original_sha256": "fae151eadce66b7d413eb45befc10fb7e4cae8a07497c2536524eaff028be2b7",
+      "tag": "core_static",
+      "patched_sha256": "fae151eadce66b7d413eb45befc10fb7e4cae8a07497c2536524eaff028be2b7"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_steep-hq.ps",
+      "original_sha256": "d116d336f0ed73e7bde16b615488992bb26303e5a18d4fb6910f091852225f66",
+      "tag": "core_pixel",
+      "patched_sha256": "d116d336f0ed73e7bde16b615488992bb26303e5a18d4fb6910f091852225f66"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_steep_d-hq.ps",
+      "original_sha256": "ac4ce40063aa1d37f72484aabb0f2bccda0243a8f7de294334439e9c56b80c4d",
+      "tag": "core_pixel",
+      "patched_sha256": "ac4ce40063aa1d37f72484aabb0f2bccda0243a8f7de294334439e9c56b80c4d"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_lmh_steep_db-hq.ps",
+      "original_sha256": "767184bd6aca06a14b4db9df16a8a2373fdf111ca70335fd483c4a90d8682624",
+      "tag": "core_pixel",
+      "patched_sha256": "767184bd6aca06a14b4db9df16a8a2373fdf111ca70335fd483c4a90d8682624"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_steep-hq.ps",
+      "original_sha256": "8b4ec953a4a419574da2819a553b14cd4d48b5ff9751a77accb4c76a7aafe44d",
+      "tag": "core_pixel",
+      "patched_sha256": "8b4ec953a4a419574da2819a553b14cd4d48b5ff9751a77accb4c76a7aafe44d"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_steep_d-hq.ps",
+      "original_sha256": "0d84c6a816780588010ac491035e4bd0cd5e55aff09d123ef005d0a175cc55e5",
+      "tag": "core_pixel",
+      "patched_sha256": "0d84c6a816780588010ac491035e4bd0cd5e55aff09d123ef005d0a175cc55e5"
+    },
+    {
+      "stage": "ps",
+      "name": "deffer_base_steep_db-hq.ps",
+      "original_sha256": "28adcfbe0268e914ce385fa0490613d215e7ebce787aceffc7016935d65d386e",
+      "tag": "core_pixel",
+      "patched_sha256": "28adcfbe0268e914ce385fa0490613d215e7ebce787aceffc7016935d65d386e"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_detail_s_flat.vs",
+      "original_sha256": "0339ead39e8a414faa6f3f009e0f5c76c141bc20dd643cc57a7cc026618cc33d",
+      "tag": "foliage_detail",
+      "patched_sha256": "7afd30c94334b6974abab332dd01e872359677b116a2e232b6dd66cfed960612"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_detail_w_flat.vs",
+      "original_sha256": "868bfb7cdf2eabff47f61a23145805021f27856af8a4c5d6a1ecbaa48d09e9d1",
+      "tag": "foliage_detail",
+      "patched_sha256": "c150216d743dcf50b7cd994d8ff102fb1e67c41c64b4693f7bffdd357ec91d39"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_bump-hq.vs",
+      "original_sha256": "a3caf64d9bafa78312441e8fd5cde1462a2d7ebd097a20014114161274bdb665",
+      "tag": "core_model",
+      "patched_sha256": "a3caf64d9bafa78312441e8fd5cde1462a2d7ebd097a20014114161274bdb665"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_bump.vs",
+      "original_sha256": "97410d36d713d1c490e064b6a3a9880d158d6e1b4f7db55ebeace16f325229c5",
+      "tag": "core_model",
+      "patched_sha256": "e22d6b5aafbd329c7827360213618a6aab7b7a530108c4d13b041f65bf80d92f"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_bump_d-hq.vs",
+      "original_sha256": "07fd33360110402698440db4cf5c3661c5ee063caf17ec1c2faf7daf6e0de3cc",
+      "tag": "core_model",
+      "patched_sha256": "07fd33360110402698440db4cf5c3661c5ee063caf17ec1c2faf7daf6e0de3cc"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_bump_d.vs",
+      "original_sha256": "7a42cf974114c6709a35897d5989f316063381afc7f90fa2062cef8f1ab4becc",
+      "tag": "core_model",
+      "patched_sha256": "7a42cf974114c6709a35897d5989f316063381afc7f90fa2062cef8f1ab4becc"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_flat.vs",
+      "original_sha256": "bd53bfbead3a00762c2a78d9a606d9ca37eb6e31ad5639f35645055f2c2d06bb",
+      "tag": "core_model",
+      "patched_sha256": "8f818951c6ae500315d493aafb0b2226dd191edd7f86c606666781112c0cd789"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_model_flat_d.vs",
+      "original_sha256": "1a3d7ec4ceab33fbfc7647b39e8537cd7b8780970273c6c8f35c1e534abf24ec",
+      "tag": "core_model",
+      "patched_sha256": "1a3d7ec4ceab33fbfc7647b39e8537cd7b8780970273c6c8f35c1e534abf24ec"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_bump-hq.vs",
+      "original_sha256": "14167737788928c0394adb9216bcabecb6106af53ee6feda583074ae1339196f",
+      "tag": "foliage_tree",
+      "patched_sha256": "14167737788928c0394adb9216bcabecb6106af53ee6feda583074ae1339196f"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_bump.vs",
+      "original_sha256": "283ffe86e21841acc66c36d6fa2120f17045f7bcee674ec1a25f51b2871aa971",
+      "tag": "foliage_tree",
+      "patched_sha256": "884fac27823ac5657ba295fd5bf4c0f36ca7f3b4ada6bafca35a4f9f642a078b"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_bump_d-hq.vs",
+      "original_sha256": "8678a062fe50c3ae7c83d3887c189740e81b1c3a7f37bb7ce1bd6876a5dd8376",
+      "tag": "foliage_tree",
+      "patched_sha256": "8678a062fe50c3ae7c83d3887c189740e81b1c3a7f37bb7ce1bd6876a5dd8376"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_bump_d.vs",
+      "original_sha256": "0a900df4b8afe5bf61032cc2c0b7d1b661ddcff35dad614a51ab1d603b55348f",
+      "tag": "foliage_tree",
+      "patched_sha256": "0a900df4b8afe5bf61032cc2c0b7d1b661ddcff35dad614a51ab1d603b55348f"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_flat.vs",
+      "original_sha256": "acfa56dc4802156bba06a177d8567a1e5da1f4764ea3c36510839088884e2d97",
+      "tag": "foliage_tree",
+      "patched_sha256": "ebaf917baa62cda587b95ffda1122a851c3f2e29de619f6d0bea3a6401ad32cc"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_flat_d.vs",
+      "original_sha256": "40bbd46ce05482c4eb5e368e0b4c257a26f845e6f086a8e607c757cfd143c7c8",
+      "tag": "foliage_tree",
+      "patched_sha256": "40bbd46ce05482c4eb5e368e0b4c257a26f845e6f086a8e607c757cfd143c7c8"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_s_bump-hq.vs",
+      "original_sha256": "056207293b0c103bda382a1decb2ba80c5e40a0511dc42c79e0eaf9ac8bd6889",
+      "tag": "foliage_tree",
+      "patched_sha256": "056207293b0c103bda382a1decb2ba80c5e40a0511dc42c79e0eaf9ac8bd6889"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_s_bump.vs",
+      "original_sha256": "32cea24ab297ba15fd43f1bc0e1130510f0e6436c51752089dbd7bb1d39c4b5f",
+      "tag": "foliage_tree",
+      "patched_sha256": "c2dd341c9fceaa05238e2e0bb9b29f8886baaebb74eff85b169dec52e4ea88f3"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_s_bump_d-hq.vs",
+      "original_sha256": "69c3e9149fb340d03b242a9e43d7678590cf41be5263d934a3994475f344eea0",
+      "tag": "foliage_tree",
+      "patched_sha256": "69c3e9149fb340d03b242a9e43d7678590cf41be5263d934a3994475f344eea0"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_s_flat.vs",
+      "original_sha256": "e66acb8df6b1c2e38f2a362eaa986afdec8cd83897a784153f3710516b837393",
+      "tag": "foliage_tree",
+      "patched_sha256": "dbeea9fb6aafdefb228a741c76efad205a74a8350e931e2053bfdcd607232acd"
+    },
+    {
+      "stage": "vs",
+      "name": "deffer_tree_s_flat_d.vs",
+      "original_sha256": "00f1570210e3356646a2719b9d0121f2a01840e7daab9117620c55f5d697cfb2",
+      "tag": "foliage_tree",
+      "patched_sha256": "00f1570210e3356646a2719b9d0121f2a01840e7daab9117620c55f5d697cfb2"
+    },
+    {
+      "stage": "ds",
+      "name": "dx11/tess.ds",
+      "original_sha256": "75a7be72fc4e36286a0b2ae69321ea99e2030e65ee7ddf04c29c0cbb6f28b096",
+      "tag": "tess_domain",
+      "patched_sha256": "f33ea2ee60e71e68da9a976f1454c281e052007dba6ea6fd8db78e0e1175ce02"
+    },
+    {
+      "stage": "hs",
+      "name": "dx11/tess.hs",
+      "original_sha256": "8c4df3462f1c4587a297d49aee9f3a4dc06e47e04a48af8d946216219078f0e3",
+      "tag": "tess_hull",
+      "patched_sha256": "97ab9ba2e3edbd82e6e7645b364b8cc49b7c70cc78ec72b466323d1d0f9b1d97"
+    }
+  ],
+  "files": {
+    "deffer_base_flat.vs": {
+      "op": "wrap",
+      "prefix": "#ifndef RSF_CORE_EXCLUDE\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifndef RSF_CORE_EXCLUDE\n#undef main\n#include \"rsf_core_vertex.h\"\nv2p_flat main(v_in v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, v.P);\n    o.rsf_valid = rsf_draw_valid();\n    return o;\n}\n#endif\n"
+    },
+    "deffer_model_flat.vs": {
+      "op": "wrap",
+      "prefix": "#define RSF_TEMPORAL 1\n#define main rsf_native_main\n",
+      "suffix": "\n#undef main\n#include \"rsf_core_vertex.h\"\n#include \"rsf_core_previous_skin.h\"\n#ifdef SKIN_NONE\nv2p_flat main(v_model v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, v.P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.z == 1);\n    return o;\n}\n#endif\n#ifdef SKIN_0\nv2p_flat main(v_model_skinned_0 v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_0(v).P);\n    o.rsf_valid = rsf_draw_valid();\n    return o;\n}\n#endif\n#ifdef SKIN_1\nv2p_flat main(v_model_skinned_1 v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_1(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n    return o;\n}\n#endif\n#ifdef SKIN_2\nv2p_flat main(v_model_skinned_2 v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_2(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n    return o;\n}\n#endif\n#ifdef SKIN_3\nv2p_flat main(v_model_skinned_3 v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_3(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n    return o;\n}\n#endif\n#ifdef SKIN_4\nv2p_flat main(v_model_skinned_4 v)\n{\n    v2p_flat o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_4(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n    return o;\n}\n#endif\n"
+    },
+    "deffer_base_flat.ps": {
+      "op": "wrap",
+      "prefix": "#ifndef ATOC\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifdef RSF_TEMPORAL\n#undef main\n#include \"rsf_core_pixel.h\"\nRSFMotionOutput main(p_flat i, float4 rsf_pixel : SV_Position)\n{\n    f_deffer native = rsf_native_main(i);\n    RSFMotionOutput o;\n    o.native0 = native.position;\n    o.native1 = native.C;\n    o.motion = rsf_encode_motion(rsf_pixel, i.rsf_previous_clip, i.rsf_valid);\n#ifdef EXTEND_F_DEFFER\n    o.native_mask = native.mask;\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_base_aref_flat.ps": {
+      "op": "wrap",
+      "prefix": "#ifndef ATOC\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifdef RSF_TEMPORAL\n#undef main\n#include \"rsf_core_pixel.h\"\nRSFMotionOutput main(p_flat i, float4 rsf_pixel : SV_Position)\n{\n#ifdef MSAA_ALPHATEST_DX10_1_ATOC\n    f_deffer native = rsf_native_main(i, rsf_pixel);\n#else\n    f_deffer native = rsf_native_main(i);\n#endif\n    RSFMotionOutput o;\n    o.native0 = native.position;\n    o.native1 = native.C;\n    o.motion = rsf_encode_motion(rsf_pixel, i.rsf_previous_clip, i.rsf_valid);\n#ifdef EXTEND_F_DEFFER\n    o.native_mask = native.mask;\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_base_bump.vs": {
+      "op": "wrap",
+      "prefix": "#ifndef RSF_CORE_EXCLUDE\n#define RSF_TEMPORAL 1\n#if defined(TESS_PN) || defined(TESS_HM)\n#define RSF_TESS_VERTEX 1\n#endif\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifndef RSF_CORE_EXCLUDE\n#undef main\n#include \"rsf_core_vertex.h\"\nv2p_bumped main(v_in v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, v.P);\n    o.rsf_valid = rsf_draw_valid();\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = v.P;\n    o.rsf_previous_normal = unpack_bx4(unpack_D3DCOLOR(v.Nh.xyz));\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_model_bump.vs": {
+      "op": "wrap",
+      "prefix": "#define RSF_TEMPORAL 1\n#if defined(TESS_PN) || defined(TESS_HM)\n#define RSF_TESS_VERTEX 1\n#endif\n#define main rsf_native_main\n",
+      "suffix": "\n#undef main\n#include \"rsf_core_vertex.h\"\n#include \"rsf_core_previous_skin.h\"\n#ifdef SKIN_NONE\nv2p_bumped main(v_model v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, v.P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.z == 1);\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = v.P;\n    o.rsf_previous_normal = 2 * v.N;\n#endif\n    return o;\n}\n#endif\n#ifdef SKIN_0\nv2p_bumped main(v_model_skinned_0 v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_0(v).P);\n    o.rsf_valid = rsf_draw_valid();\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = rsf_prev_skinning_0(v).P;\n    o.rsf_previous_normal = 2 * rsf_prev_skinning_0(v).N;\n#endif\n    return o;\n}\n#endif\n#ifdef SKIN_1\nv2p_bumped main(v_model_skinned_1 v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_1(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = rsf_prev_skinning_1(v).P;\n    o.rsf_previous_normal = 2 * rsf_prev_skinning_1(v).N;\n#endif\n    return o;\n}\n#endif\n#ifdef SKIN_2\nv2p_bumped main(v_model_skinned_2 v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_2(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = rsf_prev_skinning_2(v).P;\n    o.rsf_previous_normal = 2 * rsf_prev_skinning_2(v).N;\n#endif\n    return o;\n}\n#endif\n#ifdef SKIN_3\nv2p_bumped main(v_model_skinned_3 v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_3(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = rsf_prev_skinning_3(v).P;\n    o.rsf_previous_normal = 2 * rsf_prev_skinning_3(v).N;\n#endif\n    return o;\n}\n#endif\n#ifdef SKIN_4\nv2p_bumped main(v_model_skinned_4 v)\n{\n    v2p_bumped o = rsf_native_main(v);\n    o.rsf_previous_clip = mul(rsf_previous_wvp, rsf_prev_skinning_4(v).P);\n    o.rsf_valid = rsf_draw_valid() * (rsf_history.y == 1);\n#ifdef RSF_TESS_VERTEX\n    o.rsf_previous_position = rsf_prev_skinning_4(v).P;\n    o.rsf_previous_normal = 2 * rsf_prev_skinning_4(v).N;\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_base_bump.ps": {
+      "op": "wrap",
+      "prefix": "#ifndef ATOC\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifdef RSF_TEMPORAL\n#undef main\n#include \"rsf_core_pixel.h\"\nRSFMotionOutput main(p_bumped i, float4 rsf_pixel : SV_Position)\n{\n    f_deffer native = rsf_native_main(i);\n    RSFMotionOutput o;\n    o.native0 = native.position;\n    o.native1 = native.C;\n    o.motion = rsf_encode_motion(rsf_pixel, i.rsf_previous_clip, i.rsf_valid);\n#ifdef EXTEND_F_DEFFER\n    o.native_mask = native.mask;\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_base_aref_bump.ps": {
+      "op": "wrap",
+      "prefix": "#ifndef ATOC\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n",
+      "suffix": "\n#ifdef RSF_TEMPORAL\n#undef main\n#include \"rsf_core_pixel.h\"\nRSFMotionOutput main(p_bumped i, float4 rsf_pixel : SV_Position)\n{\n#ifdef MSAA_ALPHATEST_DX10_1_ATOC\n    f_deffer native = rsf_native_main(i, rsf_pixel);\n#else\n    f_deffer native = rsf_native_main(i);\n#endif\n    RSFMotionOutput o;\n    o.native0 = native.position;\n    o.native1 = native.C;\n    o.motion = rsf_encode_motion(rsf_pixel, i.rsf_previous_clip, i.rsf_valid);\n#ifdef EXTEND_F_DEFFER\n    o.native_mask = native.mask;\n#endif\n    return o;\n}\n#endif\n"
+    },
+    "deffer_impl_flat.vs": {
+      "op": "wrap",
+      "prefix": "#define RSF_CORE_EXCLUDE 1\n",
+      "suffix": ""
+    },
+    "deffer_impl_flat_d.vs": {
+      "op": "wrap",
+      "prefix": "#define RSF_CORE_EXCLUDE 1\n",
+      "suffix": ""
+    },
+    "common_iostructs.h": {
+      "op": "inserts",
+      "edits": [
+        {
+          "at": 8663,
+          "anchor_at": 8639,
+          "anchor": "\r\n};\r\n\r\nstruct\tp_flat\r\n{\r\n#if defined(USE_R2_STA",
+          "text": "\n#ifdef RSF_TEMPORAL\n    float4 rsf_previous_clip : TEXCOORD12;\n    nointerpolation float rsf_valid : TEXCOORD13;\n#endif\n"
+        },
+        {
+          "at": 8163,
+          "anchor_at": 8139,
+          "anchor": "flat\r\nstruct\tv2p_flat\r\n{\r\n#if defined(USE_R2_STA",
+          "text": "\n#ifdef RSF_TEMPORAL\n    float4 rsf_previous_clip : TEXCOORD12;\n    nointerpolation float rsf_valid : TEXCOORD13;\n#endif\n"
+        },
+        {
+          "at": 8060,
+          "anchor_at": 8036,
+          "anchor": "D6;\t// lm-hemi\r\n#endif\r\n};\r\n////////////////////",
+          "text": "#if defined(RSF_TEMPORAL) && defined(RSF_TESS_CONTROL)\n    float4 rsf_previous_position : TEXCOORD14;\n    float3 rsf_previous_normal : TEXCOORD15;\n#endif\n"
+        },
+        {
+          "at": 7546,
+          "anchor_at": 7522,
+          "anchor": "};\r\n\r\nstruct p_bumped\r\n{\r\n#if defined(USE_R2_STA",
+          "text": "\n#ifdef RSF_TEMPORAL\n    float4 rsf_previous_clip : TEXCOORD12;\n    nointerpolation float rsf_valid : TEXCOORD13;\n#endif\n"
+        },
+        {
+          "at": 7493,
+          "anchor_at": 7469,
+          "anchor": "D6;\t// lm-hemi\r\n#endif\r\n\tfloat4\thpos\t: SV_Positi",
+          "text": "#if defined(RSF_TEMPORAL) && defined(RSF_TESS_VERTEX)\n    float4 rsf_previous_position : TEXCOORD14;\n    float3 rsf_previous_normal : TEXCOORD15;\n#endif\n"
+        },
+        {
+          "at": 6979,
+          "anchor_at": 6955,
+          "anchor": "ed\r\nstruct v2p_bumped\r\n{\r\n#if defined(USE_R2_STA",
+          "text": "\n#ifdef RSF_TEMPORAL\n    float4 rsf_previous_clip : TEXCOORD12;\n    nointerpolation float rsf_valid : TEXCOORD13;\n#endif\n"
+        }
+      ]
+    },
+    "dx11/tess.hs": {
+      "op": "inserts",
+      "edits": [
+        {
+          "at": 1736,
+          "anchor_at": 1712,
+          "anchor": "\r\n\touput.M3\t\t= ip[i].M3;\r\n#ifdef USE_TDETAIL\r\n\to",
+          "text": "\n#ifdef RSF_TEMPORAL\n\touput.rsf_previous_clip = ip[i].rsf_previous_clip;\n\touput.rsf_valid = ip[i].rsf_valid;\n\touput.rsf_previous_position = ip[i].rsf_previous_position;\n\touput.rsf_previous_normal = ip[i].rsf_previous_normal;\n#endif"
+        },
+        {
+          "at": 0,
+          "anchor_at": 0,
+          "anchor": "#include \"common.h\"\r\n#in",
+          "text": "#define RSF_TEMPORAL 1\n#define RSF_TESS_CONTROL 1\n"
+        }
+      ]
+    },
+    "dx11/tess.ds": {
+      "op": "inserts",
+      "edits": [
+        {
+          "at": 2609,
+          "anchor_at": 2585,
+          "anchor": "output.position.xyz,1));\r\n\r\n    return output;\r\n",
+          "text": "\n#ifdef RSF_TEMPORAL\n\toutput.rsf_previous_clip = mul(rsf_previous_projection, float4(rsf_prev, 1));\n\toutput.rsf_valid = rsf_tess_valid(bp[0].rsf_valid, bp[1].rsf_valid, bp[2].rsf_valid);\n#endif"
+        },
+        {
+          "at": 2463,
+          "anchor_at": 2439,
+          "anchor": "t.position.xyz = triPos;\r\n\r\n\t\r\n\t//output.M1.z = ",
+          "text": "\n#ifdef RSF_TEMPORAL\n\t[flatten]if( minc==0 )\n\t\trsf_prev = rsf_prev_flat;\n#endif"
+        },
+        {
+          "at": 2383,
+          "anchor_at": 2359,
+          "anchor": "Normal, output.tcdh, 0);\r\n#\tendif\r\n#endif\r\n\t\r\n\r\n",
+          "text": "\n#\t\tifdef RSF_TEMPORAL\n\tComputeDisplacedVertex(rsf_prev, rsf_prev_normal, output.tcdh, 0);\n#\t\tendif"
+        },
+        {
+          "at": 2304,
+          "anchor_at": 2280,
+          "anchor": "t.tcdh, output.tcdbump);\r\n#\telse\r\n\tComputeDispla",
+          "text": "\n#\t\tifdef RSF_TEMPORAL\n\tComputeDisplacedVertex(rsf_prev, rsf_prev_normal, output.tcdh, output.tcdbump);\n#\t\tendif"
+        },
+        {
+          "at": 2176,
+          "anchor_at": 2152,
+          "anchor": "t.position.xyz, Normal);\r\n#endif\r\n\r\n#if TESS_HM\r",
+          "text": "\n#\tifdef RSF_TEMPORAL\n\t{\n\t\tfloat3 rsf_unit[3] = { normalize(rsf_pn[0]), normalize(rsf_pn[1]), normalize(rsf_pn[2]) };\n\t\tfloat3 rsf_current_unit[3] = { normalize(N[0]), normalize(N[1]), normalize(N[2]) };\n\t\tPNPatch rsf_patch, rsf_reference;\n\t\tComputePNPatch(rsf_pp, rsf_unit, rsf_patch);\n\t\tComputePNPatch(P, rsf_current_unit, rsf_reference);\n\t\trsf_tess_carry_patch(P, rsf_pp, input.patch, rsf_reference, rsf_patch);\n\t\tComputePatchVertex(rsf_pp, rsf_pn, uvw, rsf_patch, rsf_prev, rsf_prev_normal);\n\t}\n#\tendif"
+        },
+        {
+          "at": 1330,
+          "anchor_at": 1306,
+          "anchor": "on*v + bp[2].position*u;\r\n\r\n\tfloat3 M1\t\t= bp[0].",
+          "text": "\n#ifdef RSF_TEMPORAL\n\tfloat3 rsf_pp[3] =\n\t{\n\t\trsf_tess_view_position(bp[0].rsf_previous_position),\n\t\trsf_tess_view_position(bp[1].rsf_previous_position),\n\t\trsf_tess_view_position(bp[2].rsf_previous_position)\n\t};\n\tfloat3 rsf_pn[3] =\n\t{\n\t\trsf_tess_view_normal(bp[0].rsf_previous_normal),\n\t\trsf_tess_view_normal(bp[1].rsf_previous_normal),\n\t\trsf_tess_view_normal(bp[2].rsf_previous_normal)\n\t};\n\tfloat3 rsf_prev = rsf_pp[0]*w + rsf_pp[1]*v + rsf_pp[2]*u;\n\tfloat3 rsf_prev_flat = rsf_prev;\n\tfloat3 rsf_prev_normal = normalize(rsf_pn[0]*w + rsf_pn[1]*v + rsf_pn[2]*u);\n#endif"
+        },
+        {
+          "at": 36,
+          "anchor_at": 12,
+          "anchor": "mmon.h\"\r\n#include \"DX11\\tess.h\"\r\n\r\n//if you use ",
+          "text": "tess.h\"\n#include \"rsf_core_"
+        },
+        {
+          "at": 0,
+          "anchor_at": 0,
+          "anchor": "#include \"common.h\"\r\n#in",
+          "text": "#define RSF_TEMPORAL 1\n#define RSF_TESS_CONTROL 1\n"
+        }
+      ]
+    },
+    "rsf_core_previous_skin.h": {
+      "op": "extract",
+      "source": "skin.h",
+      "start": "float3 \tskinning_dir \t",
+      "end": "#endif",
+      "prefix": "#ifndef RSF_CORE_PREVIOUS_SKIN_H\n#define RSF_CORE_PREVIOUS_SKIN_H\n",
+      "suffix": "\n#endif\n",
+      "remap": {
+        "skinning_dir": "rsf_prev_skinning_dir",
+        "skinning_pos": "rsf_prev_skinning_pos",
+        "skinning_0": "rsf_prev_skinning_0",
+        "skinning_1": "rsf_prev_skinning_1",
+        "skinning_2": "rsf_prev_skinning_2",
+        "skinning_3": "rsf_prev_skinning_3",
+        "skinning_4": "rsf_prev_skinning_4",
+        "sbones_array": "rsf_previous_bones"
+      }
+    },
+    "deffer_tree_flat.vs": {
+      "op": "clone_function",
+      "start": "v2p_flat main (v_tree I)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_flat rsf_foliage_current(v_tree I)\n",
+      "between": "\n\nv2p_flat rsf_foliage_previous(v_tree I)\n",
+      "after": "\n\nv2p_flat main(v_tree I)\n{\n    v2p_flat rsf_out = rsf_foliage_current(I);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_tree_history_valid())\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(I).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    },
+    "deffer_tree_bump.vs": {
+      "op": "clone_function",
+      "start": "v2p_bumped \tmain \t(v_tree I)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_bumped rsf_foliage_current(v_tree I)\n",
+      "between": "\n\nv2p_bumped rsf_foliage_previous(v_tree I)\n",
+      "after": "\n\nv2p_bumped main(v_tree I)\n{\n    v2p_bumped rsf_out = rsf_foliage_current(I);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_tree_history_valid())\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(I).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    },
+    "deffer_tree_s_flat.vs": {
+      "op": "clone_function",
+      "start": "v2p_flat main (v_tree I)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_flat rsf_foliage_current(v_tree I)\n",
+      "between": "\n\nv2p_flat rsf_foliage_previous(v_tree I)\n",
+      "after": "\n\nv2p_flat main(v_tree I)\n{\n    v2p_flat rsf_out = rsf_foliage_current(I);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_tree_history_valid())\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(I).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    },
+    "deffer_tree_s_bump.vs": {
+      "op": "clone_function",
+      "start": "v2p_bumped \tmain \t(v_tree I)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_bumped rsf_foliage_current(v_tree I)\n",
+      "between": "\n\nv2p_bumped rsf_foliage_previous(v_tree I)\n",
+      "after": "\n\nv2p_bumped main(v_tree I)\n{\n    v2p_bumped rsf_out = rsf_foliage_current(I);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_tree_history_valid())\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(I).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    },
+    "deffer_detail_w_flat.vs": {
+      "op": "clone_function",
+      "start": "v2p_flat \tmain (v_detail v)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_flat rsf_foliage_current(v_detail v)\n",
+      "between": "\n\nv2p_flat rsf_foliage_previous(v_detail v)\n",
+      "after": "\n\nv2p_flat main(v_detail v)\n{\n    v2p_flat rsf_out = rsf_foliage_current(v);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_detail_history_valid(v.misc.w))\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(v).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    },
+    "deffer_detail_s_flat.vs": {
+      "op": "clone_function",
+      "start": "v2p_flat \tmain (v_detail v)\r\n",
+      "prefix": "#define RSF_TEMPORAL 1\n",
+      "before": "#include \"rsf_anomaly_foliage.h\"\nv2p_flat rsf_foliage_current(v_detail v)\n",
+      "between": "\n\nv2p_flat rsf_foliage_previous(v_detail v)\n",
+      "after": "\n\nv2p_flat main(v_detail v)\n{\n    v2p_flat rsf_out = rsf_foliage_current(v);\n    rsf_out.rsf_previous_clip = rsf_out.hpos;\n    rsf_out.rsf_valid = 0;\n    if (rsf_detail_history_valid(v.misc.w))\n    {\n        rsf_out.rsf_previous_clip = rsf_foliage_previous(v).hpos;\n        rsf_out.rsf_valid = 1;\n    }\n    return rsf_out;\n}\n",
+      "remap": {
+        "consts": "rsf_previous_consts",
+        "wave": "rsf_previous_wave",
+        "wind": "rsf_previous_wind",
+        "dir2D": "rsf_previous_wind",
+        "array": "rsf_previous_rows",
+        "m_xform": "rsf_previous_tree_xform",
+        "m_VP": "rsf_previous_clip_from_world",
+        "m_WVP": "rsf_previous_clip_from_world"
+      }
+    }
+  },
+  "added_semantics": {
+    "TEXCOORD": [
+      12,
+      13,
+      14,
+      15
+    ],
+    "SV_TARGET": [
+      2
+    ],
+    "SV_POSITION": [
+      0
+    ]
+  },
+  "allowed_bindings": [
+    {
+      "name": "RSFCorePrevious",
+      "point": 13,
+      "type": 0,
+      "count": 1
+    },
+    {
+      "name": "RSFFoliagePrevious",
+      "point": 13,
+      "type": 0,
+      "count": 1
+    },
+    {
+      "name": "RSFCorePixel",
+      "point": 13,
+      "type": 0,
+      "count": 1
+    },
+    {
+      "name": "RSFTessPrevious",
+      "point": 13,
+      "type": 0,
+      "count": 1
+    }
+  ]
+}

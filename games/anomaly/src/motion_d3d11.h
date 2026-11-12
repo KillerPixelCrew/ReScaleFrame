@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
+#include <rescaleframe/shader_patch.h>
 // D3D11 side of the motion MRT: the RGBA16F target, the b13 buffers and the invalidation replay for occluding draws
 // whose shaders have no motion variant.
 //
@@ -16,6 +17,7 @@
 #include <cstdint>
 
 namespace rsf::anomaly::motion {
+void set_shader_runtime(const rsf_shader_patch_api&) noexcept;
 using Microsoft::WRL::ComPtr;
 using LogFn = void (*)(void*, const char*);
 

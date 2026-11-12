@@ -44,8 +44,6 @@ inline void register_restart_options(const wchar_t* ini) noexcept {
     if (ini) try { ini_path() = ini; } catch (...) {}
     add({"SR stage (0 off .. 5 temporal)", false, 0, 5, 1, 1, true,
         []() noexcept { return read_int(L"SRStage", 0); }, [](int32_t v) noexcept { write_int(L"SRStage", v); }});
-    add({"Motion vectors", true, 0, 1, 1, 1, true,
-        []() noexcept { return read_int(L"Motion", 0); }, [](int32_t v) noexcept { write_int(L"Motion", v); }});
     add({"Frame generation bridge", true, 0, 1, 1, 1, true,
         []() noexcept { return read_int(L"FGBridge", 1); }, [](int32_t v) noexcept { write_int(L"FGBridge", v); }});
     add({"F10 frame capture", true, 0, 1, 1, 1, true,

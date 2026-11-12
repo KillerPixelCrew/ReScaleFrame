@@ -249,3 +249,5 @@ set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
 # Jitter-only receiver-depth margin: base ownership, live console edits, exits and partial writes.
 add_test(NAME anomaly_sr_sun_depth_margin_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_depth_margin)
 set_tests_properties(anomaly_sr_sun_depth_margin_contract PROPERTIES TIMEOUT 30)
+
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/runtime_shaders.cpp")

@@ -7,17 +7,17 @@
 // matching motion variant of THAT permutation, before the engine can bind the shader:
 //   1. the engine's own compile inputs are read from shader_compile's frame (root source, entry, target, flags and
 //      the complete define list; the frame is only trusted when create_shader returns to one of its two calls);
-//   2. the root source is identified by SHA-256 in the deployment manifest (never by file name alone);
-//   3. the ORIGINAL deployed tree is compiled with those inputs and must reproduce the engine's bytecode byte for
+//   2. the root source is identified by SHA-256 in pack metadata (never by file name alone);
+//   3. the acquired ORIGINAL tree is compiled with those inputs and must reproduce the engine's bytecode byte for
 //      byte, which proves root, includes, defines, compiler and flags all match;
-//   4. the MOTION tree is compiled with the same inputs;
+//   4. the runtime-patched tree is compiled with the same inputs;
 //   5. the variant's reflection must keep every stock resource and constant-buffer layout and the VS input
 //      signature, and may add only the b13 RSF buffer (VS, DS) or SV_Target2 (PS) and the RSF interpolants
 //      (compatible() below; hull and domain shaders of the tessellation pass included).
 // Any failure leaves only the stock shader (counted by reason). Verified variants are cached on disk under a key
 // over namespace, root, defines, target, entry, flags and the original bytecode hash; a cache entry is still
-// reflection-checked. No shader body is embedded in RSF: both trees are generated locally by
-// tools/anomaly_motion_deploy.py from the user's own installation and read from the deployment directory.
+// reflection-checked. Production uses the Runtime source-patch service and the engine includer.
+// The deployed-tree constructor remains a development fixture for the Python parity oracle.
 #include "motion_profile.h"
 #include <array>
 #include <cstddef>
@@ -158,8 +158,10 @@ struct Prepared {
 
 class ShaderLoader {
 public:
-    // `deployment` holds manifest.txt, original/r3 and motion/r3. `cache` may be empty (no disk cache).
+    // Development fixture only: deployment holds original/motion trees; production uses Prepare below.
     ShaderLoader(Manifest, std::filesystem::path deployment, std::filesystem::path cache, Compiler&, Reflector&);
+    using Prepare = std::function<Prepared(const ShaderRequest&, const ManifestEntry&)>;
+    ShaderLoader(Manifest, Compiler&, Reflector&, Prepare);
     const Manifest& manifest() const noexcept { return manifest_; }
     // True when the root source is in the manifest; cheap, so the detour can skip everything else.
     const ManifestEntry* lookup(std::span<const std::byte> source) const;
@@ -170,6 +172,7 @@ private:
     std::filesystem::path deployment_, cache_;
     Compiler& compiler_;
     Reflector& reflector_;
+    Prepare runtime_prepare_;
 };
 int skin_mode(const std::vector<Define>&) noexcept;
 }

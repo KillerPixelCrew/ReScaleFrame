@@ -10,6 +10,17 @@ the RTX 4070 present generated frames for DLSS-G, FSR3 and XeSS, and the Release
 (200 discovered, 188 passed, 12 skips). It is not yet game-accepted (`docs/research/anomaly-fg.md`).
 Worker specs, reports and commit messages: `.local/anomaly/orchestration/`.
 
+## Runtime rules-only shader pack, 12 November 2026
+
+The new development path reads source/includes through the exact-build engine
+includer and sends compilation/proof/cache/reflection to the shared Runtime.
+The release packager now emits one RSF-authored .rsfpatch and never generates or
+ships original/motion game shader trees. Native transforms match all 454 Python
+output files; the pack has 73 roots. Synthetic/WARP checks passed; this source
+provider and live reload have not been run in Anomaly. Existing acceptance below
+belongs to earlier deployed paths, not automatically to this service.
+See docs/research/runtime-shader-patching.md for acquisition evidence and gates.
+
 ## Goal and non-negotiable constraints
 
 - Add RSF upscaling, frame generation and the shared RSF overlay to Anomaly 1.5.3.
@@ -65,7 +76,8 @@ keys (`games/anomaly/src/overlay_service.cpp`), `SRStage=0..5`, `SRScale`, `SRJi
 `SRMipBias`, `SRStageCapture` (+`Start/Count/Interval`), `SR`, `SRBackend`, `SRQuality`,
 `DLSSPreset`, `SRExposure`, `SRFirstPersonZero`, `SRCutDistance/SRCutAngle`,
 `SRStreamlineDir/SRFidelityFXDir/SRXeSSDir`, `SRRequireSignature`, `Motion=1`, `MotionFoliage`,
-`MotionShaderDir`, `MotionInvalidate`, `MotionCapture` (+`Start/Count/Interval`).
+`MotionInvalidate`, `MotionCapture` (+`Start/Count/Interval`). `MotionShaderDir`
+is retired in the runtime-pack path; the fixed pack location is beside the adapter.
 
 ## Key implementation facts
 

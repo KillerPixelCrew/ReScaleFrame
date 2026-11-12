@@ -66,6 +66,7 @@ struct Service {
     std::vector<Option> options;
     void (*options_read)(void*, int32_t*, uint32_t){};
     int (*option_changed)(void*, uint32_t, int32_t){};
+    const char* (*option_label)(void*, uint32_t){};
     // Sampled by present(); status() reads them.
     rsf_overlay_sr_report sr{};
     bool have_sr{}, sampled{};
@@ -369,6 +370,7 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
             self.options.push_back(std::move(option));
         }
         self.options_read = setup->options_read; self.option_changed = setup->option_changed;
+        self.option_label = setup->option_label;
         const auto saved = rsf::render_settings::read(self.ini, self.section, self.defaults);
         self.settings = self.sanitize(saved);
         self.ui_preferences = rsf::render_settings::read_overlay_layout(self.ini, self.section);
@@ -479,7 +481,8 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
             auto& option = self.options[i];
             option.value = values[i];
             const bool toggle = option.meta.kind == RSF_OVERLAY_SERVICE_OPTION_TOGGLE;
-            host[i].label = option.label.c_str();
+            const char* live_label = self.option_label ? self.option_label(self.user, i) : nullptr;
+            host[i].label = live_label && *live_label ? live_label : option.label.c_str();
             host[i].kind = toggle ? RSF_OVERLAY_HOST_OPTION_TOGGLE : RSF_OVERLAY_HOST_OPTION_NUMBER;
             host[i].value = option.value;
             host[i].minimum = toggle ? 0 : option.meta.minimum; host[i].maximum = toggle ? 1 : option.meta.maximum;

@@ -18,6 +18,29 @@ SPEC.loader.exec_module(package)
 
 
 class AnomalyPackageTest(unittest.TestCase):
+    def test_source_patterns_stay_minimal(self):
+        rules = json.loads((ROOT / 'games/anomaly/patches/motion/rules.json').read_text())
+
+        def check_patterns(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key in ('anchor', 'start', 'end'):
+                        self.assertLessEqual(len(child.encode()), 48, key)
+                    check_patterns(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check_patterns(child)
+
+        check_patterns(rules)
+
+    def test_rules_pack_without_a_game_corpus(self):
+        files, report = package.motion_plan(Path('does-not-exist'))
+        self.assertEqual(set(files), {'motion.rsfpatch'})
+        info = package.shader_pack.inspect(files['motion.rsfpatch'].read_bytes())
+        self.assertEqual(info['metadata']['id'], 'org.rescaleframe.anomaly.motion')
+        self.assertEqual(len(report['roots']), 73)
+        self.assertNotIn(b'original/r3/', files['motion.rsfpatch'].read_bytes())
+
     def test_portable_defaults(self):
         ini = package.validate_config(package.CONFIG)
         self.assertEqual(ini['Loader']['RuntimeModule'], 'ReScaleFrame/ReScaleFrame.Runtime.dll')

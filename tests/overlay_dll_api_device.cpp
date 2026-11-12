@@ -23,6 +23,9 @@ void check(bool condition, const char* what)
 }
 HWND accepted_window{};
 int window_calls = 0, report_calls = 0;
+int option_reads = 0, label_reads = 0;
+bool label_order = true;
+char live_option_label[64] = "Fixture pack: loading";
 void log(void*, const char* message) { std::printf("  log: %s\n", message); }
 int accept(void*, void* hwnd) { ++window_calls; return hwnd == accepted_window; }
 int report(void*, rsf_overlay_sr_report* out)
@@ -136,6 +139,17 @@ int main()
     setup.sr_backend_choices = 1u << 1; setup.sr_quality_choices = 0x1fu;
     setup.fg_backend_choices = 0; setup.latency_choices = 1u; setup.max_generated_frames = 1;
     setup.log = log; setup.accept_window = accept; setup.sr_report = report;
+    const rsf_overlay_service_option option{"Fixture pack", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 1, 0, 1, 1, 1, 0};
+    setup.option_count = 1; setup.options = &option;
+    setup.options_read = [](void*, int32_t* values, uint32_t count) {
+        ++option_reads;
+        if (count) values[0] = 1;
+        std::snprintf(live_option_label, sizeof(live_option_label), "Fixture pack: frame %d", option_reads);
+    };
+    setup.option_label = [](void*, uint32_t index) -> const char* {
+        ++label_reads; label_order = label_order && index == 0 && label_reads == option_reads;
+        return live_option_label;
+    };
     check(api.configure(&setup) == RSF_OK, "configure");
 
     // A chain targeting another window is refused by the adapter's filter and starts nothing.
@@ -180,6 +194,7 @@ int main()
         status.application_presents >= 9, "status reports adapter SR truth and chain extent");
     std::printf("status: presents=%llu reason=\"%s\"\n", static_cast<unsigned long long>(status.application_presents), status.reason);
     check(report_calls >= 9 && window_calls >= 10, "adapter callbacks consulted per Present");
+    check(label_reads >= 9 && label_order, "live option labels follow current values on each Present");
     check(std::strstr(status.reason, "FSR4 building shaders (3s); DLSS keeps running") != nullptr,
         "status shows the adapter's note while SR is running");
 

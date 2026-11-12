@@ -1,5 +1,18 @@
 # Implementation tracker
 
+## Runtime shader patching for Anomaly, 12 November 2026
+
+Core source patching, .rsfpatch loader/build-inspect CLI, original DXBC proof,
+cache/reflection and D3D11 interception are implemented. Anomaly supplies its
+engine includer and RSF-authored rules. Native parity: all 454 shader outputs
+match the Python merged output byte for byte. Synthetic/WARP: source proof,
+refusals, cache and a same-length DXBC instruction edit/readback pass.
+The new provider/reload/pack path is not game-tested and nothing was deployed.
+Full gate results and remaining acceptance are recorded in
+[the gate report](research/runtime-shader-patching-gate.md). Release VS2026:
+201 native tests passed, 12 skipped; fmt/Clippy and 73 Rust tests passed.
+No readiness flag changed.
+
 ## Touch-first overlay panel, overlay ABI 16, 12 November 2026
 
 The shared panel is rebuilt for handheld touch screens from the agreed mockup. It is a

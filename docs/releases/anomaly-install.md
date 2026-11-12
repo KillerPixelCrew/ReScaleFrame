@@ -1,8 +1,8 @@
 # ReScaleFrame for S.T.A.L.K.E.R. Anomaly
 
 This package adds super resolution, motion vectors, frame generation and the Insert overlay to Anomaly 1.5.3's DX11
-renderer. It includes the thin DirectInput carrier, shared Runtime, Anomaly adapter, overlay, generated motion shader
-sources and the pinned DLSS/Reflex, FidelityFX and XeSS runtimes. First-party code and third-party components retain
+renderer. It includes the thin DirectInput carrier, shared Runtime, Anomaly adapter, overlay, runtime motion shader
+patch rules and the pinned DLSS/Reflex, FidelityFX and XeSS runtimes. First-party code and third-party components retain
 separate licenses and notices in `ReScaleFrame/licenses` and beside the vendor DLLs.
 
 ## Requirements
@@ -37,5 +37,5 @@ name, GPU, provider/quality, resolution and a short recording with a bug report.
 
 To disable startup, set `[Loader] AutoStart=0` while the game is closed. To uninstall, close the game, remove this
 package's `dinput8.dll`, `ReScaleFrame.ini` and `ReScaleFrame` folder, then restore any backed-up files. The folder's
-`anomaly-motion/cache` is generated locally and can be removed with the package. The source ZIP is for building and
+`patches/cache` is generated locally and can be removed with the package. The source ZIP is for building and
 inspection; it is not extracted into the game.

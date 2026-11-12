@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Build the local motion-shader deployment the Anomaly adapter loads with [Anomaly] Motion=1.
+"""Build a local development/parity oracle for the Anomaly shader rules.
 
 The output holds licensed game shader bodies, so it is written only beneath .local/anomaly/motion-deploy* and is
 never tracked or shipped. It is generated from the user's own pinned r3 corpus by the existing core and foliage
 transforms (tools/anomaly_temporal_shader.py, tools/anomaly_foliage_shader.py); this tool only merges them, adds
 the manifest and verifies the result.
 
-Layout (copy the whole directory to <game>/bin/ReScaleFrame/anomaly-motion, or point MotionShaderDir at it):
+Development output layout (never deploy or package these source trees):
     manifest.txt        rsf-anomaly-motion-manifest 1 / namespace / one `root` line per allowlisted root
                         (stage vs/ps/hs/ds; the tessellation roots are named dx11/tess.hs and dx11/tess.ds)
     original/r3/...     the untouched corpus: the adapter recompiles each engine permutation from it and requires a
                         byte-identical result before it trusts the inputs it read from the engine
     motion/r3/...       the merged core + foliage transform
     .rsf-motion.json    provenance (corpus, tool hashes, core/foliage namespaces, file hashes)
-The adapter writes verified variants to cache/<namespace prefix>/ inside the deployment at run time.
+Production uses motion.rsfpatch and the engine source provider instead of these trees.
 
 Run: py -3 tools/anomaly_motion_deploy.py --source .local/anomaly/vanilla/shaders/r3 --output .local/anomaly/motion-deploy
 """

@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/ibireme/yyjson",
+  "revision": "ebb8d7e5aaa51bea4edefb39ee73a235066b0023",
+  "license": "MIT",
+  "files": {
+    "src/yyjson.c": "40a9d8b31500c45d3ec60bb67d8083983dc5353af33f5e9487da514c368187b8",
+    "src/yyjson.h": "ef63bfc621e9edc2ac980801902f1e53797e36919f75317b002df2c96846ccbf",
+    "LICENSE": "7b14b8632bf3d5cb64c7a5f1ddfa9062e9c6eba38ac495a0897541d6658d3ad2"
+  }
+}

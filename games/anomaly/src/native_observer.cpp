@@ -219,8 +219,8 @@ rsf_result start(const rsf_game_start_args* args) noexcept {
     geometry_installed = geometry::install_native_geometry(image, build->image_size(), *build);
     // SR Stage 1 hooks, only when selected; a refusal leaves the game stock and observation intact.
     if (sr::options().selected() && !sr::install(image, build->image_size(), *build)) report("Anomaly SR stage not installed; rendering is stock.");
-    // Motion MRT, only when Motion=1; a refusal leaves every shader and target stock.
-    if (motion::options().enabled && !motion::install(image, build->image_size(), *build)) report("Anomaly motion stage not installed; shaders stay stock.");
+    // Record variants for live pack enablement; disabled packs keep draws stock.
+    if (!motion::install(image, build->image_size(), *build)) report("Anomaly motion stage not installed; shaders stay stock.");
     active.store(true, std::memory_order_release);
     reason = geometry_installed
         ? "Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."

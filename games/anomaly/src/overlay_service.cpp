@@ -286,7 +286,7 @@ rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
     setup.sr_report = sr.backends ? &sr_report : nullptr;
     setup.settings_changed = &settings_changed;
     setup.user = options.log_user;
-    // Every adapter option (AGENTS.md Rule 2). Labels are string literals; the table lives for the process.
+    // Initial labels are copied; option_label refreshes live status after options_read.
     static rsf_overlay_service_option table[RSF_OVERLAY_SERVICE_OPTION_LIMIT];
     const auto& list = rsf::anomaly::options::registry();
     uint32_t count = 0;
@@ -297,6 +297,14 @@ rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
     }
     setup.option_count = count;
     setup.options = count ? table : nullptr;
+    setup.option_label = [](void*, uint32_t wanted) noexcept -> const char* {
+        uint32_t index = 0;
+        for (const auto& option : rsf::anomaly::options::registry()) {
+            if (!option.get || !option.set) continue;
+            if (index++ == wanted) return option.label;
+        }
+        return nullptr;
+    };
     setup.options_read = [](void*, int32_t* values, uint32_t wanted) {
         uint32_t index = 0;
         for (const auto& option : rsf::anomaly::options::registry()) {
