@@ -1,0 +1,18 @@
+{
+  "id": "org.rescaleframe.anomaly.motion",
+  "version": "1",
+  "name": "Anomaly motion",
+  "api": "d3d11",
+  "license": "GPL-3.0-only",
+  "payload": {
+    "rsf_core_vertex.h": "../../shaders/core/rsf_core_vertex.h",
+    "rsf_core_pixel.h": "../../shaders/core/rsf_core_pixel.h",
+    "rsf_core_tess.h": "../../shaders/core/rsf_core_tess.h",
+    "rsf_anomaly_foliage.h": "../../shaders/foliage/rsf_anomaly_foliage.h"
+  },
+  "adapter": "anomaly",
+  "executables": {
+    "AnomalyDX11.exe": "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e",
+    "AnomalyDX11AVX.exe": "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12"
+  }
+}

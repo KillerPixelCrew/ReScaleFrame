@@ -163,6 +163,13 @@ int main() {
     check(!std::filesystem::exists(captures / L"open01_f00.png"), "no capture before the panel opens");
 
     Sleep(300);   // the Runtime debounces visibility changes
+    POINT saved_cursor{};
+    const bool restore_cursor = GetCursorPos(&saved_cursor) != FALSE;
+    POINT click{120, 80};
+    // The runtime samples the real cursor as well as window messages. Keep the
+    // posted inside click consistent with that position, independent of desktop input.
+    check(ClientToScreen(window, &click) != FALSE && SetCursorPos(click.x, click.y) != FALSE,
+          "position the fixture cursor before opening the panel");
     check(api.set_visible(1) == RSF_OK && api.visible() == 1, "open the panel");
     // Pointer events through the window procedure the overlay installed: they must be counted and consumed.
     SendMessageW(window, WM_MOUSEMOVE, 0, MAKELPARAM(120, 80));
@@ -222,6 +229,7 @@ int main() {
     check(!std::filesystem::exists(captures / L"open02_f00.png"), "capture stops after OverlayCaptureCycles");
 
     api.notify(gpu.chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET);
+    if (restore_cursor) SetCursorPos(saved_cursor.x, saved_cursor.y);
     std::filesystem::remove_all(root, ignored);
     DestroyWindow(window);
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }

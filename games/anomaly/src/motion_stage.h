@@ -2,8 +2,8 @@
 #pragma once
 // Motion MRT for the standard 1.5.3 DX11 executable. Opt-in, rides on Mode=Observe:
 //   [Anomaly] Motion=1                 load motion shader variants, bind RTV2 during the G-buffer pass
-//   MotionShaderDir=<path>             deployment from tools/anomaly_motion_deploy.py
-//                                      (default: <directory of ReScaleFrame.ini>\ReScaleFrame\anomaly-motion)
+//   Pack: <INI directory>\ReScaleFrame\patches\motion.rsfpatch. No shipped game shader bodies.
+//   MotionShaderDir is retired; original source is acquired from the engine.
 //   MotionInvalidate=1                 replay occluding draws without a variant as invalid motion (default 1)
 //   MotionFoliage=1                    tree and grass history (default 1): reads each foliage draw's staged VS constants,
 //                                      keeps the previous frame's by stable identity and binds it in b13. 0 binds the

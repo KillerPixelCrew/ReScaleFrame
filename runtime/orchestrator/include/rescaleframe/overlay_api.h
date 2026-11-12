@@ -12,14 +12,14 @@
 extern "C" {
 #endif
 
-#define RSF_OVERLAY_API_VERSION 3u
+#define RSF_OVERLAY_API_VERSION 4u
 #define RSF_OVERLAY_API_ENTRY_POINT "rsf_get_overlay_api"
 
 /* DLL access to the Runtime's one shared overlay for adapters that present through
    D3D11, normally the facade chain of the D3D11 presentation bridge
    (d3d11_present_api.h). It is the same overlay_host/overlay_input/overlay_renderer
    path the D3D11 carrier uses, not a second panel, renderer or runtime. The Rust panel
-   (rescaleframe_overlay.dll, overlay ABI 15) is loaded from RSF_OVERLAY_DLL when that
+   (rescaleframe_overlay.dll, overlay ABI 17) is loaded from RSF_OVERLAY_DLL when that
    names a file, otherwise from beside ReScaleFrame.Runtime.dll.
 
    Composition. present() draws into the chain's current D3D11 backbuffer at the
@@ -155,6 +155,9 @@ typedef struct rsf_overlay_service_setup {
     /* Present-owner thread: the user set option `index` to `value` (already clamped to its
        range). Return nonzero when accepted. */
     int (*option_changed)(void* user, uint32_t index, int32_t value);
+    /* API 4. Optional live label/status text. Called after options_read; returned
+       text is borrowed until present returns. Null keeps the configure-time label. */
+    const char* (*option_label)(void* user, uint32_t index);
 } rsf_overlay_service_setup;
 
 typedef struct rsf_overlay_capture {

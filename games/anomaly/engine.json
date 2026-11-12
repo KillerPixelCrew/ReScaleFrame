@@ -1,0 +1,18 @@
+{
+  "game": "S.T.A.L.K.E.R. Anomaly 1.5.3",
+  "engine": "X-Ray Monolith",
+  "source_revision": "028ccf5f5189b393396480076b11e40852ba3ecd",
+  "api": "D3D11",
+  "rendering_ready": false,
+  "shader_patching": {
+    "pack": "patches/motion.rsfpatch",
+    "rules": "patches/motion/rules.json",
+    "source_provider": "engine ID3DInclude through guarded shader_compile setup",
+    "validation": "built; synthetic/WARP-tested; corpus parity; source provider not game-tested",
+    "evidence": "../../docs/research/runtime-shader-patching.md",
+    "executables": {
+      "AnomalyDX11.exe": "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e",
+      "AnomalyDX11AVX.exe": "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12"
+    }
+  }
+}

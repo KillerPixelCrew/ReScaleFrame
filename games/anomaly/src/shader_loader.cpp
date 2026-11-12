@@ -327,6 +327,9 @@ const ManifestEntry* ShaderLoader::lookup(std::span<const std::byte> source) con
     return found == manifest_.by_original.end() ? nullptr : &found->second;
 }
 
+ShaderLoader::ShaderLoader(Manifest manifest, Compiler& compiler, Reflector& reflector, Prepare prepare)
+    : manifest_(std::move(manifest)), compiler_(compiler), reflector_(reflector), runtime_prepare_(std::move(prepare)) {}
+
 std::string ShaderLoader::cache_key(const ShaderRequest& request, const ManifestEntry& entry) const
 {
     std::string text = "rsf-anomaly-motion-variant 1\n" + manifest_.name_space + "\n" + entry.original_sha256 + "\n" +
@@ -341,6 +344,7 @@ Prepared ShaderLoader::prepare(const ShaderRequest& request)
     Prepared result;
     const auto* entry = lookup(request.source);
     if (!entry || request.target.empty() || request.target[0] != entry->stage) return result;
+    if (runtime_prepare_) return runtime_prepare_(request, *entry);
     result.entry = entry;
     result.skin = skin_mode(request.defines);
     Reflection stock;

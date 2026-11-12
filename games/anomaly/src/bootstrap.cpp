@@ -117,11 +117,9 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
         if (!observe) log(nullptr, "Anomaly SR stage refused: SRStage/SRStageCapture require Mode=Observe; game left stock.");
         else if (!observed) rsf::anomaly::sr::configure(sr_options, log, nullptr);
     }
-    // Motion MRT (Motion=1) also rides on Observe; the observer installs it after SR. Inert when Motion is not 1.
-    if (const auto motion_options = rsf::anomaly::motion::read_options(configuration); motion_options.enabled) {
-        if (!observe) log(nullptr, "Anomaly motion refused: Motion=1 requires Mode=Observe; shaders stay stock.");
-        else if (!observed) rsf::anomaly::motion::configure(motion_options, log, nullptr);
-    }
+    // Observe records variants even when disabled, so the pack can turn on live later.
+    if (observe && !observed)
+        rsf::anomaly::motion::configure(rsf::anomaly::motion::read_options(configuration), log, nullptr);
     // Frame generation (FG=1 or FGBridge=1) also rides on Observe: the observer's boundaries drive its frames. The
     // presentation bridge must intercept the engine's swap-chain creation, so it installs here, before the device exists.
     // A refusal leaves presentation stock.

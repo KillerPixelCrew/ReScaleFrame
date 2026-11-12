@@ -6,6 +6,7 @@
 
 namespace rsf::anomaly::motion {
 namespace {
+rsf_shader_patch_api runtime_api{};
 ComPtr<ID3D11Buffer> dynamic_buffer(ID3D11Device* device, UINT size) noexcept
 {
     D3D11_BUFFER_DESC desc{};
@@ -14,10 +15,15 @@ ComPtr<ID3D11Buffer> dynamic_buffer(ID3D11Device* device, UINT size) noexcept
     desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     ComPtr<ID3D11Buffer> buffer;
+    if (runtime_api.constant_buffer) {
+        if (runtime_api.constant_buffer(device, size, reinterpret_cast<void**>(buffer.GetAddressOf())) != 0) return {};
+        return buffer;
+    }
     if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return {};
     return buffer;
 }
 }
+void set_shader_runtime(const rsf_shader_patch_api& api) noexcept { runtime_api = api; }
 
 bool MotionDevice::create(ID3D11Device* device, LogFn log, void* user) noexcept try {
     reset();
@@ -90,6 +96,10 @@ bool MotionDevice::upload(ID3D11DeviceContext* context, ID3D11Buffer* buffer, co
 {
     if (!context || !buffer) return false;
     if (have && std::memcmp(last, data, size) == 0) { ++upload_skips_; return true; }
+    if (runtime_api.upload_constant) {
+        if (runtime_api.upload_constant(context, buffer, {data, size}) != 0) { have = false; return false; }
+        std::memcpy(last, data, size); have = true; ++uploads_; return true;
+    }
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) || !mapped.pData) { have = false; return false; }
     std::memcpy(mapped.pData, data, size);
@@ -104,6 +114,7 @@ bool MotionDevice::set_core_vertex(ID3D11DeviceContext* context, const CoreVerte
 {
     if (!upload(context, core_vs_.Get(), bytes.data(), bytes.size(), last_core_.data(), have_core_)) return false;
     ID3D11Buffer* buffer = core_vs_.Get();
+    if (runtime_api.bind_constant) return runtime_api.bind_constant(context, 'v', 13, buffer) == 0;
     context->VSSetConstantBuffers(13, 1, &buffer);
     return true;
 }
@@ -111,6 +122,7 @@ bool MotionDevice::set_foliage_vertex(ID3D11DeviceContext* context, const Foliag
 {
     if (!upload(context, foliage_vs_.Get(), bytes.data(), bytes.size(), last_foliage_.data(), have_foliage_)) return false;
     ID3D11Buffer* buffer = foliage_vs_.Get();
+    if (runtime_api.bind_constant) return runtime_api.bind_constant(context, 'v', 13, buffer) == 0;
     context->VSSetConstantBuffers(13, 1, &buffer);
     return true;
 }
@@ -118,6 +130,7 @@ bool MotionDevice::set_pixel(ID3D11DeviceContext* context, const PixelBytes& byt
 {
     if (!upload(context, pixel_.Get(), bytes.data(), bytes.size(), last_pixel_.data(), have_pixel_)) return false;
     ID3D11Buffer* buffer = pixel_.Get();
+    if (runtime_api.bind_constant) return runtime_api.bind_constant(context, 'p', 13, buffer) == 0;
     context->PSSetConstantBuffers(13, 1, &buffer);
     return true;
 }
@@ -125,6 +138,7 @@ bool MotionDevice::set_tess_domain(ID3D11DeviceContext* context, const TessDomai
 {
     if (!upload(context, tess_ds_.Get(), bytes.data(), bytes.size(), last_tess_.data(), have_tess_)) return false;
     ID3D11Buffer* buffer = tess_ds_.Get();
+    if (runtime_api.bind_constant) return runtime_api.bind_constant(context, 'd', 13, buffer) == 0;
     context->DSSetConstantBuffers(13, 1, &buffer);
     return true;
 }

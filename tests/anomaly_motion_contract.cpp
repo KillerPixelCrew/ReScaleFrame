@@ -771,6 +771,38 @@ void loader_contract()
     compiler.compile(root / "original", request.source, request, engine_code, error);
     compiler.calls = 0;
     request.bytecode = engine_code;
+    {
+        unsigned delegated = 0;
+        bool refuse = false;
+        ShaderLoader runtime_loader(*manifest, compiler, reflector,
+            [&](const ShaderRequest& input, const ManifestEntry& entry) {
+                ++delegated;
+                require(&input == &request && input.flags == 8 && input.entry == "main" &&
+                    input.defines.size() == 1 && input.defines[0].value == "2048" &&
+                    entry.family == Family::CoreStatic, "Runtime delegate receives exact engine inputs and eligibility");
+                Prepared result;
+                result.entry = &entry;
+                result.outcome = refuse ? Outcome::OriginalMismatch : Outcome::ReplacedFromCache;
+                result.detail = "Runtime proof result";
+                if (!refuse) result.variant = bytes_of("runtime variant");
+                return result;
+            });
+        const auto accepted = runtime_loader.prepare(request);
+        require(accepted.outcome == Outcome::ReplacedFromCache && !accepted.variant.empty() && compiler.calls == 0,
+            "production path delegates proof/cache/compile instead of reading offline trees");
+        auto wrong = request;
+        wrong.target = "ps_5_0";
+        require(runtime_loader.prepare(wrong).outcome == Outcome::NotAllowlisted && delegated == 1,
+            "stage eligibility applies before the Runtime delegate");
+        wrong = request;
+        wrong.source = bytes_of("unlisted Runtime root");
+        require(runtime_loader.prepare(wrong).outcome == Outcome::NotAllowlisted && delegated == 1,
+            "root eligibility applies before the Runtime delegate");
+        refuse = true;
+        const auto refused = runtime_loader.prepare(request);
+        require(refused.outcome == Outcome::OriginalMismatch && refused.variant.empty() &&
+            refused.detail == "Runtime proof result" && compiler.calls == 0, "Runtime refusals preserve stock fallback");
+    }
     auto prepared = loader.prepare(request);
     require(prepared.outcome == Outcome::Replaced && compiler.calls == 2 && prepared.entry->family == Family::CoreStatic,
         "original reproduced, then the motion tree compiled");

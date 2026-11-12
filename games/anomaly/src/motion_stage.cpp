@@ -13,6 +13,7 @@
 #include "native_observer.h"
 #include "shader_d3d.h"
 #include "shader_loader.h"
+#include "runtime_shaders.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
 #include <rescaleframe/game_frame.h>
@@ -134,6 +135,8 @@ struct Variant {
     Family family{};
     int skin{-2};
     Reflection reflection;
+    ShaderRequest request;
+    std::vector<std::byte> original_bytecode;
     FoliageLayout foliage;             // foliage VS only: where the engine stages its constants (from the STOCK reflection)
 };
 std::shared_mutex registry_guard;
@@ -161,6 +164,11 @@ std::map<UnpairedKey, std::uint64_t> unpaired_pairs;
 constexpr std::size_t unpaired_pairs_limit = 4096;
 D3DShaderApi* shader_api{};
 std::unique_ptr<ShaderLoader> loader;
+std::unique_ptr<RuntimeShaders> runtime_shaders;
+std::atomic<bool> pack_enabled{}, reload_requested{};
+std::atomic<int32_t> pack_status{};
+char pack_label[96] = "Motion shader pack: not loaded";
+std::atomic<bool> dump_shaders{};
 uint32_t refusal_logs{}, replace_logs{};
 
 // ---- D3D11 and engine state --------------------------------------------------------------------------------------
@@ -401,16 +409,22 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
             variant->device = device;
             variant->family = entry->family;
             variant->skin = prepared.skin;
-            HRESULT hr = E_FAIL;
-            const auto* code = prepared.variant.data();
-            const auto bytes = prepared.variant.size();
-            if (stage == 'v') hr = device->CreateVertexShader(code, bytes, nullptr, &variant->vs);
-            else if (stage == 'p') hr = device->CreatePixelShader(code, bytes, nullptr, &variant->ps);
-            else if (stage == 'h') hr = device->CreateHullShader(code, bytes, nullptr, &variant->hs);
-            else hr = device->CreateDomainShader(code, bytes, nullptr, &variant->ds);
+            variant->request = request;
+            variant->original_bytecode.assign(request.bytecode.begin(), request.bytecode.end());
+            variant->request.bytecode = variant->original_bytecode;
+            void* replacement{};
+            const auto attached = runtime_shaders->api().attach_d3d11(device);
+            const auto made = attached == 0 ? runtime_shaders->api().create_d3d11(device, request.target.c_str(),
+                {prepared.variant.data(), prepared.variant.size()}, &replacement) : attached;
+            const HRESULT hr = made == 0 ? S_OK : E_FAIL;
+            if (stage == 'v') variant->vs.Attach(static_cast<ID3D11VertexShader*>(replacement));
+            else if (stage == 'p') variant->ps.Attach(static_cast<ID3D11PixelShader*>(replacement));
+            else if (stage == 'h') variant->hs.Attach(static_cast<ID3D11HullShader*>(replacement));
+            else variant->ds.Attach(static_cast<ID3D11DomainShader*>(replacement));
             if (FAILED(hr)) {
                 prepared.outcome = Outcome::CreateFailed;
-                prepared.detail = "Create*Shader 0x" + std::to_string(static_cast<unsigned long>(hr));
+                prepared.detail = attached != 0 ? "Runtime D3D11 interception refused" :
+                    "Create*Shader 0x" + std::to_string(static_cast<unsigned long>(hr));
                 variant.reset();
             } else {
                 variant->reflection = std::move(prepared.reflection);
@@ -446,6 +460,13 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
 
 long long __fastcall create_shader_hook(const char* target, const void* buffer, unsigned size, const char* file,
     void** result, char disasm) {
+    {
+        std::lock_guard lock(loader_guard);
+        ID3D11Device* device{};
+        if (runtime_shaders && hooks_active.load(std::memory_order_acquire) &&
+            read_global(srp().hw_device_rva, device) && device)
+            runtime_shaders->api().attach_d3d11(device);
+    }
     const auto hr = reinterpret_cast<CreateShader>(originals[site_create_shader])(target, buffer, size, file, result, disasm);
     if (static_cast<int32_t>(hr) >= 0 && hooks_active.load(std::memory_order_acquire))
         shader_created(target, buffer, size, file, result, _ReturnAddress(),
@@ -518,8 +539,55 @@ void bind_dump() noexcept try {
 } catch (...) { dump_ready = false; }
 
 // ---- G-buffer window ---------------------------------------------------------------------------------------------
+void reload_pack() {
+    if (!reload_requested.exchange(false) || !shader_api || !image || !build) return;
+    std::lock_guard lock(loader_guard);
+    auto candidate = std::make_unique<RuntimeShaders>();
+    const std::filesystem::path root(configured.shader_dir);
+    std::string error;
+    if (!candidate->open(root / "motion.rsfpatch", root / "cache", image, mp(), error)) {
+        pack_status.store(2); sayf("Motion pack reload kept previous generation: %s", error.c_str()); return;
+    }
+    std::unordered_map<const void*, std::shared_ptr<const Variant>> next;
+    std::vector<std::pair<const void*, std::shared_ptr<const Variant>>> previous;
+    { std::shared_lock r(registry_guard); for (const auto& item : registry) previous.push_back(item); }
+    for (const auto& [key, old] : previous) {
+        const auto entry = candidate->manifest.by_original.find(sha256_hex(old->request.source));
+        if (entry == candidate->manifest.by_original.end()) continue;
+        const auto result = candidate->prepare(old->request, entry->second, *shader_api);
+        if (result.outcome != Outcome::Replaced && result.outcome != Outcome::ReplacedFromCache) {
+            pack_status.store(2); sayf("Motion pack reload kept previous generation: %s", result.detail.c_str()); return;
+        }
+        auto updated = std::make_shared<Variant>(*old);
+        updated->request.bytecode = updated->original_bytecode;
+        void* shader{};
+        if (candidate->api().create_d3d11(old->device, old->request.target.c_str(),
+            {result.variant.data(), result.variant.size()}, &shader) != 0) {
+            pack_status.store(2); say("Motion pack reload kept previous generation: shader creation"); return;
+        }
+        switch (entry->second.stage) {
+        case 'v': updated->vs.Attach(static_cast<ID3D11VertexShader*>(shader)); break;
+        case 'p': updated->ps.Attach(static_cast<ID3D11PixelShader*>(shader)); break;
+        case 'h': updated->hs.Attach(static_cast<ID3D11HullShader*>(shader)); break;
+        case 'd': updated->ds.Attach(static_cast<ID3D11DomainShader*>(shader)); break;
+        }
+        updated->reflection = result.reflection;
+        next.emplace(key, std::move(updated));
+    }
+    auto replacement_loader = std::make_unique<ShaderLoader>(candidate->manifest, *shader_api, *shader_api,
+        [](const ShaderRequest& request, const ManifestEntry& entry) { return runtime_shaders->prepare(request, entry, *shader_api); });
+    { std::unique_lock r(registry_guard); registry.swap(next); }
+    runtime_shaders = std::move(candidate); loader = std::move(replacement_loader);
+    link_cache.clear(); tess_link_cache.clear(); history.reset_all(); foliage_history.reset_all();
+    pack_status.store(1); say("Motion shader pack reloaded from runtime source; history reset.");
+}
 void window_open(void* target) noexcept try {
-    if (!hooks_active.load(std::memory_order_acquire)) return;
+    if (dump_shaders.exchange(false) && runtime_shaders) {
+        const auto path = std::filesystem::path(configured.shader_dir) / "cache" / "shader-dump";
+        sayf("Runtime shader dump result=%d", runtime_shaders->api().dump(path.c_str()));
+    }
+    reload_pack();
+    if (!hooks_active.load(std::memory_order_acquire) || !pack_enabled.load()) return;
     ID3D11Device* device{};
     ID3D11DeviceContext* context{};
     std::byte* engine_target{};
@@ -1022,10 +1090,7 @@ MotionOptions read_options(const wchar_t* ini) noexcept try {
     MotionOptions result{};
     if (!ini) return result;
     result.enabled = GetPrivateProfileIntW(L"Anomaly", L"Motion", 0, ini) == 1;
-    wchar_t path[32768]{};
-    GetPrivateProfileStringW(L"Anomaly", L"MotionShaderDir", L"", path, 32768, ini);
-    if (path[0]) result.shader_dir = path;
-    else result.shader_dir = (std::filesystem::path(ini).parent_path() / L"ReScaleFrame" / L"anomaly-motion").wstring();
+    result.shader_dir = (std::filesystem::path(ini).parent_path() / L"ReScaleFrame" / L"patches").wstring();
     result.invalidate = GetPrivateProfileIntW(L"Anomaly", L"MotionInvalidate", 1, ini) != 0;
     result.foliage = GetPrivateProfileIntW(L"Anomaly", L"MotionFoliage", 1, ini) != 0;
     result.capture = GetPrivateProfileIntW(L"Anomaly", L"MotionCapture", 0, ini) != 0;
@@ -1040,6 +1105,24 @@ MotionOptions read_options(const wchar_t* ini) noexcept try {
 void configure(const MotionOptions& value, rsf_game_log_fn log, void* user) noexcept try {
     if (hooks_active.load()) return;
     configured = value;
+    pack_enabled.store(value.enabled);
+    options::add({pack_label, true, 0, 1, 1, 1, false,
+        []() noexcept {
+            const auto status = pack_status.load();
+            rsf_patch_counters core{sizeof(core), RSF_SHADER_PATCH_VERSION};
+            if (status == 1 && runtime_shaders) runtime_shaders->api().counters(&core);
+            if (status == 1 && core.refused)
+                std::snprintf(pack_label, sizeof(pack_label), "Motion shader pack: loaded (%llu refusals)",
+                    static_cast<unsigned long long>(core.refused));
+            else std::snprintf(pack_label, sizeof(pack_label), "Motion shader pack: %s",
+                status == 1 ? "loaded" : status == 2 ? "reload refused; previous pack active" : "not loaded");
+            return pack_enabled.load() ? 1 : 0;
+        },
+        [](int32_t v) noexcept { pack_enabled.store(v != 0); options::write_int(L"Motion", v ? 1 : 0); }});
+    options::add({"Reload motion shader pack", true, 0, 1, 1, 1, false,
+        []() noexcept { return 0; }, [](int32_t v) noexcept { if (v) reload_requested.store(true); }});
+    options::add({"Dump intercepted shaders", true, 0, 1, 1, 1, false,
+        []() noexcept { return 0; }, [](int32_t v) noexcept { if (v) dump_shaders.store(true); }});
     options::add({"Tree and grass motion", true, 0, 1, 1, 1, false,
         []() noexcept { return configured.foliage ? 1 : 0; },
         [](int32_t v) noexcept {
@@ -1059,13 +1142,12 @@ const char* draw_class_name(std::size_t c) noexcept {
         "soft_skinned", "tree", "detail", "no_visual", "tessellated"};
     return c < MotionCounters::classes ? names[c] : "unknown";
 }
-bool active() noexcept { return hooks_active.load(); }
+bool active() noexcept { return hooks_active.load() && pack_enabled.load(); }
 void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept {
     jitter[0] = current_u; jitter[1] = current_v; jitter[2] = previous_u; jitter[3] = previous_v;
 }
 
 bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept try {
-    if (!configured.enabled) return true;
     if (hooks_active.load()) return true;
     if (!module || image_size != selected.image_size()) { say("Anomaly motion refused: image size differs from the verified build."); return false; }
     // Trampolines are process-lifetime: a re-start must be the build the first install verified.
@@ -1082,20 +1164,22 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
         std::lock_guard lock(loader_guard);
         if (!loader) {
             const std::filesystem::path root(configured.shader_dir);
-            std::ifstream file(root / "manifest.txt", std::ios::binary);
-            if (!file) { sayf("Anomaly motion refused: no manifest.txt in %s", utf8(configured.shader_dir).c_str()); return false; }
-            const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            std::string error;
-            auto manifest = Manifest::parse(text, error);
-            if (!manifest) { sayf("Anomaly motion refused: manifest invalid (%s).", error.c_str()); return false; }
             static D3DShaderApi api(engine_compiler_module);
-            if (!api.ready()) { say("Anomaly motion refused: the engine's d3dcompiler_43 D3DCompile/D3DReflect is unavailable."); return false; }
+            runtime_shaders = std::make_unique<RuntimeShaders>();
+            std::string error;
+            if (!api.ready() || !runtime_shaders->open(root / "motion.rsfpatch", root / "cache", module, *selected.motion, error)) {
+                sayf("Anomaly motion pack refused: %s", error.c_str()); return false;
+            }
             shader_api = &api;
-            const auto cache = root / "cache" / manifest->name_space.substr(0, 16);
-            const auto roots = manifest->by_original.size();
-            loader = std::make_unique<ShaderLoader>(std::move(*manifest), root, cache, api, api);
-            sayf("Anomaly motion manifest: %zu allowlisted roots, namespace %s, cache %s", roots,
-                loader->manifest().name_space.substr(0, 16).c_str(), cache.string().c_str());
+            set_shader_runtime(runtime_shaders->api());
+            ID3D11Device* device{};
+            if (read_global(selected.sr->hw_device_rva, device) && device) runtime_shaders->api().attach_d3d11(device);
+            const auto roots = runtime_shaders->manifest.by_original.size();
+            loader = std::make_unique<ShaderLoader>(runtime_shaders->manifest, api, api,
+                [](const ShaderRequest& request, const ManifestEntry& entry) { return runtime_shaders->prepare(request, entry, api); });
+            sayf("Anomaly runtime shader pack: %zu allowlisted roots, namespace %s", roots,
+                loader->manifest().name_space.substr(0, 16).c_str());
+            pack_status.store(1);
         }
     }
     const auto& motion_sites = mp().motion_sites;
@@ -1144,7 +1228,7 @@ MotionCounters counters() noexcept {
 }
 
 FrameTarget frame_target() noexcept {
-    if (!hooks_active.load(std::memory_order_acquire) || !window.have_frame) return {};
+    if (!hooks_active.load(std::memory_order_acquire) || !pack_enabled.load() || !window.have_frame) return {};
     return {device_state.texture(), device_state.width(), device_state.height(), window.frame,
         window.view == temporal::ViewId::Main, window.target_ok && device_state.texture() != nullptr};
 }
@@ -1155,6 +1239,17 @@ void report(void (*emit)(void*, const char*), void* user) noexcept try {
     { std::lock_guard lock(stats_guard); now = stats; }
     char text[900];
     using ull = unsigned long long;
+    if (runtime_shaders) {
+        rsf_patch_counters core{sizeof(core),RSF_SHADER_PATCH_VERSION}; runtime_shaders->api().counters(&core);
+        std::snprintf(text, sizeof(text),
+            "Runtime shaders intercepted=%llu runtime_built=%llu cache_hits=%llu refused=%llu "
+            "source=%llu hash=%llu anchor=%llu compile=%llu original=%llu reflection=%llu format=%llu internal=%llu",
+            static_cast<ull>(core.intercepted), static_cast<ull>(core.built), static_cast<ull>(core.cache_hits),
+            static_cast<ull>(core.refused), static_cast<ull>(core.refusals[3]), static_cast<ull>(core.refusals[4]),
+            static_cast<ull>(core.refusals[5]), static_cast<ull>(core.refusals[6]), static_cast<ull>(core.refusals[7]),
+            static_cast<ull>(core.refusals[8]), static_cast<ull>(core.refusals[9]), static_cast<ull>(core.refusals[10]));
+        emit(user, text);
+    }
     const auto d = [&](uint64_t MotionCounters::*field) { return static_cast<ull>(now.*field - reported.*field); };
     std::snprintf(text, sizeof(text),
         "Anomaly motion window frames=%llu windows=%llu clears=%llu draws=%llu motion=%llu valid=%llu invalid=%llu unpaired=%llu "
