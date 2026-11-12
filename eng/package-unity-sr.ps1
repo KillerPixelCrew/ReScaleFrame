@@ -4,11 +4,14 @@ param(
     [string]$Python = 'python',
     [ValidateSet('Auto','DLSS','FSR1','FSR2','FSR3','FSR4','XeSS','Off')][string]$Backend = 'Auto',
     [ValidateSet('Auto','Off','DLSS','FSR3','FSR4','XeSS')][string]$FrameGeneration = 'Auto',
-    [ValidateRange(0,4)][int]$Quality = 1
+    [ValidateRange(0,4)][int]$Quality = 1,
+    [string]$StreamlineRoot
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+# The Streamline SDK with bin/x64 (vendor/streamline may hold headers only).
+$taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline' }
 $taskGame = if ($GameDirectory) { (Resolve-Path -LiteralPath $GameDirectory).Path } else { $null }
 $taskDeployment = if ($taskGame) { Get-Content -Raw -LiteralPath (Join-Path $taskGame 'ReScaleFrame/deployment.json') | ConvertFrom-Json } else { $null }
 $taskVersion = (Get-Content -LiteralPath "$taskRoot/VERSION" -Raw).Trim()
@@ -52,8 +55,8 @@ if (!$taskDeployment) {
             'version.dll' { Join-Path $taskBin 'ReScaleFrame.Loader.dll'; break }
             'ReScaleFrame.ini' { $null; break }
             'ReScaleFrame/streamline/*' {
-                if ($taskLeaf -in @('license.txt','3rd-party-licenses.md')) { Join-Path $taskRoot "vendor/streamline/$taskLeaf" }
-                else { Join-Path $taskRoot "vendor/streamline/bin/x64/$taskLeaf" }; break
+                if ($taskLeaf -in @('license.txt','3rd-party-licenses.md')) { Join-Path $taskStreamline $taskLeaf }
+                else { Join-Path $taskStreamline "bin/x64/$taskLeaf" }; break
             }
             'ReScaleFrame/fidelityfx/*' {
                 if ($taskLeaf -eq 'license.md') { Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX/docs/license.md' }
@@ -125,7 +128,7 @@ $taskSettings = [regex]::Replace($taskSettings, '(?m)^FrameGeneration=\d+', "Fra
 Copy-Item -LiteralPath "$taskRoot/LICENSE" -Destination "$taskStage/LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/build/windows-x64/_deps/minhook-src/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/sdk/game/LICENSE" -Destination "$taskStage/GameSDK-MIT.txt"
-Copy-Item -LiteralPath "$taskRoot/vendor/streamline/bin/x64/reflex.license.txt" -Destination "$taskStage/ReScaleFrame/streamline/reflex.license.txt"
+Copy-Item -LiteralPath "$taskStreamline/bin/x64/reflex.license.txt" -Destination "$taskStage/ReScaleFrame/streamline/reflex.license.txt"
 & $Python "$taskRoot/tools/package-unity-notices.py" $taskStage
 if ($LASTEXITCODE -ne 0) { throw 'Rust dependency notice collection failed.' }
 [IO.File]::WriteAllText("$taskStage/Unity-NOTICE.txt", @'
