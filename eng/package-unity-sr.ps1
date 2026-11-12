@@ -87,7 +87,7 @@ if (!$taskDeployment) {
 }
 $taskFiles = @($taskDeployment.files)
 $taskPinnedRuntimes = @{
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll' = 'd0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+    'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll' = 'aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace'
     'ReScaleFrame/xess/libxess.dll' = '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
 }
 foreach ($taskRelative in $taskPinnedRuntimes.Keys) {
