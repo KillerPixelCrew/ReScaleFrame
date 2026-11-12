@@ -3,8 +3,8 @@
 Checkpoint: end of 12 November 2026, CET. Work started 11 November 2026.
 Status: STOPPED for today at the user's request. **Full in-game integration is NOT complete.**
 SR stages 1 and 2, motion vectors and the overlay are game-accepted. Jitter, foliage motion and
-temporal SR are built and fixture-tested, and their first game run was the last task of the day
-(see "Installation state"). Frame generation is not started.
+temporal SR are built and fixture-tested. Their first game run stopped early: the one Stage 3
+jitter burst missed its accuracy bar (see "Installation state"). Frame generation is not started.
 Worker specs, reports and commit messages: `.local/anomaly/orchestration/`.
 
 ## Goal and non-negotiable constraints
@@ -106,13 +106,26 @@ Sources: `docs/research/anomaly-{world-space-ui,native-hooks,geometry-coverage,o
 - RSF files are staged in `D:/Anomaly 1.5.3/bin`: `dinput8.dll`, `ReScaleFrame.ini`,
   `ReScaleFrame/` (Runtime, adapter, overlay, and from the last run the motion shader folder
   and vendor runtimes). Each run's rollback is `<run dir>/tools/deploy.ps1 -Rollback`.
-- The e991e89 game run (`.local/anomaly/wave6-game/`) was told to stop at a safe point for the
-  day; its result and the final INI state are recorded below when it reports.
+- The e991e89 game run (`.local/anomaly/wave6-game/result.json`) stopped early at the user's
+  wrap-up. It deployed the build, the vendor runtimes (streamline, fidelityfx, xess) and the
+  current motion folder, and ran one Stage 3 jitter burst (16 frames, SRScale 0.67). Counters
+  were clean (jittered == restores == mip applied, 4 first-person jitters per frame, no
+  refusals), but `--measure-jitter` FAILED the 0.1 px bar: worst 0.163 px whole frame, 0.124 px
+  on a static wall, 0.15-0.27 px elsewhere. The burst started before the loading screen was
+  dismissed, so the last frames show the loading screen and HUD/shadow stillness could not be
+  checked. The game then exited by itself with a clean shutdown; the cause is unknown.
+  Sharpness, Stage 3 motion, foliage and all Stage 5 backends were not exercised.
+- Final state: game not running, saves byte-identical, INI `Mode=Observe`, `Overlay=1`,
+  `SRStage=0`, `Motion=0`. Rollback: `.local/anomaly/wave6-game/tools/deploy.ps1 -Rollback`.
 
 ## Next session, in order
 
-- [ ] Read `.local/anomaly/wave6-game/result.json`. Finish any unreached items: Stage 3 jitter
-      burst measurement, weapon/world coherence, sharpness; live foliage coverage and wind;
+- [ ] Investigate the Stage 3 jitter measurement miss (0.12-0.27 px vs the 0.1 px bar): rerun
+      the burst after dismissing the loading screen, check the measurement method against a
+      synthetic burst, then check units and the projection site. Find why the game exited by
+      itself after that run.
+- [ ] Finish the unreached e991e89 items: weapon/world coherence, HUD/shadow stillness,
+      sharpness; live foliage coverage and wind;
       temporal SR per backend (convergence, panning, weapon ghosting, foliage, reset on load,
       exposure A/B, live switching, teardown).
 - [ ] Fix whatever that run found, then rerun only the failed items.
