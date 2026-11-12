@@ -108,7 +108,7 @@ def main() -> None:
     fsr = args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
     xess = args.xess_root / "bin/libxess.dll"
     for source, expected in (
-        (fsr, "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"),
+        (fsr, "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"),
         (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
     ):
         if digest(source) != expected:
@@ -162,7 +162,7 @@ def main() -> None:
     manifest = {
         "product": "ReScaleFrame for Ace Combat 7", "version": version, "source_commit": revision,
         "platform": "Windows x64", "streamline": "2.14.1", "dlss_runtime": "310.9.1.0",
-        "fidelityfx_sdk": "2.3.0", "fsr_providers": ["2.3.4", "3.1.5", "4.1.1"],
+        "fidelityfx_sdk": "2.4.0", "fsr_providers": ["2.3.4", "3.1.6", "4.1.2"],
         "xess_sdk": "3.0.2", "xess_sr_runtime": "2.0.2",
         "carrier": "dedicated AC7 dinput8",
         "frame_generation": ["DLSS-G", "FSR3", "FSR4 when exposed by the device SDK", "XeSS FG"],

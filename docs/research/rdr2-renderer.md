@@ -979,6 +979,9 @@ Hooking inside its wrapper preserves renderer cache restoration at `26ce948`, ca
 `6032a98`; only calls returning to `26f050a` normalize into the same DLSS-shaped descriptor.
 The native FSR implementation is skipped only after successful RSF output. Its resource
 state declarations and 1,352-byte FSR 2.1.2 layout are statically checked; live routing is pending.
+**Correction, 30 October:** this import-slot patch never routed a dispatch on an Intel Arc B370
+while the game ran its FSR2 carrier. The route now detours the DLL export, which is what the
+census measured (see "FSR2 input route on Intel" below).
 
 Queue observation hooks `26c97d4` with expected bytes
 `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 48`, filters caller `26df79b`, and preserves
@@ -1146,3 +1149,48 @@ and bounded original pixels. After the human closed AC normally, it was backed u
 hash-verified into the game at17:38, receipt `native-adapter-game-ad-20261026/deployment.json`.
 Cold game acceptance is pending. Native hook execution, generated game output, RTSS under FG, all-mode HUD separation,
 the resolution producer and stock-menu replacement remain unproven or unfinished.
+
+### FSR2 input route on Intel, 30 October 2026
+
+**Question.** Why does RSF never evaluate SR in RDR2 on an Intel Arc B370 (vendor `0x8086`,
+device `0xb083`, driver 32.0.101.9150, 1920x1200)?
+
+**Evidence.** The installed 0.1.1 package (`manifest.json` source `150ff92`) ran three sessions.
+The settings owner pinned the FSR2 carrier (`vendor=8086 DLSS=0 FSR2=0->2` and `->3`). The game
+refreshed its dimensions to 1130x706 into 1920x1200, the FSR2 Balanced ratio, and
+`system.xml` has `fsr2Index=2`. Queue and Present observers attached and the overlay drew.
+`rdr2.log` has no `native FSR fallback`, `SR native fallback` or `SR context` line. Each of those
+is logged on the first call that reaches `fsr_dispatch` with the expected caller. Therefore no
+dispatch reached the replaced pointer in import slot `+6032a98` with return address `+26f050a`.
+FG reported `source=0` throughout because its source identity comes from an accepted SR pass.
+
+`RDR2.exe` imports `ffxFsr2ContextDispatch` statically (no delay-load directory; slot
+`+6032a98` in `.idata`). The file on disk is encrypted, so the caller was not re-read. The
+census that measured 4,412 dispatches and the `+26f050a` return detours the
+`ffx_fsr2_api_x64.dll` export by name. OptiScaler `e7e3872d` does the same in
+`inputs/FSR2_Dx12.cpp` (`HookFSR2Inputs`). Which mechanism bypasses the import slot is
+unresolved.
+
+**Change.** The adapter detours the export in the Rockstar-signed `ffx_fsr2_api_x64.dll`,
+SHA-256 `887d11aaef717aa2d4713f4b6fb56b3d4c75737af51042de22f70f0a3fb89f83`, PE timestamp
+`64907ede`, image size `0x10000`. `ffxFsr2ContextDispatch` is at `+3c70`, entry bytes
+`48 85 c9 74 36 48 85 d2 74 31 8b 41 04 39 82 20` (`+0x520` is `renderSize.width`, matching
+the 1,352-byte layout). `ffxFsr2ContextCreate` at `+3ab0`, bytes
+`48 89 5c 24 08 57 48 83 ec 20 48 8b da 41 b8 60`, is detoured for evidence only. Calls from
+the RDR2 image use the existing normalization. The log records the first caller RVA, any second
+caller, whether the import slot resolves to the export, and up to four context creations.
+
+**Static check.** The decrypted 25 October dump (`dumps/rdr2-20261025-dx12/RDR2.exe.dump`)
+has `+26f0505 call 2ea0af5`, `2ea0af5 jmp [rip+3191f9d]` = slot `+6032a98`, and the slot holds
+`ffx_fsr2_api_x64.dll+3c70` at ASI load. The wrapper `+26efe24..+26f05d4` has no vendor test.
+The import-slot route was therefore correct statically; its runtime displacement is unexplained.
+
+**Game result, 30 October.** Built with VS 2026 Build Tools on the Intel device and deployed.
+The context-create detour logged `result=0 flags=0x29 max_render=960x600 display=1920x1200` at
+startup and after a quality change. On entering gameplay the dispatch detour logged
+`RDR2.exe+26f050a (measured wrapper)`, followed by `SR context backend=5 quality=3 input=960x600
+output=1920x1200`, evaluation 0 and accepted output. XeSS FG then reported `active=1` with
+advancing source frames. The dispatch detour now routes every caller and names the caller module,
+because a forwarding hook on the import slot would not return into `RDR2.exe`; that case was not
+observed. A menu-only run shows context creation without dispatch, which explains a session
+with an FSR2 carrier but no SR line. Image quality on Intel is not assessed.

@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 16;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 17;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -204,6 +204,12 @@ pub struct RsfOverlayStats {
     pub sharpening_debug: u32,
     /// ABI 16. Panel layout word the host stored, opaque to it.
     pub ui_preferences: u32,
+    /// ABI 17. Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL.
+    pub latency_pacing_owner: u32,
+    /// Keeps the following counter eight-byte aligned, as in the header.
+    pub latency_reserved: u32,
+    /// Frames the pacing owner has paced; a rising count shows the latency SDK is running.
+    pub latency_paced_frames: u64,
 }
 
 /// A toggle: `value` is 0 or 1.
@@ -530,7 +536,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 344);
+        assert_eq!(size_of::<RsfOverlayStats>(), 360);
         assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
@@ -598,6 +604,9 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, sharpening_debug), 336);
         // Appended in ABI 16, into the padding the host option pointer leaves at the end.
         assert_eq!(offset_of!(RsfOverlayStats, ui_preferences), 340);
+        assert_eq!(offset_of!(RsfOverlayStats, latency_pacing_owner), 344);
+        assert_eq!(offset_of!(RsfOverlayStats, latency_reserved), 348);
+        assert_eq!(offset_of!(RsfOverlayStats, latency_paced_frames), 352);
     }
 
     #[test]

@@ -24,8 +24,8 @@ FidelityFX SR/FG and XeSS SR/FG/XeLL runtimes. No original game files are includ
 5. Press **Insert** for the overlay to choose SR and FG providers, quality, DLSS preset,
    generated frames, Reflex/latency and the frame limit.
 
-Fresh defaults use DLSS SR with FG Off. On AMD or Intel hardware choose FSR or XeSS in the
-overlay. Overlay changes are saved to `ReScaleFrame.ini` beside the ASI. `[RDR2] Enable=0`
+Fresh defaults pick the SR provider for the GPU that runs the game (DLSS on NVIDIA, XeSS on
+Intel, FSR3 otherwise) with FG Off. Choosing a provider in the overlay saves it. Overlay changes are saved to `ReScaleFrame.ini` beside the ASI. `[RDR2] Enable=0`
 disables RSF without uninstalling it.
 
 ## Logs and uninstall

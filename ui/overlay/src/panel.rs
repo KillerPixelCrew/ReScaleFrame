@@ -60,6 +60,9 @@ const HEADER: f32 = 64.0;
 const STRIP: f32 = 76.0;
 const FOOTER: f32 = 44.0;
 const RAIL: f32 = 84.0;
+/// Pacing owners reported by the runtime.
+const LATENCY_REFLEX: u32 = 1;
+const LATENCY_XELL: u32 = 2;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
 const SR_BACKENDS: [(u32, &str); 6] = [
@@ -1137,37 +1140,62 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     separator(ui);
-    heading(ui, "Reflex");
-    if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex {
-        note(
-            ui,
-            "DLSS-G requires Reflex On while generating frames.",
-            AMBER,
-        );
-    }
-    let items: Vec<Segment> = [(0, "Off"), (1, "On"), (2, "On + Boost")]
-        .iter()
-        .map(|(id, label)| Segment {
-            label: (*label).to_owned(),
-            sub: None,
-            enabled: generation.reflex_available,
-            mark: if *id == generation.requested_reflex {
-                Mark::On
-            } else {
-                Mark::Off
-            },
-        })
-        .collect();
-    let (chosen, rects) = segments(ui, "reflex", &items, 3);
-    store(&mut controls.reflex, &rects);
-    if let Some(index) = chosen
-        && index as u32 != generation.requested_reflex
-    {
-        intent.reflex_changed = true;
-        intent.reflex_mode = index as u32;
-    }
-    if !generation.reflex_available {
-        note(ui, "Reflex is not reported available here.", MUTED);
+    if generation.latency_owner == LATENCY_XELL {
+        heading(ui, "Intel XeLL");
+        let status = if generation.latency_paced_frames == 0 {
+            "Intel XeLL: waiting for paced frames".to_owned()
+        } else {
+            format!(
+                "Intel XeLL active, {} frames paced",
+                generation.latency_paced_frames
+            )
+        };
+        note(ui, status, MUTED);
+        note(ui, "Low-latency mode follows frame generation.", MUTED);
+    } else {
+        heading(ui, "Reflex");
+        if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex {
+            note(
+                ui,
+                "DLSS-G requires Reflex On while generating frames.",
+                AMBER,
+            );
+        }
+        let items: Vec<Segment> = [(0, "Off"), (1, "On"), (2, "On + Boost")]
+            .iter()
+            .map(|(id, label)| Segment {
+                label: (*label).to_owned(),
+                sub: None,
+                enabled: generation.reflex_available,
+                mark: if *id == generation.requested_reflex {
+                    Mark::On
+                } else {
+                    Mark::Off
+                },
+            })
+            .collect();
+        let (chosen, rects) = segments(ui, "reflex", &items, 3);
+        store(&mut controls.reflex, &rects);
+        if let Some(index) = chosen
+            && index as u32 != generation.requested_reflex
+        {
+            intent.reflex_changed = true;
+            intent.reflex_mode = index as u32;
+        }
+        if !generation.reflex_available {
+            note(ui, "Reflex is not reported available here.", MUTED);
+        }
+
+        if generation.latency_owner == LATENCY_REFLEX && generation.latency_paced_frames > 0 {
+            note(
+                ui,
+                format!(
+                    "Reflex active, {} frames paced",
+                    generation.latency_paced_frames
+                ),
+                MUTED,
+            );
+        }
     }
 
     frame_limit(ui, &generation, intent, controls);

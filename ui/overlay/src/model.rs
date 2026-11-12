@@ -104,8 +104,12 @@ pub struct GenerationStats {
     pub max_generated: u32,
     /// RTX 40 MFG unlock admission, independent of observed activity.
     pub mfg_unlock_status: u32,
-    /// SDK-reported Reflex availability.
+    /// SDK-reported low-latency availability (Reflex or XeLL).
     pub reflex_available: bool,
+    /// Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL.
+    pub latency_owner: u32,
+    /// Frames the pacing owner has paced.
+    pub latency_paced_frames: u64,
     /// Requested Reflex mode.
     pub requested_reflex: u32,
     /// Effective Reflex mode.

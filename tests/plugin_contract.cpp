@@ -26,9 +26,6 @@ constexpr Fixture fixtures[] = {
     {L"rdr2", "rdr2", "RDR2.exe",
      "b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e",
      RSF_ERROR_NOT_READY, RSF_GAME_RECOGNIZED},
-    {L"gta5-enhanced", "gta5-enhanced", "GTA5_Enhanced.exe",
-     "b48e80f5fc899eb89e5dcc9f3b68e9551cc8dcfac78b2a940b207e569e9987ea",
-     RSF_ERROR_NOT_READY, RSF_GAME_RECOGNIZED},
     {L"unity-mono", "unity-mono", "DragNWash.exe",
      "5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
      RSF_ERROR_NOT_READY, RSF_GAME_RECOGNIZED}};

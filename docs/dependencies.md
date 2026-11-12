@@ -108,7 +108,7 @@ MIT notice alongside the existing vendor runtime terms. [Integration](research/r
 | RenderDoc header and x64 DLL | 1.45 | `vendor/renderdoc/` | In-application capture |
 | Streamline headers | 2.14.1 | `vendor/streamline/include/sl.h` | Compile the DLSS adapter |
 | Streamline/NGX x64 runtime | 2.14.1 release package | `vendor/streamline/bin/x64/` | Load and evaluate DLSS; `sl.dlss_g.dll`, `nvngx_dlssg.dll`, `sl.pcl.dll` and `sl.reflex.dll` are in the same package and are loaded by current-source FG/Reflex |
-| FidelityFX SDK headers | `60f4ea81909200d8542eca14dccb2628b763a9a3` (SDK 2.3.0; FSR 2.3.4, 3.1.5 and hardware-dependent 4.1.1) | `vendor/fidelityfx/Kits/FidelityFX/api/include/` and `upscalers/include/` | Compile the FSR adapter |
+| FidelityFX SDK headers | `7539ae8b6568ad29ed78a753404351daf3b5cca7` (SDK 2.4.0; FSR 2.3.4, 3.1.6, hardware-dependent 4.1.2 and FG 4.0.2). SDK 2.3.0 `60f4ea81` remains accepted by the FSR4 compatibility hook | `vendor/fidelityfx/Kits/FidelityFX/api/include/` and `upscalers/include/` | Compile the FSR adapter |
 | FidelityFX x64 runtime | same | `vendor/fidelityfx/Kits/FidelityFX/signedbin/` | `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` |
 | XeSS SDK headers | 3.0.2, `8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0` | `vendor/xess/inc/` (`xess/`, `xess_fg/`, `xell/`) | Compile the XeSS adapter |
 | XeSS x64 runtime | same | `vendor/xess/bin/` | `libxess.dll`, `libxess_dx11.dll`, `libxess_fg.dll`, `libxell.dll` |

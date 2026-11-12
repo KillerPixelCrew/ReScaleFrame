@@ -29,7 +29,8 @@ extern "C" {
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
 /* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
    close the panel and to store a new layout word. */
-#define RSF_OVERLAY_ABI_VERSION 16u
+#define RSF_OVERLAY_ABI_VERSION 17u
+/* 17: latency pacing owner and accepted pacing count follow the layout preferences. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -176,6 +177,11 @@ typedef struct rsf_overlay_stats {
        the last `intent.ui_preferences` the host stored, or zero for the defaults. Hosts save it
        next to the FPS overlay switch. */
     uint32_t ui_preferences;
+    /* ABI 17. Latency technology that owns pacing (0 none, 1 NVIDIA Reflex, 2 Intel XeLL) and the
+       frames it has actually paced. A rising count shows the SDK is running. */
+    uint32_t latency_pacing_owner;
+    uint32_t latency_reserved;
+    uint64_t latency_paced_frames;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the

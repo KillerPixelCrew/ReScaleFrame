@@ -79,8 +79,8 @@ Graphics creation exports (`CreateDXGIFactory`/`1`/`2`, `D3D12CreateDevice`) ret
 returned by the resolver, including during DLL initialization before the module-load callback.
 They use entry detours instead of resolver thunks. Otherwise an overlay can cache a census thunk
 as its original while the census forwards into that overlay, forming a recursive hook chain.
-The GTA V Enhanced startup failure and its correction are recorded in
-[renderer research](../../docs/research/gta5-enhanced-renderer.md). A stand-in DLL resolves these
+This corrected a recursive Steam hook chain at GTA V Enhanced startup (integration since removed;
+the record is in Git history before its removal). A stand-in DLL resolves these
 exports during its own DllMain to verify pointer identity; the WARP fixture checks that native
 graphics creation calls are still recorded.
 
