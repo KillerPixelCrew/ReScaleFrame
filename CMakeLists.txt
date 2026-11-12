@@ -65,6 +65,17 @@ add_subdirectory(runtime/backends/dlss)
 add_subdirectory(runtime/backends/fsr)
 add_subdirectory(runtime/backends/xess)
 add_subdirectory(runtime/orchestrator)
+# The Rust panel is built by cargo. bin/<Config>/rescaleframe_overlay.dll is either the current
+# target/<profile> build or absent, never a leftover from an earlier build.
+add_custom_target(rsf_overlay_panel_stage ALL
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE=${CMAKE_SOURCE_DIR}/target/$<IF:$<CONFIG:Debug>,debug,release>/rescaleframe_overlay.dll"
+        "-DDEST=$<TARGET_FILE_DIR:rsf_orchestrator>/rescaleframe_overlay.dll"
+        "-DROOT=${CMAKE_SOURCE_DIR}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/stage_overlay_panel.cmake"
+    COMMENT "Staging rescaleframe_overlay.dll from target/ (or removing a stale copy)"
+    VERBATIM)
+add_dependencies(rsf_overlay_panel_stage rsf_orchestrator)
 add_subdirectory(games/anomaly)
 add_subdirectory(games/ac7)
 add_subdirectory(games/project-wingman)

@@ -580,6 +580,8 @@ mod tests {
     fn stats_with_backend() -> Stats<'static> {
         Stats {
             backend_loaded: true,
+            // DLSS, FSR2, FSR3, FSR4, XeSS and Spatial: a host that offers super resolution.
+            backend_choices: 0x3e,
             ..Stats::default()
         }
     }
@@ -915,7 +917,7 @@ mod tests {
     #[test]
     fn a_preset_can_be_selected_before_enabling_dlss() {
         let mut overlay = Overlay::new();
-        let stats = Stats::default();
+        let stats = stats_with_backend();
         settle(&mut overlay, &stats);
         let target = quality_rect(&overlay, Quality::UltraPerformance);
         let [press, release] = click(&mut overlay, &stats, target);
@@ -936,6 +938,7 @@ mod tests {
         let mut stats = Stats {
             refusal_reason: Some("device does not support the backend"),
             backend_loaded: true,
+            backend_choices: 0x3e,
             ..Stats::default()
         };
         // Nothing found, nothing decoded, no jitter, no sizes, and a quality level from a runtime
@@ -1072,6 +1075,24 @@ mod tests {
         stats.set_quality(Quality::Native.to_abi());
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::Native);
+    }
+
+    #[test]
+    fn a_host_with_no_sr_choice_gets_no_upscaling_controls() {
+        let mut overlay = Overlay::new();
+        let stats = Stats {
+            backend_loaded: true,
+            backend_choices: 0,
+            ..Stats::default()
+        };
+        settle(&mut overlay, &stats);
+        let controls = overlay.controls();
+        assert!(controls.enabled.is_none(), "no checkbox without a backend");
+        assert!(controls.backend.iter().all(Option::is_none));
+        assert!(controls.quality.iter().all(Option::is_none));
+        // The rest of the panel still lays out and idling requests nothing.
+        assert!(!overlay.draw_calls().is_empty());
+        assert!(idle_frame(&mut overlay, &stats).is_idle());
     }
 
     #[test]

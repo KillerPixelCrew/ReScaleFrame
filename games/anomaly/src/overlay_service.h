@@ -6,6 +6,7 @@
 #pragma once
 #include "overlay_hooks.h"
 #include "overlay_input_gate.h"
+#include <rescaleframe/named_frame_dump.h>
 #include <rescaleframe/overlay_api.h>
 #include <windows.h>
 
@@ -26,6 +27,9 @@ struct StartOptions {
     void* log_user{};
     // Test seams. Production leaves both at their defaults.
     const rsf_overlay_api* api_override{};   // used instead of resolving the Runtime export
+    // Used instead of resolving rsf_get_overlay_diagnostics / rsf_input_dump_named_texture from the Runtime.
+    rsf_get_overlay_diagnostics_fn diagnostics_override{};
+    rsf_input_dump_named_texture_fn capture_override{};
     bool install_hooks{true};
 };
 
@@ -36,7 +40,10 @@ StartStatus bind_api(rsf_get_overlay_api_fn query, rsf_overlay_api* out, const c
 // Cold start, outside DllMain, before the first Present. Refuses cleanly and installs no hook unless
 // the API binds and the Runtime accepts the configuration. One call per process.
 // INI keys: [Anomaly] Overlay=1 selects this (read by the caller); OverlayKeyPoll=0 disables the
-// adapter's own Insert fallback; the shared render settings (SR, FG, StatusOverlay, ...) are written
+// adapter's own Insert fallback; OverlayCapture=1 writes PNGs of the presented backbuffer after the panel
+// drew, for the first OverlayCaptureFrames frames (default 3, spaced OverlayCaptureStride presents apart,
+// default 20) after each of the first OverlayCaptureCycles (default 2) panel opens and closes, into
+// OverlayCaptureDir (default <ini directory>\RSF-OverlayCapture\<local time>); the shared render settings (SR, FG, StatusOverlay, ...) are written
 // by the Runtime into the same section.
 StartStatus start(const StartOptions& options, const char** reason) noexcept;
 

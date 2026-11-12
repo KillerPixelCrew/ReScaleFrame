@@ -1,5 +1,16 @@
 # Implementation tracker
 
+## Anomaly overlay capture and SR Stage 1, 12 November 2026
+
+The d75a881 game run configured and activated the overlay with working DirectInput gating, but
+the panel could not be seen: desktop captures are black and F12 is blocked while it is open.
+An opt-in presented-frame capture, pointer/apply logging and a deploy that ships the current
+overlay DLL were added; the panel now hides SR controls when no SR choice exists. SR Stage 1
+(`[Anomaly] SRStage=1`) swaps generic0/generic_temp to FP16 twins from phase_scene_prepare to the
+seam and writes the stock tonemap back through an RSF round-trip shader, with guarded hooks and
+an opt-in seam capture. Release VS2026: 178 discovered, 167 passed, 11 optional skips,
+fmt/Clippy; Rust workspace tests passed. Stage 1 and the panel are not yet game-tested.
+
 ## Anomaly Observe run, overlay wiring and SR seam, 12 November 2026
 
 Observe mode ran in Anomaly: exactly-once startup before device creation, all guarded and

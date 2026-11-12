@@ -138,6 +138,11 @@ struct DrawSink {
     void (*draw)(void*, const DrawCapture&) noexcept{};
 };
 void geometry_set_draw_sink(DrawSink) noexcept; // Set only with native hooks quiescent.
+// Shared CRender::rmNear slot. The geometry producer owns the only detour on rmNear (geometry_site_rm_near); other
+// adapter users (SR world window) register here instead of patching the same bytes a second time. Called on the
+// render thread after the original rmNear returned, whether or not geometry capture is enabled. Null clears it.
+using RmNearCallback = void (*)(void* render) noexcept;
+void geometry_set_rm_near_callback(RmNearCallback) noexcept;
 // Main or scope frame, from the engine's own IsSVPFrame predicate (isActive && dwFrame % frameDelay == 0).
 // Empty when the bytes are unreadable. `module` is the executable base.
 std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept;

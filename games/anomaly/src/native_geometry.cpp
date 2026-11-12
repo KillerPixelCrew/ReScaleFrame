@@ -416,6 +416,7 @@ void __fastcall render_emissive_hook(void* self)
     const HudWindow window;
     reinterpret_cast<Unary>(originals[geometry_site_render_emissive])(self);
 }
+std::atomic<RmNearCallback> rm_near_callback{};
 void __fastcall rm_near_hook(void* self)
 {
     reinterpret_cast<Unary>(originals[geometry_site_rm_near])(self);
@@ -423,6 +424,7 @@ void __fastcall rm_near_hook(void* self)
         open_near_window();
         near_windows.fetch_add(1);
     }
+    if (const auto callback = rm_near_callback.load(std::memory_order_acquire)) callback(self);
 }
 void __fastcall rm_normal_hook(void* self)
 {
@@ -492,6 +494,10 @@ std::span<const HookSite> native_geometry_hook_sites() noexcept
         return sites;
     }();
     return result;
+}
+void geometry_set_rm_near_callback(RmNearCallback value) noexcept
+{
+    rm_near_callback.store(value, std::memory_order_release);
 }
 void geometry_set_sink(GeometrySink value) noexcept
 {

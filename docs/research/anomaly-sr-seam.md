@@ -1,8 +1,9 @@
 # Anomaly SR seam: world/output resolution split and linear-colour boundary
 
-Status: source and retained-binary research plus a design. Nothing here has been built,
-injected or game-tested. No hook below changes rendering today. Every statement is either
-cited to source/binary evidence or marked **UNVERIFIED**.
+Status: source and retained-binary research plus a design. Stage 1 (section 9) is built and
+fixture-tested behind an opt-in INI key; it has not been injected or game-tested. With the key
+off, no hook below changes rendering. Every statement is either cited to source/binary evidence
+or marked **UNVERIFIED**.
 
 - Reference engine: `D:/xray-monolith`, commit `028ccf5` ("X-Ray Monolith Engine for
   S.T.A.L.K.E.R. Anomaly 1.5.3"). Source-to-binary correspondence is checked only where a
@@ -484,8 +485,9 @@ in the same pattern as the existing `native_profile` checks.
 Live acceptance: Observe mode logs per-frame order `prepare → seam → Render exit` exactly once per
 world frame, with zero on menu and SVP frames. Do not run IDA/Ghidra jobs during game runs.
 
-**Stage 1: twin swap at scale 1.0 (render size = output size).**
-Twins allocated in H5; FP16 `generic0`/`generic_temp`; f^-1 then f round trip; nearest upsample;
+**Stage 1: twin swap at scale 1.0 (render size = output size).** Built; see section 9 for what was
+implemented, what was deferred and the live acceptance comparison.
+Original plan: twins allocated in H5; FP16 `generic0`/`generic_temp`; f^-1 then f round trip; nearest upsample;
 depth copy; no jitter; SR off.
 Tests without the game: (a) a hardware D3D11 fixture of the f/f^-1 and upsample passes against the
 CPU reference in `tonemap_inverse_check.py`; (b) a swap/restore unit test on mock `CRT`/`CTexture`
@@ -641,6 +643,123 @@ Stage 1 readiness: every site the scale-1.0 twin swap needs is mapped and guarde
 (`reset_begin/end`, already guarded), `rmNormal`, `Device` dimensions, `HW.pBaseZB`, the `generic0`/`generic_temp`/`generic1`/`rt_Position`/`rt_Color`
 slots, the `CRT`/`CTexture` fields for swap (b), and the `RCache` texture-cache fields. H4 and mip bias are
 mapped but not needed until Stage 3.
+
+## 9. Stage 1 implementation (scale 1.0)
+
+12 November 2026. Built and tested without the game. Not injected, not game-tested. No SR provider is
+called and rendering-readiness flags stay 0.
+
+**Selection.** `[Anomaly] SRStage=1` swaps; `SRStageCapture=1` dumps frames (optional
+`SRStageCaptureStart=600`, `SRStageCaptureCount=3` (at most 16), `SRStageCaptureInterval=300`, all in
+world frames). Both require `Mode=Observe`, because the native observer's `prepare()` verifies the
+executable. `SRStage` values other than 1 are off. `SRStageCapture=1` with `SRStage=0` installs the same
+hooks but never swaps, so a stock run can dump the same seam image.
+
+**Code.** `games/anomaly/src/sr_swap.{h,cpp}` (state machine, no D3D), `sr_d3d11.{h,cpp}` (twins and the
+pass), `sr_stage.{h,cpp}` (hooks, engine reads, diagnostics, capture), `sr_tonemap.h` (CPU reference) and
+`shaders/sr/rsf_sr_roundtrip.hlsl` (RSF-authored, embedded at build time, compiled at runtime with the
+system `d3dcompiler_47`). `bootstrap.cpp` reads the keys; `native_observer.cpp` installs Stage 1 after the
+geometry hooks, calls `sr::frame_end()` inside its existing `IRenderDeviceRender::End` detour before the
+original End (so before Present), adds the SR lines to its 120-frame log, and calls `sr::quiesce()`.
+
+**Hooks.** One guarded set of four: H1 `phase_scene_prepare`, H2a `phase_sunshafts`, H2b `phase_blur`, and
+H3 on `phase_combine` (its epilogue is `CRender::Render`'s epilogue for world frames, since
+`phase_combine` is the last call; this avoids a second detour on `Render`, which the observer owns).
+Before installing, all four 16-byte prologues, the 17-byte `phase_blur` guard and all five
+`sr_call_sites` must match. Any mismatch, or a `HookSet` refusal, logs the site name and leaves the game
+stock. `rmNear` is not patched again: `native_geometry` now has a callback slot
+(`geometry_set_rm_near_callback`) that its own detour calls after the original. Stage 1 only counts calls
+inside the window; Stage 3 jitter will use the slot. If the geometry hooks were refused, the slot never
+fires and the install log says `rmNear slot=unavailable`.
+
+**Swap (mechanics b).** At H1, when the frame is eligible, `generic0` (`+0x3A8`) and `generic_temp` (`+0x3B8`)
+exchange `CRT::{pSurface, pRT, pZRT, pUAView, dwWidth, dwHeight, fmt}` and
+`CTexture::{pSurface, desc_cache, desc, m_pSRView}` with RSF-owned `R16G16B16A16_FLOAT` twins. Reference
+counts are not touched. Before the exchange each target must be a colour CRT of device size and
+A8R8G8B8 whose CTexture binds the same surface, and `this` must equal `CRender::Target`. Otherwise the
+stage refuses for the rest of the process. After every exchange and restore, `RCache.T` and all
+per-stage `CTexture*` slots are cleared (section 1.2). Stage 1 does **not** swap `Device.dwWidth/dwHeight`
+or `HW.pBaseZB`, and has no depth twin and no jitter. At scale 1.0 those are identities; they arrive with
+Stage 2.
+
+Eligibility: the swap is selected and not refused; not an SVP frame (the geometry `IsSVPFrame` reader, and an
+unreadable value counts as SVP); MSAA off (`dx10_msaa` bit); valid layout; twins available. Menu, loading and
+first-after-reset frames never reach H1. Twins are keyed on `CRenderTarget*`, both CRT and surface
+addresses, `HW.pDevice`, the observer's reset count and the device size. Any change (reset,
+`vid_restart`, resolution change, new device) drops them and creates new ones on the next eligible frame.
+
+Exits, all restoring the exact original bytes: the seam (normal); H3 with the window still open (seam
+missed: restore, then refuse); the next H1 finding a stale window; `frame_end` finding a window
+(defensive: restore, then refuse); quiesce; and rollback when an engine write faults part way. A field that
+changed inside the window (as `surface_set` would) is still restored, counted as `foreign`, and refuses
+further swaps.
+
+**Round trip.** After the restore at the seam, one full-screen draw reads the twin and writes
+`saturate(f(f^-1(y)))` into the engine's own UNORM8 `generic0` RTV, with nearest mapping (identity at
+scale 1.0). The inverse is the cancellation-free form from 2.2. Inputs are clamped to `[0, 65504]`
+first, so negatives and NaN give 0 and +inf gives 255, which is what the stock UNORM8 conversion stores.
+Alpha is `saturate(a)`. The complete immediate-context state is saved and restored around the draw
+(`rsf_d3d11_state_save`), so the engine's RCache, StateManager and SRV caches stay truthful.
+
+**Diagnostics** (the observer's 120-frame log, plus refusal lines when they happen):
+
+```text
+Anomaly SR stage window frames= no_world= prepare= eligible= swapped= skipped off= scope= msaa= layout= twins= | seams= passthrough= round_trips= rt_failed= | restores seam= combine_end= stale_prepare= frame_end= shutdown= rollback= | rm_near_in_window= foreign= write_faults=
+Anomaly SR stage totals stage= swapped= restores= round_trips= twin_generation= twin_drops= twin_refs_at_drop= captures= images= capture_failed= refused=
+```
+
+`twin_refs_at_drop` is diagnostic. Stock `phase_combine` calls `surface_get()` (an AddRef) on both copy
+operands and never releases them, so the engine leaks references on its own targets every frame, and during the window on the
+twins too. Dropped twins are therefore never actually freed until the process ends: about 2 × 8 bytes
+per pixel per reset.
+
+**Capture** (`SRStageCapture=1`, the core frame dump service, default directory
+`%LOCALAPPDATA%/ReScaleFrame/Anomaly/website/scene-*` or `RSF_DUMP_DIR`). On scheduled main-view world frames,
+and on F10: `anomaly_seam_fp16_input` (the FP16 twin at the seam, SRStage=1 only),
+`anomaly_seam_generic0` (the engine UNORM8 `generic0` as every post pass receives it: after the round trip,
+or stock at the seam) and `final_color` (the back buffer before Present, with UI). Each image has a PNG
+and a raw `.bin`.
+
+**Tests without the game** (`build/wk-sr1`, Release; registered in `tests/anomaly_support.cmake`):
+
+- `anomaly_sr_swap_contract`: 14 cases on fake CRenderTarget/CRT/CTexture/RCache memory with profile offsets.
+  Normal frame (sunshafts seam, blur pass-through), blur-only seam, combine without seam, stale prepare,
+  window at frame end, shutdown mid-window, SVP/MSAA/menu/stock frames, seven layout mismatches, twin
+  failures, a write fault at each of the 22 exchange writes, foreign change, round-trip failure,
+  reset/resize/new-surface/new-device recreation. After every exit path the engine bytes are compared with
+  the original bytes.
+- `anomaly_sr_hooks_contract`: the geometry `rmNear` detour (redirected onto a fixture) calls the slot only
+  while registered and only while enabled. `sr::install` refuses on an empty image, a wrong image size, the
+  17th `phase_blur` byte, a call site that is no longer `E8`, and guarded bytes outside a real PE image, and
+  writes nothing in each case. INI parsing is also covered.
+- `anomaly_sr_roundtrip_device` on Intel UHD Graphics (hardware, debug layer on): all 65,536 FP16 patterns in
+  four channels gave 262,122 of 262,144 exact and a worst difference of 1 code value. The stock curve
+  `f(x)` for x in [0, 1e4] (65,536 samples) gave 64,888 exact and a worst difference of 1 against float64
+  `f` written to UNORM8. The float64 `f^-1(f(x))` relative error is 4.9e-16. Nearest mapping, state
+  preservation and twin creation/refusal also pass. Mixed FP16 + UNORM8 MRT with a D24S8 DSV produced 0
+  debug-layer errors. Informational, register item 3: a 64x64 RTV with a 128x128 DSV (stock `phase_blur`)
+  raises a debug-layer error, but the runtime still binds both.
+- `ctest -R "anomaly|thin"`: 63 of 64 passed. The failure is `anomaly_overlay_visibility`, which is built
+  only from the overlay sources another worker is changing. `py -3 -I tests/anomaly_sr_evidence.py --verify`
+  passes. Logs: `.local/anomaly/sr-stage1/`.
+
+**Live acceptance (to run).** Use the same save in l01_escape, the same standing view and the same time of day,
+with weather fixed if possible. Run A: `Mode=Observe`, `SRStageCapture=1`, `SRStage=0`. Run B: the same with
+`SRStage=1`. Compare `anomaly_seam_generic0.bin` between A and B. It should be identical apart from
+clamping-semantics areas (2.4 item 1: overbright sky, additive particles, stacked blends crossing 1) and
+temporal noise. Compare `final_color` the same way. Per-frame variation (grain, rain, animated foliage) has
+to be bounded by the A-vs-A difference between two stock captures. Then F12 at the same view with UI,
+plus PDA open, scope (SVP frames: `skipped scope` grows, `swapped` does not), menu (`no_world` grows),
+`vid_restart` and a resolution change (`twin_generation` and `twin_drops` grow by one each). Expected
+in a steady world view: `eligible == swapped == seams == round_trips == restores seam` per window; and
+`combine_end = stale_prepare = frame_end = rollback = foreign = write_faults = rt_failed = layout =
+twins = 0`; `refused=no`. Also expected: no D3D11 debug-layer errors when the layer is enabled, and
+about 8000 frames without a fault.
+
+Open or **UNVERIFIED**: whether any W-phase shader samples `$user$generic0` before `phase_combine` clears it.
+If one does, it now sees last frame's FP16 twin instead of last frame's post output; only `distort.s`
+samples it, and it does so in the forward pass. Also open: the effect of unclamped FP16 blending, the stock
+`seqFrameMT` dimension reads (irrelevant at 1.0), and the `generic0.a` consumers.
 
 ## Sources
 

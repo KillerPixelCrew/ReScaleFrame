@@ -2,6 +2,7 @@
 #include "native_observer.h"
 #include "native_profile.h"
 #include "overlay_service.h"
+#include "sr_stage.h"
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
@@ -95,6 +96,12 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
     }
     HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     if (!runtime) { log(nullptr, "Anomaly refused: carrier has not loaded the existing Runtime DLL."); return 3; }
+    // SR Stage 1 (SRStage=1 / SRStageCapture=1) rides on Observe: the observer's start() installs it after the
+    // geometry hooks. Inert when neither key is set.
+    if (const auto sr_options = rsf::anomaly::sr::read_options(configuration); sr_options.selected()) {
+        if (!observe) log(nullptr, "Anomaly SR stage refused: SRStage/SRStageCapture require Mode=Observe; game left stock.");
+        else if (!observed) rsf::anomaly::sr::configure(sr_options, log, nullptr);
+    }
     if (observe && !observed) {
         const auto observe_status = start_observation(runtime, hash);
         if (observe_status) return observe_status;

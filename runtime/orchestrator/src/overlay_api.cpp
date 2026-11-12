@@ -64,7 +64,10 @@ struct Service {
     uint32_t fg_backend{}, fg_owner{}, bridge_choices{};
     int32_t switch_result{}, request_result{}, apply_result{};
     uint32_t chain_width{}, chain_height{};
-    uint64_t presents{};
+    uint64_t presents{}, presents_drawn{};
+    // Every settings request, from the panel or the API. Counted even when the log line is capped.
+    uint32_t apply_attempts{}, apply_refused{};
+    int32_t last_apply_status{};
     ULONGLONG rate_tick{};
     uint64_t rate_base{}, rate_output{};
     uint32_t rate_backend{};
@@ -158,6 +161,28 @@ int32_t apply(Service& self, const rsf_render_settings& request)
     if (requested != RSF_BACKEND_OK) self.say("RSF overlay: FG provider %u request result=%d.", applied.fg_backend, requested);
     if (self.changed) self.changed(self.user, &applied);
     return RSF_OK;
+}
+
+// One line per request and its outcome, so a run can show that a panel click reached the service
+// and what became of it. Bounded: the counters keep counting after the lines stop.
+constexpr uint32_t kApplyLogLimit = 200;
+int32_t apply_logged(Service& self, const rsf_render_settings& request, const char* origin)
+{
+    const int32_t result = apply(self, request);
+    uint32_t attempt;
+    {
+        std::lock_guard lock(self.guard);
+        attempt = ++self.apply_attempts;
+        if (result != RSF_OK) ++self.apply_refused;
+        self.last_apply_status = result;
+    }
+    if (attempt <= kApplyLogLimit)
+        self.say("RSF overlay: settings_apply #%u from %s: SR=%u SRBackend=%u SRQuality=%u FG=%u FGBackend=%u "
+            "Generated=%u Latency=%u StatusOverlay=%u -> %s (%d).", attempt, origin, request.sr_enabled,
+            request.sr_backend, request.sr_quality, request.fg_enabled, request.fg_backend,
+            request.generated_frames, request.latency, request.status_overlay,
+            result == RSF_OK ? "applied and saved" : "refused", result);
+    return result;
 }
 
 // Shared by the panel's refusal line and status. Requires the service lock.
@@ -357,9 +382,7 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
         stats.enabled = value.sr_enabled;
         stats.backend = sr_off ? RSF_SR_NONE : value.sr_backend; stats.requested_backend = stats.backend;
         stats.last_switch_result = self.apply_result;
-        // The panel reads a zero mask as "host did not say, offer every backend". No SR is offered by sending
-        // a nonzero mask with no backend bit (backend IDs are 0..7; bit 31 is none of them).
-        stats.sr_backend_choices = sr_off ? 0x80000000u : self.sr_choices;
+        stats.sr_backend_choices = self.sr_choices;
         stats.dlss_preset = value.dlss_preset; stats.dlss_preset_available = self.preset_available;
         stats.sr_quality_locked = sr.quality_locked != 0;
         stats.application_presented_frames = self.presents;
@@ -385,10 +408,11 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
     rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
     if (!rsf_overlay_host_present(swapchain, &stats, &intent)) return RSF_OK;
     if (drawn) *drawn = 1;
+    { std::lock_guard lock(self.guard); ++self.presents_drawn; }
     bool changed = false;
     const auto requested = with_intent(value, intent, changed);
     if (changed) {
-        const auto result = apply(self, requested);
+        const auto result = apply_logged(self, requested, "panel");
         { std::lock_guard lock(self.guard); self.apply_result = result; }
         if (result != RSF_OK) self.say("RSF overlay: panel request refused (%d); saved settings retained.", result);
     }
@@ -492,8 +516,36 @@ int32_t settings_get(rsf_render_settings* output) noexcept try
 int32_t settings_apply(const rsf_render_settings* request) noexcept try
 {
     if (!request) return RSF_ERROR_INVALID_ARGUMENT;
-    return apply(service(), *request);
+    return apply_logged(service(), *request, "api");
 } catch (...) { return RSF_ERROR_NOT_READY; }
+}
+
+extern "C" RSF_RUNTIME_API rsf_result rsf_get_overlay_diagnostics(rsf_overlay_diagnostics* out)
+{
+    if (!out || out->struct_size < sizeof(*out)) return RSF_ERROR_INVALID_ARGUMENT;
+    auto& self = service();
+    rsf_overlay_diagnostics value{};
+    value.struct_size = sizeof(value);
+    value.started = self.started.load(std::memory_order_acquire) ? 1u : 0u;
+    value.visible = value.started ? rsf_overlay_host_visible() : 0u;
+    {
+        std::lock_guard lock(self.guard);
+        value.presents = self.presents; value.presents_drawn = self.presents_drawn;
+        value.chain_width = self.chain_width; value.chain_height = self.chain_height;
+        value.apply_attempts = self.apply_attempts; value.apply_refused = self.apply_refused;
+        value.last_apply_result = self.last_apply_status;
+    }
+    rsf_overlay_input_counters input{}; input.struct_size = sizeof(input);
+    if (rsf_overlay_input_counters_get(&input) == RSF_OVERLAY_INPUT_OK) {
+        value.input_installed = input.installed; value.cursor_freed = input.cursor_freed;
+        value.pointer_received = input.pointer_received; value.pointer_consumed = input.pointer_consumed;
+        value.button_downs_consumed = input.button_downs_consumed; value.wheel_consumed = input.wheel_consumed;
+        value.raw_mouse_reports = input.raw_mouse_reports; value.keys_consumed = input.keys_consumed;
+        value.frames_visible = input.frames_visible; value.frames_with_button = input.frames_with_button;
+        value.last_pointer_x = input.last_pointer_x; value.last_pointer_y = input.last_pointer_y;
+    }
+    *out = value;
+    return RSF_OK;
 }
 
 extern "C" RSF_RUNTIME_API rsf_result rsf_get_overlay_api(rsf_overlay_api* api)

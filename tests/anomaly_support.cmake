@@ -60,3 +60,29 @@ target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE
 target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
 set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
+
+# SR Stage 1 (scale-1.0 twin swap). The swap test drives the real state machine on fake CRT/CTexture/RCache memory
+# laid out with sr_profile.h offsets; the hooks test checks the shared rmNear slot and every install refusal on a
+# synthetic image; the round-trip fixture runs the production pass and shader on a real D3D11 device (hardware
+# with the debug layer when present, else WARP; 77 when neither exists). None of them runs game code.
+set(RSF_ANOMALY_SR_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
+add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap.cpp" "${RSF_ANOMALY_SR_SRC}/sr_swap.cpp")
+target_include_directories(rsf_anomaly_sr_swap_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_build_options)
+add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
+add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
+set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
+add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hooks.cpp"
+    "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_swap.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp"
+    "${RSF_ANOMALY_SR_SRC}/native_observer.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
+    ReScaleFrame::Graphics rsf_anomaly_sr_shaders minhook d3d11 rsf_build_options)
+add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
+add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
+target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
+add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
+set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
+    anomaly_sr_roundtrip_device PROPERTIES TIMEOUT 120)

@@ -7,6 +7,7 @@
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/backend.h>
+#include <rescaleframe/named_frame_dump.h>
 #if defined(RSF_FRAME_DUMP_STATIC)
 #define RSF_FRAME_DUMP_API
 #else

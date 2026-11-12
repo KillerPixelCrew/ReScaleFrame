@@ -129,8 +129,8 @@ typedef struct rsf_overlay_stats {
     uint32_t fg_backend, fg_requested_backend, fg_backend_choices;
     int32_t fg_selection_result;
     /* ABI 10: super-resolution backend IDs the host can switch to, as bits (bit n is backend ID n,
-       matching `backend`). Zero means the host supplied no mask and the panel keeps its default
-       list, so a host that zero-initialises the struct is unaffected. */
+       matching `backend`). Zero means the host offers no super resolution: the panel draws no
+       enable toggle, backend or quality choice. Every host that has SR must send its mask. */
     uint32_t sr_backend_choices;
     /* ABI 11. Requested DLSS model, and whether this host implements selection. */
     uint32_t dlss_preset, dlss_preset_available;

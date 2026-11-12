@@ -146,7 +146,8 @@ pub struct Stats<'a> {
     pub enabled: bool,
     /// Effective SR backend.
     pub backend: u32,
-    /// SR backend IDs the host can switch to, as bits. Zero keeps the panel's default list.
+    /// SR backend IDs the host can switch to, as bits. Zero means the host offers no super
+    /// resolution: the panel draws no enable toggle, backend or quality choice.
     pub backend_choices: u32,
     /// Runtime switch result.
     pub last_switch_result: i32,

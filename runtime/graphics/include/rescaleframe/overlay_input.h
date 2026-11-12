@@ -130,6 +130,25 @@ void rsf_overlay_input_set_visible(uint32_t visible);
 rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input* out, uint32_t display_width,
                                                    uint32_t display_height, float delta_seconds);
 
+/* Cumulative diagnostics, counted only while the panel is open. They exist so a run can tell
+   "the window never received a pointer event" from "it received and kept clicks from the game"
+   when the panel cannot be captured. Pointer events are mouse moves, buttons and wheel, and
+   touch/pen contacts delivered as window messages; raw mouse reports are WM_INPUT. A caller diffs
+   two reads to count a single open. `struct_size` is the caller's, as for every struct here. */
+typedef struct rsf_overlay_input_counters {
+    uint32_t struct_size;
+    uint32_t installed, visible;
+    /* The user32 cursor detours are installed, so the pointer position is polled each frame. */
+    uint32_t cursor_freed;
+    uint64_t pointer_received, pointer_consumed;
+    uint64_t button_downs_consumed, wheel_consumed, raw_mouse_reports, keys_consumed;
+    /* Frames sampled for the panel while open, and how many of them carried a held button. */
+    uint64_t frames_visible, frames_with_button;
+    /* The last pointer position sampled for the panel, in presented pixels. */
+    uint32_t last_pointer_x, last_pointer_y;
+} rsf_overlay_input_counters;
+rsf_overlay_input_result rsf_overlay_input_counters_get(rsf_overlay_input_counters* out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

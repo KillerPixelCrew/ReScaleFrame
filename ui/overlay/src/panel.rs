@@ -157,33 +157,43 @@ fn controls_section(
         intent.performance_hud_changed = true;
         intent.performance_hud = performance;
     }
-    let mut enabled = selection.enabled;
-    let toggle = ui.checkbox(&mut enabled, "Enable upscaling");
-    controls.enabled = Some(toggle.rect);
-    if toggle.changed() {
-        intent.enabled = enabled;
-        intent.enabled_changed = true;
-    }
+    // A zero mask means the host offers no super resolution backend: there is nothing to enable or
+    // choose, so the upscaling controls are not drawn rather than shown as a switch that cannot work.
+    let sr_offered = stats.backend_choices != 0;
+    if sr_offered {
+        let mut enabled = selection.enabled;
+        let toggle = ui.checkbox(&mut enabled, "Enable upscaling");
+        controls.enabled = Some(toggle.rect);
+        if toggle.changed() {
+            intent.enabled = enabled;
+            intent.enabled_changed = true;
+        }
 
-    ui.add_enabled_ui(stats.backend_loaded, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let mut backend = stats.backend;
-            for (index, (id, name)) in SR_BACKENDS.iter().enumerate() {
-                // A zero mask is a host that did not say, so every backend stays on offer.
-                let allowed = stats.backend_choices == 0 || stats.backend_choices & (1 << id) != 0;
-                let response =
-                    ui.add_enabled(allowed, egui::RadioButton::new(backend == *id, *name));
-                if response.clicked() {
-                    backend = *id;
+        ui.add_enabled_ui(stats.backend_loaded, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let mut backend = stats.backend;
+                for (index, (id, name)) in SR_BACKENDS.iter().enumerate() {
+                    let allowed = stats.backend_choices & (1 << id) != 0;
+                    let response =
+                        ui.add_enabled(allowed, egui::RadioButton::new(backend == *id, *name));
+                    if response.clicked() {
+                        backend = *id;
+                    }
+                    controls.backend[index] = Some(response.rect);
                 }
-                controls.backend[index] = Some(response.rect);
-            }
-            if backend != stats.backend {
-                intent.backend_changed = true;
-                intent.backend = backend;
-            }
+                if backend != stats.backend {
+                    intent.backend_changed = true;
+                    intent.backend = backend;
+                }
+            });
         });
-    });
+    } else {
+        ui.label(
+            RichText::new("Upscaling: none offered by this host")
+                .small()
+                .color(MUTED),
+        );
+    }
     if stats.last_switch_result != 0 {
         ui.label(
             RichText::new("Requested configuration refused; check runtime status").color(WARN),
@@ -459,26 +469,29 @@ fn controls_section(
         );
     }
 
-    // Presets can be saved while disabled; startup applies the selected level.
-    ui.add_enabled_ui(!stats.sr_quality_locked, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let mut choice = selection.quality;
-            for (index, level) in Quality::ALL.iter().enumerate() {
-                let label = if *level == Quality::Native && stats.backend == 1 {
-                    "DLAA"
-                } else {
-                    level.label()
-                };
-                let response = ui.radio_value(&mut choice, *level, label);
-                controls.quality[index] = Some(response.rect);
-            }
-            if choice != selection.quality {
-                intent.quality = choice;
-                intent.quality_changed = true;
-            }
+    // Presets can be saved while disabled; startup applies the selected level. With no SR backend
+    // there is no level to apply.
+    if sr_offered {
+        ui.add_enabled_ui(!stats.sr_quality_locked, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let mut choice = selection.quality;
+                for (index, level) in Quality::ALL.iter().enumerate() {
+                    let label = if *level == Quality::Native && stats.backend == 1 {
+                        "DLAA"
+                    } else {
+                        level.label()
+                    };
+                    let response = ui.radio_value(&mut choice, *level, label);
+                    controls.quality[index] = Some(response.rect);
+                }
+                if choice != selection.quality {
+                    intent.quality = choice;
+                    intent.quality_changed = true;
+                }
+            });
         });
-    });
-    if stats.sr_quality_locked {
+    }
+    if sr_offered && stats.sr_quality_locked {
         ui.label(
             RichText::new("Input resolution is controlled by the game")
                 .small()

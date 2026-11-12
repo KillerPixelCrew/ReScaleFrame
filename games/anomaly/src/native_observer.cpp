@@ -3,6 +3,7 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_profile.h"
+#include "sr_stage.h"
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
@@ -54,6 +55,7 @@ void render_begin(void* self) {
 }
 void render_end(void* self) {
     Invocation call;
+    if (call.observe) sr::frame_end(); // SR Stage 1: before Present (inert unless SRStage/SRStageCapture installed)
     reinterpret_cast<Unary>(originals[1])(self);
     if (!call.observe) return;
     NativeObservation current{};
@@ -78,6 +80,7 @@ void render_end(void* self) {
             report(text);
             geometry::geometry_report_coverage([](void*, const char* line) { report(line); }, nullptr);
         }
+        sr::report([](void*, const char* line) { report(line); }, nullptr);
     }
 }
 void camera(void* self, const float* view, const float* projection) {
@@ -189,6 +192,8 @@ rsf_result start(const rsf_game_start_args* args) noexcept {
     // Geometry lifetime/identity hooks are a separate guarded set. Refusal leaves boundary observation intact
     // and simply produces no geometry identities.
     geometry_installed = geometry::install_native_geometry(image, native_image_size, dx11_hash);
+    // SR Stage 1 hooks, only when selected; a refusal leaves the game stock and observation intact.
+    if (sr::options().selected() && !sr::install(image, native_image_size)) report("Anomaly SR stage not installed; rendering is stock.");
     active.store(true, std::memory_order_release);
     reason = geometry_installed
         ? "Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
@@ -202,6 +207,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept {
     if (const auto error = rsf_game::validate(args); error != RSF_OK) return error;
     std::lock_guard lock(control_guard);
     active.store(false, std::memory_order_release);
+    if (!sr::quiesce()) return RSF_ERROR_NATIVE_REFUSED;
     if (!hooks.disable()) return RSF_ERROR_NATIVE_REFUSED;
     if (geometry_installed) {
         if (!geometry::disable_native_geometry()) return RSF_ERROR_NATIVE_REFUSED;

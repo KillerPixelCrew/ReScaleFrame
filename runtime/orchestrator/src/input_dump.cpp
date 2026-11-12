@@ -428,6 +428,43 @@ extern "C" RSF_RUNTIME_API int rsf_input_dump_texture_record(void* context, cons
     }
     finish_if_ready(); return !raw && !preview ? 1 : 0;
 } catch (...) { failed(); return 0; }
+extern "C" RSF_RUNTIME_API int32_t rsf_input_dump_named_texture(void* context, void* source,
+    const rsf_named_frame_dump* request, rsf_named_frame_dump_report* report) try
+{
+    if (!context || !source || !request || request->struct_size < sizeof(*request) || !request->directory_utf8 ||
+        !*request->directory_utf8 || !request->name || !*request->name || !std::isfinite(request->scale))
+        return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_NAMED_FRAME_DUMP_ABI_VERSION) return RSF_TEXTURE_ERROR_ABI_MISMATCH;
+    if (std::string(request->name).find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos ||
+        request->view > RSF_DUMP_VIEW_DENSE_MOTION)
+        return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
+    ComPtr<ID3D11Texture2D> texture; ComPtr<ID3D11Device> device;
+    if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&texture))) ||
+        immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_TEXTURE_ERROR_INVALID_ARGUMENT;
+    immediate->GetDevice(&device);
+    std::error_code error;
+    const auto directory = utf8_path(request->directory_utf8);
+    std::filesystem::create_directories(directory, error);
+    if (error) return RSF_TEXTURE_ERROR_WRITE_FAILED;
+    rsf_dump_view view = request->view;
+    D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
+    if (view == RSF_DUMP_VIEW_HDR && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT && desc.Format != DXGI_FORMAT_R11G11B10_FLOAT)
+        view = RSF_DUMP_VIEW_RAW;
+    const std::string prefix = utf8_string(directory / request->name);
+    rsf_texture_dump_options options{sizeof(options), RSF_TEXTURE_DUMP_ABI_VERSION, prefix.c_str(), view,
+        request->scale, request->log, request->log_user};
+    ComPtr<ID3D11Predicate> predicate; BOOL predicate_value = FALSE; immediate->GetPredication(&predicate, &predicate_value);
+    struct Restore { ID3D11DeviceContext* context; ID3D11Predicate* predicate; BOOL value;
+        ~Restore() { context->SetPredication(predicate, value); } } restore{immediate, predicate.Get(), predicate_value};
+    immediate->SetPredication(nullptr, FALSE);
+    rsf_texture_dump_report written{sizeof(written)};
+    const auto result = rsf_dump_texture_png(device.Get(), immediate, texture.Get(), &options, &written);
+    if (!result && report && report->struct_size >= sizeof(*report)) {
+        report->width = written.width; report->height = written.height; report->dxgi_format = written.format;
+    }
+    return result;
+} catch (...) { return RSF_TEXTURE_ERROR_WRITE_FAILED; }
 extern "C" RSF_RUNTIME_API void rsf_input_dump_complete(const rsf_frame_record* record, int32_t result) try
 {
     auto& s = state(); std::lock_guard lock(s.guard);

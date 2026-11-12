@@ -177,6 +177,33 @@ typedef struct rsf_overlay_api {
     int32_t (*settings_apply)(const rsf_render_settings* settings);
 } rsf_overlay_api;
 
+/* Read-only counters for runs where the panel cannot be captured. All values are cumulative since
+   process start; an adapter diffs two reads to report one panel open. Pointer events are the window
+   messages the overlay's input layer sees while the panel is open (moves, buttons, wheel, touch);
+   "consumed" are the ones it kept from the game. Independent of rsf_overlay_api, so it does not
+   change that table. Any thread. */
+typedef struct rsf_overlay_diagnostics {
+    uint32_t struct_size;
+    uint32_t started, visible;
+    /* Last accepted chain size, zero after a resize notification until the next present(). */
+    uint32_t chain_width, chain_height;
+    /* Accepted presents, and the ones where present() reported drawn. */
+    uint64_t presents, presents_drawn;
+    /* Settings requests from the panel or settings_apply, how many were refused, and the last result. */
+    uint32_t apply_attempts, apply_refused;
+    int32_t last_apply_result;
+    uint32_t input_installed, cursor_freed;
+    uint64_t pointer_received, pointer_consumed, button_downs_consumed, wheel_consumed;
+    uint64_t raw_mouse_reports, keys_consumed;
+    /* Frames sampled for the panel while open, and those that carried a held mouse button. */
+    uint64_t frames_visible, frames_with_button;
+    /* Last pointer position sampled for the panel, in presented pixels. */
+    uint32_t last_pointer_x, last_pointer_y;
+} rsf_overlay_diagnostics;
+RSF_RUNTIME_API rsf_result rsf_get_overlay_diagnostics(rsf_overlay_diagnostics* out);
+typedef rsf_result (*rsf_get_overlay_diagnostics_fn)(rsf_overlay_diagnostics* out);
+#define RSF_OVERLAY_DIAGNOSTICS_ENTRY_POINT "rsf_get_overlay_diagnostics"
+
 /* Same contract as rsf_get_d3d11_present_api: initialize struct_size to writable
    capacity and abi_version to RSF_OVERLAY_API_VERSION. Null or capacity below
    sizeof(rsf_overlay_api): INVALID_ARGUMENT, without reading abi_version. Otherwise a
