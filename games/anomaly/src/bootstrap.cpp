@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_observer.h"
 #include "native_profile.h"
+#include "fg_stage.h"
 #include "overlay_service.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
@@ -108,6 +109,16 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
         if (!observe) log(nullptr, "Anomaly motion refused: Motion=1 requires Mode=Observe; shaders stay stock.");
         else if (!observed) rsf::anomaly::motion::configure(motion_options, log, nullptr);
     }
+    // Frame generation (FG=1 or FGBridge=1) also rides on Observe: the observer's boundaries drive its frames. The
+    // presentation bridge must intercept the engine's swap-chain creation, so it installs here, before the device exists.
+    // A refusal leaves presentation stock.
+    if (const auto fg_options = rsf::anomaly::fg::read_options(configuration); fg_options.selected()) {
+        if (!observe) log(nullptr, "Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.");
+        else if (!observed) {
+            rsf::anomaly::fg::configure(fg_options, log, nullptr);
+            (void)rsf::anomaly::fg::install(runtime);
+        }
+    }
     if (observe && !observed) {
         const auto observe_status = start_observation(runtime, hash);
         if (observe_status) return observe_status;
@@ -121,6 +132,9 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
         if (overlay_status != rsf::anomaly::overlay::StartStatus::started &&
             overlay_status != rsf::anomaly::overlay::StartStatus::already_started)
             return 9;
+        // With the bridge presenting, the engine's Present never reaches the DXGI hooks; the panel draws from the
+        // bridge's before_present into the engine-facing back buffer instead.
+        if (rsf::anomaly::fg::installed()) rsf::anomaly::fg::set_overlay_sink(rsf::anomaly::overlay::present_sink());
     }
     started = true;
     return 0;

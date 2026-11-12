@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "overlay_service.h"
 #include "sr_overlay.h"
+#include "fg_overlay.h"
 #include <rescaleframe/frame_generation.h>
 #include <rescaleframe/sr_session.h>
 #include <d3d11.h>
@@ -203,6 +204,9 @@ void track_panel(IDXGISwapChain* chain, const DXGI_SWAP_CHAIN_DESC& desc, int32_
 void on_present(void*, IDXGISwapChain* chain) noexcept {
     auto& s = state();
     if (!s.started.load(std::memory_order_acquire) || !chain) return;
+    // With the FG bridge presenting, DXGI's Present also runs for the provider's physical or proxy chain (on the
+    // provider's own thread for generated frames). The panel belongs to the engine-facing chain only.
+    if (const auto* fg_link = fg::overlay_link.load(std::memory_order_acquire); fg_link && fg_link->foreign_chain(chain)) return;
     DXGI_SWAP_CHAIN_DESC desc{};
     if (FAILED(chain->GetDesc(&desc)) || !desc.OutputWindow || !is_engine_window(desc.OutputWindow)) return;
     ID3D11Device* device = nullptr;
@@ -231,7 +235,8 @@ void on_resize(void*, IDXGISwapChain* chain) noexcept {
     if (s.started.load(std::memory_order_acquire)) (void)s.api.notify(chain, RSF_OVERLAY_NOTIFY_RESIZE);
 }
 
-// What this adapter can apply: FG never; SR only with SRStage=5, as the backends whose vendor runtime is installed and
+// What this adapter can apply: FG when the presentation bridge was installed at cold start (FG=1 or FGBridge=1), with
+// every provider the Runtime knows (it masks them with the bridge's own device-dependent choices); SR only with SRStage=5, as the backends whose vendor runtime is installed and
 // the qualities Native to Performance. Zero SR choices tell the Runtime that SR is unavailable, so the panel offers
 // none, a request to enable it is refused and status says so. Requested and effective SR status come from sr_report.
 rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
@@ -260,9 +265,20 @@ rsf_overlay_service_setup make_setup(const StartOptions& options) noexcept {
         setup.defaults.sr_quality = sr.defaults.quality;
         setup.defaults.dlss_preset = sr.defaults.preset;
     }
-    setup.fg_backend_choices = 0;
-    setup.latency_choices = 1u << RSF_REFLEX_OFF;
-    setup.max_generated_frames = 1;
+    if (const auto* fg_link = fg::overlay_link.load(std::memory_order_acquire)) {
+        setup.defaults.fg_enabled = fg_link->enabled ? 1u : 0u;
+        setup.defaults.fg_backend = fg_link->backend;
+        setup.defaults.generated_frames = fg_link->generated;
+        setup.defaults.latency = fg_link->latency;
+        setup.defaults.frame_limit_us = fg_link->frame_limit_us;
+        setup.fg_backend_choices = RSF_FG_BACKEND_ALL | (1u << RSF_FG_BACKEND_AUTO);
+        setup.latency_choices = (1u << RSF_REFLEX_OFF) | (1u << RSF_REFLEX_ON) | (1u << RSF_REFLEX_BOOST);
+        setup.max_generated_frames = 3;
+    } else {
+        setup.fg_backend_choices = 0;
+        setup.latency_choices = 1u << RSF_REFLEX_OFF;
+        setup.max_generated_frames = 1;
+    }
     setup.dlss_preset_available = sr.backends && sr.preset ? 1u : 0u;
     setup.log = options.log;
     setup.accept_window = &accept_window;
@@ -396,9 +412,9 @@ StartStatus start(const StartOptions& options, const char** reason) noexcept try
     if (api.settings_get(&saved) == RSF_OK) {
         if (setup.sr_backend_choices) {
             say("Anomaly overlay configured: saved SR=%u SRBackend=%u SRQuality=%u DLSSPreset=%u FG=%u StatusOverlay=%u. SR choices: "
-                "backends 0x%x, qualities 0x%x (SRStage=5); FG is not wired in this adapter and stays Off.", saved.sr_enabled,
+                "backends 0x%x, qualities 0x%x (SRStage=5); FG choices 0x%x (0: no bridge, FG stays Off).", saved.sr_enabled,
                 saved.sr_backend, saved.sr_quality, saved.dlss_preset, saved.fg_enabled, saved.status_overlay,
-                setup.sr_backend_choices, setup.sr_quality_choices);
+                setup.sr_backend_choices, setup.sr_quality_choices, setup.fg_backend_choices);
             // The persisted (and validated) choice is what SR starts with.
             if (const auto* link = sr_link(); link && link->request) link->request(sr_settings_of(saved));
         } else

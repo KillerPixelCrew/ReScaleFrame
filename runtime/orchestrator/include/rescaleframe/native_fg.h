@@ -55,6 +55,23 @@ RSF_RUNTIME_API void rsf_native_fg_prepare(void* user, void* chain11, void* cont
 RSF_RUNTIME_API void rsf_native_fg_present(const rsf_observer_present_event*);
 RSF_RUNTIME_API void rsf_native_fg_retire(void* user, void* provider);
 RSF_RUNTIME_API void rsf_native_fg_window_end(const rsf_game_render_pass*);
+/* Graphics thread. Declares the FG source identity for render work that the Runtime itself
+   reports without one (an SR pass built by an adapter that does not own frame identity).
+   While bound, rsf_native_fg_scene gives a pass whose source_frame_id is zero the bound
+   session, source, submission, view, family, viewport, scope, native frame and screen, and
+   ORs the bound flags (RESET, PRIMARY, AFTER_SIMULATION) into the scene copy, clearing NO_FG.
+   Only the FG scene copy changes: the SR evaluation and its history keys are untouched.
+   Null clears it. A pass that carries its own source_frame_id is never rewritten. */
+RSF_RUNTIME_API void rsf_native_fg_bind_source(const rsf_game_render_pass* identity);
+/* Graphics thread. Nonzero when depth and motion for exactly this source frame are held
+   (captured, or filled by a shared-host SR evaluation). Observation only. */
+RSF_RUNTIME_API int rsf_native_fg_inputs_ready(uint64_t source_frame_id);
+/* Graphics thread, after the FINAL_SCENE end of this source. Writes the depth, motion and
+   HUD-less colour that generation will receive for this source, as <prefix>_fg_depth,
+   _fg_motion and _fg_hudless PNG/JSON pairs under directory (frame dump service). Returns
+   how many were written; zero when this source holds no inputs. */
+RSF_RUNTIME_API int32_t rsf_native_fg_dump_inputs(void* context11, uint64_t source_frame_id,
+    const char* directory_utf8, const char* prefix_utf8);
 #ifdef __cplusplus
 }
 #endif

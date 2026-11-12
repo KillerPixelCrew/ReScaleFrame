@@ -592,7 +592,24 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_submission(const rsf_game_render_p
         with_frame(id, [](CpuOwner& frame) { frame.submit_end = now_qpc(); frame.render_complete = true; });
     }
 }
-extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) { scene = pass ? *pass : rsf_game_render_pass{}; }
+namespace {
+thread_local rsf_game_render_pass bound_source{};
+}
+extern "C" RSF_RUNTIME_API void rsf_native_fg_bind_source(const rsf_game_render_pass* identity) {
+    bound_source = identity && identity->struct_size >= sizeof(*identity) && identity->source_frame_id ? *identity : rsf_game_render_pass{};
+}
+extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) {
+    scene = pass ? *pass : rsf_game_render_pass{};
+    if (!pass || pass->source_frame_id || !bound_source.source_frame_id) return;
+    // An adapter-built pass without frame identity: the FG copy takes the declared source.
+    scene.session_id = bound_source.session_id; scene.source_frame_id = bound_source.source_frame_id;
+    scene.submission_id = bound_source.submission_id; scene.view_key = bound_source.view_key;
+    scene.family_key = bound_source.family_key; scene.viewport_key = bound_source.viewport_key;
+    scene.scope_id = bound_source.scope_id; scene.native_frame = bound_source.native_frame;
+    scene.screen = bound_source.screen;
+    scene.flags = (pass->flags & ~RSF_GAME_RENDER_NO_FG) |
+        (bound_source.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION));
+}
 namespace {
 // Colour formats the HUD-less copy can carry: D3D11-shareable display formats, SDR and HDR.
 bool hudless_format(DXGI_FORMAT format) {
@@ -957,4 +974,30 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_window_end(const rsf_game_render_p
         with_frame(pass->source_frame_id, [](CpuOwner& frame) { frame.failed = true; });
         complete_frame(pass->source_frame_id);
     }
+}
+extern "C" RSF_RUNTIME_API int rsf_native_fg_inputs_ready(uint64_t source) {
+    if (!source) return 0;
+    const auto& slot = slot_for(transfer(), source);
+    return slot.prepared && slot.source == source && slot.surfaces[1] && slot.surfaces[2];
+}
+extern "C" RSF_RUNTIME_API int32_t rsf_native_fg_dump_inputs(void* context, uint64_t source,
+    const char* directory, const char* prefix) {
+    if (!context || !source || !directory || !*directory || !prefix || !*prefix) return 0;
+    auto& slot = slot_for(transfer(), source);
+    if (slot.source != source || !slot.prepared) return 0;
+    struct Item { rsf_shared_surface* surface; const char* suffix; uint32_t view; float scale; } items[]{
+        {slot.surfaces[1], "_fg_depth", RSF_DUMP_VIEW_DEPTH, 1.0f},
+        {slot.surfaces[2], "_fg_motion", RSF_DUMP_VIEW_DENSE_MOTION, 8.0f},
+        {slot.hudless_ready ? slot.hudless : nullptr, "_fg_hudless", RSF_DUMP_VIEW_RAW, 1.0f}};
+    const auto sink = current_sink(false);
+    int32_t written = 0;
+    for (const auto& item : items) {
+        if (!item.surface) continue;
+        char name[160]; std::snprintf(name, sizeof(name), "%s%s", prefix, item.suffix);
+        rsf_named_frame_dump request{}; request.struct_size = sizeof(request); request.abi_version = RSF_NAMED_FRAME_DUMP_ABI_VERSION;
+        request.directory_utf8 = directory; request.name = name; request.view = item.view; request.scale = item.scale;
+        request.log = sink.fn; request.log_user = sink.user;
+        if (rsf_input_dump_named_texture(context, surface11(item.surface), &request, nullptr) == 0) ++written;
+    }
+    return written;
 }

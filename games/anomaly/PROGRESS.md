@@ -4,7 +4,10 @@ Checkpoint: end of 12 November 2026, CET. Work started 11 November 2026.
 Status: STOPPED for today at the user's request. **Full in-game integration is NOT complete.**
 SR stages 1 and 2, motion vectors and the overlay are game-accepted. Jitter, foliage motion and
 temporal SR are built and fixture-tested. Their first game run stopped early: the one Stage 3
-jitter burst missed its accuracy bar (see "Installation state"). Frame generation is not started.
+jitter burst missed its accuracy bar; on 13 November that miss was traced to the estimator
+(ce3484c). Frame generation (`FG=1`) is built through a generic `rsf_get_d3d11_fg_api`; device fixtures on
+the RTX 4070 present generated frames for DLSS-G, FSR3 and XeSS, and the Release gate passes
+(200 discovered, 188 passed, 12 skips). It is not yet game-accepted (`docs/research/anomaly-fg.md`).
 Worker specs, reports and commit messages: `.local/anomaly/orchestration/`.
 
 ## Goal and non-negotiable constraints

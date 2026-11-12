@@ -151,3 +151,4 @@ set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runt
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.cpp)
 target_sources(rsf_orchestrator PRIVATE src/overlay_api.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_fg_api.cpp)

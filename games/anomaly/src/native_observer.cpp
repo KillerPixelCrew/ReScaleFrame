@@ -3,6 +3,7 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_profile.h"
+#include "fg_stage.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
 #include <rescaleframe/game_plugin_util.h>
@@ -53,11 +54,16 @@ void render_begin(void* self) {
         observation.width = *reinterpret_cast<const uint32_t*>(image + device_width_rva);
         observation.height = *reinterpret_cast<const uint32_t*>(image + device_height_rva);
     }
+    // Frame generation: the source frame's render begin (inert unless FG installed the bridge at cold start).
+    if (call.observe) fg::render_begin(*reinterpret_cast<const uint32_t*>(image + device_frame_rva),
+        *reinterpret_cast<const uint32_t*>(image + device_width_rva), *reinterpret_cast<const uint32_t*>(image + device_height_rva));
 }
 void render_end(void* self) {
     Invocation call;
     if (call.observe) sr::frame_end(); // SR Stage 1: before Present (inert unless SRStage/SRStageCapture installed)
+    if (call.observe) fg::end_before(); // FG: submission end and the window scope around the bridge's Present
     reinterpret_cast<Unary>(originals[1])(self);
+    if (call.observe) fg::end_after();  // FG: frame end, then the next frame's begin and its one pacing sleep
     if (!call.observe) return;
     NativeObservation current{};
     { std::lock_guard lock(observation_guard); current = observation; }
@@ -83,6 +89,7 @@ void render_end(void* self) {
         }
         sr::report([](void*, const char* line) { report(line); }, nullptr);
         motion::report([](void*, const char* line) { report(line); }, nullptr);
+        fg::report([](void*, const char* line) { report(line); }, nullptr);
     }
 }
 void camera(void* self, const float* view, const float* projection) {
@@ -97,6 +104,7 @@ void camera(void* self, const float* view, const float* projection) {
         for (size_t i = 0; i < 16; ++i)
             if (!std::isfinite(view[i]) || !std::isfinite(projection[i])) observation.camera_finite = 0;
     }
+    if (call.observe) fg::camera(view, projection);
 }
 void scene(void* self) {
     Invocation call;
@@ -109,6 +117,9 @@ void scene(void* self) {
 void screen_ui(void* self) {
     Invocation call;
     if (call.observe) { std::lock_guard lock(observation_guard); ++observation.hud_passes; }
+    // FG HUD-less boundary: the world, its post-processing, tracers and the scope copy are in the back buffer; HitMarker,
+    // the game UI, fonts and the HUD target are not yet.
+    if (call.observe) fg::ui_boundary();
     reinterpret_cast<Unary>(originals[4])(self);
 }
 void target_copy(void* self, uint32_t target) {
@@ -119,6 +130,7 @@ void target_copy(void* self, uint32_t target) {
         if (target == 1) ++observation.pda_copies;
         if (target == 2) ++observation.scope_copies;
     }
+    if (call.observe && target == 2) fg::scope_frame();   // a secondary-viewport frame: it will not Present
 }
 void reset_begin(void* self) {
     Invocation call;
@@ -126,6 +138,7 @@ void reset_begin(void* self) {
         std::lock_guard lock(observation_guard);
         ++observation.resets; ++observation.generation; observation.camera_finite = 0;
     }
+    if (call.observe) fg::device_reset();
     reinterpret_cast<Unary>(originals[6])(self);
 }
 void reset_end(void* self) {
