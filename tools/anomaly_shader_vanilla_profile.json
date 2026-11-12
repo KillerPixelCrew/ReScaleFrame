@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "description": "Read-only extracted Anomaly 1.5.3 r3 source corpus; declaration-only local preview, not temporal rendering",
+  "file_count": 449,
+  "corpus_sha256": "fdc260e0608f259d876c4ae0f11a6f2d8c03c001cf1fe82548794af1c6826a67",
+  "patch": {
+    "path": "common.h",
+    "source_sha256": "0f64d764e3c84639bf82e2698940f5e6152e81661017dcfe67e7c2b5f4773215",
+    "anchor_line": 2,
+    "anchor_sha256": "c94c44fa8949230e6508510204c61df3780843f72f5e5b2efe507a414c878bbc"
+  },
+  "include": {
+    "name": "rsf_anomaly_temporal.h",
+    "sha256": "abf66906771077196e9d3234983e475d83f501b38a563a8f1f4f1ef2e6e1977f"
+  }
+}

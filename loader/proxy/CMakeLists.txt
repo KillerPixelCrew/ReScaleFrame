@@ -74,3 +74,17 @@ if(MSVC)
     target_sources(rsf_proxy_ac7 PRIVATE src/ac7_exports.def)
     target_link_options(rsf_proxy_ac7 PRIVATE "/MAP:$<TARGET_FILE_DIR:rsf_proxy_ac7>/dinput8.map")
 endif()
+
+# Standalone DirectInput carrier: OS forwarding and configured DLL entry only.
+# Do not inherit the combined proxy's object libraries or dependency graph.
+add_library(rsf_proxy_thin_dinput8 SHARED
+    src/thin_loader.cpp src/thin_startup.cpp src/thin_config.cpp src/thin_exports.def)
+target_link_libraries(rsf_proxy_thin_dinput8 PRIVATE rsf_build_options)
+if(MSVC)
+    # COM exports intentionally retain the system DirectInput ordinal contract.
+    target_link_options(rsf_proxy_thin_dinput8 PRIVATE /IGNORE:4222 "/PDBALTPATH:%_PDB%")
+endif()
+set_target_properties(rsf_proxy_thin_dinput8 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/thin/bin/$<CONFIG>"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/thin/lib/$<CONFIG>"
+    PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/thin/bin/$<CONFIG>")

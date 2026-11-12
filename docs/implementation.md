@@ -1,5 +1,64 @@
 # Implementation tracker
 
+## Anomaly wave 1, 12 November 2026
+
+Resumed on request. The geometry producer is audited and built into the adapter with
+two registered contracts. The Runtime exports a generic `rsf_get_overlay_api` with DLL-import
+and hardware D3D11 fixture tests. The Debug Godot CRT mismatch is fixed at its CMake cache
+source. Release VS2026: 168 discovered, 157 passed, 11 optional skips, fmt/Clippy. Built and
+synthetic-tested only; nothing was deployed or game-tested. [Progress](../games/anomaly/PROGRESS.md).
+
+## Anomaly checkpoint, 12 November 2026
+
+Implementation was paused for the day. The detailed acceptance matrix, build/device evidence,
+installation cleanup, overlay requirement and ordered resumption checklist are in
+[`games/anomaly/PROGRESS.md`](../games/anomaly/PROGRESS.md). Full in-game SR/FG and overlay
+integration remain incomplete. No RSF DLLs or shader replacements were deployed to Anomaly.
+
+## Anomaly DLL-only integration research, 11 November 2026
+
+Source and primary-vendor documentation review identified the PDA backbuffer-copy producer,
+once-per-frame UI guards, separate 3D item UI, and non-presenting scope frames. World/output
+resolution separation and a linear-color SR seam still require renderer changes through guarded
+DLL hooks; generic scene intermediates are currently 8-bit LDR. Installed DX11/AVX fingerprints
+and the DirectInput import identify entry candidates, not working hooks.
+
+RSF has reusable D3D11 SR/FG mechanisms, but the inspected native FG path does not populate a
+separate UI resource, and the combined carrier still includes AC7/orchestrator components.
+At the research-only checkpoint, no native code, game binary, shader cache or engine source had
+been changed, and no Anomaly build, injection, SR/FG or visual acceptance had been performed.
+[Evidence, vendor references and proposed first gate](research/anomaly-world-space-ui.md).
+
+### Subsequent native work (in progress)
+
+The Runtime DLL now exports a size/version-checked `rsf_get_d3d11_present_api` table for
+22 existing presentation-bridge operations. The adapter can reach the existing owner without
+embedding another runtime. C++ and C11 real-import tests are registered in the main CMake test
+suite; both passed after a fresh main-preset Windows/MSVC Debug build. The isolated worker's
+Debug and Release logs also record two passing contracts per configuration. This proves ABI
+access and refusal behavior, not graphics initialization or in-game presentation.
+
+The thin carrier's intentionally malformed runtime/adapter fixture exposed a Windows loader
+popup. Library-controlled loads now apply temporary thread-local error suppression and restore
+it before adapter entry. An independent native host with process/thread modes initially zero
+verified both malformed-image refusals: no dialogs, original modes restored, error 193 logged,
+and genuine system forwarding preserved. Evidence: `.local/anomaly/modal-regression/result.json`.
+
+The full Windows/MSVC Release verification subsequently passed: 163 discovered native tests,
+152 passed and 11 optional/device-dependent skips, followed by Cargo formatting and Clippy.
+The full Debug build failed on a Godot/runtime CRT/iterator-debug-level mismatch; focused
+Anomaly/loader Debug contracts passed. Later shader/geometry worker additions still need main
+registration and a renewed full gate. Evidence: `.local/anomaly/verify-{debug,release}.log`.
+Anomaly SR/FG/PDA/scope/overlay gameplay acceptance remains pending.
+
+CPU temporal-history/planning contracts and shader inventory/staging tests are now registered in
+the main suite. Fresh main-preset MSVC Debug execution passed all 17 internal temporal cases,
+the expected-failure unknown-selection check, and all eight Python shader-tool cases, including
+the local FXC byte-identity regression. CPU history and declaration-only shader staging do not
+produce GPU motion or establish a usable SR seam. The reviewed r3 tree contains 449 files;
+55 geometry-stage roots are identified, 44 stage roots remain unclassified, and one tree wrapper
+has a blocked recursive include. See `tools/anomaly_shader_README.md` for source evidence.
+
 ## FidelityFX Vulkan static line width, 8 November 2026
 
 The SDK export recipe now reproduces the two approved zero-to-one line-width

@@ -11,6 +11,11 @@ set(GODOTCPP_BUILD_PROFILE "${CMAKE_CURRENT_SOURCE_DIR}/build-profile.json" CACH
 set(GODOTCPP_USE_STATIC_CPP OFF CACHE BOOL "Use the native project's CRT" FORCE)
 add_subdirectory("${RSF_GODOT_CPP_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/godot-cpp" SYSTEM)
 set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+# godot-cpp (cmake/windows.cmake) stores CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL in the CMake
+# *cache*, which is global. On every re-configure it then made all other targets use the Release CRT
+# in Debug (LNK2038 against rsf_godot's /MDd). Both Godot targets set MSVC_RUNTIME_LIBRARY
+# explicitly, so drop the leaked entry; the root CMakeLists clears stale copies before targets exist.
+unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
 add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")

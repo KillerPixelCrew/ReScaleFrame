@@ -9,6 +9,7 @@
 #include <rescaleframe/overlay_fg_stats.h>
 #include <rescaleframe/d3d12_observer.h>
 #include "../../../loader/proxy/src/overlay_host.h"
+#include "render_settings_store.h"
 #include <dxgi1_4.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -28,6 +29,9 @@ namespace {
 using Microsoft::WRL::ComPtr;
 struct Host;
 std::atomic<Host*> frontend_host{};
+// Values for keys missing from the section, unchanged from the original frontend reads.
+constexpr rsf_render_settings render_defaults{sizeof(rsf_render_settings), RSF_RENDER_FRONTEND_ABI_VERSION,
+    1, RSF_SR_DLSS, 0, 0, RSF_FG_BACKEND_AUTO, 1, RSF_REFLEX_ON, 0, 1, 2};
 std::string utf8(const std::wstring& value)
 {
     const int bytes = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
@@ -722,9 +726,7 @@ extern "C" int32_t rsf_render_settings_get(rsf_render_settings* output) try
     auto* owner = frontend_host.load(std::memory_order_acquire); if (!owner) return RSF_ERROR_NOT_READY;
     std::unique_lock lock(owner->guard, std::try_to_lock);
     if (!lock.owns_lock()) return RSF_ERROR_BUSY;
-    auto read = [&](const wchar_t* key, uint32_t fallback) { return GetPrivateProfileIntW(owner->section.c_str(), key, fallback, owner->ini.c_str()); };
-    *output = {sizeof(*output), RSF_RENDER_FRONTEND_ABI_VERSION, read(L"SR",1), read(L"SRBackend",1), read(L"DLSSPreset",0),
-        read(L"FG",0) != 0, read(L"FGBackend",7), read(L"FGGeneratedFrames",1), read(L"Latency",1), read(L"FrameLimitUs",0), read(L"StatusOverlay",1), read(L"SRQuality",2)};
+    *output = rsf::render_settings::read(owner->ini, owner->section, render_defaults);
     return RSF_OK;
 } catch (...) { return RSF_ERROR_NOT_READY; }
 
@@ -740,22 +742,8 @@ extern "C" int32_t rsf_render_settings_apply(const rsf_render_settings* request)
         return RSF_ERROR_INVALID_ARGUMENT;
     std::unique_lock lock(owner->guard, std::try_to_lock);
     if (!lock.owns_lock()) return RSF_ERROR_BUSY;
-    const wchar_t* keys[] = {L"SR",L"SRBackend",L"DLSSPreset",L"FG",L"FGBackend",L"FGGeneratedFrames",L"Latency",L"FrameLimitUs",L"StatusOverlay",L"SRQuality"};
-    const uint32_t values[] = {request->sr_enabled,request->sr_backend,request->dlss_preset,request->fg_enabled,
-        request->fg_backend,request->generated_frames,request->latency,request->frame_limit_us,request->status_overlay,request->sr_quality};
-    wchar_t section[32768]{}; const auto length = GetPrivateProfileSectionW(owner->section.c_str(), section, 32768, owner->ini.c_str());
-    if (length >= 32766) return RSF_ERROR_INVALID_ARGUMENT;
-    std::vector<std::wstring> entries;
-    for (const wchar_t* entry = section; *entry; entry += std::wcslen(entry) + 1) {
-        bool owned = false;
-        for (const auto* key : keys) if (!_wcsnicmp(entry,key,std::wcslen(key)) && entry[std::wcslen(key)] == L'=') owned = true;
-        if (!owned) entries.emplace_back(entry);
-    }
-    std::wstring updated;
-    for (const auto& entry : entries) { updated += entry; updated += L'\0'; }
-    for (size_t i = 0; i < std::size(keys); ++i) { updated += keys[i]; updated += L'='; updated += std::to_wstring(values[i]); updated += L'\0'; }
-    updated += L'\0';
-    if (!WritePrivateProfileSectionW(owner->section.c_str(), updated.c_str(), owner->ini.c_str())) return RSF_ERROR_NOT_READY;
+    const auto written = rsf::render_settings::write(owner->ini, owner->section, *request);
+    if (written != RSF_OK) return written;
     owner->poll_tick = 0; owner->settings();
     return RSF_OK;
 } catch (...) { return RSF_ERROR_NOT_READY; }

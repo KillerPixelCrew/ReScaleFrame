@@ -14,6 +14,10 @@ if(NOT MSVC)
     set(CMAKE_SHARED_MODULE_PREFIX "")
 endif()
 
+# A cache entry left by godot-cpp (see integrations/godot/CMakeLists.txt) would force the Release CRT
+# onto every target in Debug; clear it so the default per-configuration CRT applies.
+unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -61,6 +65,7 @@ add_subdirectory(runtime/backends/dlss)
 add_subdirectory(runtime/backends/fsr)
 add_subdirectory(runtime/backends/xess)
 add_subdirectory(runtime/orchestrator)
+add_subdirectory(games/anomaly)
 add_subdirectory(games/ac7)
 add_subdirectory(games/project-wingman)
 add_subdirectory(games/rdr2)
