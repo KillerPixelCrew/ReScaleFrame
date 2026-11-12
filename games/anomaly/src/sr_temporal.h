@@ -45,6 +45,8 @@ enum class Refusal : uint8_t {
     Count
 };
 const char* refusal_name(Refusal) noexcept;
+// The overlay/status reason for a refused pipeline start (fits rsf_overlay_sr_report::reason, 96 bytes).
+std::string start_refusal_reason(int32_t result);
 
 struct TemporalCounters {
     std::array<uint64_t, 8> evaluated{};               // by RSF_SR_* backend id
@@ -54,6 +56,9 @@ struct TemporalCounters {
     std::array<uint64_t, static_cast<std::size_t>(ResetReason::Count)> resets{};
     uint64_t starts{}, start_failures{}, stops{}, selects{}, select_failures{}, qualities{}, quality_failures{}, presets{};
     uint64_t resizes{}, resize_failures{}, bilinear{}, motion_missing{}, prepared{};
+    // Backend requests announced before their blocking select (first use of a backend in this process), and the longest
+    // select the render thread waited for, in milliseconds.
+    uint64_t select_announced{}, longest_select_ms{};
 };
 
 struct TemporalStatus {
@@ -65,8 +70,12 @@ struct TemporalStatus {
     uint32_t last_backend{}, last_render_width{}, last_render_height{}, last_output_width{}, last_output_height{};
     float jitter[2]{};
     bool motion_present{}, exposure_present{};
+    // A backend announced and about to be selected (0: none): the select blocks the render thread while the vendor loads it.
+    uint32_t pending_backend{};
     std::string reason;
 };
+// The overlay reason between the announcement of a backend and its select: "Preparing FSR4: first use loads its model; ...".
+std::string pending_reason(const TemporalStatus&);
 
 class TemporalDriver {
 public:
@@ -80,7 +89,9 @@ public:
     void request(const SrSettings&) noexcept;
     // Render thread, after the frame's last SR use and before Present (IRenderDeviceRender::End): start the pipeline
     // on `device`, follow a device or output change, apply requested settings. This is the drained boundary: no SR
-    // input of this frame is still to be submitted.
+    // input of this frame is still to be submitted. The first request for a backend the vendor has not loaded in this
+    // process (FSR4's first use takes tens of seconds on a cold driver cache) only announces it: the status names it, the
+    // Present draws that, and the blocking select runs at the next boundary. Later selections run at once.
     void boundary(ID3D11Device* device, uint32_t output_width, uint32_t output_height) noexcept;
     // Render thread, H1: whether the world window should open for SR, and the render size the active backend plans
     // for this output (false when the pipeline is not running or plans for another output).
@@ -127,6 +138,10 @@ private:
     SrSettings refused_request_{};      // a request apply() could not fully satisfy: not retried until it changes
     bool have_refused_{};
     bool settings_changed_{}, device_changed_{}, first_{true};
+    // A backend announced and waiting for the next boundary's select; backends selected before (bit per RSF_SR_*).
+    bool pending_{};
+    uint32_t pending_backend_{};
+    uint32_t prepared_{};
     uint64_t session_{};
     // Shared with any thread.
     mutable SRWLOCK lock_ = SRWLOCK_INIT;

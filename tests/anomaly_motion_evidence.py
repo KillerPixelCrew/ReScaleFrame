@@ -16,6 +16,10 @@ What is proven, per site:
   exact offsets in the profile. No instruction in the body writes those home/argument slots after the prologue.
 * phase_scene_begin/end: the G-buffer bind u_setrt(this, this+0x378 rt_Position, ...) / SetMaxAnisotropy(1) bodies,
   with exactly their profile callers in CRender::Render.
+* hull/domain shaders (tess_dispatch, tess_create_sites): create_shader compares the target letter with 'h' and calls
+  create_shader<SHS> or else create_shader<SDS>, each called only from there; both call their CreateHWShader wrapper
+  (ID3D11Device +0x80 CreateHullShader / +0x88 CreateDomainShader), store the result at engine object +0x10
+  (shader_object_offset) before D3DReflect, and parse constants into RC_dest_hull 0x10 / RC_dest_domain 0x20.
 """
 import argparse
 import importlib.util
@@ -267,7 +271,61 @@ def verify(pe, log):
     assert first.operands[0].imm == SET_MAX_ANISOTROPY and one, 'phase_scene_end starts with SetMaxAnisotropy(1)'
     log('window: phase_scene_begin callers %s, phase_scene_end callers %s, all in CRender::Render' %
         ([hex(c) for c in begin_calls], [hex(c) for c in end_calls]))
+    verify_tessellation(pe, log, ints, hexes)
     return True
+
+
+TESS_SITE = re.compile(r'\{"(create_shader<S([HD])S>[^"]*)", (0x[0-9a-f]+),\s*((?:"[0-9a-f]+"\s*)+),\s*(0x[0-9a-f]+), "([0-9a-f]+)"\}')
+RC_DEST = {'H': 0x10, 'D': 0x20}               # RC_dest_hull, RC_dest_domain (r_constants.h)
+DEVICE_SLOT = {'H': 0x80, 'D': 0x88}           # ID3D11Device::CreateHullShader, CreateDomainShader
+
+
+def verify_tessellation(pe, log, ints, hexes):
+    """Hull/domain shader creation (r4_enable_tessellation). The create_shader detour sees 'hs_5_0'/'ds_5_0' too; these
+    guards prove that create_shader hands them to create_shader<SHS>/<SDS>, which leave the D3D11 object at
+    shader_object_offset of the engine object like the VS/PS paths."""
+    text = PROFILE.read_text()
+    sites = [(m[1], m[2], int(m[3], 16), ''.join(re.findall(r'"([0-9a-f]+)"', m[4])), int(m[5], 16), m[6])
+             for m in TESS_SITE.finditer(text)]
+    assert sorted(s[1] for s in sites) == ['D', 'H'], ('tess_create_sites', sites)
+    create = int(re.search(r'\{"create_shader", (0x[0-9a-f]+)', text)[1], 16)
+    dispatch = ints['tess_dispatch_rva']
+    raw = hexes['tess_dispatch']
+    assert pe.read(dispatch, len(raw) // 2).hex() == raw, 'tess dispatch guard'
+    assert pe.function(dispatch) == pe.function(create), 'dispatch inside create_shader'
+    code = pe.disasm(dispatch, dispatch + len(raw) // 2)
+    assert code[0].mnemonic == 'cmp' and code[0].op_str == 'al, 0x68', ('dispatch compares the target letter with h', code[0].op_str)
+    calls = [i.operands[0].imm for i in code if i.mnemonic == 'call']
+    by_stage = {s[1]: s for s in sites}
+    assert calls == [by_stage['H'][2], by_stage['D'][2]], ('dispatch calls create_shader<SHS> then <SDS>', [hex(c) for c in calls])
+    jne = next(i for i in code if i.mnemonic == 'jne')
+    assert jne.operands[0].imm == next(i.address for i in code if i.mnemonic == 'call' and i.operands[0].imm == by_stage['D'][2]), \
+        'not h -> create_shader<SDS>'
+    offset = ints['shader_object_offset']
+    for name, stage, rva, prologue, wrapper_rva, wrapper in sites:
+        assert pe.read(rva, len(prologue) // 2).hex() == prologue, ('guard', name)
+        assert pe.function(rva)[0] == rva, ('not a function start', name)
+        assert pe.direct_callers(rva) == [c.address for c in code if c.mnemonic == 'call' and c.operands[0].imm == rva], \
+            ('only caller is the dispatch', name)
+        body = pe.disasm(*pe.function(rva))
+        first_call = next(i for i in body if i.mnemonic == 'call')
+        assert first_call.operands[0].imm == wrapper_rva, ('CreateHWShader wrapper', name)
+        store = [i for i in body if i.mnemonic == 'mov' and mem(i.operands[0]) and i.operands[0].mem.disp == offset and
+                 i.operands[1].type == x86.X86_OP_REG and i.operands[1].reg == x86.X86_REG_RAX]
+        assert len(store) == 1 and store[0].address < next(i.address for i in body if pe.import_of(i) == (COMPILER, 'D3DReflect')), \
+            ('object stored at +0x%x before reflection' % offset, name)
+        assert pe.read(store[0].address, store[0].size).hex() == prologue[-len(store[0].bytes.hex()):], ('guard ends at the store', name)
+        dest = [i for i in body if i.mnemonic == 'mov' and i.operands[0].type == x86.X86_OP_REG and i.operands[0].reg == x86.X86_REG_R8D
+                and i.operands[1].type == x86.X86_OP_IMM]
+        assert [i.operands[1].imm for i in dest] == [RC_DEST[stage]], ('constant table destination', name)
+        assert pe.read(wrapper_rva, len(wrapper) // 2).hex() == wrapper, ('wrapper guard', name)
+        wrapped = pe.disasm(*pe.function(wrapper_rva))
+        vcall = next(i for i in wrapped if i.mnemonic == 'call')
+        assert mem(vcall.operands[0]) and vcall.operands[0].mem.disp == DEVICE_SLOT[stage], ('device slot', name)
+        assert vcall.address + vcall.size == wrapper_rva + len(wrapper) // 2, ('wrapper guard ends at the device call', name)
+    log('tessellation: create_shader dispatch 0x%x: h -> 0x%x, else -> 0x%x; both store the D3D11 object at +0x%x, reflect '
+        'into RC_dest_hull/domain, CreateHull/DomainShader at device +0x80/+0x88' %
+        (dispatch, by_stage['H'][2], by_stage['D'][2], offset))
 
 
 def main():

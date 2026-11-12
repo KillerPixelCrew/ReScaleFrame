@@ -10,6 +10,7 @@
 #include "motion_profile.h"
 #include "motion_target.h"
 #include "shader_loader.h"
+#include "sr_pass.h"
 #include <windows.h>
 #include <cmath>
 #include <cstdio>
@@ -201,9 +202,27 @@ void core_policy()
     d = decide_core(in);
     require(d.reason == HistoryReason::Valid && d.flags.palette && d.bones.size() == 2 && !d.flags.rigid, "skinned palette");
     in.skin = 0;
-    require(decide_core(in).reason == HistoryReason::KindMismatch, "SKIN_0 needs a bone-composed world");
+    require(decide_core(in).reason == HistoryReason::KindMismatch, "a palette draw on the SKIN_0 permutation");
+    // CSkeletonX RM_SINGLE: the engine folds the bone into the draw's world before the draw, the snapshot holds that
+    // bone-composed world, and SKIN_0 has no palette. Valid with the previous composed world and no palette flag.
     in.kind = DrawKind::SingleBone;
-    require(decide_core(in).reason == HistoryReason::UnsupportedKind, "single bone unsupported");
+    auto single = rigid;
+    single.world = sample_matrix(6);
+    in.previous = &single;
+    d = decide_core(in);
+    require(d.reason == HistoryReason::Valid && d.flags.draw && !d.flags.palette && !d.flags.rigid && d.bones.empty() &&
+        d.previous_wvp == compose(vp, single.world), "single bone: previous bone-composed world, no palette");
+    in.skin = 2;
+    require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on a palette permutation");
+    in.skin = -1;
+    require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on SKIN_NONE");
+    in.family = Family::CoreStatic; in.skin = -2;
+    require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on a static root");
+    in.family = Family::CoreModel; in.skin = 0; in.previous = nullptr;
+    require(decide_core(in).reason == HistoryReason::NoPreviousInstance, "single bone without previous");
+    in.verdict = DrawVerdict::IgnoredStaticWorld;
+    require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone never takes the static-world shortcut");
+    in.verdict = DrawVerdict::Identified;
     in.kind = DrawKind::SoftwareSkinned; in.skin = -1;
     require(decide_core(in).reason == HistoryReason::UnsupportedKind, "software skin unsupported");
     in.kind = DrawKind::HardwareSkinned; in.skin = 1;
@@ -211,6 +230,180 @@ void core_policy()
     large.bones.assign(core_max_bones + 1, sample_matrix(1));
     in.previous = &large;
     require(decide_core(in).reason == HistoryReason::TooManyBones, "palette overflow");
+}
+
+// ---- a moving skinned character, end to end ----------------------------------------------------------------------
+// The adapter chain for one vertex of an NPC that walks while the camera pans: MotionHistory (two frames), decide_core,
+// pack_core_vertex and pack_pixel bytes, the core shader formulas (skinned previous position from the packed palette,
+// rsf_encode_motion from core/README.md), the pipeline's decode (sr_pass.h decode_reference) and the dense resolve's
+// written-vector mapping (decoded UV * -render size). The result must be the true previous-minus-current unjittered
+// pixel displacement of that material point. The same pixel without a valid vector is reconstructed from depth with the
+// camera alone, and for a mover that is wrong by the object's own motion: that is the ghost.
+namespace mover {
+using temporal::Mat4;
+constexpr double W = 960, H = 540;
+Mat4 translation(double x, double y, double z)
+{
+    Mat4 m = Mat4::identity();
+    m.values[3] = x; m.values[7] = y; m.values[11] = z;
+    return m;
+}
+Mat4 yaw(double radians)
+{
+    Mat4 m = Mat4::identity();
+    m.values[0] = std::cos(radians); m.values[2] = std::sin(radians);
+    m.values[8] = -std::sin(radians); m.values[10] = std::cos(radians);
+    return m;
+}
+// X-Ray build_projection_HAT in the column-vector convention (clip.w = view z, standard depth).
+Mat4 projection(double fov = 1.2, double n = 0.2, double f = 900)
+{
+    const double h = 1 / std::tan(fov / 2), w = h / (W / H), q = f / (f - n);
+    Mat4 m{};
+    m.values[0] = w; m.values[5] = h; m.values[10] = q; m.values[11] = -q * n; m.values[14] = 1;
+    return m;
+}
+// Stage 3: the pixel jitter (render pixels, +X right, +Y down) added to clip.xy / w as (2u, -2v), u = jx / W.
+Mat4 jittered(const Mat4& p, double jx, double jy)
+{
+    Mat4 m = p;
+    for (std::size_t c = 0; c < 4; ++c) {
+        m.values[c] += 2 * jx / W * p.values[12 + c];
+        m.values[4 + c] -= 2 * jy / H * p.values[12 + c];
+    }
+    return m;
+}
+std::array<double, 4> transform_point(const Mat4& m, const std::array<double, 4>& v)
+{
+    std::array<double, 4> out{};
+    for (std::size_t r = 0; r < 4; ++r)
+        for (std::size_t c = 0; c < 4; ++c) out[r] += m.values[r * 4 + c] * v[c];
+    return out;
+}
+// Pixel (x right, y down) of a clip position, viewport origin zero.
+std::array<double, 2> pixel(const std::array<double, 4>& clip)
+{
+    return {(clip[0] / clip[3] * 0.5 + 0.5) * W, (0.5 - clip[1] / clip[3] * 0.5) * H};
+}
+// Row r of a packed row_major float4x4 or float4 array, as the shader reads it.
+std::array<double, 4> row(const std::byte* bytes, std::size_t offset, std::size_t r)
+{
+    std::array<double, 4> out{};
+    for (std::size_t c = 0; c < 4; ++c) out[c] = f32(bytes, offset + (r * 4 + c) * 4);
+    return out;
+}
+double dot(const std::array<double, 4>& a, const std::array<double, 4>& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; }
+
+struct Frame {
+    Mat4 view, projection, world;
+    std::vector<Mat4> bones;
+    double jx{}, jy{};
+};
+struct Result {
+    double written[2]{}, truth[2]{}, camera_only[2]{};
+};
+// skin 2: two-bone palette blend (SKIN_2). skin 0: CSkeletonX RM_SINGLE, the bone folded into the draw's world.
+Result run(int skin)
+{
+    // Frame a, then b. The NPC walks 0.4 m to the right and turns, its bones swing, the camera pans and moves.
+    const Mat4 p = projection();
+    const Frame a{compose(yaw(0.00), translation(-0.1, -1.7, 0)), p, compose(translation(1.0, 0, 8), yaw(0.10)),
+        {translation(0, 0.02, 0), yaw(0.20)}, 0.25, -0.375};
+    const Frame b{compose(yaw(0.02), translation(-0.15, -1.7, 0)), p, compose(translation(1.4, 0, 8), yaw(0.18)),
+        {translation(0, 0.05, 0), yaw(0.35)}, -0.4375, 0.125};
+    const std::array<double, 4> vertex{0.3, 1.2, 0.1, 1};
+    const double weight = 0.35;   // weight of bone 1
+    const auto skinned = [&](const Frame& f) {
+        std::array<double, 4> out{0, 0, 0, 1};
+        const auto p0 = transform_point(f.bones[0], vertex), p1 = transform_point(f.bones[1], vertex);
+        for (int i = 0; i < 3; ++i) out[i] = (1 - weight) * p0[i] + weight * p1[i];
+        return out;
+    };
+    // The draw's world at the flush: the actor world, or for RM_SINGLE the bone-composed world.
+    const auto draw_world = [&](const Frame& f) { return skin == 0 ? compose(f.world, f.bones[1]) : f.world; };
+    const auto object_point = [&](const Frame& f) { return skin == 0 ? vertex : skinned(f); };
+
+    MotionHistory history;
+    const temporal::InstanceKey key{0x10, 0x20, 1};
+    const auto snapshot = [&](const Frame& f) {
+        temporal::InstanceSnapshot s;
+        s.world = draw_world(f);
+        if (skin != 0) { s.kind = temporal::InstanceKind::Skinned; s.palette_layout = 1; s.bones = f.bones; }
+        return s;
+    };
+    const auto camera = [&](const Frame& f) { return CameraSample{f.view, jittered(f.projection, f.jx, f.jy)}; };
+    history.begin_frame(temporal::ViewId::Main, 100, 0, unsigned(W), unsigned(H));
+    history.observe_camera(temporal::ViewId::Main, temporal::ProjectionDomain::World, camera(a));
+    history.record(temporal::ViewId::Main, key, snapshot(a));
+    require(history.begin_frame(temporal::ViewId::Main, 101, 0, unsigned(W), unsigned(H)), "mover: continuous frame");
+    history.observe_camera(temporal::ViewId::Main, temporal::ProjectionDomain::World, camera(b));
+    const auto* previous = history.record(temporal::ViewId::Main, key, snapshot(b));
+    require(previous != nullptr, "mover: previous snapshot");
+
+    CoreDrawInput in{Family::CoreModel, skin, true, geometry::DrawVerdict::Identified,
+        skin == 0 ? geometry::DrawKind::SingleBone : geometry::DrawKind::HardwareSkinned, true, false,
+        history.previous_camera(temporal::ViewId::Main, temporal::ProjectionDomain::World), previous};
+    const auto decision = decide_core(in);
+    require(decision.reason == HistoryReason::Valid, std::string("mover: valid history, got ") + history_reason_name(decision.reason));
+    CoreVertexBytes vbytes;
+    require(pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, vbytes), "mover: pack VS b13");
+    require(f32(vbytes.data(), core_history_offset) == 1 && f32(vbytes.data(), core_history_offset + 4) == (skin == 0 ? 0 : 1) &&
+        f32(vbytes.data(), core_history_offset + 12) == 1, "mover: history flags");
+
+    // VS: previous clip = rsf_previous_wvp * (previous-palette skinning of the vertex), read back from the packed bytes.
+    std::array<double, 4> previous_object = vertex;
+    if (skin != 0)
+        for (int r = 0; r < 3; ++r)
+            previous_object[r] = (1 - weight) * dot(row(vbytes.data(), core_bones_offset, r), vertex) +
+                weight * dot(row(vbytes.data(), core_bones_offset, 3 + r), vertex);
+    std::array<double, 4> previous_clip{};
+    for (int r = 0; r < 4; ++r) previous_clip[r] = dot(row(vbytes.data(), core_wvp_offset, r), previous_object);
+    // Rasterized position of the current, jittered draw.
+    const auto current_clip = transform_point(compose(compose(jittered(b.projection, b.jx, b.jy), b.view), draw_world(b)), object_point(b));
+    const auto raster = pixel(current_clip);
+    // PS b13 and rsf_encode_motion.
+    PixelBytes pbytes;
+    require(pack_pixel({0, 0, float(W), float(H), float(b.jx / W), float(b.jy / H), float(a.jx / W), float(a.jy / H)}, pbytes),
+        "mover: pack PS b13");
+    const double rcp[2]{f32(pbytes.data(), ps_viewport_offset + 8), f32(pbytes.data(), ps_viewport_offset + 12)};
+    const double cj[2]{f32(pbytes.data(), ps_jitter_offset), f32(pbytes.data(), ps_jitter_offset + 4)};
+    const double pj[2]{f32(pbytes.data(), ps_jitter_offset + 8), f32(pbytes.data(), ps_jitter_offset + 12)};
+    const double current_uv[2]{raster[0] * rcp[0] - cj[0], raster[1] * rcp[1] - cj[1]};
+    const double previous_uv[2]{previous_clip[0] / previous_clip[3] * 0.5 + 0.5 - pj[0],
+        previous_clip[1] / previous_clip[3] * -0.5 + 0.5 - pj[1]};
+    const float stored[4]{float(current_uv[0] - previous_uv[0]), float(current_uv[1] - previous_uv[1]), 1, 0};
+    // Pipeline: decode, then the dense resolve's written-vector mapping (previous-minus-current render pixels).
+    const auto decoded = sr::decode_reference(stored);
+    require(!decoded.unwritten, "mover: a valid vector is not the sentinel");
+    Result result;
+    result.written[0] = -double(decoded.x) * W * sr::motion_to_uv[0];
+    result.written[1] = -double(decoded.y) * H * sr::motion_to_uv[1];
+    // Truth: the same material point through both unjittered cameras.
+    const auto truth_previous = pixel(transform_point(compose(compose(a.projection, a.view), draw_world(a)), object_point(a)));
+    const auto truth_current = pixel(transform_point(compose(compose(b.projection, b.view), draw_world(b)), object_point(b)));
+    result.truth[0] = truth_previous[0] - truth_current[0];
+    result.truth[1] = truth_previous[1] - truth_current[1];
+    // Camera-only reconstruction of the same pixel (what an invalid pixel becomes): the current world point, assumed
+    // static, through the previous camera.
+    const auto world_point = transform_point(draw_world(b), object_point(b));
+    const auto camera_previous = pixel(transform_point(compose(a.projection, a.view), world_point));
+    result.camera_only[0] = camera_previous[0] - truth_current[0];
+    result.camera_only[1] = camera_previous[1] - truth_current[1];
+    return result;
+}
+}
+void moving_character()
+{
+    for (const int skin : {2, 0}) {
+        const auto r = mover::run(skin);
+        const double error = std::hypot(r.written[0] - r.truth[0], r.written[1] - r.truth[1]);
+        const double ghost = std::hypot(r.camera_only[0] - r.truth[0], r.camera_only[1] - r.truth[1]);
+        std::printf("mover SKIN_%d: written (%.4f, %.4f) px, truth (%.4f, %.4f) px, error %.5f px; camera-only misses by %.2f px\n",
+            skin, r.written[0], r.written[1], r.truth[0], r.truth[1], error, ghost);
+        require(error < 2e-3, "mover: written vector equals the true unjittered displacement, SKIN_" + std::to_string(skin));
+        require(std::hypot(r.truth[0], r.truth[1]) > 5, "mover: the fixture actually moves");
+        require(ghost > 5, "mover: camera-only reconstruction is wrong for a mover (the ghost a valid vector prevents)");
+    }
 }
 
 // ---- history ---------------------------------------------------------------------------------------------------
@@ -960,12 +1153,255 @@ void foliage_policy()
         static_cast<std::size_t>(HistoryReason::Count) == 16, "reason names and counter width (MotionCounters::reasons)");
 }
 
+// ---- tessellation chain (DX11\tess.hs / DX11\tess.ds) ----------------------------------------------------------
+void tess_layout_and_packing()
+{
+    const auto tess = read_text(std::filesystem::path(RSF_SOURCE_DIR) / "games/anomaly/shaders/core/rsf_core_tess.h");
+    const auto row = [&](const std::string& pattern) {
+        std::smatch m;
+        require(std::regex_search(tess, m, std::regex(pattern)), "rsf_core_tess.h: " + pattern);
+        return std::stoul(m[1]);
+    };
+    require(row(R"(rsf_previous_wv : packoffset\(c(\d+)\))") * 16 == tess_wv_offset, "tess wv packoffset");
+    require(row(R"(rsf_previous_projection : packoffset\(c(\d+)\))") * 16 == tess_projection_offset, "tess projection packoffset");
+    require(row(R"(rsf_tess_history : packoffset\(c(\d+)\))") * 16 == tess_history_offset, "tess history packoffset");
+    require(tess_history_offset + 16 == tess_ds_bytes && tess.find("RSFTessPrevious : register(b13)") != std::string::npos,
+        "DS b13 size and slot");
+    TessDomainBytes bytes;
+    const auto wv = sample_matrix(0.5), projection = sample_matrix(1.5);
+    require(pack_tess_domain(wv, projection, true, bytes), "pack");
+    for (std::size_t r = 0; r < 4; ++r)
+        for (std::size_t c = 0; c < 4; ++c) {
+            require(f32(bytes.data(), tess_wv_offset + (r * 4 + c) * 4) == static_cast<float>(wv.values[r * 4 + c]), "wv rows");
+            require(f32(bytes.data(), tess_projection_offset + (r * 4 + c) * 4) == static_cast<float>(projection.values[r * 4 + c]),
+                "projection rows");
+        }
+    require(f32(bytes.data(), tess_history_offset) == 1 && f32(bytes.data(), tess_history_offset + 4) == 0 &&
+        f32(bytes.data(), tess_history_offset + 8) == 0 && f32(bytes.data(), tess_history_offset + 12) == 1, "history (1, 0, 0, ABI 1)");
+    require(!pack_tess_domain(wv, projection, false, bytes), "no history refused");
+    require(f32(bytes.data(), tess_history_offset) == 0 && f32(bytes.data(), tess_history_offset + 12) == 1 &&
+        f32(bytes.data(), tess_wv_offset) == 0, "refusal writes the invalid buffer");
+    auto bad = projection;
+    bad.values[10] = std::nan("");
+    require(!pack_tess_domain(wv, bad, true, bytes) && f32(bytes.data(), tess_history_offset) == 0, "NaN projection refused");
+    bytes.fill(std::byte{0x7f});
+    pack_tess_invalid(bytes);
+    for (std::size_t i = 0; i < tess_history_offset + 12; i += 4) require(f32(bytes.data(), i) == 0, "invalid zero");
+}
+
+// decide_core's split for the domain stage multiplies back to the VS's previous WVP.
+void tess_policy_split()
+{
+    using geometry::DrawKind;
+    using geometry::DrawVerdict;
+    CameraSample camera{sample_matrix(0.1), sample_matrix(0.2)};
+    temporal::InstanceSnapshot previous;
+    previous.world = sample_matrix(0.7);
+    previous.bones = {sample_matrix(1), sample_matrix(2)};
+    CoreDrawInput in{Family::CoreModel, 2, true, DrawVerdict::Identified, DrawKind::HardwareSkinned, true, false, &camera, &previous};
+    const auto d = decide_core(in);
+    require(d.reason == HistoryReason::Valid, "skinned history valid");
+    const auto product = compose(d.previous_projection, d.previous_wv);
+    for (std::size_t i = 0; i < 16; ++i)
+        require(std::abs(product.values[i] - d.previous_wvp.values[i]) <= 1e-9 * (1 + std::abs(d.previous_wvp.values[i])),
+            "previous_projection * previous_wv == previous_wvp");
+    require(d.previous_projection == camera.projection && d.previous_wv == compose(camera.view, previous.world), "split factors");
+    // SKIN_0: the bone-composed previous world is inside previous_wv.
+    previous.bones.clear();
+    in.skin = 0;
+    in.kind = DrawKind::SingleBone;
+    const auto single = decide_core(in);
+    require(single.reason == HistoryReason::Valid && single.previous_wv == compose(camera.view, previous.world), "single bone split");
+}
+
+// Control-point interfaces: RSF fields first (registers of the native fields shift), TEXCOORD14/15 before SV_Position.
+Parameter p(const char* name, std::uint32_t index, std::uint32_t reg, std::uint32_t mask, std::uint32_t sv = 0)
+{
+    return {name, index, reg, sv, 3, mask};
+}
+std::vector<Parameter> stock_control() { return {p("TEXCOORD", 0, 0, 0x3), p("TEXCOORD", 1, 1, 0xf), p("TEXCOORD", 2, 2, 0x7)}; }
+std::vector<Parameter> rsf_control()
+{
+    return {p("TEXCOORD", 12, 0, 0xf), p("TEXCOORD", 13, 1, 0x1), p("TEXCOORD", 0, 2, 0x3), p("TEXCOORD", 1, 3, 0xf),
+        p("TEXCOORD", 2, 4, 0x7), p("TEXCOORD", 14, 5, 0xf), p("TEXCOORD", 15, 6, 0x7)};
+}
+std::vector<Parameter> patch_constants()
+{
+    return {p("SV_TessFactor", 0, 0, 0x1, 13), p("POSITION", 4, 0, 0xe), p("SV_InsideTessFactor", 0, 1, 0x1, 14),
+        p("POSITION", 3, 2, 0x7), p("NORMAL", 3, 3, 0x7)};
+}
+Reflection tess_stock(char stage)
+{
+    Reflection r;
+    r.version = stage == 'h' ? 0x30050 : 0x40050;
+    r.bindings = {{"$Globals", 0, 0, 1, 0, 0}};
+    r.buffers = {{"$Globals", 32, {{stage == 'h' ? "triLOD" : "m_P", 0, 16}}}};
+    r.inputs = stock_control();
+    r.outputs = stage == 'h' ? stock_control()
+                             : std::vector<Parameter>{p("TEXCOORD", 0, 0, 0x3), p("TEXCOORD", 1, 1, 0xf), p("SV_Position", 0, 2, 0xf, 1)};
+    r.patch = patch_constants();
+    return r;
+}
+Reflection tess_variant(char stage)
+{
+    auto r = tess_stock(stage);
+    r.inputs = rsf_control();
+    if (stage == 'h') {
+        r.outputs = rsf_control();
+    } else {
+        r.outputs = {p("TEXCOORD", 12, 0, 0xf), p("TEXCOORD", 13, 1, 0x1), p("TEXCOORD", 0, 2, 0x3), p("TEXCOORD", 1, 3, 0xf),
+            p("SV_Position", 0, 4, 0xf, 1)};
+        r.bindings.push_back({"RSFTessPrevious", 0, 13, 1, 0, 0});
+    }
+    return r;
+}
+void tess_compatibility_rules()
+{
+    for (const char stage : {'h', 'd'}) {
+        const auto stock = tess_stock(stage);
+        const auto variant = tess_variant(stage);
+        const std::string s(1, stage);
+        require(compatible(stage, stock, variant) == Compatibility::Ok, s + ": reference variant compatible");
+        auto v = variant; v.patch[1].mask = 0xf;
+        require(compatible(stage, stock, v) == Compatibility::PatchConstants, s + ": patch-constant signature must be identical");
+        v = variant; v.inputs.pop_back();
+        require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": missing TEXCOORD15");
+        v = variant; v.inputs.push_back(p("TEXCOORD", 16, 7, 0xf));
+        require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": unknown extra input");
+        v = variant; v.inputs[0].mask = 0x7;
+        require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": TEXCOORD12 must be xyzw");
+        v = variant; v.inputs.erase(v.inputs.begin() + 3);
+        require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": lost a native control-point field");
+        v = variant; v.buffers[0].variables[0].offset = 16;
+        require(compatible(stage, stock, v) == Compatibility::Buffer, s + ": moved engine constant");
+    }
+    auto hull = tess_variant('h');
+    hull.bindings.push_back({"RSFTessPrevious", 0, 13, 1, 0, 0});
+    require(compatible('h', tess_stock('h'), hull) == Compatibility::ExtraBinding, "the hull stage binds no RSF buffer");
+    auto domain = tess_variant('d');
+    domain.bindings.back().name = "RSFCorePrevious";
+    require(compatible('d', tess_stock('d'), domain) == Compatibility::ExtraBinding, "the domain stage binds only RSFTessPrevious");
+    domain = tess_variant('d');
+    domain.bindings.back().point = 12;
+    require(compatible('d', tess_stock('d'), domain) == Compatibility::ExtraBinding, "RSFTessPrevious at b13 only");
+    domain = tess_variant('d');
+    domain.outputs.push_back(p("TEXCOORD", 14, 5, 0xf));
+    require(compatible('d', tess_stock('d'), domain) == Compatibility::Outputs, "the domain stage hands the PS only TEXCOORD12/13");
+    domain = tess_variant('d');
+    domain.outputs.erase(domain.outputs.begin() + 1);
+    require(compatible('d', tess_stock('d'), domain) == Compatibility::Outputs, "domain must write validity");
+    hull = tess_variant('h');
+    hull.outputs.erase(hull.outputs.begin());
+    require(compatible('h', tess_stock('h'), hull) == Compatibility::Outputs, "hull must forward the previous clip");
+    require(compatible('g', tess_stock('h'), tess_variant('h')) != Compatibility::Ok, "geometry shaders are never variants");
+}
+void tess_linkage_rules()
+{
+    Reflection vs;
+    vs.outputs = rsf_control();
+    vs.outputs.push_back(p("SV_Position", 0, 7, 0xf, 1));
+    const auto hs = tess_variant('h'), ds = tess_variant('d');
+    Reflection ps;
+    ps.inputs = {p("TEXCOORD", 12, 0, 0xf), p("TEXCOORD", 13, 1, 0x1), p("TEXCOORD", 0, 2, 0x3), p("TEXCOORD", 1, 3, 0xf),
+        p("SV_Position", 0, 4, 0x3, 1)};
+    require(tess_chain_linkable(vs, hs, ds, ps), "variant chain links");
+    require(!tess_chain_linkable(vs, tess_stock('h'), ds, ps), "stock hull refused");
+    require(!tess_chain_linkable(vs, hs, tess_stock('d'), ps), "stock domain refused");
+    auto plain = vs;   // a non-tessellation VS variant: no TEXCOORD14/15
+    plain.outputs.erase(plain.outputs.begin() + 5, plain.outputs.begin() + 7);
+    require(!tess_chain_linkable(plain, hs, ds, ps), "VS without the previous control data refused");
+    auto shifted = hs;
+    shifted.inputs[5].reg = 6;
+    require(!tess_chain_linkable(vs, shifted, ds, ps), "register mismatch between VS output and HS input refused");
+    auto unmatched = ds;
+    unmatched.patch.push_back(p("NORMAL", 4, 4, 0x7));
+    require(!tess_chain_linkable(vs, hs, unmatched, ps), "domain patch constant the hull does not write refused");
+    unmatched = ds;
+    unmatched.patch.clear();
+    require(!tess_chain_linkable(vs, hs, unmatched, ps), "a domain without patch constants refused");
+    require(!linkable(vs, ps), "the VS alone does not feed the PS under tessellation (SV_Position register)");
+    require(family_stage(Family::TessHull) == 'h' && family_stage(Family::TessDomain) == 'd' &&
+        std::string(family_name(Family::TessDomain)) == "tess_domain" && static_cast<std::size_t>(Family::Count) == 8 &&
+        std::string(compatibility_name(Compatibility::PatchConstants)) == "patch_constants", "families and names");
+}
+void tess_manifest_rules()
+{
+    const std::string ns(64, 'a'), h1(64, '1'), h2(64, '2'), h3(64, '3'), h4(64, '4');
+    const std::string head = "rsf-anomaly-motion-manifest 1\nnamespace " + ns + "\n";
+    std::string error;
+    auto ok = Manifest::parse(head + "root hs tess_hull dx11/tess.hs " + h1 + " " + h2 + "\nroot ds tess_domain dx11/tess.ds " + h3 + " " +
+        h4 + "\n", error);
+    require(ok && ok->by_original.at(h1).family == Family::TessHull && ok->by_original.at(h1).stage == 'h' &&
+        ok->by_original.at(h3).stage == 'd' && ok->by_original.at(h3).name == "dx11/tess.ds", "hull/domain roots parse: " + error);
+    for (const std::string bad : {"root vs tess_hull dx11/tess.hs ", "root ds tess_hull dx11/tess.hs ", "root gs tess_hull dx11/tess.hs ",
+             "root hs tess_hull /tess.hs ", "root hs tess_hull dx11/ ", "root hs tess_hull a/b/tess.hs ", "root hs tess_hull dx11\\tess.hs ",
+             "root hs tess_hull dx11/../tess.hs "})
+        require(!Manifest::parse(head + bad + h1 + " " + h2 + "\n", error), "refused: " + bad);
+}
+
+// ---- far characters (docs/research/anomaly-far-character-motion.md) ---------------------------------------------
+void far_character_diagnostics()
+{
+    // Bands: <20, 20-50, 50-100, 100-150, >=150 m, unknown (non-finite or negative).
+    require(distance_band(0) == 0 && distance_band(19.99) == 0 && distance_band(20) == 1 && distance_band(49.9) == 1 &&
+        distance_band(50) == 2 && distance_band(99.9) == 2 && distance_band(100) == 3 && distance_band(149.9) == 3 &&
+        distance_band(150) == 4 && distance_band(5000) == 4, "distance bands");
+    require(distance_band(std::nan("")) == distance_bands - 1 && distance_band(-1) == distance_bands - 1, "unknown band");
+    require(std::string(distance_band_name(2)) == "50-100m" && std::string(distance_band_name(distance_bands - 1)) == "unknown" &&
+        std::string(distance_band_name(99)) == "unknown", "band names");
+    // Camera at (10, 2, -5) turned 90 degrees about Y; an object 120 m east of the camera.
+    temporal::Mat4 rotation = temporal::Mat4::identity();
+    rotation.values[0] = 0; rotation.values[2] = -1; rotation.values[8] = 1; rotation.values[10] = 0;   // world-to-view R
+    temporal::Mat4 view = rotation;
+    const double camera[3]{10, 2, -5};
+    for (int r = 0; r < 3; ++r)
+        view.values[r * 4 + 3] = -(rotation.values[r * 4 + 0] * camera[0] + rotation.values[r * 4 + 1] * camera[1] +
+            rotation.values[r * 4 + 2] * camera[2]);
+    temporal::Mat4 world = temporal::Mat4::identity();
+    world.values[3] = 130; world.values[7] = 2; world.values[11] = -5;
+    require(std::abs(camera_distance(view, world) - 120.0) < 1e-9, "camera distance from a rotated view");
+    require(distance_band(camera_distance(view, world)) == 3, "120 m is the 100-150 m band");
+    temporal::Mat4 projective = view;
+    projective.values[14] = 1;
+    require(std::isnan(camera_distance(projective, world)), "a non-rigid view has no distance");
+    // Element by the engine's shader-cache root name (uber_deffer.cpp: HQ adds -hq, the tessellation pass the define list).
+    require(model_element("deffer_model_bump-hq_2.vs") == ModelElement::High, "HQ bump");
+    require(model_element("deffer_model_bump_d-hq_1.vs") == ModelElement::High, "HQ bump with detail");
+    require(model_element("deffer_model_bump_2.vs") == ModelElement::Low, "LQ bump (beyond r__dtex_range)");
+    require(model_element("deffer_model_flat_4.vs") == ModelElement::Low, "LQ flat");
+    require(model_element("deffer_model_bump(tess_pn,)_3.vs") == ModelElement::Tessellated, "tessellation chain");
+    require(model_element("deffer_base_bump.vs") == ModelElement::Unknown && model_element("model_env_lq_0.vs") == ModelElement::Unknown,
+        "not a deferred model VS");
+    // Stale palette: identical bones while the object moved more than 1 mm.
+    temporal::InstanceSnapshot previous, current;
+    previous.kind = current.kind = temporal::InstanceKind::Skinned;
+    previous.world = current.world = temporal::Mat4::identity();
+    previous.bones.assign(4, temporal::Mat4::identity());
+    current.bones = previous.bones;
+    require(!stale_palette(previous, current), "a character standing still is not stale");
+    current.world.values[3] = 0.05;
+    require(stale_palette(previous, current), "unchanged palette while walking 5 cm");
+    current.world.values[3] = 0.0005;
+    require(!stale_palette(previous, current), "sub-millimetre movement is noise");
+    current.world.values[3] = 0.05;
+    current.bones[2].values[7] = 0.01;
+    require(!stale_palette(previous, current), "an animated palette is not stale");
+    current.bones.pop_back();
+    require(!stale_palette(previous, current), "different bone counts are never stale");
+    temporal::InstanceSnapshot rigid = current;
+    rigid.bones.clear();
+    require(!stale_palette(previous, rigid), "a rigid snapshot has no palette");
+}
+
 const std::map<std::string, void (*)()> cases{
+    {"tess-layout", tess_layout_and_packing}, {"tess-policy", tess_policy_split}, {"tess-compatibility", tess_compatibility_rules},
+    {"tess-linkage", tess_linkage_rules}, {"tess-manifest", tess_manifest_rules},
     {"layouts", layouts_match_readmes}, {"core-vertex", core_vertex_packing}, {"pixel", pixel_packing},
-    {"matrix", matrix_convention}, {"policy", core_policy}, {"history", history_rules}, {"binder", binder_state_machine},
+    {"matrix", matrix_convention}, {"policy", core_policy}, {"mover", moving_character}, {"history", history_rules}, {"binder", binder_state_machine},
     {"compatibility", compatibility_rules}, {"frame", caller_frame}, {"manifest", manifest_rules}, {"loader", loader_contract},
     {"foliage-layout-readme", foliage_layout_readme}, {"foliage-layout-reflection", foliage_layout_from_reflection},
-    {"foliage-packing", foliage_packing}, {"foliage-identity", foliage_identity_remap}, {"foliage-policy", foliage_policy}};
+    {"foliage-packing", foliage_packing}, {"foliage-identity", foliage_identity_remap}, {"foliage-policy", foliage_policy},
+    {"far-character", far_character_diagnostics}};
 }
 
 int main(int argc, char** argv)

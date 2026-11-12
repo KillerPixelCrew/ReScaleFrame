@@ -43,6 +43,23 @@ bool pack_core_vertex(const temporal::Mat4& previous_wvp, std::span<const tempor
 
 void pack_foliage_invalid(FoliageVertexBytes& out) noexcept { out.fill(std::byte{}); }
 
+void pack_tess_invalid(TessDomainBytes& out) noexcept
+{
+    out.fill(std::byte{});
+    put(out.data(), tess_history_offset + 12, abi_version);
+}
+
+bool pack_tess_domain(const temporal::Mat4& previous_wv, const temporal::Mat4& previous_projection, bool valid,
+    TessDomainBytes& out) noexcept
+{
+    pack_tess_invalid(out);
+    if (!valid || !usable(previous_wv) || !usable(previous_projection)) return false;
+    put_rows(out.data(), tess_wv_offset, previous_wv, 4);
+    put_rows(out.data(), tess_projection_offset, previous_projection, 4);
+    put(out.data(), tess_history_offset, 1.0f);
+    return true;
+}
+
 namespace {
 void put_u32(std::byte* out, std::size_t offset, std::uint32_t value) noexcept { std::memcpy(out + offset, &value, sizeof(value)); }
 bool finite_all(const float* values, std::size_t count) noexcept

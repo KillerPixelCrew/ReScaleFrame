@@ -160,6 +160,7 @@ struct Fake {
     uint32_t starts{}, stops{}, selects{}, qualities{}, presets{}, resizes{}, evaluates{};
     uint32_t backend{RSF_SR_DLSS}, quality{1}, preset{}, output_width{}, output_height{}, render_width{}, render_height{};
     bool running{}, refuse_fsr4{true};
+    rsf_dlss_pipeline_result start_result{RSF_DLSS_PIPELINE_OK};
     rsf_dlss_pipeline_result evaluate_result{RSF_DLSS_PIPELINE_OK};
     rsf_game_render_pass last{};
     static Fake* self;
@@ -178,6 +179,7 @@ rsf_d3d11_sr_api fake_table() {
         f.setup = *s;
         f.streamline = s->streamline_directory_utf8; f.fidelityfx = s->fsr3_directory_utf8; f.xess = s->xess_directory_utf8;
         f.project = s->project_id_utf8; f.engine_version = s->engine_version_utf8;
+        if (f.start_result != RSF_DLSS_PIPELINE_OK) return f.start_result;
         f.device = device; f.running = true; f.backend = RSF_SR_DLSS; f.quality = s->quality;
         f.output_width = s->output_width; f.output_height = s->output_height;
         plan(f);
@@ -286,7 +288,9 @@ void driver_lifecycle() {
     // Settings at the boundary: XeSS and Balanced, preset forwarded as chosen; a settings reset on the next pass.
     driver.request({true, backend_xess, 2, 4});
     CHECK(fake.selects == 0);                        // nothing until the boundary
-    driver.boundary(a, 1920, 1080);
+    driver.boundary(a, 1920, 1080);                  // the first use of XeSS is announced, quality follows at once
+    CHECK(fake.selects == 0 && driver.status().pending_backend == backend_xess && fake.qualities == 1);
+    driver.boundary(a, 1920, 1080);                  // and selected at the next boundary
     CHECK(fake.selects == 1 && fake.backend == RSF_SR_XESS && fake.qualities == 1 && fake.quality == 2 && fake.presets == 1 && fake.preset == 4);
     CHECK(driver.planned_render(1920, 1080, rw, rh) && rw == 1129 && rh == 635);
     in = frame(1129, 635, 5, false);
@@ -352,9 +356,133 @@ void driver_lifecycle() {
     CHECK(fake.starts == starts && !inputs_only.running());
 }
 
+// A start the pipeline refuses (wave 7: Streamline could not load its plugins from a "\\?\" directory) is never a silent
+// bilinear frame: the log names the directories and keys, the overlay reason says SR is off and why.
+void start_refused_loudly() {
+    Fake fake;
+    Fake::self = &fake;
+    fake.start_result = RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED;
+    const auto table = fake_table();
+    TemporalDriver driver;
+    TemporalOptions options{};
+    options.stage = 5;
+    options.streamline = "D:\\Anomaly 1.5.3\\bin\\ReScaleFrame\\streamline"; options.fidelityfx = "C:\\ffx"; options.xess = "C:\\xess";
+    options.initial = {true, backend_dlss, 1, 0};
+    std::vector<std::string> lines;
+    driver.configure(options, [](void* user, const char* line) { static_cast<std::vector<std::string>*>(user)->push_back(line); }, &lines);
+    CHECK(driver.bind_table(table));
+    int device = 0;
+    driver.boundary(reinterpret_cast<ID3D11Device*>(&device), 1920, 1080);
+    CHECK(fake.starts == 1 && !driver.running() && driver.counters().start_failures == 1);
+    bool named = false, directories = false;
+    for (const auto& line : lines) {
+        named = named || line.find("did not start (-5, Streamline failed)") != std::string::npos;
+        directories = directories || (line.find("SR is OFF") != std::string::npos &&
+            line.find("D:\\Anomaly 1.5.3\\bin\\ReScaleFrame\\streamline") != std::string::npos && line.find("SRStreamlineDir") != std::string::npos);
+    }
+    CHECK(named && directories);
+    rsf_overlay_sr_report report{};
+    CHECK(driver.overlay_report(report) && report.effective_backend == 0);
+    const std::string_view reason{report.reason};
+    CHECK(reason.find("SR off") != std::string_view::npos && reason.find("Streamline") != std::string_view::npos &&
+        reason.find("SRStreamlineDir") != std::string_view::npos && reason.size() < sizeof(report.reason) - 1);
+    CHECK(start_refusal_reason(RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED).find("DLSS support") != std::string::npos);
+    CHECK(start_refusal_reason(RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED).find("resource failed") != std::string::npos);
+    for (const int32_t r : {int32_t(RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED), int32_t(RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED),
+             int32_t(RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT), int32_t(RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED)})
+        CHECK(start_refusal_reason(r).size() < sizeof(report.reason));
+    // Not retried every frame for the same device and settings.
+    driver.boundary(reinterpret_cast<ID3D11Device*>(&device), 1920, 1080);
+    CHECK(fake.starts == 1);
+}
+
+// The first request for a backend the vendor has not loaded in this process (FSR4's first dispatch builds pipelines for tens of seconds on a
+// cold driver cache) only announces it: the status names it and the Present draws that, then the blocking select runs at the next boundary.
+// Later selections run at once.
+void announce_before_select() {
+    Fake fake;
+    Fake::self = &fake;
+    fake.refuse_fsr4 = false;
+    const auto table = fake_table();
+    TemporalDriver driver;
+    TemporalOptions options{};
+    options.stage = 5;
+    options.streamline = "C:\\sl"; options.fidelityfx = "C:\\ffx"; options.xess = "C:\\xess";
+    options.initial = {true, backend_dlss, 1, 0};
+    std::vector<std::string> lines;
+    driver.configure(options, [](void* user, const char* line) { static_cast<std::vector<std::string>*>(user)->push_back(line); }, &lines);
+    CHECK(driver.bind_table(table));
+    int device = 0;
+    auto* a = reinterpret_cast<ID3D11Device*>(&device);
+    driver.boundary(a, 1920, 1080);
+    auto in = frame(1280, 720, 1, false);
+    CHECK(driver.evaluate(nullptr, in, {}));
+    // FSR4 requested: announced, not selected; the seam keeps evaluating with DLSS and the overlay names what is coming.
+    driver.request({true, backend_fsr4, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(fake.selects == 0 && driver.status().applied.backend == backend_dlss && driver.status().pending_backend == backend_fsr4);
+    CHECK(driver.counters().select_announced == 1);
+    in = frame(1280, 720, 2, false);
+    CHECK(driver.evaluate(nullptr, in, {}) && !(fake.last.flags & RSF_GAME_RENDER_RESET));
+    rsf_overlay_sr_report report{};
+    CHECK(driver.overlay_report(report) && report.effective_backend == backend_dlss);
+    const std::string_view preparing{report.reason};
+    CHECK(preparing.find("Preparing FSR4") != std::string_view::npos && preparing.find("pauses") != std::string_view::npos &&
+        preparing.size() < sizeof(report.reason) - 1);
+    // The next boundary runs the blocking select, once, with a settings reset on the next pass; the status is clear again.
+    driver.boundary(a, 1920, 1080);
+    CHECK(fake.selects == 1 && fake.backend == RSF_SR_FSR4 && driver.status().applied.backend == backend_fsr4 && driver.status().pending_backend == 0);
+    in = frame(1280, 720, 3, false);
+    CHECK(driver.evaluate(nullptr, in, {}) && (fake.last.flags & RSF_GAME_RENDER_RESET));
+    CHECK(driver.overlay_report(report) && report.effective_backend == backend_fsr4 && report.reason[0] == '\0');
+    // Prepared once in this process: switching away and back is not announced again, and DLSS never is.
+    driver.request({true, backend_dlss, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(fake.selects == 2 && driver.status().pending_backend == 0);
+    driver.request({true, backend_fsr4, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(fake.selects == 3 && driver.status().pending_backend == 0 && driver.counters().select_announced == 1);
+    // A wish that changes after the announcement cancels it; one back to the applied backend selects nothing.
+    driver.request({true, backend_xess, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(driver.status().pending_backend == backend_xess && fake.selects == 3);
+    driver.request({true, backend_fsr4, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(driver.status().pending_backend == 0 && fake.selects == 3 && driver.status().applied.backend == backend_fsr4);
+    // A refusal after the announcement is reported once and not retried every frame.
+    fake.refuse_fsr4 = true;
+    driver.request({true, backend_dlss, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    TemporalDriver other;
+    other.configure(options, nullptr, nullptr);
+    CHECK(other.bind_table(table));
+    fake.backend = RSF_SR_DLSS;
+    other.boundary(a, 1920, 1080);
+    other.request({true, backend_fsr4, 1, 0});
+    other.boundary(a, 1920, 1080);
+    other.boundary(a, 1920, 1080);
+    const auto asked = fake.selects;
+    other.boundary(a, 1920, 1080);
+    other.boundary(a, 1920, 1080);
+    CHECK(fake.selects == asked && other.counters().select_failures == 1 && other.status().pending_backend == 0);
+    bool said_announce = false, said_took = false, said_refused = false;
+    for (const auto& line : lines) {
+        said_announce = said_announce || line.find("preparing FSR4. The first use makes the vendor build its pipelines") != std::string::npos;
+        said_took = said_took || line.find("FSR4 selected, the boundary took") != std::string::npos;
+    }
+    CHECK(said_announce && said_took);
+    (void)said_refused;
+    // Teardown while announced forgets it.
+    driver.stop();
+    CHECK(!driver.running() && driver.status().pending_backend == 0);
+    std::vector<std::string> report_lines;
+    other.report([](void* user, const char* line) { static_cast<std::vector<std::string>*>(user)->push_back(line); }, &report_lines);
+    CHECK(report_lines.size() == 2 && report_lines[1].find("announced=") != std::string::npos && report_lines[1].find("longest_select_ms=") != std::string::npos);
+}
+
 int main(int argc, char** argv) {
     struct { const char* name; void (*run)(); } cases[] = {{"query", query}, {"idle", idle_pipeline}, {"binding", adapter_binding},
-        {"lifecycle", driver_lifecycle}};
+        {"lifecycle", driver_lifecycle}, {"start-refused", start_refused_loudly}, {"announce", announce_before_select}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;

@@ -103,8 +103,8 @@ Sources: `docs/research/anomaly-{world-space-ui,native-hooks,geometry-coverage,o
 
 - Launch path that works: `.local/anomaly/wave*-game/tools/` (Process.Start with cwd at the game
   root, `-ltx` test profile in appdata removed afterwards, `-start ... autosave`, F12 engine
-  screenshots, console quit by scancodes). Dismiss the loading screen with a key tap before
-  captures. Saves are backed up before every run and have stayed byte-identical.
+  screenshots, console quit by scancodes). Loading never finishes unless the game window is
+  clicked (user, 13 Nov); then dismiss the loading screen with a key tap before captures. Saves are backed up before every run and have stayed byte-identical.
 - 13 Nov: the user found the game starting on the Intel iGPU and set Anomaly to NVIDIA in the
   NVIDIA Control Panel. Engine logs of every earlier run name the RTX 4070, but presentation
   crossed the iGPU display path ("2-GPU path"). Re-measure frame time; treat the earlier

@@ -58,4 +58,37 @@ inline constexpr wchar_t engine_compiler_module[] = L"d3dcompiler_43.dll";
 // SPS/SVS/SGS: the D3D11 shader interface pointer is at +0x10 (create_shader: lea rax, [r15+10h] as the
 // CreatePixel/VertexShader out-parameter, 0x838e38/0x838f02).
 inline constexpr uint32_t shader_object_offset = 0x10;
+
+// Hull and domain shaders (r4_enable_tessellation: uber_deffer.cpp r_TessPass, "DX11\tess(...)"). CreateShader<SHS/SDS>
+// (ShaderResourceTraits.h) calls the same shader_compile, which calls the same create_shader detour above with target
+// "hs_5_0"/"ds_5_0", so the caller frame, the define list and the byte-exact recompile proof are the ones of VS/PS and no
+// further detour is installed. create_shader dispatches 'h' to create_shader<SHS> and anything else past 'c' to
+// create_shader<SDS> (r4.cpp:934 template, r4.cpp:1139-1146). Guarded so a rebuilt executable refuses instead of the
+// detour reading a different object layout:
+//   dispatch: cmp al,'h'; [rsp+28h] = disasm; [rsp+20h] = &result; jne -> call create_shader<SDS>, else call
+//   create_shader<SHS> (0x839123..0x83914a).
+inline constexpr uint32_t tess_dispatch_rva = 0x839123;
+inline constexpr char tess_dispatch[] =
+    "3c680fb685a801000088442428488b85a001000048894424207507e86dceffffeb05e8b6cdffff";
+// The templates: CreateHWShader (a wrapper calling ID3D11Device::CreateHullShader +0x80 / CreateDomainShader +0x88), then
+// `mov rcx, [rsi]; mov [rcx+10h], rax`: SHS::sh and SDS::sh are at shader_object_offset like SPS::ps/SVS::vs. Then
+// D3DReflect and R_constant_table::parse with RC_dest_hull 0x10 / RC_dest_domain 0x20.
+struct TessCreateSite {
+    const char* name;
+    uint32_t rva;
+    const char* prologue;        // function start through the shader-object store
+    uint32_t wrapper_rva;        // ShaderTypeTraits<T>::CreateHWShader
+    const char* wrapper;         // wrapper start through the ID3D11Device call
+};
+inline constexpr std::array<TessCreateSite, 2> tess_create_sites{{
+    {"create_shader<SHS> (r4.cpp:934, hull)", 0x835fb0,
+        "48895c240848896c24104889742418574883ec30488bfa418bd8488bcf418bd0498be9e888140000488b7424604c8d4c24204c8d05af0633008bd3"
+        "488b0e48894110",
+        0x837460, "4883ec484c8bd148c744246000000000488b0d59444b004c8d4424604c894424204533c94c8bc2498bd2488b01ff9080000000"},
+    {"create_shader<SDS> (r4.cpp:934, domain)", 0x835f00,
+        "48895c240848896c24104889742418574883ec30488bfa418bd8488bcf418bd0498be9e8a8140000488b7424604c8d4c24204c8d055f0733008bd3"
+        "488b0e48894110",
+        0x8373d0, "4883ec484c8bd148c744246000000000488b0de9444b004c8d4424604c894424204533c94c8bc2498bd2488b01ff9088000000"},
+}};
+inline constexpr std::size_t tess_create_hull = 0, tess_create_domain = 1;
 }

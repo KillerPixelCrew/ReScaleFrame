@@ -33,6 +33,8 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <algorithm>
+#include <array>
 #include <string_view>
 #include <vector>
 
@@ -267,6 +269,187 @@ void decode_case(Device& d) {
     rsf_motion_decode_destroy(decode);
 }
 
+// ---- thin static geometry and a mover, through the production decode and dense resolve -----------------------------
+// A jittered, moving-camera frame of a thin pole (about 0.75 render px wide) in front of ground and sky, and an NPC-like
+// slab that moves by itself. Every pixel is rasterized at its jittered sample: depth is the R24G8 device depth of the
+// surface the jittered ray hits. The pole and, in one run, the mover carry written vectors (validity 1), exactly what the
+// core PS writes (current-minus-previous unjittered UV); ground, sky and, in the other run, the mover are unwritten
+// (0,0,0,0) and are reconstructed from depth and the camera. The decode and resolve run with the adapter's parameters,
+// as dlss_pipeline.cpp calls them. Checks against the true previous-minus-current unjittered displacement:
+//   - written pixels (pole, mover) match it, and the pole/background step equals the true parallax step, so the
+//     camera reconstruction next to a thin static object does not disagree with the vectors on it (no edge shimmer
+//     source in the motion field);
+//   - ground and sky are reconstructed within 0.05 px (the pipeline omits the current jitter; with it, 0.01 px);
+//   - an unwritten mover is reconstructed as if static and misses its own motion: the ghost of an invalid character.
+namespace thin {
+constexpr uint32_t W = 96, H = 48;
+constexpr double fov = 1.2, near_plane = 0.2, far_plane = 900.0;
+// Row-vector X-Ray matrices (sr_pass.h convention).
+Matrix proj() { return projection(float(fov), float(W) / H, float(near_plane), float(far_plane)); }
+// Camera at c with yaw a about +Y (looking down +Z when a = 0): world_to_view = T(-c) * Ry(-a).
+Matrix view(double cx, double cy, double cz, double a) {
+    const double c = std::cos(a), s = std::sin(a);
+    // Rows are row-vector basis: v_view = (v - c) * R, R = rotation by -a about Y.
+    const double r[3][3]{{c, 0, s}, {0, 1, 0}, {-s, 0, c}};
+    Matrix m{};
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) m[i * 4 + j] = float(r[i][j]);
+    for (int j = 0; j < 3; ++j) m[12 + j] = float(-(cx * r[0][j] + cy * r[1][j] + cz * r[2][j]));
+    m[15] = 1;
+    return m;
+}
+std::array<double, 4> mul(const std::array<double, 4>& v, const Matrix& m) {
+    std::array<double, 4> out{};
+    for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) out[c] += v[k] * m[k * 4 + c];
+    return out;
+}
+// Unjittered pixel (x right, y down) of a world point.
+std::array<double, 2> to_pixel(const std::array<double, 4>& world, const Matrix& v, const Matrix& p) {
+    const auto clip = mul(mul(world, v), p);
+    return {(clip[0] / clip[3] * 0.5 + 0.5) * W, (0.5 - clip[1] / clip[3] * 0.5) * H};
+}
+enum Surface : uint8_t { Sky, Ground, Pole, Mover };
+struct Texel { Surface surface{}; double depth{}; double truth[2]{}; };
+// The current camera is the world origin looking down +Z, so view space is world space.
+std::vector<Texel> rasterize(double jx, double jy, const Matrix& previous_view, double mover_shift) {
+    const Matrix p = proj();
+    const double h = 1.0 / std::tan(fov / 2), w = h / (double(W) / H), q = far_plane / (far_plane - near_plane);
+    std::vector<Texel> out(W * H);
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            // The jittered raster sample at this pixel centre sees the unjittered position centre - jitter.
+            const double ux = x + 0.5 - jx, uy = y + 0.5 - jy;
+            const double dir[3]{(ux / W * 2 - 1) / w, (1 - uy / H * 2) / h, 1};
+            Texel t{Sky, 1.0, {}};
+            double best = 1e30;
+            const auto take = [&](Surface s, double z) { if (z > 0 && z < best) { best = z; t.surface = s; } };
+            if (dir[1] < 0) take(Ground, -1.6 / dir[1]);
+            { const double z = 14, px = dir[0] * z, py = dir[1] * z; if (std::fabs(px - 0.9) < 0.15 && py > -1.6 && py < 6) take(Pole, z); }
+            { const double z = 6, px = dir[0] * z, py = dir[1] * z; if (std::fabs(px + 1.2) < 0.5 && py > -1.6 && py < 1.8) take(Mover, z); }
+            std::array<double, 4> point{dir[0] * 1e6, dir[1] * 1e6, 1e6, 1};
+            if (t.surface != Sky) {
+                t.depth = q - q * near_plane / best;
+                point = {dir[0] * best, dir[1] * best, best, 1};
+            }
+            if (t.surface == Mover) point[0] -= mover_shift;   // where this material point was last frame
+            const auto previous = to_pixel(point, previous_view, p);
+            t.truth[0] = previous[0] - ux;
+            t.truth[1] = previous[1] - uy;
+            out[y * W + x] = t;
+        }
+    return out;
+}
+struct Run { std::vector<float> resolved; bool ok{}; };
+Run resolve_frame(Device& d, const std::vector<Texel>& texels, const PassInputs& in, bool write_mover, bool pass_jitter) {
+    Run run;
+    std::vector<uint16_t> motion(W * H * 4, 0);
+    std::vector<uint32_t> depth(W * H);
+    for (uint32_t i = 0; i < W * H; ++i) {
+        const auto& t = texels[i];
+        depth[i] = d24(t.depth);
+        if (t.surface == Pole || (t.surface == Mover && write_mover)) {
+            // The core PS output: current-minus-previous unjittered UV, Y down, validity 1.
+            motion[i * 4 + 0] = float_to_half(float(-t.truth[0] / W));
+            motion[i * 4 + 1] = float_to_half(float(-t.truth[1] / H));
+            motion[i * 4 + 2] = float_to_half(1.0f);
+        }
+    }
+    auto source = texture(d.device.Get(), W, H, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE, motion.data(), W * 8);
+    const auto depth_twin = depth_texture(d, W, H, depth);
+    rsf_motion_decode_setup setup{sizeof(setup), RSF_MOTION_DECODE_ABI_VERSION, W, H, DXGI_FORMAT_R32G32_FLOAT, nullptr, nullptr};
+    rsf_motion_decode* decode = nullptr;
+    rsf_motion_resolve* resolve = nullptr;
+    rsf_game_render_pass pass;
+    const bool built = build_pass(in, pass) == PassError::None;
+    CHECK(built);
+    if (source && depth_twin.texture && built && rsf_motion_decode_create(d.device.Get(), &setup, &decode) == RSF_MOTION_DECODE_OK &&
+        rsf_motion_resolve_create(d.device.Get(), W, H, &resolve)) {
+        const auto params = motion_decode_params();
+        rsf_motion_resolve_params r{};
+        r.struct_size = sizeof(r);
+        std::memcpy(r.clip_to_previous, pass.camera.clip_to_previous_clip, sizeof(r.clip_to_previous));
+        r.decoded_to_pixels[0] = -float(W) * pass.motion_to_uv[0];
+        r.decoded_to_pixels[1] = -float(H) * pass.motion_to_uv[1];
+        r.sentinel = params.invalid_value;
+        r.has_sentinel = pass.motion_camera_included == 0 ? 1u : 0u;
+        if (pass_jitter) { r.jitter_pixels[0] = pass.camera.jitter_pixels[0]; r.jitter_pixels[1] = pass.camera.jitter_pixels[1]; }
+        if (rsf_motion_decode_run(decode, d.context.Get(), source.Get(), &params) == RSF_MOTION_DECODE_OK &&
+            rsf_motion_resolve_run(resolve, d.context.Get(), rsf_motion_decode_texture(decode), depth_twin.texture.Get(), &r)) {
+            const auto halves = read_back<uint16_t>(d, static_cast<ID3D11Texture2D*>(rsf_motion_resolve_motion(resolve)), 2);
+            run.resolved.resize(halves.size());
+            for (std::size_t i = 0; i < halves.size(); ++i) run.resolved[i] = half_to_float(halves[i]);
+            run.ok = run.resolved.size() == W * H * 2;
+        }
+    }
+    if (resolve) rsf_motion_resolve_destroy(resolve);
+    if (decode) rsf_motion_decode_destroy(decode);
+    CHECK(run.ok);
+    return run;
+}
+}
+
+void thin_case(Device& d) {
+    using namespace thin;
+    // The camera moved 0.35 m and turned 0.6 degrees since the previous frame; jitter is mid-sequence.
+    const double jx = 0.3125, jy = -0.2037037;
+    const Matrix previous_view = view(-0.35, 0.02, -0.1, -0.0105);
+    PassInputs in{};
+    in.render_width = in.output_width = W;
+    in.render_height = in.output_height = H;
+    in.current = {view(0, 0, 0, 0), proj(), true};
+    in.previous = {previous_view, proj(), true};
+    in.jitter.applied = in.jitter.previous_applied = true;
+    in.jitter.render_width = W; in.jitter.render_height = H;
+    in.jitter.current_x = float(jx); in.jitter.current_y = float(jy);
+    in.jitter.previous_x = -0.4375f; in.jitter.previous_y = 0.2592593f;
+    int resources[4];
+    in.color = &resources[0]; in.color_output = &resources[1]; in.depth = &resources[2]; in.motion = &resources[3];
+    const double mover_shift = 0.6;   // metres, along +X, between the frames
+    const auto texels = rasterize(jx, jy, previous_view, mover_shift);
+    uint32_t counts[4]{};
+    for (const auto& t : texels) ++counts[t.surface];
+    std::printf("thin: %ux%u sky=%u ground=%u pole=%u mover=%u\n", W, H, counts[Sky], counts[Ground], counts[Pole], counts[Mover]);
+    CHECK(counts[Sky] > 100 && counts[Ground] > 100 && counts[Pole] >= 12 && counts[Pole] <= 2 * H && counts[Mover] > 50);
+    for (const bool pass_jitter : {false, true}) {
+        const auto written = resolve_frame(d, texels, in, true, pass_jitter);
+        const auto unwritten = resolve_frame(d, texels, in, false, pass_jitter);
+        if (!written.ok || !unwritten.ok) return;
+        double worst[4]{}, worst_step = 0, mover_miss_min = 1e9;
+        uint32_t steps = 0;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const uint32_t i = y * W + x;
+                const auto& t = texels[i];
+                const double ex = written.resolved[i * 2] - t.truth[0], ey = written.resolved[i * 2 + 1] - t.truth[1];
+                worst[t.surface] = std::max(worst[t.surface], std::hypot(ex, ey));
+                if (t.surface == Mover) {
+                    const double mx = unwritten.resolved[i * 2] - t.truth[0], my = unwritten.resolved[i * 2 + 1] - t.truth[1];
+                    mover_miss_min = std::min(mover_miss_min, std::hypot(mx, my));
+                }
+                // A pole pixel and its background neighbours: the resolved step must be the true step.
+                if (t.surface == Pole)
+                    for (const int dx : {-1, 1}) {
+                        const int nx = int(x) + dx;
+                        if (nx < 0 || nx >= int(W) || texels[y * W + nx].surface == Pole || texels[y * W + nx].surface == Mover) continue;
+                        const uint32_t j = y * W + uint32_t(nx);
+                        const auto& n = texels[j];
+                        const double sx = (written.resolved[i * 2] - written.resolved[j * 2]) - (t.truth[0] - n.truth[0]);
+                        const double sy = (written.resolved[i * 2 + 1] - written.resolved[j * 2 + 1]) - (t.truth[1] - n.truth[1]);
+                        worst_step = std::max(worst_step, std::hypot(sx, sy));
+                        ++steps;
+                    }
+            }
+        std::printf("thin (%s): worst error px pole=%.4f mover=%.4f ground=%.4f sky=%.4f; pole edge step error %.4f px over %u edges; "
+            "unwritten mover misses by >= %.2f px\n", pass_jitter ? "resolve given the jitter" : "pipeline: resolve without jitter",
+            worst[Pole], worst[Mover], worst[Ground], worst[Sky], worst_step, steps, mover_miss_min);
+        CHECK(worst[Pole] < 0.01 && worst[Mover] < 0.01);
+        const double background = pass_jitter ? 0.01 : 0.05;
+        CHECK(worst[Ground] < background && worst[Sky] < background + 0.02);
+        // Pole neighbours include sky, whose reconstruction at the far plane (not infinity) is off by about 0.02 px.
+        CHECK(steps > 20 && worst_step < 0.03);
+        CHECK(mover_miss_min > 2.0);
+    }
+}
+
 // ---- prepare / reinsert ----------------------------------------------------------------------------------------------
 void prepare_case(Device& d) {
     constexpr uint32_t W = 16, H = 8, OW = 24, OH = 12;
@@ -446,6 +629,12 @@ int provider_case(const std::string& root) {
     for (const auto& run : runs) {
         driver.request({true, run.backend, 1, 0});
         driver.boundary(d.device.Get(), OW, OH);
+        // The first request for FSR4/XeSS/FSR3 in this process is only announced; the blocking select (the vendor loading its model,
+        // FSR4: tens of seconds on a cold driver cache) runs at the next boundary.
+        const auto wait_begin = GetTickCount64();
+        for (uint32_t i = 0; i < 4 && driver.status().pending_backend; ++i) driver.boundary(d.device.Get(), OW, OH);
+        CHECK(!driver.status().pending_backend);
+        std::printf("%s: selected after %llu ms\n", run.name, static_cast<unsigned long long>(GetTickCount64() - wait_begin));
         const auto status = driver.status();
         if (status.applied.backend != run.backend) {
             std::printf("%s: refused by the pipeline on this GPU (select result %d)\n", run.name, status.select_result);
@@ -598,10 +787,12 @@ int main(int argc, char** argv) {
     if (argc > 2) root = argv[2];
     else if (const char* env = std::getenv("RSF_SR_VENDOR_ROOT")) root = env;
     int ran = 0, skipped = 0;
-    if (selected.empty() || selected == "decode" || selected == "prepare") {
+    if (selected.empty() || selected == "decode" || selected == "prepare" || selected == "thin") {
         Device d;
-        if (!d.create(0, true)) { std::printf("SKIP: no D3D11 hardware device\n"); return 77; }
+        // The NVIDIA adapter when there is one (common rule on this hybrid laptop), else any hardware adapter.
+        if (!d.create(0x10de, true) && !d.create(0, true)) { std::printf("SKIP: no D3D11 hardware device\n"); return 77; }
         if (selected.empty() || selected == "decode") { decode_case(d); ++ran; }
+        if (selected.empty() || selected == "thin") { thin_case(d); ++ran; }
         if (selected.empty() || selected == "prepare") { prepare_case(d); ++ran; }
         // Debug-layer errors from either case (when the layer is installed).
         ComPtr<ID3D11InfoQueue> info;

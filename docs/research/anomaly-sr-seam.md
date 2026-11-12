@@ -1252,6 +1252,71 @@ Before any deploy, run the shared-host fixture above, as it was run here.
   writes with the reconstruction all need game measurements.
 - SVP (scope) frames render at native size, and their cost is unmeasured.
 
+## 13. Ghosting on moving characters and shimmer around poles (13 November)
+
+User report with `SRStage=5` and DLSS: heavy ghosting on moving characters and shimmer around power poles. Built and
+fixture-tested, not game-tested.
+
+**What an invalid pixel becomes.** The motion target marks a pixel valid only through its validity channel. Every
+other pixel is decoded to the sentinel and reconstructed from depth and the camera (section 12). For anything that moves
+by itself that is wrong by the object's own motion, and DLSS then ghosts it. `anomaly_motion_contract mover` shows
+this on the CPU: a walking, turning, skinning character gets the true vector to 3e-5 px through the adapter chain, while
+camera-only reconstruction misses it by 20 px. `anomaly_sr_temporal_device thin` shows it through the production decode
+and resolve on the RTX 4070: an unwritten mover misses by at least 3.4 px.
+
+**Characters, cause 1: tessellated materials (`r4_enable_tessellation on`).** `uber_deffer.cpp:100-144` builds the HQ
+element of a PN or displacement material as VS, `DX11\tess.hs`, `DX11\tess.ds` and PS from the same `deffer_model_bump`
+and `deffer_base_bump` roots the motion stage allowlists. The game's shader cache holds
+`deffer_model_bump(tess_pn,)_0` to `_4.vs`, so skinned models use it. The HQ element is chosen within `r__dtex_range`
+(50 m in the run profile) of the camera (`r4.cpp:68-76`), so it affects near characters only. The motion stage swapped
+in its VS/PS pair whatever was bound between them. `tess.ds` writes plain `v2p_bumped`, so the motion PS read
+TEXCOORD12/13 that nothing wrote. `anomaly_motion_tess_device` reproduces this with first-party HLSL: the debug layer
+reports "Domain Shader - Pixel Shader linkage error ... (TEXCOORD,12)", and the RTX 4070 without the layer gives the PS
+(0, 0) with validity 0. The CPU counters still called these draws valid. Fix: with a hull, domain or geometry shader
+bound, the pair is not swapped (`intermediate_stage_bound`, as `core/README.md` requires). The draw gets the
+invalidation replay and is counted under `tessellated`. That makes the result defined but still camera-only. Real
+motion for these draws needs HS/DS motion variants from the shader tool, plus hooks on the separate HS/DS
+`create_shader` template (`r4.cpp:934`, not the hooked `0x838de0`), plus binding at draw time. Until then the user can
+confirm the cause with `r4_enable_tessellation off`.
+
+**Characters, cause 2: single-bone parts (`unsupported_kind`).** CSkeletonX `RM_SINGLE` children (weapons held by
+NPCs, gear, many first-person weapon parts) render with `SKIN_0`. The engine folds the bone into the world
+(`SkeletonX.cpp:67-75`: `W = m_w * LL_GetTransform_R(RMS_boneid)`, `set_xform_world`) before the draw. The policy refused
+them as `unsupported_kind`: 6 per frame indoors (first-person weapon) and 19-20 per frame with NPCs in view. The cache
+holds a `_0` permutation for every model root and no SKIN_NONE model permutation, so these draws are single-bone, not
+software-skinned. Fix: the snapshot taken at the draw-time flush already holds the bone-composed world, so
+`to_snapshot` accepts `SingleBone` as a rigid snapshot. `decide_core` makes it valid on a `CoreModel` `SKIN_0` variant
+with the previous composed world and no palette, which is what the shader ABI asks for. Software skinning and trees on a
+core shader stay `unsupported_kind`.
+
+Verified and correct: identified skinned draws use the previous frame's palette, read at the draw (not the same frame),
+and the object's previous world. A distant NPC in the wave 7 run had valid, plausibly scaled vectors.
+
+**Poles.** Wave 7 dumps (`d2`, DLSS, moving camera): a power pole is static world with valid shader motion. Terrain and
+sky around it are camera-reconstructed. On four moving-camera frames the shader vectors and the depth reconstruction of
+the same static pixels agree to a median of 0.003-0.009 px (p90 at most 0.035 px), so the pole edge has no conflicting
+vectors. The game worker measured a static pole at about 0.001 px and saw no change with `SRMipBias` off, and jitter
+passed (0.04 px whole frame). The `thin` fixture checks a 0.75 px pole with jitter and a moving camera: the
+pole/background step equals the true parallax step to 0.014 px. The resolve without jitter (as `dlss_pipeline.cpp`
+calls it) reconstructs the ground to 0.026 px, and to 0.004 px when given the jitter. That generic gap is real but too
+small to cause visible shimmer. No motion, jitter or depth cause was found for the pole shimmer, and it was not
+reproduced. The remaining candidates need a capture: the output-size passes after the seam read the
+nearest-upsampled, jittered render-size `rt_Position` and depth (section 5), which can flicker by one render pixel at
+silhouettes against the sky (DOF, screen-space sunshafts and other effects that are off in the test profile). Another
+candidate is alpha-tested wires at the run's total mip bias (`r__tf_mipbias -0.5` plus log2 of the render scale).
+Reactive or transparency masks would not help alpha-tested geometry: it is opaque, with depth and valid motion, and
+masks only reduce history. The D3D11 SR API has no mask channel yet (Stage 6).
+
+**Diagnostics added.** Every 120 frames: `Anomaly motion classes | valid ... | invalid ... | unpaired ...` by class
+(`static_world, rigid, skinned, single_bone, soft_skinned, tree, detail, no_visual, tessellated`), and
+`Anomaly motion unpaired (...)`, which lists the top ten stock VS+PS root pairs with their class and count.
+
+**Vendor directories.** The carrier hands over a long-path INI name, so the default directories reached Streamline as
+`\\?\D:\...\streamline`. Streamline appends `/sl.common.dll` and no plugin loaded (wave 7 c1). `plain_directory` (in
+`sr_settings.h`) strips `\\?\` and `\\?\UNC\` and uses backslashes, for the defaults and explicit keys alike. A refused
+start now logs "SR is OFF (bilinear upscale)" with the three directories and their keys. The overlay reason says "SR off
+(bilinear): Streamline failed to start; check SRStreamlineDir in the log" instead of the generic "did not start".
+
 ## Sources
 
 Engine source (read-only, `D:/xray-monolith`): `src/Layers/xrRenderPC_R4/{r4_rendertarget.cpp,

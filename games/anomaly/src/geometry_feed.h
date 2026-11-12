@@ -33,7 +33,7 @@ enum class FeedStatus : std::uint8_t {
     MissingContext,   // The draw has no view/projection domain; nothing may be guessed.
     WrongView,        // The draw belongs to a different view than the frame token.
     MissingWorld,     // The actual-draw world matrix was unreadable or not an affine Fmatrix.
-    UnsupportedKind,  // Single-bone, software-skinned and tree draws have no verified snapshot schema.
+    UnsupportedKind,  // Software-skinned and tree draws have no verified snapshot schema.
     MissingPalette,   // A hardware-skinned draw whose bone palette could not be copied.
     Rejected,         // TemporalHistory refused the snapshot; see FeedResult::history.
     Captured          // Stored (or an identical repeat of the stored) snapshot.

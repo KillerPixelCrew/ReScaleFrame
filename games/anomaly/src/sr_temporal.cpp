@@ -50,6 +50,20 @@ const char* result_name(int32_t result) noexcept {
 std::size_t result_index(int32_t result) noexcept { return result < 0 && result >= -10 ? std::size_t(-result) : 11u; }
 }
 
+std::string pending_reason(const TemporalStatus& s) {
+    // 95 characters at most (rsf_overlay_sr_report::reason). Drawn by the Present before the blocking select starts.
+    char text[96];
+    std::snprintf(text, sizeof(text), "Preparing %s: first use loads its model; the game pauses until it is ready", backend_name(s.pending_backend));
+    return text;
+}
+
+std::string start_refusal_reason(int32_t result) {
+    if (result == RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED) return "SR off: the SR pipeline needs DLSS support on this GPU";
+    if (result == RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED)
+        return "SR off (bilinear): Streamline failed to start; check SRStreamlineDir in the log";
+    return std::string("SR off (bilinear): the SR pipeline did not start (") + result_name(result) + ")";
+}
+
 const char* refusal_name(Refusal r) noexcept {
     static constexpr const char* names[] = {"not_running", "disabled", "prepare", "pass", "pipeline", "reinsert"};
     const auto i = static_cast<std::size_t>(r);
@@ -172,6 +186,7 @@ void TemporalDriver::refresh() noexcept {
     else { status_.pipeline = {}; status_.pipeline.struct_size = sizeof(pipeline); }
     status_.running = running_;
     status_.applied = applied_;
+    status_.pending_backend = pending_ ? pending_backend_ : 0u;
 }
 
 void TemporalDriver::start(ID3D11Device* device, uint32_t ow, uint32_t oh) noexcept {
@@ -212,9 +227,13 @@ void TemporalDriver::start(ID3D11Device* device, uint32_t ow, uint32_t oh) noexc
             started, result_name(started), started == RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED
                 ? ". The shared D3D11 pipeline starts only where DLSS is supported; FSR and XeSS are reached through it" : "");
         say(text);
+        // Loud, never a silent bilinear frame: the directories the pipeline was given and the keys that override them.
+        std::snprintf(text, sizeof(text), "Anomaly SR stage 5: SR is OFF (bilinear upscale) until the settings change. Vendor "
+            "directories: Streamline '%s', FidelityFX '%s', XeSS '%s' (SRStreamlineDir, SRFidelityFXDir, SRXeSSDir).",
+            options_.streamline.c_str(), options_.fidelityfx.c_str(), options_.xess.c_str());
+        say(text);
         Exclusive lock(lock_);
-        status_.reason = started == RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED ? "The SR pipeline needs DLSS support on this GPU"
-            : "The SR pipeline did not start";
+        status_.reason = start_refusal_reason(started);
         return;
     }
     ++counters_.starts;
@@ -228,19 +247,9 @@ void TemporalDriver::start(ID3D11Device* device, uint32_t ow, uint32_t oh) noexc
 }
 
 void TemporalDriver::apply(const SrSettings& wanted) noexcept {
-    char text[200];
-    if (wanted.backend != applied_.backend) {
-        ++counters_.selects;
-        const auto result = api_.select_backend(wanted.backend, nullptr, nullptr);
-        { Exclusive lock(lock_); status_.select_result = result; }
-        if (result == RSF_DLSS_PIPELINE_OK) { applied_.backend = wanted.backend; settings_changed_ = true; }
-        else {
-            ++counters_.select_failures;
-            std::snprintf(text, sizeof(text), "Anomaly SR stage 5: backend %s refused (%d, %s); keeping %s.", backend_name(wanted.backend),
-                result, result_name(result), backend_name(applied_.backend));
-            say(text);
-        }
-    }
+    char text[256];
+    // Quality first: a backend built in the background is built for the quality in force when it is requested, and a
+    // quality change after that would make the build stale.
     if (wanted.quality != applied_.quality) {
         ++counters_.qualities;
         uint32_t rw{}, rh{};
@@ -251,6 +260,46 @@ void TemporalDriver::apply(const SrSettings& wanted) noexcept {
             ++counters_.quality_failures;
             std::snprintf(text, sizeof(text), "Anomaly SR stage 5: quality %u refused (%d, %s); keeping %u.", wanted.quality, result,
                 result_name(result), applied_.quality);
+            say(text);
+        }
+    }
+    // A backend the vendor has not loaded yet in this process builds its pipelines at its first dispatch (FSR4: about 25 s on a
+    // cold driver cache, the vendor's own work), and the select below waits for it. So the first request for it only announces:
+    // the status says what is coming and the Present of this frame draws it, and the select runs at the next boundary.
+    // A backend that has been prepared once (the driver cache is warm) is selected at once.
+    if (pending_ && pending_backend_ != wanted.backend) { pending_ = false; pending_backend_ = 0; }   // the wish moved on
+    if (wanted.backend != applied_.backend) {
+        const uint32_t bit = 1u << (wanted.backend & 31u);
+        if (wanted.backend != backend_dlss && !(prepared_ & bit) && !pending_) {
+            pending_ = true;
+            pending_backend_ = wanted.backend;
+            ++counters_.select_announced;
+            std::snprintf(text, sizeof(text), "Anomaly SR stage 5: preparing %s. The first use makes the vendor build its pipelines and the game "
+                "pauses until it is done (tens of seconds for FSR4 on a cold driver cache); the select runs at the next boundary.",
+                backend_name(wanted.backend));
+            say(text);
+            have_refused_ = false;
+            return;
+        }
+        pending_ = false;
+        pending_backend_ = 0;
+        ++counters_.selects;
+        const auto begun = GetTickCount64();
+        const auto result = api_.select_backend(wanted.backend, nullptr, nullptr);
+        const uint64_t took = GetTickCount64() - begun;
+        if (took > counters_.longest_select_ms) counters_.longest_select_ms = took;
+        { Exclusive lock(lock_); status_.select_result = result; }
+        if (result == RSF_DLSS_PIPELINE_OK) {
+            applied_.backend = wanted.backend;
+            settings_changed_ = true;
+            prepared_ |= bit;
+            std::snprintf(text, sizeof(text), "Anomaly SR stage 5: %s selected, the boundary took %llu ms.", backend_name(wanted.backend),
+                static_cast<unsigned long long>(took));
+            say(text);
+        } else {
+            ++counters_.select_failures;
+            std::snprintf(text, sizeof(text), "Anomaly SR stage 5: backend %s refused (%d, %s) after %llu ms; keeping %s.", backend_name(wanted.backend),
+                result, result_name(result), static_cast<unsigned long long>(took), backend_name(applied_.backend));
             say(text);
         }
     }
@@ -276,7 +325,7 @@ void TemporalDriver::boundary(ID3D11Device* device, uint32_t ow, uint32_t oh) no
     { Shared lock(lock_); wanted = requested_; }
     if (!running_) {
         if (device && ow && oh && wanted.enabled) start(device, ow, oh);
-    } else if (!(wanted == applied_) && !(have_refused_ && wanted == refused_request_)) apply(wanted);
+    } else if (pending_ || (!(wanted == applied_) && !(have_refused_ && wanted == refused_request_))) apply(wanted);
     if (running_) {
         rsf_dlss_pipeline_status pipeline{};
         pipeline.struct_size = sizeof(pipeline);
@@ -371,6 +420,8 @@ void TemporalDriver::stop() noexcept {
     if (bound_) api_.stop();
     running_ = false;
     device_ = nullptr;
+    pending_ = false;
+    pending_backend_ = 0;
     ++counters_.stops;
     {
         Exclusive lock(lock_);
@@ -417,8 +468,10 @@ bool TemporalDriver::overlay_report(rsf_overlay_sr_report& r) const noexcept {
     r.quality_locked = 0;
     std::string reason;
     if (!active) reason = s.reason.empty() ? std::string(s.requested.enabled ? "SR not evaluated yet" : "SR disabled by setting") : s.reason;
+    else if (s.pending_backend) reason = pending_reason(s);
     else if (s.requested.backend != s.applied.backend) reason = std::string(backend_name(s.requested.backend)) + " refused on this GPU";
     else if (s.requested.quality != s.applied.quality) reason = "Requested quality refused";
+    if (!active && s.pending_backend) reason = pending_reason(s);
     std::snprintf(r.reason, sizeof(r.reason), "%s", reason.c_str());
     return true;
 }
@@ -453,7 +506,8 @@ void TemporalDriver::report(void (*emit)(void*, const char*), void* user) noexce
         std::snprintf(text, sizeof(text),
             "Anomaly SR stage 5 pipeline bound=%d running=%d backend=%s requested=%s switch=%d quality=%u/%u preset=%u render=%ux%u "
             "output=%ux%u frames_evaluated=%llu frames_refused=%llu last=%d (%s) | starts=%llu start_failed=%llu (last %d) stops=%llu "
-            "selects=%llu/%llu qualities=%llu/%llu presets=%llu resizes=%llu/%llu | SR=%u exposure=%s first_person_zero=%d | %s",
+            "selects=%llu/%llu qualities=%llu/%llu presets=%llu resizes=%llu/%llu | announced=%llu longest_select_ms=%llu "
+            "pending=%s | SR=%u exposure=%s first_person_zero=%d | %s",
             s.bound ? 1 : 0, p.running ? 1 : 0, backend_name(p.backend), backend_name(s.requested.backend), p.last_switch_result,
             s.applied.quality, s.requested.quality, s.applied.preset, p.render_width, p.render_height, p.output_width, p.output_height,
             static_cast<unsigned long long>(p.frames_evaluated), static_cast<unsigned long long>(p.frames_refused), p.last_result,
@@ -462,6 +516,7 @@ void TemporalDriver::report(void (*emit)(void*, const char*), void* user) noexce
             static_cast<unsigned long long>(now.selects), static_cast<unsigned long long>(now.qualities - now.quality_failures),
             static_cast<unsigned long long>(now.qualities), static_cast<unsigned long long>(now.presets),
             static_cast<unsigned long long>(now.resizes - now.resize_failures), static_cast<unsigned long long>(now.resizes),
+            static_cast<unsigned long long>(now.select_announced), static_cast<unsigned long long>(now.longest_select_ms), s.pending_backend ? backend_name(s.pending_backend) : "none",
             s.requested.enabled ? 1u : 0u, options_.exposure_auto ? "auto" : "constant(1.0)", options_.first_person_zero ? 1 : 0,
             s.reason.empty() ? "ok" : s.reason.c_str());
         emit(user, text);

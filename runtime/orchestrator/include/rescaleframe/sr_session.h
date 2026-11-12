@@ -62,6 +62,14 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_session_set_auto_exposure(rsf_sr_sessi
 RSF_RUNTIME_API rsf_backend_result rsf_sr_session_evaluate(rsf_sr_session* session,
                                                            void* command_context,
                                                            const rsf_sr_frame* frame);
+/* One throwaway dispatch on the active backend, so that a vendor that builds pipelines lazily at its
+   first dispatch (FSR4 spends tens of seconds there on a cold driver cache) does so here and not on
+   the first frame that matters. `frame` is validated like an evaluate's. Nothing is counted: no
+   frame id is consumed and the status is unchanged. The next real evaluate starts without history.
+   Not an evaluate: nothing else may use the session while this runs. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_session_warm_up(rsf_sr_session* session,
+                                                          void* command_context,
+                                                          const rsf_sr_frame* frame);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_session_get_status(const rsf_sr_session* session,
                                                              rsf_sr_session_status* status);
 RSF_RUNTIME_API void rsf_sr_session_destroy(rsf_sr_session* session);

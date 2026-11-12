@@ -1021,7 +1021,7 @@ StageOptions read_options(const wchar_t* ini) noexcept try {
     const auto read_dir = [&](const wchar_t* key, const wchar_t* fallback) {
         wchar_t value[MAX_PATH]{};
         GetPrivateProfileStringW(L"Anomaly", key, L"", value, MAX_PATH, ini);
-        return value[0] ? std::wstring(value) : (base / fallback).wstring();
+        return plain_directory(value[0] ? std::wstring(value) : (base / fallback).wstring());
     };
     result.streamline_dir = read_dir(L"SRStreamlineDir", L"streamline");
     result.fidelityfx_dir = read_dir(L"SRFidelityFXDir", L"fidelityfx");

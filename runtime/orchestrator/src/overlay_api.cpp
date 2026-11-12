@@ -205,6 +205,9 @@ const char* describe(const Service& self, bool idle_text)
         if (!self.fg.vendor.active) return "FG requested; the provider reports inactive";
     }
     if (self.sr_unavailable()) return "Super resolution is not available in this adapter";
+    // A note from the adapter while SR is running, for example a backend that is still being built in the
+    // background while the previous one keeps evaluating. Status only: it is not a refusal.
+    if (idle_text && value.sr_enabled && self.have_sr && self.sr.effective_backend && self.sr.reason[0]) return self.sr.reason;
     if (!idle_text) return nullptr;
     return value.fg_enabled ? "Active" : "FG disabled by setting";
 }

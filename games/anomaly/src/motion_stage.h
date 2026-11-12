@@ -23,10 +23,13 @@
 // * CBackend::constants.flush (the geometry producer's draw-time site, geometry_set_flush_callback): after every
 //   native upload, keep RTV2 bound across engine binds (motion_target.h), record the draw's camera and instance
 //   snapshot, and for a G-buffer draw whose VS and PS both have linkable variants upload VS/PS b13 and bind the
-//   variants. Other occluding draws are marked for the invalidation replay (motion_d3d11.h).
+//   variants. A tessellated draw (r4_enable_tessellation: DX11\tess.hs/ds bound) swaps the whole VS+HS+DS+PS chain, with
+//   the DS b13 previous view/projection split, only when all four stages have verified variants and every interface
+//   links (shader_loader.h tess_chain_linkable). Other occluding draws are marked for the invalidation replay
+//   (motion_d3d11.h).
 // * ID3D11DeviceContext Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced detours on the game's immediate
-//   context: run the engine's draw, then the invalidation replay if marked, then put the stock shaders back so the
-//   engine's shader cache matches the device again.
+//   context: run the engine's draw, then the invalidation replay if marked, then put the stock shaders (VS, PS and, for
+//   a swapped chain, HS and DS) back so the engine's shader cache matches the device again.
 // Rendering-readiness stays false: this produces a motion target, nothing consumes it yet.
 #include <rescaleframe/game_api.h>
 #include <cstddef>
@@ -57,7 +60,7 @@ void report(void (*emit)(void*, const char*), void* user) noexcept;
 void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept;
 
 struct MotionCounters {
-    static constexpr std::size_t families = 6, outcomes = 10, reasons = 16;
+    static constexpr std::size_t families = 8, outcomes = 10, reasons = 16;
     std::uint64_t shaders[families][outcomes]{};      // create_shader results per family (index 0: not allowlisted)
     std::uint64_t frame_refusals{};                    // allowlisted root but the caller frame was not accepted
     std::uint64_t frames{}, windows{}, clears{}, target_created{}, target_failed{}, msaa_frames{};
@@ -73,7 +76,28 @@ struct MotionCounters {
     std::uint64_t detail_replaced{}, detail_stock{}, detail_valid{}, detail_invalid{};
     std::uint64_t detail_items{}, detail_items_matched{}, detail_items_unmatched{}, detail_conflicts{};
     std::uint64_t foliage_poisoned{}, foliage_poison_failed{}, foliage_table_overflows{};
+    // G-buffer window draws by what the draw is (draw_class_name): core-pair history decisions and draws without a
+    // linkable variant pair (replayed as invalid). An invalid or unpaired draw reaches SR as camera-only motion, which
+    // is exactly wrong for anything that moves by itself.
+    static constexpr std::size_t classes = 9;
+    std::uint64_t class_valid[classes]{}, class_invalid[classes]{}, class_unpaired[classes]{};
+    // Tessellation pass (HS/DS bound): chains swapped as VS+HS+DS+PS variants; draws where a stage has no verified variant
+    // (or the VS is not a core family); chains whose interfaces do not link (refused, replayed invalid); draws with a
+    // geometry shader (never swapped); swapped chains whose domain history could not be packed (written invalid).
+    std::uint64_t tess_swapped{}, tess_no_variant{}, tess_unlinked{}, tess_geometry{}, tess_pack_refused{};
+    // Main-pass character draws (hardware-skinned, single-bone or software-skinned visuals) by camera distance band
+    // (motion_policy.h distance_band: <20, 20-50, 50-100, 100-150, >=150 m, unknown): history decision (valid/invalid),
+    // drawn without a linkable variant (unpaired, replayed invalid), invalid for want of a previous snapshot, palette
+    // unchanged while the object moved (stale_palette), and the engine's shader element by the bound VS root (HQ, LQ
+    // beyond r__dtex_range, tessellation chain).
+    static constexpr std::size_t bands = 6;
+    std::uint64_t band_valid[bands]{}, band_invalid[bands]{}, band_unpaired[bands]{}, band_no_previous[bands]{};
+    std::uint64_t band_stale_palette[bands]{}, band_hq[bands]{}, band_lq[bands]{}, band_tess[bands]{};
 };
+// Index into MotionCounters::class_*: static_world, rigid, skinned, single_bone, soft_skinned, tree, detail, no_visual,
+// tessellated (a hull, domain or geometry shader was bound: valid/invalid when the whole VS+HS+DS+PS chain was swapped,
+// unpaired otherwise, whatever the draw is).
+const char* draw_class_name(std::size_t) noexcept;
 MotionCounters counters() noexcept;
 
 // Read-only view of the motion target the last G-buffer window cleared and wrote, for the SR seam. Render thread

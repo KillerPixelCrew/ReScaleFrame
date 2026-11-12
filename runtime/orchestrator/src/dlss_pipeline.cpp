@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -72,6 +73,9 @@ struct Pipeline {
     Reported reported;
     bool streamline_loaded = false;
     rsf_sr_legacy_adapter* alternate = nullptr;
+    // Whether the frames offer an exposure texture, so that a context is created with the policy the first evaluate will ask
+    // for instead of being reopened (a second context creation) by it.
+    bool exposure_manual = false;
     uint32_t backend = RSF_SR_DLSS;
     uint32_t requested_backend = RSF_SR_DLSS;
     uint32_t last_evaluated_backend = 0;
@@ -272,7 +276,7 @@ rsf_backend_result create_alternate(Pipeline& self, uint32_t width, uint32_t hei
 {
     return rsf_sr_legacy_create(self.device, width, height, self.sdk_directories[0].c_str(),
         self.sdk_directories[1].c_str(), self.sdk_directories[2].c_str(), self.sdk_directories[3].c_str(),
-        self.units_to_meters, self.standard_depth, self.log, self.log_user, out);
+        self.units_to_meters, self.standard_depth, self.exposure_manual ? 0u : 1u, self.log, self.log_user, out);
 }
 
 /* Input conditioning this pipeline does for a backend before it evaluates. The alternate backends
@@ -579,6 +583,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     if (frame->camera->abi_version != RSF_FRAME_ASSEMBLY_ABI_VERSION) {
         return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
     }
+
+    self.exposure_manual = frame->exposure != nullptr;
 
     // One line per frame would drown the sink, which appends and closes per line by design, so the
     // sequence is announced once. Failures and size changes still speak every time.
@@ -1362,10 +1368,22 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t ba
         range = {plan.render_width, plan.render_height, plan.render_width_min, plan.render_height_min,
                  plan.render_width_max, plan.render_height_max};
         if (result == 0 && self.alternate) result = rsf_sr_legacy_select(self.alternate, RSF_SR_NONE, self.quality, nullptr, nullptr);
-        if (result == 0) rsf_dlss_release_resources();
+        // The DLSS feature is not released here: it was idle, not torn down, and the next frame starts it without history
+        // (reset_pending below). Releasing it rebuilt the feature inside the first frame back on DLSS, about 50 ms of RSF's own.
     } else {
         if (!self.alternate) result = create_alternate(self, self.output_width, self.output_height, &self.alternate);
-        if (result == 0) result = rsf_sr_legacy_select(self.alternate, backend, self.quality, &range.width, &range.height);
+        if (result == 0) {
+            // A vendor builds its pipelines lazily at its first dispatch (FSR4: about 25 s on a cold driver cache, the vendor's own
+            // work). Done here, at the boundary, with a line before and after, instead of inside the first frame where nothing says
+            // what the stall is. Later selections of the same backend find the driver cache warm.
+            say(self, "preparing backend %u: the vendor builds its pipelines on first use; the game pauses until it is done", backend);
+            const auto started = std::chrono::steady_clock::now();
+            result = rsf_sr_legacy_select(self.alternate, backend, self.quality, &range.width, &range.height);
+            if (result == 0 && rsf_sr_legacy_warm_up(self.alternate, range.width, range.height, self.output_width, self.output_height) != 0)
+                say(self, "backend %u warm-up dispatch failed; its first frame may build the pipelines instead", backend);
+            say(self, "backend %u prepared in %.0f ms", backend,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+        }
     }
     {
         std::lock_guard<std::mutex> lock(self.guard);

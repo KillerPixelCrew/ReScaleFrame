@@ -29,8 +29,13 @@ inline constexpr std::size_t foliage_detail_floats = foliage_detail_rows * 4;
 inline constexpr std::size_t ps_bytes = 48;
 inline constexpr std::size_t ps_viewport_offset = 0, ps_jitter_offset = 16, ps_control_offset = 32;
 inline constexpr float abi_version = 1.0f;
+// DS b13, tessellation chain (RSFTessPrevious, games/anomaly/shaders/core/rsf_core_tess.h): rsf_previous_wv @0 (64),
+// rsf_previous_projection @64 (64), rsf_tess_history @128 (16: valid, 0, 0, ABI).
+inline constexpr std::size_t tess_ds_bytes = 144;
+inline constexpr std::size_t tess_wv_offset = 0, tess_projection_offset = 64, tess_history_offset = 128;
 
 using CoreVertexBytes = std::array<std::byte, core_vs_bytes>;
+using TessDomainBytes = std::array<std::byte, tess_ds_bytes>;
 using FoliageVertexBytes = std::array<std::byte, foliage_vs_bytes>;
 using PixelBytes = std::array<std::byte, ps_bytes>;
 
@@ -52,6 +57,13 @@ bool pack_core_vertex(const temporal::Mat4& previous_wvp, std::span<const tempor
 void pack_core_invalid(CoreVertexBytes& out) noexcept;
 // The initialized zero foliage buffer the foliage README requires for unsupported draws.
 void pack_foliage_invalid(FoliageVertexBytes& out) noexcept;
+// previous_wv takes the motion VS's previous object-space control data (the same space rsf_previous_wvp maps from) to
+// the previous view space the PN patch is rebuilt in; previous_projection takes that to previous clip. Both
+// column-vector, stored as rows. Returns false and writes the invalid buffer (history (0, 0, 0, 1)) when a value is not
+// finite; `valid` false also writes it.
+bool pack_tess_domain(const temporal::Mat4& previous_wv, const temporal::Mat4& previous_projection, bool valid,
+    TessDomainBytes& out) noexcept;
+void pack_tess_invalid(TessDomainBytes& out) noexcept;
 
 // Previous-frame wind state of one foliage draw: tree consts/wave/wind, or detail consts/wave/dir2D.
 struct FoliageConstants {

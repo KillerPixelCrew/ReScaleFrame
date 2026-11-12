@@ -24,6 +24,7 @@
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
 #include <d3dcompiler.h>
+#include <dxgi.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <bit>
@@ -105,7 +106,7 @@ std::filesystem::path deployment;
 ShaderRequest request_for(const Root& root, std::vector<Define> defines)
 {
     ShaderRequest request;
-    request.target = root.stage == 'v' ? "vs_5_0" : "ps_5_0";
+    request.target = root.stage == 'v' ? "vs_5_0" : root.stage == 'h' ? "hs_5_0" : root.stage == 'd' ? "ds_5_0" : "ps_5_0";
     request.entry = "main";
     request.flags = 8;   // D3D10_SHADER_PACK_MATRIX_ROW_MAJOR, what CResourceManager passes for every VS/PS
     request.defines = std::move(defines);
@@ -116,6 +117,9 @@ std::vector<Define> engine_defines(const Root& root)
 {
     std::vector<Define> d{{"SMAP_size", "2048"}, {"USE_BRANCHING", "1"}, {"USE_VTF", "1"}, {"SM_5", "1"}};
     if (root.family == "core_model") d.push_back({"SKIN_NONE", "1"});
+    // The tessellation pass roots (dx11/tess.hs, dx11/tess.ds) as uber_deffer.cpp r_TessPass compiles them for PN
+    // materials; anomaly_motion_tess_chain_device draws the full chain.
+    if (root.family == "tess_hull" || root.family == "tess_domain") d.push_back({"TESS_PN", "1"});
     return d;
 }
 struct Built {
@@ -947,11 +951,29 @@ int main()
         }
         D3D_FEATURE_LEVEL level{};
         bool warp = false, debug = true;
-        HRESULT result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_DEBUG, nullptr, 0,
-            D3D11_SDK_VERSION, &device, &level, &context);
+        // The NVIDIA adapter (vendor 0x10de) when present: adapter 0 on the hybrid laptop is the Intel iGPU.
+        ComPtr<IDXGIAdapter1> nvidia;
+        {
+            ComPtr<IDXGIFactory1> factory;
+            if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+                for (UINT i = 0;; ++i) {
+                    ComPtr<IDXGIAdapter1> candidate;
+                    if (factory->EnumAdapters1(i, &candidate) == DXGI_ERROR_NOT_FOUND) break;
+                    DXGI_ADAPTER_DESC1 desc{};
+                    candidate->GetDesc1(&desc);
+                    if (desc.VendorId == 0x10de && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) { nvidia = candidate; break; }
+                }
+        }
+        const auto create = [&](UINT flags) {
+            return nvidia ? D3D11CreateDevice(nvidia.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &device,
+                                &level, &context)
+                          : D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &device,
+                                &level, &context);
+        };
+        HRESULT result = create(D3D11_CREATE_DEVICE_DEBUG);
         if (FAILED(result)) {
             debug = false;
-            result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, &level, &context);
+            result = create(0);
         }
         if (FAILED(result)) {
             warp = true;

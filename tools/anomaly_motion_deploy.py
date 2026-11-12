@@ -8,6 +8,7 @@ the manifest and verifies the result.
 
 Layout (copy the whole directory to <game>/bin/ReScaleFrame/anomaly-motion, or point MotionShaderDir at it):
     manifest.txt        rsf-anomaly-motion-manifest 1 / namespace / one `root` line per allowlisted root
+                        (stage vs/ps/hs/ds; the tessellation roots are named dx11/tess.hs and dx11/tess.ds)
     original/r3/...     the untouched corpus: the adapter recompiles each engine permutation from it and requires a
                         byte-identical result before it trusts the inputs it read from the engine
     motion/r3/...       the merged core + foliage transform
@@ -70,11 +71,17 @@ def includes(files, name, seen=None):
         return seen
     seen.add(key)
     for match in INCLUDE.finditer(files[key]):
-        includes(files, match[1].decode(), seen)
+        includes(files, match[1].decode().replace('\\', '/'), seen)   # "DX11\tess.h" is dx11/tess.h in the tree
     return seen
 
 
 def family(name):
+    # Tessellation pass (uber_deffer.cpp r_TessPass): the hull and domain shaders of the G-buffer pass. The shadow
+    # domain shader (dx11/tess_shadow.ds) is not transformed and stays stock.
+    if name == 'dx11/tess.hs':
+        return 'hs', 'tess_hull'
+    if name == 'dx11/tess.ds':
+        return 'ds', 'tess_domain'
     if name.startswith('deffer_base') and name.endswith('.ps') and '_atoc_' not in name:
         return 'ps', 'core_pixel'
     if name.startswith('deffer_base') and name.endswith('.vs'):

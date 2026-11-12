@@ -43,11 +43,15 @@ template<class T> struct Releaser {
     T* p{};
     ~Releaser() { if (p) p->Release(); }
 };
-void parameters(ID3D11ShaderReflection* reflection, UINT count, bool input, std::vector<Parameter>& out)
+enum class Signature { Input, Output, Patch };
+void parameters(ID3D11ShaderReflection* reflection, UINT count, Signature which, std::vector<Parameter>& out)
 {
     for (UINT i = 0; i < count; ++i) {
         D3D11_SIGNATURE_PARAMETER_DESC desc{};
-        if (FAILED(input ? reflection->GetInputParameterDesc(i, &desc) : reflection->GetOutputParameterDesc(i, &desc))) continue;
+        const HRESULT hr = which == Signature::Input ? reflection->GetInputParameterDesc(i, &desc)
+                         : which == Signature::Output ? reflection->GetOutputParameterDesc(i, &desc)
+                         : reflection->GetPatchConstantParameterDesc(i, &desc);
+        if (FAILED(hr)) continue;
         out.push_back({desc.SemanticName ? desc.SemanticName : "", desc.SemanticIndex, desc.Register,
             static_cast<std::uint32_t>(desc.SystemValueType), static_cast<std::uint32_t>(desc.ComponentType), desc.Mask});
     }
@@ -103,8 +107,9 @@ bool D3DShaderApi::reflect(std::span<const std::byte> bytecode, Reflection& out)
     D3D11_SHADER_DESC desc{};
     if (FAILED(reflection.p->GetDesc(&desc))) return false;
     out.version = desc.Version;
-    parameters(reflection.p, desc.InputParameters, true, out.inputs);
-    parameters(reflection.p, desc.OutputParameters, false, out.outputs);
+    parameters(reflection.p, desc.InputParameters, Signature::Input, out.inputs);
+    parameters(reflection.p, desc.OutputParameters, Signature::Output, out.outputs);
+    parameters(reflection.p, desc.PatchConstantParameters, Signature::Patch, out.patch);
     for (UINT i = 0; i < desc.BoundResources; ++i) {
         D3D11_SHADER_INPUT_BIND_DESC bind{};
         if (FAILED(reflection.p->GetResourceBindingDesc(i, &bind))) return false;

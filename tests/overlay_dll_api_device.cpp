@@ -32,6 +32,8 @@ int report(void*, rsf_overlay_sr_report* out)
     out->render_width = 320; out->render_height = 180;
     out->frames_evaluated = static_cast<uint32_t>(report_calls);
     out->inputs = RSF_OVERLAY_SR_INPUT_COLOR | RSF_OVERLAY_SR_INPUT_DEPTH | RSF_OVERLAY_SR_INPUT_MOTION;
+    // A note while SR is running: a backend still being built in the background while this one keeps evaluating.
+    std::snprintf(out->reason, sizeof(out->reason), "FSR4 building shaders (3s); DLSS keeps running");
     return 1;
 }
 void pump()
@@ -178,6 +180,8 @@ int main()
         status.application_presents >= 9, "status reports adapter SR truth and chain extent");
     std::printf("status: presents=%llu reason=\"%s\"\n", static_cast<unsigned long long>(status.application_presents), status.reason);
     check(report_calls >= 9 && window_calls >= 10, "adapter callbacks consulted per Present");
+    check(std::strstr(status.reason, "FSR4 building shaders (3s); DLSS keeps running") != nullptr,
+        "status shows the adapter's note while SR is running");
 
     check(open_after_debounce(api, 0), "close panel");
     check(api.capture(&capture) == RSF_OK && capture.started && !capture.visible && !capture.captured, "closed panel releases input");

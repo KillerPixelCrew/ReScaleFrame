@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <cstdio>
 #include <new>
 using Microsoft::WRL::ComPtr;
 
@@ -327,6 +328,85 @@ extern "C" rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
         rsf_input_dump_result(frame->record, "sr", capture_status.effective, result);
         if (result == RSF_BACKEND_OK) rsf_input_dump_texture_record(context_pointer, frame->record, "sr_output",
             "Reconstructed D3D11 scene before tonemapping", frame->output.resource, bridge->hdr ? RSF_DUMP_VIEW_HDR : RSF_DUMP_VIEW_RAW, 1);
+    }
+    return result;
+}
+extern "C" rsf_backend_result rsf_sr_bridge_warm_up(rsf_sr_bridge* bridge, uint32_t render_width,
+    uint32_t render_height, uint32_t output_width, uint32_t output_height, uint32_t manual_exposure)
+{
+    if (!bridge || !render_width || !render_height || render_width > output_width || render_height > output_height)
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (bridge->faulted) return RSF_BACKEND_ERROR_NOT_READY;
+    // Blank resources of their own: nothing here is shared with D3D11, so no D3D11 context is touched.
+    struct Input { uint32_t width, height; DXGI_FORMAT format; };
+    const Input inputs[] = {
+        {render_width, render_height, DXGI_FORMAT_R16G16B16A16_FLOAT},   // colour
+        {render_width, render_height, DXGI_FORMAT_R32_FLOAT},            // depth
+        {render_width, render_height, DXGI_FORMAT_R16G16_FLOAT},         // motion
+        {1, 1, DXGI_FORMAT_R32_FLOAT},                                   // exposure
+    };
+    ComPtr<ID3D12Resource> resources[4], output;
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    for (uint32_t i = 0; i < (manual_exposure ? 4u : 3u); ++i) {
+        D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = inputs[i].width; desc.Height = inputs[i].height; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
+        desc.Format = inputs[i].format; desc.SampleDesc.Count = 1;
+        if (FAILED(bridge->device12->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&resources[i])))) return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
+    if (!rsf::create_uav_texture(bridge->device12.Get(), output_width, output_height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                 output.ReleaseAndGetAddressOf())) return RSF_BACKEND_ERROR_INIT_FAILED;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    ComPtr<ID3D12Fence> fence;
+    if (!rsf::create_command_list(bridge->device12.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.ReleaseAndGetAddressOf(),
+                                  list.ReleaseAndGetAddressOf()) ||
+        FAILED(allocator->Reset()) || FAILED(list->Reset(allocator.Get(), nullptr)) ||
+        FAILED(bridge->device12->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return RSF_BACKEND_ERROR_INIT_FAILED;
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!event) return RSF_BACKEND_ERROR_INIT_FAILED;
+    rsf_frame_record record{};
+    record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.frame_id = 1; record.flags = RSF_FRAME_FLAG_RESET;
+    record.render_width = render_width; record.render_height = render_height;
+    record.output_width = output_width; record.output_height = output_height;
+    record.frame_time_ms = 16.6f;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.near_plane = 0.1f; record.camera.far_plane = 10000.0f; record.camera.vertical_fov_radians = 1.0f;
+    record.camera.depth_inverted = 1;
+    rsf_sr_frame frame{};
+    frame.struct_size = sizeof(frame); frame.record = &record;
+    frame.motion_scale_x = frame.motion_scale_y = frame.pre_exposure = frame.view_space_to_meters = 1.0f;
+    frame.reset = 1;
+    rsf_backend_resource* slots[] = {&frame.color, &frame.depth, &frame.motion, &frame.exposure};
+    for (uint32_t i = 0; i < 4; ++i) {
+        if (!resources[i]) continue;
+        auto& slot = *slots[i];
+        slot.struct_size = sizeof(slot); slot.resource = resources[i].Get();
+        slot.width = inputs[i].width; slot.height = inputs[i].height;
+        slot.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        transition(list.Get(), resources[i].Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+    frame.output.struct_size = sizeof(frame.output); frame.output.resource = output.Get();
+    frame.output.width = output_width; frame.output.height = output_height;
+    frame.output.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    const auto started = GetTickCount64();
+    auto result = rsf_sr_session_warm_up(bridge->session, list.Get(), &frame);
+    if (SUCCEEDED(list->Close())) {
+        ID3D12CommandList* lists[] = {list.Get()};
+        bridge->queue->ExecuteCommandLists(1, lists);
+        if (SUCCEEDED(bridge->queue->Signal(fence.Get(), 1))) {
+            // Trivial GPU work: a long wait here is a hung device, not a compile.
+            if (FAILED(rsf::wait_fence(fence.Get(), 1, event, 30000)) && result == RSF_BACKEND_OK)
+                result = RSF_BACKEND_ERROR_FEATURE_FAILED;
+        } else if (result == RSF_BACKEND_OK) result = RSF_BACKEND_ERROR_FEATURE_FAILED;
+    } else if (result == RSF_BACKEND_OK) result = RSF_BACKEND_ERROR_FEATURE_FAILED;
+    CloseHandle(event);
+    if (bridge->log) {
+        char message[96];
+        std::snprintf(message, sizeof(message), "SR warm-up dispatch %s in %llu ms", result == RSF_BACKEND_OK ? "done" : "failed",
+            static_cast<unsigned long long>(GetTickCount64() - started));
+        bridge->log(bridge->log_user, message);
     }
     return result;
 }

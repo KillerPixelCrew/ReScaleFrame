@@ -12,7 +12,8 @@
 //      byte, which proves root, includes, defines, compiler and flags all match;
 //   4. the MOTION tree is compiled with the same inputs;
 //   5. the variant's reflection must keep every stock resource and constant-buffer layout and the VS input
-//      signature, and may add only the b13 RSF buffer (VS) or SV_Target2 (PS).
+//      signature, and may add only the b13 RSF buffer (VS, DS) or SV_Target2 (PS) and the RSF interpolants
+//      (compatible() below; hull and domain shaders of the tessellation pass included).
 // Any failure leaves only the stock shader (counted by reason). Verified variants are cached on disk under a key
 // over namespace, root, defines, target, entry, flags and the original bytecode hash; a cache entry is still
 // reflection-checked. No shader body is embedded in RSF: both trees are generated locally by
@@ -30,20 +31,25 @@
 #include <vector>
 
 namespace rsf::anomaly::motion {
-enum class Family : std::uint8_t { None, CoreStatic, CoreModel, CorePixel, FoliageTree, FoliageDetail, Count };
+// TessHull/TessDomain: DX11\tess.hs and DX11\tess.ds of X-Ray's G-buffer tessellation pass (uber_deffer.cpp r_TessPass,
+// r4_enable_tessellation): the motion hull stage carries the previous control data, the motion domain stage rebuilds the
+// previous PN patch and writes the previous clip position for the motion PS.
+enum class Family : std::uint8_t { None, CoreStatic, CoreModel, CorePixel, FoliageTree, FoliageDetail, TessHull, TessDomain, Count };
 const char* family_name(Family) noexcept;
 bool family_is_vertex(Family) noexcept;
+// 'v', 'p', 'h' or 'd' (the first letter of the engine's compile target); 0 for None.
+char family_stage(Family) noexcept;
 
 struct ManifestEntry {
-    char stage{};            // 'v' or 'p'
+    char stage{};            // 'v', 'p', 'h' or 'd'
     Family family{};
-    std::string name;        // root file name, relative to r3
+    std::string name;        // root file name, relative to r3 (one subdirectory allowed: dx11/tess.hs)
     std::string original_sha256, motion_sha256;
 };
 // Line format (tools/anomaly_motion_deploy.py):
 //   rsf-anomaly-motion-manifest 1
 //   namespace <64 hex>
-//   root <vs|ps> <family> <name> <original sha256> <motion sha256>
+//   root <vs|ps|hs|ds> <family> <name> <original sha256> <motion sha256>
 struct Manifest {
     std::string name_space;
     std::map<std::string, ManifestEntry> by_original;   // keyed by the original root source SHA-256
@@ -107,6 +113,8 @@ struct Binding {
 struct Reflection {
     std::uint32_t version{};
     std::vector<Parameter> inputs, outputs;
+    // Patch-constant signature: the hull shader's patch-constant outputs, the domain shader's patch-constant inputs.
+    std::vector<Parameter> patch;
     std::vector<Binding> bindings;
     std::vector<Buffer> buffers;
 };
@@ -116,12 +124,19 @@ public:
     virtual bool reflect(std::span<const std::byte> bytecode, Reflection&) = 0;
 };
 // D3D_SIT_CBUFFER = 0.
-enum class Compatibility : std::uint8_t { Ok, Version, MissingBinding, ExtraBinding, Buffer, Inputs, Outputs };
+enum class Compatibility : std::uint8_t { Ok, Version, MissingBinding, ExtraBinding, Buffer, Inputs, Outputs, PatchConstants };
 const char* compatibility_name(Compatibility) noexcept;
+// Stage 'v', 'p', 'h' or 'd'. Hull: the stock control-point inputs and outputs kept (any register) plus exactly the four
+// RSF control-point fields (TEXCOORD12 xyzw, 13 x, 14 xyzw, 15 xyz), the patch-constant signature identical, no new
+// binding. Domain: the same control-point inputs, the stock outputs plus exactly TEXCOORD12/13, the patch-constant
+// signature identical, only RSFTessPrevious added at b13.
 Compatibility compatible(char stage, const Reflection& stock, const Reflection& variant) noexcept;
-// Linkage of a variant VS with a variant PS: every PS input must be a VS output with the same name, index and
-// register and a covering mask.
+// Linkage of a producer stage with a consumer stage: every consumer input must be a producer output with the same name,
+// index and register and a covering mask.
 bool linkable(const Reflection& vertex, const Reflection& pixel) noexcept;
+// The full tessellated chain VS -> HS -> DS -> PS: each control-point interface links, and every domain patch-constant
+// input is a hull patch-constant output with the same register.
+bool tess_chain_linkable(const Reflection& vertex, const Reflection& hull, const Reflection& domain, const Reflection& pixel) noexcept;
 
 enum class Outcome : std::uint8_t {
     NotAllowlisted, Replaced, ReplacedFromCache, UnknownCaller, Unreadable, OriginalCompileFailed, OriginalMismatch,

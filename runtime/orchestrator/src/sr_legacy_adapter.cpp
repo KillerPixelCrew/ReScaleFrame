@@ -33,7 +33,7 @@ struct rsf_sr_legacy_adapter {
 };
 rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
     const char* fsr2, const char* fsr3, const char* fsr4, const char* xess,
-    float units_to_meters, uint32_t standard_depth, rsf_backend_log_fn log, void* user,
+    float units_to_meters, uint32_t standard_depth, uint32_t auto_exposure, rsf_backend_log_fn log, void* user,
     rsf_sr_legacy_adapter** out)
 {
     if (!out || !std::isfinite(units_to_meters) || units_to_meters <= 0) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -47,7 +47,9 @@ rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t h
     setup.open.struct_size = sizeof(setup.open); setup.open.abi_version = RSF_BACKEND_ABI_VERSION;
     setup.open.api = RSF_API_D3D11; setup.open.device = device;
     setup.open.output_width = width; setup.open.output_height = height;
-    setup.open.hdr = setup.open.dynamic_resolution = setup.open.auto_exposure = 1;
+    setup.open.hdr = setup.open.dynamic_resolution = 1;
+    // The policy the first frames will ask for, so the context is not reopened by the first evaluate.
+    adapter->auto_exposure = setup.open.auto_exposure = auto_exposure ? 1u : 0u;
     // FSR and XeSS fix the depth convention at context creation. Reversed, infinite-far depth is
     // the established default; a game with standard depth declares it in the pipeline setup.
     setup.open.inverted_depth = setup.open.depth_infinite = standard_depth ? 0u : 1u;
@@ -152,6 +154,13 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
         rsf_input_dump_sr(context, &submitted, status.effective);
     }
     return rsf_sr_bridge_evaluate(adapter->bridge, context, &frame);
+}
+rsf_backend_result rsf_sr_legacy_warm_up(rsf_sr_legacy_adapter* adapter, uint32_t render_width,
+    uint32_t render_height, uint32_t output_width, uint32_t output_height)
+{
+    if (!adapter) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return rsf_sr_bridge_warm_up(adapter->bridge, render_width, render_height, output_width, output_height,
+                                 adapter->auto_exposure ? 0u : 1u);
 }
 void rsf_sr_legacy_destroy(rsf_sr_legacy_adapter* adapter)
 {

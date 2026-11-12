@@ -47,10 +47,12 @@ std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture& draw, F
 {
     try {
         if (!draw.view || !draw.domain) { why = FeedStatus::MissingContext; return std::nullopt; }
-        // Only the two draw kinds with a verified world+palette contract. SingleBone replaces the world
-        // inside the original Render, software skinning has no palette, and trees need the foliage
-        // deformation constants. Each stays invalid coverage rather than becoming camera-only motion.
-        if (draw.kind != DrawKind::Rigid && draw.kind != DrawKind::HardwareSkinned) {
+        // The draw kinds with a verified world+palette contract. A single-bone draw (CSkeletonX RM_SINGLE) folds its
+        // bone into the world inside CSkeletonX::_Render (W = m_w * LL_GetTransform_R(RMS_boneid), set_xform_world)
+        // before the draw, and the world is read here at the draw-time flush, so it is the bone-composed world the
+        // SKIN_0 shader uses: a rigid snapshot of that world is its complete previous state. Software skinning has no
+        // palette, and trees need the foliage deformation constants; both stay invalid coverage.
+        if (draw.kind != DrawKind::Rigid && draw.kind != DrawKind::HardwareSkinned && draw.kind != DrawKind::SingleBone) {
             why = FeedStatus::UnsupportedKind;
             return std::nullopt;
         }

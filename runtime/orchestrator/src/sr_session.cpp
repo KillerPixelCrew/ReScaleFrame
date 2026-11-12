@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/sr_session.h>
 #include "../../backends/common/sr_helpers.h"
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -89,8 +91,16 @@ static rsf_backend_result select_session(rsf_sr_session* session,
     open.version_id = version_id;
     open.runtime_directory_utf8 = session->directories[backend - RSF_SR_FSR2];
     void* replacement = nullptr;
+    const auto opening = std::chrono::steady_clock::now();
     auto result = provider->open(&open, &replacement);
     if (result != RSF_BACKEND_OK) return fail(result);
+    if (open.log) {
+        // How long the context took to create, so a slow switch can be told from a slow first dispatch.
+        char message[96];
+        std::snprintf(message, sizeof(message), "SR backend %u context created in %.0f ms", backend,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - opening).count());
+        open.log(open.log_user, message);
+    }
     uint32_t width = 0, height = 0;
     result = provider->plan(replacement, quality, &width, &height);
     if (result != RSF_BACKEND_OK || !width || !height || width > open.output_width ||
@@ -167,6 +177,20 @@ extern "C" rsf_backend_result rsf_sr_session_evaluate(rsf_sr_session* session,
     session->status.last_frame_result = result;
     if (result == RSF_BACKEND_OK) ++session->status.frames_evaluated;
     else ++session->status.frames_refused;
+    return result;
+}
+
+extern "C" rsf_backend_result rsf_sr_session_warm_up(rsf_sr_session* session,
+    void* command_context, const rsf_sr_frame* frame)
+{
+    if (!session || !command_context) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    auto result = rsf::validate_frame(frame);
+    if (result != RSF_BACKEND_OK) return result;
+    if (!session->backend) return RSF_BACKEND_ERROR_NOT_READY;
+    rsf_sr_frame submitted = *frame;
+    submitted.reset = 1;
+    result = session->provider->evaluate(session->backend, command_context, &submitted);
+    session->reset = true;   // the dispatch fed the backend a blank frame, which is no history to keep
     return result;
 }
 

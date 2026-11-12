@@ -3,8 +3,20 @@
 // The shared render-frontend SR settings (INI keys SR, SRBackend, SRQuality, DLSSPreset) as the Anomaly SR stages apply
 // them. No dependencies, so the overlay service and its fixtures include it without the SR pipeline headers.
 #include <cstdint>
+#include <string>
 
 namespace rsf::anomaly::sr {
+// A vendor runtime directory as Streamline, FidelityFX and XeSS can use it. The INI path the carrier hands over can be a
+// Win32 long-path name ("\\?\D:\...", "\\?\UNC\server\share\..."). Streamline appends "/sl.common.dll" to its plugin
+// directory, and a "\\?\" name disables the slash conversion, so every plugin failed to load and Stage 5 stayed on the
+// bilinear seam (wave 7 run, c1 log). Strips the prefix, uses backslashes only and drops trailing separators.
+inline std::wstring plain_directory(std::wstring path) {
+    if (path.starts_with(LR"(\\?\UNC\)")) path = LR"(\\)" + path.substr(8);
+    else if (path.starts_with(LR"(\\?\)") || path.starts_with(LR"(\??\)")) path = path.substr(4);
+    for (auto& c : path) if (c == L'/') c = L'\\';
+    while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+    return path;
+}
 inline constexpr uint32_t backend_dlss = 1, backend_fsr3 = 3, backend_fsr4 = 4, backend_xess = 5;   // RSF_SR_*
 inline constexpr uint32_t adapter_backends = (1u << backend_dlss) | (1u << backend_fsr3) | (1u << backend_fsr4) | (1u << backend_xess);
 // Native, Quality, Balanced, Performance. Ultra performance renders a third of the output, below the half-size

@@ -20,6 +20,7 @@
 #include <d3d11.h>
 #include <intrin.h>
 #include <windows.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -31,7 +32,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 namespace rsf::anomaly::motion {
 namespace {
@@ -118,6 +121,8 @@ struct Variant {
     ComPtr<IUnknown> stock;            // pinned so the address cannot be reused by another shader
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11HullShader> hs;       // DX11\tess.hs variant (TessHull)
+    ComPtr<ID3D11DomainShader> ds;     // DX11\tess.ds variant (TessDomain)
     ID3D11Device* device{};
     Family family{};
     int skin{-2};
@@ -127,7 +132,26 @@ struct Variant {
 std::shared_mutex registry_guard;
 std::unordered_map<const void*, std::shared_ptr<const Variant>> registry;
 std::map<std::pair<const void*, const void*>, bool> link_cache;   // render thread only
+std::map<std::array<const void*, 4>, bool> tess_link_cache;        // stock VS, HS, DS, PS; render thread only
 std::mutex loader_guard, stats_guard;
+// Diagnostics only: the shader-cache root of every VS/PS the engine created (allowlisted or not), by stock object.
+// An address the engine later releases may name a newer shader; the periodic log is evidence, never a decision input.
+std::shared_mutex names_guard;
+std::unordered_map<const void*, std::string> shader_names;
+std::unordered_map<const void*, ModelElement> shader_elements;   // model VS roots: HQ / LQ / tessellation element
+constexpr std::size_t shader_names_limit = 16384;
+// Draws without a linkable variant pair since the last report, by (stock VS, stock PS, draw class).
+struct UnpairedKey {
+    const void* vs{};
+    const void* ps{};
+    std::size_t draw_class{};
+    bool operator<(const UnpairedKey& o) const noexcept {
+        return std::tie(vs, ps, draw_class) < std::tie(o.vs, o.ps, o.draw_class);
+    }
+};
+std::mutex unpaired_guard;
+std::map<UnpairedKey, std::uint64_t> unpaired_pairs;
+constexpr std::size_t unpaired_pairs_limit = 4096;
 D3DShaderApi* shader_api{};
 std::unique_ptr<ShaderLoader> loader;
 uint32_t refusal_logs{}, replace_logs{};
@@ -181,8 +205,19 @@ struct Pending {
     bool restore{};
     ID3D11VertexShader* vs{};
     ID3D11PixelShader* ps{};
+    bool restore_tess{};               // the hull and domain stages were swapped too
+    ID3D11HullShader* hs{};
+    ID3D11DomainShader* ds{};
 };
 thread_local Pending pending;
+void restore_stock(ID3D11DeviceContext* context, const Pending& taken) noexcept {
+    context->VSSetShader(taken.vs, nullptr, 0);
+    context->PSSetShader(taken.ps, nullptr, 0);
+    if (taken.restore_tess) {
+        context->HSSetShader(taken.hs, nullptr, 0);
+        context->DSSetShader(taken.ds, nullptr, 0);
+    }
+}
 
 // ---- D3D11 immediate-context draw detours ------------------------------------------------------------------------
 using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
@@ -204,8 +239,7 @@ template<class Redraw> void finish_draw(ID3D11DeviceContext* context, const Pend
         }
     }
     if (taken.restore) {
-        context->VSSetShader(taken.vs, nullptr, 0);
-        context->PSSetShader(taken.ps, nullptr, 0);
+        restore_stock(context, taken);
         ++stats.restores;
     }
 }
@@ -275,10 +309,50 @@ bool install_draw_hooks(ID3D11DeviceContext* context) noexcept {
 
 // ---- create_shader detour ----------------------------------------------------------------------------------------
 std::size_t family_index(Family family) noexcept { return static_cast<std::size_t>(family) < MotionCounters::families ? static_cast<std::size_t>(family) : 0; }
+// "...\shaders_cache\r4\deffer_model_bump_4.vs\2048..." -> "deffer_model_bump_4.vs"; a plain source name stays as is.
+std::string shader_root_name(const std::string& file) {
+    std::size_t end = file.size();
+    while (end) {
+        const auto slash = file.find_last_of("\\/", end - 1);
+        const auto begin = slash == std::string::npos ? 0 : slash + 1;
+        const auto part = file.substr(begin, end - begin);
+        if (part.size() > 3 && (part.ends_with(".vs") || part.ends_with(".ps") || part.ends_with(".hs") || part.ends_with(".ds")))
+            return part;
+        if (slash == std::string::npos) break;
+        end = slash;
+    }
+    return file.size() > 64 ? file.substr(file.size() - 64) : file;
+}
+void remember_name(void** result, const std::string& file) noexcept try {
+    void* engine_object{};
+    void* stock{};
+    if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
+        !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock) return;
+    const auto root = shader_root_name(file);
+    std::unique_lock lock(names_guard);
+    if (shader_names.size() < shader_names_limit || shader_names.contains(stock)) {
+        shader_names[stock] = root;
+        shader_elements[stock] = model_element(root);
+    }
+} catch (...) {}
+std::string name_of(const void* shader) {
+    if (!shader) return "none";
+    std::shared_lock lock(names_guard);
+    const auto found = shader_names.find(shader);
+    return found == shader_names.end() ? "unknown" : found->second;
+}
+ModelElement element_of(const void* shader) noexcept {
+    if (!shader) return ModelElement::Unknown;
+    std::shared_lock lock(names_guard);
+    const auto found = shader_elements.find(shader);
+    return found == shader_elements.end() ? ModelElement::Unknown : found->second;
+}
 void shader_created(const char* target, const void* buffer, unsigned size, const char* file, void** result,
     const void* return_address, const std::byte* caller_rsp) noexcept try {
     char stage{};
-    if (!target || !guarded_copy(&stage, target, 1) || (stage != 'v' && stage != 'p') || !buffer || !size || !result) return;
+    // 'h'/'d': create_shader<SHS>/<SDS> (motion_profile.h tess_create_sites) leave the object at the same offset.
+    if (!target || !guarded_copy(&stage, target, 1) || (stage != 'v' && stage != 'p' && stage != 'h' && stage != 'd') || !buffer ||
+        !size || !result) return;
     ShaderRequest request;
     for (std::size_t i = 0; i < 16; ++i) {
         char c{};
@@ -291,6 +365,7 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
         if (!guarded_copy(&c, file + i, 1) || !c) break;
         request.file_name.push_back(c);
     }
+    remember_name(result, request.file_name);
     const auto reader = [](const void* address, void* out, std::size_t bytes) { return guarded_copy(out, address, bytes); };
     const auto frame = read_request(image, return_address, caller_rsp, reader, request);
     std::unique_lock lock(loader_guard);
@@ -320,8 +395,12 @@ void shader_created(const char* target, const void* buffer, unsigned size, const
             variant->family = entry->family;
             variant->skin = prepared.skin;
             HRESULT hr = E_FAIL;
-            if (stage == 'v') hr = device->CreateVertexShader(prepared.variant.data(), prepared.variant.size(), nullptr, &variant->vs);
-            else hr = device->CreatePixelShader(prepared.variant.data(), prepared.variant.size(), nullptr, &variant->ps);
+            const auto* code = prepared.variant.data();
+            const auto bytes = prepared.variant.size();
+            if (stage == 'v') hr = device->CreateVertexShader(code, bytes, nullptr, &variant->vs);
+            else if (stage == 'p') hr = device->CreatePixelShader(code, bytes, nullptr, &variant->ps);
+            else if (stage == 'h') hr = device->CreateHullShader(code, bytes, nullptr, &variant->hs);
+            else hr = device->CreateDomainShader(code, bytes, nullptr, &variant->ds);
             if (FAILED(hr)) {
                 prepared.outcome = Outcome::CreateFailed;
                 prepared.detail = "Create*Shader 0x" + std::to_string(static_cast<unsigned long>(hr));
@@ -445,6 +524,7 @@ void window_open(void* target) noexcept try {
         history.reset_all();
         foliage_history.reset_all();
         link_cache.clear();
+        tess_link_cache.clear();
         if (!device_state.create(device, log_fn, log_user)) { say("Anomaly motion: device resources could not be created."); return; }
     }
     std::byte* crt{};
@@ -538,6 +618,46 @@ void count_reason(HistoryReason reason) noexcept {
     if (i < MotionCounters::reasons) ++stats.reasons_by[i];
     (reason == HistoryReason::Valid ? stats.valid_draws : stats.invalid_draws) += 1;
 }
+// What a G-buffer draw is, for the per-class counters (draw_class_name).
+std::size_t draw_class(const geometry::DrawTimeFacts& f) noexcept {
+    using geometry::DrawKind;
+    if (f.detail) return 6;
+    if (!f.in_visual) return 7;
+    if (f.classification.verdict == geometry::DrawVerdict::IgnoredStaticWorld) return 0;
+    switch (f.kind) {
+    case DrawKind::Rigid: return 1;
+    case DrawKind::HardwareSkinned: return 2;
+    case DrawKind::SingleBone: return 3;
+    case DrawKind::SoftwareSkinned: return 4;
+    default: return 5;
+    }
+}
+constexpr std::size_t tessellated_class = 8;
+static_assert(MotionCounters::bands == distance_bands, "character band counters follow motion_policy.h distance_band");
+// The hull, domain and geometry shaders bound for this draw. The engine keeps its own references; the raw pointers stay
+// valid through the draw.
+struct BoundStages {
+    ID3D11HullShader* hs{};
+    ID3D11DomainShader* ds{};
+    ID3D11GeometryShader* gs{};
+    bool any() const noexcept { return hs || ds || gs; }
+};
+BoundStages intermediate_stages(ID3D11DeviceContext* context) noexcept {
+    BoundStages s;
+    context->HSGetShader(&s.hs, nullptr, nullptr);
+    context->DSGetShader(&s.ds, nullptr, nullptr);
+    context->GSGetShader(&s.gs, nullptr, nullptr);
+    if (s.hs) s.hs->Release();
+    if (s.ds) s.ds->Release();
+    if (s.gs) s.gs->Release();
+    return s;
+}
+void count_unpaired(const void* vs, const void* ps, std::size_t klass) noexcept try {
+    std::lock_guard lock(unpaired_guard);
+    const UnpairedKey key{vs, ps, klass};
+    if (const auto found = unpaired_pairs.find(key); found != unpaired_pairs.end()) ++found->second;
+    else if (unpaired_pairs.size() < unpaired_pairs_limit) unpaired_pairs.emplace(key, 1);
+} catch (...) {}
 // ---- foliage (trees and grass) -------------------------------------------------------------------------------------
 // The VS constants of a foliage draw are read from the engine's staged copy after the flush uploaded them, so they are
 // exactly what the draw uses. See motion_foliage.h for identity and the grass row hygiene.
@@ -651,10 +771,7 @@ HistoryReason prepare_foliage(const geometry::DrawTimeFacts& facts, const Varian
 void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (pending.active) {
         // A flush without the draw call it precedes (a compute dispatch): put the stock shaders back now.
-        if (pending.restore && pending.context) {
-            pending.context->VSSetShader(pending.vs, nullptr, 0);
-            pending.context->PSSetShader(pending.ps, nullptr, 0);
-        }
+        if (pending.restore && pending.context) restore_stock(pending.context, pending);
         pending = {};
         ++stats.stale_restores;
     }
@@ -689,6 +806,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     CameraStatus camera = CameraStatus::NoFrame;
     const temporal::InstanceSnapshot* previous{};
     const bool context_known = facts.view && facts.domain;
+    bool stale = false;
     if (main && context_known && history.active(*facts.view)) {
         CameraSample sample;
         if (read_camera(sample)) camera = history.observe_camera(*facts.view, *facts.domain, sample);
@@ -697,6 +815,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
             geometry::FeedStatus why{};
             if (const auto snapshot = geometry::to_snapshot(*facts.capture, why)) {
                 previous = history.record(*facts.view, facts.capture->key, *snapshot);
+                stale = previous && stale_palette(*previous, *snapshot);
                 ++stats.snapshots;
             }
         }
@@ -705,6 +824,21 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         if (facts.detail) poison_only(context);
         return;
     }
+    // Character draws by camera distance (diagnostics only; MotionCounters::band_*). `band` stays out of range for
+    // everything that is not a skinned visual in the main pass.
+    std::size_t band = MotionCounters::bands;
+    if (main && facts.in_visual && (facts.kind == geometry::DrawKind::HardwareSkinned ||
+            facts.kind == geometry::DrawKind::SingleBone || facts.kind == geometry::DrawKind::SoftwareSkinned)) {
+        band = distance_bands - 1;
+        float world[16];
+        CameraSample sample;
+        if (geometry::read_world_matrix(world) && read_camera(sample))
+            band = distance_band(camera_distance(sample.view, from_engine(world)));
+        if (stale) ++stats.band_stale_palette[band];
+    }
+    const auto count_band = [band](std::uint64_t (&field)[MotionCounters::bands]) noexcept {
+        if (band < MotionCounters::bands) ++field[band];
+    };
     ID3D11VertexShader* vs{};
     ID3D11PixelShader* ps{};
     context->VSGetShader(&vs, nullptr, nullptr);
@@ -712,6 +846,14 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     // The engine keeps its own references; these raw pointers stay valid through the draw.
     if (vs) vs->Release();
     if (ps) ps->Release();
+    if (band < MotionCounters::bands) {
+        switch (element_of(vs)) {
+        case ModelElement::High: ++stats.band_hq[band]; break;
+        case ModelElement::Low: ++stats.band_lq[band]; break;
+        case ModelElement::Tessellated: ++stats.band_tess[band]; break;
+        default: break;
+        }
+    }
     const auto vertex = find_variant(vs);
     const auto pixel = find_variant(ps);
     const bool tree_draw = facts.in_visual && facts.kind == geometry::DrawKind::Tree;
@@ -724,18 +866,50 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (foliage_vertex) foliage_reason = prepare_foliage(facts, *vertex, vs, context_known, camera, foliage_bytes);
     else pack_foliage_invalid(foliage_bytes);
     if (detail_draw && !foliage_vertex) poison_only(context);
-    bool paired = vertex && pixel && vertex->vs && pixel->ps && vertex->device == device_state.device() &&
-        pixel->device == device_state.device();
-    if (paired) {
+    // The variants extend the VS->PS interface (TEXCOORD12/13). With a hull and domain shader bound (X-Ray's DX11\tess
+    // pass for PN/displacement materials when r4_enable_tessellation is on, used by near skinned character models), the
+    // PS reads its input from the domain stage: the whole chain VS -> HS -> DS -> PS is swapped, and only when every
+    // stage has a verified variant and every interface links (tess_chain_linkable). Otherwise the stock VS/PS cannot
+    // write defined motion through the stock HS/DS, so the draw keeps its stock shaders and gets the invalidation replay.
+    // A geometry shader is never swapped.
+    const auto stages = intermediate_stages(context);
+    const bool staged = stages.any();
+    const auto device = device_state.device();
+    std::shared_ptr<const Variant> hull, domain;
+    bool paired = vertex && pixel && vertex->vs && pixel->ps && vertex->device == device && pixel->device == device;
+    if (!staged && paired) {
         const std::pair<const void*, const void*> key{vs, ps};
         auto found = link_cache.find(key);
         if (found == link_cache.end()) found = link_cache.emplace(key, linkable(vertex->reflection, pixel->reflection)).first;
         paired = found->second;
+    } else if (staged) {
+        if (!stages.gs) {
+            hull = find_variant(stages.hs);
+            domain = find_variant(stages.ds);
+        }
+        const bool core_vertex = paired && (vertex->family == Family::CoreStatic || vertex->family == Family::CoreModel);
+        paired = core_vertex && !stages.gs && hull && domain && hull->hs && domain->ds && hull->device == device &&
+            domain->device == device;
+        if (stages.gs) ++stats.tess_geometry;
+        else if (!paired) ++stats.tess_no_variant;
+        else {
+            const std::array<const void*, 4> key{vs, stages.hs, stages.ds, ps};
+            auto found = tess_link_cache.find(key);
+            if (found == tess_link_cache.end())
+                found = tess_link_cache.emplace(key, tess_chain_linkable(vertex->reflection, hull->reflection, domain->reflection,
+                    pixel->reflection)).first;
+            paired = found->second;
+            if (!paired) ++stats.tess_unlinked;
+        }
     }
+    const std::size_t klass = staged ? tessellated_class : draw_class(facts);
     if (!paired) {
         if (tree_draw) ++stats.tree_stock;
         if (detail_draw) ++stats.detail_stock;
         ++stats.unpaired_draws;
+        ++stats.class_unpaired[klass];
+        count_band(stats.band_unpaired);
+        count_unpaired(vs, ps, klass);
         pending = {true, context, configured.invalidate, false, nullptr, nullptr};
         return;
     }
@@ -745,6 +919,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         uploaded = device_state.set_foliage_vertex(context, foliage_bytes);
         count_reason(foliage_reason);
         const bool valid = foliage_reason == HistoryReason::Valid;
+        ++(valid ? stats.class_valid : stats.class_invalid)[klass];
         if (vertex->family == Family::FoliageTree) ++(valid ? stats.tree_valid : stats.tree_invalid);
         else ++(valid ? stats.detail_valid : stats.detail_invalid);
     } else {
@@ -760,14 +935,26 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         input.previous = previous;
         const auto decision = decide_core(input);
         CoreVertexBytes bytes;
-        if (decision.reason == HistoryReason::Valid) {
-            if (!pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, bytes)) count_reason(HistoryReason::TooManyBones);
-            else count_reason(HistoryReason::Valid);
+        bool valid = decision.reason == HistoryReason::Valid;
+        if (valid) {
+            valid = pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, bytes);
+            count_reason(valid ? HistoryReason::Valid : HistoryReason::TooManyBones);
         } else {
             pack_core_invalid(bytes);
             count_reason(decision.reason);
+            if (decision.reason == HistoryReason::NoPreviousInstance) count_band(stats.band_no_previous);
         }
+        ++(valid ? stats.class_valid : stats.class_invalid)[klass];
+        count_band(valid ? stats.band_valid : stats.band_invalid);
         uploaded = device_state.set_core_vertex(context, bytes);
+        if (staged) {
+            // The domain stage rebuilds the previous patch from the VS's previous object-space control points.
+            // A refused pack (no history, or non-finite split matrices) writes history x = 0, and the domain stage then
+            // writes validity 0 for the whole draw whatever the VS says.
+            TessDomainBytes tess;
+            if (!pack_tess_domain(decision.previous_wv, decision.previous_projection, valid, tess) && valid) ++stats.tess_pack_refused;
+            uploaded = uploaded && device_state.set_tess_domain(context, tess);
+        }
     }
     D3D11_VIEWPORT viewport{};
     UINT viewports = 1;
@@ -790,7 +977,12 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_replaced : stats.detail_replaced);
     context->VSSetShader(vertex->vs.Get(), nullptr, 0);
     context->PSSetShader(pixel->ps.Get(), nullptr, 0);
-    pending = {true, context, false, true, vs, ps};
+    if (staged) {
+        context->HSSetShader(hull->hs.Get(), nullptr, 0);
+        context->DSSetShader(domain->ds.Get(), nullptr, 0);
+        ++stats.tess_swapped;
+    }
+    pending = {true, context, false, true, vs, ps, staged, stages.hs, stages.ds};
 } catch (...) {}
 
 bool guards_match(std::byte* module, uint32_t image_size, const char** failed) noexcept {
@@ -806,6 +998,11 @@ bool guards_match(std::byte* module, uint32_t image_size, const char** failed) n
     }
     if (!bytes_match(module + shader_compile_rva, shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
     if (!bytes_match(module + d3dcompile_setup_rva, d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
+    if (!bytes_match(module + tess_dispatch_rva, tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
+    for (const auto& site : tess_create_sites) {
+        if (!bytes_match(module + site.rva, site.prologue)) { *failed = site.name; return false; }
+        if (!bytes_match(module + site.wrapper_rva, site.wrapper)) { *failed = "CreateHWShader (hull/domain)"; return false; }
+    }
     char name{1};
     if (!guarded_copy(&name, module + source_name_rva, 1) || name != 0) { *failed = "D3DCompile pSourceName"; return false; }
     return true;
@@ -838,6 +1035,11 @@ void configure(const MotionOptions& value, rsf_game_log_fn log, void* user) noex
     log_user = user;
 } catch (...) {}
 const MotionOptions& options() noexcept { return configured; }
+const char* draw_class_name(std::size_t c) noexcept {
+    static constexpr const char* names[MotionCounters::classes] = {"static_world", "rigid", "skinned", "single_bone",
+        "soft_skinned", "tree", "detail", "no_visual", "tessellated"};
+    return c < MotionCounters::classes ? names[c] : "unknown";
+}
 bool active() noexcept { return hooks_active.load(); }
 void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept {
     jitter[0] = current_u; jitter[1] = current_v; jitter[2] = previous_u; jitter[3] = previous_v;
@@ -962,6 +1164,53 @@ void report(void (*emit)(void*, const char*), void* user) noexcept try {
         d(&MotionCounters::detail_conflicts), d(&MotionCounters::foliage_poisoned), d(&MotionCounters::foliage_poison_failed),
         d(&MotionCounters::foliage_table_overflows));
     emit(user, text);
+    std::snprintf(text, sizeof(text),
+        "Anomaly motion tessellation chains swapped=%llu no_variant=%llu unlinked=%llu geometry_shader=%llu pack_refused=%llu",
+        d(&MotionCounters::tess_swapped), d(&MotionCounters::tess_no_variant), d(&MotionCounters::tess_unlinked),
+        d(&MotionCounters::tess_geometry), d(&MotionCounters::tess_pack_refused));
+    emit(user, text);
+    {
+        std::string classes = "Anomaly motion classes";
+        for (const auto& [label, field] : {std::pair{"valid", &MotionCounters::class_valid},
+                 std::pair{"invalid", &MotionCounters::class_invalid}, std::pair{"unpaired", &MotionCounters::class_unpaired}}) {
+            classes += std::string(" | ") + label;
+            for (std::size_t c = 0; c < MotionCounters::classes; ++c) {
+                char item[48];
+                std::snprintf(item, sizeof(item), " %s=%llu", draw_class_name(c), static_cast<ull>((now.*field)[c] - (reported.*field)[c]));
+                classes += item;
+            }
+        }
+        emit(user, classes.c_str());
+        // Character draws by camera distance: what a far NPC actually gets (history decision, unpaired, element).
+        std::string bands = "Anomaly motion character bands";
+        for (std::size_t b = 0; b < MotionCounters::bands; ++b) {
+            const auto v = [&](std::uint64_t (MotionCounters::*field)[MotionCounters::bands]) {
+                return static_cast<ull>((now.*field)[b] - (reported.*field)[b]);
+            };
+            char item[200];
+            std::snprintf(item, sizeof(item), " | %s valid=%llu invalid=%llu unpaired=%llu no_previous=%llu stale_palette=%llu "
+                "hq=%llu lq=%llu tess=%llu", distance_band_name(b), v(&MotionCounters::band_valid), v(&MotionCounters::band_invalid),
+                v(&MotionCounters::band_unpaired), v(&MotionCounters::band_no_previous), v(&MotionCounters::band_stale_palette),
+                v(&MotionCounters::band_hq), v(&MotionCounters::band_lq), v(&MotionCounters::band_tess));
+            bands += item;
+        }
+        emit(user, bands.c_str());
+        std::map<UnpairedKey, std::uint64_t> pairs;
+        { std::lock_guard lock(unpaired_guard); pairs.swap(unpaired_pairs); }
+        std::vector<std::pair<std::uint64_t, UnpairedKey>> top;
+        for (const auto& [key, count] : pairs) top.emplace_back(count, key);
+        std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        if (!top.empty()) {
+            std::string line = "Anomaly motion unpaired (draws without a linkable variant pair, invalid motion):";
+            for (std::size_t i = 0; i < top.size() && i < 10; ++i) {
+                const auto& key = top[i].second;
+                line += " " + name_of(key.vs) + "+" + name_of(key.ps) + "[" + draw_class_name(key.draw_class) + "]=" +
+                    std::to_string(top[i].first);
+            }
+            if (top.size() > 10) line += " (+" + std::to_string(top.size() - 10) + " more pairs)";
+            emit(user, line.c_str());
+        }
+    }
     std::string shaders = "Anomaly motion shaders (totals)";
     for (std::size_t f = 0; f < MotionCounters::families; ++f)
         for (std::size_t o = 0; o < MotionCounters::outcomes; ++o) {

@@ -23,6 +23,13 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_set_auto_exposure(rsf_sr_bridge
                                                                   uint32_t enabled);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
     void* d3d11_context, const rsf_sr_frame* frame);
+/* Build the active backend's lazily created pipelines now: one throwaway dispatch on the bridge's own
+   D3D12 queue with blank resources of the given sizes (the formats the evaluate path uses), waited
+   for on the CPU. FSR4 builds its pipelines at its first dispatch, which is 25 s on a cold driver
+   cache. Needs no D3D11 immediate context. `manual_exposure` also supplies a 1x1 exposure texture. The next evaluate starts
+   without history. Sizes must match what the backend will be evaluated at. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_warm_up(rsf_sr_bridge* bridge, uint32_t render_width,
+    uint32_t render_height, uint32_t output_width, uint32_t output_height, uint32_t manual_exposure);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,
     rsf_sr_session_status* status);
 RSF_RUNTIME_API void rsf_sr_bridge_destroy(rsf_sr_bridge* bridge);

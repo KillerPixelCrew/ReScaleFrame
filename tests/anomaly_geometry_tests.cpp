@@ -147,10 +147,26 @@ int main()
         const auto refused = feed_current_draw(history, *first.token, queue);
         CHECK(refused.status == FeedStatus::Rejected && refused.history == temporal::CaptureStatus::MissingProjection);
     }
-    for (const auto kind : {DrawKind::SingleBone, DrawKind::SoftwareSkinned, DrawKind::Tree}) {
+    for (const auto kind : {DrawKind::SoftwareSkinned, DrawKind::Tree}) {
         DrawContextScope view(temporal::ViewId::Main, temporal::ProjectionDomain::World);
         DrawScope draw(feed_identities, rigid_key, kind, feed_world);
         CHECK(feed_current_draw(history, *first.token, queue).status == FeedStatus::UnsupportedKind);
+    }
+    {
+        // RM_SINGLE: the world read at the draw is the bone-composed one, so the snapshot is a rigid world, no palette.
+        DrawCapture single;
+        single.key = rigid_key ? *rigid_key : temporal::InstanceKey{};
+        single.kind = DrawKind::SingleBone;
+        single.view = temporal::ViewId::Main;
+        single.domain = temporal::ProjectionDomain::World;
+        single.world = temporal::Mat4::identity();
+        single.world->at(0, 3) = 2;
+        FeedStatus why{};
+        const auto snapshot = to_snapshot(single, why);
+        CHECK(snapshot && why == FeedStatus::Captured && snapshot->kind == temporal::InstanceKind::Rigid &&
+            snapshot->bones.empty() && snapshot->palette_layout == 0 && snapshot->world == *single.world);
+        single.world.reset();
+        CHECK(!to_snapshot(single, why) && why == FeedStatus::MissingWorld);
     }
     {
         DrawContextScope view(temporal::ViewId::Main, temporal::ProjectionDomain::World);

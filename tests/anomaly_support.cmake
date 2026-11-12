@@ -106,7 +106,7 @@ set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_constants.cpp" "${R
 add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract.cpp" ${RSF_ANOMALY_MOTION_SOURCES})
 target_include_directories(rsf_anomaly_motion_contract_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_contract_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE bcrypt rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
 add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
 set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -124,6 +124,31 @@ target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_
 target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE minhook rsf_build_options)
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
 set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
+# Why the motion variant pair is refused under a bound hull/domain shader (first-party HLSL probe; 77 without hardware).
+add_executable(rsf_anomaly_motion_tess_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_device.cpp")
+target_link_libraries(rsf_anomaly_motion_tess_device_test PRIVATE d3d11 d3dcompiler dxgi dxguid rsf_build_options)
+add_test(NAME anomaly_motion_tess_device COMMAND rsf_anomaly_motion_tess_device_test)
+set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+# The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
+# preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.
+add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_chain_device.cpp"
+    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+target_include_directories(rsf_anomaly_motion_tess_chain_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_compile_definitions(rsf_anomaly_motion_tess_chain_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid
+    rsf_build_options)
+add_test(NAME anomaly_motion_tess_chain_device COMMAND rsf_anomaly_motion_tess_chain_device_test)
+set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+# The far (SE_R2_NORMAL_LQ, beyond r__dtex_range) and near (HQ) skinned VS/PS pairs against the CPU model, including a
+# few-pixel mover 100 m away (local deployment, NVIDIA adapter preferred; 77 without deployment, d3dcompiler_43 or hardware).
+add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_far_device.cpp"
+    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+target_include_directories(rsf_anomaly_motion_far_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_compile_definitions(rsf_anomaly_motion_far_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid
+    rsf_build_options)
+add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
+set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # rsf_anomaly_sr_hooks_test links native_observer.cpp, which installs/reports/quiesces the motion stage.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp"
     "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
@@ -194,6 +219,16 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
     file(TO_NATIVE_PATH "${RSF_ANOMALY_SR_VENDOR_ROOT}" rsf_anomaly_sr_vendor_native)
     add_test(NAME anomaly_sr_provider_device COMMAND rsf_anomaly_sr_temporal_device_test provider "${rsf_anomaly_sr_vendor_native}")
     set_tests_properties(anomaly_sr_provider_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+endif()
+# Backend switching through the shared pipeline on hardware (generic runtime behaviour, driven by the same vendor root).
+add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device.cpp")
+target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator rsf_build_options)
+if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
+    foreach(rsf_switch_mode baseline select select+exposure)
+        add_test(NAME sr_backend_switch_${rsf_switch_mode}
+            COMMAND rsf_sr_backend_switch_device_test "${rsf_anomaly_sr_vendor_native}" ${rsf_switch_mode})
+        set_tests_properties(sr_backend_switch_${rsf_switch_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
+    endforeach()
 endif()
 set_tests_properties(anomaly_sr_pass_contract anomaly_sr_pass_unknown_selection anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)

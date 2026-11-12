@@ -14,7 +14,8 @@
 namespace rsf::anomaly::motion {
 const char* family_name(Family family) noexcept
 {
-    static constexpr const char* names[] = {"none", "core_static", "core_model", "core_pixel", "foliage_tree", "foliage_detail"};
+    static constexpr const char* names[] = {"none", "core_static", "core_model", "core_pixel", "foliage_tree", "foliage_detail",
+        "tess_hull", "tess_domain"};
     const auto i = static_cast<std::size_t>(family);
     return i < std::size(names) ? names[i] : "unknown";
 }
@@ -23,9 +24,18 @@ bool family_is_vertex(Family family) noexcept
     return family == Family::CoreStatic || family == Family::CoreModel || family == Family::FoliageTree ||
         family == Family::FoliageDetail;
 }
+char family_stage(Family family) noexcept
+{
+    if (family_is_vertex(family)) return 'v';
+    if (family == Family::CorePixel) return 'p';
+    if (family == Family::TessHull) return 'h';
+    if (family == Family::TessDomain) return 'd';
+    return 0;
+}
 const char* compatibility_name(Compatibility value) noexcept
 {
-    static constexpr const char* names[] = {"ok", "version", "missing_binding", "extra_binding", "buffer", "inputs", "outputs"};
+    static constexpr const char* names[] = {"ok", "version", "missing_binding", "extra_binding", "buffer", "inputs", "outputs",
+        "patch_constants"};
     const auto i = static_cast<std::size_t>(value);
     return i < std::size(names) ? names[i] : "unknown";
 }
@@ -54,9 +64,39 @@ std::optional<Family> parse_family(std::string_view text) noexcept
 bool safe_name(std::string_view name) noexcept
 {
     if (name.empty() || name.size() > 200 || name.find("..") != std::string_view::npos) return false;
+    // At most one subdirectory ("dx11/tess.hs"), never at either end.
+    const auto slash = name.find('/');
+    if (slash != std::string_view::npos && (slash == 0 || slash + 1 == name.size() || name.find('/', slash + 1) != std::string_view::npos))
+        return false;
     return std::all_of(name.begin(), name.end(), [](char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == '/';
     });
+}
+// The RSF interpolants of the tessellation chain (tools/anomaly_temporal_shader.py): previous clip TEXCOORD12, validity
+// TEXCOORD13, previous object-space position TEXCOORD14 and normal TEXCOORD15. D3D_REGISTER_COMPONENT_FLOAT32 = 3.
+struct Field { std::uint32_t index, mask; };
+constexpr Field tess_control_fields[] = {{12, 0xf}, {13, 0x1}, {14, 0xf}, {15, 0x7}};
+constexpr Field tess_domain_fields[] = {{12, 0xf}, {13, 0x1}};
+bool same_element(const Parameter& a, const Parameter& b) noexcept
+{
+    return _stricmp(a.name.c_str(), b.name.c_str()) == 0 && a.index == b.index && a.system_value == b.system_value &&
+        a.component == b.component && a.mask == b.mask;
+}
+// `variant` holds every `stock` element (registers may shift: the RSF fields come first) and exactly `fields` besides.
+template<std::size_t N> bool extends(const std::vector<Parameter>& stock, const std::vector<Parameter>& variant,
+    const Field (&fields)[N]) noexcept
+{
+    std::size_t matched = 0;
+    for (const auto& element : stock)
+        if (!std::any_of(variant.begin(), variant.end(), [&](const Parameter& p) { return same_element(p, element); })) return false;
+    for (const auto& element : variant) {
+        if (std::any_of(stock.begin(), stock.end(), [&](const Parameter& p) { return same_element(p, element); })) continue;
+        const bool rsf = _stricmp(element.name.c_str(), "TEXCOORD") == 0 && element.system_value == 0 && element.component == 3 &&
+            std::any_of(std::begin(fields), std::end(fields), [&](const Field& f) { return f.index == element.index && f.mask == element.mask; });
+        if (!rsf) return false;
+        ++matched;
+    }
+    return matched == N;
 }
 std::optional<std::vector<std::byte>> read_file(const std::filesystem::path& path)
 {
@@ -99,8 +139,8 @@ std::optional<Manifest> Manifest::parse(std::string_view text, std::string& erro
         std::string stage, family, name, original, motion, extra;
         words >> stage >> family >> name >> original >> motion;
         const auto parsed = parse_family(family);
-        if ((stage != "vs" && stage != "ps") || !parsed || !safe_name(name) || !hex64(original) || !hex64(motion) ||
-            (words >> extra) || family_is_vertex(*parsed) != (stage == "vs")) {
+        if ((stage != "vs" && stage != "ps" && stage != "hs" && stage != "ds") || !parsed || !safe_name(name) || !hex64(original) ||
+            !hex64(motion) || (words >> extra) || family_stage(*parsed) != stage[0]) {
             error = "bad root record at line " + std::to_string(number);
             return std::nullopt;
         }
@@ -187,9 +227,11 @@ Compatibility compatible(char stage, const Reflection& stock, const Reflection& 
         const bool stock_has = std::any_of(stock.bindings.begin(), stock.bindings.end(),
             [&](const Binding& b) { return b.name == binding.name; });
         if (stock_has) continue;
-        const bool allowed = binding.type == 0 && binding.point == 13 && binding.count == 1 &&
-            (stage == 'v' ? binding.name == "RSFCorePrevious" || binding.name == "RSFFoliagePrevious"
-                          : binding.name == "RSFCorePixel");
+        const bool name_ok = stage == 'v' ? binding.name == "RSFCorePrevious" || binding.name == "RSFFoliagePrevious"
+                           : stage == 'p' ? binding.name == "RSFCorePixel"
+                           : stage == 'd' ? binding.name == "RSFTessPrevious"
+                           : false;   // the hull stage only forwards control points
+        const bool allowed = binding.type == 0 && binding.point == 13 && binding.count == 1 && name_ok;
         if (!allowed) return Compatibility::ExtraBinding;
     }
     for (const auto& buffer : stock.buffers) {
@@ -202,6 +244,15 @@ Compatibility compatible(char stage, const Reflection& stock, const Reflection& 
             if (v == found->variables.end() || !(*v == variable)) return Compatibility::Buffer;
         }
     }
+    if (stage == 'h' || stage == 'd') {
+        if (stock.patch != variant.patch) return Compatibility::PatchConstants;
+        if (!extends(stock.inputs, variant.inputs, tess_control_fields)) return Compatibility::Inputs;
+        const bool outputs = stage == 'h' ? extends(stock.outputs, variant.outputs, tess_control_fields)
+                                          : extends(stock.outputs, variant.outputs, tess_domain_fields);
+        if (!outputs) return Compatibility::Outputs;
+        return Compatibility::Ok;
+    }
+    if (stage != 'v' && stage != 'p') return Compatibility::Version;
     if (stage == 'v') {
         if (stock.inputs != variant.inputs) return Compatibility::Inputs;
         for (const auto& output : stock.outputs) {
@@ -224,16 +275,31 @@ Compatibility compatible(char stage, const Reflection& stock, const Reflection& 
     return Compatibility::Ok;
 }
 
-bool linkable(const Reflection& vertex, const Reflection& pixel) noexcept
+namespace {
+bool covers(const std::vector<Parameter>& outputs, const std::vector<Parameter>& inputs) noexcept
 {
-    for (const auto& input : pixel.inputs) {
-        const bool found = std::any_of(vertex.outputs.begin(), vertex.outputs.end(), [&](const Parameter& p) {
+    for (const auto& input : inputs) {
+        const bool found = std::any_of(outputs.begin(), outputs.end(), [&](const Parameter& p) {
             return _stricmp(p.name.c_str(), input.name.c_str()) == 0 && p.index == input.index && p.reg == input.reg &&
                 (p.mask & input.mask) == input.mask;
         });
         if (!found) return false;
     }
     return true;
+}
+}
+
+bool linkable(const Reflection& vertex, const Reflection& pixel) noexcept
+{
+    return covers(vertex.outputs, pixel.inputs);
+}
+
+bool tess_chain_linkable(const Reflection& vertex, const Reflection& hull, const Reflection& domain, const Reflection& pixel) noexcept
+{
+    // The patch-constant interface: every domain input is a hull output (an empty domain list would mean no tessellation
+    // factors at all, which no real domain shader has).
+    return covers(vertex.outputs, hull.inputs) && covers(hull.outputs, domain.inputs) && covers(domain.outputs, pixel.inputs) &&
+        !domain.patch.empty() && covers(hull.patch, domain.patch);
 }
 
 int skin_mode(const std::vector<Define>& defines) noexcept

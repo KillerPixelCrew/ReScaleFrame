@@ -15,6 +15,9 @@ LOCAL = REPO / '.local/anomaly'
 OWNED = REPO / 'games/anomaly/shaders/core'
 CORPUS = 'fdc260e0608f259d876c4ae0f11a6f2d8c03c001cf1fe82548794af1c6826a67'
 ABI = 1
+# X-Ray's DX11 tessellation pass for PN/displacement bump materials (uber_deffer.cpp: VS -> DX11\tess.hs ->
+# DX11\tess.ds -> PS); the shadow domain shader (dx11/tess_shadow.ds) never draws into the G-buffer.
+TESS_HULL, TESS_DOMAIN = 'dx11/tess.hs', 'dx11/tess.ds'
 
 
 class Refusal(ValueError):
@@ -59,17 +62,46 @@ def shared_io(data):
         text, count = re.subn(expression, lambda m: m[1] + addition + m[2] + m[3], text, flags=re.S)
         if count != 1:
             raise Refusal('shared IO anchor: ' + name)
+    # Tessellated draws (DX11\tess.hs/ds): the motion VS also hands the PREVIOUS object-space control data to the hull
+    # stage, so the domain stage can rebuild the previous PN patch. The extra registers sit after every native field and
+    # before SV_Position, which keeps the hull-stage input (p_bumped, no SV_Position) a register prefix of the VS output.
+    # The domain stage writes v2p_bumped without them, so the PS interface (p_bumped + SV_Position) is unchanged.
+    tess = ('#if defined(RSF_TEMPORAL) && defined({gate})\n'
+            '    float4 rsf_previous_position : TEXCOORD14;\n'
+            '    float3 rsf_previous_normal : TEXCOORD15;\n'
+            '#endif\n')
+    for name, gate, anchor in (('v2p_bumped', 'RSF_TESS_VERTEX', r'\n[ \t]*float4[ \t]+hpos[ \t]*:[ \t]*SV_Position;'),
+                               ('p_bumped', 'RSF_TESS_CONTROL', r'\n\};')):
+        expression = r'(\bstruct\s+' + name + r'\s*\{(?:(?!\n\};).)*?)(' + anchor + r')'
+        text, count = re.subn(expression, lambda m: m[1] + '\n' + tess.format(gate=gate).rstrip('\n') + m[2], text,
+                              flags=re.S)
+        if count != 1:
+            raise Refusal('shared IO tessellation anchor: ' + name)
     return text.encode()
+
+
+# A bump VS permutation compiled for X-Ray's tessellation pass (uber_deffer.cpp r_TessPass adds TESS_PN/TESS_HM to the
+# VS, HS, DS and PS of the pass) feeds the hull stage instead of the rasterizer.
+TESS_VERTEX_GATE = '#if defined(TESS_PN) || defined(TESS_HM)\n#define RSF_TESS_VERTEX 1\n#endif\n'
 
 
 def static_vertex(data, shape):
     # Native body is byte-preserved behind a conditional entrypoint alias.
-    prefix = '#ifndef RSF_CORE_EXCLUDE\n#define RSF_TEMPORAL 1\n#define main rsf_native_main\n#endif\n'
+    gate = TESS_VERTEX_GATE if shape == 'v2p_bumped' else ''
+    prefix = '#ifndef RSF_CORE_EXCLUDE\n#define RSF_TEMPORAL 1\n' + gate + '#define main rsf_native_main\n#endif\n'
+    tess = ''
+    if shape == 'v2p_bumped':
+        # Static geometry has no previous deformation: the previous object-space control point is the vertex itself, the
+        # normal the native body's own unpack (unpack_bx4 of the swizzled Nh), so rsf_previous_wv carries all motion.
+        tess = ('#ifdef RSF_TESS_VERTEX\n'
+                '    o.rsf_previous_position = v.P;\n'
+                '    o.rsf_previous_normal = unpack_bx4(unpack_D3DCOLOR(v.Nh.xyz));\n'
+                '#endif\n')
     suffix = ('\n#ifndef RSF_CORE_EXCLUDE\n#undef main\n#include "rsf_core_vertex.h"\n'
               + shape + ' main(v_in v)\n{\n'
               '    ' + shape + ' o = rsf_native_main(v);\n'
               '    o.rsf_previous_clip = mul(rsf_previous_wvp, v.P);\n'
-              '    o.rsf_valid = rsf_draw_valid();\n'
+              '    o.rsf_valid = rsf_draw_valid();\n' + tess +
               '    return o;\n}\n#endif\n')
     return prefix.encode() + data + suffix.encode()
 
@@ -95,16 +127,102 @@ def model_vertex(data, shape):
     suffix = '\n#undef main\n#include "rsf_core_vertex.h"\n#include "rsf_core_previous_skin.h"\n'
     for mode in ['NONE', '0', '1', '2', '3', '4']:
         input_type = 'v_model' if mode == 'NONE' else 'v_model_skinned_' + mode
-        previous = 'v.P' if mode == 'NONE' else 'rsf_prev_skinning_' + mode + '(v).P'
+        source = 'v' if mode == 'NONE' else 'rsf_prev_skinning_' + mode + '(v)'
+        previous = source + '.P'
         gate = ' * (rsf_history.z == 1)' if mode == 'NONE' else ''
         if mode in ('1', '2', '3', '4'):
             gate = ' * (rsf_history.y == 1)'
+        tess = ''
+        if shape == 'v2p_bumped':
+            # The previous skinned object-space position and normal, scaled exactly as the native body scales N (2 * N
+            # before m_WV), so the domain stage's previous patch matches the current one's construction.
+            tess = ('#ifdef RSF_TESS_VERTEX\n'
+                    '    o.rsf_previous_position = ' + previous + ';\n'
+                    '    o.rsf_previous_normal = 2 * ' + source + '.N;\n'
+                    '#endif\n')
         suffix += ('#ifdef SKIN_' + mode + '\n' + shape + ' main(' + input_type + ' v)\n{\n'
                    '    ' + shape + ' o = rsf_native_main(v);\n'
                    '    o.rsf_previous_clip = mul(rsf_previous_wvp, ' + previous + ');\n'
-                   '    o.rsf_valid = rsf_draw_valid()' + gate + ';\n'
+                   '    o.rsf_valid = rsf_draw_valid()' + gate + ';\n' + tess +
                    '    return o;\n}\n#endif\n')
-    return b'#define RSF_TEMPORAL 1\n#define main rsf_native_main\n' + data + suffix.encode()
+    gate = TESS_VERTEX_GATE if shape == 'v2p_bumped' else ''
+    return ('#define RSF_TEMPORAL 1\n' + gate + '#define main rsf_native_main\n').encode() + data + suffix.encode()
+
+
+def insert_after(text, pattern, insertion, what):
+    """Insert first-party text after the one native statement matching `pattern`; refuse on 0 or 2+ matches."""
+    matches = list(re.finditer(pattern, text))
+    if len(matches) != 1:
+        raise Refusal('tessellation anchor (' + str(len(matches)) + ' matches): ' + what)
+    end = matches[0].end()
+    return text[:end] + insertion + text[end:]
+
+
+def tess_hull(data):
+    # The hull stage copies each control point field by field; the RSF fields are copied the same way.
+    text = insert_after(data.decode(), r'\n[ \t]*ouput\.M3[ \t]*=[ \t]*ip\[i\]\.M3;',
+                        '\n#ifdef RSF_TEMPORAL\n'
+                        '\touput.rsf_previous_clip = ip[i].rsf_previous_clip;\n'
+                        '\touput.rsf_valid = ip[i].rsf_valid;\n'
+                        '\touput.rsf_previous_position = ip[i].rsf_previous_position;\n'
+                        '\touput.rsf_previous_normal = ip[i].rsf_previous_normal;\n'
+                        '#endif', 'tess.hs control point copy')
+    return ('#define RSF_TEMPORAL 1\n#define RSF_TESS_CONTROL 1\n' + text).encode()
+
+
+def tess_domain(data):
+    """The previous surface point at the SAME domain location: same uvw (after the native edge snap), the previous PN
+    patch built from the previous control points with the native ComputePNPatch/ComputePatchVertex (plus this frame's
+    delivered-minus-textbook patch difference carried rigidly, rsf_core_tess.h rsf_tess_carry_patch), the native
+    displacement (same height texels: the texture coordinates do not animate) along the previous normal, the native
+    edge rule (minc == 0 keeps the flat point), then the previous projection."""
+    text = data.decode()
+    # After tess.h, so the header sees PNPatch.
+    text = insert_after(text, r'#include[ \t]+"DX11\\tess\.h"', '\n#include "rsf_core_tess.h"', 'tess.ds tess.h include')
+    text = insert_after(text, r'\n[ \t]*output\.position[ \t]*=[ \t]*bp\[0\]\.position\*w \+ bp\[1\]\.position\*v \+ '
+                              r'bp\[2\]\.position\*u;',
+                        '\n#ifdef RSF_TEMPORAL\n'
+                        '\tfloat3 rsf_pp[3] =\n\t{\n'
+                        '\t\trsf_tess_view_position(bp[0].rsf_previous_position),\n'
+                        '\t\trsf_tess_view_position(bp[1].rsf_previous_position),\n'
+                        '\t\trsf_tess_view_position(bp[2].rsf_previous_position)\n\t};\n'
+                        '\tfloat3 rsf_pn[3] =\n\t{\n'
+                        '\t\trsf_tess_view_normal(bp[0].rsf_previous_normal),\n'
+                        '\t\trsf_tess_view_normal(bp[1].rsf_previous_normal),\n'
+                        '\t\trsf_tess_view_normal(bp[2].rsf_previous_normal)\n\t};\n'
+                        '\tfloat3 rsf_prev = rsf_pp[0]*w + rsf_pp[1]*v + rsf_pp[2]*u;\n'
+                        '\tfloat3 rsf_prev_flat = rsf_prev;\n'
+                        '\tfloat3 rsf_prev_normal = normalize(rsf_pn[0]*w + rsf_pn[1]*v + rsf_pn[2]*u);\n'
+                        '#endif', 'tess.ds flat position')
+    text = insert_after(text, r'\n[ \t]*ComputePatchVertex\(P, N, uvw, input\.patch, output\.position\.xyz, Normal\);',
+                        '\n#\tifdef RSF_TEMPORAL\n'
+                        '\t{\n'
+                        '\t\tfloat3 rsf_unit[3] = { normalize(rsf_pn[0]), normalize(rsf_pn[1]), normalize(rsf_pn[2]) };\n'
+                        '\t\tfloat3 rsf_current_unit[3] = { normalize(N[0]), normalize(N[1]), normalize(N[2]) };\n'
+                        '\t\tPNPatch rsf_patch, rsf_reference;\n'
+                        '\t\tComputePNPatch(rsf_pp, rsf_unit, rsf_patch);\n'
+                        '\t\tComputePNPatch(P, rsf_current_unit, rsf_reference);\n'
+                        '\t\trsf_tess_carry_patch(P, rsf_pp, input.patch, rsf_reference, rsf_patch);\n'
+                        '\t\tComputePatchVertex(rsf_pp, rsf_pn, uvw, rsf_patch, rsf_prev, rsf_prev_normal);\n'
+                        '\t}\n'
+                        '#\tendif', 'tess.ds PN evaluation')
+    for tcd in ('output.tcdbump', '0'):
+        text = insert_after(text, r'\n[ \t]*ComputeDisplacedVertex\(output\.position\.xyz, Normal, output\.tcdh, ' +
+                            re.escape(tcd) + r'\);',
+                            '\n#\t\tifdef RSF_TEMPORAL\n'
+                            '\tComputeDisplacedVertex(rsf_prev, rsf_prev_normal, output.tcdh, ' + tcd + ');\n'
+                            '#\t\tendif', 'tess.ds displacement ' + tcd)
+    text = insert_after(text, r'\n[ \t]*\[flatten\]if\( minc==0 \)\s*\n[ \t]*output\.position\.xyz = triPos;',
+                        '\n#ifdef RSF_TEMPORAL\n'
+                        '\t[flatten]if( minc==0 )\n'
+                        '\t\trsf_prev = rsf_prev_flat;\n'
+                        '#endif', 'tess.ds edge rule')
+    text = insert_after(text, r'\n[ \t]*output\.hpos[ \t]*=[ \t]*mul\(m_P, float4\(output\.position\.xyz,1\)\);',
+                        '\n#ifdef RSF_TEMPORAL\n'
+                        '\toutput.rsf_previous_clip = mul(rsf_previous_projection, float4(rsf_prev, 1));\n'
+                        '\toutput.rsf_valid = rsf_tess_valid(bp[0].rsf_valid, bp[1].rsf_valid, bp[2].rsf_valid);\n'
+                        '#endif', 'tess.ds projection')
+    return ('#define RSF_TEMPORAL 1\n#define RSF_TESS_CONTROL 1\n' + text).encode()
 
 
 def pixel(data, shape, alpha):
@@ -159,13 +277,16 @@ def stage(source, output):
         for alpha in (False, True):
             name = 'deffer_base_' + ('aref_' if alpha else '') + kind + '.ps'
             files[name] = pixel(files[name], 'p_flat' if kind == 'flat' else 'p_bumped', alpha)
+    files[TESS_HULL] = tess_hull(files[TESS_HULL])
+    files[TESS_DOMAIN] = tess_domain(files[TESS_DOMAIN])
     headers = {p.name: p.read_bytes() for p in OWNED.glob('*.h')}
     files.update(headers)
     files['rsf_core_previous_skin.h'] = previous_skin(original['skin.h'])
     report = {'schema': 1, 'abi': ABI, 'runtime_ready': False, 'motion_output_implemented': True,
               'source_corpus_sha256': CORPUS, 'source_file_count': len(original),
               'supported_roots': supported_roots(source),
-              'unsupported': ['software_skinned_SKIN_NONE', 'terrain', 'forward', 'tessellation',
+              'tessellation_roots': [TESS_HULL, TESS_DOMAIN],
+              'unsupported': ['software_skinned_SKIN_NONE', 'terrain', 'forward', 'tessellated_shadow_domain',
                               'trees', 'details', 'lod', 'particles', 'water', 'sky', 'clouds', 'hud3d'],
               'tool_sha256': digest(Path(__file__).read_bytes()),
               'header_sha256': {k: digest(v) for k, v in headers.items()},
@@ -300,13 +421,80 @@ def verify_fxc(source, output):
                 'changed': changed, 'reflection_verified': True, 'warnings': warnings,
                 'old_sha256': digest(pair[0]), 'new_sha256': digest(pair[1])}
 
+    # Tessellation pass (uber_deffer.cpp r_TessPass adds the same TESS_* and detail defines to all four stages). Kept
+    # apart from 'variants', whose VS/PS cases the device harness (tests/anomaly_temporal_shader_verify.py) consumes.
+    tess_sets = [['TESS_PN=1'], ['TESS_PN=1', 'USE_TDETAIL=1', 'USE_TDETAIL_BUMP=1'], ['TESS_PN=1', 'TESS_HM=1', 'USE_TDETAIL=1'],
+                 ['TESS_HM=1', 'USE_LM_HEMI=1']]
+    tess_cases = []
+    for tess in tess_sets:
+        for mode in ['NONE', '0', '1', '2', '3', '4']:
+            tess_cases.append(('deffer_model_bump.vs', 'vs', mode, ['SKIN_' + mode + '=1'] + tess))
+        tess_cases.append(('deffer_base_bump.vs', 'vs', 'STATIC', tess))
+        tess_cases.append((TESS_HULL, 'hs', 'HULL', tess))
+        tess_cases.append((TESS_DOMAIN, 'ds', 'DOMAIN', tess))
+        for shader in ('deffer_base_bump.ps', 'deffer_base_aref_bump.ps'):
+            tess_cases.append((shader, 'ps', 'PIXEL', tess))
+    control = {('TEXCOORD', 12): ('xyzw', 'NONE', 'float'), ('TEXCOORD', 13): ('x', 'NONE', 'float'),
+               ('TEXCOORD', 14): ('xyzw', 'NONE', 'float'), ('TEXCOORD', 15): ('xyz', 'NONE', 'float')}
+    to_pixel = {k: v for k, v in control.items() if k[1] in (12, 13)}
+
+    def compile_tess(index_case):
+        index, (shader, stage_name, mode, defines) = index_case
+        pair, assemblies = [], []
+        for tag, root in (('old', source), ('new', staged)):
+            binary = binaries / ('tess-' + str(index) + '-' + tag + '.dxbc')
+            assembly = binary.with_suffix('.asm')
+            command = [str(fxc), '/nologo', '/T', stage_name + '_5_0', '/E', 'main', '/D', 'SM_5=1', '/Zpr']
+            for define in defines:
+                command += ['/D', define]
+            command += ['/I', str(root.resolve()), '/Fo', str(binary.resolve()), '/Fc', str(assembly.resolve()), str((root / shader).resolve())]
+            run = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            if run.returncode:
+                raise Refusal(shader + ' ' + str(defines) + '\n' + run.stdout + run.stderr)
+            pair.append(binary.read_bytes())
+            assemblies.append(assembly.read_text())
+        old_in, new_in = [signature(a, 'Input') for a in assemblies]
+        old_out, new_out = [signature(a, 'Output') for a in assemblies]
+        if pair[0] == pair[1]:
+            raise Refusal('declaration-only tessellation output: ' + shader)
+        if stage_name == 'vs':
+            if old_in != new_in or new_out != {**old_out, **control}:
+                raise Refusal('tessellation VS interface mismatch: ' + shader + ' ' + str(defines))
+        elif stage_name == 'ps':
+            if not {('TEXCOORD', 12), ('TEXCOORD', 13), ('SV_POSITION', 0)} <= new_in.keys() or \
+                    {('TEXCOORD', 14), ('TEXCOORD', 15)} & new_in.keys():
+                raise Refusal('tessellation PS input mismatch: ' + shader)
+        else:
+            if signature(assemblies[0], 'Patch Constant') != signature(assemblies[1], 'Patch Constant'):
+                raise Refusal('patch-constant signature changed: ' + shader)
+            if new_in != {**old_in, **control} or new_out != {**old_out, **(control if stage_name == 'hs' else to_pixel)}:
+                raise Refusal('tessellation ' + stage_name + ' interface mismatch: ' + shader + ' ' + str(defines))
+            if stage_name == 'ds':
+                if not re.search(r'// RSFTessPrevious\s+cbuffer\s+NA\s+NA\s+cb13\s+1', assemblies[1]):
+                    raise Refusal('RSFTessPrevious b13 reflection missing')
+                for name, offset, size in (('rsf_previous_wv', 0, 64), ('rsf_previous_projection', 64, 64), ('rsf_tess_history', 128, 16)):
+                    if not re.search(r'\b' + name + r';\s*// Offset:\s*' + str(offset) + r' Size:\s*' + str(size), assemblies[1]):
+                        raise Refusal('tessellation constant layout mismatch: ' + name)
+            elif 'cb13' in assemblies[1]:
+                raise Refusal('the hull stage must not bind b13')
+        resource_pattern = r'^// (\S+)\s+(cbuffer|texture|sampler|tbuffer)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$'
+        old_resources = re.findall(resource_pattern, assemblies[0], re.M)
+        new_resources = re.findall(resource_pattern, assemblies[1], re.M)
+        if any(resource not in new_resources for resource in old_resources):
+            raise Refusal('native resource binding metadata changed: ' + shader)
+        return {'index': index, 'shader': shader, 'stage': stage_name, 'mode': mode, 'defines': defines,
+                'reflection_verified': True, 'old_sha256': digest(pair[0]), 'new_sha256': digest(pair[1])}
+
     report = {'compiler': fxc, 'planned': len(cases), 'verified': 0, 'cache_namespace': manifest['cache_namespace'],
-              'runtime_ready': False, 'variants': []}
+              'runtime_ready': False, 'variants': [], 'tess_planned': len(tess_cases), 'tess_verified': 0, 'tess_variants': []}
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             for result in executor.map(compile_pair, enumerate(cases)):
                 report['variants'].append(result)
                 report['verified'] += 1
+            for result in executor.map(compile_tess, enumerate(tess_cases)):
+                report['tess_variants'].append(result)
+                report['tess_verified'] += 1
     finally:
         (output / 'fxc-report.json').write_text(json.dumps(report, indent=2) + '\n')
     return report

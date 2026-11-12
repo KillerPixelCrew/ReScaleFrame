@@ -38,6 +38,8 @@ public:
     bool set_core_vertex(ID3D11DeviceContext*, const CoreVertexBytes&) noexcept;
     bool set_foliage_vertex(ID3D11DeviceContext*, const FoliageVertexBytes&) noexcept;
     bool set_pixel(ID3D11DeviceContext*, const PixelBytes&) noexcept;
+    // DS slot 13 (RSFTessPrevious) for a swapped tessellation chain.
+    bool set_tess_domain(ID3D11DeviceContext*, const TessDomainBytes&) noexcept;
     // Re-issues the draw (`redraw(context)`) as the invalidation pass described above.
     template<class Redraw> ReplayResult invalidate(ID3D11DeviceContext* context, Redraw&& redraw) noexcept
     {
@@ -71,11 +73,12 @@ private:
     ComPtr<ID3D11Texture2D> texture_;
     ComPtr<ID3D11RenderTargetView> rtv_;
     std::uint32_t width_{}, height_{};
-    ComPtr<ID3D11Buffer> core_vs_, foliage_vs_, pixel_;
+    ComPtr<ID3D11Buffer> core_vs_, foliage_vs_, pixel_, tess_ds_;
     CoreVertexBytes last_core_{};
     FoliageVertexBytes last_foliage_{};
     PixelBytes last_pixel_{};
-    bool have_core_{}, have_foliage_{}, have_pixel_{};
+    TessDomainBytes last_tess_{};
+    bool have_core_{}, have_foliage_{}, have_pixel_{}, have_tess_{};
     ComPtr<ID3D11PixelShader> zero_ps_;
     ComPtr<ID3D11DepthStencilState> no_depth_;
     ComPtr<ID3D11DepthStencilState> equal_;

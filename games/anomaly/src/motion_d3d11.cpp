@@ -26,6 +26,7 @@ bool MotionDevice::create(ID3D11Device* device, LogFn log, void* user) noexcept 
     core_vs_ = dynamic_buffer(device, static_cast<UINT>(core_vs_bytes));
     foliage_vs_ = dynamic_buffer(device, static_cast<UINT>(foliage_vs_bytes));
     pixel_ = dynamic_buffer(device, static_cast<UINT>(ps_bytes));
+    tess_ds_ = dynamic_buffer(device, static_cast<UINT>(tess_ds_bytes));
     std::vector<uint8_t> code;
     if (!rsf::compile_shader(zero_motion_hlsl, sizeof(zero_motion_hlsl) - 1, "rsf_anomaly_zero_motion", "main", "ps_5_0",
             code, log, user) ||
@@ -43,7 +44,7 @@ bool MotionDevice::create(ID3D11Device* device, LogFn log, void* user) noexcept 
     equal.DepthFunc = D3D11_COMPARISON_EQUAL;
     equal.StencilEnable = FALSE;
     if (FAILED(device->CreateDepthStencilState(&desc, &no_depth_)) || FAILED(device->CreateDepthStencilState(&equal, &equal_)) ||
-        !core_vs_ || !foliage_vs_ || !pixel_) {
+        !core_vs_ || !foliage_vs_ || !pixel_ || !tess_ds_) {
         reset();
         return false;
     }
@@ -53,8 +54,8 @@ bool MotionDevice::create(ID3D11Device* device, LogFn log, void* user) noexcept 
 void MotionDevice::reset() noexcept
 {
     texture_.Reset(); rtv_.Reset(); width_ = height_ = 0;
-    core_vs_.Reset(); foliage_vs_.Reset(); pixel_.Reset();
-    have_core_ = have_foliage_ = have_pixel_ = false;
+    core_vs_.Reset(); foliage_vs_.Reset(); pixel_.Reset(); tess_ds_.Reset();
+    have_core_ = have_foliage_ = have_pixel_ = have_tess_ = false;
     zero_ps_.Reset(); no_depth_.Reset(); equal_.Reset();
     device_.Reset();
 }
@@ -118,6 +119,13 @@ bool MotionDevice::set_pixel(ID3D11DeviceContext* context, const PixelBytes& byt
     if (!upload(context, pixel_.Get(), bytes.data(), bytes.size(), last_pixel_.data(), have_pixel_)) return false;
     ID3D11Buffer* buffer = pixel_.Get();
     context->PSSetConstantBuffers(13, 1, &buffer);
+    return true;
+}
+bool MotionDevice::set_tess_domain(ID3D11DeviceContext* context, const TessDomainBytes& bytes) noexcept
+{
+    if (!upload(context, tess_ds_.Get(), bytes.data(), bytes.size(), last_tess_.data(), have_tess_)) return false;
+    ID3D11Buffer* buffer = tess_ds_.Get();
+    context->DSSetConstantBuffers(13, 1, &buffer);
     return true;
 }
 
