@@ -391,7 +391,9 @@ Prepared ShaderLoader::prepare(const ShaderRequest& request)
         result.detail = "deployed original tree does not reproduce the engine bytecode";
         return result;
     }
-    const auto motion_root = read_file(deployment_ / "motion" / "r3" / entry->name);
+    // Manifest names use '/', as in "dx11/tess.hs". An extended-length "\\?\" deployment path
+    // does not normalise separators, so convert before opening.
+    const auto motion_root = read_file(deployment_ / "motion" / "r3" / std::filesystem::path(entry->name).make_preferred());
     if (!motion_root || sha256_hex(*motion_root) != entry->motion_sha256) {
         result.outcome = Outcome::MotionCompileFailed;
         result.detail = "motion root missing or not the manifest's";

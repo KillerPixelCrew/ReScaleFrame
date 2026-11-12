@@ -17,7 +17,9 @@ public:
     HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID, LPCVOID* data, UINT* bytes) override
     {
         if (!name || !data || !bytes) return E_INVALIDARG;
-        for (const auto& path : {tree_ / "r3" / name, tree_ / name}) {
+        // Include names may use '/'; "\\?\" trees do not normalise separators.
+        const auto relative = std::filesystem::path(name).make_preferred();
+        for (const auto& path : {tree_ / "r3" / relative, tree_ / relative}) {
             std::ifstream file(path, std::ios::binary);
             if (!file) continue;
             std::vector<char> content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

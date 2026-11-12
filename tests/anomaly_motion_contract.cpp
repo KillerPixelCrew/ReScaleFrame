@@ -799,6 +799,24 @@ void loader_contract()
     compiler.compile(root / "original", pixel.source, pixel, engine_code, error);
     pixel.bytecode = engine_code;
     require(loader.prepare(pixel).outcome == Outcome::MotionCompileFailed, "motion root missing from the tree: stock");
+
+    // Game deployments use an extended-length "\\?\" path, which does not normalise '/', while manifest
+    // names such as "dx11/tess.hs" contain one. The motion root must still be found.
+    {
+        const std::string sub_source = "sub root source", sub_motion = "sub motion root";
+        std::filesystem::create_directories(root / "motion" / "r3" / "dx11");
+        std::ofstream(root / "motion" / "r3" / "dx11" / "deffer_base_flat_d.vs", std::ios::binary) << sub_motion;
+        auto sub_manifest = Manifest::parse("rsf-anomaly-motion-manifest 1\nnamespace " + ns + "\nroot vs core_static dx11/deffer_base_flat_d.vs " +
+            sha(sub_source) + " " + sha(sub_motion) + "\n", error);
+        require(sub_manifest.has_value(), "manifest accepts a subdirectory root: " + error);
+        const std::filesystem::path extended = L"\\\\?\\" + std::filesystem::absolute(root).wstring();
+        ShaderLoader extended_loader(*sub_manifest, extended, extended / "cache", compiler, reflector);
+        auto sub = request;
+        sub.source = bytes_of(sub_source);
+        compiler.compile(root / "original", sub.source, sub, engine_code, error);
+        sub.bytecode = engine_code;
+        require(extended_loader.prepare(sub).outcome == Outcome::Replaced, "'/' in a manifest name under a \\\\?\\ deployment path");
+    }
     std::filesystem::remove_all(root);
 }
 
