@@ -42,6 +42,7 @@ struct Engine {
     alignas(8) std::array<std::byte, 4> guard{};
     // Stage 3: Device.mView/mProject/mFullTransform (X-Ray Fmatrix, row vectors) and SSManager.m_uiMipLODBias.
     EngineMatrix view{}, project{}, full{};
+    std::array<float, 2> sun_depth_scale{1.0f, 1.0f};
     float sampler_bias = 0.25f;   // the user's r__tf_mipbias
     std::array<int, 64> objects{};   // addresses stand in for D3D objects
     uint32_t width = 1920, height = 1080;
@@ -147,6 +148,8 @@ struct Engine {
             const auto* raw = reinterpret_cast<const std::byte*>(m->data());
             bytes.insert(bytes.end(), raw, raw + sizeof(EngineMatrix));
         }
+        const auto* scales = reinterpret_cast<const std::byte*>(sun_depth_scale.data());
+        bytes.insert(bytes.end(), scales, scales + sizeof(sun_depth_scale));
         const auto* bias = reinterpret_cast<const std::byte*>(&sampler_bias);
         bytes.insert(bytes.end(), bias, bias + sizeof(float));
         return bytes;
@@ -171,6 +174,7 @@ struct Engine {
 struct FakeHost final : SwapHost {
     std::array<int, 64> twin_objects{};
     int write_count = 0, fail_write_at = -1;
+    void* fail_write_address{};
     bool fail_make = false, fail_round_trip = false, wrong_format = false, depth_refused = false, refused = false;
     int makes = 0, drops = 0, round_trips = 0, upscales = 0;
     TargetFields last_twin{}, last_engine{};
@@ -186,6 +190,7 @@ struct FakeHost final : SwapHost {
     }
     bool write(void* address, const void* input, std::size_t size) noexcept override {
         if (!address || write_count++ == fail_write_at) return false;
+        if (address == fail_write_address) { fail_write_address = nullptr; return false; }
         std::memcpy(address, input, size);
         return true;
     }
@@ -236,12 +241,15 @@ struct FakeHost final : SwapHost {
     // Stage 3: R_xforms::set_P records the matrix it was given; SetMipLODBias stores the value as the engine does.
     int upload_calls = 0, fail_upload_at = -1, bias_calls = 0, fail_bias_at = -1;
     std::vector<EngineMatrix> uploaded;
+    EngineMatrix cache_project{}, cache_full{};
     std::vector<float> biases;
     bool upload_projection(const void* matrix) noexcept override {
         if (upload_calls++ == fail_upload_at) return false;
         EngineMatrix m{};
         std::memcpy(m.data(), matrix, sizeof(m));
         uploaded.push_back(m);
+        cache_project = m;
+        if (engine) cache_full = engine_mul(m, engine->view);
         return true;
     }
     bool set_mip_bias(float value) noexcept override {
@@ -869,8 +877,8 @@ void stage3_normal() {
     for (const std::size_t i : {0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15}) CHECK(c.engine.project[i] == main[i]);
     CHECK(c.engine.full == engine_mul(*expected, view) && c.engine.view == view);
     CHECK(c.host.uploaded.size() == 1 && c.host.uploaded[0] == *expected);
-    // Mip bias: user + log2(1286 / 1920) - 0.3, through SetMipLODBias.
-    const float window = user + float(std::log2(1286.0 / 1920.0) - 0.3);
+    // Mip bias: user + log2(1286 / 1920) + the default offset 0, through SetMipLODBias.
+    const float window = user + float(std::log2(1286.0 / 1920.0));
     CHECK(near(c.engine.sampler_bias, window, 1e-6f) && c.host.biases.size() == 1 && c.controller.window_mip_bias() == c.engine.sampler_bias);
     c.controller.prepared();
     // r_dsgraph_render_hud: a fresh first-person projection gets the same pixel offset once.
@@ -1054,6 +1062,169 @@ void stage3_foreign_and_ineligible() {
         CHECK(c.host.upload_calls == 0 && c.controller.seam() && !c.controller.refused());
     }
 }
+void stage3_sun_cascades() {
+    for (const auto sample : {jitter_sample(0, 18), jitter_sample(5, 18), jitter_sample(17, 18)}) {
+        Case c;
+        const auto main = c.engine.project, full = c.engine.full, view = c.engine.view;
+        CHECK(c.controller.prepare(c.engine.facts3(0.67f, sample.x, sample.y)));
+        const auto jittered = c.engine.project, jittered_full = c.engine.full;
+        const auto window = c.engine.snapshot();
+        const bool token = c.controller.sun_cascades_begin();
+        CHECK(token);
+        // The wrapper's three cascade calls must all build the same unjittered frustum. Each original leaves its
+        // projection in RCache; a Device-only restore would fail the cache assertion after end.
+        for (int cascade = 0; cascade < 3; ++cascade) {
+            CHECK(c.engine.project == main && c.engine.full == full && c.engine.view == view);
+            CHECK(c.host.upload_projection(c.engine.project.data()));
+            c.controller.rm_near();   // reentrant draw callbacks must not put jitter into the shadow window
+            CHECK(c.engine.project == main && c.engine.full == full);
+        }
+        const bool nested = c.controller.sun_cascades_begin();
+        CHECK(!nested);
+        c.controller.sun_cascades_end(nested);
+        CHECK(c.engine.project == main);
+        c.controller.sun_cascades_end(token);
+        CHECK(c.engine.snapshot() == window);
+        CHECK(c.engine.project == jittered && c.engine.full == jittered_full);
+        CHECK(c.host.cache_project == jittered && c.host.cache_full == jittered_full);
+        const auto& n = c.controller.counters();
+        CHECK(n.sun_calls == 2 && n.sun_unjittered == 1 && n.sun_restored == 1 && n.sun_refused == 0);
+        CHECK(c.controller.seam() && c.stock() && !c.controller.refused());
+    }
+    // No jitter: SR off, a scope frame and the live jitter-off path leave both Device and RCache untouched.
+    for (int mode = 0; mode < 3; ++mode) {
+        Case c;
+        auto facts = c.engine.facts3();
+        if (mode == 0) c.controller.set_swap_enabled(false);
+        if (mode == 1) facts.scope = true;
+        if (mode == 2) facts.jitter = false;
+        c.controller.prepare(facts);
+        const auto before = c.engine.snapshot();
+        const auto writes = c.host.write_count, uploads = c.host.upload_calls;
+        const bool token = c.controller.sun_cascades_begin();
+        CHECK(!token);
+        c.controller.sun_cascades_end(token);
+        CHECK(c.engine.snapshot() == before && c.host.write_count == writes && c.host.upload_calls == uploads);
+        CHECK(c.controller.counters().sun_calls == 1 && c.controller.counters().sun_unjittered == 0 &&
+            c.controller.counters().sun_restored == 0 && c.controller.counters().sun_refused == 0);
+        c.controller.shutdown();
+        CHECK(c.stock());
+    }
+    // A partial unjitter or re-jitter write, or a failed set_P, closes the SR window and restores stock state.
+    for (int failure = 0; failure < 5; ++failure) {
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        bool token{};
+        if (failure < 2) {
+            c.host.fail_write_at = c.host.write_count + failure;
+            token = c.controller.sun_cascades_begin();
+            CHECK(!token);
+        } else {
+            token = c.controller.sun_cascades_begin();
+            CHECK(token);
+            if (failure < 4) c.host.fail_write_at = c.host.write_count + failure - 2;
+            else c.host.fail_upload_at = c.host.upload_calls;
+        }
+        c.controller.sun_cascades_end(token);
+        CHECK(c.stock() && c.controller.refused() && !c.controller.window_open());
+        CHECK(c.controller.counters().sun_refused == 1 && c.controller.counters().sun_restored == 0);
+        CHECK(c.host.cache_project == c.engine.project && c.host.cache_full == c.engine.full);
+    }
+    // Quiesce during the wrapped call restores stock and invalidates its token; returning must not reapply jitter.
+    Case c;
+    CHECK(c.controller.prepare(c.engine.facts3()));
+    const bool token = c.controller.sun_cascades_begin();
+    CHECK(token);
+    c.controller.shutdown();
+    const auto uploads = c.host.upload_calls;
+    c.controller.sun_cascades_end(token);
+    CHECK(c.stock() && c.host.upload_calls == uploads && c.controller.counters().foreign_changes == 0);
+}
+
+FrameFacts sun_depth_facts(Engine& engine, uint32_t margin = 5) {
+    auto facts = engine.facts3();
+    facts.sun_depth_margin = margin;
+    facts.sun_depth_scale = {reinterpret_cast<std::byte*>(&engine.sun_depth_scale[0]),
+        reinterpret_cast<std::byte*>(&engine.sun_depth_scale[1])};
+    return facts;
+}
+void stage3_sun_depth_margin() {
+    for (const auto margin : {1u, 5u, 20u}) {
+        Case c;
+        c.engine.sun_depth_scale = {1.2f, 0.8f};
+        c.rebase();
+        const auto base = c.engine.sun_depth_scale;
+        const auto facts = sun_depth_facts(c.engine, margin);
+        CHECK(c.controller.prepare(facts));
+        for (std::size_t i = 0; i < base.size(); ++i)
+            CHECK(c.engine.sun_depth_scale[i] == base[i] * (1.0f - float(margin) / 10000.0f));
+        CHECK(c.controller.counters().sun_depth_applied == 2);
+        // Shadow-frustum suspension does not remove the receiver-depth margin during accumulation.
+        const auto scaled = c.engine.sun_depth_scale;
+        const bool token = c.controller.sun_cascades_begin();
+        CHECK(token && c.engine.sun_depth_scale == scaled);
+        c.controller.sun_cascades_end(token);
+        CHECK(c.controller.seam() && c.stock() && !c.controller.refused());
+        CHECK(c.controller.counters().sun_depth_restored == 2 && c.controller.counters().sun_depth_foreign == 0);
+    }
+    // Console edits inside the window survive the close and become the next window's base, independently per scale.
+    for (const bool shutdown : {false, true}) {
+        Case c;
+        CHECK(c.controller.prepare(sun_depth_facts(c.engine)));
+        c.engine.sun_depth_scale[0] = 1.1f;
+        if (shutdown) c.controller.shutdown(); else CHECK(c.controller.seam());
+        CHECK(c.engine.sun_depth_scale[0] == 1.1f && c.engine.sun_depth_scale[1] == 1.0f && !c.controller.refused());
+        CHECK(c.controller.counters().sun_depth_restored == 1 && c.controller.counters().sun_depth_foreign == 1);
+        if (!shutdown) {
+            CHECK(c.controller.prepare(sun_depth_facts(c.engine)));
+            CHECK(c.engine.sun_depth_scale[0] == 1.1f * 0.9995f && c.engine.sun_depth_scale[1] == 0.9995f);
+            CHECK(c.controller.seam() && c.engine.sun_depth_scale[0] == 1.1f && !c.controller.refused());
+        }
+        c.engine.sun_depth_scale[0] = 1.0f;
+        CHECK(c.stock());
+    }
+    // A console change between windows is also read afresh; no application compounds the previous multiplier.
+    Case c;
+    CHECK(c.controller.prepare(sun_depth_facts(c.engine)) && c.controller.seam());
+    c.engine.sun_depth_scale = {0.95f, 1.05f};
+    c.rebase();
+    CHECK(c.controller.prepare(sun_depth_facts(c.engine)));
+    CHECK(c.engine.sun_depth_scale[0] == 0.95f * 0.9995f && c.engine.sun_depth_scale[1] == 1.05f * 0.9995f);
+    CHECK(c.controller.seam() && c.stock());
+    for (int mode = 0; mode < 4; ++mode) {
+        Case skipped;
+        auto facts = sun_depth_facts(skipped.engine);
+        if (mode == 0) facts.jitter = false;
+        if (mode == 1) facts.scope = true;
+        if (mode == 2) skipped.controller.set_swap_enabled(false);
+        if (mode == 3) facts.sun_depth_margin = 0;
+        skipped.controller.prepare(facts);
+        CHECK((skipped.engine.sun_depth_scale == std::array<float, 2>{1.0f, 1.0f}));
+        skipped.controller.shutdown();
+        CHECK(skipped.stock() && skipped.controller.counters().sun_depth_applied == 0 &&
+            skipped.controller.counters().sun_depth_restored == 0);
+    }
+    // Every existing window close restores the owned scales, including stale prepare and quiesce.
+    for (int exit = 0; exit < 5; ++exit) {
+        Case closing;
+        CHECK(closing.controller.prepare(sun_depth_facts(closing.engine)));
+        if (exit == 0) closing.controller.shutdown();
+        if (exit == 1) closing.controller.frame_end();
+        if (exit == 2) closing.controller.combine_end();
+        if (exit == 3) closing.controller.close_stale();
+        if (exit == 4) CHECK(closing.controller.seam());
+        CHECK(closing.stock() && closing.controller.counters().sun_depth_restored == 2);
+    }
+    // Failed near/far writes and a subsequent mip-bias failure roll back the partial window.
+    for (int failure = 0; failure < 3; ++failure) {
+        Case failed;
+        if (failure < 2) failed.host.fail_write_address = &failed.engine.sun_depth_scale[static_cast<std::size_t>(failure)];
+        else failed.host.fail_bias_at = 0;
+        CHECK(!failed.controller.prepare(sun_depth_facts(failed.engine)));
+        CHECK(failed.stock() && failed.controller.refused());
+    }
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -1065,7 +1236,7 @@ int main(int argc, char** argv) {
         {"stage2_normal", stage2_normal}, {"stage2_optional_odd", stage2_optional_and_odd}, {"stage2_layout", stage2_layout},
         {"stage2_exits", stage2_exits}, {"stage2_foreign", stage2_foreign}, {"stage2_ssao_viewport", stage2_ssao_viewport},
         {"stage2_write_faults", stage2_write_faults}, {"stage2_lifecycle", stage2_lifecycle}, {"stage3_normal", stage3_normal},
-        {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}};
+        {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}, {"stage3_sun_cascades", stage3_sun_cascades}, {"stage3_sun_depth_margin", stage3_sun_depth_margin}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;

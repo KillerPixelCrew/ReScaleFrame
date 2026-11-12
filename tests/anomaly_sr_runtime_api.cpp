@@ -142,7 +142,7 @@ void adapter_binding() {
     uint32_t w{}, h{};
     CHECK(!driver.planned_render(1920, 1080, w, h));
     // Settings the adapter cannot apply keep the current value; SR=0 is honoured.
-    driver.request({false, 2, 4, 0});
+    driver.request({false, 2, 5, 0});   // backend 2 and quality 5 are not offered (4, ultra performance, is)
     CHECK(!driver.enabled() && driver.status().requested.backend == backend_dlss && driver.status().requested.quality == 1);
     TemporalDriver refused;
     refused.configure(options, nullptr, nullptr);

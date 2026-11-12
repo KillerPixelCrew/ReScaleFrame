@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include "adapter_options.h"
 #include "native_observer.h"
-#include "native_profile.h"
+#include "build_profile.h"
 #include "fg_stage.h"
 #include "overlay_service.h"
 #include "motion_stage.h"
@@ -36,7 +37,7 @@ void result_log(const char* operation, rsf_result result) noexcept {
     std::snprintf(text, sizeof(text), "Anomaly %s result=%d", operation, result);
     log(nullptr, text);
 }
-uint32_t start_observation(HMODULE runtime, const std::string& hash) noexcept try {
+uint32_t start_observation(HMODULE runtime, const rsf::anomaly::BuildProfile& build) noexcept try {
     const auto prepare = resolve<decltype(&rsf_plugin_session_prepare)>(runtime, "rsf_plugin_session_prepare");
     const auto start = resolve<decltype(&rsf_plugin_session_start)>(runtime, "rsf_plugin_session_start");
     if (!prepare || !start) { log(nullptr, "Anomaly refused: required Runtime plugin-session exports missing."); return 4; }
@@ -46,7 +47,7 @@ uint32_t start_observation(HMODULE runtime, const std::string& hash) noexcept tr
     wchar_t plugin[32768]{};
     const auto plugin_length = GetModuleFileNameW(self, plugin, 32768);
     if (!plugin_length || plugin_length >= 32768) return 4;
-    const rsf_game_probe probe{sizeof(probe), 0x8664, 0, "AnomalyDX11.exe", hash.c_str()};
+    const rsf_game_probe probe{sizeof(probe), 0x8664, 0, build.executable, build.sha256};
     rsf_plugin_session_options options{};
     options.struct_size = sizeof(options); options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION;
     options.plugin_path = plugin; options.probe = &probe;
@@ -83,10 +84,21 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
     if (!length || length >= 32768) return 2;
     const auto* separator = std::wcsrchr(executable, L'\\');
     const auto* name = separator ? separator + 1 : executable;
-    if (_wcsicmp(name, L"AnomalyDX11.exe")) return 2;
+    // Exact build selection (build_profile.h): name and SHA-256 must both match one profiled executable.
+    bool profiled_name = false;
+    for (const auto& candidate : rsf::anomaly::build_profiles) profiled_name |= !_wcsicmp(name, candidate.executable_wide);
+    if (!profiled_name) return 2;
     std::string hash;
-    if (!rsf::sha256_file(executable, hash) || hash != rsf::anomaly::dx11_hash) return 2;
+    if (!rsf::sha256_file(executable, hash)) return 2;
+    const auto* build = rsf::anomaly::find_build(std::wstring_view{name}, hash);
+    if (!build) return 2;
     log_path = (config.parent_path() / L"ReScaleFrame.Anomaly.log").wstring();
+    {
+        char text[192]{};
+        std::snprintf(text, sizeof(text), "Anomaly executable %s: %s build profile selected by exact SHA-256.",
+            build->executable, build->label);
+        log(nullptr, text);
+    }
     wchar_t mode[64]{};
     GetPrivateProfileStringW(L"Anomaly", L"Mode", L"", mode, 64, configuration);
     const bool observe = !std::wcscmp(mode, L"Observe");
@@ -100,6 +112,7 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
     if (!runtime) { log(nullptr, "Anomaly refused: carrier has not loaded the existing Runtime DLL."); return 3; }
     // SR Stage 1 (SRStage=1 / SRStageCapture=1) rides on Observe: the observer's start() installs it after the
     // geometry hooks. Inert when neither key is set.
+    rsf::anomaly::options::register_restart_options(configuration);
     if (const auto sr_options = rsf::anomaly::sr::read_options(configuration); sr_options.selected()) {
         if (!observe) log(nullptr, "Anomaly SR stage refused: SRStage/SRStageCapture require Mode=Observe; game left stock.");
         else if (!observed) rsf::anomaly::sr::configure(sr_options, log, nullptr);
@@ -116,11 +129,11 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
         if (!observe) log(nullptr, "Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.");
         else if (!observed) {
             rsf::anomaly::fg::configure(fg_options, log, nullptr);
-            (void)rsf::anomaly::fg::install(runtime);
+            (void)rsf::anomaly::fg::install(runtime, *build);
         }
     }
     if (observe && !observed) {
-        const auto observe_status = start_observation(runtime, hash);
+        const auto observe_status = start_observation(runtime, *build);
         if (observe_status) return observe_status;
         observed = true;
     }

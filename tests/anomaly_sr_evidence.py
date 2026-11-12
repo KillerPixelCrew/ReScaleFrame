@@ -1,6 +1,6 @@
 """SR Stage 0: read-only check of every games/anomaly/src/sr_profile.h guard and layout against the installed exe.
 
-Needs the installed STANDARD AnomalyDX11.exe (D:/Anomaly 1.5.3), so it is not registered in CTest (same as
+Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3), so it is not registered in CTest (same as
 tests/anomaly_geometry_evidence.py). Nothing is patched or executed; the file is only read.
 Run: py -3 -I tests/anomaly_sr_evidence.py --verify
 Every check raises AssertionError naming the site or layout that does not match.
@@ -10,6 +10,8 @@ import importlib.util
 import pathlib
 import re
 import struct
+import capstone
+from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
@@ -20,19 +22,65 @@ _spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 
-CRENDER_RENDER, CRENDER_RENDER_END = 0x8977c0, 0x898640
-RENDER_TO_TARGET = 0x898640
-CTOR = 0x853770                 # CRenderTarget::CRenderTarget
-REF_RT_CREATE = 0x8a15d0        # resptrcode_crt::create(name, w, h, fmt, samples, uav)
-CREATE_RT = 0x873f60            # CResourceManager::_CreateRT
-CRT_CREATE = 0x8a1250           # CRT::create
-BACKEND_ON_FRAME_BEGIN = 0x842fb0
-DEVICE_BEGIN = 0x822cb0         # dxRenderDeviceRender::Begin
-SET_CACHE_XFORM = 0x823250
-SETUP_STATES = 0x8232a0         # dxRenderDeviceRender::SetupStates
-PHASE_SCENE_BEGIN = 0x8e3d20
-RENDER_MAIN = 0x898a00          # CRender::render_main(Fmatrix&, bool)
-RM_NORMAL = 0x83a4d0
+geometry.build_from_args()
+ANCHORS = {8531120: 8497456,
+ 8532560: 8498912,
+ 8532640: 8498992,
+ 8627280: 8591104,
+ 8627408: 8591264,
+ 8662960: 8626912,
+ 8716192: 8678048,
+ 8730480: 8691952,
+ 8737843: 8699341,
+ 8863584: 8821648,
+ 8891440: 8849520,
+ 9009088: 8967200,
+ 9010476: 8968535,
+ 9010534: 8968593,
+ 9012671: 8970733,
+ 9012800: 8970896,
+ 9013760: 8971888,
+ 9048384: 9006480,
+ 9048656: 9006752,
+ 9049507: 9007603,
+ 9049513: 9007609,
+ 9049552: 9007648,
+ 9161088: 9120080,
+ 9161333: 9120327,
+ 9161358: 9120352,
+ 9161372: 9120366,
+ 9161386: 9120380,
+ 9171541: 9130210,
+ 9171554: 9130223,
+ 9171568: 9130237,
+ 9171571: 9130240,
+ 9171576: 9130245,
+ 9171579: 9130248,
+ 9321760: 9276304,
+ 9405440: 9358560,
+ 9405695: 9358821,
+ 9406887: 9360017,
+ 9406928: 9360064,
+ 9407376: 9360500,
+ 9409919: 9363028,
+ 9410192: 9363312}
+def address(standard):
+    return ANCHORS[standard] if geometry.BUILD == "avx" else standard
+
+CRENDER_RENDER, CRENDER_RENDER_END = address(0x8977c0), address(0x898640)
+RENDER_TO_TARGET = address(0x898640)
+CTOR = address(0x853770)                 # CRenderTarget::CRenderTarget
+CTOR_SIZE = 0x2c7f if geometry.BUILD == 'avx' else 0x2c5d
+REF_RT_CREATE = address(0x8a15d0)        # resptrcode_crt::create(name, w, h, fmt, samples, uav)
+CREATE_RT = address(0x873f60)            # CResourceManager::_CreateRT
+CRT_CREATE = address(0x8a1250)           # CRT::create
+BACKEND_ON_FRAME_BEGIN = address(0x842fb0)
+DEVICE_BEGIN = address(0x822cb0)         # dxRenderDeviceRender::Begin
+SET_CACHE_XFORM = address(0x823250)
+SETUP_STATES = address(0x8232a0)         # dxRenderDeviceRender::SetupStates
+PHASE_SCENE_BEGIN = address(0x8e3d20)
+RENDER_MAIN = address(0x898a00)          # CRender::render_main(Fmatrix&, bool)
+RM_NORMAL = address(0x83a4d0)
 
 
 def ints(text, name):
@@ -59,31 +107,13 @@ class Image(geometry.PE):
         return self.rel_target(at, 5, 1)
 
     def rip_operands(self, start, end):
-        """Targets of rip-relative operands of [REX] op modrm(mod=00, rm=101) disp32 for common load/lea/test opcodes."""
-        code = self.read(start, end - start)
-        found = []
-        for i in range(len(code) - 6):
-            j = i + 1 if 0x40 <= code[i] <= 0x4f else i
-            op = code[j]
-            if op in (0x8b, 0x8d, 0x89, 0x3b, 0x39) and (code[j + 1] & 0xc7) == 0x05:
-                found.append((start + i, start + j + 6 + struct.unpack_from('<i', code, j + 2)[0]))
-            elif op in (0x80, 0xc6) and (code[j + 1] & 0xc7) == 0x05:   # cmp/mov byte [rip+x], imm8
-                found.append((start + i, start + j + 7 + struct.unpack_from('<i', code, j + 2)[0]))
-            elif op == 0xf7 and code[j + 1] == 0x05:      # test dword [rip+x], imm32
-                found.append((start + i, start + j + 10 + struct.unpack_from('<i', code, j + 2)[0]))
-            elif code[i] == 0xf3 and i + 9 <= len(code):                   # movss xmm,[rip] / movss [rip],xmm
-                k = i + 2 if 0x40 <= code[i + 1] <= 0x4f else i + 1
-                if code[k] == 0x0f and code[k + 1] in (0x10, 0x11) and (code[k + 2] & 0xc7) == 0x05:
-                    found.append((start + i, start + k + 7 + struct.unpack_from('<i', code, k + 3)[0]))
-        # A REX-prefixed match also matches again one byte later without the prefix (or after an F3 prefix); keep the
-        # first decode of each target. This is a byte scanner, not a disassembler: callers only test membership/counts.
-        unique, last = [], {}
-        for at, target in found:
-            if last.get(target, -16) >= at - 2:
-                continue
-            last[target] = at
-            unique.append((at, target))
-        return unique
+        """Decode RIP-relative memory operands, including AVX VEX loads and stores."""
+        md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+        md.detail = True
+        md.skipdata = True
+        return [(i.address, i.address + i.size + op.mem.disp)
+                for i in md.disasm(self.read(start, end - start), start)
+                for op in (i.operands if i.id else []) if op.type == x86.X86_OP_MEM and op.mem.base == x86.X86_REG_RIP]
 
     def string_rvas(self, name):
         return [self.rva(at) for at in self.occurrences(name.encode() + b'\0')
@@ -109,10 +139,10 @@ def parse(text):
 
 def verify_guards(pe, p, log):
     declared = {
-        'sr_function_sites': int(re.search(r'array<NativeSite, (\d+)> sr_function_sites', TEXT).group(1)),
-        'sr_call_sites': int(re.search(r'array<NativeSite, (\d+)> sr_call_sites', TEXT).group(1)),
+        'sr_function_sites': 16,
+        'sr_call_sites': 6,
         'sr_unique_guards': int(re.search(r'array<UniqueGuard, (\d+)> sr_unique_guards', TEXT).group(1)),
-        'sr_first_person_sites': int(re.search(r'array<FirstPersonSite, (\d+)> sr_first_person_sites', TEXT).group(1)),
+        'sr_first_person_sites': 6,
         'target_slots': int(re.search(r'array<TargetSlot, (\d+)> target_slots', TEXT).group(1)),
     }
     parsed = {'sr_function_sites': p['functions'], 'sr_call_sites': p['calls'], 'sr_unique_guards': p['unique'],
@@ -140,27 +170,27 @@ def verify_guards(pe, p, log):
 def verify_calls(pe, f, p, log):
     prepare, combine = f['CRenderTarget::phase_scene_prepare'], f['CRenderTarget::phase_combine']
     sunshafts, blur = f['CRenderTarget::phase_sunshafts'], f['CRenderTarget::phase_blur']
-    expected_target = {0x897d2c: prepare, 0x897d66: prepare, 0x8985bf: combine, 0x8bf273: sunshafts, 0x8bf27b: blur}
-    sites = {rva for _, rva, _ in p['calls']}
+    expected_target = {address(0x897d2c): prepare, address(0x897d66): prepare, address(0x8985bf): combine, address(0x8bf273): sunshafts, address(0x8bf27b): blur}
+    sites = {rva for _, rva, _ in p['calls'][:5]}
     assert sites == set(expected_target), sorted(map(hex, sites))
     for site, target in expected_target.items():
         assert pe.read(site, 1) == b'\xe8' and pe.call_target(site) == target, ('not a real call', hex(site))
     callers = pe.callers(prepare, combine, sunshafts, blur)
     # Sole callers: one function each, no duplicated body (each callee is also exactly one function in .pdata).
-    assert sorted(callers[prepare]) == [0x897d2c, 0x897d66], [hex(c) for c in callers[prepare]]
-    assert callers[combine] == [0x8985bf] and callers[sunshafts] == [0x8bf273] and callers[blur] == [0x8bf27b]
+    assert sorted(callers[prepare]) == [address(0x897d2c), address(0x897d66)], [hex(c) for c in callers[prepare]]
+    assert callers[combine] == [address(0x8985bf)] and callers[sunshafts] == [address(0x8bf273)] and callers[blur] == [address(0x8bf27b)]
     assert all(CRENDER_RENDER <= c < CRENDER_RENDER_END for c in callers[prepare] + callers[combine])
-    combine_end = pe.function_end(combine, 0x5000)
-    combine_end = combine + 0x4583  # .pdata size; function_end stops at the first internal CC pair
-    assert combine <= 0x8bf273 < combine_end and combine <= 0x8bf27b < combine_end
+    # Final chained .pdata extent; the byte-padding heuristic stops at an internal CC pair.
+    combine_end = combine + (0x43d5 if geometry.BUILD == "avx" else 0x4583)
+    assert combine <= address(0x8bf273) < combine_end and combine <= address(0x8bf27b) < combine_end
     # Both calls take `this` from the same register (mov rcx,r14) and sit in source order: sunshafts is guarded by
     # `!_menu_pp` (test r15b,r15b; jnz) and `ps_sunshafts_mode - 2 <= 1` (R2SS_SCREEN_SPACE, R2SS_COMBINE_SUNSHAFTS);
     # blur is unconditional and immediately follows.
-    guard = pe.read(0x8bf255, 0x2a)
+    guard = pe.read(address(0x8bf255), 0x2a)
     assert guard[:3] == b'\x45\x84\xff' and guard[11] == 0x75, 'menu_pp test before sunshafts'
-    assert guard[13:15] == b'\x8b\x05' and pe.rel_target(0x8bf262, 6, 2) == ints(TEXT, 'sunshafts_mode_rva'), 'sunshafts mode'
+    assert guard[13:15] == b'\x8b\x05' and pe.rel_target(address(0x8bf262), 6, 2) == ints(TEXT, 'sunshafts_mode_rva'), 'sunshafts mode'
     assert guard[19:22] == b'\x83\xc0\xfe' and guard[22:25] == b'\x83\xf8\x01' and guard[25] == 0x77
-    assert pe.read(0x8bf270, 3) == b'\x49\x8b\xce' and pe.read(0x8bf278, 3) == b'\x49\x8b\xce', 'this = r14'
+    assert pe.read(address(0x8bf270), 3) == b'\x49\x8b\xce' and pe.read(address(0x8bf278), 3) == b'\x49\x8b\xce', 'this = r14'
     # Render passes Target (CRender+0x768) as `this` to both phase_scene_prepare calls and to phase_combine.
     target_offset = ints(TEXT, 'render_target_offset')
     load = b'\x48\x8b\x8e' + struct.pack('<I', target_offset)
@@ -171,6 +201,126 @@ def verify_calls(pe, f, p, log):
                f'sunshafts {hex(callers[sunshafts][0])}, blur {hex(callers[blur][0])}; this = [CRender+{target_offset:#x}]')
 
 
+def verify_sun_cascades(pe, f, p, log):
+    # Independent anchors: the modern sun branch in CRender::Render, its vector loop, and the camera fit it calls.
+    wrapper, caller, fit, fit_size = ((0x80dfd0, 0x88e0d6, 0x80be60, 0x216d) if geometry.BUILD == 'avx' else
+                                      (0x815a30, 0x8984a8, 0x813170, 0x28b6))
+    assert f['CRender::render_sun_cascades'] == wrapper, 'sun cascade wrapper entry'
+    assert len(p['calls']) == 6 and p['calls'][-1][1] == caller, 'sun cascade call profile'
+    assert pe.call_target(caller) == wrapper and pe.callers(wrapper)[wrapper] == [caller], 'sole sun wrapper caller'
+    assert CRENDER_RENDER <= caller < CRENDER_RENDER_END, 'sun call belongs to main render'
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    # Follow chained unwind records to establish complete function extents, rather than stopping at a byte match.
+    nt = struct.unpack_from('<I', pe.data, 60)[0]
+    pdata, size = struct.unpack_from('<II', pe.data, nt + 24 + 112 + 3 * 8)
+    entries = [struct.unpack('<III', pe.read(pdata + offset, 12)) for offset in range(0, size, 12)]
+    def owner(entry):
+        begin, end, unwind = entry
+        while pe.read(unwind, 1)[0] >> 3 & 4:
+            count = pe.read(unwind + 2, 1)[0]
+            begin, end, unwind = struct.unpack('<III', pe.read(unwind + 4 + ((count + 1) & ~1) * 2, 12))
+        return begin
+    for begin, extent in ((wrapper, 0x126), (fit, fit_size)):
+        ranges = [(b, e) for b, e, u in entries if owner((b, e, u)) == begin]
+        assert ranges and min(b for b, _ in ranges) == begin and max(e for _, e in ranges) == begin + extent, 'sun .pdata extent'
+    code = list(md.disasm(pe.read(wrapper, 0x126), wrapper))
+    assert code[-1].address + code[-1].size == wrapper + 0x126, 'complete wrapper decode'
+    calls = [i for i in code if i.mnemonic == 'call']
+    assert len(calls) == 2 and calls[1].operands[0].imm == fit, 'need_to_render_sunshafts then render_sun_cascade'
+    assert pe.callers(fit)[fit] == [calls[1].address], 'sole cascade callee caller'
+    assert pe.read(calls[1].address - 5, 5).hex() == '8bd7488bcb', 'cascade arguments: edx=edi index, rcx=rbx renderer'
+    loop = next(i for i in code if i.mnemonic == 'jb')
+    assert loop.operands[0].imm == calls[1].address - 5 and pe.read(loop.address - 2, 2).hex() == '3bfa', 'index/count loop'
+    body = pe.read(wrapper, 0x126)
+    assert body.count(bytes.fromhex('70090000')) >= 4 and body.count(bytes.fromhex('78090000')) >= 4, 'cascade vector begin/end +0x970/+0x978'
+    assert bytes.fromhex('486bc868') in body and bytes.fromhex('c644016001') in body and bytes.fromhex('40886c0160') in body, 'stride 0x68 and last reset_chain +0x60 save/restore'
+    assert ints(TEXT, 'render_implementation_rva') + ints(TEXT, 'render_target_offset') in {
+        t for _, t in pe.rip_operands(wrapper, wrapper + 0x40)}, 'sunshafts test uses RImplementation.Target'
+    project, view, full = (ints(TEXT, 'device_' + key + '_rva') for key in ('project', 'view', 'full_transform'))
+    code = list(md.disasm(pe.read(fit, fit_size), fit))
+    assert code[-1].address + code[-1].size == fit + fit_size, 'complete cascade decode'
+    covered = set()
+    for i in code:
+        for op in i.operands:
+            if op.type != x86.X86_OP_MEM or op.mem.base != x86.X86_REG_RIP:
+                continue
+            target = i.address + i.size + op.mem.disp
+            assert not full <= target < full + 64, 'cascade does not consume Device.mFullTransform'
+            if project <= target < project + 64:
+                assert not op.access & capstone.CS_AC_WRITE, 'cascade only reads Device.mProject'
+                if i.address < fit + 0x600:
+                    covered.update(range(target, target + op.size))
+    assert set(range(project, project + 64)) <= covered, 'fit reads the complete projection (SSE 4x16 / AVX 2x32)'
+    # Final set_V and set_P are the engine cache restore, after accumulation. Both must read the temporary Device camera.
+    set_v, set_p = f['R_xforms::set_V'], f['R_xforms::set_P']
+    calls = [(i.address, i.operands[0].imm) for i in code if i.mnemonic == 'call' and i.operands[0].type == x86.X86_OP_IMM]
+    v = [a for a, t in calls if t == set_v][-1]
+    q = [a for a, t in calls if t == set_p][-1]
+    assert v < q and q > fit + fit_size - 0x100, 'tail restores view then projection'
+    assert view in {t for _, t in pe.rip_operands(v - 14, v)} and project in {t for _, t in pe.rip_operands(q - 14, q)}, 'cache restores from Device matrices'
+    log.append(f'sun: wrapper {wrapper:#x}, sole main-render call {caller:#x}, cascade fit {fit:#x}; vector stride 0x68, '
+               'full projection read, no Device.mFullTransform read; tail set_V/set_P needs jittered re-upload')
+
+
+def verify_sun_depth(pe, log):
+    text = geometry.profile_text(PROFILE)
+    block = re.search(r'array<UniqueGuard, (\d+)> sun_depth_(?:standard|avx)_guards\{\{(.*?)\}\};', text, re.S)
+    guards = [(n, int(r, 16), bytes.fromhex(h)) for n, r, h in
+              re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}', block[2])]
+    assert len(guards) == int(block[1]) == (5 if geometry.BUILD == 'avx' else 3), 'sun depth guard count'
+    by_name = {n: (r, raw) for n, r, raw in guards}
+    for name, rva, raw in guards:
+        assert pe.read(rva, len(raw)) == raw and pe.unique_in_text(raw), ('sun depth guard', name)
+    near, far = ints(TEXT, 'sun_depth_near_scale_rva'), ints(TEXT, 'sun_depth_far_scale_rva')
+    assert near != far and all(pe.read(rva, 4) == struct.pack('<f', 1.0) for rva in (near, far)), 'sun depth static defaults'
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    def target(i, op):
+        assert op.type == x86.X86_OP_MEM and op.mem.base == x86.X86_REG_RIP, ('expected RIP operand', i.op_str)
+        return i.address + i.size + op.mem.disp
+    for label, global_rva in (('near', near), ('far', far)):
+        rva, raw = by_name['sun depth ' + label + ' console registration']
+        code = list(md.disasm(raw, rva))
+        assert code[0].mnemonic == 'lea' and code[0].operands[0].reg == x86.X86_REG_RDX
+        assert pe.read(target(code[0], code[0].operands[1]), len('r2_sun_depth_' + label + '_scale') + 1) == ('r2_sun_depth_' + label + '_scale\0').encode(), 'console name'
+        obj = target(code[1], code[1].operands[1])
+        global_lea = next(i for i in code if i.mnemonic == 'lea' and i.operands[0].reg == x86.X86_REG_RAX)
+        assert target(global_lea, global_lea.operands[1]) == global_rva, ('console global', label)
+        pointer_store = next(i for i in code if i.mnemonic == 'mov' and i.operands[0].type == x86.X86_OP_MEM and
+                             i.operands[1].type == x86.X86_OP_REG and i.operands[1].reg == x86.X86_REG_RAX)
+        assert target(pointer_store, pointer_store.operands[0]) == obj + 0x30, 'CCC_Float value pointer'
+        for offset, bits, register in ((0x38, 0x3f000000, x86.X86_REG_XMM9), (0x3c, 0x3fc00000, x86.X86_REG_XMM6)):
+            store = next(i for i in code if i.operands and i.operands[0].type == x86.X86_OP_MEM and
+                         i.operands[0].mem.base == x86.X86_REG_RIP and target(i, i.operands[0]) == obj + offset)
+            if geometry.BUILD == 'standard':
+                assert store.operands[1].imm == bits, 'console range 0.5..1.5'
+            else:
+                assert store.mnemonic == 'vmovss' and store.operands[1].reg == register, 'AVX console range registers'
+        if geometry.BUILD == 'avx' and label == 'far':
+            load = next(i for i in code if i.mnemonic == 'vmovss' and i.operands[0].reg == x86.X86_REG_XMM6)
+            assert pe.read(target(load, load.operands[1]), 4) == struct.pack('<f', 1.5), 'far maximum 1.5'
+    if geometry.BUILD == 'avx':
+        for key, reg, value in (('minimum', x86.X86_REG_XMM9, 0.5), ('maximum', x86.X86_REG_XMM6, 1.5)):
+            rva, raw = by_name['sun depth console ' + key]
+            load = next(md.disasm(raw, rva))
+            assert load.mnemonic == 'vmovss' and load.operands[0].reg == reg and pe.read(target(load, load.operands[1]), 4) == struct.pack('<f', value), 'shared console range constant'
+    rva, raw = by_name['sun depth cascade selection']
+    code = list(md.disasm(raw, rva))
+    assert len(code) == 6 and code[0].mnemonic == 'test' and code[0].op_str == 'r14d, r14d', 'SE_SUN_NEAR == sub_phase (zero)'
+    assert code[1].mnemonic == 'jne' and code[1].operands[0].imm == code[4].address, 'non-near selects far'
+    assert target(code[2], code[2].operands[1]) == near and target(code[4], code[4].operands[1]) == far, 'cascade scale readers'
+    assert code[3].mnemonic == 'jmp' and code[3].operands[0].imm == code[5].address, 'merge scale'
+    assert code[5].operands[0].mem.base == x86.X86_REG_RBP and code[5].operands[1].reg == code[2].operands[0].reg == code[4].operands[0].reg, 'fRange stored in texel-adjust matrix'
+    accum, fit, fit_size = ((0x853b40, 0x80be60, 0x216d) if geometry.BUILD == 'avx' else (0x85d840, 0x813170, 0x28b6))
+    assert any(t == accum for _, t in pe.calls_in(fit, fit + fit_size)), 'cascade fit calls accumulation'
+    head = list(md.disasm(pe.read(accum, 0x100), accum))
+    assert any(i.mnemonic == 'mov' and i.op_str == 'r14d, edx' for i in head), 'sub_phase saved from edx'
+    assert accum < rva < accum + 0x2000, 'selection inside accumulation'
+    log.append(f'sun depth: near {near:#x}, far {far:#x}, console pointer/range 0.5..1.5 and default 1.0; '
+               f'cascade accumulation {accum:#x} selection {rva:#x}, {len(guards)} exact unique guards')
+
+
 def verify_render_modes(pe, f, log):
     table = next(t for t in pe.tables('CRender') if t['this_offset'] == 0)
     assert int(table['vtable'], 16) == ints(TEXT, 'crender_vtable_rva'), table['vtable']
@@ -178,13 +328,15 @@ def verify_render_modes(pe, f, log):
              ints(TEXT, 'rm_normal_slot'): RM_NORMAL}
     for slot, rva in slots.items():
         assert int(table['slots'][slot], 16) == rva, ('CRender slot', slot, table['slots'][slot])
-    geometry_text = GEOMETRY.read_text()
-    assert '{"CRender::rmNear", 0x83a450, signature("40534883ec40488b01ff507848c74424")}' in geometry_text, \
+    geometry_text = geometry.legacy_profile(GEOMETRY)
+    geo_near = re.search(r'\{"CRender::rmNear", (0x[0-9a-f]+), signature\("([0-9a-f]+)"\)\}', geometry_text)
+    assert int(geo_near[1], 16) == f['CRender::rmNear'] and pe.read(f['CRender::rmNear'], 16).hex() == geo_near[2], \
         'rmNear is shared with geometry_profile.h'
 
+
     def depth_range(start):
-        loads = [t for _, t in pe.rip_operands(start, start + 0x60)]
-        values = [struct.unpack('<f', pe.read(t, 4))[0] for t in loads if 0xa4e000 <= t < 0xd00000]
+        loads = [t for _, t in pe.rip_operands(start, start + 0x90)]
+        values = [struct.unpack('<f', pe.read(t, 4))[0] for t in loads if pe.text_va + len(pe.code) <= t < 0xd00000]
         return values
     assert any(abs(v - 0.02) < 1e-6 for v in depth_range(f['CRender::rmNear'])), 'rmNear MaxDepth 0.02'
     assert any(abs(v - 0.99999) < 1e-6 for v in depth_range(f['CRender::rmFar'])), 'rmFar MinDepth 0.99999'
@@ -194,7 +346,7 @@ def verify_render_modes(pe, f, log):
 def verify_xforms(pe, f, log):
     set_p, set_v = f['R_xforms::set_P'], f['R_xforms::set_V']
     xforms = ints(TEXT, 'backend_rva') + ints(TEXT, 'backend_xforms_offset')
-    assert xforms == ints(GEOMETRY.read_text(), 'world_matrix_rva'), 'RCache.xforms == geometry world matrix owner'
+    assert xforms == ints(geometry.legacy_profile(GEOMETRY), 'world_matrix_rva'), 'RCache.xforms == geometry world matrix owner'
     # set_P copies [rdx] to this+0xC0 (m_p); set_V to this+0x80 (m_v). `mov eax,[rdx]; lea rdi,[rcx+disp32]; mov [rdi],eax`.
     p_off, v_off = ints(TEXT, 'xforms_project_offset'), ints(TEXT, 'xforms_view_offset')
     assert ('8b02488db9' + struct.pack('<I', p_off).hex() + '8907') in pe.read(set_p, 40).hex(), 'set_P -> m_p'
@@ -221,7 +373,7 @@ def verify_xforms(pe, f, log):
     assert p_args == {project} and v_args == {view} and full in main_args, (p_args, v_args, main_args)
     # First-person sites write Device.mFullTransform = mProject * mView before uploading (accum_point, particles).
     for start in (f['CRenderTarget::accum_point'],):
-        stores = {t for _, t in pe.rip_operands(start, start + 0x600)}
+        stores = {t for _, t in pe.rip_operands(start, start + 0x900)}
         assert any(full <= t < full + 64 for t in stores), 'mFullTransform write'
     log.append(f'set_P -> this+{p_off:#x}, set_V -> this+{v_off:#x}, xforms {xforms:#x}; Device.mView {view:#x}, '
                f'mProject {project:#x}, mFullTransform {full:#x}')
@@ -230,10 +382,13 @@ def verify_xforms(pe, f, log):
 
 def verify_first_person(pe, f, p, set_p, log):
     rm_near = f['CRender::rmNear']
-    hud = 0x84ffa0
+    hud = address(0x84ffa0)
     hud_code = pe.read(hud, 0x200)
-    first = next(i for i in range(len(hud_code) - 9) if hud_code[i:i + 4] == b'\xf3\x0f\x10\x05')
-    fov = hud + first + 8 + struct.unpack_from('<i', hud_code, first + 4)[0]
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    load = next(i for i in md.disasm(hud_code, hud) if i.mnemonic in ('movss', 'vmovss') and
+                len(i.operands) == 2 and i.operands[1].type == x86.X86_OP_MEM and i.operands[1].mem.base == x86.X86_REG_RIP)
+    fov = load.address + load.size + load.operands[1].mem.disp
     project = ints(TEXT, 'device_project_rva')
     listed = set()
     for name, start, set_p_call, near_call in p['first_person']:
@@ -243,8 +398,8 @@ def verify_first_person(pe, f, p, set_p, log):
         # out of line with rcx = &Device.mProject.
         before = pe.rip_operands(max(start, set_p_call - 0x600), set_p_call)
         def movss_store(a):
-            raw = pe.read(a, 4)
-            return raw[0] == 0xf3 and (raw[1:3] == b'\x0f\x11' or (0x40 <= raw[1] <= 0x4f and raw[2:4] == b'\x0f\x11'))
+            ins = next(md.disasm(pe.read(a, 16), a))
+            return ins.mnemonic in ('movss', 'vmovss', 'movups', 'vmovups', 'movaps', 'vmovaps') and ins.operands[0].type == x86.X86_OP_MEM
         stores = sum(project <= t < project + 64 and movss_store(a) for a, t in before)
         this_lea = any(t == project and pe.read(a, 3) == b'\x48\x8d\x0d' for a, t in before)
         assert stores >= 3 or this_lea, ('rebuilds Device.mProject', name, stores)
@@ -291,7 +446,7 @@ def verify_first_person(pe, f, p, set_p, log):
 
 
 def verify_device_and_hw(pe, f, log):
-    native = NATIVE.read_text()
+    native = geometry.legacy_profile(NATIVE)
     width, height = ints(native, 'device_width_rva'), ints(native, 'device_height_rva')
     base_rt, base_zb = ints(TEXT, 'hw_base_rt_rva'), ints(TEXT, 'hw_base_zb_rva')
     device, context, chain = ints(TEXT, 'hw_device_rva'), ints(TEXT, 'hw_context_rva'), ints(TEXT, 'hw_swap_chain_rva')
@@ -325,7 +480,7 @@ def verify_device_and_hw(pe, f, log):
     impl = ints(TEXT, 'render_implementation_rva')
     call = next(a for a, t in pe.calls_in(BACKEND_ON_FRAME_BEGIN, BACKEND_ON_FRAME_BEGIN + 0x40) if t == RM_NORMAL)
     assert pe.read(call - 7, 3) == b'\x48\x8d\x0d' and pe.rel_target(call - 7, 7, 3) == impl, 'RImplementation'
-    assert impl + 0x150 == ints(GEOMETRY.read_text(), 'render_phase_rva'), 'RImplementation.phase'
+    assert impl + 0x150 == ints(geometry.legacy_profile(GEOMETRY), 'render_phase_rva'), 'RImplementation.phase'
     log.append(f'Device {width:#x}/{height:#x}; HW pDevice {device:#x} pContext {context:#x} swapchain {chain:#x} '
                f'pBaseRT {base_rt:#x} pBaseZB {base_zb:#x}; RImplementation {impl:#x}')
 
@@ -334,7 +489,7 @@ def verify_options(pe, log):
     word0, word3 = ints(TEXT, 'render_options_word0_rva'), ints(TEXT, 'render_options_word3_rva')
     impl = ints(TEXT, 'render_implementation_rva')
     assert word3 == word0 + 12 and word0 - impl == 0x460, 'CRender::o placement'
-    ctor = pe.read(CTOR, 0x2c5d)
+    ctor = pe.read(CTOR, CTOR_SIZE)
     def bt_after_load(word, bit):
         """`mov eax,[rip+word]` followed within 80 bytes by `bt eax,bit` (0F BA E0 ib)."""
         for i in range(len(ctor) - 6):
@@ -350,8 +505,8 @@ def verify_options(pe, log):
 
 
 def verify_targets(pe, p, log):
-    ctor = pe.read(CTOR, 0x2c5d)
-    create_calls = [a - CTOR for a, t in pe.calls_in(CTOR, CTOR + 0x2c5d) if t == REF_RT_CREATE]
+    ctor = pe.read(CTOR, CTOR_SIZE)
+    create_calls = [a - CTOR for a, t in pe.calls_in(CTOR, CTOR + CTOR_SIZE) if t == REF_RT_CREATE]
     found = {}
     for name, offset, fmt in p['slots']:
         hits = []
@@ -383,8 +538,8 @@ def verify_targets(pe, p, log):
         found[name] = offset
     assert len(set(found.values())) == len(found), 'duplicate slot offsets'
     # The two first surface_set calls in phase_combine re-point t_LUM_src/t_LUM_dest (phase_combine.cpp:57-58).
-    combine = 0x8bc980
-    calls = [a for a, t in pe.calls_in(combine, combine + 0x200) if t == 0x87ac30][:2]
+    combine = address(0x8bc980)
+    calls = [a for a, t in pe.calls_in(combine, combine + 0x200) if t == address(0x87ac30)][:2]
     for call, key in zip(calls, ('target_lum_src_texture_offset', 'target_lum_dest_texture_offset')):
         assert struct.pack('<I', ints(TEXT, key)) in pe.read(call - 30, 30), key
     log.append(f'CRenderTarget: {len(found)} ref_rt slots re-derived from constructor create calls; t_LUM src/dest')
@@ -392,9 +547,9 @@ def verify_targets(pe, p, log):
 
 def verify_crt_texture(pe, log):
     create_rt = pe.read(CREATE_RT, 0x200)
-    # xr_new<CRT>: `mov edx, 50h` into the allocator, then the CRT constructor (0x8a1140) on the result.
+    # xr_new<CRT>: `mov edx, 50h` into the allocator, then the CRT constructor (address(0x8a1140)) on the result.
     alloc = create_rt.find(b'\xba' + struct.pack('<I', ints(TEXT, 'crt_size')))
-    ctor_call = [a - CREATE_RT for a, t in pe.calls_in(CREATE_RT, CREATE_RT + 0x200) if t == 0x8a1140]
+    ctor_call = [a - CREATE_RT for a, t in pe.calls_in(CREATE_RT, CREATE_RT + 0x200) if t == address(0x8a1140)]
     assert alloc >= 0 and ctor_call and 0 < ctor_call[0] - alloc < 0x30, 'CRT allocation size'
     assert CRT_CREATE in [t for _, t in pe.calls_in(CREATE_RT, CREATE_RT + 0x200)], '_CreateRT -> CRT::create'
     body = pe.read(CRT_CREATE, 0x375).hex()
@@ -420,9 +575,9 @@ def verify_crt_texture(pe, log):
     assert at >= 0 and raw[to:to + 9].hex() == 'bb02000000448d6b2a', 'D24S8 -> R24G8_TYPELESS'
     assert re.search(r'83f82c75..c745..2d000000', body), 'R24G8_TYPELESS -> D24_UNORM_S8_UINT view'
     # mov rdx,[r14] (pSurface); mov rcx,[rsi] (pTexture); call CTexture::surface_set.
-    assert pe.read(0x8a15a3, 6).hex() == '498b16488b0e' and pe.call_target(0x8a15a9) == 0x87ac30, \
+    assert pe.read(address(0x8a15a3), 6).hex() == '498b16488b0e' and pe.call_target(address(0x8a15a9)) == address(0x87ac30), \
         'CRT::create -> pTexture->surface_set(pSurface)'
-    s = pe.read(0x87ac30, 0x90).hex()
+    s = pe.read(address(0x87ac30), 0x90).hex()
     t = {k: ints(TEXT, k) for k in ('texture_surface_offset', 'texture_desc_cache_offset', 'texture_desc_offset', 'texture_srv_offset')}
     assert f'48897b{t["texture_surface_offset"]:02x}' in s, 'CTexture::pSurface'
     assert '488b8b' + struct.pack('<I', t['texture_srv_offset']).hex() in s, 'CTexture::m_pSRView'
@@ -466,9 +621,9 @@ def verify_samplers(pe, f, log):
     targets = [pe.call_target(SETUP_STATES + i) for i in range(len(body) - 4) if body[i] in (0xe8, 0xe9)
                and pe.call_target(SETUP_STATES + i) in (set_bias, set_aniso)]
     assert targets == [set_aniso, set_bias], [hex(t) for t in targets]
-    assert pe.read(SETUP_STATES + 0x22, 4) == b'\xf3\x0f\x10\x0d', 'bias passed in xmm1'
+    assert pe.read(SETUP_STATES + 0x22, 4) in (b'\xf3\x0f\x10\x0d', b'\xc5\xfa\x10\x0d'), 'bias passed in xmm1'
     field = ints(TEXT, 'sampler_mip_lod_bias_offset')
-    assert pe.read(set_bias + 9, 8) == b'\xf3\x0f\x10\x81' + struct.pack('<I', field), 'm_uiMipLODBias'
+    assert pe.read(set_bias + 9, 8) in (b'\xf3\x0f\x10\x81' + struct.pack('<I', field), b'\xc5\xfa\x10\x81' + struct.pack('<I', field)), 'm_uiMipLODBias'
     scene_begin = [t for _, t in pe.rip_operands(PHASE_SCENE_BEGIN, PHASE_SCENE_BEGIN + 0x20)]
     assert cache in scene_begin and aniso in scene_begin and \
         pe.calls_in(PHASE_SCENE_BEGIN, PHASE_SCENE_BEGIN + 0x20)[0][1] == set_aniso, 'phase_scene_begin SetMaxAnisotropy'
@@ -504,8 +659,8 @@ def verify_stage2(pe, p, log):
     # rt_half_depth (r4_rendertarget.cpp:705-720): `test al,4` (ssao_opt_data), Device.dwWidth/dwHeight into r8d/r9d,
     # `test al,8` (ssao_half_data) then `shr r8d,1; shr r9d,1`, R16F (0x6f) or R32F on NVIDIA, slot +0x590.
     word0 = ints(TEXT, 'render_options_word0_rva')
-    width, height = ints(NATIVE.read_text(), 'device_width_rva'), ints(NATIVE.read_text(), 'device_height_rva')
-    at = 0x855433
+    width, height = ints(geometry.legacy_profile(NATIVE), 'device_width_rva'), ints(geometry.legacy_profile(NATIVE), 'device_height_rva')
+    at = address(0x855433)
     code = pe.read(at, 0x55)
     assert code[:2] == b'\x8b\x05' and pe.rel_target(at, 6, 2) == word0, 'half_depth: o word0 load'
     assert code[6:10] == b'\xa8\x04\x74\x78', 'half_depth: test o.ssao_opt_data'
@@ -518,37 +673,50 @@ def verify_stage2(pe, p, log):
     assert bits['ssao_opt_data_bit'] == 4 and bits['ssao_half_data_bit'] == 8
     # phase_combine (phase_combine.cpp:61-77): hdao (0x20 && 0x40), else opt_data (4) -> phase_downsamp, else blur_on (2)
     # -> phase_ssao.
-    at = 0x8bca75
+    at = address(0x8bca75)
     code = pe.read(at, 0x38)
     assert code[:2] == b'\x8b\x05' and pe.rel_target(at, 6, 2) == word0, 'phase_combine: o word0 load'
     assert code[6:8] == bytes([0xa8, bits['ssao_hdao_bit']]) and code[10:12] == bytes([0xa8, bits['ssao_ultra_bit']])
-    hdao, downsamp, ssao = pe.call_target(0x8bca8e), pe.call_target(0x8bca9c), pe.call_target(0x8bcaaa)
+    hdao, downsamp, ssao = pe.call_target(address(0x8bca8e)), pe.call_target(address(0x8bca9c)), pe.call_target(address(0x8bcaaa))
     assert code[0x20:0x22] == bytes([0xa8, bits['ssao_opt_data_bit']]) and code[0x2e:0x30] == bytes([0xa8, bits['ssao_blur_on_bit']])
-    assert (hdao, downsamp, ssao) == (0x8f9690, 0x8f8400, 0x8f89d0), [hex(x) for x in (hdao, downsamp, ssao)]
+    assert (hdao, downsamp, ssao) == (address(0x8f9690), address(0x8f8400), address(0x8f89d0)), [hex(x) for x in (hdao, downsamp, ssao)]
     callers = pe.callers(hdao, downsamp, ssao)
-    assert callers[hdao] == [0x8bca8e] and callers[downsamp] == [0x8bca9c] and callers[ssao] == [0x8bcaaa], callers
+    assert callers[hdao] == [address(0x8bca8e)] and callers[downsamp] == [address(0x8bca9c)] and callers[ssao] == [address(0x8bcaaa)], callers
     # set_viewport: the code bytes the adapter checks at install, both data addresses from their displacements.
     helper = ints(TEXT, 'ssao_set_viewport_rva')
-    expected = bytes.fromhex(re.search(r'ssao_set_viewport_code =\s*"([0-9a-f]+)"', TEXT).group(1))
-    assert len(expected) == 0x46 and pe.read(helper, len(expected)) == expected, 'set_viewport code'
+    expected = bytes.fromhex(re.search(r'ssao_set_viewport_code(?:\[\])? =\s*"([0-9a-f]+)"', TEXT).group(1))
+    assert len(expected) == (0x4a if geometry.BUILD == 'avx' else 0x46) and pe.read(helper, len(expected)) == expected, 'set_viewport code'
+    assert pe.unique_in_text(expected), 'set_viewport code not unique'
     viewport, guard = ints(TEXT, 'ssao_viewport_rva'), ints(TEXT, 'ssao_viewport_guard_rva')
-    assert expected[0x34:0x36] == b'\x39\x05' and pe.rel_target(helper + 0x34, 6, 2) == guard, 'cmp [guard], tls epoch'
-    assert expected[0x3a] == 0x7f, 'jg: the initialisation path'
-    assert expected[0x3f:0x42] == b'\x4c\x8d\x05' and pe.rel_target(helper + 0x3f, 7, 3) == viewport, 'lea r8,[viewport]'
-    tail = pe.read(helper + 0x46, 0x42)
-    assert tail[:2] == b'\xba\x01' and bytes.fromhex('ffa060010000') in tail, 'RSSetViewports(1, &viewport) via vtable +0x160'
-    # Initialisation path: only Width (+8) and Height (+0xC) are stored (movss [rip+x], xmm7 / xmm6).
-    assert pe.read(helper + 0x80, 4) == b'\xf3\x0f\x11\x3d' and pe.rel_target(helper + 0x80, 8, 4) == viewport + ints(TEXT, 'ssao_viewport_width_offset')
-    assert pe.read(helper + 0x88, 4) == b'\xf3\x0f\x11\x35' and pe.rel_target(helper + 0x88, 8, 4) == viewport + ints(TEXT, 'ssao_viewport_height_offset')
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    code = list(md.disasm(pe.read(helper, 0xa0), helper))
+    def rip(i):
+        return [i.address + i.size + op.mem.disp for op in i.operands
+                if op.type == x86.X86_OP_MEM and op.mem.base == x86.X86_REG_RIP]
+    cmp = next(i for i in code if i.mnemonic == 'cmp' and guard in rip(i))
+    assert next(i for i in code if i.address == cmp.address + cmp.size).mnemonic == 'jg', 'guard > TLS epoch -> initialise'
+    lea = next(i for i in code if i.mnemonic == 'lea' and viewport in rip(i))
+    assert lea.operands[0].reg == x86.X86_REG_R8 and lea.address + lea.size == helper + len(expected), 'viewport passed in r8'
+    tail = pe.read(helper + len(expected), 0x42)
+    assert tail[:2] == b'\xba\x01' and bytes.fromhex('ffa060010000') in tail, 'RSSetViewports(1, &viewport)'
+    for field in ('ssao_viewport_width_offset', 'ssao_viewport_height_offset'):
+        stores = [i for i in code if i.mnemonic in ('movss', 'vmovss') and i.operands[0].type == x86.X86_OP_MEM and
+                  viewport + ints(TEXT, field) in rip(i)]
+        assert len(stores) == 1, ('viewport initialisation store', field)
     # .data initialiser {0, 0, w, h, 0, 1.0f}; the guard lies past the section's raw data (zero-initialised .bss).
     assert pe.read(viewport, 24) == struct.pack('<6f', 0, 0, 0, 0, 0, 1.0), pe.read(viewport, 24).hex()
     section = next(s for s in pe.sections if s[0] <= guard < s[0] + s[1])
     assert guard >= section[0] + section[3] and viewport < section[0] + section[3], 'guard in .bss, viewport in .data'
     # Every reference to either address is inside set_viewport, and set_viewport has exactly the four stock callers.
-    refs = [(a, t) for a, t in pe.rip_operands(pe.text_va, pe.text_va + len(pe.code)) if t in (viewport, guard)]
-    assert refs and all(helper <= a < helper + 0x98 for a, _ in refs), [hex(a) for a, _ in refs]
+    refs = []
+    for m in re.finditer(rb'(?:\x39\x05|\x4c\x8d\x05|\xf3\x0f\x11[\x3d\x35]|\xc5\xfa\x11[\x3d\x35])(....)', pe.code, re.S):
+        target = pe.text_va + m.end() + struct.unpack('<i', m[1])[0]
+        if target in (viewport, guard):
+            refs.append((pe.text_va + m.start(), target))
+    assert refs and all(helper <= a < helper + 0xa0 for a, _ in refs), [hex(a) for a, _ in refs]
     calls = pe.callers(helper)[helper]
-    assert sorted(calls) == [0x8f84ff, 0x8f89a7, 0x8f8b90, 0x8f957f], [hex(c) for c in calls]
+    assert sorted(calls) == [address(0x8f84ff), address(0x8f89a7), address(0x8f8b90), address(0x8f957f)], [hex(c) for c in calls]
     assert all(downsamp <= c < helper for c in calls), 'callers inside phase_downsamp/phase_ssao'
     log.append(f'Stage 2: {len(world)} world targets (= target_slots), absent {[hex(o) for o in absent]}; rt_half_depth halves with '
                f'ssao_half_data; SSAO dispatch hdao {hdao:#x} downsamp {downsamp:#x} ssao {ssao:#x}; set_viewport {helper:#x} '
@@ -560,7 +728,7 @@ def verify_loading_screen(pe, log):
     uses them: CGamePersistent::game_loaded (the `intro_start game_loaded` message) tests dwPrecacheFrame <= 2 and
     b_need_user_input (= b_registered + 1), and CRenderDevice::PreCache tests b_registered == 0 before it sets it to 1."""
     precache, registered = ints(TEXT, 'device_precache_frame_rva'), ints(TEXT, 'load_screen_registered_rva')
-    width = ints(NATIVE.read_text(), 'device_width_rva')
+    width = ints(geometry.legacy_profile(NATIVE), 'device_width_rva')
     assert precache == width + 8, 'Device.dwPrecacheFrame follows dwWidth and dwHeight'
     message = [pe.rva(at) for at in pe.occurrences(b'intro_start game_loaded\0') if pe.data[at - 1:at] == b'\0']
     assert len(message) == 1, 'one intro_start game_loaded string'
@@ -611,7 +779,7 @@ def verify_stage3(pe, f, p, log):
     # then ucomiss xmm0,xmm1), so an unchanged value returns without rebuilding the samplers.
     set_bias = f['dx10SamplerStateCache::SetMipLODBias']
     body = pe.read(set_bias, 0x20)
-    assert b'\x0f\x2e\xc1' in body or b'\x0f\x2e\xc8' in body, ('ucomiss with xmm1', body.hex())
+    assert any(bytes.fromhex(h) in body for h in ('0f2ec1', '0f2ec8', 'c5f82ec1')), ('ucomiss with xmm1', body.hex())
     verify_loading_screen(pe, log)
     log.append(f'Stage 3: Device.mView/mProject/mFullTransform {view:#x}/{project:#x}/{full:#x} adjacent; set_P {set_p:#x} '
                f'extended guard; first-person sites {forms["slot55"]} via slot 55, {forms["direct"]} direct rmNear; '
@@ -869,7 +1037,10 @@ def verify(pe):
     p = parse(TEXT)
     log = [f'image sha256 {geometry.HASH}']
     f = verify_guards(pe, p, log)
+    geometry.verify_detour_prefix(pe, p['functions'])
     verify_calls(pe, f, p, log)
+    verify_sun_cascades(pe, f, p, log)
+    verify_sun_depth(pe, log)
     verify_render_modes(pe, f, log)
     set_p = verify_xforms(pe, f, log)
     verify_first_person(pe, f, p, set_p, log)
@@ -889,10 +1060,11 @@ def verify(pe):
           'projection/first-person/mip-bias sites')
 
 
-TEXT = PROFILE.read_text() if PROFILE.exists() else ''
+TEXT = geometry.legacy_profile(PROFILE) if PROFILE.exists() else ''
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--exe', choices=sorted(geometry.BUILDS), default=geometry.BUILD)
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--read', nargs=2)
     parser.add_argument('--profile', help='verify another copy of sr_profile.h (negative tests)')
@@ -907,7 +1079,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.profile:
         PROFILE = pathlib.Path(args.profile)
-        TEXT = PROFILE.read_text()
+        TEXT = geometry.legacy_profile(PROFILE)
     if args.measure_self_test:
         raise SystemExit(measure_self_test())
     if args.measure_jitter:

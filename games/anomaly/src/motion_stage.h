@@ -31,6 +31,7 @@
 //   context: run the engine's draw, then the invalidation replay if marked, then put the stock shaders (VS, PS and, for
 //   a swapped chain, HS and DS) back so the engine's shader cache matches the device again.
 // Rendering-readiness stays false: this produces a motion target, nothing consumes it yet.
+#include "build_profile.h"
 #include <rescaleframe/game_api.h>
 #include <cstddef>
 #include <cstdint>
@@ -50,7 +51,8 @@ void configure(const MotionOptions&, rsf_game_log_fn log, void* user) noexcept;
 const MotionOptions& options() noexcept;
 // After the observer's and geometry hooks on the verified image. True when not enabled. A refusal logs and leaves
 // every shader and target stock.
-bool install(std::byte* image, std::uint32_t image_size) noexcept;
+// `build` is the exact executable profile the observer selected (build_profile.h); image_size must be its SizeOfImage.
+bool install(std::byte* image, std::uint32_t image_size, const BuildProfile& build) noexcept;
 bool quiesce() noexcept;
 bool active() noexcept;
 // Log lines for the observer's periodic report. Nothing when inactive.

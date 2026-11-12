@@ -3,17 +3,17 @@
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/version.h>
 #include "native_observer.h"
-#include "native_profile.h"
+#include "build_profile.h"
 
 namespace {
 rsf_detection detect(const rsf_game_probe* probe) noexcept {
     if (!probe || probe->struct_size < sizeof(*probe) || probe->pe_machine != 0x8664)
         return RSF_GAME_UNKNOWN;
-    const bool standard = rsf_game::equal_ascii(probe->executable_name_utf8, "AnomalyDX11.exe") &&
-        rsf_game::equal_ascii(probe->sha256_hex, rsf::anomaly::dx11_hash);
-    const bool avx = rsf_game::equal_ascii(probe->executable_name_utf8, "AnomalyDX11AVX.exe") &&
-        rsf_game::equal_ascii(probe->sha256_hex, rsf::anomaly::avx_hash);
-    return standard || avx ? RSF_GAME_RECOGNIZED : RSF_GAME_UNKNOWN;
+    // Exactly one of the profiled builds (build_profile.h): both name and SHA-256 must match the same entry.
+    for (const auto& build : rsf::anomaly::build_profiles)
+        if (rsf_game::equal_ascii(probe->executable_name_utf8, build.executable) &&
+            rsf_game::equal_ascii(probe->sha256_hex, build.sha256)) return RSF_GAME_RECOGNIZED;
+    return RSF_GAME_UNKNOWN;
 }
 }
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(

@@ -2,7 +2,7 @@
 #include "native_observer.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
-#include "native_profile.h"
+#include "build_profile.h"
 #include "fg_stage.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
@@ -28,7 +28,9 @@ const char* reason = "Native rendering has not been prepared.";
 rsf_game_host_services host{};
 HookSet hooks;
 std::byte* image{};
-std::array<void*, native_sites.size()> originals{};
+// The exact build prepare() selected; every native read and site below comes from its tables.
+const BuildProfile* build{};
+std::array<void*, native_site_count> originals{};
 NativeObservation observation{sizeof(observation), observation_abi};
 struct Invocation {
     bool observe;
@@ -50,13 +52,14 @@ void render_begin(void* self) {
     if (call.observe) {
         std::lock_guard lock(observation_guard);
         ++observation.render_frames;
-        observation.engine_frame = *reinterpret_cast<const uint32_t*>(image + device_frame_rva);
-        observation.width = *reinterpret_cast<const uint32_t*>(image + device_width_rva);
-        observation.height = *reinterpret_cast<const uint32_t*>(image + device_height_rva);
+        observation.engine_frame = *reinterpret_cast<const uint32_t*>(image + build->native->device_frame_rva);
+        observation.width = *reinterpret_cast<const uint32_t*>(image + build->native->device_width_rva);
+        observation.height = *reinterpret_cast<const uint32_t*>(image + build->native->device_height_rva);
     }
     // Frame generation: the source frame's render begin (inert unless FG installed the bridge at cold start).
-    if (call.observe) fg::render_begin(*reinterpret_cast<const uint32_t*>(image + device_frame_rva),
-        *reinterpret_cast<const uint32_t*>(image + device_width_rva), *reinterpret_cast<const uint32_t*>(image + device_height_rva));
+    if (call.observe) fg::render_begin(*reinterpret_cast<const uint32_t*>(image + build->native->device_frame_rva),
+        *reinterpret_cast<const uint32_t*>(image + build->native->device_width_rva),
+        *reinterpret_cast<const uint32_t*>(image + build->native->device_height_rva));
 }
 void render_end(void* self) {
     Invocation call;
@@ -145,13 +148,14 @@ void reset_end(void* self) {
     Invocation call;
     reinterpret_cast<Unary>(originals[7])(self);
 }
-std::array<HookSite, native_sites.size()> sites() noexcept {
-    const std::array<void*, native_sites.size()> replacements{
+std::array<HookSite, native_site_count> sites() noexcept {
+    const std::array<void*, native_site_count> replacements{
         reinterpret_cast<void*>(&render_begin), reinterpret_cast<void*>(&render_end),
         reinterpret_cast<void*>(&camera), reinterpret_cast<void*>(&scene),
         reinterpret_cast<void*>(&screen_ui), reinterpret_cast<void*>(&target_copy),
         reinterpret_cast<void*>(&reset_begin), reinterpret_cast<void*>(&reset_end)};
-    std::array<HookSite, native_sites.size()> result{};
+    std::array<HookSite, native_site_count> result{};
+    const auto& native_sites = build->native->native_sites;
     for (size_t i = 0; i < result.size(); ++i)
         result[i] = {native_sites[i].name, native_sites[i].rva, native_sites[i].expected,
             replacements[i], &originals[i]};
@@ -168,27 +172,33 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try {
     if (!length || length >= 32768) return RSF_ERROR_NATIVE_REFUSED;
     const auto* separator = std::wcsrchr(path, L'\\');
     const auto* name = separator ? separator + 1 : path;
-    if (_wcsicmp(name, L"AnomalyDX11.exe")) {
-        reason = "Native sites belong to the standard DX11 executable, not this process.";
+    bool profiled_name = false;
+    for (const auto& candidate : build_profiles) profiled_name |= !_wcsicmp(name, candidate.executable_wide);
+    if (!profiled_name) {
+        reason = "Native sites belong to the profiled DX11 executables (standard or AVX), not this process.";
         return RSF_ERROR_NATIVE_REFUSED;
     }
     std::string hash;
-    if (!rsf::sha256_file(path, hash) || hash != dx11_hash) {
-        reason = "Running executable SHA-256 does not match the guarded native profile.";
+    const BuildProfile* selected = nullptr;
+    if (!rsf::sha256_file(path, hash) || !(selected = find_build(std::wstring_view{name}, hash))) {
+        reason = "Running executable SHA-256 does not match a guarded native profile.";
         return RSF_ERROR_NATIVE_REFUSED;
     }
-    image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
-    const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(image + dos->e_lfanew);
-    if (pe->OptionalHeader.SizeOfImage != native_image_size) {
+    auto* const module = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+    const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(module + dos->e_lfanew);
+    if (pe->OptionalHeader.SizeOfImage != selected->image_size()) {
         reason = "Running image size differs from the verified build."; return RSF_ERROR_NATIVE_REFUSED;
     }
-    for (const auto& site : native_sites) {
-        if (std::memcmp(image + site.rva, site.expected.data(), site.expected.size())) {
+    for (const auto& site : selected->native->native_sites) {
+        if (std::memcmp(module + site.rva, site.expected.data(), site.expected.size()) ||
+            !unique_guards_match(module, selected->image_size(), selected->native->native_unique_guards, site.rva)) {
             reason = "A native hook's expected instructions do not match; no hook was written.";
             return RSF_ERROR_NATIVE_REFUSED;
         }
     }
+    image = module;
+    build = selected;
     host = *args->host;
     prepared = true;
     reason = "Exact native boundary sites prepared; temporal SR/FG is not validated.";
@@ -202,22 +212,26 @@ rsf_result start(const rsf_game_start_args* args) noexcept {
     HMODULE pinned{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
         reinterpret_cast<LPCWSTR>(reinterpret_cast<void*>(&start)), &pinned)) return RSF_ERROR_NATIVE_REFUSED;
-    const bool installed = hooks.created() ? hooks.enable() : hooks.install(image, native_image_size, sites());
+    const bool installed = hooks.created() ? hooks.enable() : hooks.install(image, build->image_size(), sites());
     if (!installed) { reason = "Guarded native detour installation refused."; return RSF_ERROR_NATIVE_REFUSED; }
     // Geometry lifetime/identity hooks are a separate guarded set. Refusal leaves boundary observation intact
     // and simply produces no geometry identities.
-    geometry_installed = geometry::install_native_geometry(image, native_image_size, dx11_hash);
+    geometry_installed = geometry::install_native_geometry(image, build->image_size(), *build);
     // SR Stage 1 hooks, only when selected; a refusal leaves the game stock and observation intact.
-    if (sr::options().selected() && !sr::install(image, native_image_size)) report("Anomaly SR stage not installed; rendering is stock.");
+    if (sr::options().selected() && !sr::install(image, build->image_size(), *build)) report("Anomaly SR stage not installed; rendering is stock.");
     // Motion MRT, only when Motion=1; a refusal leaves every shader and target stock.
-    if (motion::options().enabled && !motion::install(image, native_image_size)) report("Anomaly motion stage not installed; shaders stay stock.");
+    if (motion::options().enabled && !motion::install(image, build->image_size(), *build)) report("Anomaly motion stage not installed; shaders stay stock.");
     active.store(true, std::memory_order_release);
     reason = geometry_installed
         ? "Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
         : "Native boundaries active; geometry identity hooks refused; observation does not establish temporal SR/FG execution.";
     lock.unlock();
-    report(geometry_installed ? "Anomaly guarded native hooks installed, including geometry identity. No executable file was modified."
-        : "Anomaly guarded native hooks installed; geometry identity hooks were refused. No executable file was modified.");
+    char text[256]{};
+    std::snprintf(text, sizeof(text), geometry_installed
+        ? "Anomaly guarded native hooks installed on the %s build (%s), including geometry identity. No executable file was modified."
+        : "Anomaly guarded native hooks installed on the %s build (%s); geometry identity hooks were refused. No executable file was modified.",
+        build->label, build->executable);
+    report(text);
     return RSF_OK;
 }
 rsf_result quiesce(const rsf_game_control_args* args) noexcept {

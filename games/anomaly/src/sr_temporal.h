@@ -27,6 +27,10 @@ ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, cons
 struct TemporalOptions {
     uint32_t stage{};                    // 4: inputs only (bilinear output), 5: temporal SR
     bool exposure_auto{};                // SRExposure=auto: no exposure texture, backend auto exposure
+    // SRColourTransport: 0 (default) hands DLSS the linear, already exposed colour with its HDR flag on. 1 selects
+    // the Runtime's display-range encoding with HDR off; its knee is tuned for unexposed HDR and squeezes this
+    // game's 0..1 image into about half of the 8-bit range DLSS quantizes LDR input to.
+    bool colour_transport{};
     bool first_person_zero{true};        // SRFirstPersonZero: unwritten first-person pixels get zero motion
     CutRule cut{};                       // SRCutDistance (m), SRCutAngle (degrees)
     std::string streamline, fidelityfx, xess;   // UTF-8 vendor runtime directories

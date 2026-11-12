@@ -10,7 +10,8 @@
 #include <cstdint>
 
 namespace rsf::anomaly::sr {
-inline constexpr float min_scale = 0.5f, max_scale = 1.0f, default_scale = 0.67f;
+// 0.33 admits Ultra Performance (a third of the output, 853 of 2560). Stage 2 was measured from 0.5 up.
+inline constexpr float min_scale = 0.33f, max_scale = 1.0f, default_scale = 0.67f;
 
 // NaN, infinities and values <= 0 select the default; everything else is clamped to [min_scale, max_scale].
 inline float clamp_scale(float requested) noexcept {

@@ -9,11 +9,11 @@
 //    by an rmNear call (slot 55 or direct);
 //  * frame_end/report/quiesce are inert while nothing is installed;
 //  * SRStage/SRScale/SRJitter/SRMipBias parsing (Stage 2 and 3 keys, clamping, defaults).
-#include "geometry_profile.h"
+#include "anomaly_build_select.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
-#include "sr_profile.h"
 #include "sr_stage.h"
+#include "adapter_options.h"
 
 #include <windows.h>
 #include <cstdio>
@@ -24,6 +24,8 @@
 
 namespace {
 using namespace rsf::anomaly;
+// The build profile under test (argument "standard" or "avx"); every site and address below comes from its tables.
+const BuildProfile* B{};
 int failures = 0;
 #define CHECK(condition) do { if (!(condition)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
 
@@ -44,14 +46,15 @@ void put_hex(std::byte* at, const char* hex) {
     for (std::size_t i = 0; hex[2 * i]; ++i) at[i] = std::byte(digit(hex[2 * i]) * 16 + digit(hex[2 * i + 1]));
 }
 void fill_guards(std::vector<std::byte>& image) {
-    for (const auto& site : sr::sr_function_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
-    for (const auto& guard : sr::sr_unique_guards) put_hex(image.data() + guard.rva, guard.expected_hex);
-    for (const auto& site : sr::sr_call_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
-    put_hex(image.data() + sr::ssao_set_viewport_rva, sr::ssao_set_viewport_code);
+    for (const auto& site : B->sr->sr_function_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
+    for (const auto& guard : B->sr->sr_unique_guards) put_hex(image.data() + guard.rva, guard.expected_hex);
+    for (const auto& site : B->sr->sr_call_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
+    for (const auto& site : B->sr->sun_depth_guards) put_hex(image.data() + site.rva, site.expected_hex);
+    put_hex(image.data() + B->sr->ssao_set_viewport_rva, B->sr->ssao_set_viewport_code);
 }
 
 void rm_near_slot() {
-    const auto sites = geometry::native_geometry_hook_sites();
+    const auto sites = geometry::native_geometry_hook_sites(*B);
     auto* base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
@@ -79,46 +82,57 @@ void rm_near_slot() {
 void install_refusals() {
     // Not selected: nothing to install, nothing refused.
     sr::configure({}, &collect, nullptr);
-    std::vector<std::byte> image(native_image_size);
-    CHECK(sr::install(image.data(), native_image_size) && !sr::active());
+    std::vector<std::byte> image(B->image_size());
+    CHECK(sr::install(image.data(), B->image_size(), *B) && !sr::active());
     sr::StageOptions options{};
     options.stage = 1;
     sr::configure(options, &collect, nullptr);
     CHECK(sr::options().selected());
     // Empty image: the first prologue guard fails.
-    CHECK(!sr::install(image.data(), native_image_size) && !sr::active());
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && !sr::active());
     CHECK(logged("guard mismatch at CRenderTarget::phase_scene_prepare"));
-    CHECK(!sr::install(image.data(), native_image_size - 0x1000) && logged("image size differs"));
+    CHECK(!sr::install(image.data(), B->image_size() - 0x1000, *B) && logged("image size differs"));
     // Every guard present except one byte past the 16-byte phase_blur prologue (its unique 17-byte guard).
     fill_guards(image);
-    image[sr::sr_function_sites[sr::site_phase_blur].rva + 16] ^= std::byte{0xff};
+    image[B->sr->sr_function_sites[sr::site_phase_blur].rva + 16] ^= std::byte{0xff};
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at CRenderTarget::phase_blur"));
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at CRenderTarget::phase_blur"));
     // A call site no longer a real call rel32 (an inlined or relinked phase_combine).
     fill_guards(image);
-    image[sr::sr_call_sites[3].rva] = std::byte{0x90};
+    image[B->sr->sr_call_sites[3].rva] = std::byte{0x90};
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at phase_combine -> phase_sunshafts"));
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at phase_combine -> phase_sunshafts"));
+    // The modern sun wrapper is guarded before any patch, including the distinguishing bytes beyond expected16.
+    for (const auto offset : {0u, 29u}) {
+        fill_guards(image);
+        image[B->sr->sr_function_sites[sr::site_sun_cascades].rva + offset] ^= std::byte{0xff};
+        lines.clear();
+        CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at CRender::render_sun_cascades"));
+    }
+    fill_guards(image);
+    image[B->sr->sr_call_sites[5].rva + 1] ^= std::byte{0x01};
+    lines.clear();
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at CRender::Render -> render_sun_cascades"));
     // All guards match, but the bytes are a heap buffer, not the mapped executable: HookSet refuses before any patch.
     fill_guards(image);
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guarded detour installation failed") && !sr::active());
-    for (const auto& site : sr::sr_function_sites)
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guarded detour installation failed") && !sr::active());
+    for (const auto& site : B->sr->sr_function_sites)
         CHECK(std::memcmp(image.data() + site.rva, site.expected.data(), 16) == 0);   // nothing was written
     // Stage 2: the SSAO helper's code is checked first, then every Stage 1 guard.
     options.stage = 2;
     sr::configure(options, &collect, nullptr);
     fill_guards(image);
-    image[sr::ssao_set_viewport_rva + 0x42] ^= std::byte{0x01};   // the viewport displacement
+    image[B->sr->ssao_set_viewport_rva + std::strlen(B->sr->ssao_set_viewport_code) / 2 - 4] ^= std::byte{0x01};   // the viewport displacement
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at set_viewport") && !sr::active());
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at set_viewport") && !sr::active());
     fill_guards(image);
-    image[sr::sr_function_sites[sr::site_phase_combine].rva] ^= std::byte{0xff};
+    image[B->sr->sr_function_sites[sr::site_phase_combine].rva] ^= std::byte{0xff};
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at CRenderTarget::phase_combine"));
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at CRenderTarget::phase_combine"));
     fill_guards(image);
     lines.clear();
-    CHECK(!sr::install(image.data(), native_image_size) && logged("guarded detour installation failed") && !sr::active());
+    CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guarded detour installation failed") && !sr::active());
     // Inert while not installed.
     lines.clear();
     sr::frame_end();
@@ -146,7 +160,7 @@ void options_from_ini() {
     CHECK(options.selected() && options.stage == 2 && options.scale == 0.67f && options.scale_defaulted);
     const struct { const wchar_t* text; float scale; bool defaulted; } scales[] = {
         {L"0.5", 0.5f, false}, {L"0.77", 0.77f, false}, {L"1.0", 1.0f, false}, {L" 0.6 ", 0.6f, false},
-        {L"0.25", 0.5f, false}, {L"2", 1.0f, false}, {L"0", 0.67f, true}, {L"-1", 0.67f, true},
+        {L"0.25", 0.33f, false}, {L"2", 1.0f, false}, {L"0", 0.67f, true}, {L"-1", 0.67f, true},
         {L"abc", 0.67f, true}, {L"0.7x", 0.67f, true}, {L"nan", 0.67f, true}};
     for (const auto& item : scales) {
         WritePrivateProfileStringW(L"Anomaly", L"SRScale", item.text, path);
@@ -178,7 +192,7 @@ void options_from_ini() {
     WritePrivateProfileStringW(L"Anomaly", L"SRStreamlineDir", L"C:\\sl", path);
     WritePrivateProfileStringW(L"Anomaly", L"SR", L"0", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"5", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRQuality", L"4", path);    // ultra performance: not offered, kept at Quality
+    WritePrivateProfileStringW(L"Anomaly", L"SRQuality", L"5", path);    // past ultra performance: not offered, kept at Quality
     WritePrivateProfileStringW(L"Anomaly", L"DLSSPreset", L"6", path);
     options = sr::read_options(path);
     CHECK(options.exposure_auto && !options.first_person_zero && options.cut.distance == 0.1f && options.cut.degrees == 45.0f &&
@@ -192,21 +206,21 @@ void options_from_ini() {
     CHECK(options.stage == 4 && options.sr_inputs() && options.temporal() && options.world_window());
     WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
     CHECK(!sr::read_options(path).sr_inputs());
-    // Stage 3: SRJitter (default 1), SRMipBias (offset, default -0.3, clamped [-2, 1], "off"), consecutive capture count.
+    // Stage 3: SRJitter (default 1), SRMipBias (offset, default 0, clamped [-2, 1], "off"), consecutive capture count.
     WritePrivateProfileStringW(L"Anomaly", L"SRScale", L"0.67", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", nullptr, path);
     options = sr::read_options(path);
     CHECK(options.stage == 3 && options.world_window() && options.selected() && options.jitter && options.mip_bias &&
-        options.mip_bias_offset == -0.3f && options.capture_count == 8);
+        options.mip_bias_offset == 0.0f && options.capture_count == 8);
     WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", L"99", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRJitter", L"0", path);
     options = sr::read_options(path);
     CHECK(options.capture_count == 32 && !options.jitter);
     const struct { const wchar_t* text; float offset; bool enabled; } biases[] = {
         {L"-0.3", -0.3f, true}, {L"0", 0.0f, true}, {L" -1 ", -1.0f, true}, {L"-5", -2.0f, true}, {L"3", 1.0f, true},
-        {L"off", -0.3f, false}, {L" OFF ", -0.3f, false}, {L"offset", -0.3f, true}, {L"abc", -0.3f, true}, {L"-0.5x", -0.3f, true},
-        {L"nan", -0.3f, true}, {L"", -0.3f, true}};
+        {L"off", 0.0f, false}, {L" OFF ", 0.0f, false}, {L"offset", 0.0f, true}, {L"abc", 0.0f, true}, {L"-0.5x", 0.0f, true},
+        {L"nan", 0.0f, true}, {L"", 0.0f, true}};
     for (const auto& item : biases) {
         WritePrivateProfileStringW(L"Anomaly", L"SRMipBias", item.text, path);
         bool enabled = !item.enabled;
@@ -216,7 +230,7 @@ void options_from_ini() {
         options = sr::read_options(path);
         CHECK(options.mip_bias_offset == item.offset && options.mip_bias == item.enabled);
     }
-    CHECK(sr::read_mip_bias(nullptr) == -0.3f);
+    CHECK(sr::read_mip_bias(nullptr) == 0.0f);
     WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);   // Stage 2 keeps its single-frame capture limit
     CHECK(sr::read_options(path).capture_count == 16);
     DeleteFileW(path);
@@ -225,20 +239,21 @@ void options_from_ini() {
 void stage3_install_refusals() {
     sr::StageOptions options{};
     options.stage = 3;
+    options.sun_depth_margin = 0;   // guards still authorize a later live enable
     sr::configure(options, &collect, nullptr);
-    std::vector<std::byte> image(native_image_size);
+    std::vector<std::byte> image(B->image_size());
     const auto refused_at = [&](const char* text) {
         lines.clear();
-        const bool ok = !sr::install(image.data(), native_image_size) && !sr::active() && logged(text);
+        const bool ok = !sr::install(image.data(), B->image_size(), *B) && !sr::active() && logged(text);
         if (!ok) for (const auto& line : lines) std::printf("  log: %s\n", line.c_str());
         return ok;
     };
     // set_P is called from the adapter: its 28-byte unique guard must match.
     fill_guards(image);
-    image[sr::sr_function_sites[sr::site_set_p].rva + 20] ^= std::byte{0x01};
+    image[B->sr->sr_function_sites[sr::site_set_p].rva + 20] ^= std::byte{0x01};
     CHECK(refused_at("guard mismatch at R_xforms::set_P"));
     fill_guards(image);
-    image[sr::sr_function_sites[sr::site_set_mip_lod_bias].rva + 12] ^= std::byte{0x01};   // the m_uiMipLODBias displacement
+    image[B->sr->sr_function_sites[sr::site_set_mip_lod_bias].rva + 12] ^= std::byte{0x01};   // the m_uiMipLODBias load
     CHECK(refused_at("guard mismatch at dx10SamplerStateCache::SetMipLODBias"));
     // Each first-person site must still upload with `call set_P` and then call rmNear.
     const auto put_call = [&](uint32_t at, uint32_t target) {
@@ -248,35 +263,76 @@ void stage3_install_refusals() {
     };
     const auto fill_sites = [&] {
         fill_guards(image);
-        for (const auto& site : sr::sr_first_person_sites) {
-            put_call(site.set_p_call, sr::sr_function_sites[sr::site_set_p].rva);
-            if (site.function_rva == 0x8d8420 || site.function_rva == 0x90dca0) put_call(site.rm_near_call, sr::sr_function_sites[sr::site_rm_near].rva);
+        for (const auto& site : B->sr->sr_first_person_sites) {
+            put_call(site.set_p_call, B->sr->sr_function_sites[sr::site_set_p].rva);
+            // CParticleEffect::Render and accum_point call rmNear directly (sr_function_sites 13 and 14); the others use slot 55.
+            if (site.function_rva == B->sr->sr_function_sites[13].rva || site.function_rva == B->sr->sr_function_sites[14].rva)
+                put_call(site.rm_near_call, B->sr->sr_function_sites[sr::site_rm_near].rva);
             else put_hex(image.data() + site.rm_near_call, "ff90b8010000");
         }
     };
     fill_sites();
     CHECK(refused_at("guarded detour installation failed"));   // every Stage 3 guard matched; the heap buffer is refused later
     fill_sites();
-    put_call(sr::sr_first_person_sites[2].set_p_call, sr::sr_function_sites[sr::site_set_p].rva + 0x10);   // calls elsewhere
+    put_call(B->sr->sr_first_person_sites[2].set_p_call, B->sr->sr_function_sites[sr::site_set_p].rva + 0x10);   // calls elsewhere
     CHECK(refused_at("guard mismatch at r_dsgraph_render_sorted"));
     fill_sites();
-    image[sr::sr_first_person_sites[0].rm_near_call + 2] = std::byte{0xc0};   // call [rax+0x1c0]: slot 56, rmFar
+    image[B->sr->sr_first_person_sites[0].rm_near_call + 2] = std::byte{0xc0};   // call [rax+0x1c0]: slot 56, rmFar
     CHECK(refused_at("guard mismatch at r_dsgraph_render_hud "));
     fill_sites();
-    put_call(sr::sr_first_person_sites[5].rm_near_call, sr::sr_function_sites[sr::site_rm_far].rva);   // direct call to rmFar
+    put_call(B->sr->sr_first_person_sites[5].rm_near_call, B->sr->sr_function_sites[sr::site_rm_far].rva);   // direct call to rmFar
     CHECK(refused_at("guard mismatch at CRenderTarget::accum_point"));
+    // These guards are required even if the live margin starts at zero, so enabling it later remains safe.
+    for (const auto& site : B->sr->sun_depth_guards) {
+        fill_sites();
+        image[site.rva + std::strlen(site.expected_hex) / 2 - 1] ^= std::byte{0x01};
+        CHECK(refused_at(site.name));
+    }
     // Inert while not installed: no jitter is published.
     const auto uv = sr::current_jitter_uv();
     CHECK(uv.current_u == 0 && uv.current_v == 0 && uv.previous_u == 0 && uv.previous_v == 0 && !sr::current_jitter().applied);
     sr::configure({}, nullptr, nullptr);
 }
+void sun_margin_option() {
+    wchar_t directory[MAX_PATH]{}, path[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, directory);
+    GetTempFileNameW(directory, L"rsf", 0, path);
+    CHECK(sr::read_options(path).sun_depth_margin == 5 && sr::read_options(nullptr).sun_depth_margin == 5);
+    options::registry().clear();
+    options::ini_path() = path;
+    sr::configure({}, nullptr, nullptr);
+    const options::Option* control{};
+    for (const auto& option : options::registry())
+        if (std::string_view(option.label) == "Sun shadow margin with jitter") control = &option;
+    CHECK(control && !control->toggle && !control->restart && control->minimum == 0 && control->maximum == 20 &&
+        control->step == 1 && control->divisor == 10000 && control->get() == 5);
+    if (control) {
+        for (const int32_t value : {0, 5, 20, 7, -1, 21}) {
+            control->set(value);
+            const auto expected = sr::clamp_sun_depth_margin(value);
+            CHECK(control->get() == expected && sr::options().sun_depth_margin == static_cast<uint32_t>(expected));
+            CHECK(sr::read_options(path).sun_depth_margin == static_cast<uint32_t>(expected));
+            CHECK(GetPrivateProfileIntW(L"Anomaly", L"SRSunDepthMargin", 99, path) == static_cast<uint32_t>(expected));
+        }
+    }
+    for (const auto* text : {L"x", L"nan", L"5x", L""}) {
+        WritePrivateProfileStringW(L"Anomaly", L"SRSunDepthMargin", text, path);
+        CHECK(sr::read_options(path).sun_depth_margin == 5);
+    }
+    options::ini_path().clear();
+    DeleteFileW(path);
 }
 
-int main() {
+}
+
+int main(int argc, char** argv) {
+    B = &testing::selected_build(argc, argv);
+    testing::announce(*B);
     rm_near_slot();
     install_refusals();
     stage3_install_refusals();
     options_from_ini();
+    sun_margin_option();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

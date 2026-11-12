@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
     fg::configure(options, log_line, nullptr);
     fg::set_depth_view_source(&depth_source);
     HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    if (!runtime || !fg::install(runtime)) { std::puts("FAIL: the bridge did not install"); return 1; }
+    if (!runtime || !fg::install(runtime, rsf::anomaly::standard_build)) { std::puts("FAIL: the bridge did not install"); return 1; }
     fg::set_overlay_sink({&overlay_sink, nullptr, nullptr});
     sr::test_stage.stage = stage5 ? 5u : 0u;
 

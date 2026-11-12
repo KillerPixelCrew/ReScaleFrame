@@ -123,7 +123,7 @@ Not exercised: the fixtures and every game run so far are windowed. Prefer windo
 
 ## Diagnostics and keys
 
-INI (`[Anomaly]`, Observe mode): `FG`, `FGBridge`, `FGBackend` (1, 3, 4, 5, 7 Auto), `FGGeneratedFrames`, `Latency`,
+INI (`[Anomaly]`, Observe mode): `FG`, `FGBridge` (default 1, so FG can be switched on live from the overlay), `FGBackend` (1, 3, 4, 5, 7 Auto), `FGGeneratedFrames`, `Latency`,
 `FrameLimitUs`, `FGScopeHold`, `FGDebug`, `FGDevelopment`, `FGCapture` (+`Start`, `Count`, `Interval`, `Dir`); vendor
 directories are SR's (`SRStreamlineDir`, `SRFidelityFXDir`, `SRXeSSDir`). The bridge installs only at cold start.
 

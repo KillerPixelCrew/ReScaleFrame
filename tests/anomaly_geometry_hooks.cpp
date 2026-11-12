@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_geometry.h"
-#include "geometry_profile.h"
+#include "anomaly_build_select.h"
 #include "native_hooks.h"
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -186,19 +186,23 @@ std::uint64_t cell(const GeometryCoverage& c, DrawPass pass, VisualType type, Dr
     return c.draws[static_cast<std::size_t>(pass)][static_cast<std::size_t>(type)][static_cast<std::size_t>(verdict)];
 }
 }
-int main()
+int main(int argc, char** argv)
 {
-    std::vector<std::byte> module(native_image_size);
-    CHECK(!install_native_geometry(nullptr, native_image_size, dx11_hash));
-    CHECK(!install_native_geometry(module.data(), native_image_size, avx_hash));
-    CHECK(!install_native_geometry(module.data(), native_image_size, dx11_hash));
+    const auto& build = testing::selected_build(argc, argv);
+    const auto& other = testing::other_build(build);
+    const auto& gp = *build.geometry;
+    testing::announce(build);
+    std::vector<std::byte> module(build.image_size());
+    CHECK(!install_native_geometry(nullptr, build.image_size(), build));
+    CHECK(!install_native_geometry(module.data(), build.image_size(), other));
+    CHECK(!install_native_geometry(module.data(), build.image_size(), build));
     CHECK(!geometry_hooks_active());
-    geometry_test_bind_module(module.data());
+    geometry_test_bind_module(module.data(), build);
     geometry_set_sink({nullptr, &retired});
     const float world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 123, 0, 0, 1};
     const float identity_world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    std::memcpy(module.data() + world_matrix_rva, world, sizeof(world));
-    const void* table = module.data() + hierarchy_vtables[0];
+    std::memcpy(module.data() + gp.world_matrix_rva, world, sizeof(world));
+    const void* table = module.data() + gp.hierarchy_vtables[0];
     std::memcpy(visual.data(), &table, sizeof(table));
     void* child_list[]{child.data()};
     const void* begin = child_list;
@@ -208,8 +212,8 @@ int main()
     std::memcpy(visual.data() + 112, &end, sizeof(end));
     int owner{};
     expected_owner = &owner;
-    const auto sites = native_geometry_hook_sites();
-    CHECK(sites.size() == geometry_sites.size() && sites.size() == 17);
+    const auto sites = native_geometry_hook_sites(build);
+    CHECK(sites.size() == gp.geometry_sites.size() && sites.size() == 17);
     auto base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
@@ -325,7 +329,7 @@ int main()
     // Shadow-map and Z-fill phase: nothing is captured, and the counters say why.
     {
         const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
         const auto before = geometry_coverage();
         sunk.clear();
         {
@@ -340,7 +344,7 @@ int main()
             cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::Identified));
         CHECK(after.flush_total[1] == before.flush_total[1] + 1 && after.flush_in_visual[1] == before.flush_in_visual[1] + 1);
         const std::uint32_t other_phase = 7;
-        std::memcpy(module.data() + render_phase_rva, &other_phase, sizeof(other_phase));
+        std::memcpy(module.data() + gp.render_phase_rva, &other_phase, sizeof(other_phase));
         {
             DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
             render(child.data(), 0.375f);
@@ -350,13 +354,13 @@ int main()
             cell(after, DrawPass::Unknown, VisualType::Static, DrawVerdict::Identified) + 1);
         CHECK(sunk.empty() && unknown.captured == before.captured);
         const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
     }
     // Unregistered rigid visuals: level geometry (exactly Fidentity) needs no object motion; anything else is a gap.
     expect_identity = false;
     expected_instance = unregistered.data();
     {
-        std::memcpy(module.data() + world_matrix_rva, identity_world, sizeof(identity_world));
+        std::memcpy(module.data() + gp.world_matrix_rva, identity_world, sizeof(identity_world));
         const auto before = geometry_coverage();
         sunk.clear();
         render(unregistered.data(), 0.375f);
@@ -366,7 +370,7 @@ int main()
         CHECK(sunk.empty() && after.captured == before.captured);
         CHECK(after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
 
-        std::memcpy(module.data() + world_matrix_rva, world, sizeof(world));
+        std::memcpy(module.data() + gp.world_matrix_rva, world, sizeof(world));
         render(unregistered.data(), 0.375f);
         const auto moving = geometry_coverage();
         CHECK(cell(moving, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedDynamic) ==
@@ -374,10 +378,10 @@ int main()
         CHECK(sunk.empty() && moving.captured == before.captured);
 
         const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
         render(unregistered.data(), 0.375f);
         const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
         const auto shadow = geometry_coverage();
         CHECK(cell(shadow, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) ==
             cell(moving, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) + 1);
@@ -451,14 +455,14 @@ int main()
         CHECK(seen_facts[1].visual == address && seen_facts[1].type == VisualType::TreePM && seen_facts[1].tree_lod == 5);
         // A shadow-map tree needs nothing.
         const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
         before = geometry_coverage();
         tree_st(tree_visual.data(), 0.5f);
         after = geometry_coverage();
         CHECK(cell(after, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) ==
             cell(before, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) + 1);
         const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
 
         // CDetailManager::Render: every flush inside it is a detail draw in its pass; outside it none is.
         before = geometry_coverage();
@@ -469,9 +473,9 @@ int main()
         CHECK(seen_facts.size() == 3 && seen_facts[0].detail && seen_facts[1].detail && !seen_facts[2].detail);
         CHECK(!seen_facts[0].in_visual && seen_facts[0].pass == DrawPass::Main);
         CHECK(after.detail_renders[0] == before.detail_renders[0] + 1 && after.flush_in_detail[0] == before.flush_in_detail[0] + 2);
-        std::memcpy(module.data() + render_phase_rva, &smap, sizeof(smap));
+        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
         detail_render(&detail_calls);
-        std::memcpy(module.data() + render_phase_rva, &normal_phase, sizeof(normal_phase));
+        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
         const auto shadow = geometry_coverage();
         CHECK(shadow.detail_renders[1] == after.detail_renders[1] + 1 && shadow.flush_in_detail[1] == after.flush_in_detail[1] + 2);
         geometry_set_flush_callback(nullptr);
@@ -489,7 +493,7 @@ int main()
         std::memcpy(object.data() + constant_buffer_size_offset, &size, sizeof(size));
         std::memcpy(object.data() + constant_buffer_data_offset, &data, sizeof(data));
         const auto object_pointer = reinterpret_cast<std::uintptr_t>(object.data());
-        std::memcpy(module.data() + vertex_constant_buffers_rva + 3 * sizeof(object_pointer), &object_pointer, sizeof(object_pointer));
+        std::memcpy(module.data() + gp.vertex_constant_buffers_rva + 3 * sizeof(object_pointer), &object_pointer, sizeof(object_pointer));
         float out[4]{};
         CHECK(read_vertex_constants(3, size, 16, out, sizeof(out)) && out[0] == 5.0f && out[3] == 8.0f);
         CHECK(!read_vertex_constants(3, size + 16, 16, out, sizeof(out)));          // reflected size differs
@@ -507,19 +511,19 @@ int main()
     // Context producers: the engine's IsSVPFrame predicate selects the view, render_hud and the rmNear window the
     // first-person domain.
     const auto set_viewport = [&](bool active, std::uint8_t delay, std::uint32_t frame) {
-        std::memcpy(module.data() + second_viewport_rva, &active, sizeof(active));
-        std::memcpy(module.data() + second_viewport_rva + second_viewport_delay_offset, &delay, sizeof(delay));
-        std::memcpy(module.data() + device_frame_rva, &frame, sizeof(frame));
+        std::memcpy(module.data() + gp.second_viewport_rva, &active, sizeof(active));
+        std::memcpy(module.data() + gp.second_viewport_rva + second_viewport_delay_offset, &delay, sizeof(delay));
+        std::memcpy(module.data() + build.native->device_frame_rva, &frame, sizeof(frame));
     };
-    CHECK(!current_render_view(nullptr));
+    CHECK(!current_render_view(nullptr, build));
     set_viewport(false, 2, 4);
-    CHECK(current_render_view(module.data()) == temporal::ViewId::Main);
+    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
     set_viewport(true, 2, 3);
-    CHECK(current_render_view(module.data()) == temporal::ViewId::Main);
+    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
     set_viewport(true, 2, 4);
-    CHECK(current_render_view(module.data()) == temporal::ViewId::Scope);
+    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Scope);
     set_viewport(true, 0, 4);
-    CHECK(current_render_view(module.data()) == temporal::ViewId::Main);
+    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
     const Context outside{};
     CHECK(context_now() == outside);
     {
@@ -587,7 +591,7 @@ int main()
         stats.draws_unidentified >= 1 && stats.capture_faults == 1);
     // Production installation path, using guarded code copied into an executable-memory fixture.
     // No game code is executed, no game process or installation is modified.
-    auto image = static_cast<std::byte*>(VirtualAlloc(nullptr, native_image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    auto image = static_cast<std::byte*>(VirtualAlloc(nullptr, build.image_size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     CHECK(image);
     auto fixture_dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image);
     fixture_dos->e_magic = IMAGE_DOS_SIGNATURE;
@@ -596,32 +600,45 @@ int main()
     fixture_pe->Signature = IMAGE_NT_SIGNATURE;
     fixture_pe->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
     fixture_pe->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
-    fixture_pe->OptionalHeader.SizeOfImage = native_image_size;
-    for (const auto& site : geometry_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
-    for (const auto& site : geometry_layout_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
+    fixture_pe->OptionalHeader.SizeOfImage = build.image_size();
+    for (const auto& site : gp.geometry_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
+    for (const auto& site : gp.geometry_layout_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
+    // Extended unique guards (sites whose 16 bytes are not unique in .text): the longer prefix must also match.
+    const auto put_hex = [&](std::uint32_t rva, const char* hex) {
+        const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
+        for (std::size_t i = 0; hex[2 * i]; ++i) image[rva + i] = static_cast<std::byte>(digit(hex[2 * i]) * 16 + digit(hex[2 * i + 1]));
+    };
+    for (const auto& guard : gp.geometry_unique_guards) put_hex(guard.rva, guard.expected_hex);
+    for (const auto& guard : gp.geometry_unique_guards) {
+        const auto last = guard.rva + std::strlen(guard.expected_hex) / 2 - 1;
+        image[last] ^= std::byte{1};
+        CHECK(!install_native_geometry(image, build.image_size(), build));
+        image[last] ^= std::byte{1};
+    }
     // Every detour and every layout guard refuses on a single changed byte, and nothing is written before the refusal.
-    for (const auto& layout : geometry_layout_sites) {
+    for (const auto& layout : gp.geometry_layout_sites) {
         image[layout.rva] ^= std::byte{1};
-        CHECK(!install_native_geometry(image, native_image_size, dx11_hash));
+        CHECK(!install_native_geometry(image, build.image_size(), build));
         image[layout.rva] ^= std::byte{1};
     }
-    for (const auto& site : geometry_sites) {
+    for (const auto& site : gp.geometry_sites) {
         image[site.rva + 5] ^= std::byte{0x80};
-        CHECK(!install_native_geometry(image, native_image_size, dx11_hash));
+        CHECK(!install_native_geometry(image, build.image_size(), build));
         image[site.rva + 5] ^= std::byte{0x80};
     }
-    const auto corrupted = geometry_sites.back();
+    const auto corrupted = gp.geometry_sites.back();
     image[corrupted.rva] ^= std::byte{1};
-    CHECK(!install_native_geometry(image, native_image_size, dx11_hash));
-    for (std::size_t i = 0; i + 1 < geometry_sites.size(); ++i)
-        CHECK(!std::memcmp(image + geometry_sites[i].rva, geometry_sites[i].expected.data(), 16));
+    CHECK(!install_native_geometry(image, build.image_size(), build));
+    for (std::size_t i = 0; i + 1 < gp.geometry_sites.size(); ++i)
+        CHECK(!std::memcmp(image + gp.geometry_sites[i].rva, gp.geometry_sites[i].expected.data(), 16));
     image[corrupted.rva] ^= std::byte{1};
-    CHECK(install_native_geometry(image, native_image_size, dx11_hash));
+    CHECK(install_native_geometry(image, build.image_size(), build));
     CHECK(geometry_hooks_active());
     CHECK(disable_native_geometry() && !geometry_hooks_active());
-    for (const auto& site : geometry_sites) CHECK(!std::memcmp(image + site.rva, site.expected.data(), 16));
-    CHECK(!install_native_geometry(image, native_image_size, avx_hash));
-    CHECK(install_native_geometry(image, native_image_size, dx11_hash));
+    for (const auto& site : gp.geometry_sites) CHECK(!std::memcmp(image + site.rva, site.expected.data(), 16));
+    CHECK(!install_native_geometry(image, build.image_size(), other));
+    CHECK(!install_native_geometry(image, other.image_size(), other));   // the other build's sites are not on this image
+    CHECK(install_native_geometry(image, build.image_size(), build));
     CHECK(disable_native_geometry());
     // Executable fixture allocations and trampolines intentionally live until process exit.
     std::puts("PASS: actual x64 lifecycle/visual detours, RCX/RDX/R8/XMM1, hierarchy retirement before pooling/reuse, current world, "
