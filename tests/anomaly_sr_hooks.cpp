@@ -4,7 +4,9 @@
 //    registered SR callback after the original, and only while one is registered;
 //  * sr::install refuses and installs nothing when any Stage 1 guard differs (function prologues, the 17-byte
 //    phase_blur guard, the five real call sites), and when the guarded bytes are not inside a real PE image;
-//  * frame_end/report/quiesce are inert while nothing is installed.
+//  * Stage 2 also requires the SSAO set_viewport code that encodes its static viewport and guard addresses;
+//  * frame_end/report/quiesce are inert while nothing is installed;
+//  * SRStage/SRScale parsing (Stage 2 keys, clamping, defaults).
 #include "geometry_profile.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
@@ -42,6 +44,7 @@ void fill_guards(std::vector<std::byte>& image) {
     for (const auto& site : sr::sr_function_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
     for (const auto& guard : sr::sr_unique_guards) put_hex(image.data() + guard.rva, guard.expected_hex);
     for (const auto& site : sr::sr_call_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
+    put_hex(image.data() + sr::ssao_set_viewport_rva, sr::ssao_set_viewport_code);
 }
 
 void rm_near_slot() {
@@ -99,6 +102,20 @@ void install_refusals() {
     CHECK(!sr::install(image.data(), native_image_size) && logged("guarded detour installation failed") && !sr::active());
     for (const auto& site : sr::sr_function_sites)
         CHECK(std::memcmp(image.data() + site.rva, site.expected.data(), 16) == 0);   // nothing was written
+    // Stage 2: the SSAO helper's code is checked first, then every Stage 1 guard.
+    options.stage = 2;
+    sr::configure(options, &collect, nullptr);
+    fill_guards(image);
+    image[sr::ssao_set_viewport_rva + 0x42] ^= std::byte{0x01};   // the viewport displacement
+    lines.clear();
+    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at set_viewport") && !sr::active());
+    fill_guards(image);
+    image[sr::sr_function_sites[sr::site_phase_combine].rva] ^= std::byte{0xff};
+    lines.clear();
+    CHECK(!sr::install(image.data(), native_image_size) && logged("guard mismatch at CRenderTarget::phase_combine"));
+    fill_guards(image);
+    lines.clear();
+    CHECK(!sr::install(image.data(), native_image_size) && logged("guarded detour installation failed") && !sr::active());
     // Inert while not installed.
     lines.clear();
     sr::frame_end();
@@ -119,9 +136,28 @@ void options_from_ini() {
     auto options = sr::read_options(path);
     CHECK(options.stage == 1 && options.capture && options.capture_start == 600 && options.capture_count == 16 &&
         options.capture_interval == 1);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);   // only Stage 1 exists
+    CHECK(options.scale == 0.67f && options.scale_defaulted && options.ini == path);   // SRScale missing: the default
     WritePrivateProfileStringW(L"Anomaly", L"SRStageCapture", L"0", path);
-    CHECK(!sr::read_options(path).selected());
+    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);
+    options = sr::read_options(path);
+    CHECK(options.selected() && options.stage == 2 && options.scale == 0.67f && options.scale_defaulted);
+    const struct { const wchar_t* text; float scale; bool defaulted; } scales[] = {
+        {L"0.5", 0.5f, false}, {L"0.77", 0.77f, false}, {L"1.0", 1.0f, false}, {L" 0.6 ", 0.6f, false},
+        {L"0.25", 0.5f, false}, {L"2", 1.0f, false}, {L"0", 0.67f, true}, {L"-1", 0.67f, true},
+        {L"abc", 0.67f, true}, {L"0.7x", 0.67f, true}, {L"nan", 0.67f, true}};
+    for (const auto& item : scales) {
+        WritePrivateProfileStringW(L"Anomaly", L"SRScale", item.text, path);
+        bool defaulted = false;
+        const float scale = sr::read_scale(path, &defaulted);
+        if (scale != item.scale || defaulted != item.defaulted) std::printf("SRScale=%ls -> %f (defaulted %d)\n", item.text, scale, defaulted);
+        CHECK(scale == item.scale && defaulted == item.defaulted);
+        CHECK(sr::read_options(path).scale == item.scale);
+    }
+    CHECK(sr::read_scale(nullptr) == 0.67f);
+    for (const auto* stage : {L"3", L"-1", L"x"}) {
+        WritePrivateProfileStringW(L"Anomaly", L"SRStage", stage, path);   // only Stages 1 and 2 exist
+        CHECK(!sr::read_options(path).selected());
+    }
     DeleteFileW(path);
 }
 }

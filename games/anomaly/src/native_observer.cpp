@@ -3,6 +3,7 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_profile.h"
+#include "motion_stage.h"
 #include "sr_stage.h"
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/sha256_file.h>
@@ -81,6 +82,7 @@ void render_end(void* self) {
             geometry::geometry_report_coverage([](void*, const char* line) { report(line); }, nullptr);
         }
         sr::report([](void*, const char* line) { report(line); }, nullptr);
+        motion::report([](void*, const char* line) { report(line); }, nullptr);
     }
 }
 void camera(void* self, const float* view, const float* projection) {
@@ -194,6 +196,8 @@ rsf_result start(const rsf_game_start_args* args) noexcept {
     geometry_installed = geometry::install_native_geometry(image, native_image_size, dx11_hash);
     // SR Stage 1 hooks, only when selected; a refusal leaves the game stock and observation intact.
     if (sr::options().selected() && !sr::install(image, native_image_size)) report("Anomaly SR stage not installed; rendering is stock.");
+    // Motion MRT, only when Motion=1; a refusal leaves every shader and target stock.
+    if (motion::options().enabled && !motion::install(image, native_image_size)) report("Anomaly motion stage not installed; shaders stay stock.");
     active.store(true, std::memory_order_release);
     reason = geometry_installed
         ? "Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
@@ -208,6 +212,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept {
     std::lock_guard lock(control_guard);
     active.store(false, std::memory_order_release);
     if (!sr::quiesce()) return RSF_ERROR_NATIVE_REFUSED;
+    if (!motion::quiesce()) return RSF_ERROR_NATIVE_REFUSED;
     if (!hooks.disable()) return RSF_ERROR_NATIVE_REFUSED;
     if (geometry_installed) {
         if (!geometry::disable_native_geometry()) return RSF_ERROR_NATIVE_REFUSED;

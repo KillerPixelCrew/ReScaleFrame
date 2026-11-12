@@ -1,9 +1,10 @@
 # Anomaly SR seam: world/output resolution split and linear-colour boundary
 
-Status: source and retained-binary research plus a design. Stage 1 (section 9) is built and
-fixture-tested behind an opt-in INI key; it has not been injected or game-tested. With the key
-off, no hook below changes rendering. Every statement is either cited to source/binary evidence
-or marked **UNVERIFIED**.
+Status: source and retained-binary research plus a design. Stage 1 (section 9) is built,
+fixture-tested and game-tested in Observe mode (`.local/anomaly/wave4-game/result.json`). Stage 2
+(section 10) is built and fixture-tested behind `SRStage=2`; it has not been injected or
+game-tested. With the keys off, no hook below changes rendering. Every statement is either cited
+to source/binary evidence or marked **UNVERIFIED**.
 
 - Reference engine: `D:/xray-monolith`, commit `028ccf5` ("X-Ray Monolith Engine for
   S.T.A.L.K.E.R. Anomaly 1.5.3"). Source-to-binary correspondence is checked only where a
@@ -497,7 +498,7 @@ Live acceptance: F12 captures of stock and scale 1.0 in l01_escape (day, night w
 rain, PDA open, scope, menu, resize/`vid_restart`) differ only where clamping semantics changed.
 No D3D11 debug-layer errors. About 8000 frames with no fault.
 
-**Stage 2: spatial resolution reduction (0.5 to 0.77 per axis).**
+**Stage 2: spatial resolution reduction (0.5 to 0.77 per axis).** Built; see section 10.
 Same seam; the adapter does a bilinear/spatial upscale instead of temporal SR.
 Tests without the game: render/output plan arithmetic, and the resize/reset lifecycle.
 Live acceptance: geometry and lighting are registered (no offset G-buffer or corner rendering).
@@ -760,6 +761,135 @@ Open or **UNVERIFIED**: whether any W-phase shader samples `$user$generic0` befo
 If one does, it now sees last frame's FP16 twin instead of last frame's post output; only `distort.s`
 samples it, and it does so in the forward pass. Also open: the effect of unclamped FP16 blending, the stock
 `seqFrameMT` dimension reads (irrelevant at 1.0), and the `generic0.a` consumers.
+
+## 10. Stage 2 implementation (render size below output, bilinear at the seam)
+
+12 November 2026. Built and tested without the game. Not injected, not game-tested. No SR provider is
+called and rendering-readiness flags stay 0.
+
+**Selection.** `[Anomaly] SRStage=2` with `SRScale=<0.5..1.0>` (default 0.67), `Mode=Observe` as for Stage 1.
+`SRScale` is parsed as a decimal number; missing, unparsable, non-positive or non-finite values select 0.67,
+values outside the range are clamped (`sr_plan.h`). The key is re-read after every device reset, so a new value
+applies at the next `vid_restart`. `SRStageCapture` works unchanged. `SRStage` values other than 1 and 2 are off.
+
+**Render size.** One scale for both axes: `render = floor(output * scale + 0.5)`, kept inside
+`[ceil(output / 2), output]` and never below 1 (1920x1080 at 0.67 gives 1286x724; 1280x720 gives 858x482). The
+render aspect differs from `Device.fASPECT` by the rounding only: the projection is unchanged, and the pixel-to-NDC
+mapping (`pos_decompression_params`, the viewport) uses the render dimensions, so both cover the same frustum.
+
+**What the world window swaps.** At H1, on an eligible frame, in this order (all in `sr_swap.cpp`):
+
+| Field | Window value | Evidence and reason |
+| --- | --- | --- |
+| The nine `sr_world_targets` (`generic0`, `generic_temp`, `rt_Position`, `rt_Color`, `rt_Accumulator`, `generic1`, and when their option is on `generic2`, `rt_half_depth`, `rt_ssao_temp`) | Render-size twins: `generic0`/`generic_temp` FP16 (section 2.4), the others in the engine's own format, with views built from the engine views' descriptions and a UAV exactly when the engine target has one | Every target the W phase renders into (1.3). `rt_half_depth` keeps the engine's halving: `Device.dwWidth / 2` with `o.ssao_half_data` (ctor `0x85544b`: `test al,8; shr r8d,1; shr r9d,1`), so its twin is `render / 2`. Targets of paths Stage 2 does not twin (`msaadepth`, `generic0_r`, `generic1_r`, `accum_temp`) must be null, else the stage refuses |
+| `Device.dwWidth/dwHeight` | Render size | Every full-screen quad, light scissor and binder inside the window reads them (table below) |
+| `HW.pBaseZB` | Render-size depth twin, `R24G8_TYPELESS` with a `D24_UNORM_S8_UINT` DSV and an `R24_UNORM_X8` SRV | Section 3. The engine DSV must be a single-sample D24S8 Texture2D view of output size, else `skipped depth` and refusal |
+| `HW.pBaseRT` | A render-size stand-in RTV in the back buffer view's format | `phase_occq` binds `HW.pBaseRT` with `HW.pBaseZB` (`r4_rendertarget_phase_occq.cpp:6`, colour writes off). The fixture shows D3D11 **drops** an output-size RTV with a render-size DSV entirely, so without the stand-in the occlusion queries would run against whatever was bound before. Nothing else in the window binds `HW.pBaseRT`; the back buffer is rewritten by `phase_pp` |
+| SSAO `set_viewport`'s static `D3D11_VIEWPORT` (`0xceebd0`) | `render / 2`, only when its magic-static guard (`0xd79284`) says initialised | `r4_rendertarget_phase_ssao.cpp:3-10` declares `static D3D_VIEWPORT viewport[1] = {0, 0, w, h, 0, 1}`: the first call fixes the size for the life of the process (binary: `cmp [guard], tls_epoch; jg init`, the init path stores only Width/Height). Its callers (`phase_downsamp` with `ssao_half_data`, `phase_ssao` with `ssao_blur_on` and no `ssao_opt_data`) always pass `Device / 2` first. In the window it must describe render/2, outside output/2. If the first call of the process happens inside a window, the restore writes `output / 2`, what stock would have stored |
+| `RCache` texture cache (Stage 1) and `RCache.ctable` | Cleared after the exchange and after the restore | `set_Constants` returns early on `ctable == C` (`R_Backend_Runtime`); clearing it re-runs every binder (`screen_res`, `pos_decompression_params{,2}`) with the current `Device` size at the next `set_Element` |
+
+After the original `phase_scene_prepare` returns (H1 epilogue) the viewport is set to `{0, 0, render, 0..1}`, what
+`rmNormal` gives for a render-size target: `phase_scene_prepare` binds `rt_Position` with
+`u_setrt(Device.dwWidth, ...)`, but the viewport is still the one `CRender::Render`'s first `rmNormal` set from the
+previous frame's output-size target, and the z-prepass draws before any other `rmNormal`.
+
+**Seam (S-B).** Restore every field above (a changed `Device` size, `HW.pBaseZB` or `HW.pBaseRT`, or a changed twinned
+field, counts as `foreign` and refuses further swaps), write `CRenderTarget::dwWidth/dwHeight` = output (they follow
+the last `u_setrt`, a twin), invalidate the caches, then one full-screen draw at output size
+(`shaders/sr/rsf_sr_upscale.hlsl`):
+
+- `SV_Target0` engine UNORM8 `generic0` = `saturate(f(bilinear(f^-1(y))))`: the filter runs on the exposure-scaled
+  linear `x`, with texel-centre alignment and clamped neighbours. Alpha is nearest.
+- `SV_Target1` engine `rt_Position` = nearest (packed normal and view Z are never filtered). P reads it in
+  `blur`, `dof`, `nightvision`, `combine_2` and the sunshafts mask (`blender_{blur,dof,nightvision,combine}.cpp`).
+- `SV_Target2` engine `generic1` = bilinear (the distortion mask, read by UV in `combine_2_naa.ps:48`). This deviates
+  from 1.3 ("kept through P"): restoring it at the seam with the rest leaves a single exit point and no render-size
+  resource visible to P, for one extra 4-byte output per pixel.
+- `SV_Depth` engine `HW.pBaseZB` = nearest depth twin; its stencil is cleared to 0 first. No pass after the seam tests
+  stencil against it (SMAA, the only post pass that enables stencil, binds no depth view).
+- `rt_Color` is not upsampled: every P pass that binds it (`dof`, `lut`, `gasmask_*`, `nightvision`, `smaa`,
+  `combine_2`) writes it full screen before anything reads it, and no P blender samples `$user$albedo`.
+- Then the viewport returns to output size. Everything from sunshafts to `phase_pp` runs stock.
+
+At scale 1.0 the pass equals the Stage 1 round trip bit for bit (fixture), so `SRStage=2 SRScale=1.0` exercises
+every Stage 2 swap at output size and is the first A/B against stock.
+
+**Exits and refusals.** As Stage 1, extended to the globals: seam (normal), `combine_end` without a seam (restore,
+viewport to output, refuse), stale prepare (the H1 hook closes it before it reads `Device.dwWidth`), `frame_end`,
+shutdown (engine memory only, no D3D call) and rollback (a failed write part way restores every field written so far,
+including the globals). Ineligible frames (SVP scope, MSAA, menu/no world, swap disabled) touch nothing. Layout or
+depth mismatches refuse for the process. An allocation failure (`CreateTexture2D` and friends) is not a refusal:
+that frame and every frame with the same twin key stay stock (`skipped twins`, `alloc_failed`), and a new key (scale,
+size, reset) tries again.
+
+**Twin lifetime.** The key is the stage, `CRenderTarget*`, every CRT and surface address, `HW.pBaseZB`, `HW.pBaseRT`,
+`HW.pDevice`, the observer's reset count, output and render size. Any change (scale, resolution, `vid_restart`, a new
+view or device) drops the twins and builds new ones at the next eligible frame (`twin_generation` and `twin_drops`
+grow by one). As in Stage 1, the engine leaks `surface_get` references on the `generic0`/`generic_temp` twins, so
+those two are freed only at process end. At 1920x1080 and 0.67 the twins take about 53 MiB with every option on
+(the totals line prints `twin_mib`).
+
+**Size- and projection-dependent code inside the window** (requirement 2; engine source `028ccf5`):
+
+| Site | Reads | Handling |
+| --- | --- | --- |
+| `screen_res` binder (`Blender_Recorder_StandartBinding.cpp:389-396`), `pos_decompression_params{,2}` (`r4.cpp:106-125`) | `Device.dwWidth/dwHeight` (and `fFOV`, `fASPECT`) at constant-table bind | Device swap plus `ctable` invalidation at both swap points |
+| Full-screen quads and jitter tiling: `phase_combine.cpp:215-216` (combine_1), `accum_direct.cpp:53,227,367,550,755,838,981,1063,1095`, `accum_reflected.cpp:30`, `draw_rain.cpp:10,172`, `phase_scene.cpp:84` (albedo_wo only), `phase_bloom.cpp:85,352` (texel offsets into the render-size `generic1`; kernel aspect) | `Device` size per call | Device swap |
+| `phase_scene_prepare`, terrain prepass, `phase_occq` `u_setrt(Device.dwWidth, ...)` (`phase_scene.cpp:10`, `r4_R_render.cpp:327`, `phase_occq.cpp:6`) | `Device` size, `HW.pBaseZB`, `HW.pBaseRT` | Device, depth and back-buffer stand-in swaps |
+| Light scissor (`r4_rendertarget_enable_scissor.cpp:102-106`) | `Device` size | Device swap |
+| `rmNear/rmFar/rmNormal` (`r4.cpp:834-858`) | Last bound target (`CRenderTarget::dwWidth`) | Twins carry render size; H1 epilogue viewport; seam writes output back |
+| SSAO: `phase_downsamp` (`phase_ssao.cpp:127-132`), `phase_ssao` (50-56), `set_viewport` static | `Device` size, a viewport frozen at the first call | Device swap; static viewport swap (above) |
+| HDAO dispatch (`phase_hdao.cpp:37-38`) | `CRenderTarget::dwWidth/dwHeight` | Render size after the twin binds |
+| 3D fluid (`dx103DFluidRenderer.cpp:440-490`, `fluid_raydata_*.ps:10`, `fluid_common_render.h:169,283`) | Ray-data targets sized at create/reset from the output (`r4.cpp:501,587`); scene depth and ray data sampled by UV; composite with `PrepareCBuffer(Device.dwWidth)` | Registered by construction (UV sampling, own `rmNormal` per target); no saving for the ray-cast part. **UNVERIFIED** in game |
+| SSAO noise/kernel factors (`phase_combine.cpp:176-182`, `phase_ssao.cpp:39-46`), shadow maps (`phase_smap_D.cpp:33`), bloom/luminance fixed targets, `Device.mProject` | FOV, own viewports, fixed sizes, NDC | Unaffected |
+| Item-attached UI `g_hud->RenderActiveItemUI()` (`r__dsgraph_render.cpp:584`) | UI scale cached at reset from the output size (`ui_base.cpp:113`) | **UNVERIFIED**: 3D-anchored (LIT) item UI is projected and unaffected; screen-space parts would be drawn at output scale into a render-size target. Game acceptance item |
+| `OnRenderPPUI_main` -> `draw_wnds_rects` (`phase_combine.cpp:303`, `GamePersistent.cpp:844-848`) | UI windows' PP rects; `pp_start` scales by `getTarget()->get_width()` over `Device.dwWidth` | **UNVERIFIED**, probably consistent (both render size in the window) |
+| Concurrent thread: `seqFrameMT` (sound, network) and `seqParallel` (HOM `MT_RENDER`, details `MT_CALC`, AI visibility, ALife, `CMapManager::Update`) | Not the dimensions, except possibly the map manager | **UNVERIFIED** for `CMapManager::Update` |
+| `Device.fWidth_2/fHeight_2` | Set at reset; no renderer reader | Unaffected |
+
+**Diagnostics.** The 120-frame window line appends
+`| depth= alloc_failed= viewports= ssao_viewport= | gpu_world_ms swapped=<ms> (n=) stock=<ms> (n=) gpu_seam_ms=<ms>`,
+and the totals line adds `render=WxH output=WxH scale= twin_mib=` before `refused=`. `round_trips` counts the seam
+pass in both stages. `gpu_world_ms` is the GPU time from the H1 prologue to the first seam call, from D3D11
+timestamp queries read back a few frames later without a stall; `swapped` covers frames with an open window and
+`stock` every other world frame, so a capture-only run (`SRStage=0`, `SRStageCapture=1`) gives the stock reference
+for the same view. `gpu_seam_ms` is the seam pass. Install line:
+`Anomaly SR stage hooks installed: SRStage=2 ... SRScale=0.670 (default), bilinear upscale at the seam`.
+
+**Capture** (`SRStageCapture=1`): `anomaly_seam_fp16_input` (the render-size FP16 `generic0` twin before the upscale),
+`anomaly_seam_generic0` (the engine UNORM8 `generic0` after the upscale, as P receives it) and `final_color`. The
+frame record carries render and output size.
+
+**Hooks and guards.** The same four detours. Stage 2 also requires the first 0x46 bytes of `set_viewport`
+(`ssao_set_viewport_code`, which encodes the guard and viewport displacements) before installing.
+`tests/anomaly_sr_evidence.py --verify` re-derives the world-target table against the constructor slots, the absent
+slots, the `rt_half_depth` halving, the SSAO dispatch bits in `phase_combine` (`0x8bca75`), the `set_viewport` code,
+both data addresses (viewport in `.data` with `{0,0,0,0,0,1}`, guard in `.bss`), its four callers and that nothing
+else references either address (`.local/anomaly/sr-stage2/verify.txt`). Six negative profile mutations each fail by
+name (`.local/anomaly/sr-stage2/negative.txt`).
+
+**Live acceptance (to run).** Same save and view as Stage 1. Runs: A `SRStage=0 SRStageCapture=1` (stock and the
+stock `gpu_world_ms`), B `SRStage=2 SRScale=1.0` (every swap at output size; seam and final images should match A
+as Stage 1 did, apart from clamping areas and noise), C `SRStage=2` (0.67), D `SRScale=0.5`. Check:
+
+1. Geometry and lighting registered: no offset G-buffer, no lighting in a corner, no half-screen SSAO (with
+   `r2_ssao_half_data` on and off), fog, sky, rain, volumetrics, wallmarks and decals aligned; `anomaly_seam_fp16_input`
+   is a full image at render size.
+2. HUD, PDA content, scope and menus sharp at output size; scope frames counted as `skipped scope` with no swap.
+3. Item-attached UI (detectors, PDA in hand) at the right place and scale at 0.67 and 0.5 (the 1.5 hazard).
+4. Fluid volumes (smoke, anomaly fields with `r3_volumetric_smoke` on) registered and occluded correctly.
+5. GPU time: `gpu_world_ms swapped` in C and D against `stock` in A at the same view, and the frame time.
+6. `vid_restart` and a resolution change with an edited `SRScale`: `twin_generation` and `twin_drops` +1 each, the
+   "SRScale a -> b" line, `render=` follows.
+
+Expected in a steady world view: `eligible == swapped == seams == round_trips == restores seam`,
+`viewports == 2 * swapped`, `ssao_viewport == swapped` once any SSAO static exists (else 0), and
+`combine_end = stale_prepare = frame_end = rollback = foreign = write_faults = rt_failed = layout = twins = depth =
+alloc_failed = 0`, `refused=no`; no D3D11 debug-layer errors.
+
+Open or **UNVERIFIED**: everything marked so in the table; whether lower-resolution forward passes that sample
+`$user$generic0`/`generic_temp` (glass, `distort.s`) behave like the Stage 1 glass-pane finding; texture sharpness
+(no mip bias until Stage 3); and the effect of the bilinear filter on the alpha channel consumers (none known).
 
 ## Sources
 

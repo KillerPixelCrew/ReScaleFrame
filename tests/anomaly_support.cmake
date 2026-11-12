@@ -86,3 +86,44 @@ add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
     anomaly_sr_roundtrip_device PROPERTIES TIMEOUT 120)
+
+# SR Stage 2 (render-size world window). The plan test checks the render/output arithmetic; the Stage 2 swap cases live
+# in anomaly_sr_swap_contract and the upscale/depth-twin fixture in anomaly_sr_roundtrip_device.
+add_executable(rsf_anomaly_sr_plan_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_plan.cpp")
+target_include_directories(rsf_anomaly_sr_plan_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_link_libraries(rsf_anomaly_sr_plan_test PRIVATE rsf_build_options)
+add_test(NAME anomaly_sr_plan_contract COMMAND rsf_anomaly_sr_plan_test)
+set_tests_properties(anomaly_sr_plan_contract PROPERTIES TIMEOUT 30)
+
+# Motion MRT. The contract test checks the b13 layouts against the shader READMEs/headers, the history policy, the
+# RTV2 bind-preservation state machine on fake RCache memory and the shader-loader hook contract (caller frame,
+# manifest, original-bytecode proof, reflection rules, disk cache) with fakes. The device fixture draws the real
+# deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the production
+# loader, b13 packers and invalidation replay. Neither runs game code.
+set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_constants.cpp" "${RSF_ANOMALY_SR_SRC}/motion_history.cpp"
+    "${RSF_ANOMALY_SR_SRC}/motion_policy.cpp" "${RSF_ANOMALY_SR_SRC}/motion_target.cpp" "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
+add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract.cpp" ${RSF_ANOMALY_MOTION_SOURCES})
+target_include_directories(rsf_anomaly_motion_contract_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_compile_definitions(rsf_anomaly_motion_contract_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE bcrypt rsf_build_options)
+add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
+add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
+set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
+add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.cpp" ${RSF_ANOMALY_MOTION_SOURCES}
+    "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+target_include_directories(rsf_anomaly_motion_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(rsf_anomaly_motion_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
+add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
+set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection anomaly_motion_device PROPERTIES TIMEOUT 300)
+# The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
+add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE minhook rsf_build_options)
+add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
+set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
+# rsf_anomaly_sr_hooks_test links native_observer.cpp, which installs/reports/quiesces the motion stage.
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp"
+    "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)

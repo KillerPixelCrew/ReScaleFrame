@@ -2,6 +2,7 @@
 #include "native_observer.h"
 #include "native_profile.h"
 #include "overlay_service.h"
+#include "motion_stage.h"
 #include "sr_stage.h"
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/sha256_file.h>
@@ -101,6 +102,11 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
     if (const auto sr_options = rsf::anomaly::sr::read_options(configuration); sr_options.selected()) {
         if (!observe) log(nullptr, "Anomaly SR stage refused: SRStage/SRStageCapture require Mode=Observe; game left stock.");
         else if (!observed) rsf::anomaly::sr::configure(sr_options, log, nullptr);
+    }
+    // Motion MRT (Motion=1) also rides on Observe; the observer installs it after SR. Inert when Motion is not 1.
+    if (const auto motion_options = rsf::anomaly::motion::read_options(configuration); motion_options.enabled) {
+        if (!observe) log(nullptr, "Anomaly motion refused: Motion=1 requires Mode=Observe; shaders stay stock.");
+        else if (!observed) rsf::anomaly::motion::configure(motion_options, log, nullptr);
     }
     if (observe && !observed) {
         const auto observe_status = start_observation(runtime, hash);

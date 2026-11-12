@@ -128,6 +128,58 @@ inline constexpr std::array<TargetSlot, 26> target_slots{{
 // CTexture* t_LUM_src / t_LUM_dest, re-pointed with surface_set at the start of every phase_combine.
 inline constexpr uint32_t target_lum_src_texture_offset = 0x4c8, target_lum_dest_texture_offset = 0x4d0;
 
+// SR Stage 2 world targets: every CRenderTarget target the world window (phase_scene_prepare .. S-B seam) renders
+// into, in the order of sr::Slot. Each entry repeats its target_slots offset and format (static_assert in
+// sr_swap.cpp, and the verifier). d3d_format 0 accepts R16F (111) or R32F (114): rt_half_depth is R32F on NVIDIA and
+// R16F elsewhere (r4_rendertarget.cpp:717), rt_ssao_temp is R16F with a UAV (749). Optional targets exist only with
+// their option (generic2: o.advancedpp; half_depth: o.ssao_opt_data; ssao_temp: o.ssao_hdao && o.ssao_ultra).
+// half_allowed: the engine may create it at Device.dwWidth/2 x Device.dwHeight/2 (o.ssao_half_data, line 709).
+struct WorldTarget {
+    const char* name;
+    uint32_t offset;
+    uint32_t d3d_format;
+    bool optional;
+    bool half_allowed;
+};
+inline constexpr uint32_t d3dfmt_r16f = 111, d3dfmt_r32f = 114;
+inline constexpr std::array<WorldTarget, 9> sr_world_targets{{
+    {"$user$generic0", 0x3a8, 21, false, false},       // S-B colour; FP16 twin
+    {"$user$generic_temp", 0x3b8, 21, false, false},   // CopyResource partner of generic0; FP16 twin
+    {"$user$position", 0x378, 113, false, false},      // G-buffer position/normal; P reads it (blur, dof, combine_2)
+    {"$user$albedo", 0x380, 21, false, false},         // G-buffer albedo, then hud_ui scratch
+    {"$user$accum", 0x388, 113, false, false},         // light accumulation
+    {"$user$generic1", 0x3b0, 21, false, false},       // bloom source, then distortion mask; combine_2 reads it
+    {"$user$generic2", 0x420, 113, true, false},       // volumetric light accumulation (advancedpp)
+    {"$user$half_depth", 0x590, 0, true, true},        // SSAO downsampled depth (ssao_opt_data)
+    {"$user$ssao_temp", 0x588, 0, true, false},        // HDAO output, UAV (ssao_hdao && ssao_ultra)
+}};
+// Targets the world window would also write on paths Stage 2 does not twin. Each must be absent (null ref_rt):
+// msaadepth, generic0_r and generic1_r exist only with MSAA (refused); accum_temp only without mrtmixdepth and
+// fp16_blend (r4_rendertarget.cpp:426), which D3D10+ never selects (HWCaps.cpp:242).
+inline constexpr std::array<uint32_t, 4> sr_world_absent_offsets{0x358, 0x360, 0x368, 0x390};
+
+// SSAO viewport helper (r4_rendertarget_phase_ssao.cpp:3-10): `static D3D_VIEWPORT viewport[1] = {0, 0, w, h, 0, 1}`
+// is a function-local static, so its width and height are fixed by the first call for the rest of the process and
+// later calls only re-apply it. Stock calls it from phase_downsamp (with o.ssao_half_data) and phase_ssao (with
+// o.ssao_blur_on and no ssao_opt_data), always first with Device.dwWidth/2 x Device.dwHeight/2. In a Stage 2 world
+// window the static must hold render/2, and output/2 again afterwards. Binary (0x8f95f0, x64 magic static):
+// `cmp [guard], tls_epoch; jg init` then `lea r8,[viewport]; jmp [ctx->vtbl+0x160]` (RSSetViewports); the init path
+// stores only Width (+8) and Height (+0xC); X, Y, MinDepth 0 and MaxDepth 1.0 are in .data. The guard is in .bss:
+// 0 = never initialised, -1 = being initialised, anything else = initialised. Callers: 0x8f84ff and 0x8f89a7
+// (phase_downsamp 0x8f8400), 0x8f8b90 and 0x8f957f (phase_ssao 0x8f89d0); no other reference.
+inline constexpr uint32_t ssao_set_viewport_rva = 0x8f95f0;
+inline constexpr uint32_t ssao_viewport_rva = 0xceebd0;          // D3D11_VIEWPORT {X, Y, Width, Height, MinDepth, MaxDepth}
+inline constexpr uint32_t ssao_viewport_width_offset = 0x8, ssao_viewport_height_offset = 0xc;
+inline constexpr uint32_t ssao_viewport_guard_rva = 0xd79284;    // int32 magic-static guard
+// The first 0x46 bytes of set_viewport, up to and including `lea r8,[rip+viewport]`; the displacements at +0x36
+// (guard, next instruction +0x3a) and +0x42 (viewport, next +0x46) prove both data addresses.
+inline constexpr const char* ssao_set_viewport_code =
+    "40534883ec408b0514704600488bd965488b1425580000000f297424300f28f2b9100002000f297c24200f28f9488b14c28b041139055afc47007f28488b034c8d059a553f00";
+// The CRender::o word0 bits phase_combine tests before calling the SSAO passes (0x8bca75: test al,0x20 / 0x40 ->
+// phase_hdao 0x8f9690; test al,4 -> phase_downsamp; test al,2 -> phase_ssao). Documentation and verifier only.
+inline constexpr uint32_t ssao_blur_on_bit = 1u << 1, ssao_opt_data_bit = 1u << 2, ssao_half_data_bit = 1u << 3,
+    ssao_hdao_bit = 1u << 5, ssao_ultra_bit = 1u << 6;
+
 // CRT (SH_RT.h:6-38; 0x50 bytes, allocated by CResourceManager::_CreateRT).
 inline constexpr uint32_t crt_size = 0x50, crt_reference_offset = 0x0, crt_surface_offset = 0x10, crt_rtv_offset = 0x18,
     crt_dsv_offset = 0x20, crt_uav_offset = 0x28, crt_texture_offset = 0x30, crt_width_offset = 0x38,

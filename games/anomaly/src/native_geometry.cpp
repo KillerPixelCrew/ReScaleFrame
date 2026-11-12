@@ -367,10 +367,15 @@ void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod
 
 // Draw-time call site. CBackend::constants.flush runs once per D3D draw (or dispatch), after every state apply and
 // immediately before DrawIndexed/Draw, so the world matrix and bone palette are the ones the draw uses.
+std::atomic<FlushCallback> flush_callback{};
 void __fastcall flush_hook()
 {
-    geometry_observe_draw();
+    DrawTimeFacts facts;
+    std::optional<DrawCapture> capture;
+    observe_draw_facts(facts, capture);
     reinterpret_cast<Flush>(originals[geometry_site_flush])();
+    // After the original: every native upload is done and the engine's D3D draw call is next.
+    if (const auto callback = flush_callback.load(std::memory_order_acquire)) callback(facts);
 }
 
 // First-person projection. r_dsgraph_render_hud draws mapHUD under the HUD projection for its whole body.
@@ -433,12 +438,23 @@ void __fastcall rm_normal_hook(void* self)
 }
 }
 
-void geometry_observe_draw() noexcept
+void observe_draw_facts(DrawTimeFacts& facts, std::optional<DrawCapture>& kept) noexcept
 {
-    if (!capture_enabled.load(std::memory_order_relaxed)) return;
-    const auto pass = read_pass(native_module.load());
-    flush_total[static_cast<std::size_t>(pass)].fetch_add(1);
     const auto scope = DrawScope::current_;
+    if (scope) {
+        facts.in_visual = true;
+        facts.classification = scope->identity_.classification;
+        facts.kind = scope->identity_.kind;
+        facts.view = scope->identity_.view;
+        facts.domain = scope->identity_.domain;
+    } else if (const auto context = DrawContextScope::current_) {
+        facts.view = context->view_;
+        facts.domain = context->domain_;
+    }
+    const auto pass = read_pass(native_module.load());
+    facts.pass = pass;
+    if (!capture_enabled.load(std::memory_order_relaxed)) return;
+    flush_total[static_cast<std::size_t>(pass)].fetch_add(1);
     if (!scope) return;
     flush_in_visual[static_cast<std::size_t>(pass)].fetch_add(1);
     const auto& classification = scope->identity_.classification;
@@ -452,6 +468,18 @@ void geometry_observe_draw() noexcept
     if (!capture->world) capture_no_world.fetch_add(1);
     if (capture->kind == DrawKind::HardwareSkinned && capture->bones.empty()) capture_no_palette.fetch_add(1);
     if (draw_sink.draw) { draw_sink.draw(draw_sink.context, *capture); sunk.fetch_add(1); }
+    kept = std::move(capture);
+    facts.capture = &*kept;
+}
+void geometry_observe_draw() noexcept
+{
+    DrawTimeFacts facts;
+    std::optional<DrawCapture> capture;
+    observe_draw_facts(facts, capture);
+}
+void geometry_set_flush_callback(FlushCallback value) noexcept
+{
+    flush_callback.store(value, std::memory_order_release);
 }
 std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept
 {

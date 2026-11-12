@@ -26,6 +26,17 @@ std::size_t RetirementQueue::drain(temporal::TemporalHistory& history)
     return keys.size();
 }
 
+std::size_t RetirementQueue::drain(void (*apply)(void*, temporal::InstanceKey), void* user)
+{
+    std::vector<temporal::InstanceKey> keys;
+    {
+        const std::lock_guard lock(mutex_);
+        keys.swap(pending_);
+    }
+    if (apply) for (const auto key : keys) apply(user, key);
+    return keys.size();
+}
+
 std::uint64_t RetirementQueue::dropped() const noexcept
 {
     const std::lock_guard lock(mutex_);

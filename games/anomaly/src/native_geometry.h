@@ -86,6 +86,8 @@ struct DrawCapture {
     std::uint64_t palette_layout{};
     std::vector<temporal::Mat4> bones;
 };
+struct DrawTimeFacts;
+void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
 class DrawContextScope {
 public:
     struct InheritView {};
@@ -97,6 +99,7 @@ public:
     DrawContextScope& operator=(const DrawContextScope&) = delete;
 private:
     friend class DrawScope;
+    friend void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
     std::optional<temporal::ViewId> view_;
     std::optional<temporal::ProjectionDomain> domain_;
     DrawContextScope* previous_{};
@@ -112,6 +115,7 @@ public:
 private:
     friend const DrawIdentity* borrow_draw() noexcept;
     friend void geometry_observe_draw() noexcept;
+    friend void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
     const IdentityRegistry& registry_;
     DrawIdentity identity_{};
     DrawScope* previous_{};
@@ -138,6 +142,21 @@ struct DrawSink {
     void (*draw)(void*, const DrawCapture&) noexcept{};
 };
 void geometry_set_draw_sink(DrawSink) noexcept; // Set only with native hooks quiescent.
+// What the draw-time call site knows about one draw, handed to the flush callback.
+struct DrawTimeFacts {
+    bool in_visual{};                          // inside a hooked visual's Render (a DrawScope)
+    DrawPass pass{DrawPass::Unknown};          // CRender::phase at the flush
+    DrawClassification classification{};       // valid only with in_visual
+    DrawKind kind{};                           // valid only with in_visual
+    std::optional<temporal::ViewId> view;      // from the draw scope, else the enclosing context scope
+    std::optional<temporal::ProjectionDomain> domain;
+    const DrawCapture* capture{};              // the identified main-pass capture of this draw, else null
+};
+// Shared CBackend::constants.flush slot. Called on the render thread AFTER the original flush returned, i.e. after
+// every native constant upload and state apply and immediately before the engine's D3D draw call, whether or not
+// geometry capture is enabled. Must not throw or reenter the renderer. Null clears it.
+using FlushCallback = void (*)(const DrawTimeFacts&) noexcept;
+void geometry_set_flush_callback(FlushCallback) noexcept;
 // Shared CRender::rmNear slot. The geometry producer owns the only detour on rmNear (geometry_site_rm_near); other
 // adapter users (SR world window) register here instead of patching the same bytes a second time. Called on the
 // render thread after the original rmNear returned, whether or not geometry capture is enabled. Null clears it.

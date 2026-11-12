@@ -481,6 +481,80 @@ def verify_samplers(pe, f, log):
                f'{[hex(j) for j in jumps + calls]}), ps_r__tf_Mipbias {bias:#x}, SetMaxAnisotropy {set_aniso:#x}')
 
 
+def verify_stage2(pe, p, log):
+    """SR Stage 2 data: the world-target table, the absent targets, the SSAO helper's static viewport and its callers,
+    the half-size rule of rt_half_depth, and the SSAO dispatch in phase_combine."""
+    slots = {name: (offset, fmt) for name, offset, fmt in p['slots']}
+    body = re.search(r'sr_world_targets\{\{(.*?)\}\};', TEXT, re.S).group(1)
+    world = [(n, int(o, 16), int(f), a == 'true', h == 'true') for n, o, f, a, h in
+             re.findall(r'\{"(\$user\$[^"]+)", (0x[0-9a-f]+), (\d+), (true|false), (true|false)\}', body)]
+    declared = int(re.search(r'array<WorldTarget, (\d+)> sr_world_targets', TEXT).group(1))
+    assert len(world) == declared == 9, ('sr_world_targets parse', len(world), declared)
+    order = ['$user$generic0', '$user$generic_temp', '$user$position', '$user$albedo', '$user$accum', '$user$generic1',
+             '$user$generic2', '$user$half_depth', '$user$ssao_temp']
+    assert [w[0] for w in world] == order, 'sr_world_targets order must match sr::Slot'
+    for name, offset, fmt, optional, half in world:
+        assert slots.get(name) == (offset, fmt), ('world target differs from target_slots', name)
+        assert optional == (name in ('$user$generic2', '$user$half_depth', '$user$ssao_temp')), ('optional', name)
+        assert half == (name == '$user$half_depth'), ('half_allowed', name)
+    absent = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', re.search(r'sr_world_absent_offsets\{(.*?)\};', TEXT).group(1))]
+    by_offset = {offset: name for name, (offset, _) in slots.items()}
+    assert [by_offset.get(o) for o in absent] == ['$user$msaadepth', '$user$generic0_r', '$user$generic1_r', '$user$accum_temp'], absent
+    assert set(absent).isdisjoint({w[1] for w in world})
+    # rt_half_depth (r4_rendertarget.cpp:705-720): `test al,4` (ssao_opt_data), Device.dwWidth/dwHeight into r8d/r9d,
+    # `test al,8` (ssao_half_data) then `shr r8d,1; shr r9d,1`, R16F (0x6f) or R32F on NVIDIA, slot +0x590.
+    word0 = ints(TEXT, 'render_options_word0_rva')
+    width, height = ints(NATIVE.read_text(), 'device_width_rva'), ints(NATIVE.read_text(), 'device_height_rva')
+    at = 0x855433
+    code = pe.read(at, 0x55)
+    assert code[:2] == b'\x8b\x05' and pe.rel_target(at, 6, 2) == word0, 'half_depth: o word0 load'
+    assert code[6:10] == b'\xa8\x04\x74\x78', 'half_depth: test o.ssao_opt_data'
+    assert code[10:13] == b'\x44\x8b\x05' and pe.rel_target(at + 10, 7, 3) == width, 'half_depth: Device.dwWidth'
+    assert code[17:20] == b'\x44\x8b\x0d' and pe.rel_target(at + 17, 7, 3) == height, 'half_depth: Device.dwHeight'
+    assert code[24:34] == bytes.fromhex('a808740641d1e841d1e9'), 'half_depth: o.ssao_half_data -> w/2, h/2'
+    assert code[44:47] == b'\x48\x8d\x15' and pe.rel_target(at + 44, 7, 3) in pe.string_rvas('$user$half_depth'), 'half_depth name'
+    assert code[51:56] == bytes.fromhex('b86f000000') and code[69:76] == b'\x49\x8d\x8f' + struct.pack('<I', 0x590), 'half_depth R16F, +0x590'
+    bits = {k: ints(TEXT, k) for k in ('ssao_blur_on_bit', 'ssao_opt_data_bit', 'ssao_half_data_bit', 'ssao_hdao_bit', 'ssao_ultra_bit')}
+    assert bits['ssao_opt_data_bit'] == 4 and bits['ssao_half_data_bit'] == 8
+    # phase_combine (phase_combine.cpp:61-77): hdao (0x20 && 0x40), else opt_data (4) -> phase_downsamp, else blur_on (2)
+    # -> phase_ssao.
+    at = 0x8bca75
+    code = pe.read(at, 0x38)
+    assert code[:2] == b'\x8b\x05' and pe.rel_target(at, 6, 2) == word0, 'phase_combine: o word0 load'
+    assert code[6:8] == bytes([0xa8, bits['ssao_hdao_bit']]) and code[10:12] == bytes([0xa8, bits['ssao_ultra_bit']])
+    hdao, downsamp, ssao = pe.call_target(0x8bca8e), pe.call_target(0x8bca9c), pe.call_target(0x8bcaaa)
+    assert code[0x20:0x22] == bytes([0xa8, bits['ssao_opt_data_bit']]) and code[0x2e:0x30] == bytes([0xa8, bits['ssao_blur_on_bit']])
+    assert (hdao, downsamp, ssao) == (0x8f9690, 0x8f8400, 0x8f89d0), [hex(x) for x in (hdao, downsamp, ssao)]
+    callers = pe.callers(hdao, downsamp, ssao)
+    assert callers[hdao] == [0x8bca8e] and callers[downsamp] == [0x8bca9c] and callers[ssao] == [0x8bcaaa], callers
+    # set_viewport: the code bytes the adapter checks at install, both data addresses from their displacements.
+    helper = ints(TEXT, 'ssao_set_viewport_rva')
+    expected = bytes.fromhex(re.search(r'ssao_set_viewport_code =\s*"([0-9a-f]+)"', TEXT).group(1))
+    assert len(expected) == 0x46 and pe.read(helper, len(expected)) == expected, 'set_viewport code'
+    viewport, guard = ints(TEXT, 'ssao_viewport_rva'), ints(TEXT, 'ssao_viewport_guard_rva')
+    assert expected[0x34:0x36] == b'\x39\x05' and pe.rel_target(helper + 0x34, 6, 2) == guard, 'cmp [guard], tls epoch'
+    assert expected[0x3a] == 0x7f, 'jg: the initialisation path'
+    assert expected[0x3f:0x42] == b'\x4c\x8d\x05' and pe.rel_target(helper + 0x3f, 7, 3) == viewport, 'lea r8,[viewport]'
+    tail = pe.read(helper + 0x46, 0x42)
+    assert tail[:2] == b'\xba\x01' and bytes.fromhex('ffa060010000') in tail, 'RSSetViewports(1, &viewport) via vtable +0x160'
+    # Initialisation path: only Width (+8) and Height (+0xC) are stored (movss [rip+x], xmm7 / xmm6).
+    assert pe.read(helper + 0x80, 4) == b'\xf3\x0f\x11\x3d' and pe.rel_target(helper + 0x80, 8, 4) == viewport + ints(TEXT, 'ssao_viewport_width_offset')
+    assert pe.read(helper + 0x88, 4) == b'\xf3\x0f\x11\x35' and pe.rel_target(helper + 0x88, 8, 4) == viewport + ints(TEXT, 'ssao_viewport_height_offset')
+    # .data initialiser {0, 0, w, h, 0, 1.0f}; the guard lies past the section's raw data (zero-initialised .bss).
+    assert pe.read(viewport, 24) == struct.pack('<6f', 0, 0, 0, 0, 0, 1.0), pe.read(viewport, 24).hex()
+    section = next(s for s in pe.sections if s[0] <= guard < s[0] + s[1])
+    assert guard >= section[0] + section[3] and viewport < section[0] + section[3], 'guard in .bss, viewport in .data'
+    # Every reference to either address is inside set_viewport, and set_viewport has exactly the four stock callers.
+    refs = [(a, t) for a, t in pe.rip_operands(pe.text_va, pe.text_va + len(pe.code)) if t in (viewport, guard)]
+    assert refs and all(helper <= a < helper + 0x98 for a, _ in refs), [hex(a) for a, _ in refs]
+    calls = pe.callers(helper)[helper]
+    assert sorted(calls) == [0x8f84ff, 0x8f89a7, 0x8f8b90, 0x8f957f], [hex(c) for c in calls]
+    assert all(downsamp <= c < helper for c in calls), 'callers inside phase_downsamp/phase_ssao'
+    log.append(f'Stage 2: {len(world)} world targets (= target_slots), absent {[hex(o) for o in absent]}; rt_half_depth halves with '
+               f'ssao_half_data; SSAO dispatch hdao {hdao:#x} downsamp {downsamp:#x} ssao {ssao:#x}; set_viewport {helper:#x} '
+               f'static viewport {viewport:#x} (.data), guard {guard:#x} (.bss), callers {[hex(c) for c in sorted(calls)]}')
+
+
 def verify(pe):
     assert PROFILE.exists(), 'missing games/anomaly/src/sr_profile.h'
     p = parse(TEXT)
@@ -496,11 +570,12 @@ def verify(pe):
     verify_crt_texture(pe, log)
     verify_backend(pe, f, log)
     verify_samplers(pe, f, log)
+    verify_stage2(pe, p, log)
     for line in log:
         print(line)
     print(f'PASS: {len(p["functions"])} function guards, {len(p["calls"])} call-site guards, {len(p["unique"])} '
           f'extended unique guards, {len(p["first_person"])} first-person sites, {len(p["slots"])} CRenderTarget slots, '
-          'CRT/CTexture/RCache/R_xforms/SSManager layouts')
+          'CRT/CTexture/RCache/R_xforms/SSManager layouts, Stage 2 world targets and SSAO viewport static')
 
 
 TEXT = PROFILE.read_text() if PROFILE.exists() else ''

@@ -1,5 +1,17 @@
 # Implementation tracker
 
+## Anomaly SR Stage 2 and motion MRT, 12 November 2026
+
+The ae714a2 game run accepted the overlay panel (seen through adapter captures, click applied
+and persisted, relayout on resize) and SR Stage 1 (counters consistent, 0 faults, images
+matching stock within run-to-run noise; the glass-pane difference is stock brightness drift).
+SR Stage 2 (`SRStage=2`, `SRScale`) renders nine world targets, depth and the viewport at render
+size and upscales once at the seam; occlusion queries get a render-size stand-in RT and the SSAO
+static viewport is swapped. `Motion=1` recompiles allowlisted shaders byte-exactly, swaps in
+motion variants per draw with b13 history, keeps RTV2 bound and replays unpaired occluders as
+zero motion. Release VS2026: 183 discovered, 172 passed, 11 optional skips, fmt/Clippy. Stage 2
+and Motion are fixture-tested only. [SR seam](research/anomaly-sr-seam.md).
+
 ## Anomaly overlay capture and SR Stage 1, 12 November 2026
 
 The d75a881 game run configured and activated the overlay with working DirectInput gating, but

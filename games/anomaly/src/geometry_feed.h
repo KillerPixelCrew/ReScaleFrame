@@ -17,6 +17,8 @@ public:
     static void sink(void* queue, temporal::InstanceKey key) noexcept;
     // Render thread only. Applies every queued retirement to the history that owns the frame.
     std::size_t drain(temporal::TemporalHistory& history);
+    // Same, for another render-thread history owner (the motion stage's draw-time history).
+    std::size_t drain(void (*apply)(void* user, temporal::InstanceKey), void* user);
     // Retirements that could not be queued. Stale snapshots stay harmless because the new generation
     // never equals an old key and the registry refuses retired draws, but the count is evidence.
     std::uint64_t dropped() const noexcept;

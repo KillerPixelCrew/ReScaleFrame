@@ -7,6 +7,13 @@ file(READ "${RSF_ANOMALY_SR_SHADER}" RSF_ANOMALY_SR_SHADER_TEXT)
 file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_roundtrip_hlsl.h"
     CONTENT "// Generated from games/anomaly/shaders/sr/rsf_sr_roundtrip.hlsl. Do not edit.\n#pragma once\ninline constexpr char rsf_sr_roundtrip_hlsl[] = R\"rsf_hlsl(@RSF_ANOMALY_SR_SHADER_TEXT@)rsf_hlsl\";\n"
     @ONLY NEWLINE_STYLE LF)
+# SR Stage 2 seam upscale shader, embedded the same way.
+set(RSF_ANOMALY_SR_UPSCALE_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sr/rsf_sr_upscale.hlsl")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RSF_ANOMALY_SR_UPSCALE_SHADER}")
+file(READ "${RSF_ANOMALY_SR_UPSCALE_SHADER}" RSF_ANOMALY_SR_UPSCALE_SHADER_TEXT)
+file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_upscale_hlsl.h"
+    CONTENT "// Generated from games/anomaly/shaders/sr/rsf_sr_upscale.hlsl. Do not edit.\n#pragma once\ninline constexpr char rsf_sr_upscale_hlsl[] = R\"rsf_hlsl(@RSF_ANOMALY_SR_UPSCALE_SHADER_TEXT@)rsf_hlsl\";\n"
+    @ONLY NEWLINE_STYLE LF)
 add_library(rsf_anomaly_sr_shaders INTERFACE)
 target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GENERATED}")
 
@@ -19,3 +26,9 @@ target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::GameSDK ReScaleFram
 # Stage 1 uses only the generic immediate-context state scope (d3d11_state) and the texture-dump view enum header.
 target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")
+
+# Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time
+# history and the invalidation replay. Inert unless [Anomaly] Motion=1.
+target_sources(rsf_game_anomaly PRIVATE src/motion_constants.cpp src/motion_history.cpp src/motion_policy.cpp
+    src/motion_target.cpp src/motion_d3d11.cpp src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
+target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
