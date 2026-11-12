@@ -93,6 +93,11 @@ inline constexpr uint32_t rm_near_slot = 55, rm_far_slot = 56, rm_normal_slot = 
 inline constexpr uint32_t device_view_rva = 0xd376c8;            // Device.mView
 inline constexpr uint32_t device_project_rva = 0xd37708;         // Device.mProject
 inline constexpr uint32_t device_full_transform_rva = 0xd37748;  // Device.mFullTransform
+// Loading screen. CRenderDevice::PreCache registers load_screen_renderer (b_registered = 1, b_need_user_input = the next byte)
+// and CGamePersistent::OnFrame stops it only when dwPrecacheFrame is 0 and the "Press any key to continue" sequence is done,
+// so the flag stays set through the key wait, when the world still renders under the loading screen and dwPrecacheFrame is 0.
+inline constexpr uint32_t device_precache_frame_rva = 0xd37670;  // Device.dwPrecacheFrame (device_width_rva + 8)
+inline constexpr uint32_t load_screen_registered_rva = 0xce41b0; // load_screen_renderer.b_registered (bool)
 inline constexpr uint32_t hw_device_rva = 0xceb8d0, hw_context_rva = 0xceb8d8, hw_swap_chain_rva = 0xceb8e0;
 inline constexpr uint32_t hw_base_rt_rva = 0xceb8e8, hw_base_zb_rva = 0xceb8f0;  // HW.pBaseRT, HW.pBaseZB
 inline constexpr uint32_t render_implementation_rva = 0xd64e40;  // RImplementation (CRender)

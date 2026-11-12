@@ -1017,8 +1017,12 @@ Runs: A `SRStage=2` (0.67, `SRStageCapture=1`); B `SRStage=3 SRJitter=0` (mip bi
 `SRStageCapture=1` (burst of 8; `SRStageCaptureCount=18` covers a whole sequence at 0.67); D as C with `SRMipBias=0`;
 E as C with `Motion=1` and F10 motion captures. Check:
 
-1. C burst: `--measure-jitter` world displacement equals the recorded jitter difference (expected within 0.1 px on static
-   content; animated foliage, rain and grain add noise, so pick a static `--region`).
+1. C burst: `--measure-jitter` world displacement equals the recorded jitter difference within 0.05 render px over
+   the whole frame and over a static, non-periodic region of at least 64 px (animated foliage, rain, grain and
+   striped textures add noise or alias). Correction, 13 November: the first estimator (Hann-windowed
+   cross-correlation) recovered only 74-80% of each shift, so the e991e89 burst read 0.163 px. The
+   Gauss-Newton/Catmull-Rom estimator measures the same burst at 0.025 px worst; recorded jitter units, sign
+   and frame timing were correct. Captures now wait for 30 frames clear of the loading screen.
 2. Weapon: `--region` on the weapon gives the same displacement as the world (no relative shimmer); `fp_jittered` > 0.
 3. Shadows and UI: shadow edges move with the surfaces they fall on (same displacement, no extra crawl); `--final-region`
    on a HUD element measures 0.

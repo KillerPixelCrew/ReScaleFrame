@@ -214,12 +214,46 @@ void motion_cancellation() {
     }
     CHECK(checked == 57);
 }
+// The wave 6 failure: a burst started while the "Press any key to continue" screen was up (the world renders under it, the
+// frames reach H1, frames_without_world does not move, only the engine's loading-screen flag is set).
+void burst_gate() {
+    BurstGate gate;
+    uint64_t no_world = 7;
+    // The very first frame has nothing to compare with and is held; the loading screen holds for any length.
+    CHECK(!gate.frame(true, no_world, false).capture);
+    for (int frame = 0; frame < 1200; ++frame) {
+        const auto verdict = gate.frame(true, no_world, false);
+        CHECK(!verdict.capture && !verdict.discard);
+    }
+    CHECK(gate.clear_frames() == 0 && gate.restarts() == 0);
+    // After dismissal the burst waits for the settle frames: 29 clear frames hold, the 30th starts it.
+    for (uint32_t frame = 1; frame < BurstGate::default_settle_frames; ++frame) CHECK(!gate.frame(false, no_world, false).capture);
+    CHECK(gate.clear_frames() == BurstGate::default_settle_frames - 1);
+    CHECK(gate.frame(false, no_world, false).capture);
+    // Once frames are taken it continues without waiting.
+    for (int frame = 0; frame < 5; ++frame) { const auto verdict = gate.frame(false, no_world, true); CHECK(verdict.capture && !verdict.discard); }
+    // A menu or loading frame (a frame that never reached H1) in the middle discards the frames and starts over.
+    ++no_world;
+    auto verdict = gate.frame(false, no_world, true);
+    CHECK(!verdict.capture && verdict.discard && gate.restarts() == 1 && gate.clear_frames() == 0);
+    for (uint32_t frame = 1; frame < BurstGate::default_settle_frames; ++frame) CHECK(!gate.frame(false, no_world, false).capture);
+    CHECK(gate.frame(false, no_world, false).capture);
+    // So does the loading screen appearing mid-burst, and one seen only just before Present.
+    verdict = gate.frame(true, no_world, true);
+    CHECK(!verdict.capture && verdict.discard && gate.restarts() == 2);
+    for (uint32_t frame = 0; frame < BurstGate::default_settle_frames; ++frame) gate.frame(false, no_world, false);
+    gate.interrupted();
+    CHECK(gate.restarts() == 3 && gate.clear_frames() == 0 && !gate.frame(false, no_world, false).capture);
+    // A held frame with nothing taken is not a restart; a custom settle of 1 starts on the first clear frame.
+    BurstGate quick(1);
+    CHECK(!quick.frame(false, 0, false).capture && quick.frame(false, 0, false).capture && quick.restarts() == 0);
+}
 }
 
 int main(int argc, char** argv) {
     struct { const char* name; void (*run)(); } cases[] = {{"halton", halton_sequence}, {"sequence", sequence_resets},
         {"ndc", ndc_offset}, {"first_person", first_person_rule}, {"mip_bias", mip_bias}, {"published", published_state},
-        {"motion_cancellation", motion_cancellation}};
+        {"motion_cancellation", motion_cancellation}, {"burst_gate", burst_gate}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;

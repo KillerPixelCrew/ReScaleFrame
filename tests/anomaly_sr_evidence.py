@@ -555,6 +555,36 @@ def verify_stage2(pe, p, log):
                f'static viewport {viewport:#x} (.data), guard {guard:#x} (.bss), callers {[hex(c) for c in sorted(calls)]}')
 
 
+def verify_loading_screen(pe, log):
+    """The burst capture gate reads Device.dwPrecacheFrame and load_screen_renderer.b_registered. Proof from the code that
+    uses them: CGamePersistent::game_loaded (the `intro_start game_loaded` message) tests dwPrecacheFrame <= 2 and
+    b_need_user_input (= b_registered + 1), and CRenderDevice::PreCache tests b_registered == 0 before it sets it to 1."""
+    precache, registered = ints(TEXT, 'device_precache_frame_rva'), ints(TEXT, 'load_screen_registered_rva')
+    width = ints(NATIVE.read_text(), 'device_width_rva')
+    assert precache == width + 8, 'Device.dwPrecacheFrame follows dwWidth and dwHeight'
+    message = [pe.rva(at) for at in pe.occurrences(b'intro_start game_loaded\0') if pe.data[at - 1:at] == b'\0']
+    assert len(message) == 1, 'one intro_start game_loaded string'
+    code, base = pe.code, pe.text_va
+    lea = [base + m.start() for m in re.finditer(rb'[\x48\x4c]\x8d[\x05\x0d\x15\x1d\x25\x2d\x35\x3d](....)', code, re.S)
+           if base + m.start() + 7 + struct.unpack('<i', m.group(1))[0] == message[0]]
+    assert len(lea) == 1, 'one reference to the string (CGamePersistent::game_loaded)'
+    start = lea[0] - 0x80
+    window = pe.read(start, 0x80)
+    cmp_precache = [m for m in re.finditer(rb'\x83\x3d(....)\x02', window, re.S)
+                    if start + m.start() + 7 + struct.unpack('<i', m.group(1))[0] == precache]
+    cmp_need_input = [m for m in re.finditer(rb'[\x40\x41]\x38[\x05\x0d\x15\x1d\x25\x2d\x35\x3d](....)', window, re.S)
+                      if start + m.start() + 7 + struct.unpack('<i', m.group(1))[0] == registered + 1]
+    assert cmp_precache and cmp_need_input, ('game_loaded does not read dwPrecacheFrame <= 2 and b_need_user_input',
+                                              len(cmp_precache), len(cmp_need_input))
+    def refs(pattern):
+        return [base + m.start() for m in re.finditer(pattern, code, re.S)
+                if base + m.start() + 7 + struct.unpack('<i', m.group(1))[0] == registered]
+    tests, sets = refs(rb'\x80\x3d(....)\x00'), refs(rb'\xc6\x05(....)\x01')
+    assert len(tests) == 1 and len(sets) == 1 and 0 < sets[0] - tests[0] < 0x40, ('PreCache test-then-set of b_registered', tests, sets)
+    log.append(f'Stage 3 capture gate: Device.dwPrecacheFrame {precache:#x}, load_screen_renderer.b_registered {registered:#x} '
+               f'(game_loaded {lea[0]:#x} reads dwPrecacheFrame and b_registered+1; PreCache {tests[0]:#x} tests, {sets[0]:#x} sets)')
+
+
 def verify_stage3(pe, f, p, log):
     """SR Stage 3 data: the adapter writes Device.mProject/mFullTransform and reads mView as three adjacent Fmatrix
     globals, calls R_xforms::set_P (the extended guard) and SetMipLODBias (xmm1), and at install checks every
@@ -582,6 +612,7 @@ def verify_stage3(pe, f, p, log):
     set_bias = f['dx10SamplerStateCache::SetMipLODBias']
     body = pe.read(set_bias, 0x20)
     assert b'\x0f\x2e\xc1' in body or b'\x0f\x2e\xc8' in body, ('ucomiss with xmm1', body.hex())
+    verify_loading_screen(pe, log)
     log.append(f'Stage 3: Device.mView/mProject/mFullTransform {view:#x}/{project:#x}/{full:#x} adjacent; set_P {set_p:#x} '
                f'extended guard; first-person sites {forms["slot55"]} via slot 55, {forms["direct"]} direct rmNear; '
                f'SetMipLODBias {set_bias:#x} compares xmm1 with the cached bias')
@@ -596,38 +627,82 @@ def _np():
     return numpy
 
 
-def _upsampled_dft(np, data, size, factor, offsets):
-    """Matrix-multiply DFT of `data` (frequency domain) upsampled by `factor` in a size x size window at `offsets`
-    (Guizar-Sicairos, Thurman and Fienup 2008, as in scikit-image's phase_cross_correlation)."""
-    rows, cols = data.shape
-    col_kernel = np.exp((-1j * 2 * np.pi / (cols * factor)) *
-                        (np.fft.ifftshift(np.arange(cols))[:, None] - np.floor(cols / 2)) * (np.arange(size) - offsets[1])[None, :])
-    row_kernel = np.exp((-1j * 2 * np.pi / (rows * factor)) *
-                        (np.arange(size)[:, None] - offsets[0]) * (np.fft.ifftshift(np.arange(rows))[None, :] - np.floor(rows / 2)))
-    return row_kernel @ data @ col_kernel
+def _blur(np, image, sigma):
+    """Separable Gaussian blur with edge replication."""
+    if sigma <= 0:
+        return image
+    radius = int(np.ceil(3 * sigma))
+    x = np.arange(-radius, radius + 1)
+    kernel = np.exp(-x ** 2 / (2.0 * sigma ** 2))
+    kernel /= kernel.sum()
+    padded = np.pad(image, radius, mode='edge')
+    height, width = image.shape
+    horizontal = sum(kernel[i] * padded[:, i:i + width] for i in range(2 * radius + 1))
+    return sum(kernel[i] * horizontal[i:i + height, :] for i in range(2 * radius + 1))
 
 
-def image_shift(np, reference, moving, factor=100):
-    """Displacement (dx, dy) in pixels of the content of `moving` relative to `reference` (+x right, +y down), from
-    cross-correlation of Hann-windowed, mean-removed images with 1/factor pixel refinement."""
-    window = np.outer(np.hanning(reference.shape[0]), np.hanning(reference.shape[1]))
-    a = (reference - reference.mean()) * window
-    b = (moving - moving.mean()) * window
-    # Plain (not whitened) cross-correlation: whitening equalises the noise floor (film grain, rain) with the signal
-    # and biases the subpixel peak; the band-limited correlation peak of a pure translation sits at the offset.
-    product = np.fft.fft2(a) * np.conj(np.fft.fft2(b))
-    correlation = np.fft.ifft2(product)
-    peak = np.array(np.unravel_index(np.argmax(np.abs(correlation)), correlation.shape), dtype=float)
-    shape = np.array(correlation.shape, dtype=float)
-    peak[peak > np.trunc(shape / 2)] -= shape[peak > np.trunc(shape / 2)]
-    region = np.ceil(factor * 1.5)
-    centre = np.trunc(region / 2)
-    shift = np.round(peak * factor) / factor
-    refined = np.conj(_upsampled_dft(np, np.conj(product), int(region), factor, centre - shift * factor))
-    fine = np.array(np.unravel_index(np.argmax(np.abs(refined)), refined.shape), dtype=float)
-    shift = shift + (fine - centre) / factor
-    # `shift` registers moving onto reference; the content moved by its negative.
-    return -shift[1], -shift[0]
+def _shifted(np, image, dx, dy, margin):
+    """image(x + dx, y + dy) for the interior pixels margin <= x < width - margin (Catmull-Rom). The fractional part of a
+    translation is the same for every pixel, so this is four shifted slices per axis, no gather."""
+    height, width = image.shape
+    ix, iy = int(np.floor(dx)), int(np.floor(dy))
+    def weights(t):
+        return (-0.5 * t ** 3 + t ** 2 - 0.5 * t, 1.5 * t ** 3 - 2.5 * t ** 2 + 1.0, -1.5 * t ** 3 + 2.0 * t ** 2 + 0.5 * t,
+                0.5 * t ** 3 - 0.5 * t ** 2)
+    wx, wy = weights(dx - ix), weights(dy - iy)
+    rows = slice(margin + iy - 1, height - margin + iy + 2)
+    assert margin + iy - 1 >= 0 and height - margin + iy + 2 <= height and margin + ix - 1 >= 0 and width - margin + ix + 2 <= width,         'shift larger than the margin'
+    band = image[rows, :]
+    horizontal = sum(wx[i] * band[:, margin + ix - 1 + i:width - margin + ix - 1 + i] for i in range(4))
+    return sum(wy[j] * horizontal[j:j + height - 2 * margin, :] for j in range(4))
+
+
+def image_shift(np, reference, moving, sigma=1.0, iterations=12, margin=8, detail=None):
+    """Displacement (dx, dy) in pixels of the content of `moving` relative to `reference` (+x right, +y down):
+    moving(x) = reference(x - d). Robust (Tukey) Gauss-Newton registration of the Gaussian-smoothed images with a
+    Catmull-Rom warp, started at the integer peak of a plain cross-correlation.
+
+    Windowed cross-correlation, which this used to be, is biased toward zero: the window does not move with the content,
+    and real frames have large low-frequency lighting and edges. On the synthetic frame of measure_self_test it was off by up to
+    0.3 px of a 0.44 px shift, and on the real Stage 3 burst it recovered 74 to 80 percent of every shift (worst error 0.163 px
+    over the whole frame, 0.124 px on the stove wall; this estimator: 0.025 and 0.012). detail, when a dict, receives `valid`
+    (fraction of pixels with nonzero weight) and `rms` (weighted residual)."""
+    a = np.asarray(reference, dtype=np.float64)
+    b = np.asarray(moving, dtype=np.float64)
+    assert a.shape == b.shape and min(a.shape) > 2 * margin + 8, ('region too small', a.shape)
+    # Integer start: peak of the cross-correlation of the mean-removed images (robust to larger moves, biased below one pixel).
+    product = np.fft.fft2(a - a.mean()) * np.conj(np.fft.fft2(b - b.mean()))
+    correlation = np.abs(np.fft.ifft2(product))
+    peak = np.array(np.unravel_index(int(np.argmax(correlation)), correlation.shape), dtype=float)
+    for axis in (0, 1):
+        if peak[axis] > a.shape[axis] // 2:
+            peak[axis] -= a.shape[axis]
+    d = np.array([float(np.clip(-np.round(peak[1]), -margin + 3, margin - 3)), float(np.clip(-np.round(peak[0]), -margin + 3, margin - 3))])
+    if abs(d[0]) < 1.0 and abs(d[1]) < 1.0:
+        d[:] = 0.0
+    sa, sb = _blur(np, a, sigma), _blur(np, b, sigma)
+    target = sa[margin:-margin, margin:-margin]
+    weight = np.ones_like(target)
+    residual = target
+    for step in range(iterations):
+        warped = _shifted(np, sb, d[0], d[1], margin)
+        gx = _shifted(np, sb, d[0] + 0.5, d[1], margin) - _shifted(np, sb, d[0] - 0.5, d[1], margin)
+        gy = _shifted(np, sb, d[0], d[1] + 0.5, margin) - _shifted(np, sb, d[0], d[1] - 0.5, margin)
+        residual = target - warped
+        if step >= 1:
+            scale = 1.4826 * np.median(np.abs(residual - np.median(residual))) + 1e-12
+            u = np.abs(residual) / (4.685 * scale)
+            weight = np.where(u < 1.0, (1.0 - u ** 2) ** 2, 0.0)
+        normal = np.array([[np.sum(weight * gx * gx), np.sum(weight * gx * gy)], [np.sum(weight * gx * gy), np.sum(weight * gy * gy)]])
+        rhs = np.array([np.sum(weight * gx * residual), np.sum(weight * gy * residual)])
+        delta = np.linalg.solve(normal + 1e-12 * np.eye(2), rhs)
+        d = d + delta
+        if np.abs(delta).max() < 1e-4:
+            break
+    if detail is not None:
+        detail['valid'] = float(np.mean(weight > 0))
+        detail['rms'] = float(np.sqrt(np.sum(weight * residual ** 2) / max(np.sum(weight), 1e-12)))
+    return float(d[0]), float(d[1])
 
 
 def _luminance(np, path, width, height, dxgi):
@@ -647,49 +722,67 @@ def _luminance(np, path, width, height, dxgi):
     return rgb @ np.array([0.2126, 0.7152, 0.0722])
 
 
-def measure_burst(directory, region=None, final_region=None, tolerance=0.15, out=None):
+def measure_burst(directory, region=None, final_region=None, tolerance=0.05, out=None, min_valid=0.25):
     """Reads a Stage 3 burst (burst.json, world_NN.bin, final_NN.bin) and compares the measured displacement of every
-    world frame against frame 0 with the jitter difference the adapter recorded. Returns the summary dict; `ok` is
-    False when any world error exceeds `tolerance` render pixels or a final region moved more than `tolerance`."""
+    world frame against the first usable frame with the jitter difference the adapter recorded. Frames flagged
+    `loading_screen` by the adapter, frames without a world copy and frames whose robust fit keeps fewer than `min_valid`
+    of the pixels are excluded and listed. `ok` is False when any usable frame's error exceeds `tolerance` render pixels,
+    fewer than two frames are usable, or a final region moved more than `tolerance`. Pass a static `region` (a wall, not
+    foliage, rain or the hands); without one the whole frame is used and the robust weights drop moving content."""
     import json
     np = _np()
     if np is None:
         raise SystemExit('numpy is required for --measure-jitter')
     directory = pathlib.Path(directory)
     index = json.loads((directory / 'burst.json').read_text())
-    frames = [f for f in index['frames'] if f['world']]
-    assert len(frames) >= 2, 'need at least two world frames'
-    def crop(image, box, border=4):
+    excluded = []
+    frames = []
+    for f in index['frames']:
+        if not f['world']:
+            excluded.append({'index': f['index'], 'reason': 'no world copy'})
+        elif f.get('loading_screen'):
+            excluded.append({'index': f['index'], 'reason': 'loading screen active'})
+        else:
+            frames.append(f)
+    assert len(frames) >= 2, ('need at least two usable world frames', excluded)
+    def crop(image, box, border=8):
         if box:
             x0, y0, x1, y1 = box
             return image[y0:y1, x0:x1]
         return image[border:-border, border:-border]
+    def world(f):
+        return crop(_luminance(np, directory / f'world_{f["index"]:02d}.bin', *f['world_size'], f['world_dxgi']), region)
+    def recorded(f):
+        return (f['jitter_px'][0], f['jitter_px'][1]) if f['applied'] else (0.0, 0.0)
     base = frames[0]
-    reference = crop(_luminance(np, directory / f'world_{base["index"]:02d}.bin', *base['world_size'], base['world_dxgi']), region)
+    reference = world(base)
     final_reference = None
     if final_region and base['final']:
         final_reference = crop(_luminance(np, directory / f'final_{base["index"]:02d}.bin', *base['final_size'], base['final_dxgi']),
                                final_region)
     rows, worst, worst_final = [], 0.0, 0.0
     for f in frames[1:]:
-        moving = crop(_luminance(np, directory / f'world_{f["index"]:02d}.bin', *f['world_size'], f['world_dxgi']), region)
-        dx, dy = (float(v) for v in image_shift(np, reference, moving))
-        jx = (f['jitter_px'][0] if f['applied'] else 0.0) - (base['jitter_px'][0] if base['applied'] else 0.0)
-        jy = (f['jitter_px'][1] if f['applied'] else 0.0) - (base['jitter_px'][1] if base['applied'] else 0.0)
+        detail = {}
+        dx, dy = image_shift(np, reference, world(f), detail=detail)
+        jx, jy = (a - b for a, b in zip(recorded(f), recorded(base)))
         error = max(abs(dx - jx), abs(dy - jy))
-        worst = max(worst, error)
         row = {'index': f['index'], 'sequence_index': f['sequence_index'], 'expected': [round(jx, 4), round(jy, 4)],
-               'measured': [round(dx, 4), round(dy, 4)], 'error_px': round(error, 4)}
+               'measured': [round(dx, 4), round(dy, 4)], 'error_px': round(error, 4), 'valid': round(detail['valid'], 3),
+               'rms': round(detail['rms'], 5)}
+        if detail['valid'] < min_valid:
+            excluded.append({'index': f['index'], 'reason': f'robust fit kept {detail["valid"]:.2f} of the pixels', 'measured': row['measured']})
+            continue
+        worst = max(worst, error)
         if final_reference is not None and f['final']:
-            fdx, fdy = (float(v) for v in image_shift(np, final_reference, crop(_luminance(np, directory / f'final_{f["index"]:02d}.bin',
-                                                                        *f['final_size'], f['final_dxgi']), final_region)))
+            fdx, fdy = image_shift(np, final_reference, crop(_luminance(np, directory / f'final_{f["index"]:02d}.bin',
+                                                                       *f['final_size'], f['final_dxgi']), final_region))
             row['final_region_shift'] = [round(fdx, 4), round(fdy, 4)]
             worst_final = max(worst_final, abs(fdx), abs(fdy))
         rows.append(row)
-    summary = {'directory': str(directory), 'region': region, 'final_region': final_region, 'frames': rows,
-               'worst_world_error_px': round(float(worst), 4), 'tolerance_px': tolerance,
+    summary = {'directory': str(directory), 'region': region, 'final_region': final_region, 'base_index': base['index'],
+               'frames': rows, 'excluded': excluded, 'worst_world_error_px': round(float(worst), 4), 'tolerance_px': tolerance,
                'worst_final_region_shift_px': round(float(worst_final), 4) if final_reference is not None else None}
-    summary['ok'] = bool(worst <= tolerance and (final_reference is None or worst_final <= tolerance))
+    summary['ok'] = bool(len(rows) >= 1 and worst <= tolerance and (final_reference is None or worst_final <= tolerance))
     text = json.dumps(summary, indent=1)
     print(text)
     if out:
@@ -697,9 +790,27 @@ def measure_burst(directory, region=None, final_region=None, tolerance=0.15, out
     return summary
 
 
+def _synthetic_world(np, width, height, texture, jx, jy, magnification=0.7):
+    """A rasterized-looking frame whose image moved by (jx, jy) render pixels: a bilinear-filtered texture sampled at pixel
+    centres (no anti-aliasing, like the engine's world pass) under a large smooth light, with hard edges. The light and the
+    edges are what biased the old windowed cross-correlation."""
+    xs, ys = (np.arange(width) + 0.5 - jx) * magnification - 0.5, (np.arange(height) + 0.5 - jy) * magnification - 0.5
+    x0, y0 = np.floor(xs).astype(int), np.floor(ys).astype(int)
+    fx, fy = (xs - x0)[None, :], (ys - y0)[:, None]
+    def tap(dy, dx):
+        return texture[np.clip(y0 + dy, 0, texture.shape[0] - 1)[:, None], np.clip(x0 + dx, 0, texture.shape[1] - 1)[None, :]]
+    base = (tap(0, 0) * (1 - fx) + tap(0, 1) * fx) * (1 - fy) + (tap(1, 0) * (1 - fx) + tap(1, 1) * fx) * fy
+    x, y = np.arange(width)[None, :] + 0.5 - jx, np.arange(height)[:, None] + 0.5 - jy
+    light = 0.15 + 0.85 * np.exp(-((x - width * 0.35) / (width * 0.45)) ** 2 - ((y - height * 0.4) / (height * 0.6)) ** 2)
+    edges = ((x > width * 0.2) & (x < width * 0.27)) * 0.35 + ((y > height * 0.3) & (y < height * 0.32)) * 0.25 +         ((x > width * 0.7) & (y > height * 0.4)) * 0.3
+    return base * light * (1 + 0.5 * x / width + 0.3 * y / height) + edges
+
+
 def measure_self_test():
-    """Synthetic burst: a band-limited random image shifted by Fourier translation by the first 8 Halton(2,3) samples
-    (mean-free noise added), plus a static 'UI' image. The measurement must recover each offset within 0.03 px."""
+    """Synthetic burst. A rasterized, point-sampled textured scene with strong light and edges moves by the first 8 Halton
+    (2,3) samples of an 18-phase sequence, one patch of the image moves on its own (a hand or foliage), one frame is flagged
+    as a loading screen and carries unrelated content, and a static 'UI' image stays put in the back buffer. Every offset
+    must be recovered within 0.03 px with a slope of 1 (the old windowed cross-correlation was off by up to 0.3 px here)."""
     import json
     import tempfile
     np = _np()
@@ -707,10 +818,11 @@ def measure_self_test():
         print('SKIP: numpy unavailable')
         return 77
     rng = np.random.default_rng(7)
-    h, w = 96, 144
-    spectrum = np.fft.fft2(rng.standard_normal((h, w)))
-    fy, fx = np.fft.fftfreq(h)[:, None], np.fft.fftfreq(w)[None, :]
-    spectrum *= np.exp(-(fx ** 2 + fy ** 2) / (2 * 0.08 ** 2))   # smooth, band-limited content
+    size, h, w = 512, 180, 320
+    spectrum = np.fft.fft2(rng.random((size, size)))
+    spectrum *= np.exp(-(np.fft.fftfreq(size)[:, None] ** 2 + np.fft.fftfreq(size)[None, :] ** 2) * (2 * np.pi ** 2) * 1.5 ** 2)
+    texture = np.real(np.fft.ifft2(spectrum))
+    texture = (texture - texture.min()) / (texture.max() - texture.min()) * 0.5
     def halton(i, b):
         r, f = 0.0, 1.0
         while i:
@@ -718,24 +830,37 @@ def measure_self_test():
             r += f * (i % b)
             i //= b
         return r
-    samples = [(halton(i + 1, 2) - 0.5, halton(i + 1, 3) - 0.5) for i in range(8)]
+    samples = [(halton(i + 6, 2) - 0.5, halton(i + 6, 3) - 0.5) for i in range(9)]
     ui = (rng.random((h * 2, w * 2)) > 0.5).astype(np.float64)
+    loading_slot = 4
     with tempfile.TemporaryDirectory() as temp:
         root = pathlib.Path(temp)
         frames = []
         for i, (jx, jy) in enumerate(samples):
-            shifted = np.real(np.fft.ifft2(spectrum * np.exp(-2j * np.pi * (fx * jx + fy * jy))))
-            shifted = 0.5 + 0.1 * shifted / np.abs(shifted).max() + rng.normal(0, 0.002, shifted.shape)
-            rgba = np.stack([shifted, shifted, shifted, np.ones_like(shifted)], axis=-1).astype('<f2')
+            image = _synthetic_world(np, w, h, texture, jx, jy)
+            image[40:75, 200:260] = 0.2 + 0.5 * rng.random((35, 60))   # content with its own motion
+            if i == loading_slot:
+                image = rng.random((h, w))                               # loading screen: unrelated content
+            image = image + rng.normal(0, 0.002, image.shape)
+            rgba = np.stack([image, image, image, np.ones_like(image)], axis=-1).astype('<f2')
             (root / f'world_{i:02d}.bin').write_bytes(rgba.tobytes())
             final = np.stack([ui * 255] * 3 + [np.full_like(ui, 255)], axis=-1).astype(np.uint8)
             (root / f'final_{i:02d}.bin').write_bytes(final.tobytes())
             frames.append({'index': i, 'sequence_index': i, 'applied': True, 'jitter_px': [jx, jy], 'world': True,
-                           'world_size': [w, h], 'world_dxgi': 10, 'final': True, 'final_size': [w * 2, h * 2], 'final_dxgi': 28})
+                           'loading_screen': i == loading_slot, 'world_size': [w, h], 'world_dxgi': 10, 'final': True,
+                           'final_size': [w * 2, h * 2], 'final_dxgi': 28})
         (root / 'burst.json').write_text(json.dumps({'frames': frames}))
         summary = measure_burst(root, final_region=[10, 10, 200, 150], tolerance=0.03)
     assert summary['ok'], summary
-    print(f'PASS: measured {len(summary["frames"])} synthetic subpixel offsets, worst error {summary["worst_world_error_px"]} px')
+    assert [e['index'] for e in summary['excluded']] == [loading_slot], summary['excluded']
+    assert len(summary['frames']) == len(samples) - 2, summary
+    expected = np.array([r['expected'] for r in summary['frames']])
+    measured = np.array([r['measured'] for r in summary['frames']])
+    for axis in (0, 1):
+        slope = float((measured[:, axis] * expected[:, axis]).sum() / (expected[:, axis] ** 2).sum())
+        assert abs(slope - 1.0) < 0.03, ('biased slope', axis, slope)
+    print(f'PASS: measured {len(summary["frames"])} synthetic subpixel offsets (loading frame excluded, moving patch rejected), '
+          f'worst error {summary["worst_world_error_px"]} px')
     return 0
 
 
@@ -776,7 +901,7 @@ if __name__ == '__main__':
                         help='world sub-rectangle in render pixels (for example the first-person weapon)')
     parser.add_argument('--final-region', nargs=4, type=int, metavar=('X0', 'Y0', 'X1', 'Y1'),
                         help='back-buffer sub-rectangle that must not move (HUD/UI), output pixels')
-    parser.add_argument('--tolerance', type=float, default=0.15, help='pass threshold in pixels (default 0.15)')
+    parser.add_argument('--tolerance', type=float, default=0.05, help='pass threshold in render pixels (default 0.05)')
     parser.add_argument('--out', help='also write the measurement summary JSON here')
     parser.add_argument('--measure-self-test', action='store_true', help='synthetic check of the burst measurement')
     args = parser.parse_args()

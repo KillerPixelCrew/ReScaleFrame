@@ -90,6 +90,45 @@ private:
     uint64_t resets_{}, frames_{};
 };
 
+// ---- burst capture gating -----------------------------------------------------------------------------------------------
+// A Stage 3 jitter burst must hold consecutive, clean main-view frames. The wave 6 game run started it while the "Press any
+// key to continue" screen was up: the world still renders under that screen (frames reach H1, so frames_without_world does
+// not move), and every final image was the loading screen. The adapter reads the engine's loading-screen flag and feeds it
+// here with its count of frames that never reached H1 (menu, loading, first frame after a reset).
+class BurstGate {
+public:
+    static constexpr uint32_t default_settle_frames = 30;
+    struct Verdict {
+        bool capture{};   // this frame may be captured
+        bool discard{};   // frames already taken are no longer consecutive or clean: drop them
+    };
+    BurstGate(uint32_t settle_frames = default_settle_frames) noexcept : settle_(settle_frames) {}
+    // One call per main-view frame at H1. A loading screen or any frame without a world since the previous call breaks the
+    // run; a burst starts only after `settle_frames` unbroken frames and, once started, continues while they stay unbroken.
+    Verdict frame(bool loading_screen, uint64_t frames_without_world, bool frames_taken) noexcept {
+        const bool broken = loading_screen || !marked_ || frames_without_world != mark_;
+        mark_ = frames_without_world;
+        marked_ = true;
+        if (broken) {
+            clear_ = 0;
+            ++held_;
+            if (frames_taken) ++restarts_;
+            return {false, frames_taken};
+        }
+        ++clear_;
+        return {frames_taken || clear_ >= settle_, false};
+    }
+    // The loading screen showed up while the frame already armed was in flight (checked before Present).
+    void interrupted() noexcept { clear_ = 0; ++held_; ++restarts_; }
+    uint64_t clear_frames() const noexcept { return clear_; }
+    uint64_t held() const noexcept { return held_; }          // frames a capture was held back or broken
+    uint64_t restarts() const noexcept { return restarts_; }  // bursts that lost frames and started over
+private:
+    uint32_t settle_{};
+    uint64_t mark_{}, clear_{}, held_{}, restarts_{};
+    bool marked_{};
+};
+
 // ---- engine (row-vector) matrices -----------------------------------------------------------------------------------
 using EngineMatrix = std::array<float, 16>;   // Fmatrix: _11.._14, _21.._24, _31.._34, _41.._44
 inline temporal::Mat4 to_column(const EngineMatrix& engine) noexcept {

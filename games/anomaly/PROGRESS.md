@@ -102,6 +102,10 @@ Sources: `docs/research/anomaly-{world-space-ui,native-hooks,geometry-coverage,o
   root, `-ltx` test profile in appdata removed afterwards, `-start ... autosave`, F12 engine
   screenshots, console quit by scancodes). Dismiss the loading screen with a key tap before
   captures. Saves are backed up before every run and have stayed byte-identical.
+- 13 Nov: the user found the game starting on the Intel iGPU and set Anomaly to NVIDIA in the
+  NVIDIA Control Panel. Engine logs of every earlier run name the RTX 4070, but presentation
+  crossed the iGPU display path ("2-GPU path"). Re-measure frame time; treat the earlier
+  "CPU-bound, ~40 ms" conclusion as unverified.
 - Both game exe hashes are unchanged.
 - RSF files are staged in `D:/Anomaly 1.5.3/bin`: `dinput8.dll`, `ReScaleFrame.ini`,
   `ReScaleFrame/` (Runtime, adapter, overlay, and from the last run the motion shader folder
@@ -129,7 +133,10 @@ Sources: `docs/research/anomaly-{world-space-ui,native-hooks,geometry-coverage,o
       temporal SR per backend (convergence, panning, weapon ghosting, foliage, reset on load,
       exposure A/B, live switching, teardown).
 - [ ] Fix whatever that run found, then rerun only the failed items.
-- [ ] Find the PDA key binding and a save with a scoped weapon; exercise PDA text and scope
+- [ ] Find the PDA key binding (no user.ltx exists, so defaults come from the archives; run the
+      console `bind_list` and read the log). Per the user, Anomaly starts with the PDA NOT
+      equipped: open the inventory and equip it into the PDA slot first, then use the key;
+      find a save with a scoped weapon; exercise PDA text and scope
       alternation with SR on (no history contamination).
 - [ ] Stage 6 hints: opaque-only colour from `generic_temp`, reactive/transparency masks.
 - [ ] Frame generation: source-frame ownership and pacing (scope frames render without Present),

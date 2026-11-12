@@ -95,6 +95,14 @@ bool call_set_mip_bias(float value) noexcept {
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+// True while the engine draws its loading screen over the world: the precache frames and the "Press any key to continue"
+// wait (sr_profile.h). Unreadable counts as loading, so a capture never starts on a guess.
+bool loading_screen_active() noexcept {
+    uint8_t registered{};
+    uint32_t precache{};
+    return !read_global(load_screen_registered_rva, registered) || !read_global(device_precache_frame_rva, precache) ||
+        registered != 0 || precache != 0;
+}
 // ---- Stage 3 jitter burst: consecutive render-size world frames of one view -------------------------------------
 // The core frame dump service bundles one frame per request, so consecutive frames are copied into adapter staging
 // textures (the FP16 generic0 twin at the seam, the back buffer before Present), mapped once after the last one and
@@ -110,6 +118,7 @@ struct Burst {
     bool enabled{}, armed{}, finished{}, written{};
     uint32_t wanted{}, wait{};
     uint64_t start{}, fp_at_prepare{};
+    BurstGate gate;   // loading screen / menu / no-world frames hold and restart the burst (sr_jitter.h)
     std::wstring directory;
     std::vector<Frame> frames;
     std::string result{"not started"};
@@ -458,7 +467,7 @@ void capture_arm(const FrameFacts& facts) noexcept {
     capture_abandon();
     capture.seam_taken = false;
     dump.poll();
-    const bool scheduled = capture.remaining && world_frames >= capture.next;
+    const bool scheduled = capture.remaining && world_frames >= capture.next && !loading_screen_active();   // F10 is the user's call
     if (scheduled) dump.request();
     if (!dump.requested()) return;
     const bool stage2 = controller.window_open() && controller.stage() == 2;   // this frame renders the world at render size
@@ -560,7 +569,10 @@ void publish_jitter(const FrameFacts& facts, const JitterSample& sample, bool re
 }
 // Stage 3 burst: arm a consecutive capture frame at H1 (after publish_jitter).
 void burst_arm(const FrameFacts& facts) noexcept {
-    if (!burst.enabled || burst.finished || facts.scope || !controller.window_open() || world_frames < burst.start) return;
+    if (!burst.enabled || burst.finished || facts.scope) return;
+    const auto verdict = burst.gate.frame(loading_screen_active(), frames_without_world, !burst.frames.empty());
+    if (verdict.discard && !burst.finished) { burst.frames.clear(); burst.armed = false; }
+    if (!verdict.capture || !controller.window_open() || world_frames < burst.start) return;
     if (burst.frames.size() >= burst.wanted) return;
     Burst::Frame frame{};
     uint32_t engine_frame{};
@@ -906,7 +918,7 @@ void burst_write(ID3D11DeviceContext* ctx) noexcept try {
         std::snprintf(line, sizeof(line),
             "    {\"index\": %zu, \"engine_frame\": %u, \"jitter_frame\": %llu, \"sequence_index\": %u, \"phase_count\": %u, "
             "\"applied\": %s, \"reset\": %s, \"jitter_px\": [%.6f, %.6f], \"previous_jitter_px\": [%.6f, %.6f], \"render\": [%u, %u], "
-            "\"mip_bias\": %.4f, \"fp_jittered\": %llu, \"world\": %s, \"world_size\": [%u, %u], \"world_dxgi\": %u, "
+            "\"mip_bias\": %.4f, \"fp_jittered\": %llu, \"loading_screen\": false, \"world\": %s, \"world_size\": [%u, %u], \"world_dxgi\": %u, "
             "\"final\": %s, \"final_size\": [%u, %u], \"final_dxgi\": %u}%s\n",
             i, f.engine_frame, static_cast<unsigned long long>(j.frame), j.sequence_index, j.phase_count, j.applied ? "true" : "false",
             j.reset ? "true" : "false", double(j.current_x), double(j.current_y), double(j.previous_x), double(j.previous_y),
@@ -1186,15 +1198,21 @@ void frame_end() noexcept {
     if (burst.armed) {
         // The burst frame armed at this frame's H1: the presented image, then the next frame (or the drain).
         burst.armed = false;
-        auto& frame = burst.frames.back();
-        frame.fp_jittered = controller.counters().fp_jittered - burst.fp_at_prepare;
-        ID3D11RenderTargetView* base{};
-        if (read_global(hw_base_rt_rva, base) && base) {
-            ID3D11Resource* back{};
-            base->GetResource(&back);
-            if (back) { frame.presented = staging_copy(host.context(), back); back->Release(); }
+        if (loading_screen_active()) {
+            // The loading screen appeared during this frame and may be the presented image: start the burst over.
+            burst.frames.clear();
+            burst.gate.interrupted();
+        } else {
+            auto& frame = burst.frames.back();
+            frame.fp_jittered = controller.counters().fp_jittered - burst.fp_at_prepare;
+            ID3D11RenderTargetView* base{};
+            if (read_global(hw_base_rt_rva, base) && base) {
+                ID3D11Resource* back{};
+                base->GetResource(&back);
+                if (back) { frame.presented = staging_copy(host.context(), back); back->Release(); }
+            }
+            if (burst.frames.size() >= burst.wanted) { burst.finished = true; burst.wait = 3; }
         }
-        if (burst.frames.size() >= burst.wanted) { burst.finished = true; burst.wait = 3; }
     } else if (burst.finished && !burst.written && burst.wait-- == 0) burst_write(host.context());
     if (!capture.active) return;
     // The presented frame: the back buffer immediately before End's Present, with UI.
@@ -1232,8 +1250,10 @@ void report(void (*emit)(void*, const char*), void* user) noexcept {
         mip_window = controller.window_mip_bias();
         mip_saved = controller.saved_mip_bias();
         mip_applied = controller.mip_bias_applied() || controller.counters().mip_applied;
-        char text[64];
-        std::snprintf(text, sizeof(text), "%zu/%u", burst.frames.size(), burst.wanted);
+        char text[96];
+        std::snprintf(text, sizeof(text), "%zu/%u held=%llu restarts=%llu%s", burst.frames.size(), burst.wanted,
+            static_cast<unsigned long long>(burst.gate.held()), static_cast<unsigned long long>(burst.gate.restarts()),
+            loading_screen_active() ? " loading-screen" : "");
         burst_state = burst.enabled ? (burst.written ? burst.result : std::string(text)) : std::string("off");
         now = controller.counters();
         now_frames = frames; now_without = frames_without_world; twin_refs = host.last_drop_refs;
