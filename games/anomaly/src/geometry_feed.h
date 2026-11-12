@@ -46,5 +46,7 @@ std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture&, FeedSt
 // Render thread, inside the actual draw of the current visual. Drains retirements first, then copies
 // the current draw's world/palette and records it for `frame`.
 FeedResult feed_current_draw(temporal::TemporalHistory&, temporal::FrameToken frame, RetirementQueue&);
+// Same mapping for a capture the draw-time hook already copied (DrawSink::draw), on the history owner's thread.
+FeedResult feed_draw(temporal::TemporalHistory&, temporal::FrameToken frame, RetirementQueue&, const DrawCapture&);
 
 }

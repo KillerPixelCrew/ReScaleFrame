@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <new>
 #ifndef NOMINMAX
@@ -34,6 +36,15 @@ std::optional<InstanceKey> IdentityRegistry::find_visual(std::uint64_t visual) c
     if (found == live_.end() || found->first.first != visual) return {};
     const auto next = std::next(found);
     return next != live_.end() && next->first.first == visual ? std::nullopt : std::optional{found->second};
+}
+VisualProbe IdentityRegistry::probe_visual(std::uint64_t visual) const
+{
+    const std::lock_guard lock(mutex_);
+    const auto found = live_.lower_bound({visual, 0});
+    if (found == live_.end() || found->first.first != visual) return {};
+    const auto next = std::next(found);
+    if (next != live_.end() && next->first.first == visual) return {VisualLookup::Ambiguous, std::nullopt};
+    return {VisualLookup::Unique, found->second};
 }
 std::optional<InstanceKey> IdentityRegistry::retire(std::uint64_t owner, std::uint64_t visual)
 {
@@ -79,15 +90,23 @@ DrawContextScope::DrawContextScope(std::optional<temporal::ViewId> view,
 {
     current_ = this;
 }
+DrawContextScope::DrawContextScope(InheritView, std::optional<temporal::ProjectionDomain> domain) noexcept
+    : domain_(domain), previous_(current_)
+{
+    if (previous_) view_ = previous_->view_;
+    current_ = this;
+}
 DrawContextScope::~DrawContextScope() { current_ = previous_; }
 thread_local DrawScope* DrawScope::current_{};
 DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey> key,
-    DrawKind kind, const float* world, const std::byte* skeleton) noexcept : registry_(registry), previous_(current_)
+    DrawKind kind, const float* world, const std::byte* skeleton, DrawClassification classification) noexcept
+    : registry_(registry), previous_(current_)
 {
     identity_.key = key.value_or(InstanceKey{});
     identity_.kind = kind;
     identity_.world = world;
     identity_.skeleton = skeleton;
+    identity_.classification = classification;
     if (const auto context = DrawContextScope::current_) {
         identity_.view = context->view_;
         identity_.domain = context->domain_;
@@ -135,6 +154,40 @@ std::optional<DrawCapture> capture_current_draw() noexcept
     return result;
 }
 
+DrawVerdict classify_draw(const DrawFacts& facts) noexcept
+{
+    if (facts.pass == DrawPass::Shadow) return DrawVerdict::IgnoredShadow;
+    if (!facts.capturing) return DrawVerdict::UnidentifiedNoCapture;
+    if (facts.lookup == VisualLookup::Unique) return DrawVerdict::Identified;
+    if (facts.lookup == VisualLookup::Ambiguous) return DrawVerdict::UnidentifiedAmbiguous;
+    // From here the visual is unregistered. A skinned visual always needs its bone palette, so it is never static.
+    if (facts.type == VisualType::SkeletonST || facts.type == VisualType::SkeletonPM) return DrawVerdict::UnidentifiedDynamic;
+    if (!facts.world_readable) return DrawVerdict::UnidentifiedUnreadable;
+    if (facts.type == VisualType::TreeST || facts.type == VisualType::TreePM) return DrawVerdict::UnidentifiedDeformed;
+    return facts.world_identity ? DrawVerdict::IgnoredStaticWorld : DrawVerdict::UnidentifiedDynamic;
+}
+const char* pass_name(DrawPass pass) noexcept
+{
+    switch (pass) {
+    case DrawPass::Main: return "main";
+    case DrawPass::Shadow: return "shadow";
+    default: return "other";
+    }
+}
+const char* visual_type_name(VisualType type) noexcept
+{
+    static constexpr const char* names[] = {"static", "progressive", "skeleton_st", "skeleton_pm", "tree_st", "tree_pm"};
+    const auto index = static_cast<std::size_t>(type);
+    return index < std::size(names) ? names[index] : "unknown";
+}
+const char* verdict_name(DrawVerdict verdict) noexcept
+{
+    static constexpr const char* names[] = {"identified", "ignored_shadow", "ignored_static_world", "unidentified_dynamic",
+        "unidentified_deformed", "unidentified_ambiguous", "unidentified_unreadable", "unidentified_nocapture"};
+    const auto index = static_cast<std::size_t>(verdict);
+    return index < std::size(names) ? names[index] : "unknown";
+}
+
 namespace {
 // Microsoft x64 C++ member ABI: RCX=this, RDX=name/source/ref, R8=reader/BOOL;
 // the second argument float in Render is XMM1, never XMM0 or an integer register.
@@ -142,15 +195,40 @@ using Create = void*(__fastcall*)(void*, const char*, void*);
 using Duplicate = void*(__fastcall*)(void*, void*);
 using Delete = void(__fastcall*)(void*, void**, std::int32_t);
 using Render = void(__fastcall*)(void*, float);
-std::array<void*, 10> originals{};
+using Flush = void(__fastcall*)();
+using Unary = void(__fastcall*)(void*);
+std::array<void*, 16> originals{};
 IdentityRegistry native_identities;
 std::mutex native_lifecycle;
 GeometrySink sink;
+DrawSink draw_sink;
 std::atomic<std::byte*> native_module{};
 std::atomic<bool> capture_enabled{};
 std::atomic<bool> hooks_enabled{};
 HookSet native_hooks;
 std::atomic<std::uint64_t> models_registered{}, models_retired{}, draws_identified{}, draws_unidentified{}, capture_faults{};
+constexpr std::size_t coverage_cells = GeometryCoverage::passes * GeometryCoverage::types * GeometryCoverage::verdicts;
+std::array<std::atomic<std::uint64_t>, coverage_cells> coverage_draws{};
+std::array<std::atomic<std::uint64_t>, GeometryCoverage::passes> flush_total{}, flush_in_visual{};
+std::atomic<std::uint64_t> captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
+std::atomic<std::uint64_t> views_main{}, views_scope{}, hud_scopes{}, near_windows{};
+std::size_t coverage_index(DrawPass pass, VisualType type, DrawVerdict verdict) noexcept
+{
+    return (static_cast<std::size_t>(pass) * GeometryCoverage::types + static_cast<std::size_t>(type)) *
+        GeometryCoverage::verdicts + static_cast<std::size_t>(verdict);
+}
+// CRender::phase at the time of the call. Only the two engine phases are named; anything else is "other".
+DrawPass read_pass(const std::byte* module) noexcept
+{
+    std::uint32_t phase{};
+    if (!module || !safe_copy(&phase, module + render_phase_rva, sizeof(phase))) return DrawPass::Unknown;
+    return phase == phase_normal ? DrawPass::Main : phase == phase_smap ? DrawPass::Shadow : DrawPass::Unknown;
+}
+bool is_identity_matrix(const float (&values)[16]) noexcept
+{
+    static constexpr float identity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    return std::memcmp(values, identity, sizeof(identity)) == 0;
+}
 // A faulted capture stays off until the next guarded install, rather than guessing which lifetimes were lost.
 void fault() noexcept { capture_faults.fetch_add(1); capture_enabled = false; }
 thread_local std::uint32_t factory_depth{};
@@ -246,11 +324,19 @@ void __fastcall delete_hook(void* self, void** reference, std::int32_t discard)
     model_retiring(self, reference);
     reinterpret_cast<Delete>(originals[3])(self, reference, discard);
 }
-void render_visual(std::size_t index, void* self, float lod, DrawKind kind, std::uint32_t skeleton_offset = 0)
+void render_visual(std::size_t index, void* self, float lod, DrawKind kind, VisualType type, std::uint32_t skeleton_offset = 0)
 {
-    std::optional<InstanceKey> key;
-    if (capture_enabled.load() && !factory_depth) key = native_identities.find_visual(reinterpret_cast<std::uintptr_t>(self));
     const auto module = native_module.load();
+    DrawFacts facts;
+    facts.type = type;
+    facts.capturing = capture_enabled.load() && !factory_depth;
+    facts.pass = read_pass(module);
+    std::optional<InstanceKey> key;
+    if (facts.capturing) {
+        const auto probe = native_identities.probe_visual(reinterpret_cast<std::uintptr_t>(self));
+        facts.lookup = probe.lookup;
+        key = probe.key;
+    }
     const auto skeleton = skeleton_offset ? static_cast<const std::byte*>(self) + skeleton_offset : nullptr;
     if (skeleton) {
         std::uint16_t mode{};
@@ -258,26 +344,149 @@ void render_visual(std::size_t index, void* self, float lod, DrawKind kind, std:
             kind = mode == 0 ? DrawKind::SoftwareSkinned : mode == 1 ? DrawKind::SingleBone : DrawKind::HardwareSkinned;
         }
     }
+    // The world matrix is read here only to tell level geometry (exactly Fidentity, set by r_dsgraph_render_graph and
+    // insert_static) from an unregistered moving object. It is never used as a motion input.
+    if (module && facts.capturing && facts.lookup == VisualLookup::Missing && facts.pass != DrawPass::Shadow) {
+        float values[16];
+        facts.world_readable = safe_copy(values, module + world_matrix_rva, sizeof(values));
+        facts.world_identity = facts.world_readable && is_identity_matrix(values);
+    }
+    const DrawClassification classification{facts.pass, type, classify_draw(facts)};
+    coverage_draws[coverage_index(classification.pass, type, classification.verdict)].fetch_add(1);
     (key ? draws_identified : draws_unidentified).fetch_add(1);
     DrawScope scope(native_identities, key, kind,
-        module ? reinterpret_cast<const float*>(module + world_matrix_rva) : nullptr, skeleton);
+        module ? reinterpret_cast<const float*>(module + world_matrix_rva) : nullptr, skeleton, classification);
     reinterpret_cast<Render>(originals[index])(self, lod);
 }
-void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, DrawKind::Rigid); }
-void __fastcall progressive_hook(void* self, float lod) { render_visual(5, self, lod, DrawKind::Rigid); }
-void __fastcall skeleton_st_hook(void* self, float lod) { render_visual(6, self, lod, DrawKind::HardwareSkinned, skeleton_st_offset); }
-void __fastcall skeleton_pm_hook(void* self, float lod) { render_visual(7, self, lod, DrawKind::HardwareSkinned, skeleton_pm_offset); }
-void __fastcall tree_st_hook(void* self, float lod) { render_visual(8, self, lod, DrawKind::Tree); }
-void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod, DrawKind::Tree); }
+void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, DrawKind::Rigid, VisualType::Static); }
+void __fastcall progressive_hook(void* self, float lod) { render_visual(5, self, lod, DrawKind::Rigid, VisualType::Progressive); }
+void __fastcall skeleton_st_hook(void* self, float lod) { render_visual(6, self, lod, DrawKind::HardwareSkinned, VisualType::SkeletonST, skeleton_st_offset); }
+void __fastcall skeleton_pm_hook(void* self, float lod) { render_visual(7, self, lod, DrawKind::HardwareSkinned, VisualType::SkeletonPM, skeleton_pm_offset); }
+void __fastcall tree_st_hook(void* self, float lod) { render_visual(8, self, lod, DrawKind::Tree, VisualType::TreeST); }
+void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod, DrawKind::Tree, VisualType::TreePM); }
+
+// Draw-time call site. CBackend::constants.flush runs once per D3D draw (or dispatch), after every state apply and
+// immediately before DrawIndexed/Draw, so the world matrix and bone palette are the ones the draw uses.
+void __fastcall flush_hook()
+{
+    geometry_observe_draw();
+    reinterpret_cast<Flush>(originals[geometry_site_flush])();
+}
+
+// First-person projection. r_dsgraph_render_hud draws mapHUD under the HUD projection for its whole body.
+thread_local std::uint32_t hud_window_depth{};
+// The rmNear..rmNormal window spans two hook calls, so its scope lives in thread-local raw storage. That keeps the
+// thread-local trivially destructible; the pinned adapter never unloads, and a window is always closed by rmNormal
+// or by the enclosing sorted/emissive hook before any outer scope ends.
+thread_local DrawContextScope* near_scope{};
+alignas(DrawContextScope) thread_local std::byte near_storage[sizeof(DrawContextScope)];
+void open_near_window() noexcept
+{
+    near_scope = ::new (static_cast<void*>(near_storage))
+        DrawContextScope(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
+}
+void close_near_window() noexcept
+{
+    if (!near_scope) return;
+    near_scope->~DrawContextScope();
+    near_scope = nullptr;
+}
+void __fastcall render_hud_hook(void* self)
+{
+    std::optional<DrawContextScope> context;
+    if (capture_enabled.load()) {
+        context.emplace(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
+        hud_scopes.fetch_add(1);
+    }
+    reinterpret_cast<Unary>(originals[geometry_site_render_hud])(self);
+}
+// r_dsgraph_render_sorted/emissive draw their world half under the main projection, then switch to the HUD projection
+// and call rmNear() for their HUD half. Between rmNear and rmNormal inside such a window the domain is first-person.
+struct HudWindow {
+    HudWindow() noexcept { ++hud_window_depth; }
+    ~HudWindow() { if (--hud_window_depth == 0) close_near_window(); }
+};
+void __fastcall render_sorted_hook(void* self)
+{
+    const HudWindow window;
+    reinterpret_cast<Unary>(originals[geometry_site_render_sorted])(self);
+}
+void __fastcall render_emissive_hook(void* self)
+{
+    const HudWindow window;
+    reinterpret_cast<Unary>(originals[geometry_site_render_emissive])(self);
+}
+void __fastcall rm_near_hook(void* self)
+{
+    reinterpret_cast<Unary>(originals[geometry_site_rm_near])(self);
+    if (hud_window_depth && !near_scope && capture_enabled.load()) {
+        open_near_window();
+        near_windows.fetch_add(1);
+    }
+}
+void __fastcall rm_normal_hook(void* self)
+{
+    close_near_window();
+    reinterpret_cast<Unary>(originals[geometry_site_rm_normal])(self);
+}
+}
+
+void geometry_observe_draw() noexcept
+{
+    if (!capture_enabled.load(std::memory_order_relaxed)) return;
+    const auto pass = read_pass(native_module.load());
+    flush_total[static_cast<std::size_t>(pass)].fetch_add(1);
+    const auto scope = DrawScope::current_;
+    if (!scope) return;
+    flush_in_visual[static_cast<std::size_t>(pass)].fetch_add(1);
+    const auto& classification = scope->identity_.classification;
+    // Shadow, Z-fill and every unidentified verdict write no per-instance motion. Only an identified main-pass draw
+    // is captured; capture_current_draw() re-validates the identity against the registry.
+    if (classification.verdict != DrawVerdict::Identified || classification.pass != DrawPass::Main) return;
+    const auto capture = capture_current_draw();
+    if (!capture) { capture_stale.fetch_add(1); return; }
+    captured.fetch_add(1);
+    if (!capture->view || !capture->domain) capture_no_context.fetch_add(1);
+    if (!capture->world) capture_no_world.fetch_add(1);
+    if (capture->kind == DrawKind::HardwareSkinned && capture->bones.empty()) capture_no_palette.fetch_add(1);
+    if (draw_sink.draw) { draw_sink.draw(draw_sink.context, *capture); sunk.fetch_add(1); }
+}
+std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept
+{
+    if (!module) return {};
+    bool active{};
+    std::uint8_t delay{};
+    std::uint32_t frame{};
+    if (!safe_copy(&active, module + second_viewport_rva, sizeof(active)) ||
+        !safe_copy(&delay, module + second_viewport_rva + second_viewport_delay_offset, sizeof(delay)) ||
+        !safe_copy(&frame, module + device_frame_rva, sizeof(frame))) return {};
+    // Same expression as CSecondVPParams::IsSVPFrame; a zero delay would divide by zero in the engine, so it is "main".
+    return active && delay && frame % delay == 0 ? temporal::ViewId::Scope : temporal::ViewId::Main;
+}
+RenderViewScope::RenderViewScope() noexcept
+{
+    if (!capture_enabled.load()) return;
+    const auto view = current_render_view(native_module.load());
+    if (!view) return;
+    (*view == temporal::ViewId::Scope ? views_scope : views_main).fetch_add(1);
+    scope_.emplace(view, temporal::ProjectionDomain::World);
+}
+RenderViewScope::~RenderViewScope() = default;
+void geometry_set_draw_sink(DrawSink value) noexcept
+{
+    const std::lock_guard lock(native_lifecycle);
+    draw_sink = value;
 }
 std::span<const HookSite> native_geometry_hook_sites() noexcept
 {
     static const auto result = [] {
-        const std::array<void*, 10> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
+        const std::array<void*, 16> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
             reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook), reinterpret_cast<void*>(&rigid_hook),
             reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook), reinterpret_cast<void*>(&skeleton_pm_hook),
-            reinterpret_cast<void*>(&tree_st_hook), reinterpret_cast<void*>(&tree_pm_hook)};
-        std::array<HookSite, 10> sites;
+            reinterpret_cast<void*>(&tree_st_hook), reinterpret_cast<void*>(&tree_pm_hook), reinterpret_cast<void*>(&flush_hook),
+            reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
+            reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook), reinterpret_cast<void*>(&rm_normal_hook)};
+        std::array<HookSite, 16> sites;
         for (std::size_t i = 0; i < sites.size(); ++i)
             sites[i] = {geometry_sites[i].name, geometry_sites[i].rva, geometry_sites[i].expected, replacements[i], &originals[i]};
         return sites;
@@ -336,6 +545,72 @@ GeometryStats geometry_stats() noexcept
 {
     return {models_registered.load(), models_retired.load(), draws_identified.load(), draws_unidentified.load(),
         capture_faults.load()};
+}
+GeometryCoverage geometry_coverage() noexcept
+{
+    GeometryCoverage result;
+    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass) {
+        for (std::size_t type = 0; type < GeometryCoverage::types; ++type)
+            for (std::size_t verdict = 0; verdict < GeometryCoverage::verdicts; ++verdict)
+                result.draws[pass][type][verdict] = coverage_draws[(pass * GeometryCoverage::types + type) *
+                    GeometryCoverage::verdicts + verdict].load();
+        result.flush_total[pass] = flush_total[pass].load();
+        result.flush_in_visual[pass] = flush_in_visual[pass].load();
+    }
+    result.captured = captured.load(); result.capture_stale = capture_stale.load();
+    result.capture_no_world = capture_no_world.load(); result.capture_no_palette = capture_no_palette.load();
+    result.capture_no_context = capture_no_context.load(); result.sunk = sunk.load();
+    result.views_main = views_main.load(); result.views_scope = views_scope.load();
+    result.hud_scopes = hud_scopes.load(); result.near_windows = near_windows.load();
+    return result;
+}
+void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noexcept
+{
+    if (!emit) return;
+    const auto c = geometry_coverage();
+    using ull = unsigned long long;
+    char text[640];
+    std::uint64_t by_verdict[GeometryCoverage::verdicts]{}, by_pass[GeometryCoverage::passes]{};
+    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass)
+        for (std::size_t type = 0; type < GeometryCoverage::types; ++type)
+            for (std::size_t verdict = 0; verdict < GeometryCoverage::verdicts; ++verdict) {
+                by_verdict[verdict] += c.draws[pass][type][verdict];
+                by_pass[pass] += c.draws[pass][type][verdict];
+            }
+    // identified + ignored_* are covered; unidentified_* is the measured gap that matters for motion vectors.
+    std::snprintf(text, sizeof(text),
+        "Anomaly geometry coverage render-entries main=%llu shadow=%llu other=%llu | identified=%llu ignored_shadow=%llu ignored_static_world=%llu "
+        "| unidentified dynamic=%llu deformed=%llu ambiguous=%llu unreadable=%llu nocapture=%llu",
+        static_cast<ull>(by_pass[0]), static_cast<ull>(by_pass[1]), static_cast<ull>(by_pass[2]),
+        static_cast<ull>(by_verdict[0]), static_cast<ull>(by_verdict[1]), static_cast<ull>(by_verdict[2]),
+        static_cast<ull>(by_verdict[3]), static_cast<ull>(by_verdict[4]), static_cast<ull>(by_verdict[5]),
+        static_cast<ull>(by_verdict[6]), static_cast<ull>(by_verdict[7]));
+    emit(user, text);
+    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass)
+        for (std::size_t type = 0; type < GeometryCoverage::types; ++type) {
+            const auto& row = c.draws[pass][type];
+            std::uint64_t sum{};
+            for (const auto value : row) sum += value;
+            if (!sum) continue;
+            std::snprintf(text, sizeof(text),
+                "Anomaly geometry coverage pass=%s type=%s identified=%llu ignored_shadow=%llu ignored_static_world=%llu "
+                "unidentified_dynamic=%llu unidentified_deformed=%llu unidentified_other=%llu",
+                pass_name(static_cast<DrawPass>(pass)), visual_type_name(static_cast<VisualType>(type)),
+                static_cast<ull>(row[0]), static_cast<ull>(row[1]), static_cast<ull>(row[2]), static_cast<ull>(row[3]),
+                static_cast<ull>(row[4]), static_cast<ull>(row[5] + row[6] + row[7]));
+            emit(user, text);
+        }
+    std::snprintf(text, sizeof(text),
+        "Anomaly geometry draw-time flush main=%llu(in_visual=%llu) shadow=%llu(in_visual=%llu) other=%llu(in_visual=%llu) "
+        "| captured=%llu sunk=%llu stale=%llu no_world=%llu no_palette=%llu no_context=%llu "
+        "| views main=%llu scope=%llu hud_scopes=%llu near_windows=%llu",
+        static_cast<ull>(c.flush_total[0]), static_cast<ull>(c.flush_in_visual[0]),
+        static_cast<ull>(c.flush_total[1]), static_cast<ull>(c.flush_in_visual[1]),
+        static_cast<ull>(c.flush_total[2]), static_cast<ull>(c.flush_in_visual[2]),
+        static_cast<ull>(c.captured), static_cast<ull>(c.sunk), static_cast<ull>(c.capture_stale),
+        static_cast<ull>(c.capture_no_world), static_cast<ull>(c.capture_no_palette), static_cast<ull>(c.capture_no_context),
+        static_cast<ull>(c.views_main), static_cast<ull>(c.views_scope), static_cast<ull>(c.hud_scopes), static_cast<ull>(c.near_windows));
+    emit(user, text);
 }
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
 void geometry_test_bind_module(std::byte* module) noexcept { native_module = module; capture_enabled = true; }

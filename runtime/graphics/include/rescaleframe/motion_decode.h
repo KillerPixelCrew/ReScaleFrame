@@ -20,6 +20,7 @@
 #ifndef RSF_MOTION_DECODE_H
 #define RSF_MOTION_DECODE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -77,7 +78,23 @@ typedef struct rsf_motion_decode_params {
     /* Whether a stored zero means "nothing wrote this pixel". True for Unreal. When false, no
        pixel is marked and `invalid_value` is unused. */
     uint32_t zero_means_unwritten;
+    /* Optional validity channel, appended after the original layout. A caller that passes the
+       older, shorter struct_size (ending at zero_means_unwritten) gets the behaviour above
+       unchanged; a zero-initialised struct also leaves it off.
+
+       When `validity_enabled` is non-zero, a pixel is valid iff source channel `validity_channel`
+       (0 = x, 1 = y, 2 = z, 3 = w; the source must store that channel) is greater than
+       `validity_threshold`, independent of the motion value. Invalid pixels take the unwritten
+       path and receive `invalid_value`. `zero_means_unwritten` is then ignored, so a valid
+       stationary pixel stays zero motion. */
+    uint32_t validity_enabled;
+    uint32_t validity_channel;
+    float validity_threshold;
 } rsf_motion_decode_params;
+
+/* Size of the params before the validity fields; still accepted by rsf_motion_decode_run. */
+#define RSF_MOTION_DECODE_PARAMS_SIZE_V1 \
+    ((uint32_t)(offsetof(rsf_motion_decode_params, zero_means_unwritten) + sizeof(uint32_t)))
 
 typedef struct rsf_motion_decode rsf_motion_decode;
 

@@ -1,5 +1,18 @@
 # Implementation tracker
 
+## Anomaly Observe run, overlay wiring and SR seam, 12 November 2026
+
+Observe mode ran in Anomaly: exactly-once startup before device creation, all guarded and
+geometry hooks installed, 8040 frames with no fault or reset (`.local/anomaly/wave2-observe/`).
+Only ~5.5% of draws were identified; the gap is explained and per-category counters, a guarded
+draw-time hook and view/first-person context producers were added. The adapter now wires the
+shared overlay with DirectInput gating, with SR/FG reported unavailable. The SR seam design
+chooses the phase_sunshafts/phase_blur prologue with FP16 render-size targets and an exact
+inverse/forward tonemap; all Stage 0 sites are byte-guarded and verified against the exe.
+The shared motion decode gained an optional validity channel. Release VS2026: 173 discovered,
+162 passed, 11 optional skips, fmt/Clippy. Overlay and coverage are not yet game-tested.
+[Progress](../games/anomaly/PROGRESS.md), [SR seam](research/anomaly-sr-seam.md).
+
 ## Anomaly wave 1, 12 November 2026
 
 Resumed on request. The geometry producer is audited and built into the adapter with

@@ -6,6 +6,7 @@
 #include <thread>
 #include <limits>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #define CHECK(expression) do { if (!(expression)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expression); std::exit(1); } } while (false)
@@ -200,5 +201,123 @@ int main()
         CHECK(fed.status == FeedStatus::Captured && fed.history == temporal::CaptureStatus::Captured);
     }
     CHECK(geometry_stats().capture_faults == 0);
-    std::puts("Anomaly geometry registry, TLS, real-layout world/palette capture, history feed: PASS");
+
+    // The visual lookup tells an unknown visual from an ambiguous pool.
+    {
+        IdentityRegistry pool;
+        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Missing && !pool.probe_visual(0x500).key);
+        const auto one = pool.acquire(0x1, 0x500);
+        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Unique && pool.probe_visual(0x500).key == one);
+        CHECK(pool.probe_visual(0x4ff).lookup == VisualLookup::Missing && pool.probe_visual(0x501).lookup == VisualLookup::Missing);
+        pool.acquire(0x2, 0x500);
+        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Ambiguous && !pool.probe_visual(0x500).key);
+        pool.retire(0x2, 0x500);
+        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Unique);
+    }
+
+    // Classification of a draw by pass, identity and world. Shadow and Z-fill need no motion and win over identity.
+    {
+        const auto verdict = [](DrawPass pass, VisualType type, VisualLookup lookup, bool readable = true, bool identity = false,
+                                 bool capturing = true) {
+            DrawFacts facts;
+            facts.pass = pass;
+            facts.type = type;
+            facts.lookup = lookup;
+            facts.capturing = capturing;
+            facts.world_readable = readable;
+            facts.world_identity = identity;
+            return classify_draw(facts);
+        };
+        constexpr auto Main = DrawPass::Main, Shadow = DrawPass::Shadow, Unknown = DrawPass::Unknown;
+        constexpr auto Static = VisualType::Static, Progressive = VisualType::Progressive, SkeletonST = VisualType::SkeletonST,
+            SkeletonPM = VisualType::SkeletonPM, TreeST = VisualType::TreeST, TreePM = VisualType::TreePM;
+        constexpr auto Missing = VisualLookup::Missing, Unique = VisualLookup::Unique, Ambiguous = VisualLookup::Ambiguous;
+        constexpr auto Identified = DrawVerdict::Identified, IgnoredShadow = DrawVerdict::IgnoredShadow,
+            IgnoredStaticWorld = DrawVerdict::IgnoredStaticWorld, UnidentifiedDynamic = DrawVerdict::UnidentifiedDynamic,
+            UnidentifiedDeformed = DrawVerdict::UnidentifiedDeformed, UnidentifiedAmbiguous = DrawVerdict::UnidentifiedAmbiguous,
+            UnidentifiedUnreadable = DrawVerdict::UnidentifiedUnreadable, UnidentifiedNoCapture = DrawVerdict::UnidentifiedNoCapture;
+        CHECK(verdict(Main, Static, Unique) == Identified);
+        CHECK(verdict(Main, SkeletonPM, Unique) == Identified && verdict(Main, TreeST, Unique) == Identified);
+        CHECK(verdict(Shadow, Static, Unique) == IgnoredShadow && verdict(Shadow, Progressive, Missing) == IgnoredShadow);
+        CHECK(verdict(Shadow, SkeletonST, Missing, false, false, false) == IgnoredShadow);
+        CHECK(verdict(Main, Static, Missing, true, true) == IgnoredStaticWorld);
+        CHECK(verdict(Main, Progressive, Missing, true, true) == IgnoredStaticWorld);
+        CHECK(verdict(Main, Static, Missing, true, false) == UnidentifiedDynamic);
+        CHECK(verdict(Main, Progressive, Missing, true, false) == UnidentifiedDynamic);
+        CHECK(verdict(Main, Static, Missing, false) == UnidentifiedUnreadable);
+        // A skinned visual always needs its palette, so an identity world never makes it static.
+        CHECK(verdict(Main, SkeletonST, Missing, true, true) == UnidentifiedDynamic);
+        CHECK(verdict(Main, SkeletonPM, Missing, false) == UnidentifiedDynamic);
+        // A tree sways in the vertex shader: unregistered it is a deformation gap, never static.
+        CHECK(verdict(Main, TreeST, Missing, true, true) == UnidentifiedDeformed);
+        CHECK(verdict(Main, TreePM, Missing, true, false) == UnidentifiedDeformed);
+        CHECK(verdict(Main, Static, Ambiguous) == UnidentifiedAmbiguous);
+        CHECK(verdict(Main, Static, Missing, true, true, false) == UnidentifiedNoCapture);
+        CHECK(verdict(Unknown, Static, Missing, true, true) == IgnoredStaticWorld);
+        CHECK(verdict(Unknown, Static, Unique) == Identified);
+        for (std::size_t i = 0; i < GeometryCoverage::verdicts; ++i) CHECK(std::strlen(verdict_name(static_cast<DrawVerdict>(i))) > 3);
+        for (std::size_t i = 0; i < GeometryCoverage::types; ++i) CHECK(std::strlen(visual_type_name(static_cast<VisualType>(i))) > 3);
+        for (std::size_t i = 0; i < GeometryCoverage::passes; ++i) CHECK(std::strlen(pass_name(static_cast<DrawPass>(i))) > 3);
+    }
+
+    // The enclosing view survives a projection-domain change, and a classification travels with the draw.
+    {
+        IdentityRegistry scoped;
+        const auto key = scoped.acquire(0x9, 0x900);
+        {
+            DrawContextScope main_frame(temporal::ViewId::Scope, temporal::ProjectionDomain::World);
+            {
+                DrawContextScope hud_window(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
+                DrawScope draw(scoped, key, DrawKind::Rigid, world, nullptr,
+                    DrawClassification{DrawPass::Shadow, VisualType::Progressive, DrawVerdict::IgnoredShadow});
+                CHECK(borrow_draw()->view == temporal::ViewId::Scope && borrow_draw()->domain == temporal::ProjectionDomain::FirstPerson);
+                CHECK(borrow_draw()->classification.pass == DrawPass::Shadow);
+                CHECK(borrow_draw()->classification.type == VisualType::Progressive);
+                CHECK(borrow_draw()->classification.verdict == DrawVerdict::IgnoredShadow);
+            }
+            DrawScope after(scoped, key, DrawKind::Rigid, world);
+            CHECK(borrow_draw()->domain == temporal::ProjectionDomain::World);
+            CHECK(borrow_draw()->classification.verdict == DrawVerdict::Identified && borrow_draw()->classification.pass == DrawPass::Main);
+        }
+        {
+            // With no enclosing frame there is nothing to inherit; the draw keeps no view.
+            DrawContextScope orphan(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
+            DrawScope draw(scoped, key, DrawKind::Rigid, world);
+            CHECK(!borrow_draw()->view && borrow_draw()->domain == temporal::ProjectionDomain::FirstPerson);
+        }
+    }
+
+    // The draw sink adaptor feeds an already-copied capture; a foreign view is refused like a live draw.
+    {
+        RetirementQueue sink_queue;
+        temporal::TemporalHistory sink_history;
+        const auto frame = sink_history.begin_frame(make_frame(temporal::ViewId::Main, 40));
+        CHECK(frame.status == temporal::BeginStatus::Started && frame.token);
+        IdentityRegistry sink_identities;
+        const auto sink_key = sink_identities.acquire(0x1, 0x700);
+        float sink_world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1};
+        std::optional<DrawCapture> copy;
+        {
+            DrawContextScope view(temporal::ViewId::Main, temporal::ProjectionDomain::World);
+            DrawScope draw(sink_identities, sink_key, DrawKind::Rigid, sink_world);
+            copy = capture_current_draw();
+        }
+        CHECK(copy);
+        const auto fed = feed_draw(sink_history, *frame.token, sink_queue, *copy);
+        CHECK(fed.status == FeedStatus::Captured && fed.history == temporal::CaptureStatus::Captured);
+        CHECK(feed_draw(sink_history, *frame.token, sink_queue, *copy).history == temporal::CaptureStatus::Repeated);
+        auto foreign = *copy;
+        foreign.view = temporal::ViewId::Scope;
+        CHECK(feed_draw(sink_history, *frame.token, sink_queue, foreign).status == FeedStatus::WrongView);
+        foreign.view.reset();
+        CHECK(feed_draw(sink_history, *frame.token, sink_queue, foreign).status == FeedStatus::MissingContext);
+        auto tree = *copy;
+        tree.kind = DrawKind::Tree;
+        CHECK(feed_draw(sink_history, *frame.token, sink_queue, tree).status == FeedStatus::UnsupportedKind);
+        // Retirements queued by the engine thread still drain through the sink adaptor.
+        RetirementQueue::sink(&sink_queue, *sink_key);
+        CHECK(feed_draw(sink_history, *frame.token, sink_queue, *copy).history == temporal::CaptureStatus::Retired);
+    }
+    CHECK(geometry_stats().capture_faults == 0);
+    std::puts("Anomaly geometry registry, TLS, real-layout world/palette capture, classification, context scopes, history feed: PASS");
 }

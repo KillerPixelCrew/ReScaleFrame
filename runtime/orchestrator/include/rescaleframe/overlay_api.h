@@ -101,9 +101,15 @@ typedef struct rsf_overlay_service_setup {
     /* Values for keys missing from the section. Must satisfy the choices below.
        struct_size/abi_version as for rsf_render_settings_get. */
     rsf_render_settings defaults;
-    /* Bit n: SR backend id n the adapter can apply. Nonzero. */
+    /* Bit n: SR backend id n the adapter can apply. Zero means the adapter has no super
+       resolution: SR can only be Off, the panel offers no backend, settings_apply refuses
+       sr_enabled=1 or an SR backend/quality other than the defaults (which must then have
+       sr_enabled=0), saved SR keys are replaced by the defaults, and status reports
+       sr_backend_choices=0 with the reason "Super resolution is not available in this
+       adapter". sr_report is not consulted in that case. */
     uint32_t sr_backend_choices;
-    /* Bit n: SR quality n (0 native .. 4 ultra performance). Nonzero. */
+    /* Bit n: SR quality n (0 native .. 4 ultra performance). Nonzero when sr_backend_choices
+       is nonzero; ignored when it is zero. */
     uint32_t sr_quality_choices;
     /* Bit n: FG provider id n (RSF_FG_BACKEND_*), RSF_FG_BACKEND_AUTO allowed. The
        panel offers the intersection with rsf_d3d11_present_backend_choices(). Zero

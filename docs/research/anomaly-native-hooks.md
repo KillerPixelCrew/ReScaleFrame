@@ -72,6 +72,16 @@ has retired from a trampoline. Quiesce disables observation and detours, and ref
 completion while callbacks remain in flight. The carrier never unloads successful
 runtime/adapter loads. No executable file or reference engine source is patched.
 
+## Geometry identity, draw-time and context sites
+
+The geometry hooks (`games/anomaly/src/geometry_profile.h`, 16 detours and 5 layout guards) are a separate guarded
+set installed after these boundary hooks. Besides the model lifecycle and the six visual `Render` overrides they hook
+`CBackend::constants.flush` (the draw-time call site, `0x84b930`), `r_dsgraph_render_hud` (`0x84ffa0`),
+`r_dsgraph_render_sorted` (`0x850cc0`), `r_dsgraph_render_emissive` (`0x84ec80`) and `CRender::rmNear`/`rmNormal`
+(vtable slots 55 and 57), and read `CRender::phase` (`0xd64f90`) and `Device.m_SecondViewport` (`0xd37b30`) as data.
+`CRender::Render` itself stays the observer's hook; the geometry view scope is opened from it. The question, source
+reading, evidence and the coverage counters are in `docs/research/anomaly-geometry-coverage.md`.
+
 ## Verification boundaries
 
 - Exact-build detection and foreign-process refusal are native DLL tests.

@@ -76,6 +76,7 @@ void render_end(void* self) {
                 static_cast<unsigned long long>(stats.draws_identified), static_cast<unsigned long long>(stats.draws_unidentified),
                 static_cast<unsigned long long>(stats.capture_faults));
             report(text);
+            geometry::geometry_report_coverage([](void*, const char* line) { report(line); }, nullptr);
         }
     }
 }
@@ -95,6 +96,9 @@ void camera(void* self, const float* view, const float* projection) {
 void scene(void* self) {
     Invocation call;
     if (call.observe) { std::lock_guard lock(observation_guard); ++observation.scene_passes; }
+    // Main or scope view, world projection, for every geometry draw this CRender::Render makes (shadow and Z-fill
+    // passes included; they are classified by phase). Inert unless the geometry hooks are active.
+    const geometry::RenderViewScope view;
     reinterpret_cast<Unary>(originals[3])(self);
 }
 void screen_ui(void* self) {

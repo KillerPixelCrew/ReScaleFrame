@@ -23,7 +23,7 @@ namespace {
 // the cross build has no shader compiler and a pass that only exists in the MSVC build could not be
 // tested here at all. d3dcompiler_47 is present both on Windows and in a Proton prefix.
 const char* const decode_shader = R"(
-Texture2D<float2>   Source : register(t0);
+Texture2D<float4>   Source : register(t0);
 RWTexture2D<float2> Target : register(u0);
 
 cbuffer Params : register(b0)
@@ -34,7 +34,10 @@ cbuffer Params : register(b0)
     float  InvalidValue;
     uint   ZeroMeansUnwritten;
     uint2  Size;
-    uint2  Padding;
+    uint   ValidityEnabled;
+    uint   ValidityChannel;
+    float  ValidityThreshold;
+    uint3  Padding;
 };
 
 [numthreads(8, 8, 1)]
@@ -45,11 +48,22 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float2 stored = Source[id.xy];
+    float4 raw = Source[id.xy];
+    float2 stored = raw.xy;
 
     // The sentinel test runs before the decode and on the stored value, which is the only place it
-    // is unambiguous. After the decode, zero is a value real motion can take.
-    if (ZeroMeansUnwritten != 0 && stored.x == 0.0 && stored.y == 0.0)
+    // is unambiguous. After the decode, zero is a value real motion can take. An explicit validity
+    // channel replaces the zero test: validity then does not depend on the motion value at all.
+    bool unwritten;
+    if (ValidityEnabled != 0)
+    {
+        unwritten = !(raw[ValidityChannel & 3u] > ValidityThreshold);
+    }
+    else
+    {
+        unwritten = ZeroMeansUnwritten != 0 && stored.x == 0.0 && stored.y == 0.0;
+    }
+    if (unwritten)
     {
         Target[id.xy] = float2(InvalidValue, InvalidValue);
         return;
@@ -66,7 +80,10 @@ struct Constants {
     float invalid_value;
     uint32_t zero_means_unwritten;
     uint32_t size[2];
-    uint32_t padding[2];
+    uint32_t validity_enabled;
+    uint32_t validity_channel;
+    float validity_threshold;
+    uint32_t padding[3];
 };
 static_assert(sizeof(Constants) % 16 == 0, "constant buffers are bound in 16 byte registers");
 
@@ -164,7 +181,7 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
                                                           const rsf_motion_decode_params* params)
 {
     if (!pass || !context_pointer || !source || !params ||
-        params->struct_size < sizeof(rsf_motion_decode_params)) {
+        params->struct_size < RSF_MOTION_DECODE_PARAMS_SIZE_V1) {
         return RSF_MOTION_DECODE_ERROR_INVALID_ARGUMENT;
     }
 
@@ -179,6 +196,12 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
         !std::isfinite(params->bias_x) || !std::isfinite(params->bias_y) ||
         !std::isfinite(params->output_scale_x) || !std::isfinite(params->output_scale_y) ||
         !std::isfinite(params->invalid_value)) {
+        return RSF_MOTION_DECODE_ERROR_INVALID_ARGUMENT;
+    }
+    // The validity fields exist only when the caller's struct is long enough to hold them.
+    const bool has_validity = params->struct_size >= sizeof(rsf_motion_decode_params);
+    if (has_validity && params->validity_enabled &&
+        (params->validity_channel > 3 || !std::isfinite(params->validity_threshold))) {
         return RSF_MOTION_DECODE_ERROR_INVALID_ARGUMENT;
     }
 
@@ -216,6 +239,11 @@ extern "C" rsf_motion_decode_result rsf_motion_decode_run(rsf_motion_decode* pas
     values.output_scale[1] = params->output_scale_y;
     values.invalid_value = params->invalid_value;
     values.zero_means_unwritten = params->zero_means_unwritten;
+    if (has_validity) {
+        values.validity_enabled = params->validity_enabled ? 1u : 0u;
+        values.validity_channel = params->validity_channel;
+        values.validity_threshold = params->validity_threshold;
+    }
     values.size[0] = pass->width;
     values.size[1] = pass->height;
     std::memcpy(mapped.pData, &values, sizeof(values));

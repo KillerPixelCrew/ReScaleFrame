@@ -105,8 +105,12 @@ int main()
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "empty path");
     bad = setup; bad.configuration_section = nullptr;
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "missing section");
-    bad = setup; bad.sr_backend_choices = 0;
-    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "no SR choices");
+    bad = setup; bad.sr_backend_choices = 1u << 0;
+    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "SR backend bit 0 is not a backend");
+    bad = setup; bad.sr_quality_choices = 0;
+    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "SR backends without any quality");
+    bad = setup; bad.sr_backend_choices = 0; bad.defaults.sr_enabled = 1;
+    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "no SR but defaults enable SR");
     bad = setup; bad.latency_choices = 1u << RSF_REFLEX_ON;
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "latency without Off");
     bad = setup; bad.fg_backend_choices = 1u << 2;

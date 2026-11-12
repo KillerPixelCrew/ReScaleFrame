@@ -3,9 +3,10 @@
 add_executable(rsf_overlay_dll_api_test "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api.cpp")
 add_executable(rsf_overlay_dll_api_c11 "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_c11.c")
 add_executable(rsf_overlay_dll_api_device "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_device.cpp")
+add_executable(rsf_overlay_dll_api_no_sr "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_no_sr.cpp")
 set_target_properties(rsf_overlay_dll_api_c11 PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-foreach(client rsf_overlay_dll_api_test rsf_overlay_dll_api_c11 rsf_overlay_dll_api_device)
+foreach(client rsf_overlay_dll_api_test rsf_overlay_dll_api_c11 rsf_overlay_dll_api_device rsf_overlay_dll_api_no_sr)
     target_include_directories(${client} PRIVATE
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
     target_link_libraries(${client} PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
@@ -14,7 +15,8 @@ endforeach()
 target_link_libraries(rsf_overlay_dll_api_device PRIVATE d3d11 dxgi)
 add_test(NAME overlay_dll_api_contract COMMAND rsf_overlay_dll_api_test)
 add_test(NAME overlay_dll_api_c11_contract COMMAND rsf_overlay_dll_api_c11)
-set_tests_properties(overlay_dll_api_contract overlay_dll_api_c11_contract PROPERTIES TIMEOUT 30)
+add_test(NAME overlay_dll_api_no_sr_contract COMMAND rsf_overlay_dll_api_no_sr)
+set_tests_properties(overlay_dll_api_contract overlay_dll_api_c11_contract overlay_dll_api_no_sr_contract PROPERTIES TIMEOUT 30)
 
 # The device fixture loads the real Rust panel. Build it first with
 #   cargo build --release --locked -p rescaleframe-overlay

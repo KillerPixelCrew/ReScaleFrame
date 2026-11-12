@@ -13,11 +13,18 @@
 
 namespace rsf::anomaly::geometry {
 using temporal::InstanceKey;
+enum class VisualLookup : std::uint8_t { Missing, Unique, Ambiguous };
+struct VisualProbe {
+    VisualLookup lookup{VisualLookup::Missing};
+    std::optional<InstanceKey> key; // Set only for Unique.
+};
 class IdentityRegistry {
 public:
     std::optional<InstanceKey> acquire(std::uint64_t owner, std::uint64_t visual);
     std::optional<InstanceKey> find(std::uint64_t owner, std::uint64_t visual) const;
     std::optional<InstanceKey> find_visual(std::uint64_t visual) const;
+    // Like find_visual, but distinguishes an unknown visual from one live under several owners.
+    VisualProbe probe_visual(std::uint64_t visual) const;
     std::optional<InstanceKey> retire(std::uint64_t owner, std::uint64_t visual);
     std::vector<InstanceKey> retire_all();
 private:
@@ -27,6 +34,40 @@ private:
 };
 
 enum class DrawKind : std::uint8_t { Rigid, HardwareSkinned, SingleBone, SoftwareSkinned, Tree };
+
+// Where the draw happens, read from CRender::phase at visual entry. Shadow-map and Z-fill passes write no motion.
+enum class DrawPass : std::uint8_t { Main, Shadow, Unknown, Count };
+// Which engine Render override the draw entered.
+enum class VisualType : std::uint8_t { Static, Progressive, SkeletonST, SkeletonPM, TreeST, TreePM, Count };
+enum class DrawVerdict : std::uint8_t {
+    Identified,             // A live registry identity names this visual.
+    IgnoredShadow,          // Shadow-map or Z-fill phase: no motion output, so no identity is needed.
+    IgnoredStaticWorld,     // Unregistered, rigid, world matrix exactly identity: level geometry, camera-only motion is exact.
+    UnidentifiedDynamic,    // Unregistered skinned visual or non-identity world: needs an identity and has none.
+    UnidentifiedDeformed,   // Unregistered tree: vertex-shader sway needs a deformation schema.
+    UnidentifiedAmbiguous,  // The visual address is live under more than one owner.
+    UnidentifiedUnreadable, // The world matrix could not be read to classify an unregistered draw.
+    UnidentifiedNoCapture,  // Capture latched off, or the draw ran inside a model factory.
+    Count
+};
+struct DrawFacts {
+    DrawPass pass{};
+    VisualType type{};
+    VisualLookup lookup{};
+    bool capturing{true};       // Capture enabled and not inside a model factory.
+    bool world_readable{};
+    bool world_identity{};
+};
+// Pure classification. Only the unregistered rigid, non-shadow path depends on the world matrix.
+DrawVerdict classify_draw(const DrawFacts&) noexcept;
+const char* pass_name(DrawPass) noexcept;
+const char* visual_type_name(VisualType) noexcept;
+const char* verdict_name(DrawVerdict) noexcept;
+struct DrawClassification {
+    DrawPass pass{DrawPass::Main};
+    VisualType type{VisualType::Static};
+    DrawVerdict verdict{DrawVerdict::Identified};
+};
 struct DrawIdentity {
     InstanceKey key{};
     DrawKind kind{};
@@ -34,6 +75,7 @@ struct DrawIdentity {
     std::optional<temporal::ProjectionDomain> domain;
     const float* world{}; // Borrowed native row-vector Fmatrix, read again at the actual D3D draw.
     const std::byte* skeleton{}; // Actual CSkeletonX subobject, not the complete visual.
+    DrawClassification classification{};
 };
 struct DrawCapture {
     InstanceKey key{};
@@ -46,7 +88,10 @@ struct DrawCapture {
 };
 class DrawContextScope {
 public:
+    struct InheritView {};
     DrawContextScope(std::optional<temporal::ViewId>, std::optional<temporal::ProjectionDomain>) noexcept;
+    // Keeps the enclosing view and only changes the projection domain (first-person inside a main or scope frame).
+    DrawContextScope(InheritView, std::optional<temporal::ProjectionDomain>) noexcept;
     ~DrawContextScope();
     DrawContextScope(const DrawContextScope&) = delete;
     DrawContextScope& operator=(const DrawContextScope&) = delete;
@@ -60,12 +105,13 @@ private:
 class DrawScope {
 public:
     DrawScope(const IdentityRegistry&, std::optional<InstanceKey>, DrawKind, const float*,
-        const std::byte* skeleton = nullptr) noexcept;
+        const std::byte* skeleton = nullptr, DrawClassification = {}) noexcept;
     ~DrawScope();
     DrawScope(const DrawScope&) = delete;
     DrawScope& operator=(const DrawScope&) = delete;
 private:
     friend const DrawIdentity* borrow_draw() noexcept;
+    friend void geometry_observe_draw() noexcept;
     const IdentityRegistry& registry_;
     DrawIdentity identity_{};
     DrawScope* previous_{};
@@ -74,6 +120,9 @@ private:
 // Valid only until the matching visual returns, on this thread. No engine object/resource lease.
 const DrawIdentity* borrow_draw() noexcept;
 std::optional<DrawCapture> capture_current_draw() noexcept;
+// Called by the draw-time hook before the engine's D3D draw. Counts the draw and, for an identified main-pass draw,
+// captures it and hands it to the draw sink. Does nothing outside a DrawScope other than count.
+void geometry_observe_draw() noexcept;
 
 struct GeometrySink {
     void* context{};
@@ -82,11 +131,47 @@ struct GeometrySink {
     void (*retired)(void*, InstanceKey) noexcept{};
 };
 void geometry_set_sink(GeometrySink) noexcept; // Set only with native hooks quiescent.
+struct DrawSink {
+    void* context{};
+    // Render thread, inside the engine's draw, synchronously. The capture is a copy; it holds no engine lease.
+    // Must not throw or reenter the renderer.
+    void (*draw)(void*, const DrawCapture&) noexcept{};
+};
+void geometry_set_draw_sink(DrawSink) noexcept; // Set only with native hooks quiescent.
+// Main or scope frame, from the engine's own IsSVPFrame predicate (isActive && dwFrame % frameDelay == 0).
+// Empty when the bytes are unreadable. `module` is the executable base.
+std::optional<temporal::ViewId> current_render_view(const std::byte* module) noexcept;
+// Opens the view/World context for one CRender::Render. Inert when geometry hooks are not active.
+class RenderViewScope {
+public:
+    RenderViewScope() noexcept;
+    ~RenderViewScope();
+    RenderViewScope(const RenderViewScope&) = delete;
+    RenderViewScope& operator=(const RenderViewScope&) = delete;
+private:
+    std::optional<DrawContextScope> scope_;
+};
 // Monotonic process counters for live validation. They prove hook invocation, not temporal correctness.
 struct GeometryStats {
     std::uint64_t models_registered{}, models_retired{}, draws_identified{}, draws_unidentified{}, capture_faults{};
 };
 GeometryStats geometry_stats() noexcept;
+
+// Per-category coverage for the periodic log. Counts describe hook invocations, not temporal correctness.
+struct GeometryCoverage {
+    static constexpr std::size_t passes = static_cast<std::size_t>(DrawPass::Count);
+    static constexpr std::size_t types = static_cast<std::size_t>(VisualType::Count);
+    static constexpr std::size_t verdicts = static_cast<std::size_t>(DrawVerdict::Count);
+    std::uint64_t draws[passes][types][verdicts]{};   // Render-entry classification by pass, visual type and verdict.
+    // Draw-time call site (CBackend::constants.flush: every draw or dispatch, hooked visual or not).
+    std::uint64_t flush_total[passes]{}, flush_in_visual[passes]{};
+    std::uint64_t captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
+    // Context producers.
+    std::uint64_t views_main{}, views_scope{}, hud_scopes{}, near_windows{};
+};
+GeometryCoverage geometry_coverage() noexcept;
+// Writes the coverage as log lines through `emit`. Rows with no draws are omitted.
+void geometry_report_coverage(void (*emit)(void*, const char*), void*) noexcept;
 std::span<const HookSite> native_geometry_hook_sites() noexcept;
 bool install_native_geometry(std::byte* module, std::uint32_t image_size,
     std::string_view verified_executable_sha256) noexcept;

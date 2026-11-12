@@ -61,18 +61,27 @@ std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture& draw, F
     }
 }
 
-FeedResult feed_current_draw(temporal::TemporalHistory& history, temporal::FrameToken frame, RetirementQueue& queue)
+FeedResult feed_draw(temporal::TemporalHistory& history, temporal::FrameToken frame, RetirementQueue& queue,
+    const DrawCapture& draw)
 {
     queue.drain(history);
-    const auto draw = capture_current_draw();
-    if (!draw) return {FeedStatus::NoDraw, std::nullopt};
-    if (draw->view && *draw->view != frame.view) return {FeedStatus::WrongView, std::nullopt};
+    if (draw.view && *draw.view != frame.view) return {FeedStatus::WrongView, std::nullopt};
     FeedStatus why{};
-    const auto snapshot = to_snapshot(*draw, why);
+    const auto snapshot = to_snapshot(draw, why);
     if (!snapshot) return {why, std::nullopt};
-    const auto stored = history.capture(frame, draw->key, *snapshot);
+    const auto stored = history.capture(frame, draw.key, *snapshot);
     const bool ok = stored.status == temporal::CaptureStatus::Captured || stored.status == temporal::CaptureStatus::Repeated;
     return {ok ? FeedStatus::Captured : FeedStatus::Rejected, stored.status};
+}
+
+FeedResult feed_current_draw(temporal::TemporalHistory& history, temporal::FrameToken frame, RetirementQueue& queue)
+{
+    const auto draw = capture_current_draw();
+    if (!draw) {
+        queue.drain(history);
+        return {FeedStatus::NoDraw, std::nullopt};
+    }
+    return feed_draw(history, frame, queue, *draw);
 }
 
 }

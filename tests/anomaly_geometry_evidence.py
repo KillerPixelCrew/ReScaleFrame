@@ -15,6 +15,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXE = pathlib.Path('D:/Anomaly 1.5.3/bin/AnomalyDX11.exe')
 HASH = 'c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e'
 SET_W = 0x840960
+FLUSH = 0x84b930          # CBackend constants.flush
+RENDER_GRAPH = 0x84f220
+RENDER_HUD, RENDER_HUD_UI = 0x84ffa0, 0x8505a0
+RENDER_SORTED, RENDER_EMISSIVE = 0x850cc0, 0x84ec80
+CRENDER_RENDER, CRENDER_RENDER_END = 0x8977c0, 0x898600
+SKELETON_RENDER = 0x849aa0   # CSkeletonX::_Render, called by CSkeletonX_ST/PM::Render
+IS_SVP_FRAME, DEVICE_END = 0x2d260, 0x822eb0
 
 class PE:
     def __init__(self):
@@ -65,6 +72,33 @@ class PE:
                     table = self.rva(pointer + 8)
                     entries = [hex(v - self.base) for v in struct.unpack('<' + 'Q' * 65, self.read(table, 65 * 8))]
                     yield {'class': name, 'vtable': hex(table), 'this_offset': offset, 'slots': entries}
+    def text(self):
+        text_va, text_size, raw, _ = self.sections[0]
+        return text_va, self.data[raw:raw + text_size]
+    def callers(self, *targets):
+        """Direct `call rel32` sites per target, over the whole .text section."""
+        text_va, code = self.text()
+        wanted = set(targets)
+        found = {t: [] for t in wanted}
+        at = code.find(b'\xe8')
+        while at >= 0:
+            if at + 5 <= len(code):
+                target = text_va + at + 5 + struct.unpack_from('<i', code, at + 1)[0]
+                if target in wanted:
+                    found[target].append(text_va + at)
+            at = code.find(b'\xe8', at + 1)
+        return found
+    def function_end(self, rva, limit=0x1800):
+        """First 16-byte-padding (CC CC) after the entry; the image pads every function this way."""
+        code = self.read(rva, limit)
+        for i in range(16, len(code) - 1):
+            if code[i] == 0xcc and code[i + 1] == 0xcc:
+                return rva + i
+        return rva + limit
+    def calls_in(self, start, end):
+        code = self.read(start, end - start)
+        return [(start + i, start + i + 5 + struct.unpack_from('<i', code, i + 1)[0])
+                for i in range(len(code) - 5) if code[i] == 0xe8]
     def set_w_world_address(self):
         """Count of `lea rcx,[rip+x]` operands feeding direct calls to R_xforms::set_W."""
         text_va, text_size, raw, _ = self.sections[0]
@@ -93,18 +127,138 @@ def rea(name, args):
             content = [{k: item[k] for k in ('address', 'status', 'pseudocode') if k in item} for item in content['items']]
     print(json.dumps({'record': record['id'], 'result': content}, indent=2), flush=True)
 
+def verify_context(pe, text):
+    """Draw-time call site, phase, view and first-person boundaries. Raises AssertionError with the failing name."""
+    profile = {n: int(r, 16) for n, r, _ in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text)}
+    assert profile['CBackend::constants.flush'] == FLUSH
+    assert profile['R_dsgraph_structure::r_dsgraph_render_hud'] == RENDER_HUD
+    assert profile['R_dsgraph_structure::r_dsgraph_render_sorted'] == RENDER_SORTED
+    assert profile['R_dsgraph_structure::r_dsgraph_render_emissive'] == RENDER_EMISSIVE
+    callers = pe.callers(FLUSH, RENDER_HUD, RENDER_HUD_UI, RENDER_SORTED, RENDER_EMISSIVE, RENDER_GRAPH, IS_SVP_FRAME, SKELETON_RENDER)
+
+    # constants.flush: a loop over 14 constant-buffer slots (mov edi,0xe), no arguments, called from every inlined
+    # CBackend::Render. Its callers are the draw sites, so it runs once per D3D draw (or dispatch).
+    body = pe.read(FLUSH, 0x80).hex()
+    assert 'bf0e000000' in body and body.count('e8') >= 6 and 'c3' in body, 'flush body'
+    assert len(callers[FLUSH]) >= 100, len(callers[FLUSH])
+    # In every hooked visual body, and in the shared skeleton _Render, each flush call is followed within 40 bytes by the
+    # D3D11 context call DrawIndexed (vtable slot 12: FF 50 60 or FF 90 60 00 00 00); no engine call sits between them.
+    draw_ranges = {'Fvisual::Render': 0x8cff60, 'FProgressive::Render': 0x8d0800, 'FTreeVisual_ST::Render': 0x8d5d20,
+                   'FTreeVisual_PM::Render': 0x8d5a40, 'CSkeletonX::_Render': SKELETON_RENDER}
+    flush_before_draw = 0
+    for name, start in draw_ranges.items():
+        end = pe.function_end(start, 0x2000)
+        sites = [site for site in callers[FLUSH] if start <= site < end]
+        assert sites, name
+        for site in sites:
+            tail = pe.read(site + 5, 48).hex()
+            assert 'ff5060' in tail or 'ff9060000000' in tail, (name, hex(site))
+            flush_before_draw += 1
+    for name, start in (('CSkeletonX_ST::Render', 0x8d1610), ('CSkeletonX_PM::Render', 0x8d1520)):
+        assert SKELETON_RENDER in [target for _, target in pe.calls_in(start, pe.function_end(start))], name
+
+    # CRender::phase: Fvisual::Render's `cmp dword [phase], 1` (PHASE_SMAP) and the stores in CRender::Render.
+    phase = int(re.search(r'render_phase_rva = (0x[0-9a-f]+)', text).group(1), 16)
+    cmp_at = 0x8cff83
+    raw = pe.read(cmp_at, 7)
+    assert raw[:2] == b'\x83\x3d' and raw[6] == 1 and cmp_at + 7 + struct.unpack_from('<i', raw, 2)[0] == phase, 'phase compare'
+    # The writes are `this`-relative: CRender::Render does `mov [rsi+0x150],1` (PHASE_SMAP, Z-fill) and later
+    # `mov [rsi+0x150],r14d` (PHASE_NORMAL before render_main). The global CRender (RImplementation) is phase-0x150.
+    render = pe.read(CRENDER_RENDER, CRENDER_RENDER_END - CRENDER_RENDER)
+    assert render.count(b'\xc7\x86\x50\x01\x00\x00\x01\x00\x00\x00') == 1, 'phase = PHASE_SMAP store'
+    assert render.count(b'\x44\x89\xb6\x50\x01\x00\x00') == 1, 'phase = PHASE_NORMAL store'
+    crender = phase - 0x150
+    text_va, code = pe.text()
+    lea_refs = 0
+    at = code.find(b'\x48\x8d')
+    while at >= 0:
+        if at + 7 <= len(code) and (code[at + 2] & 0xc7) == 0x05 and \
+                text_va + at + 7 + struct.unpack_from('<i', code, at + 3)[0] == crender:
+            lea_refs += 1
+        at = code.find(b'\x48\x8d', at + 1)
+    assert lea_refs >= 50, ('RImplementation', hex(crender), lea_refs)
+
+    # View: IsSVPFrame is `isActive && dwFrame % frameDelay == 0`; End passes &Device.m_SecondViewport to it and
+    # reads isCamReady at +2. dwFrame is the same global the observer reads as engine_frame.
+    sv = pe.read(IS_SVP_FRAME, 32)
+    assert sv[:3] == b'\x80\x39\x00' and sv[5:9] == b'\x0f\xb6\x49\x01' and sv[11:13] == b'\x8b\x05' and sv[17:19] == b'\xf7\xf1', 'IsSVPFrame shape'
+    frame = IS_SVP_FRAME + 17 + struct.unpack_from('<i', sv, 13)[0]
+    assert frame == int(re.search(r'device_frame_rva = (0x[0-9a-f]+)', open(ROOT / 'games/anomaly/src/native_profile.h').read()).group(1), 16), hex(frame)
+    call_at = callers[IS_SVP_FRAME]
+    assert len(call_at) >= 1 and any(DEVICE_END <= c < DEVICE_END + 0x100 for c in call_at), 'End calls IsSVPFrame'
+    call_in_end = next(c for c in call_at if DEVICE_END <= c < DEVICE_END + 0x100)
+    lea = pe.read(call_in_end - 7, 7)
+    assert lea[:3] == b'\x48\x8d\x0d', 'lea rcx,[Device.m_SecondViewport]'
+    viewport = call_in_end - 7 + 7 + struct.unpack_from('<i', lea, 3)[0]
+    assert viewport == int(re.search(r'second_viewport_rva = (0x[0-9a-f]+)', text).group(1), 16), hex(viewport)
+    after = pe.read(call_in_end + 5, 24)
+    cam = after.find(b'\x38\x05')
+    assert cam >= 0 and call_in_end + 5 + cam + 6 + struct.unpack_from('<i', after, cam + 2)[0] == viewport + 2, 'isCamReady'
+
+    # First-person: render_hud / render_sorted / render_emissive / render_hud_ui all read psHUD_FOV (movss/mulss of one
+    # global); render_hud, sorted and emissive bracket their HUD work with CRender vtable slots 55 (rmNear, 0x1b8) and 57
+    # (rmNormal, 0x1c8). They are called from CRender::Render, and render_sorted right after render_graph(1).
+    def float_reads(start, size):
+        """Targets of rip-relative scalar-float loads `F3 [REX] 0F 10 /r` (movss reg,[rip+x])."""
+        code = pe.read(start, size)
+        found = set()
+        for i in range(len(code) - 9):
+            if code[i] != 0xf3:
+                continue
+            j = i + 2 if 0x40 <= code[i + 1] <= 0x4f else i + 1
+            if code[j:j + 2] == b'\x0f\x10' and (code[j + 2] & 0xc7) == 0x05:
+                found.add(start + j + 7 + struct.unpack_from('<i', code, j + 3)[0])
+        return found
+    # render_hud's first float load is psHUD_FOV (psHUD_FOV * 83 -> deg2rad -> build_projection); the others share it.
+    # The shared Device globals (aspect, near/far) are also common, so the HUD FOV is pinned by that first load.
+    hud_code = pe.read(RENDER_HUD, 0x200)
+    first_load = next(i for i in range(len(hud_code) - 9) if hud_code[i:i + 4] == b'\xf3\x0f\x10\x05')
+    fov = {RENDER_HUD + first_load + 8 + struct.unpack_from('<i', hud_code, first_load + 4)[0]}
+    for name, start in (('hud_ui', RENDER_HUD_UI), ('sorted', RENDER_SORTED), ('emissive', RENDER_EMISSIVE)):
+        assert fov <= float_reads(start, 0x300), name
+    for name, start in (('hud', RENDER_HUD), ('sorted', RENDER_SORTED), ('emissive', RENDER_EMISSIVE)):
+        end = pe.function_end(start, 0x1000)
+        code = pe.read(start, end - start)
+        near, normal = code.find(b'\xff\x90\xb8\x01\x00\x00'), code.find(b'\xff\x90\xc8\x01\x00\x00')
+        assert 0 < near < normal, (name, near, normal)
+    hud_sites = [c for c in callers[RENDER_HUD] if CRENDER_RENDER <= c < CRENDER_RENDER_END]
+    assert len(hud_sites) == 2, [hex(c) for c in callers[RENDER_HUD]]
+    assert any(CRENDER_RENDER <= c < CRENDER_RENDER_END for c in callers[RENDER_EMISSIVE])
+    assert any(0 < c - g <= 0x30 for c in callers[RENDER_SORTED] for g in callers[RENDER_GRAPH]), 'render_sorted follows render_graph'
+    # rmNear sets viewport depth 0..0.02, rmNormal 0..1 (movss xmm1,[rip+x] holds MaxDepth).
+    def max_depth(start):
+        code = pe.read(start, 0x60)
+        at = code.find(b'\xf3\x0f\x10\x0d')
+        return struct.unpack('<f', pe.read(start + at + 8 + struct.unpack_from('<i', code, at + 4)[0], 4))[0]
+    assert abs(max_depth(0x83a450) - 0.02) < 1e-6 and max_depth(0x83a4d0) == 1.0, 'rmNear/rmNormal viewport depth'
+
+    # Static level geometry: r_dsgraph_render_graph and render_landscape call set_W(&xforms, &Fidentity); the same
+    # global is the source of 18 set_W callers. Its identity contents are set at startup, so the classifier compares the
+    # live matrix and the log reports how many draws matched.
+    graph = pe.read(RENDER_GRAPH, 0x90)
+    set_w = next(i for i in range(len(graph) - 5) if graph[i] == 0xe8 and
+                 RENDER_GRAPH + i + 5 + struct.unpack_from('<i', graph, i + 1)[0] == SET_W)
+    lea_rdx, lea_rcx = graph[set_w - 14:set_w - 7], graph[set_w - 7:set_w]
+    assert lea_rdx[:3] == b'\x48\x8d\x15' and lea_rcx[:3] == b'\x48\x8d\x0d'
+    identity = RENDER_GRAPH + set_w - 14 + 7 + struct.unpack_from('<i', lea_rdx, 3)[0]
+    world = RENDER_GRAPH + set_w - 7 + 7 + struct.unpack_from('<i', lea_rcx, 3)[0]
+    assert world == int(re.search(r'world_matrix_rva = (0x[0-9a-f]+)', text).group(1), 16)
+    return {'flush_callers': len(callers[FLUSH]), 'draw_flush_sites': flush_before_draw, 'phase': hex(phase), 'RImplementation': hex(crender),
+            'viewport': hex(viewport), 'psHUD_FOV': hex(next(iter(fov))), 'Fidentity': hex(identity)}
+
 def verify(pe):
     profile = ROOT / 'games/anomaly/src/geometry_profile.h'
     assert profile.exists(), 'missing installed geometry profile'
     text = profile.read_text()
     sites = re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text)
-    assert len(sites) >= 13, 'missing verified lifecycle, visual or layout sites'
+    assert len(sites) >= 21, 'missing verified lifecycle, visual, context or layout sites'
     for name, rva, expected in sites:
         assert pe.read(int(rva, 16), 16).hex() == expected, name
     wanted = {'CRender': {36: 0x839940, 37: 0x839950, 38: 0x839bd0, 39: 0x839b40},
               'Fvisual': {7: 0x8cff60}, 'FProgressive': {7: 0x8d0800},
               'CSkeletonX_ST': {7: 0x8d1610}, 'CSkeletonX_PM': {7: 0x8d1520},
               'FTreeVisual_ST': {7: 0x8d5d20}, 'FTreeVisual_PM': {7: 0x8d5a40}}
+    wanted['CRender'].update({55: 0x83a450, 57: 0x83a4d0})   # rmNear, rmNormal
     for name, slots in wanted.items():
         table = next(t for t in pe.tables(name) if t['this_offset'] == 0)
         for slot, rva in slots.items():
@@ -123,9 +277,10 @@ def verify(pe):
     # LL_GetBoneInstance: (id & 0xffff) * 0xa8 + [IKinematics + 0x50]; LL_GetTransform_R adds 0x40.
     assert pe.read(0x803d90, 10).hex() == '0fb7c24869c0a8000000', 'bone instance stride'
     assert '4883c040' in pe.read(0x803da0, 20).hex(), 'render transform offset'
-    print(f'PASS: installed standard hash, {len(sites)} expected16 guards, lifecycle/visual RTTI slots, '
+    context = verify_context(pe, text)
+    print(f'PASS: installed standard hash, {len(sites)} expected16 guards, lifecycle/visual/rmNear/rmNormal RTTI slots, '
           f'{len(found_tables)} hierarchy vtables, world matrix {hex(world)} ({callers[world]} set_W callers), '
-          'bone stride/render-transform offset')
+          f'bone stride/render-transform offset; draw-time/context: {context}')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

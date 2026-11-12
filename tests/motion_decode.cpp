@@ -256,6 +256,99 @@ int main()
     }
 
     readable->Release();
+
+    // Validity channel. An RGBA16_FLOAT source holds (motion x, motion y, validity, 0); a valid
+    // stationary pixel is (0,0,1,0) and must not be confused with the cleared (0,0,0,0).
+    {
+        constexpr uint16_t h0 = 0x0000, h1 = 0x3C00, hhalf = 0x3800, hneg_quarter = 0xB400;
+        const uint16_t rgba[4 * 4] = {
+            h0, h0, h1, h0,                    // valid, stationary
+            h0, h0, h0, h0,                    // cleared, unwritten
+            hhalf, hneg_quarter, h1, h0,       // valid, moving
+            hhalf, hneg_quarter, h0, h0,       // validity says invalid despite a motion value
+        };
+        D3D11_TEXTURE2D_DESC vdesc = source;
+        vdesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        D3D11_SUBRESOURCE_DATA vinit{};
+        vinit.pSysMem = rgba;
+        vinit.SysMemPitch = width * 8;
+        ID3D11Texture2D* validity_source = nullptr;
+        check(SUCCEEDED(device->CreateTexture2D(&vdesc, &vinit, &validity_source)) &&
+                  validity_source,
+              "The RGBA16 validity source must be created.");
+        ID3D11Texture2D* vread = nullptr;
+        D3D11_TEXTURE2D_DESC rdesc{};
+        decoded->GetDesc(&rdesc);
+        rdesc.Usage = D3D11_USAGE_STAGING;
+        rdesc.BindFlags = 0;
+        rdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        rdesc.MiscFlags = 0;
+        check(SUCCEEDED(device->CreateTexture2D(&rdesc, nullptr, &vread)) && vread,
+              "A staging copy for the validity decode must be created.");
+
+        if (validity_source && vread) {
+            float out[8] = {};
+            auto run = [&](const rsf_motion_decode_params& p, const char* what) {
+                check(rsf_motion_decode_run(pass, context, validity_source, &p) ==
+                          RSF_MOTION_DECODE_OK,
+                      what);
+                context->CopyResource(vread, decoded);
+                D3D11_MAPPED_SUBRESOURCE m{};
+                if (SUCCEEDED(context->Map(vread, 0, D3D11_MAP_READ, 0, &m)) && m.pData) {
+                    const auto* r = static_cast<const uint16_t*>(m.pData);
+                    for (int i = 0; i < 8; ++i) {
+                        out[i] = half_to_float(r[i]);
+                    }
+                    context->Unmap(vread, 0);
+                }
+            };
+
+            rsf_motion_decode_params vp{};
+            vp.struct_size = sizeof(vp);
+            vp.scale_x = vp.scale_y = 1.0f;
+            vp.output_scale_x = vp.output_scale_y = 1.0f;
+            vp.invalid_value = -1000.0f;
+            vp.zero_means_unwritten = 1;  // must be ignored once validity is enabled
+            vp.validity_enabled = 1;
+            vp.validity_channel = 2;
+            vp.validity_threshold = 0.5f;
+            run(vp, "Running with a validity channel must succeed.");
+            check_near(out[0], 0.0f, 0.001f, "A valid stationary pixel must keep zero motion (x).");
+            check_near(out[1], 0.0f, 0.001f, "A valid stationary pixel must keep zero motion (y).");
+            check_near(out[2], -1000.0f, 1.0f, "An unwritten pixel must take the invalid value.");
+            check_near(out[3], -1000.0f, 1.0f, "An unwritten pixel must take the invalid value.");
+            check_near(out[4], 0.5f, 0.001f, "A valid moving pixel must decode (x).");
+            check_near(out[5], -0.25f, 0.001f, "A valid moving pixel must decode (y).");
+            check_near(out[6], -1000.0f, 1.0f, "Validity must win over the motion value.");
+
+            // Validity off: the zero test applies exactly as before, so the stationary pixel
+            // collides with the clear value and is marked unwritten.
+            rsf_motion_decode_params off = vp;
+            off.validity_enabled = 0;
+            run(off, "Running with validity disabled must succeed.");
+            check_near(out[0], -1000.0f, 1.0f, "Without validity a zero pixel is unwritten.");
+            check_near(out[2], -1000.0f, 1.0f, "Without validity the cleared pixel is unwritten.");
+            check_near(out[4], 0.5f, 0.001f, "Without validity motion still decodes.");
+            check_near(out[6], 0.5f, 0.001f, "Without validity the motion value is used.");
+
+            // Old struct size: the validity fields do not exist, so they are ignored.
+            rsf_motion_decode_params old = vp;
+            old.struct_size = RSF_MOTION_DECODE_PARAMS_SIZE_V1;
+            run(old, "The pre-validity struct size must still be accepted.");
+            check_near(out[0], -1000.0f, 1.0f, "The old struct size must behave as before.");
+            check_near(out[6], 0.5f, 0.001f, "The old struct size must ignore validity.");
+
+            // A channel that does not exist is refused.
+            rsf_motion_decode_params bad = vp;
+            bad.validity_channel = 4;
+            check(rsf_motion_decode_run(pass, context, validity_source, &bad) ==
+                      RSF_MOTION_DECODE_ERROR_INVALID_ARGUMENT,
+                  "An out of range validity channel must be refused.");
+        }
+        if (vread) vread->Release();
+        if (validity_source) validity_source->Release();
+    }
+
     rsf_motion_decode_destroy(pass);
     motion->Release();
     context->Release();

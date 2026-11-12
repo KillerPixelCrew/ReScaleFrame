@@ -24,18 +24,18 @@ Worker specs and reports: `.local/anomaly/orchestration/`.
 | Area | Verified today | Still required |
 | --- | --- | --- |
 | Source/shader research | Packed r3 inventory, colour/depth/UI contracts and guarded native-boundary mappings | Complete live producer/pass/permutation coverage |
-| Thin DirectInput carrier | Native forwarding, export/ordinal/dependency contracts, synchronous exactly-once startup and refusal paths | Anomaly process startup and device-order acceptance |
+| Thin DirectInput carrier | Native forwarding, export/ordinal/dependency contracts, synchronous exactly-once startup and refusal paths | Accepted in Anomaly: forwarding and exactly-once startup before device creation (12 Nov) |
 | Adapter/bootstrap | Exact-build detection, foreign-process refusal, lifecycle and cold entry built/tested | Actual Anomaly activation; current explicit `Mode=Observe` only instruments boundaries |
 | Native boundary hooks | Guarded x64 detour/trampoline/restoration fixture; standard-DX11 site map | Live invocation and ABI/camera/PDA/scope captures; AVX native mapping |
 | Temporal CPU state | Independent main/scope and first-person histories, lifetimes, bones/deformation snapshots, jitter/math/reset tests | Feed from real engine producers, convert native matrix conventions and upload immutable per-draw GPU state |
 | Core mesh shaders | Changed static/model VS/PS, prior palette path, motion MRT and hardware fixtures retained | Engine cache/reflection interception, actual draw binding and missing-family coverage |
 | Foliage shaders | Changed tree/detail variants and real hardware MRT2 fixtures retained | Real tree/detail lifetime/wind/fade capture and identity-remapped previous batch data |
-| Geometry hook producer | Audited and built into the adapter; byte-guarded lifecycle/render hooks feed Rigid and HardwareSkinned snapshots to history; two contracts registered; evidence script verifies layouts against the installed exe | Live hook invocation, a draw-time call site, view/projection producers, real palettes; single-bone/software/tree snapshots |
-| World/UI render scaling | CPU dimension/frame plans only | Real target allocation/viewport changes, native-size screen UI/PDA and scope lifecycle |
-| SR | Existing generic RSF services inspected | Complete verified scene-colour seam, inputs, dispatch and output reinsertion |
+| Geometry hook producer | Built into the adapter. Live Observe: hooks ran with 0 faults, ~5.5% of draws identified. Coverage gap explained (`docs/research/anomaly-geometry-coverage.md`); per-category counters, a guarded draw-time hook on `CBackend::constants.flush` and Main/Scope/FirstPerson context producers added; evidence script passes | Live coverage measurement; no history consumer wired to the draw sink; trees/grass/LOD/particles; real palettes |
+| World/UI render scaling | CPU dimension/frame plans; seam design chooses a W-phase twin swap of world targets (`docs/research/anomaly-sr-seam.md`); all Stage 0 sites mapped and byte-guarded in `sr_profile.h` | Stage 1 scale-1.0 twin swap; real allocation/viewport changes, native-size UI/PDA and scope lifecycle |
+| SR | Seam S-B chosen (prologue of phase_sunshafts/phase_blur); FP16 render-size generic0/generic_temp with exact inverse/forward tonemap round trip; shared motion decode gained a validity channel | Stage 1 pixel comparison against stock, then inputs, dispatch and reinsertion |
 | FG | DLL access to existing presentation bridge tested | Real source-frame ownership/pacing, depth/motion/UI transport, Present matching and retirement |
-| Overlay | Runtime exports `rsf_get_overlay_api` (configure/present/notify/visible/toggle/capture/status/settings); C++/C11 contracts and a hardware D3D11 fixture with the real panel pass. Adapter recipe: `.local/anomaly/orchestration/overlay-api-worker-report.md` | Anomaly wiring, DirectInput gating, live controls/status, composition acceptance. Overlay rides in the presented real frame, not after generation |
-| Game validation | Vanilla engine/device startup observed under Frida, followed by shutdown | No injected Anomaly SR, FG, overlay or gameplay acceptance yet |
+| Overlay | Runtime exports `rsf_get_overlay_api` (configure/present/notify/visible/toggle/capture/status/settings); C++/C11 contracts and a hardware D3D11 fixture with the real panel pass. Adapter recipe: `.local/anomaly/orchestration/overlay-api-worker-report.md` Adapter wiring (`[Anomaly] Overlay=1`): DXGI Present/Resize hooks, DirectInput gate with edge flushes, SR/FG reported unavailable; fixtures pass (`docs/research/anomaly-overlay-wiring.md`) | Live open/close, input blocking and pass-through, resize, persistence. Overlay rides in the presented real frame, not after generation. The Rust panel still draws the SR checkbox when no SR choices exist |
+| Game validation | Vanilla menu and l01_escape level load; injected Observe mode ran 8040 frames with no refusal, fault or crash (`.local/anomaly/wave2-observe/result.json`) | PDA/scope exercise; no SR, FG, overlay or gameplay acceptance yet |
 
 ## Built components and tests
 
@@ -197,12 +197,14 @@ Sources and exact boundaries:
 - [x] Audit and integrate the interrupted geometry worker's source/tests. Removed the
       superseded standalone `tests/anomaly_geometry/CMakeLists.txt` and the unreferenced
       `tests/anomaly_geometry_HudEvidence.java` (no retained output).
-- [ ] Reproduce a reliable vanilla launch with preserved native fs_root, correct
-      command line, explicit test settings and backups. Capture the actual window,
-      adapter/device and normal shutdown before blaming injection.
-- [ ] Stage the thin carrier + exactly one Runtime + adapter with a rollback
-      manifest. Verify Observe-mode hook activation/order and real camera/UI/
-      PDA/scope counters. Do not deploy to an already-running game.
+- [x] Reproduce a reliable vanilla launch (12 Nov: direct Process.Start, cwd at the game
+      root, `rs_screenmode` windowing, `-ltx` test profile, `-start ... autosave` to reach
+      l01_escape, console quit). Desktop capture is black on this hybrid GPU; use F12.
+- [x] Stage carrier + one Runtime + adapter with a rollback manifest and run Observe.
+      Exactly-once startup, all guarded and geometry hooks installed, 8040 frames with
+      0 faults/resets. PDA and scope were NOT exercised (0 copies). Only ~5.5% of
+      geometry draws were identified. The Observe deployment is left staged; rollback:
+      `.local/anomaly/wave2-observe/tools/deploy.ps1 -Rollback`.
 - [ ] Connect source-frame/view/first-person and geometry-lifetime producers to
       frozen history. Capture real final palettes and detail wind/fade/item state.
 - [ ] Merge core/foliage artifacts, implement coherent cache/reflection hooks,

@@ -82,10 +82,18 @@ struct Service {
         va_end(arguments);
         if (written >= 0) logger(user, message);
     }
+    // No SR backend choice means the adapter has no super resolution: it can only be Off, and the SR
+    // backend and quality stay at the adapter's defaults.
+    bool sr_unavailable() const { return sr_choices == 0; }
+    bool sr_valid(const rsf_render_settings& value) const
+    {
+        if (sr_unavailable())
+            return !value.sr_enabled && value.sr_backend == defaults.sr_backend && value.sr_quality == defaults.sr_quality;
+        return has(sr_choices, value.sr_backend) && has(quality_choices, value.sr_quality);
+    }
     bool valid(const rsf_render_settings& value) const
     {
-        return value.sr_enabled <= 1 && value.fg_enabled <= 1 && value.status_overlay <= 1 &&
-            has(sr_choices, value.sr_backend) && has(quality_choices, value.sr_quality) &&
+        return value.sr_enabled <= 1 && value.fg_enabled <= 1 && value.status_overlay <= 1 && sr_valid(value) &&
             has(latency_choices, value.latency) && value.generated_frames && value.generated_frames <= max_generated &&
             rsf_dlss_preset_valid(value.dlss_preset) && (!value.fg_enabled || fg_choices) &&
             (value.fg_backend == RSF_FG_BACKEND_AUTO || has(fg_choices, value.fg_backend));
@@ -96,8 +104,12 @@ struct Service {
         if (value.sr_enabled > 1) value.sr_enabled = defaults.sr_enabled;
         if (value.fg_enabled > 1 || (value.fg_enabled && !fg_choices)) value.fg_enabled = defaults.fg_enabled;
         if (value.status_overlay > 1) value.status_overlay = defaults.status_overlay;
-        if (!has(sr_choices, value.sr_backend)) value.sr_backend = defaults.sr_backend;
-        if (!has(quality_choices, value.sr_quality)) value.sr_quality = defaults.sr_quality;
+        if (sr_unavailable()) {
+            value.sr_enabled = defaults.sr_enabled; value.sr_backend = defaults.sr_backend; value.sr_quality = defaults.sr_quality;
+        } else {
+            if (!has(sr_choices, value.sr_backend)) value.sr_backend = defaults.sr_backend;
+            if (!has(quality_choices, value.sr_quality)) value.sr_quality = defaults.sr_quality;
+        }
         if (!has(latency_choices, value.latency)) value.latency = defaults.latency;
         if (!value.generated_frames || value.generated_frames > max_generated) value.generated_frames = defaults.generated_frames;
         if (!rsf_dlss_preset_valid(value.dlss_preset)) value.dlss_preset = defaults.dlss_preset;
@@ -156,8 +168,7 @@ const char* describe(const Service& self, bool idle_text)
     if (value.sr_enabled && !self.sr.effective_backend) {
         if (self.have_sr && self.sr.reason[0]) return self.sr.reason;
         return self.have_sr ? "SR requested; the adapter reports no SR output" : "SR is not connected by the adapter";
-    }
-    if (value.fg_enabled) {
+    }    if (value.fg_enabled) {
         if (!self.fg_owner) return "FG presentation owner unavailable";
         if (self.request_result) return "FG provider request refused";
         if (self.switch_result) return "FG provider switch failed; previous provider retained";
@@ -168,6 +179,7 @@ const char* describe(const Service& self, bool idle_text)
         if (self.fg.reason) return "Frame inputs or submission not matched";
         if (!self.fg.vendor.active) return "FG requested; the provider reports inactive";
     }
+    if (self.sr_unavailable()) return "Super resolution is not available in this adapter";
     if (!idle_text) return nullptr;
     return value.fg_enabled ? "Active" : "FG disabled by setting";
 }
@@ -252,8 +264,8 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_OVERLAY_API_VERSION) return RSF_ERROR_ABI_MISMATCH;
     if (!setup->configuration_path || !*setup->configuration_path || !setup->configuration_section ||
-        !*setup->configuration_section || !setup->sr_backend_choices || (setup->sr_backend_choices & ~kKnownSr) ||
-        !setup->sr_quality_choices || (setup->sr_quality_choices & ~kQualities) ||
+        !*setup->configuration_section || (setup->sr_backend_choices & ~kKnownSr) ||
+        (setup->sr_backend_choices && !setup->sr_quality_choices) || (setup->sr_quality_choices & ~kQualities) ||
         (setup->fg_backend_choices & ~kKnownFg) || !has(setup->latency_choices, RSF_REFLEX_OFF) ||
         (setup->latency_choices & ~kLatencies) || !setup->max_generated_frames || setup->max_generated_frames > 15 ||
         setup->defaults.struct_size < sizeof(rsf_render_settings))
@@ -263,6 +275,7 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
     {
         // Choices are checked against the defaults before the one-time claim.
         Service probe;
+        probe.defaults = setup->defaults;
         probe.sr_choices = setup->sr_backend_choices; probe.quality_choices = setup->sr_quality_choices;
         probe.fg_choices = setup->fg_backend_choices; probe.latency_choices = setup->latency_choices;
         probe.max_generated = setup->max_generated_frames;
@@ -324,8 +337,9 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
         value = self.settings;
         const auto& sr = self.sr;
         if (const char* text = describe(self, false)) std::snprintf(reason, sizeof(reason), "%s", text);
+        const bool sr_off = self.sr_unavailable();
         stats.backend_loaded = 1; stats.backend_supported = sr.effective_backend != 0;
-        stats.backend_name = sr_name(sr.effective_backend ? sr.effective_backend : value.sr_backend);
+        stats.backend_name = sr_name(sr.effective_backend ? sr.effective_backend : sr_off ? RSF_SR_NONE : value.sr_backend);
         stats.render_width = sr.render_width; stats.render_height = sr.render_height;
         stats.output_width = sr.output_width ? sr.output_width : self.chain_width;
         stats.output_height = sr.output_height ? sr.output_height : self.chain_height;
@@ -341,9 +355,11 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
         stats.jitter_pixels[0] = sr.jitter_pixels[0]; stats.jitter_pixels[1] = sr.jitter_pixels[1];
         stats.quality = sr.effective_backend ? sr.effective_quality : value.sr_quality;
         stats.enabled = value.sr_enabled;
-        stats.backend = value.sr_backend; stats.requested_backend = value.sr_backend;
+        stats.backend = sr_off ? RSF_SR_NONE : value.sr_backend; stats.requested_backend = stats.backend;
         stats.last_switch_result = self.apply_result;
-        stats.sr_backend_choices = self.sr_choices;
+        // The panel reads a zero mask as "host did not say, offer every backend". No SR is offered by sending
+        // a nonzero mask with no backend bit (backend IDs are 0..7; bit 31 is none of them).
+        stats.sr_backend_choices = sr_off ? 0x80000000u : self.sr_choices;
         stats.dlss_preset = value.dlss_preset; stats.dlss_preset_available = self.preset_available;
         stats.sr_quality_locked = sr.quality_locked != 0;
         stats.application_presented_frames = self.presents;
@@ -433,7 +449,7 @@ int32_t status(rsf_render_status* output) noexcept try
     const auto& wanted = self.settings;
     const auto& sr = self.sr;
     const auto& fg = self.fg;
-    value.sr_enabled = wanted.sr_enabled; value.sr_requested_backend = wanted.sr_backend;
+    value.sr_enabled = wanted.sr_enabled; value.sr_requested_backend = self.sr_unavailable() ? RSF_SR_NONE : wanted.sr_backend;
     value.sr_effective_backend = sr.effective_backend;
     value.render_width = sr.render_width; value.render_height = sr.render_height;
     value.output_width = sr.output_width ? sr.output_width : self.chain_width;

@@ -3,7 +3,9 @@
 #include "native_profile.h"
 namespace rsf::anomaly::geometry {
 // STANDARD executable only. Local handoff records decompilation and RTTI slot evidence.
-inline constexpr std::array<NativeSite, 10> geometry_sites{{
+// Indices 0..9 are the lifecycle and visual-entry detours. 10..15 are the draw-time call site and the
+// view/projection context boundaries (see the "Context and draw-time sites" block below).
+inline constexpr std::array<NativeSite, 16> geometry_sites{{
     {"CRender::model_Create", 0x839940, signature("488b8958070000e914e20400cccccccc")},
     {"CRender::model_CreateChild", 0x839950, signature("488b8958070000e974e40400cccccccc")},
     {"CRender::model_Duplicate", 0x839bd0, signature("488b8958070000e9d4ea0400cccccccc")},
@@ -13,14 +15,39 @@ inline constexpr std::array<NativeSite, 10> geometry_sites{{
     {"CSkeletonX_ST::Render", 0x8d1610, signature("4883ec384c8bc1488d51684881c1a000")},
     {"CSkeletonX_PM::Render", 0x8d1520, signature("4883ec38448b89c80000000f57c00f2f")},
     {"FTreeVisual_ST::Render", 0x8d5d20, signature("48895c2410555657415641574883ec30")},
-    {"FTreeVisual_PM::Render", 0x8d5a40, signature("48895c241848896c2420565741544156")}
+    {"FTreeVisual_PM::Render", 0x8d5a40, signature("48895c241848896c2420565741544156")},
+    {"CBackend::constants.flush", 0x84b930, signature("48895c2408574883ec20488d1da78551")},
+    {"R_dsgraph_structure::r_dsgraph_render_hud", 0x84ffa0, signature("488bc448897010574881ec500100000f")},
+    {"R_dsgraph_structure::r_dsgraph_render_sorted", 0x850cc0, signature("488bc44889580848897010574881ec10")},
+    {"R_dsgraph_structure::r_dsgraph_render_emissive", 0x84ec80, signature("488bc44889580848897010574881ec10")},
+    {"CRender::rmNear", 0x83a450, signature("40534883ec40488b01ff507848c74424")},
+    {"CRender::rmNormal", 0x83a4d0, signature("40534883ec40488b01ff507848c74424")}
 }};
+inline constexpr std::size_t geometry_site_lifecycle_count = 4;
+inline constexpr std::size_t geometry_site_visual_count = 6;
+inline constexpr std::size_t geometry_site_flush = 10, geometry_site_render_hud = 11, geometry_site_render_sorted = 12,
+    geometry_site_render_emissive = 13, geometry_site_rm_near = 14, geometry_site_rm_normal = 15;
 // These are layout evidence guards, not detours. Refuse the native layout reader on mismatch.
-inline constexpr std::array<NativeSite, 3> geometry_layout_sites{{
+inline constexpr std::array<NativeSite, 5> geometry_layout_sites{{
     {"R_xforms::set_W", 0x840960, signature("48895c240848896c2410488974241857")},
     {"CKinematics::LL_GetBoneInstance", 0x803d90, signature("0fb7c24869c0a800000048034150c3cc")},
-    {"CKinematics::LL_GetTransform_R", 0x803da0, signature("4883ec28488b01ff50484883c0404883")}
+    {"CKinematics::LL_GetTransform_R", 0x803da0, signature("4883ec28488b01ff50484883c0404883")},
+    // Includes the rip-relative displacement to RImplementation.phase (`cmp dword [phase], PHASE_SMAP`).
+    {"Fvisual::Render phase compare", 0x8cff83, signature("833d06504900010f850b020000813d0a")},
+    // CRenderDevice::CSecondVPParams::IsSVPFrame: isActive && dwFrame % frameDelay == 0.
+    {"CSecondVPParams::IsSVPFrame", 0x2d260, signature("80390074150fb6490133d28b050fa4d0")}
 }};
+// Context and draw-time sites (standard 1.5.3 DX11).
+// * CBackend::constants.flush runs once per indexed/non-indexed draw (and compute dispatch), after the SRV, RT/ZB,
+//   vertex-layout and state-manager applies and immediately before DrawIndexed, from all 128 inlined
+//   CBackend::Render sites. The inlined D3D call is not hookable, so this is the last engine-owned call before it.
+// * r_dsgraph_render_hud draws mapHUD under the HUD projection (psHUD_FOV). r_dsgraph_render_sorted and
+//   r_dsgraph_render_emissive draw their world half and then, after rmNear(), their HUD half. rmNear/rmNormal
+//   are CRender vtable slots 55 and 57 (viewport depth 0..0.02 and 0..1).
+inline constexpr std::uint32_t render_phase_rva = 0xd64f90;      // CRender::phase (u32); PHASE_NORMAL=0, PHASE_SMAP=1.
+inline constexpr std::uint32_t phase_normal = 0, phase_smap = 1;
+inline constexpr std::uint32_t second_viewport_rva = 0xd37b30;   // CSecondVPParams: bool isActive, u8 frameDelay, bool isCamReady.
+inline constexpr std::uint32_t second_viewport_delay_offset = 1;
 // R_xforms instance behind RCache.xforms; set_W copies the 16 floats to its first member (m_w).
 // 32 of 44 set_W callers pass this address (tests/anomaly_geometry_evidence.py --verify).
 inline constexpr std::uint32_t world_matrix_rva = 0xd63c18;
