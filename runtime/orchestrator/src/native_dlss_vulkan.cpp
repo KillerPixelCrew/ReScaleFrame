@@ -32,7 +32,9 @@ sl::float4x4 matrix(const float* values) {
 }
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 }
+#include "sharpening_vulkan.h"
 struct rsf_dlssvk {
+    rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
     uint32_t width = 0, height = 0, preset = 0;
     uint64_t session = 0, frame = 0; uint32_t view = 0, generation = 0;
@@ -49,6 +51,7 @@ struct rsf_dlssvk {
     PFun_slDLSSGetOptimalSettings* optimal = nullptr; PFun_slDLSSSetOptions* options = nullptr;
     rsf::FrameCaptureVk capture;
     ~rsf_dlssvk() {
+        sharpen.clear();
         const auto device = static_cast<VkDevice>(setup.device);
         for (Image* image : {&color, &depth, &motion, &output}) {
             if (image->view) destroy_view(device, image->view, nullptr);
@@ -102,7 +105,7 @@ sl::Resource resource(const Image& image, uint32_t width, uint32_t height, VkFor
         reinterpret_cast<void*>(image.view), uint32_t(output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)};
     result.width = width; result.height = height; result.nativeFormat = format; result.mipLevels = result.arrayLayers = 1;
     result.flags = 0;
-    result.usage = output ? VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT : VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    result.usage = output ? VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT : VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     return result;
 }
 rsf_backend_result initialize(void* module, uintptr_t, void* user) {
@@ -191,6 +194,7 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     (void)self.capture.record(call.commands, input.depth, record, "sr-depth", reset);
     (void)self.capture.record(call.commands, input.motion, record, "sr-motion-uv", reset);
     (void)self.capture.record(call.commands, out, record, "sr-output-linear", reset);
+    (void)self.sharpen.run(self.setup,call.commands,input,self.output.image);
     transition(self, call.commands, self.output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {record.output_width, record.output_height, 1};
     self.copy(call.commands, self.output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reinterpret_cast<VkImage>(input.output.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -200,7 +204,8 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
 }
 }
 #else
-struct rsf_dlssvk {};
+struct rsf_dlssvk {
+};
 #endif
 
 rsf_backend_result rsf_dlssvk_create(const rsf_srvk_setup* setup, rsf_dlssvk** out) {
@@ -225,7 +230,7 @@ rsf_backend_result rsf_dlssvk_create(const rsf_srvk_setup* setup, rsf_dlssvk** o
     if (!allocate(*self, self->color, self->width, self->height, VK_FORMAT_R16G16B16A16_SFLOAT, usage) ||
         !allocate(*self, self->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT, usage) ||
         !allocate(*self, self->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT, usage) ||
-        !allocate(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
+        !allocate(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
 #else
@@ -276,4 +281,12 @@ rsf_backend_result rsf_dlssvk_destroy(rsf_dlssvk* self) {
     if (self) (void)self->capture.flush();
 #endif
     delete self; return RSF_BACKEND_OK;
+}
+
+void rsf_dlssvk_retire_commands(rsf_dlssvk* self,void* commands) {
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    if (self) self->sharpen.retire(commands);
+#else
+    (void)self; (void)commands;
+#endif
 }

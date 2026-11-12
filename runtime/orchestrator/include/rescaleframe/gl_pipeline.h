@@ -2,6 +2,7 @@
 #pragma once
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/sharpening_settings.h>
 typedef struct rsf_gl_pipeline rsf_gl_pipeline;
 typedef struct rsf_gl_pipeline_setup {
     uint32_t struct_size;
@@ -18,6 +19,7 @@ typedef struct rsf_gl_pipeline_options {
     uint32_t struct_size, sr_backend, quality, fg_backend;
     rsf_native_fg_options generation;
     uint32_t dlss_preset;
+    rsf_sharpening_options sharpening;
 } rsf_gl_pipeline_options;
 typedef struct rsf_gl_pipeline_surfaces {
     uint32_t struct_size, render_width, render_height, output_width, output_height;

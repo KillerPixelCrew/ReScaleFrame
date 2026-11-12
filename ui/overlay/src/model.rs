@@ -161,6 +161,118 @@ pub struct Stats<'a> {
     pub show_performance_hud: bool,
     /// Whether the SDK aggregate present counter is usable.
     pub fg_present_count_valid: bool,
+    /// Options the host defines, in the host's order. `None` past the last one.
+    pub host_options: [Option<HostOption<'a>>; MAX_HOST_OPTIONS],
+    /// Host implements shared sharpening.
+    pub sharpening_available: bool,
+    /// The current frame has a depth input.
+    pub sharpening_depth_available: bool,
+    /// Current shared sharpening settings.
+    pub sharpening: Sharpening,
+    /// Scene render size the runtime reports, zero when unknown.
+    pub render_size: [u32; 2],
+    /// Output size the runtime reports, zero when unknown.
+    pub output_size: [u32; 2],
+    /// Saved panel layout, as the host last stored it. See [`UiPreferences`].
+    pub ui_preferences: u32,
+}
+
+/// How large the panel is drawn, on top of the display-height heuristic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelSize {
+    /// The display-height heuristic alone.
+    #[default]
+    Auto,
+    /// 0.8 times the heuristic, for a mouse on a desktop display.
+    Compact,
+    /// 1.25 times, for small handheld screens.
+    Large,
+    /// 1.5 times.
+    Larger,
+}
+
+impl PanelSize {
+    /// Every size, in the order the panel offers them.
+    pub const ALL: [Self; 4] = [Self::Auto, Self::Compact, Self::Large, Self::Larger];
+
+    /// Factor applied to the display-height scale.
+    #[must_use]
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Auto => 1.0,
+            Self::Compact => 0.8,
+            Self::Large => 1.25,
+            Self::Larger => 1.5,
+        }
+    }
+
+    /// What the panel calls this size.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Compact => "0.8×",
+            Self::Large => "1.25×",
+            Self::Larger => "1.5×",
+        }
+    }
+}
+
+/// Panel layout preferences. The host stores them as one opaque word
+/// (`rsf_overlay_stats::ui_preferences`), so a new preference never needs host changes.
+///
+/// Bits 0-1 size, bit 2 right side, bit 3 detailed FPS overlay. Zero is every default, which is
+/// what a host that never stored anything sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UiPreferences {
+    /// Panel size.
+    pub size: PanelSize,
+    /// Draw the panel on the right edge instead of the left.
+    pub right: bool,
+    /// The FPS overlay also shows the SR state and frame limit.
+    pub detailed_hud: bool,
+}
+
+impl UiPreferences {
+    /// Decode the host's word, ignoring bits this build does not know.
+    #[must_use]
+    pub fn from_bits(bits: u32) -> Self {
+        Self {
+            size: PanelSize::ALL[(bits & 0x3) as usize],
+            right: bits & 0x4 != 0,
+            detailed_hud: bits & 0x8 != 0,
+        }
+    }
+
+    /// Encode for the host.
+    #[must_use]
+    pub fn to_bits(self) -> u32 {
+        let size = PanelSize::ALL
+            .iter()
+            .position(|candidate| *candidate == self.size)
+            .unwrap_or(0) as u32;
+        size | (u32::from(self.right) << 2) | (u32::from(self.detailed_hud) << 3)
+    }
+}
+
+/// How many host options the panel draws.
+pub const MAX_HOST_OPTIONS: usize = 24;
+
+/// One host-defined option.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostOption<'a> {
+    /// What the control is called.
+    pub label: &'a str,
+    /// A toggle rather than a number.
+    pub toggle: bool,
+    /// Current value.
+    pub value: i32,
+    /// Minimum, maximum and step of a number.
+    pub range: [i32; 3],
+    /// A number is shown divided by this.
+    pub divisor: u32,
+    /// A change applies at the next start.
+    pub restart: bool,
 }
 
 impl Default for Stats<'_> {
@@ -184,6 +296,13 @@ impl Default for Stats<'_> {
             counter_clock: [0, 0],
             show_performance_hud: false,
             fg_present_count_valid: false,
+            host_options: [None; MAX_HOST_OPTIONS],
+            sharpening_available: false,
+            sharpening_depth_available: false,
+            sharpening: Sharpening::default(),
+            render_size: [0, 0],
+            output_size: [0, 0],
+            ui_preferences: 0,
         }
     }
 }
@@ -196,12 +315,58 @@ impl Stats<'_> {
     }
 }
 
+/// Shared sharpening values, independent of SR backend.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sharpening {
+    /// mode setting.
+    pub mode: u32,
+    /// sharpness setting.
+    pub sharpness: f32,
+    /// mas setting.
+    pub mas: u32,
+    /// motion_sharpness setting.
+    pub motion_sharpness: f32,
+    /// motion_threshold setting.
+    pub motion_threshold: f32,
+    /// motion_scale_limit setting.
+    pub motion_scale_limit: f32,
+    /// contrast_enabled setting.
+    pub contrast_enabled: u32,
+    /// contrast setting.
+    pub contrast: f32,
+    /// depth_scale setting.
+    pub depth_scale: f32,
+    /// depth_bias setting.
+    pub depth_bias: f32,
+    /// clamp_output setting.
+    pub clamp_output: u32,
+    /// debug setting.
+    pub debug: u32,
+}
+impl Default for Sharpening {
+    fn default() -> Self {
+        Self {
+            mode: 0,
+            sharpness: 0.4,
+            mas: 0,
+            motion_sharpness: 0.2,
+            motion_threshold: 0.0,
+            motion_scale_limit: 10.0,
+            contrast_enabled: 0,
+            contrast: 0.0,
+            depth_scale: 35.0,
+            depth_bias: 0.001,
+            clamp_output: 0,
+            debug: 0,
+        }
+    }
+}
 /// What the user asked for in one frame.
 ///
 /// The `*_changed` flags are true only in the frame the widget changed, so a caller acts once
 /// instead of every frame after a click. The values are reported either way, so a caller that
 /// missed a frame can still see what the panel is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Intent {
     /// The quality the panel shows as chosen.
     pub quality: Quality,
@@ -241,6 +406,22 @@ pub struct Intent {
     pub frame_limit_changed: bool,
     /// Requested minimum interval between rendered frames in microseconds. Zero is unlimited.
     pub frame_limit_us: u32,
+    /// A host option changed.
+    pub host_option_changed: bool,
+    /// Which one, as an index into the host's options.
+    pub host_option_index: u32,
+    /// Its new value.
+    pub host_option_value: i32,
+    /// All sharpening fields are applied atomically.
+    pub sharpening_changed: bool,
+    /// Requested sharpening settings.
+    pub sharpening: Sharpening,
+    /// The user asked to close the panel: the close button, or a tap outside it.
+    pub close_requested: bool,
+    /// The panel layout preferences changed.
+    pub ui_preferences_changed: bool,
+    /// Requested layout preferences, encoded as [`UiPreferences::to_bits`].
+    pub ui_preferences: u32,
 }
 
 impl Intent {
@@ -256,6 +437,10 @@ impl Intent {
             && !self.reflex_changed
             && !self.performance_hud_changed
             && !self.frame_limit_changed
+            && !self.host_option_changed
+            && !self.sharpening_changed
+            && !self.close_requested
+            && !self.ui_preferences_changed
     }
 }
 
@@ -340,5 +525,44 @@ mod tests {
         stats.set_quality(7);
         assert_eq!(stats.quality, None);
         assert_eq!(stats.quality_raw, 7);
+    }
+    #[test]
+    fn sharpening_defaults_and_idle_intent() {
+        let d = Sharpening::default();
+        assert_eq!(d.mode, 0);
+        assert_eq!(d.sharpness, 0.4);
+        assert_eq!(d.mas, 0);
+        assert_eq!(d.motion_sharpness, 0.2);
+        assert_eq!(d.motion_threshold, 0.0);
+        assert_eq!(d.motion_scale_limit, 10.0);
+        assert_eq!(d.contrast, 0.0);
+        assert_eq!(d.depth_scale, 35.0);
+        assert_eq!(d.depth_bias, 0.001);
+        let mut intent = Intent::default();
+        assert!(intent.is_idle());
+        intent.sharpening_changed = true;
+        assert!(!intent.is_idle());
+    }
+
+    #[test]
+    fn ui_preferences_round_trip_and_zero_is_default() {
+        assert_eq!(UiPreferences::from_bits(0), UiPreferences::default());
+        for size in PanelSize::ALL {
+            for right in [false, true] {
+                for detailed_hud in [false, true] {
+                    let value = UiPreferences {
+                        size,
+                        right,
+                        detailed_hud,
+                    };
+                    assert_eq!(UiPreferences::from_bits(value.to_bits()), value);
+                }
+            }
+        }
+        // Unknown high bits from a newer build are ignored rather than misread.
+        assert_eq!(
+            UiPreferences::from_bits(0xffff_fff0),
+            UiPreferences::default()
+        );
     }
 }

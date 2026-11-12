@@ -75,3 +75,11 @@ extern "C" int32_t rsf_srvk_fsr4_destroy(rsf_fsr4vk* owner) try {
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+extern "C" void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk* self,void* commands) {
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    rsf_fsr4vk_retire_commands(self,commands);
+#else
+    (void)self; (void)commands;
+#endif
+}

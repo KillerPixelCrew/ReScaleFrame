@@ -57,9 +57,25 @@ JNI_METHOD(jlong) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_ope
     if(result!=RSF_BACKEND_OK) {char message[96];std::snprintf(message,sizeof(message),"Minecraft native open failed: %d",result);log(nullptr,message);}
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(self));
 }
-JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_configure(JNIEnv* env,jclass,jlong pointer,jint width,jint height,jint sr,jint quality,jint preset,jint fg,jint count,jint reflex,jint limit,jboolean debug) {
+JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_configure(JNIEnv* env,jclass,jlong pointer,jint width,jint height,jint sr,jint quality,jint preset,jint fg,jint count,jint reflex,jint limit,jboolean debug,jfloatArray sharpening) {
     rsf_gl_pipeline_options options{};options.struct_size=sizeof(options);options.sr_backend=sr;options.quality=quality;options.dlss_preset=preset;options.fg_backend=fg;
     options.generation={sizeof(options.generation),fg?RSF_FG_FIXED:RSF_FG_OFF,static_cast<uint32_t>(count),static_cast<uint32_t>(reflex),limit>0?1000000u/static_cast<uint32_t>(limit):0u,debug?1u:0u};
+    if(!sharpening||env->GetArrayLength(sharpening)!=12)return nullptr;
+    jfloat sharpening_values[12]{};env->GetFloatArrayRegion(sharpening,0,12,sharpening_values);if(env->ExceptionCheck())return nullptr;
+    options.sharpening=rsf_sharpening_defaults();
+    options.sharpening.mode=(std::isfinite(sharpening_values[0])&&sharpening_values[0]>=0&&sharpening_values[0]<=4?static_cast<uint32_t>(sharpening_values[0]):UINT32_MAX);
+    options.sharpening.sharpness=sharpening_values[1];
+    options.sharpening.mas=(std::isfinite(sharpening_values[2])&&sharpening_values[2]>=0&&sharpening_values[2]<=4?static_cast<uint32_t>(sharpening_values[2]):UINT32_MAX);
+    options.sharpening.motion_sharpness=sharpening_values[3];
+    options.sharpening.motion_threshold=sharpening_values[4];
+    options.sharpening.motion_scale_limit=sharpening_values[5];
+    options.sharpening.contrast_enabled=(std::isfinite(sharpening_values[6])&&sharpening_values[6]>=0&&sharpening_values[6]<=4?static_cast<uint32_t>(sharpening_values[6]):UINT32_MAX);
+    options.sharpening.contrast=sharpening_values[7];
+    options.sharpening.depth_scale=sharpening_values[8];
+    options.sharpening.depth_bias=sharpening_values[9];
+    options.sharpening.clamp_output=(std::isfinite(sharpening_values[10])&&sharpening_values[10]>=0&&sharpening_values[10]<=4?static_cast<uint32_t>(sharpening_values[10]):UINT32_MAX);
+    options.sharpening.debug=(std::isfinite(sharpening_values[11])&&sharpening_values[11]>=0&&sharpening_values[11]<=4?static_cast<uint32_t>(sharpening_values[11]):UINT32_MAX);
+    if(!rsf::sharpening_settings::valid(options.sharpening))return nullptr;
     const auto result=rsf_gl_pipeline_configure(pipeline(pointer),&options,width,height);
     rsf_gl_pipeline_surfaces surfaces{};surfaces.struct_size=sizeof(surfaces);
     if(result!=RSF_BACKEND_OK||rsf_gl_pipeline_get_surfaces(pipeline(pointer),&surfaces)!=RSF_BACKEND_OK)return nullptr;

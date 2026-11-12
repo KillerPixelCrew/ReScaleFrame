@@ -5,6 +5,10 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <cstdio>
+#include <DirectXPackedVector.h>
+#include <vector>
+#include <cstring>
+#include <cmath>
 using Microsoft::WRL::ComPtr;
 void log_line(void*, const char* message) { std::fprintf(stderr, "%s\n", message); }
 int main(int argc, char** argv)
@@ -75,6 +79,60 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "evaluate %u: %d\n", backend, result);
             passed &= result == 0;
         }
+    }
+    // Exercise the production post pass with deterministic reset frames on FSR3.
+    result = rsf_dlss_pipeline_select_backend(3,nullptr,nullptr);
+    passed &= result == 0;
+    if (result == 0) {
+        std::vector<uint16_t> source(512*512*4);
+        for (uint32_t y=0;y<512;++y) for (uint32_t x=0;x<512;++x) {
+            const float base=0.1f+0.3f*float(x)/512+(x>=256?0.3f:0)+0.01f*std::sin(float(x)*0.7f);
+            for (uint32_t c=0;c<4;++c)
+                source[(y*512+x)*4+c]=DirectX::PackedVector::XMConvertFloatToHalf(c==3?0.75f:base*(0.9f+float(c)*0.1f));
+        }
+        context->UpdateSubresource(textures[0].Get(),0,nullptr,source.data(),512*8,0);
+        camera.reset=1; camera.jitter_pixels[0]=0.25f;
+        auto read_output=[&]() {
+            auto* output=static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
+            D3D11_TEXTURE2D_DESC desc{}; output->GetDesc(&desc);
+            desc.BindFlags=0; desc.Usage=D3D11_USAGE_STAGING; desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> copy; std::vector<uint16_t> bytes;
+            if (FAILED(device->CreateTexture2D(&desc,nullptr,&copy))) return bytes;
+            context->CopyResource(copy.Get(),output); D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(context->Map(copy.Get(),0,D3D11_MAP_READ,0,&mapped))) return bytes;
+            bytes.resize(512*512*4);
+            for (uint32_t y=0;y<512;++y) std::memcpy(bytes.data()+y*512*4,static_cast<char*>(mapped.pData)+y*mapped.RowPitch,512*8);
+            context->Unmap(copy.Get(),0); return bytes;
+        };
+        auto options=rsf_sharpening_defaults();
+        passed &= rsf_dlss_pipeline_set_sharpening(&options)==0;
+        passed &= rsf_dlss_pipeline_on_frame(context.Get(),&frame)==0;
+        const auto off=read_output();
+        options.mode=RSF_SHARPENING_RCAS; options.sharpness=0;
+        passed &= rsf_dlss_pipeline_set_sharpening(&options)==0;
+        passed &= rsf_dlss_pipeline_on_frame(context.Get(),&frame)==0;
+        const auto zero=read_output();
+        const bool identical=!off.empty() && off==zero;
+        std::fprintf(stderr,"Sharpening Off versus zero strength: %s (byte identical)\n",identical?"PASS":"FAIL");
+        passed &= identical;
+        options.sharpness=1;
+        passed &= rsf_dlss_pipeline_set_sharpening(&options)==0;
+        passed &= rsf_dlss_pipeline_on_frame(context.Get(),&frame)==0;
+        const auto sharpened=read_output();
+        const bool changed=!sharpened.empty() && sharpened!=off;
+        std::fprintf(stderr,"Sharpening production on_frame edge: %s (output changed)\n",changed?"PASS":"FAIL");
+        passed &= changed;
+        for (uint32_t mode : {RSF_SHARPENING_DEPTH_RCAS,RSF_SHARPENING_DEPTH_DAS,RSF_SHARPENING_VENDOR}) {
+            options.mode=mode;
+            passed &= rsf_dlss_pipeline_set_sharpening(&options)==0;
+            passed &= rsf_dlss_pipeline_on_frame(context.Get(),&frame)==0;
+            const auto filtered=read_output();
+            const bool distinct=!filtered.empty() && filtered!=off;
+            std::fprintf(stderr,"Sharpening production mode %u edge: %s\n",mode,distinct?"PASS":"FAIL");
+            passed &= distinct;
+        }
+        options.mode=RSF_SHARPENING_OFF;
+        passed &= rsf_dlss_pipeline_set_sharpening(&options)==0;
     }
     result = rsf_dlss_pipeline_stop(); passed &= result == 0;
     return passed ? 0 : 1;

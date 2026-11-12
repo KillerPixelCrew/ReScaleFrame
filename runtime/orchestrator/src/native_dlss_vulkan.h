@@ -7,3 +7,5 @@ rsf_backend_result rsf_dlssvk_plan(const rsf_dlssvk*, uint32_t*, uint32_t*);
 rsf_backend_result rsf_dlssvk_evaluate(rsf_dlssvk*, void*, const rsf_srvk_frame*);
 rsf_backend_result rsf_dlssvk_preset(rsf_dlssvk*, uint32_t);
 rsf_backend_result rsf_dlssvk_destroy(rsf_dlssvk*);
+
+void rsf_dlssvk_retire_commands(rsf_dlssvk*,void* commands);

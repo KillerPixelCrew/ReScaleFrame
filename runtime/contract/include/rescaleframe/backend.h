@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define RSF_BACKEND_ABI_VERSION 3u
+#define RSF_BACKEND_ABI_VERSION 4u
 
 /* Ordered as the Rust capability model orders them, so the two can be compared field by field
    rather than through a mapping nobody maintains. */
@@ -259,6 +259,8 @@ typedef struct rsf_sr_frame {
        is translucent coverage in [0,1] (FSR transparency and composition). */
     rsf_backend_resource reactive;
     rsf_backend_resource transparency;
+    /* ABI 4. FFX native sharpening only; zero for custom post passes. */
+    float sharpness;
 } rsf_sr_frame;
 
 typedef struct rsf_sr_provider {

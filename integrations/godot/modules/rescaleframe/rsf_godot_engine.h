@@ -49,6 +49,7 @@ int32_t vk_images(void *owner, uint32_t *count, uint64_t *images);
 uint32_t vk_image_layout(void *owner);
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index);
 int32_t vk_present(void *owner, const void *info);
+void vk_recording_begin(void* commands);
 void vk_submitted(void *const *commands, uint32_t count);
 bool vk_destroy(void *owner);
 bool vk_drain(void *owner);

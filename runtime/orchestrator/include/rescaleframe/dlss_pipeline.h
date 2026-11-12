@@ -35,6 +35,7 @@
 #include <rescaleframe/sr_session.h>
 
 #include <stdint.h>
+#include <rescaleframe/sharpening_settings.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -309,6 +310,7 @@ RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_correction(uint32_t enabled);
    is decoded back to linear (colour_transport.h). On by default: DLSS 310's auto-exposing presets
    band in AC7's dark linear HDR, independently of which preset a driver override selects. */
 RSF_RUNTIME_API void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled);
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_sharpening(const rsf_sharpening_options*);
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_preset(uint32_t preset);
 
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_set_quality(rsf_dlss_quality quality,

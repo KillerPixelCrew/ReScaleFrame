@@ -10,6 +10,7 @@
 #include <rescaleframe/colour_transport.h>
 #include <rescaleframe/log.h>
 #include "sr_legacy_adapter.h"
+#include "../../graphics/src/sharpening/d3d11.h"
 #include <rescaleframe/input_dump.h>
 
 #include <windows.h>
@@ -17,6 +18,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <memory>
+#include <new>
 
 #include <cstdio>
 #include <cstring>
@@ -117,6 +119,9 @@ struct Pipeline {
     uint32_t render_width_max = 0;
     uint32_t render_height_max = 0;
     uint32_t preset = 0;
+    rsf_sharpening_options sharpening = rsf_sharpening_defaults();
+    std::unique_ptr<rsf::sharpening::D3D11> sharpen_pass;
+    bool sharpen_reported = false;
     rsf_dlss_quality quality = RSF_DLSS_QUALITY_NATIVE;
     // Frames that reached a successful evaluate and frames that did not, for the scene and for the
     // layer feature.
@@ -833,6 +838,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     rsf_input_dump_texture(context_pointer, "sr_bias_mask", "Bias-current-colour hint; DLSS use is preset dependent", frame->bias_mask, RSF_DUMP_VIEW_SCALAR, 1);
     rsf_input_dump_texture(context_pointer, "sr_cloud_depth", "Cloud/translucent depth used by the dense-motion resolve", frame->motion_depth_layer, RSF_DUMP_VIEW_DEPTH, 1);
     rsf_dlss_result evaluated = RSF_DLSS_OK;
+    rsf_sharpening_options sharpen;
+    { std::lock_guard<std::mutex> lock(self.guard); sharpen = self.sharpening; }
     if (self.backend == RSF_SR_DLSS) {
         evaluated = rsf_native_fg_evaluate(context_pointer, &dlss_frame);
     } else {
@@ -844,7 +851,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
             alternate_frame.motion_scale_y *= -0.5f;
         }
         evaluated = rsf_sr_legacy_evaluate(self.alternate, context_pointer, &alternate_frame,
-                                           marks_unwritten(self.motion) ? 1u : 0u);
+                                           marks_unwritten(self.motion) ? 1u : 0u,
+            rsf::sharpening_settings::vendor_sharpness(sharpen,self.backend));
     }
     // Every backend offers its frame to FG capture, which keeps one copy per frame: DLSS through a
     // Streamline host has already filled the slot in its evaluate. The alternate backends hand over
@@ -916,6 +924,40 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
                     frame->render_height))
                 say(self, "DLSS colour correction refused this frame; retaining the native graph");
             return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
+        }
+    }
+    // Post-SR, after decoding and fidelity correction. Failure keeps the vendor's valid output.
+    if (sharpen.mode != RSF_SHARPENING_OFF && sharpen.mode != RSF_SHARPENING_VENDOR &&
+        (sharpen.sharpness > 0 || (sharpen.mas && sharpen.motion_sharpness > 0))) {
+        rsf::sharpening::Options options;
+        options.mode = static_cast<rsf::sharpening::Mode>(sharpen.mode);
+        options.sharpness = sharpen.sharpness;
+        options.mas = sharpen.mas;
+        options.motion_sharpness = sharpen.motion_sharpness;
+        options.motion_threshold = sharpen.motion_threshold;
+        options.motion_scale_limit = sharpen.motion_scale_limit;
+        options.contrast_enabled = sharpen.contrast_enabled;
+        options.contrast = sharpen.contrast;
+        options.depth_scale = sharpen.depth_scale;
+        options.depth_bias = sharpen.depth_bias;
+        options.clamp_output = sharpen.clamp_output;
+        options.debug = sharpen.debug;
+        void* depth = dlss_frame.depth; void* motion = dlss_frame.motion;
+        if (self.backend != RSF_SR_DLSS) (void)rsf_sr_legacy_fg_inputs(self.alternate, &depth, &motion);
+        rsf::sharpening::Frame mapping{};
+        mapping.depth_inverted = dlss_frame.depth_inverted;
+        if (self.backend == RSF_SR_DLSS) {
+            mapping.motion_x = float(frame->render_width) * dlss_frame.motion_scale_x;
+            mapping.motion_y = float(frame->render_height) * dlss_frame.motion_scale_y;
+        }
+        mapping.near_plane = dlss_frame.near_plane; mapping.far_plane = dlss_frame.far_plane;
+        if (!self.sharpen_pass) self.sharpen_pass.reset(new(std::nothrow) rsf::sharpening::D3D11);
+        const bool sharpened = self.sharpen_pass && self.sharpen_pass->run(static_cast<ID3D11DeviceContext*>(context_pointer),self.output,
+            static_cast<ID3D11Texture2D*>(motion), static_cast<ID3D11Texture2D*>(depth),
+            static_cast<ID3D11Texture2D*>(frame->exposure),options,mapping);
+        if (!sharpened && !self.sharpen_reported) {
+            self.sharpen_reported = true;
+            say(self,"Sharpening pass unavailable; retaining the unsharpened SR output");
         }
     }
     if (!prefix.empty()) {
@@ -1219,6 +1261,17 @@ extern "C" void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled)
     colour_transport.store(enabled != 0, std::memory_order_release);
 }
 
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_sharpening(const rsf_sharpening_options* options)
+{
+    if (!options || options->struct_size < sizeof(*options)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    if (options->abi_version != RSF_SHARPENING_ABI_VERSION) return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
+    if (!rsf::sharpening_settings::valid(*options)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    auto& self = pipeline();
+    std::lock_guard<std::mutex> lock(self.guard);
+    self.sharpening = *options;
+    return RSF_DLSS_PIPELINE_OK;
+}
+
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_preset(uint32_t preset)
 {
     if (!rsf_dlss_preset_valid(preset)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
@@ -1407,6 +1460,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_select_backend(uint32_t ba
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_stop(void)
 {
     Pipeline& self = pipeline();
+    self.sharpen_pass.reset(); self.sharpen_reported = false;
     if (!self.device && !self.streamline_loaded && !self.output) {
         return RSF_DLSS_PIPELINE_ERROR_NOT_RUNNING;
     }

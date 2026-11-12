@@ -32,6 +32,19 @@ engine integration policy. This boundary is mandatory for every adapter, includi
   dependencies and callbacks and validate affected integrations; a rename or text search alone
   is not proof of domain separation.
 
+## Rule 2: every option is settable in the overlay
+
+Every option an integration or the runtime reads, including diagnostic and experimental ones,
+must have a control in the shared overlay that applies it while the game runs and saves it.
+An INI key alone is not enough: a setting that needs a restart to try costs a game session.
+
+- The overlay stays generic. An adapter describes its options (label, kind, range, value) through
+  the overlay service, and the panel draws them; no game names or game-specific controls in
+  `ui/overlay` or the runtime.
+- If an option truly cannot change without a restart, the control still exists, says so, and
+  saves the value for the next start.
+- Adding an option without its overlay control is an incomplete change.
+
 ## Research and tool setup
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.

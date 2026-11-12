@@ -34,6 +34,35 @@ public final class TaaSettings {
     public Reflex reflex=Reflex.ON;
     public int generatedFrames=1,frameLimit=0;
     public boolean nativeDebug=false;
+    public enum Sharpener { OFF,RCAS,DEPTH_RCAS,DEPTH_DAS,VENDOR_FSR_ONLY }
+    public Sharpener sharpeningMode=Sharpener.OFF;
+    public int sharpening_sharpness=400;
+    public boolean sharpening_mas=false;
+    public int sharpening_motion_sharpness=200;
+    public int sharpening_motion_threshold=0;
+    public int sharpening_motion_scale_limit=10000;
+    public boolean sharpening_contrast_enabled=false;
+    public int sharpening_contrast=0;
+    public int sharpening_depth_scale=35000;
+    public int sharpening_depth_bias=1000;
+    public boolean sharpening_clamp_output=false;
+    public boolean sharpening_debug=false;
+    public void sanitizeSharpening() {
+        if(sharpeningMode==null)sharpeningMode=Sharpener.OFF;
+        sharpening_sharpness=Math.clamp(sharpening_sharpness,0,1000);
+        sharpening_motion_sharpness=Math.clamp(sharpening_motion_sharpness,-1000,1000);
+        sharpening_motion_threshold=Math.clamp(sharpening_motion_threshold,0,100000);
+        sharpening_motion_scale_limit=Math.clamp(sharpening_motion_scale_limit,10,100000);
+        sharpening_contrast=Math.clamp(sharpening_contrast,0,2000);
+        sharpening_depth_scale=Math.clamp(sharpening_depth_scale,0,600000);
+        sharpening_depth_bias=Math.clamp(sharpening_depth_bias,0,1000000);
+    }
+    public float[] sharpening() { return new float[]{sharpeningMode.ordinal(),sharpening_sharpness/1000.0f,sharpening_mas?1f:0f,sharpening_motion_sharpness/1000.0f,sharpening_motion_threshold/1000.0f,sharpening_motion_scale_limit/1000.0f,sharpening_contrast_enabled?1f:0f,sharpening_contrast/1000.0f,sharpening_depth_scale/1000.0f,sharpening_depth_bias/1000000.0f,sharpening_clamp_output?1f:0f,sharpening_debug?1f:0f}; }
+    public record SharpeningState(Sharpener mode,int sharpness,boolean mas,int motion_sharpness,int motion_threshold,int motion_scale_limit,boolean contrast_enabled,int contrast,int depth_scale,int depth_bias,boolean clamp_output,boolean debug) {
+        public boolean matches(TaaSettings settings) { return mode==settings.sharpeningMode&&
+            sharpness==settings.sharpening_sharpness&&mas==settings.sharpening_mas&&motion_sharpness==settings.sharpening_motion_sharpness&&motion_threshold==settings.sharpening_motion_threshold&&motion_scale_limit==settings.sharpening_motion_scale_limit&&contrast_enabled==settings.sharpening_contrast_enabled&&contrast==settings.sharpening_contrast&&depth_scale==settings.sharpening_depth_scale&&depth_bias==settings.sharpening_depth_bias&&clamp_output==settings.sharpening_clamp_output&&debug==settings.sharpening_debug; }
+    }
+    public SharpeningState sharpeningState() { return new SharpeningState(sharpeningMode,sharpening_sharpness,sharpening_mas,sharpening_motion_sharpness,sharpening_motion_threshold,sharpening_motion_scale_limit,sharpening_contrast_enabled,sharpening_contrast,sharpening_depth_scale,sharpening_depth_bias,sharpening_clamp_output,sharpening_debug); }
     public static void load() {
         Path FILE=file();
         if(Files.exists(FILE)) {
@@ -41,6 +70,7 @@ public final class TaaSettings {
                 var loaded=GSON.fromJson(reader,TaaSettings.class);
                 if(loaded!=null) {
                     current=loaded;
+                    current.sanitizeSharpening();
                     if(current.upscaler==null)current.upscaler=Upscaler.OFF;
                     if(current.dlssPreset==null)current.dlssPreset=DlssPreset.DEFAULT;
                     if(current.quality==null)current.quality=Quality.QUALITY;
@@ -53,6 +83,7 @@ public final class TaaSettings {
         }
     }
     public static void save() {
+        current.sanitizeSharpening();
         current.generatedFrames=FrameGenerationLimits.INSTANCE.clamp(current.frameGeneration,current.generatedFrames);
         Path FILE=file();
         try { Files.createDirectories(FILE.getParent());Files.writeString(FILE,GSON.toJson(current)); }

@@ -59,6 +59,9 @@
 static rsf_plugin_session* game_session;
 static int game_prepared;
 static uint32_t performance_hud_enabled = 1;
+/* Panel layout word (rsf_overlay_stats::ui_preferences). Session only, like the FPS overlay
+   switch above: this carrier has no settings file of its own for either yet. */
+static uint32_t overlay_ui_preferences;
 static SRWLOCK game_prepare_guard = SRWLOCK_INIT;
 static volatile LONG shutdown_requested;
 
@@ -417,6 +420,7 @@ static struct {
        backend started. */
     unsigned long quality;
     unsigned long dlss_preset;
+    rsf_sharpening_options sharpening;
     int quality_chosen;
     unsigned long reinsert_frames;
     unsigned long gate_evaluates;
@@ -2774,6 +2778,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->sample_qpc = (uint64_t)now.QuadPart; stats->qpc_frequency = (uint64_t)frequency.QuadPart;
         stats->show_performance_hud = performance_hud_enabled;
     }
+    stats->ui_preferences = overlay_ui_preferences;
     stats->enabled = InterlockedCompareExchange(&native_owner, 0, 0) ? (uint32_t)bridge.enabled_requested : (uint32_t)bridge.reinsert_on;
     stats->debug_view_on = (uint32_t)bridge.show;
     stats->reinsert_on = InterlockedCompareExchange(&native_owner, 0, 0) ? (uint32_t)bridge.enabled_requested : (uint32_t)bridge.reinsert_on;
@@ -2805,6 +2810,20 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->quality = (rsf_overlay_quality)bridge.quality;
     stats->dlss_preset = (uint32_t)bridge.dlss_preset;
     stats->dlss_preset_available = 1;
+    stats->sharpening_available = 1;
+    stats->sharpening_mode = bridge.sharpening.mode;
+    stats->sharpening_sharpness = bridge.sharpening.sharpness;
+    stats->sharpening_mas = bridge.sharpening.mas;
+    stats->sharpening_motion_sharpness = bridge.sharpening.motion_sharpness;
+    stats->sharpening_motion_threshold = bridge.sharpening.motion_threshold;
+    stats->sharpening_motion_scale_limit = bridge.sharpening.motion_scale_limit;
+    stats->sharpening_contrast_enabled = bridge.sharpening.contrast_enabled;
+    stats->sharpening_contrast = bridge.sharpening.contrast;
+    stats->sharpening_depth_scale = bridge.sharpening.depth_scale;
+    stats->sharpening_depth_bias = bridge.sharpening.depth_bias;
+    stats->sharpening_clamp_output = bridge.sharpening.clamp_output;
+    stats->sharpening_debug = bridge.sharpening.debug;
+
     if (rsf_bridge_native_owned()) {
         rsf_game_render_config config = {0}; config.struct_size = sizeof(config);
         stats->render_scale_percent = rsf_native_sr_render_config(NULL, &config) && config.output_width ?
@@ -2834,6 +2853,14 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
    from the message thread to the render thread at a defined point, which is the open review finding
    about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
    and leaves the hotkeys as the way to ask. */
+int rsf_bridge_select_sharpening(const rsf_sharpening_options* options)
+{
+    if (rsf_dlss_pipeline_set_sharpening(options) != RSF_DLSS_PIPELINE_OK) return 0;
+    bridge.sharpening = *options;
+    if (bridge.actions.save_sharpening) bridge.actions.save_sharpening(options);
+    return 1;
+}
+
 int rsf_bridge_select_dlss_preset(unsigned long preset)
 {
     if (rsf_dlss_pipeline_set_preset((uint32_t)preset) != RSF_DLSS_PIPELINE_OK) return 0;
@@ -2971,6 +2998,7 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.performance_hud_changed) performance_hud_enabled = intent.performance_hud != 0;
+    if (intent.ui_preferences_changed) overlay_ui_preferences = intent.ui_preferences;
     /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
        That is the boundary the review finding asks for: the panel records what was clicked and the
        change happens where the rendering already is, rather than from the message thread while a
@@ -3029,6 +3057,22 @@ static void overlay_tick(void* swapchain)
             rsf_dlss_pipeline_select_backend(previous.backend, NULL, NULL);
             bridge.setting_error = "Game render resolution refused; previous backend restored";
         }
+    }
+    if (intent.sharpening_changed) {
+        rsf_sharpening_options options = rsf_sharpening_defaults();
+        options.mode = intent.sharpening_mode;
+        options.sharpness = intent.sharpening_sharpness;
+        options.mas = intent.sharpening_mas;
+        options.motion_sharpness = intent.sharpening_motion_sharpness;
+        options.motion_threshold = intent.sharpening_motion_threshold;
+        options.motion_scale_limit = intent.sharpening_motion_scale_limit;
+        options.contrast_enabled = intent.sharpening_contrast_enabled;
+        options.contrast = intent.sharpening_contrast;
+        options.depth_scale = intent.sharpening_depth_scale;
+        options.depth_bias = intent.sharpening_depth_bias;
+        options.clamp_output = intent.sharpening_clamp_output;
+        options.debug = intent.sharpening_debug;
+        rsf_bridge_select_sharpening(&options);
     }
     if (intent.dlss_preset_changed) rsf_bridge_select_dlss_preset(intent.dlss_preset);
     if (intent.quality_changed) {

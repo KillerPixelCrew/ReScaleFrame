@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <climits>
+#include <cstdlib>
 #include <mutex>
 
 namespace {
@@ -124,6 +125,25 @@ struct State {
     float scroll = 0.0f;
     uint32_t contact_id = 0;
     bool contact_position = false, contact_down = false, contact_press_pending = false;
+    /* Set while two or more fingers are on the open panel. A multi-finger touch is a gesture, not
+       a press, so the panel's contact is cancelled and further contacts are ignored until every
+       finger has lifted. Under `guard`. */
+    bool multi_touch = false;
+
+    /* The three-finger tap that opens and closes the panel on a touch screen, which usually has
+       no Insert key. Window procedure thread only, so no lock. Tracked while hidden too, without
+       consuming anything: the game still sees every contact. */
+    struct Gesture {
+        static constexpr uint32_t capacity = 10;
+        uint32_t ids[capacity]{};
+        POINT origin[capacity]{};
+        uint32_t count = 0, peak = 0;
+        ULONGLONG started = 0;
+        bool moved = false, open_at_start = false;
+    } gesture;
+    /* WM_POINTER touch was seen, so a WM_TOUCH promoted from the same contacts is not counted a
+       second time under different ids. */
+    bool pointer_touch_seen = false;
 
     // Keys and buttons the game has seen pressed and not yet released, indexed by virtual key.
     // Atomic rather than under the lock so that the hidden path, which is the game's ordinary input
@@ -335,6 +355,7 @@ void record_contact(State& self, HWND window, POINT point, uint32_t id, bool dow
     RECT client{};
     if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) return;
     std::lock_guard<std::mutex> lock(self.guard);
+    if (self.multi_touch) return;
     if (self.contact_down && self.contact_id != id) return;
     self.contact_id = id;
     self.contact_position = true;
@@ -342,6 +363,57 @@ void record_contact(State& self, HWND window, POINT point, uint32_t id, bool dow
     self.mouse_y = static_cast<float>(point.y) * (self.display_height > 0 ? self.display_height / static_cast<float>(client.bottom) : 1);
     if (down) { self.contact_down = true; self.contact_press_pending = true; }
     if (up) self.contact_down = false;
+}
+
+/* A three-finger tap: exactly three contacts down at once, all lifted within half a second of
+   the first, none moved further than a finger's width. Four or five fingers, a slow hold or a
+   swipe is not one. */
+constexpr ULONGLONG kGestureTapMs = 500;
+constexpr LONG kGestureSlopPixels = 48;
+
+/* Cancel the panel's pointer contact when a second finger lands on the open panel. The release
+   is delivered far outside the panel, so egui sees the pointer leave rather than a click. */
+void cancel_panel_contact(State& self)
+{
+    std::lock_guard<std::mutex> lock(self.guard);
+    self.multi_touch = true;
+    self.contact_down = self.contact_press_pending = false;
+    self.mouse_x = self.mouse_y = -100000.0f;
+}
+
+/* Feed one touch contact, in screen pixels. Returns true when this contact ended a three-finger
+   tap; the caller then sets visibility to the opposite of what it was when the tap began, so a
+   close the panel itself requested during the same tap cannot be undone by it. */
+bool track_gesture(State& self, uint32_t id, POINT screen, bool down, bool up, bool canceled)
+{
+    auto& gesture = self.gesture;
+    uint32_t slot = gesture.count;
+    for (uint32_t index = 0; index < gesture.count; ++index)
+        if (gesture.ids[index] == id) { slot = index; break; }
+    if (down && slot == gesture.count) {
+        if (gesture.count == 0) {
+            gesture.peak = 0; gesture.moved = false; gesture.started = GetTickCount64();
+            gesture.open_at_start = self.visible.load(std::memory_order_acquire) != 0;
+        }
+        if (gesture.count == State::Gesture::capacity) { gesture.moved = true; return false; }
+        gesture.ids[gesture.count] = id; gesture.origin[gesture.count] = screen; ++gesture.count;
+        if (gesture.count > gesture.peak) gesture.peak = gesture.count;
+        if (gesture.count == 2 && gesture.open_at_start) cancel_panel_contact(self);
+        return false;
+    }
+    if (slot == gesture.count) return false;
+    if (std::abs(screen.x - gesture.origin[slot].x) > kGestureSlopPixels ||
+        std::abs(screen.y - gesture.origin[slot].y) > kGestureSlopPixels || canceled)
+        gesture.moved = true;
+    if (!up && !canceled) return false;
+    --gesture.count;
+    gesture.ids[slot] = gesture.ids[gesture.count]; gesture.origin[slot] = gesture.origin[gesture.count];
+    if (gesture.count) return false;
+    {
+        std::lock_guard<std::mutex> lock(self.guard);
+        self.multi_touch = false;
+    }
+    return gesture.peak == 3 && !gesture.moved && GetTickCount64() - gesture.started <= kGestureTapMs;
 }
 
 // Where the cursor is when the overlay opens, so the first frame does not place it at the origin
@@ -726,11 +798,19 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_POINTERDOWN:
     case WM_POINTERUPDATE:
     case WM_POINTERUP: {
+        POINTER_INFO info{};
+        const bool have_info = GetPointerInfo(GET_POINTERID_WPARAM(wparam), &info) != FALSE;
+        if (have_info && info.pointerType == PT_TOUCH) {
+            self.pointer_touch_seen = true;
+            const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
+            if (track_gesture(self, info.pointerId, info.ptPixelLocation, message == WM_POINTERDOWN,
+                    message == WM_POINTERUP, canceled))
+                apply_visibility(self, !self.gesture.open_at_start);
+        }
+        // Hidden: tracked above, and the game still receives every contact.
         if (!visible) break;
         self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-        POINTER_INFO info{};
-        if (GetPointerInfo(GET_POINTERID_WPARAM(wparam), &info) &&
-            (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN)) {
+        if (have_info && (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN)) {
             POINT point = info.ptPixelLocation;
             if (ScreenToClient(window, &point))
                 record_contact(self, window, point, info.pointerId, message == WM_POINTERDOWN,
@@ -748,10 +828,21 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         }
         break;
     case WM_TOUCH: {
-        if (!visible) break;
         TOUCHINPUT contacts[32]{};
         const UINT count = LOWORD(wparam);
+        // Reading the contacts does not consume them: a hidden panel leaves the handle open for
+        // the game, which closes it.
         if (count > 32 || !GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(lparam), count, contacts, sizeof(TOUCHINPUT))) break;
+        if (!self.pointer_touch_seen) {
+            bool tapped = false;
+            for (UINT i = 0; i < count; ++i) {
+                const POINT screen{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
+                tapped |= track_gesture(self, contacts[i].dwID, screen, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
+                    (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0, false);
+            }
+            if (tapped) apply_visibility(self, !self.gesture.open_at_start);
+        }
+        if (!visible) break;
         self.pointer_received.fetch_add(count, std::memory_order_relaxed);
         self.pointer_consumed.fetch_add(count, std::memory_order_relaxed);
         for (UINT i = 0; i < count; ++i) {

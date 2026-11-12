@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 13;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 16;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -172,11 +172,72 @@ pub struct RsfOverlayStats {
     pub fg_mfg_unlock_status: u32,
     /// Engine-owned input resolution; do not offer ineffective quality changes.
     pub sr_quality_locked: u32,
+    /// ABI 14. Number of entries at `host_options`; zero draws no host section.
+    pub host_option_count: u32,
+    /// Host-defined options, borrowed for the call.
+    pub host_options: *const RsfOverlayHostOption,
+    /// ABI 15. Host implements shared sharpening.
+    pub sharpening_available: u32,
+    /// Shared sharpening mode.
+    pub sharpening_mode: u32,
+    /// Shared sharpening sharpness.
+    pub sharpening_sharpness: f32,
+    /// Shared sharpening mas.
+    pub sharpening_mas: u32,
+    /// Shared sharpening motion_sharpness.
+    pub sharpening_motion_sharpness: f32,
+    /// Shared sharpening motion_threshold.
+    pub sharpening_motion_threshold: f32,
+    /// Shared sharpening motion_scale_limit.
+    pub sharpening_motion_scale_limit: f32,
+    /// Shared sharpening contrast_enabled.
+    pub sharpening_contrast_enabled: u32,
+    /// Shared sharpening contrast.
+    pub sharpening_contrast: f32,
+    /// Shared sharpening depth_scale.
+    pub sharpening_depth_scale: f32,
+    /// Shared sharpening depth_bias.
+    pub sharpening_depth_bias: f32,
+    /// Shared sharpening clamp_output.
+    pub sharpening_clamp_output: u32,
+    /// Shared sharpening debug.
+    pub sharpening_debug: u32,
+    /// ABI 16. Panel layout word the host stored, opaque to it.
+    pub ui_preferences: u32,
+}
+
+/// A toggle: `value` is 0 or 1.
+pub const RSF_OVERLAY_HOST_OPTION_TOGGLE: u32 = 0;
+/// A stepped number between `minimum` and `maximum`, shown divided by `divisor`.
+pub const RSF_OVERLAY_HOST_OPTION_NUMBER: u32 = 1;
+
+/// ABI 14. One option the host defines and the panel draws. Mirrors `rsf_overlay_host_option`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RsfOverlayHostOption {
+    /// NUL-terminated label, borrowed for the call.
+    pub label: *const c_char,
+    /// One of the `RSF_OVERLAY_HOST_OPTION_*` kinds.
+    pub kind: u32,
+    /// Current value.
+    pub value: i32,
+    /// Smallest value of a number.
+    pub minimum: i32,
+    /// Largest value of a number.
+    pub maximum: i32,
+    /// Step of a number; zero means one.
+    pub step: i32,
+    /// A number is shown as `value / divisor`; zero means one.
+    pub divisor: u32,
+    /// Non-zero when a change only applies at the next start.
+    pub restart: u32,
+    /// Zero.
+    pub reserved: u32,
 }
 
 /// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RsfOverlayIntent {
     /// `sizeof(rsf_overlay_intent)`, written by the overlay.
     pub struct_size: u32,
@@ -240,6 +301,44 @@ pub struct RsfOverlayIntent {
     pub dlss_preset_changed: u32,
     /// Requested model ID.
     pub dlss_preset: u32,
+    /// ABI 14. The user changed a host option in this frame.
+    pub host_option_changed: u32,
+    /// Index into the host's option array.
+    pub host_option_index: u32,
+    /// The value the user chose.
+    pub host_option_value: i32,
+    /// Shared sharpening snapshot changed.
+    pub sharpening_changed: u32,
+    /// Shared sharpening mode.
+    pub sharpening_mode: u32,
+    /// Shared sharpening sharpness.
+    pub sharpening_sharpness: f32,
+    /// Shared sharpening mas.
+    pub sharpening_mas: u32,
+    /// Shared sharpening motion_sharpness.
+    pub sharpening_motion_sharpness: f32,
+    /// Shared sharpening motion_threshold.
+    pub sharpening_motion_threshold: f32,
+    /// Shared sharpening motion_scale_limit.
+    pub sharpening_motion_scale_limit: f32,
+    /// Shared sharpening contrast_enabled.
+    pub sharpening_contrast_enabled: u32,
+    /// Shared sharpening contrast.
+    pub sharpening_contrast: f32,
+    /// Shared sharpening depth_scale.
+    pub sharpening_depth_scale: f32,
+    /// Shared sharpening depth_bias.
+    pub sharpening_depth_bias: f32,
+    /// Shared sharpening clamp_output.
+    pub sharpening_clamp_output: u32,
+    /// Shared sharpening debug.
+    pub sharpening_debug: u32,
+    /// ABI 16. Hide the panel.
+    pub close_requested: u32,
+    /// Store `ui_preferences`.
+    pub ui_preferences_changed: u32,
+    /// Panel layout word for the host to store and send back.
+    pub ui_preferences: u32,
 }
 
 impl Default for RsfOverlayIntent {
@@ -276,6 +375,25 @@ impl Default for RsfOverlayIntent {
             frame_limit_us: 0,
             fg_backend_changed: 0,
             fg_backend: 0,
+            host_option_changed: 0,
+            host_option_index: 0,
+            host_option_value: 0,
+            sharpening_changed: 0,
+            sharpening_mode: 0,
+            sharpening_sharpness: 0.4,
+            sharpening_mas: 0,
+            sharpening_motion_sharpness: 0.2,
+            sharpening_motion_threshold: 0.0,
+            sharpening_motion_scale_limit: 10.0,
+            sharpening_contrast_enabled: 0,
+            sharpening_contrast: 0.0,
+            sharpening_depth_scale: 35.0,
+            sharpening_depth_bias: 0.001,
+            sharpening_clamp_output: 0,
+            sharpening_debug: 0,
+            close_requested: 0,
+            ui_preferences_changed: 0,
+            ui_preferences: 0,
         }
     }
 }
@@ -412,7 +530,8 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 280);
+        assert_eq!(size_of::<RsfOverlayStats>(), 344);
+        assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
         assert_eq!(offset_of!(RsfOverlayStats, render_width), 32);
@@ -450,12 +569,71 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, dlss_preset_available), 264);
         assert_eq!(offset_of!(RsfOverlayStats, fg_mfg_unlock_status), 268);
         assert_eq!(offset_of!(RsfOverlayStats, sr_quality_locked), 272);
+        assert_eq!(offset_of!(RsfOverlayStats, host_option_count), 276);
+        assert_eq!(offset_of!(RsfOverlayStats, host_options), 280);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_available), 288);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_mode), 292);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_sharpness), 296);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_mas), 300);
+        assert_eq!(
+            offset_of!(RsfOverlayStats, sharpening_motion_sharpness),
+            304
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayStats, sharpening_motion_threshold),
+            308
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayStats, sharpening_motion_scale_limit),
+            312
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayStats, sharpening_contrast_enabled),
+            316
+        );
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_contrast), 320);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_depth_scale), 324);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_depth_bias), 328);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_clamp_output), 332);
+        assert_eq!(offset_of!(RsfOverlayStats, sharpening_debug), 336);
+        // Appended in ABI 16, into the padding the host option pointer leaves at the end.
+        assert_eq!(offset_of!(RsfOverlayStats, ui_preferences), 340);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 124);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 200);
+        assert_eq!(offset_of!(RsfOverlayIntent, close_requested), 188);
+        assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences_changed), 192);
+        assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences), 196);
         assert_eq!(offset_of!(RsfOverlayIntent, dlss_preset_changed), 116);
+        assert_eq!(offset_of!(RsfOverlayIntent, host_option_changed), 124);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_changed), 136);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_mode), 140);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_sharpness), 144);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_mas), 148);
+        assert_eq!(
+            offset_of!(RsfOverlayIntent, sharpening_motion_sharpness),
+            152
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayIntent, sharpening_motion_threshold),
+            156
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayIntent, sharpening_motion_scale_limit),
+            160
+        );
+        assert_eq!(
+            offset_of!(RsfOverlayIntent, sharpening_contrast_enabled),
+            164
+        );
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_contrast), 168);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_depth_scale), 172);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_depth_bias), 176);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_clamp_output), 180);
+        assert_eq!(offset_of!(RsfOverlayIntent, sharpening_debug), 184);
+
         assert_eq!(offset_of!(RsfOverlayIntent, dlss_preset), 120);
         assert_eq!(offset_of!(RsfOverlayIntent, fg_backend_changed), 108);
         assert_eq!(offset_of!(RsfOverlayIntent, frame_limit_changed), 100);

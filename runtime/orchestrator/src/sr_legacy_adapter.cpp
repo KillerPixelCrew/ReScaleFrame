@@ -75,7 +75,7 @@ rsf_backend_result rsf_sr_legacy_select(rsf_sr_legacy_adapter* adapter, uint32_t
     return result;
 }
 rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* context,
-    const rsf_dlss_frame* input, uint32_t has_sentinel)
+    const rsf_dlss_frame* input, uint32_t has_sentinel, float vendor_sharpness)
 {
     if (!adapter || !input) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     // FSR/XeSS choose exposure behavior at context creation, unlike DLSS's per-frame option. Going
@@ -119,6 +119,7 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     record.camera.near_plane = input->near_plane; record.camera.far_plane = input->far_plane;
     record.camera.vertical_fov_radians = input->vertical_fov; record.camera.depth_inverted = input->depth_inverted;
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
+    frame.sharpness = vendor_sharpness;
     frame.jitter_x = input->jitter_x; frame.jitter_y = input->jitter_y;
     frame.motion_scale_x = frame.motion_scale_y = 1; frame.pre_exposure = 1;
     frame.view_space_to_meters = adapter->units_to_meters; frame.reset = input->reset;

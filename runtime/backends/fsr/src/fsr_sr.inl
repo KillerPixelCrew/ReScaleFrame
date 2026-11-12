@@ -146,6 +146,7 @@ rsf_backend_result sr_evaluate(void* pointer, void* context, const rsf_sr_frame*
     dispatch.frameTimeDelta = record.frame_time_ms;
     dispatch.preExposure = frame->pre_exposure;
     dispatch.reset = frame->reset != 0;
+    rsf::ffx_sharpening(dispatch, frame->sharpness);
     dispatch.cameraNear = record.camera.near_plane;
     dispatch.cameraFar = record.camera.far_plane > 0 ? record.camera.far_plane : FLT_MAX;
     dispatch.cameraFovAngleVertical = record.camera.vertical_fov_radians;

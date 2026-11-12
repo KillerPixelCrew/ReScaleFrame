@@ -34,7 +34,7 @@ std::string fsr4_directory;
 std::wstring intel_directory;
 void* primary_window = nullptr;
 uint64_t render_source_frame = 0;
-rsf_godot_settings requested{sizeof(requested), RSF_GODOT_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
+rsf_godot_settings requested{sizeof(requested), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
 rsf_godot_status current{sizeof(current), RSF_GODOT_ABI_VERSION};
 rsf_srvk* context = nullptr;
 rsf_fsr4vk* fsr4_context = nullptr;
@@ -300,7 +300,7 @@ extern "C" int rsfg_boot_vulkan(const rsf_godot_setup* setup) try {
     std::lock_guard lock(guard);
     if (active) return 0;
     if (sdk_shutdown_pending) return 0;
-    requested = {sizeof(requested), RSF_GODOT_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
+    requested = {sizeof(requested), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
     primary_window = nullptr; render_source_frame = 0;
     directory = std::string(setup->runtime_directory) + "/fidelityfx-vulkan";
     fsr4_directory = std::string(setup->runtime_directory) + "/fidelityfx";
@@ -426,6 +426,13 @@ extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
     }
     return result;
 } catch (...) { return -3; }
+extern "C" void rsfg_vk_recording_begin(void* commands) try {
+    std::lock_guard lock(guard);
+    if (context) rsf_srvk_retire_commands(context,commands);
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    if (fsr4_context) rsf_srvk_fsr4_retire_commands(fsr4_context,commands);
+#endif
+} catch (...) {}
 extern "C" void rsfg_vk_submitted(void* const* commands, uint32_t count) try {
     std::lock_guard lock(guard); if (presentation) rsf_fgvk_submitted(presentation, commands, count);
 } catch (...) {}
@@ -577,6 +584,8 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
     current.render_width = width; current.render_height = height;
     rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
     // Vulkan SHADER_READ_ONLY_OPTIMAL = 5, TRANSFER_DST_OPTIMAL = 7.
+    frame.sharpening=requested.sharpening.struct_size?requested.sharpening:rsf_sharpening_defaults();
+    frame.log=logger;frame.log_user=logger_user;
     frame.color = image(packet->color, 5); frame.depth = image(packet->depth, 5); frame.motion = image(packet->motion, 5); frame.output = image(packet->output, 7);
     frame.motion_scale_x = -float(camera.render_width) * pass.motion_to_uv[0];
     frame.motion_scale_y = -float(camera.render_height) * pass.motion_to_uv[1]; frame.pre_exposure = 1;

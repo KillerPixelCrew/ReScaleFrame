@@ -29,7 +29,7 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
-rsf_unity_package_settings settings{sizeof(settings), 1, RSF_SR_AUTO, 1, 0, 7, 0, 1, 0, 0, 1};
+rsf_unity_package_settings settings{sizeof(settings), RSF_UNITY_SETTINGS_ABI_VERSION, RSF_SR_AUTO, 1, 0, 7, 0, 1, 0, 0, 1};
 rsf_unity_package_status status{sizeof(status), 1};
 rsf_game_render_config plan{sizeof(plan)};
 rsf_unity_native_api api{};
@@ -209,6 +209,8 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     for (uint32_t i = 0; i < 3; ++i) if (view.lists[i] == commands) { slot = i; break; }
     if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!view.lists[i]) { view.lists[i] = commands; slot = i; break; }
     if (slot == 3) return;
+    auto sharp=settings.sharpening.struct_size?settings.sharpening:rsf_sharpening_defaults();
+    (void)rsf_sr12_set_sharpening(view.sr,&sharp);
     const auto result = rsf_sr12_evaluate(view.sr, commands, &pass, slot);
     if (view.backend || settings.sr_backend == RSF_SR_NONE || settings.sr_backend == RSF_SR_SPATIAL) status.sr_result = result;
     if (result == RSF_BACKEND_OK) {
@@ -303,7 +305,8 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 
 extern "C" __declspec(dllexport) int rsfu_configure(const rsf_unity_package_settings* input) noexcept try
 {
-    if (!input || input->struct_size != sizeof(*input) || input->abi_version != 1 || input->sr_backend > RSF_SR_AUTO ||
+    if (!input || input->struct_size != sizeof(*input) || input->abi_version != RSF_UNITY_SETTINGS_ABI_VERSION || input->sr_backend > RSF_SR_AUTO ||
+        (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) ||
         input->quality > 5 || !rsf_dlss_preset_valid(input->dlss_preset) || input->fg_mode > RSF_FG_FIXED ||
         input->latency_mode > 2 || input->generated_frames < 1 || input->generated_frames > 15 ||
         (input->fg_backend != 1 && input->fg_backend != 3 && input->fg_backend != 4 && input->fg_backend != 5 && input->fg_backend != 7)) return 0;
@@ -316,6 +319,12 @@ extern "C" __declspec(dllexport) int rsfu_configure(const rsf_unity_package_sett
     rsf_native_fg_options options{sizeof(options), settings.fg_mode, settings.generated_frames, settings.latency_mode, settings.frame_limit_us, 0};
     rsf_fg12_options(&options);
     return 1;
+} catch (...) { return 0; }
+
+extern "C" __declspec(dllexport) int rsfu_settings(rsf_unity_package_settings* output) noexcept try
+{
+    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_UNITY_SETTINGS_ABI_VERSION) return 0;
+    std::lock_guard<std::mutex> lock(guard); *output = settings; return 1;
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_temporal_ready() noexcept { return temporal_ready.load() ? 1 : 0; }

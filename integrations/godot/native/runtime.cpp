@@ -23,7 +23,7 @@
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
-rsf_godot_settings settings{sizeof(settings), 1, RSF_SR_AUTO, 1, 0, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 1};
+rsf_godot_settings settings{sizeof(settings), RSF_GODOT_SETTINGS_ABI_VERSION, RSF_SR_AUTO, 1, 0, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 1};
 rsf_godot_status status{sizeof(status), 1};
 uint64_t settings_generation = 1, context_generation = 0;
 std::string root, streamline, fsr, xess, version, project;
@@ -144,8 +144,9 @@ extern "C" int32_t rsfg_create_swapchain(void* factory, void* queue12, void* win
 
 extern "C" int rsfg_configure(const rsf_godot_settings* input) try
 {
-    if (!input || input->struct_size < sizeof(*input) || input->abi_version != RSF_GODOT_ABI_VERSION ||
+    if (!input || input->struct_size < sizeof(*input) || input->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION ||
         input->sr_backend > RSF_SR_AUTO || input->quality > 5 || !rsf_dlss_preset_valid(input->dlss_preset) ||
+        (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) ||
         input->fg_mode > RSF_FG_FIXED || input->latency_mode > 2 ||
         !input->generated_frames || input->generated_frames > 15 || input->gameplay > 1 ||
         !(rsf_fg_backend_known(input->fg_backend) || input->fg_backend == RSF_FG_BACKEND_AUTO) ||
@@ -280,6 +281,8 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
     if (!wait(slots[slot])) return 0;
     rsf_game_render_pass frame = *pass;
     frame.screen = options.gameplay && pass->screen == RSF_SCREEN_FLIGHT ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
+    auto sharp=options.sharpening.struct_size?options.sharpening:rsf_sharpening_defaults();
+    (void)rsf_sr12_set_sharpening(context,&sharp);
     const auto evaluated = rsf_sr12_evaluate(context, commands, &frame, slot);
     static uint32_t diagnostics = 0;
     if (evaluated == RSF_BACKEND_ERROR_INVALID_ARGUMENT && diagnostics++ < 4) {
@@ -411,7 +414,7 @@ extern "C" int rsfg_status(rsf_godot_status* output) try
 
 extern "C" int rsfg_settings(rsf_godot_settings* output) try
 {
-    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_ABI_VERSION) return 0;
+    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION) return 0;
     if (rsf::godot_vk::booted()) return rsf::godot_vk::settings(output);
     std::lock_guard lock(guard);
     *output = settings;

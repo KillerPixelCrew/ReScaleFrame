@@ -34,8 +34,24 @@ namespace ReScaleFrame
             internal ulong Session;
             internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent;
         }
+        [StructLayout(LayoutKind.Sequential)] internal struct Sharpening {
+            internal uint Size, Version;
+            internal uint mode;
+            internal float sharpness;
+            internal uint mas;
+            internal float motion_sharpness;
+            internal float motion_threshold;
+            internal float motion_scale_limit;
+            internal uint contrast_enabled;
+            internal float contrast;
+            internal float depth_scale;
+            internal float depth_bias;
+            internal uint clamp_output;
+            internal uint debug;
+        }
         [StructLayout(LayoutKind.Sequential)] internal struct Settings {
             internal uint Size, Version, Sr, Quality, Preset, Fg, FgMode, Generated, Latency, LimitUs, Gameplay;
+            internal Sharpening Sharpen;
         }
         [StructLayout(LayoutKind.Sequential)] internal struct FrameCounters {
             internal uint Size, Version, Valid, Active;

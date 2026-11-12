@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define RSF_D3D11_SR_API_VERSION 1u
+#define RSF_D3D11_SR_API_VERSION 2u
 #define RSF_D3D11_SR_API_ENTRY_POINT "rsf_get_d3d11_sr_api"
 
 /* DLL access to the Runtime's one D3D11 super-resolution pipeline (dlss_pipeline.h) and its
@@ -23,7 +23,7 @@ extern "C" {
    standard_depth). Nothing here selects game-specific behaviour.
 
    Execution: every entry runs on the thread that owns the D3D11 immediate context, except
-   status and request_dump, which are safe from any thread. Nothing is retained from a pass.
+   status, request_dump and set_sharpening, which are safe from any thread. Nothing is retained from a pass.
    - start: once, with the game's device; refuses ALREADY_RUNNING while started. The setup's
      abi_version is RSF_DLSS_PIPELINE_ABI_VERSION, reported here as pipeline_abi_version.
    - evaluate: rsf_native_sr_evaluate. On success the reconstruction is copied into
@@ -55,6 +55,7 @@ typedef struct rsf_d3d11_sr_api {
     /* ID3D11Texture2D* the backend evaluates into, owned by the pipeline; null when stopped. */
     void* (*output_texture)(void);
     rsf_dlss_pipeline_result (*request_dump)(const char* prefix_utf8);
+    rsf_dlss_pipeline_result (*set_sharpening)(const rsf_sharpening_options*);
 } rsf_d3d11_sr_api;
 
 /* Same contract as rsf_get_d3d11_present_api: initialize struct_size to the writable capacity

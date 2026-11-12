@@ -17,10 +17,16 @@
 #include <cstdio>
 #include <algorithm>
 #include <vector>
+#include <mutex>
+#include "../../graphics/src/sharpening/d3d12.h"
 
 using Microsoft::WRL::ComPtr;
 struct rsf_sr12 {
     ComPtr<ID3D12Device> device;
+    std::mutex sharpening_guard;
+    rsf_sharpening_options sharpening = rsf_sharpening_defaults();
+    rsf::sharpening::D3D12 sharpen_pass;
+    bool sharpen_reported = false;
     rsf_sr_session* alternate = nullptr;
     rsf_dlss_native12* dlss = nullptr;
     ComPtr<ID3D12RootSignature> root;
@@ -304,6 +310,8 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
 {
     if (!self || !commands || !pass || pass->struct_size < sizeof(*pass) || slot >= 3 || !inputs_valid(*self, *pass))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    rsf_sharpening_options sharpen;
+    { std::lock_guard lock(self->sharpening_guard); sharpen=self->sharpening; }
     auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
     (void)self->capture.flush(slot);
     if (list != self->validated_list.Get()) {
@@ -399,6 +407,7 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
         resources[i]->generation = record.resource_generation;
         resources[i]->state = i == 3 ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
+    frame.sharpness = rsf::sharpening_settings::vendor_sharpness(sharpen,self->backend);
     frame.jitter_x = pass->camera.jitter_pixels[0]; frame.jitter_y = pass->camera.jitter_pixels[1];
     // The producer measures pixel jitter from the actual GPU projection, including its Y conversion.
     frame.motion_scale_x = frame.motion_scale_y = 1; frame.pre_exposure = frame.view_space_to_meters = 1;
@@ -413,6 +422,35 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     rsf_input_dump_result(&record, "sr", self->backend, result);
     (void)self->capture.event(record, "sr-evaluate", record.frame_id, frame.reset != 0, result);
     if (result == RSF_BACKEND_OK) rsf_fg12_capture(list, &record, self->normalized[1].Get(), self->normalized[2].Get());
+    if (result == RSF_BACKEND_OK && self->backend) {
+        rsf::sharpening::Options options;
+        options.mode = static_cast<rsf::sharpening::Mode>(sharpen.mode);
+        options.sharpness = sharpen.sharpness;
+        options.mas = sharpen.mas;
+        options.motion_sharpness = sharpen.motion_sharpness;
+        options.motion_threshold = sharpen.motion_threshold;
+        options.motion_scale_limit = sharpen.motion_scale_limit;
+        options.contrast_enabled = sharpen.contrast_enabled;
+        options.contrast = sharpen.contrast;
+        options.depth_scale = sharpen.depth_scale;
+        options.depth_bias = sharpen.depth_bias;
+        options.clamp_output = sharpen.clamp_output;
+        options.debug = sharpen.debug;
+        if (rsf::sharpening::active(options)) {
+            rsf::sharpening::Frame mapping{};
+            mapping.hdr=!self->input_sdr; mapping.depth_inverted=pass->camera.depth_inverted;
+            mapping.near_plane=pass->camera.near_plane; mapping.far_plane=pass->camera.far_plane;
+            bool accepted=false;
+            try {
+                accepted=self->sharpen_pass.run(list,self->output.Get(),self->normalized[2].Get(),
+                    self->normalized[1].Get(),static_cast<ID3D12Resource*>(frame.exposure.resource),options,mapping,slot);
+            } catch (...) { accepted=false; }
+            if (!accepted && !self->sharpen_reported) {
+                self->sharpen_reported=true;
+                rsf::say(self->diagnostic_log,self->diagnostic_user,"D3D12 sharpening unavailable; retaining unsharpened SR output");
+            }
+        }
+    }
     for (auto& resource : self->normalized) transition(list, resource.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (self->external_exposure) transition(list, self->exposure.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -436,6 +474,13 @@ extern "C" rsf_backend_result rsf_sr12_evaluate(rsf_sr12* self, void* commands,
     self->last_session = pass->session_id; self->last_generation = pass->resource_generation;
     return result;
 }
+extern "C" rsf_backend_result rsf_sr12_set_sharpening(rsf_sr12* self,const rsf_sharpening_options* options) try {
+    if (!self || !options || options->struct_size<sizeof(*options)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (options->abi_version!=RSF_SHARPENING_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (!rsf::sharpening_settings::valid(*options)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard lock(self->sharpening_guard); self->sharpening=*options;
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 extern "C" void rsf_sr12_destroy(rsf_sr12* self)
 {
     if (!self) return;

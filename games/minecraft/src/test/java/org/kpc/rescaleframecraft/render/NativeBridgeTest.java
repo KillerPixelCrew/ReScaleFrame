@@ -17,7 +17,7 @@ class NativeBridgeTest {
         assertArrayEquals(new long[16],status,"JNI signature and capability output layout match the staged DLL");
         var legacy=new long[14];Arrays.fill(legacy,-1);NativeBridge.status(0,legacy);
         assertArrayEquals(new long[14],legacy,"The appended capability fields preserve legacy callers");
-        assertNull(NativeBridge.configure(0,1920,1080,1,1,13,0,1,1,0,false),
+        assertNull(NativeBridge.configure(0,1920,1080,1,1,13,0,1,1,0,false,new org.kpc.rescaleframecraft.client.TaaSettings().sharpening()),
             "Preset-bearing JNI signature rejects an absent native session");
     }
 }

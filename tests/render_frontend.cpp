@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <string>
+#include <cstring>
 
 int main()
 {
@@ -30,6 +31,20 @@ int main()
     if(rsf_render_settings_apply(&settings)!=RSF_OK)return 1;
     rsf_render_settings saved{};saved.struct_size=sizeof(saved);saved.abi_version=RSF_RENDER_FRONTEND_ABI_VERSION;
     if(rsf_render_settings_get(&saved)!=RSF_OK || saved.sr_backend!=3 || saved.generated_frames!=3 || saved.latency!=2 || saved.sr_quality!=4)return 1;
+    for (uint32_t mode=0;mode<=4;++mode) {
+        auto sharp=saved;
+        sharp.sharpening_mode=mode; sharp.sharpening_sharpness=0.63f; sharp.sharpening_mas=1;
+        sharp.sharpening_motion_sharpness=-0.3f; sharp.sharpening_motion_threshold=3; sharp.sharpening_motion_scale_limit=20;
+        sharp.sharpening_contrast_enabled=1; sharp.sharpening_contrast=1.1f;
+        sharp.sharpening_depth_scale=87; sharp.sharpening_depth_bias=0.004f;
+        sharp.sharpening_clamp_output=1; sharp.sharpening_debug=1;
+        if(rsf_render_settings_apply(&sharp)!=RSF_OK)return 1;
+        rsf_render_settings roundtrip{sizeof(roundtrip),RSF_RENDER_FRONTEND_ABI_VERSION};
+        if(rsf_render_settings_get(&roundtrip)!=RSF_OK ||
+            std::memcmp(&roundtrip.sharpening_mode,&sharp.sharpening_mode,48))return 1;
+    }
+    auto invalid_sharpen=saved; invalid_sharpen.sharpening_sharpness=9;
+    if(rsf_render_settings_apply(&invalid_sharpen)!=RSF_ERROR_INVALID_ARGUMENT)return 1;
     auto disabled=saved;disabled.fg_enabled=0;
     if(rsf_render_settings_apply(&disabled)!=RSF_OK || rsf_render_status_get(&status)!=RSF_OK ||
         status.fg_requested || status.fg_requested_backend || status.fg_effective_backend)return 1;

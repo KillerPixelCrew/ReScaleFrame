@@ -2,16 +2,30 @@
 #pragma once
 #include <rescaleframe/runtime.h>
 #include <stdint.h>
+#include <rescaleframe/sharpening_settings.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_RENDER_FRONTEND_ABI_VERSION 2u
+#define RSF_RENDER_FRONTEND_ABI_VERSION 3u
 typedef struct rsf_render_settings {
     uint32_t struct_size, abi_version;
     uint32_t sr_enabled, sr_backend, dlss_preset;
     uint32_t fg_enabled, fg_backend, generated_frames;
     uint32_t latency, frame_limit_us, status_overlay;
     uint32_t sr_quality;
+    uint32_t sharpening_mode;
+    float sharpening_sharpness;
+    uint32_t sharpening_mas;
+    float sharpening_motion_sharpness;
+    float sharpening_motion_threshold;
+    float sharpening_motion_scale_limit;
+    uint32_t sharpening_contrast_enabled;
+    float sharpening_contrast;
+    float sharpening_depth_scale;
+    float sharpening_depth_bias;
+    uint32_t sharpening_clamp_output;
+    uint32_t sharpening_debug;
+
 } rsf_render_settings;
 typedef struct rsf_render_status {
     uint32_t struct_size, abi_version;

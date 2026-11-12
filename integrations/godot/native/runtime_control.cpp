@@ -31,7 +31,7 @@ bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
         const int64_t number = raw;
         if (number < 0 || number > UINT32_MAX) return false;
     }
-    rsf_godot_settings value{sizeof(value), RSF_GODOT_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
+    rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
     auto field = [&options](const char* name, uint32_t fallback) { return static_cast<uint32_t>(static_cast<int64_t>(options.get(name, fallback))); };
     value.sr_backend = field("sr_backend", value.sr_backend);
     value.quality = field("quality", value.quality);
@@ -42,6 +42,19 @@ bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
     value.latency_mode = field("latency_mode", value.latency_mode);
     value.frame_limit_us = field("frame_limit_us", value.frame_limit_us);
     value.gameplay = field("gameplay", value.gameplay);
+    value.sharpening=rsf_sharpening_defaults();
+    value.sharpening.mode=field("sharpening_mode",value.sharpening.mode);
+    value.sharpening.sharpness=static_cast<float>(static_cast<double>(options.get("sharpening_sharpness",value.sharpening.sharpness)));
+    value.sharpening.mas=field("sharpening_mas",value.sharpening.mas);
+    value.sharpening.motion_sharpness=static_cast<float>(static_cast<double>(options.get("sharpening_motion_sharpness",value.sharpening.motion_sharpness)));
+    value.sharpening.motion_threshold=static_cast<float>(static_cast<double>(options.get("sharpening_motion_threshold",value.sharpening.motion_threshold)));
+    value.sharpening.motion_scale_limit=static_cast<float>(static_cast<double>(options.get("sharpening_motion_scale_limit",value.sharpening.motion_scale_limit)));
+    value.sharpening.contrast_enabled=field("sharpening_contrast_enabled",value.sharpening.contrast_enabled);
+    value.sharpening.contrast=static_cast<float>(static_cast<double>(options.get("sharpening_contrast",value.sharpening.contrast)));
+    value.sharpening.depth_scale=static_cast<float>(static_cast<double>(options.get("sharpening_depth_scale",value.sharpening.depth_scale)));
+    value.sharpening.depth_bias=static_cast<float>(static_cast<double>(options.get("sharpening_depth_bias",value.sharpening.depth_bias)));
+    value.sharpening.clamp_output=field("sharpening_clamp_output",value.sharpening.clamp_output);
+    value.sharpening.debug=field("sharpening_debug",value.sharpening.debug);
     return rsfg_configure_engine(&value, viewport.get_id()) != 0;
 }
 Dictionary ReScaleFrameRuntime::get_status() const
@@ -57,7 +70,7 @@ Dictionary ReScaleFrameRuntime::get_status() const
     const bool available = rsfg_status(&status) && status.session_id != 0;
     result["engine_bridge_ready"] = available;
     if (!available) return result;
-    rsf_godot_settings requested{sizeof(requested), RSF_GODOT_ABI_VERSION};
+    rsf_godot_settings requested{sizeof(requested), RSF_GODOT_SETTINGS_ABI_VERSION};
     if (rsfg_settings(&requested)) {
         result["requested_dlss_preset"] = requested.dlss_preset;
         result["requested_fg_backend"] = requested.fg_backend;

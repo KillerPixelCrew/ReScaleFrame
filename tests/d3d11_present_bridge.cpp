@@ -158,7 +158,10 @@ int main(int argc, char** argv) {
     }
     if (argc != 3 && argc != 4 && argc != 6) { std::puts("SKIP: supply Streamline directory, adapter vendor ID, optional --enable or --switch FSR-directory XeSS-directory"); return 77; }
     const bool switching_visible = argc == 6 && std::strcmp(argv[3], "--switch-visible") == 0;
-    const bool switching = switching_visible || (argc == 6 && std::strcmp(argv[3], "--switch") == 0);
+    // --borderless: X-Ray's borderless sequence (xray-monolith Device_create.cpp:205) on a window whose swap chain the
+    // bridge owns. The window must land at the monitor origin, as it does without the bridge.
+    const bool borderless_fixture = argc == 6 && std::strcmp(argv[3], "--borderless") == 0;
+    const bool switching = switching_visible || borderless_fixture || (argc == 6 && std::strcmp(argv[3], "--switch") == 0);
     const bool pacing_fixture = argc == 4 && std::strcmp(argv[3], "--enable-visible-pacing") == 0;
     const bool ordering_only = argc == 4 && std::strcmp(argv[3], "--ordering-only") == 0;
     const bool ten_bit = pacing_fixture || (argc == 4 && std::strcmp(argv[3], "--enable-visible-10bit") == 0);
@@ -177,6 +180,8 @@ int main(int argc, char** argv) {
         }
         return EXCEPTION_EXECUTE_HANDLER;
     });
+    // Anomaly runs system-DPI-aware (its window reports awareness 1 at the system DPI); match it.
+    if (borderless_fixture) SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
     std::puts("fixture: creating D3D11 graphics");
     if (GetEnvironmentVariableA("RSF_TEST_D3D12_DEBUG", nullptr, 0)) {
         ComPtr<ID3D12Debug> debug;
@@ -204,9 +209,18 @@ int main(int argc, char** argv) {
     WNDCLASSW wc{}; wc.hInstance = GetModuleHandleW(nullptr); wc.lpfnWndProc = DefWindowProcW;
     wc.lpszClassName = L"RSFPresentBridgeFixture";
     if (!RegisterClassW(&wc)) return 1;
-    auto window = CreateWindowW(wc.lpszClassName, L"Presentation bridge fixture", WS_OVERLAPPEDWINDOW,
-        0, 0, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
+    RECT initial{0, 0, 1280, 720};
+    if (borderless_fixture) { initial = {0, 0, 640, 480}; AdjustWindowRect(&initial, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE); }
+    // X-Ray: an ANSI class and WS_EX_TOPMOST (xray-monolith Device_Initialize.cpp).
+    WNDCLASSA xray{}; xray.hInstance = wc.hInstance; xray.lpfnWndProc = DefWindowProcA; xray.lpszClassName = "_XRAY_FIXTURE";
+    if (borderless_fixture && !RegisterClassA(&xray)) return 1;
+    auto window = borderless_fixture ?
+        CreateWindowExA(WS_EX_TOPMOST, xray.lpszClassName, "Presentation bridge fixture", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            190, 190, initial.right - initial.left, initial.bottom - initial.top, nullptr, nullptr, wc.hInstance, nullptr) :
+        CreateWindowW(wc.lpszClassName, L"Presentation bridge fixture", WS_OVERLAPPEDWINDOW,
+            0, 0, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
     if (!window) return 1;
+    if (borderless_fixture) ShowWindow(window, SW_SHOW);
     if (visible_fixture) { ShowWindow(window, SW_SHOW); SetForegroundWindow(window); }
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup);
     setup.runtime_directory_utf8 = argv[1]; setup.log = log_message; setup.user = window; setup.accept_window = accept_window;
@@ -230,8 +244,36 @@ int main(int argc, char** argv) {
     desc.BufferDesc.Format = ten_bit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM; desc.SampleDesc.Count = 1;
     desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.BufferCount = 1;
     desc.OutputWindow = window; desc.Windowed = TRUE; desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    if (borderless_fixture) { desc.BufferDesc.Width = 640; desc.BufferDesc.Height = 480; desc.BufferCount = 2; }
     ComPtr<IDXGISwapChain> chain;
     if (FAILED(factory->CreateSwapChain(device.Get(), &desc, &chain))) return 1;
+    if (borderless_fixture) {
+        const auto pump = [] { MSG msg; while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); } };
+        const auto where = [&](const char* when) {
+            RECT r{}; GetWindowRect(window, &r);
+            std::printf("borderless: %-18s rect %ld,%ld %ldx%ld\n", when, r.left, r.top, r.right - r.left, r.bottom - r.top);
+            return r;
+        };
+        // The engine creates its views (GetBuffer) right after the chain, which makes the bridge create its own.
+        ComPtr<ID3D11Texture2D> buffer;
+        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return 1;
+        buffer.Reset();
+        pump(); where("after chain");
+        MONITORINFO monitor{sizeof(monitor)};
+        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &monitor);
+        const auto& m = monitor.rcMonitor;
+        SetWindowLongPtrW(window, GWL_STYLE, WS_VISIBLE | WS_POPUP);
+        SetWindowPos(window, HWND_TOP, 0, 0, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED);
+        pump(); where("after borderless");
+        if (FAILED(chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0)) || FAILED(chain->Present(0, 0))) return 1;
+        Sleep(300); pump();
+        const auto final_rect = where("after present");
+        const bool origin = final_rect.left == 0 && final_rect.top == 0 && final_rect.right - final_rect.left == m.right - m.left;
+        std::puts(origin ? "PASS: borderless window at the monitor origin with the bridge" :
+                           "FAIL: borderless window is not at the monitor origin with the bridge");
+        chain.Reset(); DestroyWindow(window);
+        return origin ? 0 : 1;
+    }
     if (!rsf_d3d11_present_host()) {
         ComPtr<ID3D11Texture2D> buffer; ComPtr<ID3D11RenderTargetView> target;
         if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer))) || FAILED(device->CreateRenderTargetView(buffer.Get(), nullptr, &target))) return 1;

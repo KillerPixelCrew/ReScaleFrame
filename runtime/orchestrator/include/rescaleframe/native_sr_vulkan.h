@@ -2,8 +2,9 @@
 #pragma once
 #include <rescaleframe/runtime.h>
 #include <rescaleframe/sr_session.h>
+#include <rescaleframe/sharpening_settings.h>
 
-#define RSF_SRVK_ABI_VERSION 1u
+#define RSF_SRVK_ABI_VERSION 2u
 typedef struct rsf_srvk rsf_srvk;
 typedef void (*rsf_vk_function)(void);
 typedef rsf_vk_function (*rsf_vk_get_proc)(void* object, const char* name);
@@ -34,6 +35,12 @@ typedef struct rsf_srvk_frame {
     const rsf_frame_record* record;
     rsf_srvk_image color, depth, motion, output, reactive, composition;
     float motion_scale_x, motion_scale_y, pre_exposure;
+    /* ABI 2. Optional sampled 1x1 floating exposure and live post-pass options. */
+    rsf_srvk_image exposure;
+    rsf_sharpening_options sharpening;
+    /* Optional diagnostic sink. User storage outlives the recording call. */
+    void (*log)(void* user,const char* message);
+    void* log_user;
 } rsf_srvk_frame;
 
 typedef struct rsf_srvk_fallback {
@@ -73,6 +80,9 @@ RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk*, void* command_bu
    precedes recording. The caller submits and leases both images through GPU
    completion, and retains the original SR failure in its provider status. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback*);
+/* Call only after GPU completion and reset of every prior use of commands.
+   Releases borrowed views and makes its per-recording UBO/descriptor slots reusable. */
+RSF_RUNTIME_API void rsf_srvk_retire_commands(rsf_srvk*, void* commands);
 /* Failure preserves the context and its module/resources for a later retry. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk*);
 #ifdef __cplusplus

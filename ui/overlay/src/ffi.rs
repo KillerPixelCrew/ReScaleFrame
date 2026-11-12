@@ -221,40 +221,7 @@ unsafe fn frame_inner(
     let produced = overlay.frame(&frame_input, &frame_stats);
 
     if let Some(out) = unsafe { intent.as_mut() } {
-        *out = RsfOverlayIntent {
-            struct_size: size_of::<RsfOverlayIntent>() as u32,
-            dlss_preset_changed: u32::from(produced.dlss_preset_changed),
-            dlss_preset: produced.dlss_preset,
-            quality_changed: u32::from(produced.quality_changed),
-            quality: produced.quality.to_abi(),
-            enabled_changed: u32::from(produced.enabled_changed),
-            enabled: u32::from(produced.enabled),
-            fg_changed: u32::from(produced.fg_changed),
-            fg_mode: produced.fg_mode,
-            fg_generated: produced.fg_generated,
-            fg_backend_changed: u32::from(produced.fg_backend_changed),
-            fg_backend: produced.fg_backend,
-            reflex_changed: u32::from(produced.reflex_changed),
-            reflex_mode: produced.reflex_mode,
-            performance_hud_changed: u32::from(produced.performance_hud_changed),
-            performance_hud: u32::from(produced.performance_hud),
-            frame_limit_changed: u32::from(produced.frame_limit_changed),
-            frame_limit_us: produced.frame_limit_us,
-            // The panel offers none of these; the fields stay in the header for older hosts.
-            dump_requested: 0,
-            start_requested: 0,
-            debug_view_changed: 0,
-            debug_view: 0,
-            reinsert_changed: 0,
-            reinsert: 0,
-            scale_requested: 0,
-            scale_percent: 0,
-            capture_requested: 0,
-            jitter_changed: 0,
-            jitter: 0,
-            backend_changed: u32::from(produced.backend_changed),
-            backend: produced.backend,
-        };
+        *out = encode_intent(produced);
     }
     if let Some(out) = unsafe { draw_data.as_mut() } {
         // Null with a count of zero when there is nothing to draw, rather than a pointer into an
@@ -286,6 +253,63 @@ unsafe fn frame_inner(
 unsafe fn fits<T>(pointer: *const T) -> bool {
     let declared = unsafe { pointer.cast::<u32>().read_unaligned() };
     declared as usize >= size_of::<T>()
+}
+
+fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
+    RsfOverlayIntent {
+        struct_size: size_of::<RsfOverlayIntent>() as u32,
+        dlss_preset_changed: u32::from(produced.dlss_preset_changed),
+        dlss_preset: produced.dlss_preset,
+        quality_changed: u32::from(produced.quality_changed),
+        quality: produced.quality.to_abi(),
+        enabled_changed: u32::from(produced.enabled_changed),
+        enabled: u32::from(produced.enabled),
+        fg_changed: u32::from(produced.fg_changed),
+        fg_mode: produced.fg_mode,
+        fg_generated: produced.fg_generated,
+        fg_backend_changed: u32::from(produced.fg_backend_changed),
+        fg_backend: produced.fg_backend,
+        reflex_changed: u32::from(produced.reflex_changed),
+        reflex_mode: produced.reflex_mode,
+        performance_hud_changed: u32::from(produced.performance_hud_changed),
+        performance_hud: u32::from(produced.performance_hud),
+        frame_limit_changed: u32::from(produced.frame_limit_changed),
+        frame_limit_us: produced.frame_limit_us,
+        host_option_changed: u32::from(produced.host_option_changed),
+        host_option_index: produced.host_option_index,
+        host_option_value: produced.host_option_value,
+        sharpening_changed: u32::from(produced.sharpening_changed),
+        sharpening_mode: produced.sharpening.mode,
+        sharpening_sharpness: produced.sharpening.sharpness,
+        sharpening_mas: produced.sharpening.mas,
+        sharpening_motion_sharpness: produced.sharpening.motion_sharpness,
+        sharpening_motion_threshold: produced.sharpening.motion_threshold,
+        sharpening_motion_scale_limit: produced.sharpening.motion_scale_limit,
+        sharpening_contrast_enabled: produced.sharpening.contrast_enabled,
+        sharpening_contrast: produced.sharpening.contrast,
+        sharpening_depth_scale: produced.sharpening.depth_scale,
+        sharpening_depth_bias: produced.sharpening.depth_bias,
+        sharpening_clamp_output: produced.sharpening.clamp_output,
+        sharpening_debug: produced.sharpening.debug,
+        close_requested: u32::from(produced.close_requested),
+        ui_preferences_changed: u32::from(produced.ui_preferences_changed),
+        ui_preferences: produced.ui_preferences,
+
+        // The panel offers none of these; the fields stay in the header for older hosts.
+        dump_requested: 0,
+        start_requested: 0,
+        debug_view_changed: 0,
+        debug_view: 0,
+        reinsert_changed: 0,
+        reinsert: 0,
+        scale_requested: 0,
+        scale_percent: 0,
+        capture_requested: 0,
+        jitter_changed: 0,
+        jitter: 0,
+        backend_changed: u32::from(produced.backend_changed),
+        backend: produced.backend,
+    }
 }
 
 fn slice_ptr<T>(slice: &[T]) -> *const T {
@@ -337,7 +361,55 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         counter_clock: [stats.sample_qpc, stats.qpc_frequency],
         show_performance_hud: stats.show_performance_hud != 0,
         fg_present_count_valid: stats.fg_present_count_valid != 0,
+        host_options: unsafe { borrow_host_options(stats) },
+        sharpening_available: stats.sharpening_available != 0,
+        sharpening_depth_available: stats.have_depth != 0,
+        sharpening: crate::model::Sharpening {
+            mode: stats.sharpening_mode,
+            sharpness: stats.sharpening_sharpness,
+            mas: stats.sharpening_mas,
+            motion_sharpness: stats.sharpening_motion_sharpness,
+            motion_threshold: stats.sharpening_motion_threshold,
+            motion_scale_limit: stats.sharpening_motion_scale_limit,
+            contrast_enabled: stats.sharpening_contrast_enabled,
+            contrast: stats.sharpening_contrast,
+            depth_scale: stats.sharpening_depth_scale,
+            depth_bias: stats.sharpening_depth_bias,
+            clamp_output: stats.sharpening_clamp_output,
+            debug: stats.sharpening_debug,
+        },
+        render_size: [stats.render_width, stats.render_height],
+        output_size: [stats.output_width, stats.output_height],
+        ui_preferences: stats.ui_preferences,
     }
+}
+
+/// # Safety
+/// `stats.host_options` must be null or point at `host_option_count` entries with NUL terminated
+/// labels, all borrowed for this call.
+unsafe fn borrow_host_options(
+    stats: &RsfOverlayStats,
+) -> [Option<crate::model::HostOption<'_>>; crate::model::MAX_HOST_OPTIONS] {
+    let mut out = [None; crate::model::MAX_HOST_OPTIONS];
+    if stats.host_options.is_null() {
+        return out;
+    }
+    let count = (stats.host_option_count as usize).min(out.len());
+    for (index, slot) in out.iter_mut().enumerate().take(count) {
+        let option = unsafe { &*stats.host_options.add(index) };
+        let Some(label) = (unsafe { borrow_str(option.label) }) else {
+            continue;
+        };
+        *slot = Some(crate::model::HostOption {
+            label,
+            toggle: option.kind == crate::abi::RSF_OVERLAY_HOST_OPTION_TOGGLE,
+            value: option.value,
+            range: [option.minimum, option.maximum, option.step.max(1)],
+            divisor: option.divisor.max(1),
+            restart: option.restart != 0,
+        });
+    }
+    out
 }
 
 /// # Safety
@@ -460,6 +532,22 @@ mod tests {
             dlss_preset_available: 0,
             fg_mfg_unlock_status: 0,
             sr_quality_locked: 0,
+            host_option_count: 0,
+            host_options: null(),
+            sharpening_available: 0,
+            sharpening_mode: 0,
+            sharpening_sharpness: 0.4,
+            sharpening_mas: 0,
+            sharpening_motion_sharpness: 0.2,
+            sharpening_motion_threshold: 0.0,
+            sharpening_motion_scale_limit: 10.0,
+            sharpening_contrast_enabled: 0,
+            sharpening_contrast: 0.0,
+            sharpening_depth_scale: 35.0,
+            sharpening_depth_bias: 0.001,
+            sharpening_clamp_output: 0,
+            sharpening_debug: 0,
+            ui_preferences: 0,
         }
     }
 
@@ -621,7 +709,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 13);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 16);
     }
 
     #[test]
@@ -640,5 +728,97 @@ mod tests {
         assert_eq!(draw.call_count, 0);
         assert!(draw.vertices.is_null() && draw.indices.is_null() && draw.calls.is_null());
         unsafe { rsf_overlay_destroy(overlay) };
+    }
+    #[test]
+    fn sharpening_snapshot_preserves_every_field() {
+        let mut raw = stats();
+        raw.sharpening_available = 1;
+        raw.have_depth = 1;
+        raw.sharpening_mode = 2;
+        raw.sharpening_sharpness = 0.41;
+        raw.sharpening_mas = 1;
+        raw.sharpening_motion_sharpness = 0.21;
+        raw.sharpening_motion_threshold = 0.01;
+        raw.sharpening_motion_scale_limit = 10.01;
+        raw.sharpening_contrast_enabled = 1;
+        raw.sharpening_contrast = 0.01;
+        raw.sharpening_depth_scale = 35.01;
+        raw.sharpening_depth_bias = 0.011;
+        raw.sharpening_clamp_output = 1;
+        raw.sharpening_debug = 1;
+        let borrowed = unsafe { borrow_stats(&raw) };
+        assert!(borrowed.sharpening_available && borrowed.sharpening_depth_available);
+        assert_eq!(borrowed.sharpening.mode, raw.sharpening_mode);
+        assert_eq!(borrowed.sharpening.sharpness, raw.sharpening_sharpness);
+        assert_eq!(borrowed.sharpening.mas, raw.sharpening_mas);
+        assert_eq!(
+            borrowed.sharpening.motion_sharpness,
+            raw.sharpening_motion_sharpness
+        );
+        assert_eq!(
+            borrowed.sharpening.motion_threshold,
+            raw.sharpening_motion_threshold
+        );
+        assert_eq!(
+            borrowed.sharpening.motion_scale_limit,
+            raw.sharpening_motion_scale_limit
+        );
+        assert_eq!(
+            borrowed.sharpening.contrast_enabled,
+            raw.sharpening_contrast_enabled
+        );
+        assert_eq!(borrowed.sharpening.contrast, raw.sharpening_contrast);
+        assert_eq!(borrowed.sharpening.depth_scale, raw.sharpening_depth_scale);
+        assert_eq!(borrowed.sharpening.depth_bias, raw.sharpening_depth_bias);
+        assert_eq!(
+            borrowed.sharpening.clamp_output,
+            raw.sharpening_clamp_output
+        );
+        assert_eq!(borrowed.sharpening.debug, raw.sharpening_debug);
+    }
+    #[test]
+    fn sharpening_intent_preserves_every_field() {
+        let mut intent = crate::model::Intent {
+            sharpening_changed: true,
+            ..Default::default()
+        };
+        intent.sharpening.mode = 3;
+        intent.sharpening.sharpness = 0.42;
+        intent.sharpening.mas = 1;
+        intent.sharpening.motion_sharpness = 0.22;
+        intent.sharpening.motion_threshold = 0.02;
+        intent.sharpening.motion_scale_limit = 10.02;
+        intent.sharpening.contrast_enabled = 1;
+        intent.sharpening.contrast = 0.02;
+        intent.sharpening.depth_scale = 35.02;
+        intent.sharpening.depth_bias = 0.021;
+        intent.sharpening.clamp_output = 1;
+        intent.sharpening.debug = 1;
+        let out = encode_intent(intent);
+        assert_eq!(out.sharpening_changed, 1);
+        assert_eq!(out.sharpening_mode, intent.sharpening.mode);
+        assert_eq!(out.sharpening_sharpness, intent.sharpening.sharpness);
+        assert_eq!(out.sharpening_mas, intent.sharpening.mas);
+        assert_eq!(
+            out.sharpening_motion_sharpness,
+            intent.sharpening.motion_sharpness
+        );
+        assert_eq!(
+            out.sharpening_motion_threshold,
+            intent.sharpening.motion_threshold
+        );
+        assert_eq!(
+            out.sharpening_motion_scale_limit,
+            intent.sharpening.motion_scale_limit
+        );
+        assert_eq!(
+            out.sharpening_contrast_enabled,
+            intent.sharpening.contrast_enabled
+        );
+        assert_eq!(out.sharpening_contrast, intent.sharpening.contrast);
+        assert_eq!(out.sharpening_depth_scale, intent.sharpening.depth_scale);
+        assert_eq!(out.sharpening_depth_bias, intent.sharpening.depth_bias);
+        assert_eq!(out.sharpening_clamp_output, intent.sharpening.clamp_output);
+        assert_eq!(out.sharpening_debug, intent.sharpening.debug);
     }
 }

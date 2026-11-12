@@ -42,6 +42,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk*, void*, const rsf_srvk_frame*, void** co
     return provider_result;
 }
 int32_t rsf_fsr4vk_destroy(rsf_fsr4vk*) { return provider_result; }
+void rsf_fsr4vk_retire_commands(rsf_fsr4vk*,void*) {}
 #endif
 
 #if defined(RSF_TEST_SPLIT_STUB) || defined(RSF_TEST_SPLIT_DISABLED)

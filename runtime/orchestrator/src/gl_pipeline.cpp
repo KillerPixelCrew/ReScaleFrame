@@ -131,6 +131,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup* 
 extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,const rsf_gl_pipeline_options* options,uint32_t width,uint32_t height) try {
     if(!self||!options||options->struct_size<sizeof(*options)||!width||!height||options->sr_backend>RSF_SR_AUTO||
         options->sr_backend==RSF_SR_SPATIAL||options->quality>5||!rsf_dlss_preset_valid(options->dlss_preset)||options->generation.struct_size<sizeof(options->generation))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if(options->sharpening.struct_size&&!rsf::sharpening_settings::valid(options->sharpening))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const bool rebuild=self->width!=width||self->height!=height||self->options.sr_backend!=options->sr_backend||self->options.quality!=options->quality||self->options.dlss_preset!=options->dlss_preset||!self->sr;
     self->options=*options;self->status.requested_sr=options->sr_backend;self->status.requested_fg=options->fg_backend;
     rsf_fg12_options(&options->generation);
@@ -142,7 +143,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,co
         else requested_fg=0;
     }
     if(requested_fg!=rsf_d3d11_present_backend())self->status.fg_switch_result=rsf_d3d11_present_request(requested_fg);
-    if(!rebuild)return RSF_BACKEND_OK;
+    if(!rebuild) { auto sharp=options->sharpening.struct_size?options->sharpening:rsf_sharpening_defaults(); return rsf_sr12_set_sharpening(self->sr,&sharp); }
     auto result=rsf_gl_drain(self->sharing);if(result!=RSF_BACKEND_OK)return result;
     // Prepare the complete replacement while the published GL names remain alive.
     // A rejected resize cannot leave Java holding deleted surfaces or a null SR session.
@@ -171,6 +172,8 @@ extern "C" rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline* self,co
     }
     std::swap(self->sr,pending.sr);std::swap(self->surfaces,pending.surfaces);std::swap(self->textures,pending.textures);
     self->width=width;self->height=height;self->render_width=render_width;self->render_height=render_height;self->status.effective_sr=selected;self->status.evaluated=0;
+    auto sharp=options->sharpening.struct_size?options->sharpening:rsf_sharpening_defaults();
+    (void)rsf_sr12_set_sharpening(self->sr,&sharp);
     ++self->generation;return RSF_BACKEND_OK;
 } catch(...) {return RSF_BACKEND_ERROR_FEATURE_FAILED;}
 extern "C" rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline* self,rsf_gl_pipeline_surfaces* out) {

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
+#include <rescaleframe/sharpening_settings.h>
+#define RSF_UNITY_SETTINGS_ABI_VERSION 2u
 #include <stdint.h>
 #include <rescaleframe/unity_bridge.h>
 #define RSF_UNITY_PACKAGE_ABI_VERSION 1u
@@ -8,6 +10,7 @@ typedef struct rsf_unity_package_settings {
     uint32_t sr_backend, quality, dlss_preset;
     uint32_t fg_backend, fg_mode, generated_frames, latency_mode, frame_limit_us;
     uint32_t gameplay;
+    rsf_sharpening_options sharpening;
 } rsf_unity_package_settings;
 typedef struct rsf_unity_package_status {
     uint32_t struct_size, abi_version;

@@ -1,3 +1,4 @@
+#include <float.h>
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Research proxy: loads with the game, forwards DirectInput8Create to the real dinput8, and
    dumps the main module once its code section stops looking like ciphertext.
@@ -1624,6 +1625,120 @@ static void save_preferences(void)
     }
 }
 
+static void action_save_sharpening(const rsf_sharpening_options* options)
+{
+    wchar_t text[80];
+    _snwprintf(text, 80, L"%u", options->mode);
+    if (!WritePrivateProfileStringW(L"Rendering", L"SharpeningMode", text, preference_path))
+        note("settings: could not save SharpeningMode");
+    _snwprintf(text, 80, L"%.9g", (double)options->sharpness);
+    if (!WritePrivateProfileStringW(L"Rendering", L"Sharpness", text, preference_path))
+        note("settings: could not save Sharpness");
+    _snwprintf(text, 80, L"%u", options->mas);
+    if (!WritePrivateProfileStringW(L"Rendering", L"MAS", text, preference_path))
+        note("settings: could not save MAS");
+    _snwprintf(text, 80, L"%.9g", (double)options->motion_sharpness);
+    if (!WritePrivateProfileStringW(L"Rendering", L"MotionSharpness", text, preference_path))
+        note("settings: could not save MotionSharpness");
+    _snwprintf(text, 80, L"%.9g", (double)options->motion_threshold);
+    if (!WritePrivateProfileStringW(L"Rendering", L"MotionThreshold", text, preference_path))
+        note("settings: could not save MotionThreshold");
+    _snwprintf(text, 80, L"%.9g", (double)options->motion_scale_limit);
+    if (!WritePrivateProfileStringW(L"Rendering", L"MotionScaleLimit", text, preference_path))
+        note("settings: could not save MotionScaleLimit");
+    _snwprintf(text, 80, L"%u", options->contrast_enabled);
+    if (!WritePrivateProfileStringW(L"Rendering", L"ContrastEnabled", text, preference_path))
+        note("settings: could not save ContrastEnabled");
+    _snwprintf(text, 80, L"%.9g", (double)options->contrast);
+    if (!WritePrivateProfileStringW(L"Rendering", L"Contrast", text, preference_path))
+        note("settings: could not save Contrast");
+    _snwprintf(text, 80, L"%.9g", (double)options->depth_scale);
+    if (!WritePrivateProfileStringW(L"Rendering", L"DADepthScale", text, preference_path))
+        note("settings: could not save DADepthScale");
+    _snwprintf(text, 80, L"%.9g", (double)options->depth_bias);
+    if (!WritePrivateProfileStringW(L"Rendering", L"DADepthBias", text, preference_path))
+        note("settings: could not save DADepthBias");
+    _snwprintf(text, 80, L"%u", options->clamp_output);
+    if (!WritePrivateProfileStringW(L"Rendering", L"DAClampOutput", text, preference_path))
+        note("settings: could not save DAClampOutput");
+    _snwprintf(text, 80, L"%u", options->debug);
+    if (!WritePrivateProfileStringW(L"Rendering", L"SharpeningDebug", text, preference_path))
+        note("settings: could not save SharpeningDebug");
+}
+
+static void load_sharpening(void)
+{
+    rsf_sharpening_options options = rsf_sharpening_defaults();
+    wchar_t text[80], fallback[80];
+    options.mode = GetPrivateProfileIntW(L"Rendering", L"SharpeningMode", 0, preference_path);
+    if (options.mode > 4) options.mode = 0;
+    _snwprintf(fallback, 80, L"%.9g", (double)options.sharpness);
+    GetPrivateProfileStringW(L"Rendering", L"Sharpness", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.sharpness = (float)(value < 0 ? 0 : value > 1 ? 1 : value);
+    }
+    options.mas = GetPrivateProfileIntW(L"Rendering", L"MAS", 0, preference_path);
+    if (options.mas > 1) options.mas = 0;
+    _snwprintf(fallback, 80, L"%.9g", (double)options.motion_sharpness);
+    GetPrivateProfileStringW(L"Rendering", L"MotionSharpness", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.motion_sharpness = (float)(value < -1 ? -1 : value > 1 ? 1 : value);
+    }
+    _snwprintf(fallback, 80, L"%.9g", (double)options.motion_threshold);
+    GetPrivateProfileStringW(L"Rendering", L"MotionThreshold", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.motion_threshold = (float)(value < 0 ? 0 : value > 100 ? 100 : value);
+    }
+    _snwprintf(fallback, 80, L"%.9g", (double)options.motion_scale_limit);
+    GetPrivateProfileStringW(L"Rendering", L"MotionScaleLimit", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.motion_scale_limit = (float)(value < 0.01 ? 0.01 : value > 100 ? 100 : value);
+    }
+    options.contrast_enabled = GetPrivateProfileIntW(L"Rendering", L"ContrastEnabled", 0, preference_path);
+    if (options.contrast_enabled > 1) options.contrast_enabled = 0;
+    _snwprintf(fallback, 80, L"%.9g", (double)options.contrast);
+    GetPrivateProfileStringW(L"Rendering", L"Contrast", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.contrast = (float)(value < 0 ? 0 : value > 2 ? 2 : value);
+    }
+    _snwprintf(fallback, 80, L"%.9g", (double)options.depth_scale);
+    GetPrivateProfileStringW(L"Rendering", L"DADepthScale", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.depth_scale = (float)(value < 0 ? 0 : value > 600 ? 600 : value);
+    }
+    _snwprintf(fallback, 80, L"%.9g", (double)options.depth_bias);
+    GetPrivateProfileStringW(L"Rendering", L"DADepthBias", fallback, text, 80, preference_path);
+    {
+        wchar_t* end = NULL;
+        double value = wcstod(text, &end);
+        if (end != text && !*end && _finite(value))
+            options.depth_bias = (float)(value < 0 ? 0 : value > 1 ? 1 : value);
+    }
+    options.clamp_output = GetPrivateProfileIntW(L"Rendering", L"DAClampOutput", 0, preference_path);
+    if (options.clamp_output > 1) options.clamp_output = 0;
+    options.debug = GetPrivateProfileIntW(L"Rendering", L"SharpeningDebug", 0, preference_path);
+    if (options.debug > 1) options.debug = 0;
+    rsf_bridge_select_sharpening(&options);
+}
+
 static void action_save_dlss_preset(unsigned long preset)
 {
     wchar_t text[16];
@@ -1675,6 +1790,7 @@ static void register_overlay_actions(void)
     actions.startup_ready = action_startup_ready;
     actions.save_quality = action_save_quality;
     actions.save_dlss_preset = action_save_dlss_preset;
+    actions.save_sharpening = action_save_sharpening;
     actions.save_enabled = action_save_enabled;
     actions.maintain_renderer = action_maintain_renderer;
     rsf_bridge_set_actions(&actions);
@@ -1701,6 +1817,7 @@ static void register_overlay_actions(void)
         uint32_t preset = GetPrivateProfileIntW(L"Rendering", L"DlssPreset", read_number("RSF_DLSS_PRESET", 0), preference_path);
         rsf_bridge_select_dlss_preset(rsf_dlss_preset_valid(preset) ? preset : 0);
     }
+    load_sharpening();
     rsf_bridge_select_quality(preferred_quality);
     rsf_bridge_set_enabled((int)preferred_enabled);
 }

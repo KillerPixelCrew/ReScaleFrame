@@ -44,6 +44,8 @@ decltype(&rsfg_vk_images) native_vk_images = nullptr;
 decltype(&rsfg_vk_image_layout) native_vk_image_layout = nullptr;
 decltype(&rsfg_vk_acquire) native_vk_acquire = nullptr;
 decltype(&rsfg_vk_present) native_vk_present = nullptr;
+decltype(&rsfg_vk_recording_begin) native_vk_recording_begin = nullptr;
+
 decltype(&rsfg_vk_submitted) native_vk_submitted = nullptr;
 decltype(&rsfg_vk_destroy) native_vk_destroy = nullptr;
 decltype(&rsfg_vk_drain) native_vk_drain = nullptr;
@@ -74,11 +76,23 @@ uint64_t previous_color = 0;
 rsf_game_render_pass last_pass{};
 
 int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_id) {
-    if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_GODOT_ABI_VERSION) return 0;
+    if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION) return 0;
     auto *bridge = Object::cast_to<ReScaleFrameBridge>(Engine::get_singleton()->get_singleton_object("ReScaleFrame"));
     if (!bridge) return 0;
     Dictionary options;
 #define RSF_FIELD(name) options[#name] = value->name
+    options["sharpening_mode"] = value->sharpening.mode;
+    options["sharpening_sharpness"] = value->sharpening.sharpness;
+    options["sharpening_mas"] = value->sharpening.mas;
+    options["sharpening_motion_sharpness"] = value->sharpening.motion_sharpness;
+    options["sharpening_motion_threshold"] = value->sharpening.motion_threshold;
+    options["sharpening_motion_scale_limit"] = value->sharpening.motion_scale_limit;
+    options["sharpening_contrast_enabled"] = value->sharpening.contrast_enabled;
+    options["sharpening_contrast"] = value->sharpening.contrast;
+    options["sharpening_depth_scale"] = value->sharpening.depth_scale;
+    options["sharpening_depth_bias"] = value->sharpening.depth_bias;
+    options["sharpening_clamp_output"] = value->sharpening.clamp_output;
+    options["sharpening_debug"] = value->sharpening.debug;
     RSF_FIELD(sr_backend); RSF_FIELD(quality); RSF_FIELD(dlss_preset); RSF_FIELD(fg_backend); RSF_FIELD(fg_mode);
     RSF_FIELD(generated_frames); RSF_FIELD(latency_mode); RSF_FIELD(frame_limit_us); RSF_FIELD(gameplay);
 #undef RSF_FIELD
@@ -186,10 +200,23 @@ bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
     if (!ready || !viewport.is_valid()) return false;
     SceneTree *tree = SceneTree::get_singleton();
     if (!tree || !tree->get_root() || tree->get_root()->get_viewport_rid() != viewport) return false;
-    rsf_godot_settings value{sizeof(value), 1, 7, 1, 0, 7, 0, 1, 0, 0, 1};
+    rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
     value.sr_backend = options.get("sr_backend", value.sr_backend);
     value.quality = options.get("quality", value.quality);
     value.dlss_preset = options.get("dlss_preset", value.dlss_preset);
+    value.sharpening=rsf_sharpening_defaults();
+    value.sharpening.mode=options.get("sharpening_mode",value.sharpening.mode);
+    value.sharpening.sharpness=options.get("sharpening_sharpness",value.sharpening.sharpness);
+    value.sharpening.mas=options.get("sharpening_mas",value.sharpening.mas);
+    value.sharpening.motion_sharpness=options.get("sharpening_motion_sharpness",value.sharpening.motion_sharpness);
+    value.sharpening.motion_threshold=options.get("sharpening_motion_threshold",value.sharpening.motion_threshold);
+    value.sharpening.motion_scale_limit=options.get("sharpening_motion_scale_limit",value.sharpening.motion_scale_limit);
+    value.sharpening.contrast_enabled=options.get("sharpening_contrast_enabled",value.sharpening.contrast_enabled);
+    value.sharpening.contrast=options.get("sharpening_contrast",value.sharpening.contrast);
+    value.sharpening.depth_scale=options.get("sharpening_depth_scale",value.sharpening.depth_scale);
+    value.sharpening.depth_bias=options.get("sharpening_depth_bias",value.sharpening.depth_bias);
+    value.sharpening.clamp_output=options.get("sharpening_clamp_output",value.sharpening.clamp_output);
+    value.sharpening.debug=options.get("sharpening_debug",value.sharpening.debug);
     value.fg_backend = options.get("fg_backend", value.fg_backend);
     value.fg_mode = options.get("fg_mode", value.fg_mode);
     value.generated_frames = options.get("generated_frames", value.generated_frames);
@@ -245,7 +272,7 @@ void boot() {
     RSF_RESOLVE(boot); RSF_RESOLVE(boot_vulkan); RSF_RESOLVE(render_vulkan);
     RSF_RESOLVE(render_vulkan_handoff); RSF_RESOLVE(vk_host_capabilities);
     RSF_RESOLVE(vk_resolver); RSF_RESOLVE(vk_window); RSF_RESOLVE(vk_present_marker); RSF_RESOLVE(vk_native_present); RSF_RESOLVE(vk_wsi_call);
-    RSF_RESOLVE(vk_create); RSF_RESOLVE(vk_images); RSF_RESOLVE(vk_acquire); RSF_RESOLVE(vk_present); RSF_RESOLVE(vk_submitted); RSF_RESOLVE(vk_destroy);
+    RSF_RESOLVE(vk_create); RSF_RESOLVE(vk_images); RSF_RESOLVE(vk_acquire); RSF_RESOLVE(vk_present); RSF_RESOLVE(vk_submitted); RSF_RESOLVE(vk_recording_begin); RSF_RESOLVE(vk_destroy);
     RSF_RESOLVE(vk_drain); RSF_RESOLVE(vk_image_layout); RSF_RESOLVE(vk_foreign_call);
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
@@ -290,6 +317,7 @@ int32_t vk_images(void *owner, uint32_t *count, uint64_t *images) { return nativ
 uint32_t vk_image_layout(void *owner) { return native_vk_image_layout(owner); }
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index) { return native_vk_acquire(owner, timeout, semaphore, fence, index); }
 int32_t vk_present(void *owner, const void *info) { return native_vk_present(owner, info); }
+void vk_recording_begin(void* commands) { if (ready) native_vk_recording_begin(commands); }
 void vk_submitted(void *const *commands, uint32_t count) { if (ready) native_vk_submitted(commands, count); }
 bool vk_destroy(void *owner) { return native_vk_destroy(owner) == 0; }
 bool vk_drain(void *owner) { return native_vk_drain(owner) == 0; }

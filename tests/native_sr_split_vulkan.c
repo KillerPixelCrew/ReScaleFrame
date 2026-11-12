@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_split_vulkan.h>
 #include <stddef.h>
-_Static_assert(RSF_SRVK_ABI_VERSION == 1, "SR ABI 1 is preserved");
+_Static_assert(RSF_SRVK_ABI_VERSION == 2, "SR ABI 2 appends sharpening");
 _Static_assert(RSF_SRVK_SPLIT_ABI_VERSION == 1, "split ABI starts at 1");
 _Static_assert(offsetof(rsf_fsr4vk_handoff, struct_size) == 0, "size leads");
 _Static_assert(offsetof(rsf_fsr4vk_handoff, abi_version) == 4, "version follows");

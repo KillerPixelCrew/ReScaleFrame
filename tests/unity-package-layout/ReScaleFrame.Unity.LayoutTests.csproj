@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../integrations/unity/com.kpc.rescaleframe/Runtime/Native.cs" Link="Native.cs" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.SharedInternalsModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.SharedInternalsModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

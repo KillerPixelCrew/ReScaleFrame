@@ -1,3 +1,4 @@
+#include "../../common/sharpening.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* FSR2, FSR3 and FSR4 reconstruction through the official versioned DX12 API.
    Frame generation remains a refusing provider; it is never advertised as implemented. */

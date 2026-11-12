@@ -10,6 +10,7 @@
 
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/game_renderer.h>
+#include <rescaleframe/sharpening_settings.h>
 
 typedef void (*rsf_bridge_log_fn)(void* user, const char* message);
 
@@ -183,6 +184,7 @@ typedef struct rsf_bridge_actions {
     unsigned long (*startup_ready)(void);
     void (*save_quality)(unsigned long quality);
     void (*save_dlss_preset)(unsigned long preset);
+    void (*save_sharpening)(const rsf_sharpening_options*);
     void (*save_enabled)(unsigned long enabled);
     void (*maintain_renderer)(void);
 } rsf_bridge_actions;
@@ -191,6 +193,7 @@ void rsf_bridge_set_actions(const rsf_bridge_actions* actions);
 /* Requested session state. Startup waits for patches/device/tail discovery on the render thread. */
 void rsf_bridge_set_enabled(int enabled);
 int rsf_bridge_select_dlss_preset(unsigned long preset);
+int rsf_bridge_select_sharpening(const rsf_sharpening_options*);
 int rsf_bridge_select_quality(unsigned long quality);
 /* Optional bounded research capture, armed before shader creation. Empty disables it. */
 void rsf_bridge_set_briefing_capture(const char* prefix);
