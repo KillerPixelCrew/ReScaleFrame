@@ -172,6 +172,107 @@ is preserved separately. Built, synthetic-tested and GPU-fixture-tested;
 no game, visual-quality, stereo, FG, RTSS or headset acceptance. DLSS retains
 single-owner/viewport-one SR. [Contract, evidence and limits](research/public-fsr4-vulkan-api.md).
 
+## Latency owner in the overlay, 30 October 2026
+
+On Intel the overlay greyed out Reflex and the frame limit because both sat under the provider's
+`low_latency_available`, which the XeSS provider never set, although it already runs XeLL sleep and
+markers and the orchestrator passes the frame limit to XeLL's `minimumIntervalUs`. The XeSS
+provider now reports availability once its XeLL context is bound. Both XeSS and DLSS providers
+count frames their pacing owner accepted (`rsf_fg_status.latency_paced_frames`). Overlay ABI 14
+adds `latency_pacing_owner` and `latency_paced_frames`. The panel shows the Reflex radio only for
+Reflex and shows a live XeLL status line for XeLL, with the frame limit enabled for either. The count
+is evidence that the SDK accepted sleep calls, not a latency measurement. Rust 41+19 tests,
+Clippy and fmt with the pinned 1.94.1 toolchain (rustup installed on this device); C++ 84/84.
+The save-and-reboot round trip for the refresh fix passed: after an in-game apply and normal exit
+`system.xml` holds `12000/100` at index 5.
+
+## RDR2 on Intel: settings-change crashes and the 30 Hz boot, 30 October 2026
+
+Three faults surfaced once SR ran on the Arc B370; each has a log or dump behind it.
+
+- **VSync toggle crash (ERR_GFX_STATE).** New per-step Present logging showed
+  `physical GetBuffer failed 80070057` right after the game resized its chain to 2 buffers. With
+  runtime switching the application renders into `render_buffers`, so the physical chain now
+  keeps its created count (`ResizeBuffers(0, ...)`). XeSS FG's proxy had kept an index past the new
+  count. Change in `runtime/presentation/src/d3d11_present_bridge.cpp`.
+- **Upscaling-preset crash.** Crashpad dump `0e3dc899...`: AV in `ffx_fsr2_api_dx12_x64.dll+3163`
+  calling `GetDesc` through `RDR2.exe+5730b08`, reached from the RSF native-FSR fallback. The
+  game's FSR library is 2.2 (`r_input_opaque_only`, `rw_output_autoreactive`,
+  `ffxFsr2ResourceIsNull`), whose description extends past the 1,352-byte 2.1.2 prefix with
+  `enableAutoReactive` and `colorOpaqueOnly`. The fallback passed a truncated stack copy; it now
+  passes the game's description and only sets the prefix `reset` byte after skipped frames.
+- **30 Hz at every boot.** The panel's 120 Hz DXGI mode is `31550000/262912` (index 5). RAGE saves
+  the rational clamped to 262144, so `system.xml` held `262144/262144`; the game then fell back to
+  mode 0 (30 Hz). This also happens with `Enable=0`, so it is a base-game fault. Boot requests
+  were read from the new bridge log: saved `12000/100`, `120/1` or the exact rational all produce
+  `31550000/262912`. The RDR2 settings hook now stores a centihertz rational when the value exceeds
+  the limit and replaces an already clamped value with the desktop refresh. Offsets: video group
+  +124, numerator +148, denominator +14c, from `system.xml` member order with `ReflexSettings` +38
+  as the existing calibration. Game-tested at boot from the broken file: the chain was created at
+  `31550000/262912`; the save-and-reboot round trip then stored `12000/100`.
+- The bridge also kept the application's fullscreen refresh, scanline order and scaling in
+  `CreateSwapChainForHwnd` translation and reports them from `GetFullscreenDesc`. It used to report
+  0/0. This did not cause the 30 Hz boot, which also happens without RSF.
+
+Release VS2026 build and 84/84 ctest (11 opt-in skips, `rdr2_capture*` excluded as above); the RDR2
+settings test covers the refresh policy; XeSS FG cold fixture 39 tags/result 0. In game after the fixes: a
+settings apply that previously failed and three preset changes (1280x800 inputs) completed without
+a presentation failure or crash. Repeated VSync toggling has not been separately confirmed.
+
+## RDR2 on Intel: FSR2 input route, orchestrator Auto SR and FidelityFX 2.4.0, 30 October 2026
+
+The 0.1.1 package on an Intel Arc B370 (vendor 0x8086, device 0xb083, driver 32.0.101.9150) ran
+three sessions without one SR evaluation. The game used its FSR2 carrier (`FSR2=0->2/3`, input
+1130x706 into 1920x1200), but `rdr2.log` has no FSR dispatch, fallback, refusal or SR context
+line. Every such path logs on first entry, so the patched import slot `+6032a98` never routed a
+dispatch. The vendor census that recorded 4,412 dispatches hooks the DLL export instead
+(`loader/census/src/census_internal.h`), as does OptiScaler (`inputs/FSR2_Dx12.cpp`,
+revision `e7e3872d410f704479d94d318d68d163b6b58947`). The decrypted 25 October dump confirms the
+static route (`+26f0505 call 2ea0af5`, `jmp [+6032a98]`, slot bound to the export `+3c70` at ASI
+load), so the slot was displaced or bypassed later at runtime; which one is not established.
+
+The adapter now detours `ffxFsr2ContextDispatch` in the game's Rockstar-signed
+`ffx_fsr2_api_x64.dll` (timestamp `64907ede`, image `0x10000`, export `+3c70`, entry bytes
+`48 85 c9 74 36 48 85 d2 74 31 8b 41 04 39 82 20`). Calls from the RDR2 image are routed; the
+first caller RVA and whether the import slot resolves to the export are logged. A guarded
+`ffxFsr2ContextCreate` detour (`+3ab0`) logs result, flags and sizes. FSR routing no longer
+gates the DLSS route. The `2ea0af5` thunk check is dropped because nothing patches there.
+
+SR Auto is now an orchestrator policy: `rsf_gpu_select_sr_backend` resolves the adapter
+preference against the host's choices (FSR3, then XeSS fallback). The shared native host
+defaults `SRBackend` to Auto (7) and resolves it from the device that records the first pass,
+and the callback host uses the same function. The RDR2 package no longer writes `SRBackend=1`.
+
+GTA V Enhanced is removed: it ships native DLSS FG, and OptiScaler covers the remaining needs.
+Its adapter, ASI, tests and research note last exist at `150ff92`. The generic engine-owned
+presentation mode of the shared host remains.
+
+FidelityFX SDK 2.4.0 (`7539ae8b`) replaces 2.3.0 in `vendor/` and both packagers: FSR 2.3.4,
+3.1.6, upscaler 4.1.2.4555 (SHA-256 `aad4fccc...4ccace`) and FG 4.0.2. The FSR4 INT8 compatibility
+hook now keeps a table of pinned upscaler builds. In 4.1.2 the INT8 capability predicate moved
+from `+8d70` to `+9960`; both are the same slot of the provider vtable (third entry after the
+RTTI pointer, `.rdata+1af36b8` and `+3635270`). It adds a Shader Model 6.6 query, which the lease
+already requires, and accepts ASIC family `0x96`. AMD's license text forbids disassembly of the
+SDK binaries; the existing hook and this re-location depend on inspecting them.
+
+Checks on the Intel Arc B370 with VS 2026 Build Tools 18.11: Release `eng/verify.ps1` built and
+ran 86 tests, 84 passed or skipped (11 opt-in). `rdr2_capture` and `rdr2_capture_rgb10` fail
+with `capture_timeout:true`: the diagnostic capture's 5 s budget is exceeded on this iGPU; that
+code is unchanged. fmt and Clippy pass. With the RDR2 shared host (`rsf_unity_sr_d3d12_test`,
+`RSF_RDR2_HOST_INI/ROOT`), no `SRBackend` logs `Auto SR selected backend 5` and XeSS 2.0.2 output is
+accepted. FSR3 and FSR4 INT8 pass on 2.3.0 and 2.4.0 (`4.1.2.4555, RVA 0x9960`), FSR2 2.3.4
+passes, and cold FG with FSR FG and XeSS FG tags 39 frames with result 0; FSR FG reports generated
+frames. These are synthetic GPU fixtures.
+
+Game run on the same device, deployment receipt `.local/deploy-backups/rdr2-intel-20261030/`
+(Game DLL `0af430d5...52c57a7`, FidelityFX 2.4.0 runtimes): the game created its FSR2 context
+through the export (`flags=0x29`, 960x600 into 1920x1200), and on entering gameplay the export
+detour saw `RDR2.exe+26f050a`. RSF Auto selected XeSS, `SR context backend=5`, evaluation 0 and
+output accepted. XeSS FG then reported `mode=1 active=1` with source frames advancing 120 and
+presents 240 per 4 s. Pause produced the expected frozen-jitter native fallback. The preceding
+run only reached the menus, so it shows no dispatch; that build's in-image caller filter was not
+shown to be wrong. Generated-image quality, latency and HUD modes on Intel remain unchecked.
+
 ## RDR2 0.1.1 package, 29 October 2026
 
 `tools/package-rdr2.py` builds the first RDR2 download from the post-migration Release outputs
@@ -180,50 +281,12 @@ skips with fmt/Clippy. The RDR2 shared-host GPU fixture passed against the stage
 four SR providers and three cold-FG providers with the overlay open. Built and synthetic-tested;
 this exact ASI/Runtime has not run in RDR2. [Build record](releases/v0.1.1-rdr2.md).
 
-## GTA V Enhanced active integration and domain repair, 28 October 2026
-
-The exact-build adapter now produces canonical frame/camera/resource inputs and executes shared
-SR using the game's existing Streamline owner. A captured2560x1600 frame has finite RSF output
-and byte-identical engine copyback. Shared overlay drawing is active; nested SDK/native Present
-callbacks are corrected. Native FG is suppressed while RSF FG/presentation, latency ownership,
-FSR input routing and live engine quality changes remain unfinished. Readiness stays0.
-
-The captured run later reported `ERR_GFX_STATE`. The subsequent explicit validation run reaches
-gameplay but reports a native shader-read/render-target state mismatch. Stable gameplay and
-scene/UI pixel acceptance are not established; identifying and correcting that contract is the
-current blocker. Release VS2026 has104 discovered cases,93 passes/11 optional skips, fmt/Clippy.
-[Current evidence and remaining requirements](research/gta5-enhanced-renderer.md).
+## Shared host domain repair, 28 October 2026
 
 Game/engine policy has moved out of shared hosts: adapter setup supplies identity/configuration/
 window policy; Unity owns its startup/exports/configuration and AC7 produces material mip bias.
 Generic runtime mechanisms retain SDK/GPU/presentation ownership. Affected binaries build and
 contract tests pass; RDR2/Unity redeployment and live preservation checks remain outstanding.
-
-## GTA V Enhanced build identification and first-run probe, 27 October 2026
-
-The completed Steam build25971420 is1.0.1158.16. Its exact SHA-256 now enables detection while
-rendering preparation remains refused. Added an optional native-call census, gated by that
-fingerprint and default-off configuration. The shared decoder now records all five Streamline
-camera matrices and world-space axes alongside the existing frame/viewport, jitter, resource-tag,
-feature and presentation samples. This unlocks a combined first-run input survey; it is not an
-SR/FG implementation. Calls preceding the ASI worker's installation may be missed.
-
-Two initial startup defects are corrected: early graphics-creation thunks formed a recursive
-Steam hook chain, and the ASI entry reserved64 KiB on thread-attach notifications despite static
-TLS. Creation pointers now retain identity and the path buffer uses static storage. Regression
-fixtures cover both; a stand-in control fails the old ASI's small-stack thread test. Final Release
-VS2026:100 discovered,89 passed,11 optional skips, formatting and Clippy. The hash-verified ASI
-now reaches human-confirmed Story gameplay with Steam/RTSS, native DLSS/FG/Reflex settings.
-
-Native DLSS Quality inputs are1707x1067 into2560x1600. Constants from eight workers correlate by
-frame/viewport;201 projection/history inverse checks stay below9e-8, near/far/FOV are
-0.1/10000/50 degrees, and34 matched SL/NGX evaluations have identical jitter. Separate native
-HUDLessColor and UIColorAndAlpha resources are tagged, both BGRA8 at display resolution. They
-remain candidate pixel boundaries. No RSF SR, FG, latency control, UI or reinsertion is implemented;
-the game already owns Streamline2.9.1 and rendering preparation remains refused.
-The run ends normally with code0 after recorded present145237. Diagnostics are reset off for
-subsequent launches; game-native settings and caches are preserved.
-[Full evidence, return RVAs, lifetime limits and remaining work](research/gta5-enhanced-renderer.md).
 
 ## RDR2 shared overlay and quality controls, 26 October 2026
 

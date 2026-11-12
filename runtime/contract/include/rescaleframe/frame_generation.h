@@ -111,6 +111,9 @@ typedef struct rsf_fg_status {
     uint64_t generated_callbacks;
     /* RTX 40 unlock admission, separate from observed interpolation activity. */
     uint32_t mfg_unlock_status;
+    /* Frames the pacing owner actually paced (Reflex/XeLL sleep accepted). Evidence that the
+       latency SDK is running, not a latency measurement. */
+    uint64_t latency_paced_frames;
 } rsf_fg_status;
 
 typedef struct rsf_fg_retirement {

@@ -32,7 +32,7 @@ struct Host;
 std::atomic<Host*> frontend_host{};
 // Values for keys missing from the section, unchanged from the original frontend reads.
 constexpr rsf_render_settings render_defaults{sizeof(rsf_render_settings), RSF_RENDER_FRONTEND_ABI_VERSION,
-    1, RSF_SR_DLSS, 0, 0, RSF_FG_BACKEND_AUTO, 1, RSF_REFLEX_ON, 0, 1, 2};
+    1, RSF_SR_AUTO, 0, 0, RSF_FG_BACKEND_AUTO, 1, RSF_REFLEX_ON, 0, 1, 2};
 std::string utf8(const std::wstring& value)
 {
     const int bytes = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
@@ -61,7 +61,10 @@ struct Host {
     rsf_game_log_fn logger{};
     void* logger_user{};
     uint64_t session{}, poll_tick{}, serial{}, fence_value{};
-    uint32_t backend{RSF_SR_DLSS}, preset{};
+    // requested_backend is the saved setting, possibly Auto; backend is what it resolves to.
+    uint32_t backend{}, requested_backend{RSF_SR_AUTO}, preset{};
+    // Auto resolves once against the adapter that owns the game's device.
+    std::atomic<uint32_t> automatic_backend{};
     rsf_sharpening_options sharpening=rsf_sharpening_defaults();
     bool enabled{true}, reset{true};
     bool engine_streamline{};
@@ -112,12 +115,27 @@ struct Host {
         const auto& owner = *static_cast<Host*>(user);
         return owner.window_filter && owner.window_filter(owner.window_user, pointer);
     }
-    uint32_t vendor()
+    bool adapter(DXGI_ADAPTER_DESC1& desc)
     {
-        ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
+        ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> owner;
         return device && SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
-            SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) &&
-            SUCCEEDED(adapter->GetDesc1(&desc)) ? desc.VendorId : 0;
+            SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&owner))) &&
+            SUCCEEDED(owner->GetDesc1(&desc));
+    }
+    uint32_t vendor() { DXGI_ADAPTER_DESC1 desc{}; return adapter(desc) ? desc.VendorId : 0; }
+    uint32_t resolve_backend()
+    {
+        if (requested_backend != RSF_SR_AUTO) return requested_backend;
+        if (const auto selected = automatic_backend.load()) return selected;
+        DXGI_ADAPTER_DESC1 desc{};
+        if (!adapter(desc)) return RSF_SR_NONE;
+        const auto selected = rsf_gpu_select_sr_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0, sr_choices);
+        automatic_backend = selected;
+        char message[160]{};
+        std::snprintf(message, sizeof(message), "Auto SR selected backend %u from owning adapter vendor=0x%x device=0x%x",
+            selected, desc.VendorId, desc.DeviceId);
+        log(message);
+        return selected;
     }
     void settings()
     {
@@ -127,7 +145,8 @@ struct Host {
         sharpening=rsf::render_settings::read_sharpening(ini,section);
         if (context) (void)rsf_sr12_set_sharpening(context,&sharpening);
         enabled = GetPrivateProfileIntW(section.c_str(), L"SR", 1, ini.c_str()) != 0;
-        backend = GetPrivateProfileIntW(section.c_str(), L"SRBackend", RSF_SR_DLSS, ini.c_str());
+        requested_backend = GetPrivateProfileIntW(section.c_str(), L"SRBackend", RSF_SR_AUTO, ini.c_str());
+        backend = resolve_backend();
         preset = GetPrivateProfileIntW(section.c_str(), L"DLSSPreset", 0, ini.c_str());
         status_overlay = GetPrivateProfileIntW(section.c_str(), L"StatusOverlay", 1, ini.c_str()) != 0;
         ui_preferences.store(rsf::render_settings::read_overlay_layout(ini, section), std::memory_order_relaxed);
@@ -203,9 +222,7 @@ struct Host {
         std::lock_guard lock(guard);
         flush_captures();
         settings();
-        if (poisoned || !enabled || backend < RSF_SR_DLSS || backend > RSF_SR_XESS ||
-            !(sr_choices & (1u << backend)) ||
-            !rsf_dlss_preset_valid(preset)) { reset = true; return RSF_ERROR_NOT_READY; }
+        if (poisoned || !enabled || !rsf_dlss_preset_valid(preset)) { reset = true; return RSF_ERROR_NOT_READY; }
         ComPtr<ID3D12Device> owner;
         auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
         if (FAILED(list->GetDevice(IID_PPV_ARGS(&owner)))) return RSF_ERROR_NOT_READY;
@@ -216,6 +233,11 @@ struct Host {
             }
         }
         if (owner.Get() != device.Get()) return RSF_ERROR_NATIVE_REFUSED;
+        // Auto needs the owning adapter, which is known only once the game records a pass.
+        backend = resolve_backend();
+        if (backend < RSF_SR_DLSS || backend > RSF_SR_XESS || !(sr_choices & (1u << backend))) {
+            reset = true; return RSF_ERROR_NOT_READY;
+        }
         const auto& camera = pass->camera;
         const auto desired_quality = infer_quality(camera);
         if (desired_quality > 4) return RSF_ERROR_INVALID_ARGUMENT;
@@ -455,7 +477,9 @@ void overlay(Host& owner, void* chain)
     else if (settings_result != RSF_ERROR_BUSY || !have_prefs) return;
     rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats);
     stats.backend_loaded = 1; stats.backend_supported = status.sr_effective_backend != 0;
-    stats.backend = prefs.sr_backend; stats.requested_backend = prefs.sr_backend;
+    // Auto is shown as the provider it resolved to. Picking a provider in the panel saves it explicitly.
+    stats.backend = stats.requested_backend =
+        prefs.sr_backend == RSF_SR_AUTO ? owner.automatic_backend.load() : prefs.sr_backend;
     stats.enabled = prefs.sr_enabled; stats.quality = quality;
     stats.sr_backend_choices = owner.sr_choices;
     rsf::sharpening_overlay::fill(stats,rsf::render_settings::sharpening(prefs));
@@ -756,7 +780,7 @@ extern "C" int32_t rsf_render_settings_apply(const rsf_render_settings* request)
     if (!rsf::sharpening_settings::valid(rsf::render_settings::sharpening(*request)) ||
         request->sr_enabled > 1 || request->fg_enabled > 1 || request->status_overlay > 1 || request->latency > 2 || request->sr_quality > 4 ||
         !request->generated_frames || request->generated_frames > 15 || !rsf_dlss_preset_valid(request->dlss_preset) ||
-        (request->sr_backend > 31 || !(owner->sr_choices & (1u << request->sr_backend))) ||
+        (request->sr_backend != RSF_SR_AUTO && (request->sr_backend > 31 || !(owner->sr_choices & (1u << request->sr_backend)))) ||
         (request->fg_backend != 1 && request->fg_backend != 3 && request->fg_backend != 4 && request->fg_backend != 5 && request->fg_backend != 7))
         return RSF_ERROR_INVALID_ARGUMENT;
     std::unique_lock lock(owner->guard, std::try_to_lock);

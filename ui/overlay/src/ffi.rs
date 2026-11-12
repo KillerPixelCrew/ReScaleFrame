@@ -349,6 +349,8 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
             max_generated: stats.fg_max_generated,
             mfg_unlock_status: stats.fg_mfg_unlock_status,
             reflex_available: stats.reflex_available != 0,
+            latency_owner: stats.latency_pacing_owner,
+            latency_paced_frames: stats.latency_paced_frames,
             requested_reflex: stats.reflex_requested_mode,
             effective_reflex: stats.reflex_effective_mode,
             reason: stats.fg_reason,
@@ -548,6 +550,9 @@ mod tests {
             sharpening_clamp_output: 0,
             sharpening_debug: 0,
             ui_preferences: 0,
+            latency_pacing_owner: 0,
+            latency_reserved: 0,
+            latency_paced_frames: 0,
         }
     }
 
@@ -709,7 +714,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 16);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 17);
     }
 
     #[test]

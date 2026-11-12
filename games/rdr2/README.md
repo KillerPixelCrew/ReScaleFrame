@@ -66,8 +66,8 @@ is implemented in source and awaits live acceptance. Its native Reflex markers a
 latency API. Vulkan is not a target. [The research note](../../docs/research/rdr2-renderer.md)
 records the plan, the evidence so far and the open questions.
 
-`[RDR2] SR=0` retains native evaluation; `SR=1` enables replacement. `SRBackend=1/3/4/5`
-selects DLSS/FSR3/FSR4/XeSS, and `DLSSPreset` uses the shared preset IDs. These settings are
+`[RDR2] SR=0` retains native evaluation; `SR=1` enables replacement. `SRBackend=1/3/4/5/7`
+selects DLSS/FSR3/FSR4/XeSS/Auto (the default, resolved by the orchestrator from the owning adapter), and `DLSSPreset` uses the shared preset IDs. These settings are
 polled once per second. Omit `SRQuality` to follow the game's active render ratio. Its override
 currently changes vendor mode only; changing the engine's render-resolution producer and
 replacing the native options rows are pending. Context changes wait for submitted GPU work

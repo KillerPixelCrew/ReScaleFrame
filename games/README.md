@@ -9,8 +9,7 @@ recorded. Other Unity players, HDRP and built-in pipelines still need verified a
 
 [AC7](ac7/README.md) has the accepted native SR/UI/cloud integration and DLSS-G path.
 [Project Wingman](project-wingman/README.md) remains a detection/lifecycle scaffold with rendering
-unsupported. [GTA V Enhanced](gta5-enhanced/README.md) has an opt-in ASI and inactive plugin scaffold;
-its completed executable and renderer remain unverified. [Red Dead Redemption 2](rdr2/README.md)
+unsupported. [Red Dead Redemption 2](rdr2/README.md)
 has a forced-DX12 ASI with a guarded Social Club correction and recorded SR/FG acceptance for
 specific game and device paths.
 All native plugin APIs retain `rendering_ready = 0`; that flag is separate from

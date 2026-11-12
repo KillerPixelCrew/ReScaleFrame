@@ -363,7 +363,10 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
 rsf_backend_result begin(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return rsf_streamline_host_begin(static_cast<DlssSession*>(pointer)->host, id);
+    auto& self = *static_cast<DlssSession*>(pointer);
+    const auto result = rsf_streamline_host_begin(self.host, id);
+    if (result == RSF_BACKEND_OK && self.state.effective_reflex != RSF_REFLEX_OFF) ++self.state.latency_paced_frames;
+    return result;
 }
 rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t controller)
 {
