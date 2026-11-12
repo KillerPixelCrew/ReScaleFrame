@@ -297,6 +297,8 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     frame.color = gpu.describe(color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.depth = gpu.describe(depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     frame.motion = gpu.describe(motion, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.output = gpu.describe(output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     frame.motion_scale_x = frame.motion_scale_y = frame.pre_exposure = 1;
+    uint32_t fallback_logs=0;frame.log_user=&fallback_logs;
+    frame.log=[](void* user,const char* message){++*static_cast<uint32_t*>(user);std::printf("optional pass fallback: %s\n",message);};
     for (uint32_t index = 1; index <= 12; ++index) {
         if (backend == RSF_SR_DLSS) {
             require(rsf_srvk_dlss_preset(context, 99) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "unknown DLSS preset refused");
@@ -305,7 +307,12 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
             event.source_frame_id = index; event.stage = RSF_GAME_CPU_FRAME_BEGIN; rsf_latencyvk_cpu(&event);
         }
         const std::array<float, 4> value = index < 7 ? std::array<float, 4>{0.18f, 0.05f, 0.7f, 1} : std::array<float, 4>{0.05f, 0.4f, 0.12f, 1};
-        gpu.start();
+        frame.sharpening=rsf_sharpening_defaults(); frame.sharpening.mode=(index-1)%4;
+        if(index==12 && setup.backend>=2 && setup.backend<=4)frame.sharpening.mode=RSF_SHARPENING_VENDOR;
+        frame.sharpening.sharpness=.7f;
+        frame.exposure={};if(index==6||index==10)frame.exposure.image=1; // Invalid optional exposure must retain valid vendor output.
+        gpu.start(); rsf_srvk_retire_commands(context,gpu.commands);
+        std::printf("live sharpening mode=%u\n",frame.sharpening.mode);
         for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, index == 1 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         if (index == 1) gpu.transition(output, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         gpu.fill(color, value); gpu.fill(depth, {0.5f, 0, 0, 0}); gpu.fill(motion, {0, 0, 0, 0});
@@ -318,6 +325,7 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
         require(result == RSF_BACKEND_OK, "Vulkan SR dispatch");
         gpu.read(output); gpu.finish(); gpu.verify(value);
     }
+    require(fallback_logs==1,"optional failure logs once while frames remain valid");
     require(gpu.idle(gpu.device) == VK_SUCCESS && rsf_srvk_destroy(context) == RSF_BACKEND_OK, "drain and retire Vulkan SR"); owner.value = nullptr;
     std::printf("PASS: Vulkan SR backend %u GPU pixels, reset and image-owner guards\n", backend);
 }

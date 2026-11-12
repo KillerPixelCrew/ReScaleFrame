@@ -49,7 +49,9 @@ xess_quality_settings_t quality(uint32_t setting) {
     return settings[setting];
 }
 }
+#include "sharpening_vulkan.h"
 struct rsf_xessvk {
+    rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
     std::shared_ptr<Library> sdk;
     xess_context_handle_t context = nullptr;
@@ -65,6 +67,7 @@ struct rsf_xessvk {
     PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
     rsf::FrameCaptureVk capture;
     ~rsf_xessvk() {
+        sharpen.clear();
         if (context) (void)sdk->destroy(context);
         const auto device = static_cast<VkDevice>(setup.device);
         for (Image* image : {&color, &depth, &motion, &output}) {
@@ -121,7 +124,8 @@ xess_vk_image_view_info resource(const Image& image, uint32_t width, uint32_t he
 }
 }
 #else
-struct rsf_xessvk {};
+struct rsf_xessvk {
+};
 #endif
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_xessvk_initialize(const rsf_xessvk_setup* setup) try {
@@ -234,7 +238,7 @@ rsf_backend_result rsf_xessvk_create(const rsf_srvk_setup* setup, rsf_xessvk** o
         !allocate(*self, self->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT, usage) ||
         !allocate(*self, self->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT, usage) ||
         !allocate(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return RSF_BACKEND_ERROR_INIT_FAILED;
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
 #else
     return RSF_BACKEND_ERROR_NOT_COMPILED;
@@ -299,6 +303,7 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     (void)self->capture.record(list, input->color, record, "sr-linear-color", data.resetHistory);
     (void)self->capture.record(list, input->depth, record, "sr-depth", data.resetHistory);
     (void)self->capture.record(list, input->motion, record, "sr-motion-uv", data.resetHistory);
+    (void)self->sharpen.run(self->setup,commands,*input,self->output.image);
     (void)self->capture.record(list, output, record, "sr-output-linear", data.resetHistory);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {record.output_width, record.output_height, 1};
@@ -320,4 +325,12 @@ rsf_backend_result rsf_xessvk_destroy(rsf_xessvk* self) {
     }
 #endif
     delete self; return RSF_BACKEND_OK;
+}
+
+void rsf_xessvk_retire_commands(rsf_xessvk* self,void* commands) {
+#if defined(RSF_HAVE_XESS_VK)
+    if (self) self->sharpen.retire(commands);
+#else
+    (void)self; (void)commands;
+#endif
 }

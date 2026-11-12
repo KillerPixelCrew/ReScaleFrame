@@ -27,7 +27,9 @@ extern "C" {
    reinsert, render scale and capture, and stats gained what is actually in effect. Both structs
    were extended by appending, which is the only way they are allowed to change. */
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
-#define RSF_OVERLAY_ABI_VERSION 13u
+/* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
+   close the panel and to store a new layout word. */
+#define RSF_OVERLAY_ABI_VERSION 16u
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
 typedef int32_t rsf_overlay_result;
@@ -54,6 +56,20 @@ typedef uint32_t rsf_overlay_quality;
    Every field here is something the project can actually answer. There is deliberately no frames
    per second gain, no latency figure and no quality score: a presentation counter is not a latency
    measurement, and this project does not get to imply otherwise on its own status panel. */
+/* ABI 14. One option the host defines and the panel draws under "Advanced". The panel knows
+   nothing about what it does. Borrowed for the frame call. */
+#define RSF_OVERLAY_HOST_OPTION_TOGGLE 0u /* value is 0 or 1 */
+#define RSF_OVERLAY_HOST_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
+typedef struct rsf_overlay_host_option {
+    const char* label;
+    uint32_t kind;
+    int32_t value, minimum, maximum, step;
+    uint32_t divisor;
+    /* Nonzero when a change only applies at the next start; the panel says so. */
+    uint32_t restart;
+    uint32_t reserved;
+} rsf_overlay_host_option;
+
 typedef struct rsf_overlay_stats {
     uint32_t struct_size;
 
@@ -139,6 +155,27 @@ typedef struct rsf_overlay_stats {
     /* ABI 13. The engine owns input resolution; quality is informational. Zero preserves
        existing hosts' quality controls. */
     uint32_t sr_quality_locked;
+    /* ABI 14. Host-defined options; zero draws no section. */
+    uint32_t host_option_count;
+    const rsf_overlay_host_option* host_options;
+    /* ABI 15. Shared post-upscale sharpening. Zero availability hides controls. */
+    uint32_t sharpening_available;
+    uint32_t sharpening_mode;
+    float sharpening_sharpness;
+    uint32_t sharpening_mas;
+    float sharpening_motion_sharpness;
+    float sharpening_motion_threshold;
+    float sharpening_motion_scale_limit;
+    uint32_t sharpening_contrast_enabled;
+    float sharpening_contrast;
+    float sharpening_depth_scale;
+    float sharpening_depth_bias;
+    uint32_t sharpening_clamp_output;
+    uint32_t sharpening_debug;
+    /* ABI 16. Panel layout preferences, owned by the overlay and opaque to the host: send back
+       the last `intent.ui_preferences` the host stored, or zero for the defaults. Hosts save it
+       next to the FPS overlay switch. */
+    uint32_t ui_preferences;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -179,6 +216,27 @@ typedef struct rsf_overlay_intent {
     uint32_t frame_limit_changed, frame_limit_us;
     uint32_t fg_backend_changed, fg_backend;
     uint32_t dlss_preset_changed, dlss_preset;
+    /* ABI 14. The user changed host option `host_option_index` to `host_option_value`. */
+    uint32_t host_option_changed, host_option_index;
+    int32_t host_option_value;
+    /* ABI 15. Atomic snapshot of all sharpening controls. */
+    uint32_t sharpening_changed;
+    uint32_t sharpening_mode;
+    float sharpening_sharpness;
+    uint32_t sharpening_mas;
+    float sharpening_motion_sharpness;
+    float sharpening_motion_threshold;
+    float sharpening_motion_scale_limit;
+    uint32_t sharpening_contrast_enabled;
+    float sharpening_contrast;
+    float sharpening_depth_scale;
+    float sharpening_depth_bias;
+    uint32_t sharpening_clamp_output;
+    uint32_t sharpening_debug;
+    /* ABI 16. The close button or a tap outside the panel: hide it. */
+    uint32_t close_requested;
+    /* ABI 16. Store `ui_preferences` and send it back in the stats. */
+    uint32_t ui_preferences_changed, ui_preferences;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

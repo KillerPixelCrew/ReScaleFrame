@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
+#include <rescaleframe/sharpening_settings.h>
+#define RSF_GODOT_SETTINGS_ABI_VERSION 2u
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/native_fg_vulkan.h>
 #include <stdint.h>
@@ -19,6 +21,7 @@ typedef struct rsf_godot_settings {
     uint32_t sr_backend, quality, dlss_preset;
     uint32_t fg_backend, fg_mode, generated_frames, latency_mode, frame_limit_us;
     uint32_t gameplay;
+    rsf_sharpening_options sharpening;
 } rsf_godot_settings;
 typedef struct rsf_godot_status {
     uint32_t struct_size, abi_version;
@@ -102,6 +105,7 @@ RSF_GODOT_EXPORT int32_t rsfg_vk_images(void* owner, uint32_t* count, uint64_t* 
 RSF_GODOT_EXPORT uint32_t rsfg_vk_image_layout(void* owner);
 RSF_GODOT_EXPORT int32_t rsfg_vk_acquire(void* owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);
 RSF_GODOT_EXPORT int32_t rsfg_vk_present(void* owner, const void* present_info);
+RSF_GODOT_EXPORT void rsfg_vk_recording_begin(void* commands);
 RSF_GODOT_EXPORT void rsfg_vk_submitted(void* const* commands, uint32_t count);
 RSF_GODOT_EXPORT int32_t rsfg_vk_destroy(void* owner);
 RSF_GODOT_EXPORT int32_t rsfg_vk_drain(void* owner);

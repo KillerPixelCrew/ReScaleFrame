@@ -44,6 +44,7 @@ extern "C" {
    A provider mismatch refuses creation. A failed cleanup may retain *output. */
 RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgeCreate(const rsf_fsr4_bridge_create*, rsf_fsr4_bridge**);
 RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgeInfo(const rsf_fsr4_bridge*, rsf_fsr4_bridge_info*);
+RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgeSharpness(rsf_fsr4_bridge*, float amount);
 RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgePlan(rsf_fsr4_bridge*, uint32_t quality, uint32_t*, uint32_t*);
 /* Valid ready/done values always receive an ordered handoff, including SDK
    failures. A failed output must not be copied into the engine image. */

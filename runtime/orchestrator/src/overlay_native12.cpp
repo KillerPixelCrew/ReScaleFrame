@@ -277,6 +277,8 @@ int rsf_overlay_native12_present(void* device, void* queue, void* chain, const r
     p.previous=now;input.startup_hint_alpha=now-p.started<7000?1.0f:now-p.started<8000?static_cast<float>(8000-(now-p.started))/1000:0;
     rsf_overlay_draw_data data{};data.struct_size=sizeof(data);rsf_overlay_intent decided{};decided.struct_size=sizeof(decided);
     if (p.layout(p.ui,&input,stats,&data,&decided)!=RSF_OVERLAY_OK) return fail();
+    // The close button and a tap outside the sheet.
+    if (decided.close_requested) rsf_overlay_input_set_visible(0u);
     if (trace) p.log("Overlay12: atlas uploads and draw recording");
     rsf_overlay_texture_update updates[32]{};
     for (UINT count;(count=p.updates(p.ui,updates,32))!=0;) for (UINT i=0;i<count;++i) if (!texture(p,frame,updates[i])) return fail();

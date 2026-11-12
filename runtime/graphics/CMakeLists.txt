@@ -3,6 +3,8 @@ add_library(rsf_graphics STATIC
     src/texture_dump.cpp
     src/motion_decode.cpp
     src/motion_resolve.cpp
+    src/sharpening/d3d11.cpp
+    src/sharpening/d3d12.cpp
     src/colour_fidelity.cpp
     src/colour_transport.cpp
     src/resource_roles.cpp

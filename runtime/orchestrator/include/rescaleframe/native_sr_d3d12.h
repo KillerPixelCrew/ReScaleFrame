@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <rescaleframe/runtime.h>
+#include <rescaleframe/sharpening_settings.h>
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/game_renderer.h>
@@ -46,6 +47,8 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr12_plan(const rsf_sr12*, uint32_t* widt
 // descriptors, and all submitted work before resize/destroy. Command slot is 0..2.
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_evaluate(rsf_sr12*, void* command_list,
     const rsf_game_render_pass*, uint32_t command_slot);
+/* Thread safe; snapshots apply without recreating the vendor context. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_set_sharpening(rsf_sr12*, const rsf_sharpening_options*);
 RSF_RUNTIME_API void rsf_sr12_destroy(rsf_sr12*);
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_present(rsf_sr12*, void* swapchain,
     uint32_t sync_interval, uint32_t flags, uint32_t begin);

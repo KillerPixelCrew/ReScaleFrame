@@ -327,6 +327,7 @@ replace(path, '\tcommand_buffer->vk_command_buffer = vk_command_buffer;',
 replace(path, 'bool RenderingDeviceDriverVulkan::command_buffer_begin(CommandBufferID p_cmd_buffer) {\n\tCommandBufferInfo *command_buffer = (CommandBufferInfo *)(p_cmd_buffer.id);',
         'bool RenderingDeviceDriverVulkan::command_buffer_begin(CommandBufferID p_cmd_buffer) {\n\tCommandBufferInfo *command_buffer = (CommandBufferInfo *)(p_cmd_buffer.id);\n'
         '\t// The frame fence has retired every previous use of this pooled buffer.\n'
+        '\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);\n'
         '\tcommand_buffer->rescaleframe_timeline = VK_NULL_HANDLE;\n'
         '\tcommand_buffer->rescaleframe_wait = command_buffer->rescaleframe_signal = 0;')
 # Validate section granularity before consuming the engine's acquire-wait list.
@@ -401,13 +402,28 @@ replace(path, '\t//FSR Rcas',
         '\tRD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, pipelines[destination_variant].get_rid());\n'
         '\tshader = destination_shader;\n\n\t//FSR Rcas')
 
+previous_sharpening_plan = planned.copy()
+previous_unsharpened_plan = {path: text.replace("\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);\n", "") for path, text in planned.items()}
+# Retire every buffer in the completed frame pool before Godot frees deferred
+# textures, including graph continuations not used by the next frame.
+path = "drivers/vulkan/rendering_device_driver_vulkan.cpp"
+replace(path, '\tERR_FAIL_COND_V_MSG(err, false, vformat("Couldn\'t reset Vulkan command pool (VkResult error %d).", err));',
+        '\tERR_FAIL_COND_V_MSG(err, false, vformat("Couldn\'t reset Vulkan command pool (VkResult error %d).", err));\n'
+        '\tfor (CommandBufferInfo *command_buffer : command_pool->command_buffers_created) {\n'
+        '\t\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);\n\t}')
+
+previous_pool_retirement_plan = planned.copy()
+replace(path, '\t// The frame fence has retired every previous use of this pooled buffer.\n\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);',
+        '\t// The frame fence has retired every previous use of this pooled buffer.')
+
+
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

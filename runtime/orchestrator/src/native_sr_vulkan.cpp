@@ -3,6 +3,7 @@
 #include "native_dlss_vulkan.h"
 #include "native_xess_vulkan.h"
 #include <cmath>
+#include "../../backends/common/sharpening.h"
 #include <memory>
 #include <limits>
 
@@ -51,7 +52,9 @@ struct Image {
 };
 }
 
+#include "sharpening_vulkan.h"
 struct rsf_srvk {
+    rsf::sharpening::Vulkan sharpen;
     rsf_dlssvk* dlss = nullptr;
     rsf_xessvk* xess = nullptr;
     rsf_srvk_setup setup{};
@@ -78,6 +81,7 @@ struct rsf_srvk {
     bool registered = false;
     rsf::FrameCaptureVk capture;
     ~rsf_srvk() {
+        sharpen.clear();
         if (effect && destroy) (void)destroy(&effect, nullptr);
         for (Image* image : {&output, &zero_mask}) {
             if (image->image && destroy_image) destroy_image(static_cast<VkDevice>(setup.device), image->image, nullptr);
@@ -149,7 +153,8 @@ bool valid_image(const rsf_srvk& self, const rsf_srvk_image& image, uint32_t wid
 }
 }
 #else
-struct rsf_srvk {};
+struct rsf_srvk {
+};
 #endif
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback* call) try {
@@ -282,7 +287,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_set
         if (self->query(&self->effect, &plan.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     }
     if (!self->width || !self->height ||
-        !allocate_image(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
+        !allocate_image(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
         !allocate_image(*self, self->zero_mask, self->width, self->height, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
@@ -303,6 +308,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk* self
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, void* commands, const rsf_srvk_frame* input) try {
     if (!self || !commands || !input || input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (input->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if defined(RSF_HAVE_FFX_VK)
     const auto* record = input->record;
     if (!record || record->struct_size < sizeof(*record) || record->abi_version != RSF_GAME_FRAME_ABI_VERSION ||
@@ -363,6 +369,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     data.frameTimeDelta = record->frame_time_ms; data.cameraNear = record->camera.near_plane;
     data.cameraFar = record->camera.far_plane > 0 ? record->camera.far_plane : std::numeric_limits<float>::max();
     data.cameraFovAngleVertical = record->camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
+    rsf::ffx_sharpening(data,input->sharpening.struct_size?rsf::sharpening_settings::vendor_sharpness(input->sharpening,self->setup.backend):0);
     data.reset = (record->flags & RSF_FRAME_FLAG_RESET) || self->last_frame + 1 != record->frame_id || self->last_session != record->session_id ||
         self->last_view != record->view_id || self->last_generation != record->resource_generation;
     rsf::capture_sr_parameters(*record, self->setup.backend, input->motion_scale_x, input->motion_scale_y, input->pre_exposure, data.reset);
@@ -374,6 +381,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     if (self->dispatch(&self->effect, &data.header) != FFX_API_RETURN_OK) {
         self->last_frame = 0; rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_ERROR_FEATURE_FAILED); return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
+    (void)self->sharpen.run(self->setup,commands,*input,self->output.image);
     (void)self->capture.record(list, output, *record, "sr-output-linear", data.reset);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -389,6 +397,16 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
+extern "C" void rsf_srvk_retire_commands(rsf_srvk* self,void* commands) {
+#if defined(RSF_HAVE_FFX_VK)
+    if (!self || !commands) return;
+    self->sharpen.retire(commands);
+    if (self->dlss) rsf_dlssvk_retire_commands(self->dlss,commands);
+    if (self->xess) rsf_xessvk_retire_commands(self->xess,commands);
+#else
+    (void)self; (void)commands;
+#endif
+}
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk* self) try {
 #if defined(RSF_HAVE_FFX_VK)
     if (self && self->dlss) {

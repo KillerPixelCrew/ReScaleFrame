@@ -733,6 +733,9 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
+        // The physical chain is created lazily; like every other window call, ResizeTarget creates it first instead of
+        // failing with DXGI_ERROR_WAS_STILL_DRAWING when an engine resizes before its first Present.
+        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         const auto chain = current_physical(); return chain ? chain->ResizeTarget(desc) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetContainingOutput(out); }); }

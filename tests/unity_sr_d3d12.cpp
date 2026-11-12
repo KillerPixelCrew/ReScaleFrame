@@ -329,6 +329,12 @@ int main(int argc, char** argv)
     }
     if (rdr2.process_upscale && evaluated == 0) {
         for (uint64_t frame = 2; frame <= 3; ++frame) {
+            rsf_render_settings settings{sizeof(settings),RSF_RENDER_FRONTEND_ABI_VERSION};
+            if (rsf_render_settings_get(&settings)!=RSF_OK) return 1;
+            settings.sharpening_mode=static_cast<uint32_t>(frame);
+            settings.sharpening_sharpness=frame==2?0.2f:0.8f;
+            if (rsf_render_settings_apply(&settings)!=RSF_OK) return 1;
+            std::fprintf(stderr,"Live host sharpening mode %u applied without draining unsubmitted recordings.\n",settings.sharpening_mode);
             pass.native_frame = frame;
             if (rdr2.process_upscale(rdr2.user, list.Get(), &pass) != 0) return 1;
         }

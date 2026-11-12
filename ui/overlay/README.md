@@ -2,11 +2,20 @@
 
 Rust/egui behind the C ABI in [overlay.h](include/rescaleframe/overlay.h). It produces meshes, texture updates, and settings intents. The C++ D3D11 renderer in `runtime/graphics` handles GPU work.
 
-Current overlay ABI is **12**. AC7's proxy host and Unity's shared runtime host load the matched
-Rust DLL; D3D11 and the D3D11-on-12 overlay route handle GPU drawing. **Insert** toggles the panel.
-The AC7 startup hint lasts eight seconds and fades during the last second; opening Insert dismisses it.
+Current overlay ABI is **16**. AC7's proxy host and Unity's shared runtime host load the matched
+Rust DLL; D3D11 and the D3D11-on-12 overlay route handle GPU drawing. **Insert** or a
+**three-finger tap** toggles the panel; the close button or a tap outside the sheet closes it.
+The startup hint lasts eight seconds and fades during the last second; opening the panel dismisses it.
 The old F5 action and ABI 3 plan are historical. Planned inspection/capture views remain in
 [the tracker](../../docs/implementation.md#egui-development-and-validation-workflow).
+
+The panel is touch-first, built for handheld screens: a full-height sheet with a tab rail
+(Upscale, Frames, Sharpen, Game, Display) and a status strip of what is in effect. Every target
+is at least 48 points, nothing needs hover, and values are stepped (held buttons repeat and apply
+once on release) or dragged, never typed. A drag that starts on the sheet scrolls it. The
+Display tab sets panel size (Auto, 0.8×, 1.25×, 1.5× of the display-height scale), side and FPS
+overlay detail. These travel as one opaque `ui_preferences` word that hosts store and send back
+without reading it.
 
 | Layer | Files | Responsibility |
 | --- | --- | --- |
@@ -52,6 +61,8 @@ not build the Rust release DLL. Actual game use and user acceptance are recorded
 [Unity/shared FG](../../docs/research/shared-fg-20261004.md). This audit adds no new device test.
 
 The input contract supplies pointer position, button state and wheel input, without keyboard text
-or controller navigation. Short clicks between samples remain a review concern. Use mouse/drag
-controls for frame limits; typed input is unavailable. The panic path has no deliberate panic test.
+or controller navigation. Touch reaches the panel as that pointer: the input layer maps
+WM_POINTER, WM_TOUCH and promoted touch to it, and cancels it while two or more fingers are down.
+Short clicks between samples remain a review concern. Frame limits use steppers and presets;
+typed input is unavailable. The panic path has no deliberate panic test.
 Broader focus, scrolling and display-scaling coverage remains separate validation.

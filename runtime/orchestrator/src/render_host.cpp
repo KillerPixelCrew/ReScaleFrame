@@ -10,6 +10,7 @@
 #include <rescaleframe/d3d12_observer.h>
 #include "../../../loader/proxy/src/overlay_host.h"
 #include "render_settings_store.h"
+#include "sharpening_overlay.h"
 #include <dxgi1_4.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -61,6 +62,7 @@ struct Host {
     void* logger_user{};
     uint64_t session{}, poll_tick{}, serial{}, fence_value{};
     uint32_t backend{RSF_SR_DLSS}, preset{};
+    rsf_sharpening_options sharpening=rsf_sharpening_defaults();
     bool enabled{true}, reset{true};
     bool engine_streamline{};
     std::atomic<bool> poisoned{};
@@ -90,6 +92,8 @@ struct Host {
     std::array<Scene, 64> scenes{};
     uint32_t scene_reports{};
     uint32_t renderer_reason{}, status_overlay{1};
+    // Panel layout word, saved under its own key next to the render settings.
+    std::atomic<uint32_t> ui_preferences{};
     uint64_t feedback_tick{}, native_frame{}, application_presents{}, rate_tick{}, rate_base{}, rate_output{};
     uint32_t rate_backend{};
     float base_fps{}, output_fps{};
@@ -120,10 +124,13 @@ struct Host {
         const auto now = GetTickCount64();
         if (now < poll_tick) return;
         poll_tick = now + 1000;
+        sharpening=rsf::render_settings::read_sharpening(ini,section);
+        if (context) (void)rsf_sr12_set_sharpening(context,&sharpening);
         enabled = GetPrivateProfileIntW(section.c_str(), L"SR", 1, ini.c_str()) != 0;
         backend = GetPrivateProfileIntW(section.c_str(), L"SRBackend", RSF_SR_DLSS, ini.c_str());
         preset = GetPrivateProfileIntW(section.c_str(), L"DLSSPreset", 0, ini.c_str());
         status_overlay = GetPrivateProfileIntW(section.c_str(), L"StatusOverlay", 1, ini.c_str()) != 0;
+        ui_preferences.store(rsf::render_settings::read_overlay_layout(ini, section), std::memory_order_relaxed);
         if (fg_installed) {
             rsf_native_fg_options options{sizeof(options), GetPrivateProfileIntW(section.c_str(), L"FG", 0, ini.c_str()),
                 GetPrivateProfileIntW(section.c_str(), L"FGGeneratedFrames", 1, ini.c_str()),
@@ -252,6 +259,7 @@ struct Host {
             const auto result = rsf_sr12_create(&setup, &replacement);
             if (result != RSF_BACKEND_OK) return result;
             context = replacement;
+            (void)rsf_sr12_set_sharpening(context,&sharpening);
             if (!capture_directory.empty()) {
                 const auto captured = rsf_sr12_capture(context, capture_directory.c_str(), pass->native_frame, 4);
                 if (captured != RSF_BACKEND_OK) log("Native renderer bounded SR capture configuration refused.");
@@ -450,12 +458,15 @@ void overlay(Host& owner, void* chain)
     stats.backend = prefs.sr_backend; stats.requested_backend = prefs.sr_backend;
     stats.enabled = prefs.sr_enabled; stats.quality = quality;
     stats.sr_backend_choices = owner.sr_choices;
+    rsf::sharpening_overlay::fill(stats,rsf::render_settings::sharpening(prefs));
+    stats.have_depth=status.sr_effective_backend!=0;
     stats.dlss_preset = prefs.dlss_preset; stats.dlss_preset_available = 1;
     stats.refusal_reason = status.fg_requested && !status.fg_active ? status.reason : nullptr;
     stats.render_width = status.render_width; stats.render_height = status.render_height;
     stats.output_width = status.output_width; stats.output_height = status.output_height;
     stats.application_presented_frames = status.application_presents;
     stats.show_performance_hud = prefs.status_overlay;
+    stats.ui_preferences = owner.ui_preferences.load(std::memory_order_relaxed);
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     stats.sample_qpc = static_cast<uint64_t>(now.QuadPart); stats.qpc_frequency = static_cast<uint64_t>(frequency.QuadPart);
     rsf_overlay_fill_fg_stats(&stats, &fg);
@@ -470,7 +481,13 @@ void overlay(Host& owner, void* chain)
     stats.reflex_requested_mode = prefs.latency; stats.frame_limit_us = prefs.frame_limit_us;
     rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
     if (!rsf_overlay_d3d12_present(device.Get(), queue.Get(), chain, &stats, &intent, Host::backend_log, &owner)) return;
+    if (intent.ui_preferences_changed && intent.ui_preferences != stats.ui_preferences) {
+        owner.ui_preferences.store(intent.ui_preferences, std::memory_order_relaxed);
+        if (!rsf::render_settings::write_overlay_layout(owner.ini, owner.section, intent.ui_preferences))
+            owner.log("RSF overlay: panel layout applied for this session; the save failed.");
+    }
     bool changed = false;
+    if (intent.sharpening_changed) { rsf::render_settings::sharpening(prefs,rsf::sharpening_overlay::requested(intent)); changed=true; }
     if (intent.backend_changed) { prefs.sr_backend = intent.backend; changed = true; }
     if (intent.enabled_changed) { prefs.sr_enabled = intent.enabled; changed = true; }
     if (intent.quality_changed) { prefs.sr_quality = intent.quality; changed = true; }
@@ -727,6 +744,7 @@ extern "C" int32_t rsf_render_settings_get(rsf_render_settings* output) try
     std::unique_lock lock(owner->guard, std::try_to_lock);
     if (!lock.owns_lock()) return RSF_ERROR_BUSY;
     *output = rsf::render_settings::read(owner->ini, owner->section, render_defaults);
+    rsf::render_settings::sharpening(*output,rsf::sharpening_settings::sanitize(rsf::render_settings::sharpening(*output)));
     return RSF_OK;
 } catch (...) { return RSF_ERROR_NOT_READY; }
 
@@ -735,7 +753,8 @@ extern "C" int32_t rsf_render_settings_apply(const rsf_render_settings* request)
     if (!request || request->struct_size < sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
     if (request->abi_version != RSF_RENDER_FRONTEND_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
     auto* owner = frontend_host.load(std::memory_order_acquire); if (!owner) return RSF_ERROR_NOT_READY;
-    if (request->sr_enabled > 1 || request->fg_enabled > 1 || request->status_overlay > 1 || request->latency > 2 || request->sr_quality > 4 ||
+    if (!rsf::sharpening_settings::valid(rsf::render_settings::sharpening(*request)) ||
+        request->sr_enabled > 1 || request->fg_enabled > 1 || request->status_overlay > 1 || request->latency > 2 || request->sr_quality > 4 ||
         !request->generated_frames || request->generated_frames > 15 || !rsf_dlss_preset_valid(request->dlss_preset) ||
         (request->sr_backend > 31 || !(owner->sr_choices & (1u << request->sr_backend))) ||
         (request->fg_backend != 1 && request->fg_backend != 3 && request->fg_backend != 4 && request->fg_backend != 5 && request->fg_backend != 7))

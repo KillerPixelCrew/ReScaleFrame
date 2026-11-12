@@ -84,6 +84,9 @@ int main()
         WritePrivateProfileStringW(L"Overlay", L"SRBackend", L"9", ini.c_str()) &&
         WritePrivateProfileStringW(L"Overlay", L"SRQuality", L"3", ini.c_str()), "seed INI");
 
+    WritePrivateProfileStringW(L"Overlay", L"Sharpness", L"nan", ini.c_str());
+    WritePrivateProfileStringW(L"Overlay", L"MotionScaleLimit", L"-4", ini.c_str());
+
     rsf_overlay_service_setup setup{};
     setup.struct_size = sizeof(setup); setup.abi_version = RSF_OVERLAY_API_VERSION;
     setup.identity_utf8 = "contract fixture";
@@ -99,7 +102,7 @@ int main()
     check(api.configure(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null setup");
     auto bad = setup; bad.struct_size = sizeof(bad) - 4;
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "short setup");
-    bad = setup; bad.abi_version = 2;
+    bad = setup; bad.abi_version = RSF_OVERLAY_API_VERSION + 1;
     check(api.configure(&bad) == RSF_ERROR_ABI_MISMATCH, "setup version");
     bad = setup; bad.configuration_path = L"";
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "empty path");
@@ -126,6 +129,8 @@ int main()
     check(api.settings_get(&settings) == RSF_OK, "settings after configure");
     check(settings.sr_backend == 1 && settings.sr_quality == 3 && settings.sr_enabled == 0 && settings.fg_backend == RSF_FG_BACKEND_AUTO,
         "saved quality read; unsupported saved backend replaced by default");
+    check(settings.sharpening_mode == 0 && settings.sharpening_sharpness == 0.4f &&
+        settings.sharpening_motion_scale_limit == 0.01f, "configure loads and sanitizes sharpening");
     check(read(ini, L"SRBackend") == 9, "load does not rewrite the file");
 
     auto request = settings;
@@ -152,6 +157,20 @@ int main()
         read(ini, L"FrameLimitUs") == 8333 && read(ini, L"Foreign") == 7, "persisted in adapter section; foreign key kept");
     rsf_render_settings reread{sizeof(reread), RSF_RENDER_FRONTEND_ABI_VERSION};
     check(api.settings_get(&reread) == RSF_OK && reread.sr_backend == 3 && reread.fg_enabled == 1, "get reflects apply");
+
+    auto sharpen_request = reread;
+    sharpen_request.sharpening_mode = 2; sharpen_request.sharpening_sharpness = 0.75f;
+    sharpen_request.sharpening_mas = 1; sharpen_request.sharpening_motion_sharpness = -0.2f;
+    sharpen_request.sharpening_motion_threshold = 3; sharpen_request.sharpening_motion_scale_limit = 12;
+    sharpen_request.sharpening_contrast_enabled = 1; sharpen_request.sharpening_contrast = 1.5f;
+    sharpen_request.sharpening_depth_scale = 72; sharpen_request.sharpening_depth_bias = 0.002f;
+    sharpen_request.sharpening_clamp_output = 1; sharpen_request.sharpening_debug = 1;
+    check(api.settings_apply(&sharpen_request) == RSF_OK, "sharpening applies and saves");
+    check(api.settings_get(&reread) == RSF_OK && reread.sharpening_sharpness == 0.75f &&
+        reread.sharpening_mode == 2 && read(ini,L"SharpeningMode") == 2 && read(ini,L"MAS") == 1,
+        "sharpening service snapshot and INI reflect request");
+    auto invalid_sharpening = sharpen_request; invalid_sharpening.sharpening_sharpness = 8;
+    check(api.settings_apply(&invalid_sharpening) == RSF_ERROR_INVALID_ARGUMENT, "invalid sharpening refused");
 
     rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg);
     check(rsf_native_fg_status_get(&fg) && fg.requested.mode == RSF_FG_FIXED && fg.requested.generated_frames == 1 &&

@@ -110,6 +110,7 @@ inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
     if (record.camera.struct_size < sizeof(rsf_camera_frame) || !record.frame_id ||
         !record.render_width || !record.render_height || !record.output_width || !record.output_height ||
         record.render_width > record.output_width || record.render_height > record.output_height ||
+        !std::isfinite(frame->sharpness) || frame->sharpness < 0 || frame->sharpness > 1 ||
         !std::isfinite(frame->jitter_x) || !std::isfinite(frame->jitter_y) ||
         !std::isfinite(frame->motion_scale_x) || !std::isfinite(frame->motion_scale_y) ||
         !frame->motion_scale_x || !frame->motion_scale_y ||

@@ -19,6 +19,8 @@
 #include <mutex>
 #include <string>
 #include <cstdio>
+#include "render_settings_store.h"
+#include "sharpening_overlay.h"
 
 namespace {
 struct Host {
@@ -34,12 +36,16 @@ struct Host {
     uint32_t backend = RSF_SR_DLSS, quality = 1;
     uint32_t requested_backend = RSF_SR_DLSS, requested_quality = 1;
     uint32_t preset = 0;
+    rsf_sharpening_options sharpening=rsf_sharpening_defaults();
+    uint64_t sharpening_poll=0;
     uint32_t sr_choices{};
     uint32_t engine_type{};
     std::string engine_version, project_id;
     std::wstring preferences;
     int (*policy)(uint32_t, uint32_t) = nullptr;
     bool dirty = false, enabled = true, show_performance = false;
+    // Panel layout word, saved in the preferences file under its own key.
+    uint32_t ui_preferences = 0;
     bool automatic = true;
     int32_t last_result = 0;
     uint64_t overlay_frames = 0;
@@ -117,12 +123,16 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         stats.backend_name = sr_name(self.backend); stats.backend = self.backend;
         stats.sr_backend_choices = self.sr_choices;
         stats.requested_backend = self.requested_backend; stats.quality = self.quality;
+        rsf::sharpening_overlay::fill(stats,self.sharpening);
+        stats.sharpening_available=self.backend>=RSF_SR_DLSS && self.backend<=RSF_SR_XESS;
         stats.dlss_preset = self.preset; stats.dlss_preset_available = 1;
         stats.enabled = self.enabled; stats.last_result = self.last_result;
         stats.last_switch_result = self.last_result;
         stats.refusal_reason = self.dirty ? "Applying requested configuration after GPU completion" :
             self.last_result ? "Provider refused; spatial fallback retained" :
             !self.accepted && self.backend != RSF_SR_SPATIAL ? "Prepared; awaiting an eligible scene evaluation" : nullptr;
+        if (self.backend==RSF_SR_SPATIAL && !stats.refusal_reason)
+            stats.refusal_reason="Sharpening unavailable with engine spatial upscaling";
         stats.render_width = self.plan.render_width; stats.render_height = self.plan.render_height;
         stats.output_width = pass->camera.output_width; stats.output_height = pass->camera.output_height;
         stats.frames_presented = static_cast<uint32_t>(++self.overlay_frames);
@@ -145,6 +155,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
 #if RSF_OVERLAY_ABI_VERSION >= 7
         stats.show_performance_hud = self.show_performance;
 #endif
+        stats.ui_preferences = self.ui_preferences;
         rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
         // The overlay draw and its GPU interop need no host state, and every managed
         // configuration query waits on this lock.
@@ -166,6 +177,19 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
 #if RSF_OVERLAY_ABI_VERSION >= 7
             if (intent.performance_hud_changed) self.show_performance = intent.performance_hud != 0;
 #endif
+            if (intent.ui_preferences_changed && intent.ui_preferences != self.ui_preferences) {
+                self.ui_preferences = intent.ui_preferences;
+                if (!rsf::render_settings::write_overlay_layout(self.preferences, L"Rendering", intent.ui_preferences))
+                    log(&self, "Could not save the panel layout; it applies for this session.");
+            }
+            if (intent.sharpening_changed) {
+                const auto requested=rsf::sharpening_overlay::requested(intent);
+                if (rsf::sharpening_settings::valid(requested) &&
+                    rsf::render_settings::write_sharpening(self.preferences,L"Rendering",requested)==RSF_OK) {
+                    self.sharpening=requested;
+                    if (self.sr) (void)rsf_sr12_set_sharpening(self.sr,&self.sharpening);
+                } else log(&self,"Could not save sharpening settings; previous values retained.");
+            }
             if (intent.dlss_preset_changed && rsf_dlss_preset_valid(intent.dlss_preset)) {
                 self.preset = intent.dlss_preset;
                 self.dirty = true; self.plan.enabled = 0;
@@ -249,6 +273,7 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
         const auto created = rsf_sr12_create(&setup, &self.sr);
         self.last_result = created;
         if (created == RSF_BACKEND_OK) {
+            (void)rsf_sr12_set_sharpening(self.sr,&self.sharpening);
             rsf_sr12_plan(self.sr, &self.plan.render_width, &self.plan.render_height);
             self.plan.enabled = 1;
         }
@@ -281,6 +306,12 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
     for (uint32_t i = 0; i < 3; ++i) if (self.command_lists[i] == command_list) { slot = i; break; }
     if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!self.command_lists[i]) { self.command_lists[i] = command_list; slot = i; break; }
     if (slot == 3) return;
+    const auto now=GetTickCount64();
+    if (now>=self.sharpening_poll) {
+        self.sharpening_poll=now+1000;
+        self.sharpening=rsf::render_settings::read_sharpening(self.preferences,L"Rendering");
+        (void)rsf_sr12_set_sharpening(self.sr,&self.sharpening);
+    }
     const auto result = rsf_sr12_evaluate(self.sr, command_list, pass, slot);
     if (result != RSF_BACKEND_OK && self.refused == 0) {
         void* resources[] = {pass->color_input, pass->depth, pass->motion, pass->color_output};
@@ -317,6 +348,8 @@ extern "C" uint32_t rsf_callback_host_start(const rsf_callback_host_setup* setup
     next->backend = setup->backend; next->automatic = next->backend == RSF_SR_AUTO;
     if (next->automatic) next->backend = 0;
     next->preferences = setup->preferences_path;
+    next->sharpening=rsf::render_settings::read_sharpening(next->preferences,L"Rendering");
+    next->ui_preferences=rsf::render_settings::read_overlay_layout(next->preferences,L"Rendering");
     next->preset = setup->dlss_preset; next->quality = setup->quality;
     next->sr_choices = setup->sr_backend_choices;
     if (!rsf_dlss_preset_valid(next->preset) || next->backend > RSF_SR_SPATIAL || next->quality > 5 ||

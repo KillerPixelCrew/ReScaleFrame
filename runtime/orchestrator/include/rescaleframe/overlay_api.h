@@ -12,14 +12,14 @@
 extern "C" {
 #endif
 
-#define RSF_OVERLAY_API_VERSION 1u
+#define RSF_OVERLAY_API_VERSION 3u
 #define RSF_OVERLAY_API_ENTRY_POINT "rsf_get_overlay_api"
 
 /* DLL access to the Runtime's one shared overlay for adapters that present through
    D3D11, normally the facade chain of the D3D11 presentation bridge
    (d3d11_present_api.h). It is the same overlay_host/overlay_input/overlay_renderer
    path the D3D11 carrier uses, not a second panel, renderer or runtime. The Rust panel
-   (rescaleframe_overlay.dll, overlay ABI 13) is loaded from RSF_OVERLAY_DLL when that
+   (rescaleframe_overlay.dll, overlay ABI 15) is loaded from RSF_OVERLAY_DLL when that
    names a file, otherwise from beside ReScaleFrame.Runtime.dll.
 
    Composition. present() draws into the chain's current D3D11 backbuffer at the
@@ -91,6 +91,19 @@ typedef struct rsf_overlay_sr_report {
     char reason[96];
 } rsf_overlay_sr_report;
 
+/* API 2. An adapter-defined option the panel draws under "Advanced" (AGENTS.md Rule 2). The
+   service only transports it: the adapter applies and persists a change in option_changed. */
+#define RSF_OVERLAY_SERVICE_OPTION_TOGGLE 0u /* value is 0 or 1 */
+#define RSF_OVERLAY_SERVICE_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
+#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 24u
+typedef struct rsf_overlay_service_option {
+    const char* label_utf8; /* copied by configure */
+    uint32_t kind;
+    int32_t value, minimum, maximum, step;
+    uint32_t divisor;
+    uint32_t restart; /* nonzero: a change applies at the next start */
+} rsf_overlay_service_option;
+
 typedef struct rsf_overlay_service_setup {
     uint32_t struct_size, abi_version;
     /* Adapter name for log lines. Never selects behaviour. Copied. */
@@ -133,6 +146,15 @@ typedef struct rsf_overlay_service_setup {
        applies SR choices at its own drained boundary. Borrowed for the call. */
     void (*settings_changed)(void* user, const rsf_render_settings* applied);
     void* user;
+    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. */
+    uint32_t option_count;
+    const rsf_overlay_service_option* options;
+    /* Present-owner thread, each presented frame: write the current value of every option.
+       Null keeps the values given at configure plus accepted changes. */
+    void (*options_read)(void* user, int32_t* values, uint32_t count);
+    /* Present-owner thread: the user set option `index` to `value` (already clamped to its
+       range). Return nonzero when accepted. */
+    int (*option_changed)(void* user, uint32_t index, int32_t value);
 } rsf_overlay_service_setup;
 
 typedef struct rsf_overlay_capture {

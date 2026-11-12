@@ -9,6 +9,7 @@
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/dlss_preset.h>
+#include <rescaleframe/dlss_pipeline.h>
 #include "../../../loader/proxy/src/overlay_host.h"
 #include "render_settings_store.h"
 #include <windows.h>
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace {
 constexpr uint32_t kKnownFg = (1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4) |
@@ -51,12 +53,19 @@ struct Service {
     std::wstring ini, section;
     std::string identity;
     rsf_render_settings defaults{}, settings{};
+    // Panel layout word, saved under its own key. Present-owner thread only.
+    uint32_t ui_preferences{};
     uint32_t sr_choices{}, quality_choices{}, fg_choices{}, latency_choices{}, max_generated{}, preset_available{};
     rsf_game_log_fn logger{};
     int (*accept)(void*, void*){};
     int (*report)(void*, rsf_overlay_sr_report*){};
     void (*changed)(void*, const rsf_render_settings*){};
     void* user{};
+    // Adapter-defined options: fixed after configure, values touched only on the present thread.
+    struct Option { std::string label; rsf_overlay_service_option meta{}; int32_t value{}; };
+    std::vector<Option> options;
+    void (*options_read)(void*, int32_t*, uint32_t){};
+    int (*option_changed)(void*, uint32_t, int32_t){};
     // Sampled by present(); status() reads them.
     rsf_overlay_sr_report sr{};
     bool have_sr{}, sampled{};
@@ -99,7 +108,8 @@ struct Service {
         return value.sr_enabled <= 1 && value.fg_enabled <= 1 && value.status_overlay <= 1 && sr_valid(value) &&
             has(latency_choices, value.latency) && value.generated_frames && value.generated_frames <= max_generated &&
             rsf_dlss_preset_valid(value.dlss_preset) && (!value.fg_enabled || fg_choices) &&
-            (value.fg_backend == RSF_FG_BACKEND_AUTO || has(fg_choices, value.fg_backend));
+            (value.fg_backend == RSF_FG_BACKEND_AUTO || has(fg_choices, value.fg_backend)) &&
+            rsf::sharpening_settings::valid(rsf::render_settings::sharpening(value));
     }
     // A saved value this adapter cannot apply falls back to its default, field by field.
     rsf_render_settings sanitize(rsf_render_settings value) const
@@ -117,6 +127,7 @@ struct Service {
         if (!value.generated_frames || value.generated_frames > max_generated) value.generated_frames = defaults.generated_frames;
         if (!rsf_dlss_preset_valid(value.dlss_preset)) value.dlss_preset = defaults.dlss_preset;
         if (value.fg_backend != RSF_FG_BACKEND_AUTO && !has(fg_choices, value.fg_backend)) value.fg_backend = defaults.fg_backend;
+        rsf::render_settings::sharpening(value, rsf::sharpening_settings::sanitize(rsf::render_settings::sharpening(value)));
         return value;
     }
 };
@@ -154,6 +165,8 @@ int32_t apply(Service& self, const rsf_render_settings& request)
         if (written != RSF_OK) return written;
         self.settings = applied;
     }
+    const auto sharpen = rsf::render_settings::sharpening(applied);
+    (void)rsf_dlss_pipeline_set_sharpening(&sharpen);
     const auto requested = forward_fg(applied);
     {
         std::lock_guard lock(self.guard); self.request_result = requested;
@@ -267,6 +280,21 @@ void sample(Service& self, IDXGISwapChain* chain, const DXGI_SWAP_CHAIN_DESC& de
 
 rsf_render_settings with_intent(rsf_render_settings value, const rsf_overlay_intent& intent, bool& changed)
 {
+    if (intent.sharpening_changed) {
+        value.sharpening_mode = intent.sharpening_mode;
+        value.sharpening_sharpness = intent.sharpening_sharpness;
+        value.sharpening_mas = intent.sharpening_mas;
+        value.sharpening_motion_sharpness = intent.sharpening_motion_sharpness;
+        value.sharpening_motion_threshold = intent.sharpening_motion_threshold;
+        value.sharpening_motion_scale_limit = intent.sharpening_motion_scale_limit;
+        value.sharpening_contrast_enabled = intent.sharpening_contrast_enabled;
+        value.sharpening_contrast = intent.sharpening_contrast;
+        value.sharpening_depth_scale = intent.sharpening_depth_scale;
+        value.sharpening_depth_bias = intent.sharpening_depth_bias;
+        value.sharpening_clamp_output = intent.sharpening_clamp_output;
+        value.sharpening_debug = intent.sharpening_debug;
+        changed = true;
+    }
     if (intent.backend_changed) { value.sr_backend = intent.backend; changed = true; }
     if (intent.enabled_changed) { value.sr_enabled = intent.enabled != 0; changed = true; }
     if (intent.quality_changed) { value.sr_quality = intent.quality; changed = true; }
@@ -291,6 +319,13 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
 {
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_OVERLAY_API_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (setup->option_count > RSF_OVERLAY_SERVICE_OPTION_LIMIT || (setup->option_count && !setup->options))
+        return RSF_ERROR_INVALID_ARGUMENT;
+    for (uint32_t i = 0; i < setup->option_count; ++i) {
+        const auto& o = setup->options[i];
+        if (!o.label_utf8 || !*o.label_utf8 || o.kind > RSF_OVERLAY_SERVICE_OPTION_NUMBER || o.maximum < o.minimum)
+            return RSF_ERROR_INVALID_ARGUMENT;
+    }
     if (!setup->configuration_path || !*setup->configuration_path || !setup->configuration_section ||
         !*setup->configuration_section || (setup->sr_backend_choices & ~kKnownSr) ||
         (setup->sr_backend_choices && !setup->sr_quality_choices) || (setup->sr_quality_choices & ~kQualities) ||
@@ -304,10 +339,11 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
         // Choices are checked against the defaults before the one-time claim.
         Service probe;
         probe.defaults = setup->defaults;
+        rsf::render_settings::initialize_sharpening(probe.defaults);
         probe.sr_choices = setup->sr_backend_choices; probe.quality_choices = setup->sr_quality_choices;
         probe.fg_choices = setup->fg_backend_choices; probe.latency_choices = setup->latency_choices;
         probe.max_generated = setup->max_generated_frames;
-        if (!probe.valid(setup->defaults)) return RSF_ERROR_INVALID_ARGUMENT;
+        if (!probe.valid(probe.defaults)) return RSF_ERROR_INVALID_ARGUMENT;
     }
     bool claimed = false;
     std::call_once(self.claimed, [&] { claimed = true; });
@@ -317,14 +353,25 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
         std::lock_guard lock(self.guard);
         self.ini = setup->configuration_path; self.section = setup->configuration_section;
         self.identity = setup->identity_utf8 ? setup->identity_utf8 : "adapter";
-        self.defaults = setup->defaults; self.defaults.struct_size = sizeof(self.defaults);
+        self.defaults = setup->defaults;
+        rsf::render_settings::initialize_sharpening(self.defaults); self.defaults.struct_size = sizeof(self.defaults);
         self.sr_choices = setup->sr_backend_choices; self.quality_choices = setup->sr_quality_choices;
         self.fg_choices = setup->fg_backend_choices; self.latency_choices = setup->latency_choices;
         self.max_generated = setup->max_generated_frames; self.preset_available = setup->dlss_preset_available != 0;
         self.logger = setup->log; self.accept = setup->accept_window; self.report = setup->sr_report;
         self.changed = setup->settings_changed; self.user = setup->user;
+        self.options.clear();
+        for (uint32_t i = 0; i < setup->option_count; ++i) {
+            const auto& in = setup->options[i];
+            Service::Option option;
+            option.label = in.label_utf8 ? in.label_utf8 : "";
+            option.meta = in; option.meta.label_utf8 = nullptr; option.value = in.value;
+            self.options.push_back(std::move(option));
+        }
+        self.options_read = setup->options_read; self.option_changed = setup->option_changed;
         const auto saved = rsf::render_settings::read(self.ini, self.section, self.defaults);
         self.settings = self.sanitize(saved);
+        self.ui_preferences = rsf::render_settings::read_overlay_layout(self.ini, self.section);
         settings = self.settings;
         if (!self.valid(saved)) self.say("RSF overlay: saved settings this adapter cannot apply were replaced by its defaults.");
     }
@@ -332,6 +379,8 @@ int32_t configure(const rsf_overlay_service_setup* setup) noexcept try
     {
         std::lock_guard lock(self.guard); self.request_result = requested;
     }
+    const auto sharpen = rsf::render_settings::sharpening(settings);
+    (void)rsf_dlss_pipeline_set_sharpening(&sharpen);
     self.configured.store(true, std::memory_order_release);
     self.say("RSF overlay service configured for %s; Insert opens the shared panel.", self.identity.c_str());
     return RSF_OK;
@@ -405,6 +454,41 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
         stats.fg_selection_result = self.request_result ? self.request_result : self.switch_result;
     }
     stats.refusal_reason = reason[0] ? reason : nullptr;
+    // Options are only read and written here, on the present-owner thread.
+    stats.sharpening_available = self.sr_choices != 0;
+    stats.sharpening_mode = value.sharpening_mode;
+    stats.sharpening_sharpness = value.sharpening_sharpness;
+    stats.sharpening_mas = value.sharpening_mas;
+    stats.sharpening_motion_sharpness = value.sharpening_motion_sharpness;
+    stats.sharpening_motion_threshold = value.sharpening_motion_threshold;
+    stats.sharpening_motion_scale_limit = value.sharpening_motion_scale_limit;
+    stats.sharpening_contrast_enabled = value.sharpening_contrast_enabled;
+    stats.sharpening_contrast = value.sharpening_contrast;
+    stats.sharpening_depth_scale = value.sharpening_depth_scale;
+    stats.sharpening_depth_bias = value.sharpening_depth_bias;
+    stats.sharpening_clamp_output = value.sharpening_clamp_output;
+    stats.sharpening_debug = value.sharpening_debug;
+    stats.ui_preferences = self.ui_preferences;
+    rsf_overlay_host_option host[RSF_OVERLAY_SERVICE_OPTION_LIMIT]{};
+    const uint32_t option_count = static_cast<uint32_t>(self.options.size());
+    if (option_count) {
+        int32_t values[RSF_OVERLAY_SERVICE_OPTION_LIMIT]{};
+        for (uint32_t i = 0; i < option_count; ++i) values[i] = self.options[i].value;
+        if (self.options_read) self.options_read(self.user, values, option_count);
+        for (uint32_t i = 0; i < option_count; ++i) {
+            auto& option = self.options[i];
+            option.value = values[i];
+            const bool toggle = option.meta.kind == RSF_OVERLAY_SERVICE_OPTION_TOGGLE;
+            host[i].label = option.label.c_str();
+            host[i].kind = toggle ? RSF_OVERLAY_HOST_OPTION_TOGGLE : RSF_OVERLAY_HOST_OPTION_NUMBER;
+            host[i].value = option.value;
+            host[i].minimum = toggle ? 0 : option.meta.minimum; host[i].maximum = toggle ? 1 : option.meta.maximum;
+            host[i].step = option.meta.step > 0 ? option.meta.step : 1;
+            host[i].divisor = option.meta.divisor ? option.meta.divisor : 1;
+            host[i].restart = option.meta.restart;
+        }
+        stats.host_option_count = option_count; stats.host_options = host;
+    }
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     stats.sample_qpc = static_cast<uint64_t>(now.QuadPart); stats.qpc_frequency = static_cast<uint64_t>(frequency.QuadPart);
     if (rsf_overlay_host_visible()) stats.display_refresh_mhz = display_refresh(self, desc.OutputWindow);
@@ -412,6 +496,22 @@ int32_t present(void* swapchain, uint32_t* drawn) noexcept try
     if (!rsf_overlay_host_present(swapchain, &stats, &intent)) return RSF_OK;
     if (drawn) *drawn = 1;
     { std::lock_guard lock(self.guard); ++self.presents_drawn; }
+    if (intent.host_option_changed && intent.host_option_index < option_count) {
+        auto& option = self.options[intent.host_option_index];
+        const bool toggle = option.meta.kind == RSF_OVERLAY_SERVICE_OPTION_TOGGLE;
+        const int32_t low = toggle ? 0 : option.meta.minimum, high = toggle ? 1 : option.meta.maximum;
+        const int32_t wanted = intent.host_option_value < low ? low : intent.host_option_value > high ? high : intent.host_option_value;
+        const bool accepted = !self.option_changed || self.option_changed(self.user, intent.host_option_index, wanted) != 0;
+        if (accepted) option.value = wanted;
+        self.say("RSF overlay: option '%s' = %d %s.", option.label.c_str(), wanted, accepted ? "applied" : "refused by the adapter");
+    }
+    if (intent.ui_preferences_changed && intent.ui_preferences != self.ui_preferences) {
+        std::wstring ini, section;
+        { std::lock_guard lock(self.guard); ini = self.ini; section = self.section; }
+        const bool saved = rsf::render_settings::write_overlay_layout(ini, section, intent.ui_preferences);
+        self.ui_preferences = intent.ui_preferences;
+        self.say("RSF overlay: panel layout 0x%x %s.", intent.ui_preferences, saved ? "saved" : "applied for this session; the save failed");
+    }
     bool changed = false;
     const auto requested = with_intent(value, intent, changed);
     if (changed) {

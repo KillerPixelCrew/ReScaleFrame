@@ -58,6 +58,7 @@ extern "C" RSF_RUNTIME_API rsf_result rsf_get_d3d11_sr_api(rsf_d3d11_sr_api* api
         &rsf_dlss_pipeline_resize_output,
         &rsf_dlss_pipeline_output_texture,
         &rsf_dlss_pipeline_request_dump,
+        &rsf_dlss_pipeline_set_sharpening,
     };
     *api = complete;
     return RSF_OK;

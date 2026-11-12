@@ -24,6 +24,7 @@
 #define RSF_FSR4_BRIDGE_BUILD
 #endif
 #include "bridge_api.h"
+#include "../../backends/common/sharpening.h"
 
 /// @brief Releases a local COM reference and clears its pointer without waiting for GPU work.
 template<class T> static void Release(T*& object) {
@@ -73,6 +74,7 @@ struct VulkanStoryFsr4 {
     uint64_t adapterLuid{}, providerVersion{}, lastDoneSignalled{};
     uint32_t vendor{}, maxRenderWidth{}, maxRenderHeight{}, maxOutputWidth{}, maxOutputHeight{};
     bool depthInverted{}, depthInfinite{};
+    float sharpness{};
 };
 
 /// @brief Whether a PCI vendor is an FSR4 candidate: AMD natively, NVIDIA/Intel through the INT8 compatibility lease.
@@ -515,6 +517,7 @@ static int EvaluateFrame(VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* fra
     ffxDispatchDescUpscale upscale{};
     upscale.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
     upscale.commandList = value->commands;
+    rsf::ffx_sharpening(upscale,value->sharpness);
     upscale.color = ffxApiGetResourceDX12(frame->color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.depth = ffxApiGetResourceDX12(frame->depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.motionVectors = ffxApiGetResourceDX12(frame->motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
@@ -621,4 +624,10 @@ extern "C" RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgeEvaluate(rsf_fsr4_bridge* va
     legacy.fov = frame->vertical_fov; legacy.reset = frame->reset;
     legacy.readyValue = frame->ready_value; legacy.doneValue = frame->done_value;
     return EvaluateChecked(value, &legacy, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure);
+}
+
+extern "C" int32_t RsfFsr4BridgeSharpness(rsf_fsr4_bridge* pointer,float amount) {
+    if (!pointer || !std::isfinite(amount) || amount<0 || amount>1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    reinterpret_cast<VulkanStoryFsr4*>(pointer)->sharpness=amount;
+    return 0;
 }

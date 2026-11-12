@@ -117,7 +117,9 @@ int wmain(int argc, wchar_t** argv) {
         input.depth = images[1].input(device, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         input.motion = images[2].input(device, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         input.output = images[3].input(device, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        input.sharpening=rsf_sharpening_defaults();input.sharpening.mode=frame==6?4u:(frame-1)%4;input.sharpening.sharpness=.7f;
         input.motion_scale_x = static_cast<float>(width); input.motion_scale_y = static_cast<float>(height); input.pre_exposure = 1;
+        rsf_srvk_fsr4_retire_commands(owner,commands[1]);
         void* continuation = nullptr;
         // Exercise public and actual private admission before it can record or
         // invoke the host's graph split. This command buffer is still recording.

@@ -11,7 +11,7 @@ use crate::abi::{
     RsfOverlayVertex,
 };
 use crate::model::{FrameInput, Intent, Stats, TextureUpdate};
-use crate::panel::{self, Controls, Selection};
+use crate::panel::{self, Controls, HudDetail, Selection, View};
 
 /// Largest texture side the overlay will ask egui for.
 ///
@@ -30,6 +30,8 @@ const REFERENCE_HEIGHT: f32 = 1080.0;
 pub struct Overlay {
     context: egui::Context,
     selection: Selection,
+    /// Open tab and the panel layout, which the host stores but never interprets.
+    view: View,
     controls: Controls,
     performance: crate::performance::Meter,
 
@@ -109,11 +111,27 @@ impl Overlay {
         // click is never presented to the widgets twice.
         context.options_mut(|options| {
             options.max_passes = std::num::NonZeroUsize::new(1).expect("1 is not zero");
+            // A finger wobbles more than a mouse. A tap that moves less than this is still a tap;
+            // anything further is a scroll drag.
+            options.input_options.max_click_dist = 12.0;
+        });
+        context.all_styles_mut(|style| {
+            style.visuals = egui::Visuals::dark();
+            // A label that can be selected takes the tap meant for the row around it.
+            style.interaction.selectable_labels = false;
+            style.visuals.selection.bg_fill = egui::Color32::from_rgb(0x3d, 0x8f, 0xe6);
+            style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(0x2e, 0x35, 0x40);
+            style.visuals.widgets.inactive.fg_stroke.color = egui::Color32::WHITE;
+            style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
+            style.visuals.widgets.active.fg_stroke.color = egui::Color32::WHITE;
+            style.spacing.slider_rail_height = 8.0;
+            style.spacing.scroll.bar_width = 8.0;
         });
 
         Self {
             context,
             selection: Selection::default(),
+            view: View::default(),
             controls: Controls::default(),
             performance: crate::performance::Meter::default(),
             time: 0.0,
@@ -143,24 +161,30 @@ impl Overlay {
         self.textures_to_free.clear();
 
         self.selection.reconcile(stats);
+        self.view.reconcile(stats);
+        let preferences = self.view.preferences(stats);
         let rates = self.performance.sample(stats);
         if stats.show_performance_hud {
-            self.hud.update(rates, &stats.generation);
+            let detail = preferences.detailed_hud.then(|| HudDetail::of(stats));
+            self.hud.update(rates, &stats.generation, detail);
         }
 
         let mut intent = Intent {
             quality: self.selection.quality(),
             enabled: self.selection.enabled(),
+            ui_preferences: preferences.to_bits(),
             ..Intent::default()
         };
 
         let display = [input.display[0] as f32, input.display[1] as f32];
+        let scale = (pixels_per_point(display[1]) * preferences.size.factor()).clamp(0.5, 4.5);
         if !input.visible || display[0] <= 0.0 || display[1] <= 0.0 {
             // Still track the pointer while hidden, so a button pressed and released behind the
             // panel does not arrive as a click the moment it reappears.
             self.last_mouse = Some(input.mouse);
             self.last_buttons = input.mouse_buttons;
             self.was_visible = false;
+            self.view.release();
             self.controls = Controls::default();
             let alpha = sanitise(input.startup_hint_alpha, 0.0).clamp(0.0, 1.0);
             if !input.visible
@@ -168,7 +192,7 @@ impl Overlay {
                 && display[0] > 0.0
                 && display[1] > 0.0
             {
-                let raw = base_raw_input(display, pixels_per_point(display[1]));
+                let raw = base_raw_input(display, scale);
                 // No pointer events, widgets or cursor while the hint is shown.
                 let hud = &self.hud;
                 let output = self.context.run_ui(raw, |ui| {
@@ -188,11 +212,16 @@ impl Overlay {
             return intent;
         }
 
-        let scale = pixels_per_point(display[1]);
         let points_per_pixel = 1.0 / scale;
         let raw = self.raw_input(input, display, scale);
 
-        let selection = &self.selection;
+        let frame = panel::Frame {
+            selection: &self.selection,
+            stats,
+            rates,
+            preferences,
+        };
+        let view = &mut self.view;
         let hud = &self.hud;
         let controls = &mut self.controls;
         *controls = Controls::default();
@@ -201,7 +230,7 @@ impl Overlay {
             sanitise(input.mouse[1], 0.0) * points_per_pixel,
         );
         let output = self.context.run_ui(raw, |ui| {
-            panel::show(ui.ctx(), selection, stats, &mut intent, controls);
+            panel::show(ui.ctx(), &frame, view, &mut intent, controls);
             if stats.show_performance_hud {
                 panel::performance_hud(ui.ctx(), hud);
             }
@@ -209,9 +238,10 @@ impl Overlay {
         });
 
         // Applied after the layout rather than during it, so every widget in the frame reads the
-        // same selection: the one the frame started with. A checkbox that wrote back into that
+        // same selection: the one the frame started with. A switch that wrote back into that
         // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
         self.selection.apply(&intent);
+        self.view.apply(&intent);
         intent.quality = self.selection.quality();
         intent.enabled = self.selection.enabled();
 
@@ -453,20 +483,28 @@ fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
         egui::Order::Foreground,
         egui::Id::new("rsf_startup_hint"),
     ));
+    // Touch first: handhelds rarely have a keyboard attached.
     let text = painter.layout_no_wrap(
-        "ReScaleFrame · Press Insert for settings".to_owned(),
-        egui::FontId::proportional(18.0),
+        "ReScaleFrame is running. Three-finger tap or Insert for settings.".to_owned(),
+        egui::FontId::proportional(16.0),
         egui::Color32::WHITE.gamma_multiply(alpha),
     );
-    let position = Pos2::new(24.0, 24.0);
-    let rect = egui::Rect::from_min_size(position, text.size() + egui::vec2(24.0, 16.0));
+    let screen = ctx.content_rect();
+    let size = text.size() + egui::vec2(36.0, 20.0);
+    let rect = egui::Rect::from_min_size(
+        Pos2::new(
+            screen.center().x - size.x / 2.0,
+            screen.bottom() - size.y - 24.0,
+        ),
+        size,
+    );
     painter.rect_filled(
         rect,
-        6.0,
-        egui::Color32::from_black_alpha(200).gamma_multiply(alpha),
+        size.y / 2.0,
+        egui::Color32::from_rgba_unmultiplied(15, 17, 21, 235).gamma_multiply(alpha),
     );
     painter.galley(
-        position + egui::vec2(12.0, 8.0),
+        rect.min + egui::vec2(18.0, 10.0),
         text,
         egui::Color32::WHITE.gamma_multiply(alpha),
     );
@@ -564,11 +602,17 @@ mod tests {
         assert_eq!(overlay.controls, Controls::default());
         assert!(!overlay.was_visible);
     }
-    use crate::model::Quality;
+    use crate::model::{Quality, UiPreferences};
+    use crate::panel::Tab;
 
     /// A display that maps points to pixels one to one, so a test can click a rectangle the panel
     /// reported without converting anything.
     const DISPLAY: [u32; 2] = [1280, 720];
+
+    /// Open a tab directly. Tab switching itself is tested once, through the rail.
+    fn on_tab(overlay: &mut Overlay, tab: Tab) {
+        overlay.view.tab = tab;
+    }
 
     fn visible_input() -> FrameInput {
         FrameInput {
@@ -686,6 +730,7 @@ mod tests {
         stats.generation.requested_backend = 1;
         stats.generation.backend_choices = 0x3b;
         stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);
         let target = overlay.controls().fg_backend[2].expect("FSR3 generation choice was laid out");
         let [press, release] = click(&mut overlay, &stats, target);
@@ -708,6 +753,7 @@ mod tests {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
         stats.generation.backend_choices = 0x39; // Unity has no native DLSS-G presentation yet.
+        on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);
         let target = overlay.controls().fg_backend[1].expect("Disabled DLSS-G choice was laid out");
         let [press, release] = click(&mut overlay, &stats, target);
@@ -720,6 +766,7 @@ mod tests {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
         stats.generation.backend_choices = 0x8000_002b;
+        on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);
         let target =
             overlay.controls().fg_backend[3].expect("Disabled FSR4 choice remains visible");
@@ -742,23 +789,17 @@ mod tests {
         stats.generation.requested_mode = 1;
         stats.generation.requested_generated = 1;
         stats.generation.max_generated = 3;
+        on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);
-        let track = overlay
-            .controls()
-            .fg_multiplier
-            .expect("MFG track exists for supported hardware");
-        let right = egui::Rect::from_center_size(
-            egui::pos2(track.right() - 2.0, track.center().y),
-            egui::vec2(1.0, 1.0),
-        );
-        let [press, release] = click(&mut overlay, &stats, right);
-        let changed = if press.fg_changed { press } else { release };
-        assert!(changed.fg_changed);
-        assert_eq!(changed.fg_generated, 3);
-        assert_eq!(changed.fg_mode, 1);
+        let four = overlay.controls().fg_multiplier[2].expect("4x exists for supported hardware");
+        let [press, release] = click(&mut overlay, &stats, four);
+        assert!(!press.fg_changed);
+        assert!(release.fg_changed);
+        assert_eq!(release.fg_generated, 3);
+        assert_eq!(release.fg_mode, 1);
         stats.generation.max_generated = 1;
         idle_frame(&mut overlay, &stats);
-        assert!(overlay.controls().fg_multiplier.is_some());
+        assert!(overlay.controls().fg_multiplier[0].is_some());
     }
 
     #[test]
@@ -772,17 +813,10 @@ mod tests {
         stats.generation.requested_generated = 1;
         stats.generation.max_generated = 5;
         stats.generation.mfg_unlock_status = 1;
+        on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);
-        let track = overlay
-            .controls()
-            .fg_multiplier
-            .expect("RTX 40 MFG control");
-        let target = egui::Rect::from_center_size(
-            egui::pos2(track.right() - 2.0, track.center().y),
-            egui::vec2(1.0, 1.0),
-        );
-        let [press, release] = click(&mut overlay, &stats, target);
-        let chosen = if press.fg_changed { press } else { release };
+        let six = overlay.controls().fg_multiplier[4].expect("RTX 40 MFG offers 6x");
+        let [_, chosen] = click(&mut overlay, &stats, six);
         assert!(chosen.fg_changed);
         assert_eq!(chosen.fg_generated, 5);
         assert!(!chosen.fg_backend_changed);
@@ -790,11 +824,12 @@ mod tests {
         stats.generation.mfg_unlock_status = 2;
         stats.generation.max_generated = 1;
         settle(&mut overlay, &stats);
-        let track = overlay
-            .controls()
-            .fg_multiplier
-            .expect("Disabled multiplier control");
-        let [press, release] = click(&mut overlay, &stats, track);
+        assert!(
+            overlay.controls().fg_multiplier[3].is_none(),
+            "only 2x to 4x remain"
+        );
+        let four = overlay.controls().fg_multiplier[2].expect("Disabled 4x stays visible");
+        let [press, release] = click(&mut overlay, &stats, four);
         assert!(!press.fg_changed && !release.fg_changed);
     }
 
@@ -1274,6 +1309,263 @@ mod tests {
                 display
             ),
             None
+        );
+    }
+    #[test]
+    fn sharpening_controls_follow_mode_and_backend() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        on_tab(&mut overlay, Tab::Sharpen);
+        settle(&mut overlay, &stats);
+        assert!(
+            overlay.controls().tabs[Tab::Sharpen as usize].is_none(),
+            "no sharpening tab without host support"
+        );
+        on_tab(&mut overlay, Tab::Sharpen);
+        assert!(
+            overlay
+                .controls()
+                .sharpening_mode
+                .iter()
+                .all(Option::is_none)
+        );
+        stats.sharpening_available = true;
+        settle(&mut overlay, &stats);
+        assert!(
+            overlay
+                .controls()
+                .sharpening_mode
+                .iter()
+                .all(Option::is_some)
+        );
+        assert!(overlay.controls().sharpening_strength.is_none());
+        let vendor = overlay.controls().sharpening_mode[4].unwrap();
+        let [a, b] = click(&mut overlay, &stats, vendor);
+        assert!(!a.sharpening_changed && !b.sharpening_changed);
+        let rcas = overlay.controls().sharpening_mode[1].unwrap();
+        let [_, chosen] = click(&mut overlay, &stats, rcas);
+        assert!(chosen.sharpening_changed);
+        assert_eq!(chosen.sharpening.mode, 1);
+        stats.sharpening = chosen.sharpening;
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().sharpening_mas.is_some());
+        assert!(overlay.controls().sharpening_contrast.is_some());
+        assert!(overlay.controls().sharpening_depth.is_none());
+        stats.sharpening.mode = 2;
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().sharpening_contrast.is_none());
+        assert!(overlay.controls().sharpening_depth.is_some());
+        stats.backend = 3;
+        stats.sharpening.mode = 4;
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().sharpening_strength.is_some());
+        assert!(overlay.controls().sharpening_mas.is_none());
+        assert!(overlay.controls().sharpening_depth.is_none());
+        assert!(overlay.controls().sharpening_debug.is_none());
+    }
+    #[test]
+    fn sharpening_slider_applies_only_after_drag_ends() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.sharpening_available = true;
+        stats.sharpening.mode = 1;
+        on_tab(&mut overlay, Tab::Sharpen);
+        settle(&mut overlay, &stats);
+        let target = overlay.controls().sharpening_strength.unwrap();
+        let start = target.left_center() + egui::vec2(30.0, 0.0);
+        let end = start + egui::vec2(60.0, 0.0);
+        let press = FrameInput {
+            mouse: [start.x, start.y],
+            mouse_buttons: crate::abi::RSF_OVERLAY_MOUSE_LEFT,
+            ..FrameInput::default()
+        };
+        let moved = FrameInput {
+            mouse: [end.x, end.y],
+            ..press
+        };
+        let released = FrameInput {
+            mouse_buttons: 0,
+            ..moved
+        };
+        let first = overlay.frame(&press, &stats);
+        // A click can apply once; a held moving drag must not emit intermediate settings.
+        let dragged = overlay.frame(&moved, &stats);
+        assert!(!dragged.sharpening_changed);
+        let final_intent = overlay.frame(&released, &stats);
+        assert!(final_intent.sharpening_changed || first.sharpening_changed);
+        assert!(final_intent.sharpening_changed);
+        assert_ne!(
+            final_intent.sharpening.sharpness,
+            stats.sharpening.sharpness
+        );
+    }
+
+    #[test]
+    fn the_rail_switches_tabs() {
+        let mut overlay = Overlay::new();
+        let stats = stats_with_backend();
+        settle(&mut overlay, &stats);
+        assert!(
+            overlay.controls().fg_backend[0].is_none(),
+            "Frames is not open yet"
+        );
+        let frames = overlay.controls().tabs[Tab::Frames as usize].expect("Frames tab");
+        let [_, release] = click(&mut overlay, &stats, frames);
+        assert!(
+            release.is_idle(),
+            "switching tabs asks the host for nothing"
+        );
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().fg_backend[0].is_some());
+        assert!(overlay.controls().quality[0].is_none());
+    }
+
+    #[test]
+    fn every_control_is_a_touch_target() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.dlss_preset_available = true;
+        stats.sharpening_available = true;
+        stats.sharpening.mode = 1;
+        stats.generation.available = true;
+        stats.generation.reflex_available = true;
+        stats.generation.backend_choices = 0x3b;
+        stats.generation.max_generated = 3;
+        for tab in [Tab::Upscale, Tab::Frames, Tab::Sharpen, Tab::Display] {
+            on_tab(&mut overlay, tab);
+            settle(&mut overlay, &stats);
+            let c = *overlay.controls();
+            let singles = [c.close, c.enabled, c.fg_enabled, c.sharpening_mas, c.hud];
+            let rects = c
+                .tabs
+                .iter()
+                .chain(&c.quality)
+                .chain(&c.dlss_preset)
+                .chain(&c.backend)
+                .chain(&c.fg_backend)
+                .chain(&c.fg_multiplier)
+                .chain(&c.reflex)
+                .chain(&c.frame_limit)
+                .chain(&c.frame_limit_preset)
+                .chain(&c.sharpening_mode)
+                .chain(&c.hud_detail)
+                .chain(&c.panel_size)
+                .chain(&c.panel_side)
+                .chain(&singles)
+                .flatten()
+                .collect::<Vec<_>>();
+            assert!(rects.len() > 4, "{tab:?} laid out its controls");
+            for rect in rects {
+                assert!(
+                    rect.width() >= 44.0 && rect.height() >= 44.0,
+                    "{tab:?} has a {rect:?} target"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_close_button_and_a_tap_outside_close_the_panel() {
+        let mut overlay = Overlay::new();
+        let stats = stats_with_backend();
+        settle(&mut overlay, &stats);
+        let close = overlay.controls().close.expect("close button");
+        let [press, release] = click(&mut overlay, &stats, close);
+        assert!(!press.close_requested && release.close_requested);
+
+        settle(&mut overlay, &stats);
+        let sheet = overlay.controls().sheet.expect("sheet");
+        let outside = egui::Rect::from_center_size(
+            egui::pos2(sheet.right() + 100.0, sheet.center().y),
+            egui::vec2(1.0, 1.0),
+        );
+        let [_, release] = click(&mut overlay, &stats, outside);
+        assert!(release.close_requested);
+
+        // A drag that starts inside and ends outside is a scroll, not a close.
+        let inside = sheet.center();
+        overlay.frame(
+            &FrameInput {
+                mouse: [inside.x, inside.y],
+                mouse_buttons: RSF_OVERLAY_MOUSE_LEFT,
+                ..visible_input()
+            },
+            &stats,
+        );
+        let release = overlay.frame(
+            &FrameInput {
+                mouse: [outside.center().x, outside.center().y],
+                ..visible_input()
+            },
+            &stats,
+        );
+        assert!(!release.close_requested);
+    }
+
+    #[test]
+    fn layout_preferences_apply_at_once_and_go_to_the_host() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        on_tab(&mut overlay, Tab::Display);
+        settle(&mut overlay, &stats);
+        let left = overlay.controls().sheet.expect("sheet");
+        let right = overlay.controls().panel_side[1].expect("right side");
+        let [_, release] = click(&mut overlay, &stats, right);
+        assert!(release.ui_preferences_changed);
+        let wanted = UiPreferences::from_bits(release.ui_preferences);
+        assert!(wanted.right);
+
+        // The host has not stored it yet; the panel moves anyway.
+        settle(&mut overlay, &stats);
+        let moved = overlay.controls().sheet.expect("sheet");
+        assert!(moved.left() > left.left());
+        assert!(idle_frame(&mut overlay, &stats).is_idle());
+
+        // Once the host echoes it, the host's copy is used.
+        stats.ui_preferences = release.ui_preferences;
+        settle(&mut overlay, &stats);
+        assert_eq!(overlay.controls().sheet, Some(moved));
+    }
+
+    #[test]
+    fn a_held_step_button_repeats_and_applies_once_on_release() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.reflex_available = true;
+        stats.generation.frame_limit_us = 25_000; // 40 fps
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let up = overlay.controls().frame_limit[1].expect("frame limit up");
+        let held = FrameInput {
+            mouse: [up.center().x, up.center().y],
+            mouse_buttons: RSF_OVERLAY_MOUSE_LEFT,
+            delta_seconds: 0.1,
+            ..visible_input()
+        };
+        // One second held: the first step, then repeats after the delay.
+        for _ in 0..10 {
+            assert!(!overlay.frame(&held, &stats).frame_limit_changed);
+        }
+        let release = overlay.frame(
+            &FrameInput {
+                mouse_buttons: 0,
+                ..held
+            },
+            &stats,
+        );
+        assert!(release.frame_limit_changed);
+        let fps = 1.0e6 / f64::from(release.frame_limit_us);
+        assert!(fps > 42.0, "held for repeats, got {fps}");
+
+        // A single tap is one step.
+        stats.generation.frame_limit_us = release.frame_limit_us;
+        settle(&mut overlay, &stats);
+        let down = overlay.controls().frame_limit[0].expect("frame limit down");
+        let [_, release] = click(&mut overlay, &stats, down);
+        let after = 1.0e6 / f64::from(release.frame_limit_us);
+        assert!(
+            (fps.round() - 1.0 - after).abs() < 0.05,
+            "{fps} then {after}"
         );
     }
 }

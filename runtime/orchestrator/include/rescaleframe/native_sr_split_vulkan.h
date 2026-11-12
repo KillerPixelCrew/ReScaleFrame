@@ -54,6 +54,7 @@ RSF_RUNTIME_API int32_t rsf_srvk_fsr4_plan(const rsf_fsr4vk*, uint32_t* width, u
    transfer-dst. Never abandon an owner with unsubmitted graph sections. */
 RSF_RUNTIME_API int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk*, void* current_commands,
     const rsf_srvk_frame*, void** continuation_commands);
+RSF_RUNTIME_API void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk*, void* commands);
 /* Submit both sections and drain their GPU users first. Success frees the owner;
    failure retains it and remaining resource/module leases. NULL is a successful
    no-op. These entry points never submit the host's Vulkan queue. */

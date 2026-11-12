@@ -470,6 +470,9 @@ extern "C" int rsf_overlay_host_draw_target(void* native_context, void* native_t
     rsf_overlay_intent decided{}; decided.struct_size = sizeof(decided);
     if (trace) say("Unity overlay: laying out panel on thread %lu", static_cast<unsigned long>(GetCurrentThreadId()));
     if (self.frame(self.panel, &input, stats, &data, &decided) != RSF_OVERLAY_OK) return 0;
+    // The close button and a tap outside the sheet. Visibility is input state, so it is handled
+    // here for every host rather than by each one.
+    if (decided.close_requested) rsf_overlay_input_set_visible(0u);
     auto* context = static_cast<ID3D11DeviceContext*>(native_context);
     auto* target = static_cast<ID3D11RenderTargetView*>(native_target);
     if (trace) say("Unity overlay: uploading textures");
@@ -619,6 +622,8 @@ extern "C" int rsf_overlay_host_present(void* swapchain,
         rsf_overlay_input_set_visible(0u);
         return 0;
     }
+    // The close button and a tap outside the sheet.
+    if (decided.close_requested) rsf_overlay_input_set_visible(0u);
 
     if (trace) {
         say("overlay frame: laid out, %u vertices, %u indices, %u calls. Carrying textures",

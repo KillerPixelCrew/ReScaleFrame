@@ -9,6 +9,7 @@
 #include <string>
 #include "native_sr_fsr4_vulkan.h"
 #include "../../backends/common/frame_capture_vk.h"
+#include "sharpening_vulkan.h"
 
 struct ID3D12Resource;
 extern "C" int VulkanStoryFsr4CreateSharedImage(rsf_fsr4_bridge*, uint32_t, uint32_t,
@@ -20,6 +21,7 @@ extern "C" int VulkanStoryFsr4PrepareDestroy(rsf_fsr4_bridge*);
 extern "C" int VulkanStoryFsr4DestroyChecked(rsf_fsr4_bridge*);
 
 struct rsf_fsr4vk {
+    rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
     rsf_fsr4vk_handoff handoff{};
     rsf_fsr4_bridge* bridge{};
@@ -58,7 +60,7 @@ int create_image(rsf_fsr4vk& self, rsf_fsr4vk::Image& slot, uint32_t format, uin
     VkPhysicalDeviceImageFormatInfo2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
     query.pNext = &external_query; query.format = static_cast<VkFormat>(format); query.type = VK_IMAGE_TYPE_2D;
     query.tiling = VK_IMAGE_TILING_OPTIMAL;
-    query.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (writable ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
+    query.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (writable ? VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT : 0u);
     VkExternalImageFormatProperties external{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
     VkImageFormatProperties2 properties{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2}; properties.pNext = &external;
     VkResult result = self.image_properties(self.physical, &query, &properties);
@@ -231,6 +233,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     if (!self || !current_commands || !frame || frame->struct_size < sizeof(*frame) || !frame->record)
         return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     if (frame->abi_version != RSF_SRVK_ABI_VERSION) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
+    if (frame->sharpening.struct_size && !rsf::sharpening_settings::valid(frame->sharpening)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     const auto& record = *frame->record;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
@@ -308,10 +311,12 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     dispatch.reset = (record.flags & RSF_FRAME_FLAG_RESET) || self->generation != record.resource_generation ? 1u : 0u;
     self->view = record.view_id; self->generation = record.resource_generation;
     dispatch.ready_value = ready; dispatch.done_value = done;
+    (void)RsfFsr4BridgeSharpness(self->bridge,frame->sharpening.struct_size&&frame->sharpening.mode==RSF_SHARPENING_VENDOR?frame->sharpening.sharpness:0.0f);
     result = RsfFsr4BridgeEvaluate(self->bridge, &dispatch);
     if (result) return result; // Host records fallback in the returned continuation.
     const auto continuation = static_cast<VkCommandBuffer>(*continuation_commands);
     const auto& output = self->images[3];
+    (void)self->sharpen.run(self->setup,continuation,*frame,output.image);
     transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, true);
     VkImageCopy copy{}; copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.extent = {record.output_width, record.output_height, 1};
@@ -336,6 +341,7 @@ int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
     if (!result && !self->capture.flush()) result = VK_ERROR_UNKNOWN;
     if (result) return result;
     self->usable = false;
+    self->sharpen.clear();
     for (auto& image : self->images) {
         if (image.image) self->destroy_image(self->device, image.image, nullptr);
         if (image.memory) self->free_memory(self->device, image.memory, nullptr);
@@ -348,3 +354,5 @@ int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
     if (result) return result;
     delete self; return 0;
 }
+
+void rsf_fsr4vk_retire_commands(rsf_fsr4vk* self,void* commands) { if (self) self->sharpen.retire(commands); }

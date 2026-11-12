@@ -1,5 +1,28 @@
 # Implementation tracker
 
+## Touch-first overlay panel, overlay ABI 16, 12 November 2026
+
+The shared panel is rebuilt for handheld touch screens from the agreed mockup. It is a
+full-height sheet with a tab rail (Upscale, Frames, Sharpen, Game, Display) and a status strip
+of what is in effect. Choices are segment buttons, switches are full-width rows, and values use
+−/+ steppers that repeat while held and apply once on release. Every target is at least 48
+points. Pending and refused states sit next to their control, and backends or providers that
+are not offered are named. Overlay ABI 16 adds `stats.ui_preferences`, an opaque layout word
+(panel size, side and FPS overlay detail), and `intent.close_requested` and
+`ui_preferences_changed`. The overlay hosts close the panel on `close_requested` (the close
+button, or a tap that starts and ends outside the sheet). The shared overlay service, the D3D12
+render host and Unity save the layout word as `OverlayLayout` in their existing INI section. The
+AC7 carrier keeps it for the session only, as it already does for the FPS overlay switch. The
+input layer opens and closes the panel on a three-finger tap
+(WM_POINTER, or WM_TOUCH when no pointer messages arrive). It tracks the tap while hidden
+without consuming touches, and cancels the panel's own contact when a second finger lands.
+The render and output resolution in the status strip come from the runtime's stats, not from
+a per-level estimate. Rust: 54 overlay tests, including a 44-point touch-target check over every tab, plus
+fmt and Clippy. Debug VS2026: 215/215 native tests passed with the rebuilt panel DLL. Not
+game-tested or touch-device-tested. Whether Proton/Wine on the Steam Deck delivers three-finger
+WM_POINTER or WM_TOUCH contacts is unverified; Insert still opens the panel there. Steam Input
+can bind Insert to a back button.
+
 ## Anomaly SR Stages 3-5 and foliage motion, 12 November 2026
 
 SR Stage 3 adds Halton jitter to the world and the six first-person projections once each, and
@@ -2403,3 +2426,59 @@ Behaviour changes to watch in the next game run:
 - Frame tap in compat mode: sampler bias, constant-buffer size patches and view constants (3.1 to 3.3); the "reconstruction input set" line must still appear.
 - Pixel-binding diagnostic log lines are off by default (RSF_AC7_PIXEL_DIAGNOSTICS=1 enables them).
 - The FG choice is saved only after a successful switch. A failed overlay start is final until the overlay is stopped.
+
+### Shared sharpening prototype (2026-11-12, incomplete)
+
+[Shader contract and open integration work](research/sharpening.md): OptiScaler
+2fff542 RCAS/DA RCAS/DA DAS ports, perceptual HDR transport, internal constants,
+D3D11 helper, embedded SPIR-V and regeneration script. The focused D3D11 WARP
+fixture passes. Production pipelines, shared settings, live overlay controls,
+engine surfaces, vendor descriptor plumbing and D3D12/Vulkan helpers are not
+implemented. This is not game-tested or deployable sharpening support.
+
+### Shared sharpening milestone 1 (2026-11-12)
+
+Supersedes the isolated prototype status above: shared saved settings and overlay
+ABI 15 controls now drive the D3D11 production pipeline, and AC7 forwards/persists
+the same values. FFX native sharpening is mutually exclusive with custom passes.
+[Modes, defaults, execution, ABI changes and evidence](research/sharpening.md).
+The production synthetic fixture establishes an edge change and byte-identical
+Off/zero-strength output. D3D12/Vulkan/GL and the remaining host/settings surfaces
+are milestones 2 and 3. No game deployment or game-tested acceptance is claimed.
+
+### Shared sharpening milestone 2 (2026-11-12)
+
+D3D12 `rsf_sr12` now runs the shared post pass after vendor evaluation and before
+copy back, with inline root constants and per-slot descriptors/scratch. The
+RDR2 and Unity Mono native-SR hosts apply and save settings live without
+rebuilding the SR context. Native FFX sharpening is exclusive with custom
+passes. [Execution, ownership and device evidence](research/sharpening.md).
+The WARP fixture covers HDR/SDR, flat/edge/alpha behavior, disabled bypass,
+missing-depth fallback and three unsubmitted slots with different settings.
+Vulkan, GL option forwarding and engine surfaces remain for milestone 3. The
+engine-owned spatial/FSR1 branch remains outside the native temporal pass.
+No deployment or new game-tested acceptance is claimed by this milestone.
+
+
+### Shared sharpening milestone 3 (2026-11-12)
+
+Vulkan post-upscale sharpening is built for FFX2/3, DLSS, XeSS and the FSR4
+continuation path, with per-recording descriptors/constants and explicit GPU
+retirement. GL forwards live settings to its SDR D3D12 path. Godot Resources,
+Unity URP Options assets and Minecraft Sodium settings expose all 12 values;
+engine-owned spatial FSR1 retains its engine sharpening control. The device
+fixture covers HDR bounds, alpha, monotonic edges, MAS, missing-depth fallback,
+hard depth boundaries and simultaneous recordings. Engine settings have ABI and
+round-trip tests. Validation receipts and limits are in the milestone 3 report;
+this describes synthetic and device evidence, not new game acceptance or a
+deployment. See [Sharpening](sharpening.md) for every user option.
+
+Milestone 3 receipts: MSVC Release gate 202 executed passes / 11 default opt-in
+skips (213 discovered), 66 Rust tests, formatting and Clippy clean; Vulkan
+opt-ins 3/3 after supplying runtimes; FSR4 continuation fixture six completed
+frames; Khronos synchronization validation clean for the sharpening fixture.
+Godot engine and Unity managed package builds passed; Godot Resource, Unity
+managed/native ABI and Minecraft settings tests passed (Minecraft 44/44).
+RDR2 host backends 1/3/4/5 and both D3D11 bridge variants passed with the release
+overlay. The bridge's foreground-game DLSS activity check was not run after
+foreground ownership was denied. These remain device/synthetic results.
