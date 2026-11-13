@@ -246,8 +246,13 @@ set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_co
 add_test(NAME anomaly_sr_sun_cascades_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_cascades)
 set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
 
-# Jitter-only receiver-depth margin: base ownership, live console edits, exits and partial writes.
-add_test(NAME anomaly_sr_sun_depth_margin_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_depth_margin)
-set_tests_properties(anomaly_sr_sun_depth_margin_contract PROPERTIES TIMEOUT 30)
 
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/runtime_shaders.cpp")
+
+# Jittered deferred reconstruction: float-precision round trips and all six native constant-buffer stages.
+add_executable(rsf_anomaly_sr_reconstruction_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_reconstruction.cpp")
+target_include_directories(rsf_anomaly_sr_reconstruction_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+target_link_libraries(rsf_anomaly_sr_reconstruction_test PRIVATE rsf_build_options)
+add_test(NAME anomaly_sr_reconstruction_contract COMMAND rsf_anomaly_sr_reconstruction_test)
+add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)
+set_tests_properties(anomaly_sr_reconstruction_contract anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)

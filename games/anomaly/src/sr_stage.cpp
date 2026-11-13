@@ -8,6 +8,7 @@
 #include "sr_d3d11.h"
 #include "build_profile.h"
 #include "sr_swap.h"
+#include "sr_reconstruction.h"
 #include "sr_temporal.h"
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
@@ -100,6 +101,19 @@ bool call_set_mip_bias(float value) noexcept {
     __try { set_mip_bias_fn(image + srp().sampler_cache_rva, value); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+
+using GetConstantBuffer = std::byte*(__fastcall*)(void*, void*, uint32_t);
+GetConstantBuffer get_constant_buffer_fn{};
+struct EnginePositionConstants final : PositionConstantHost {
+    bool read(const void* p, void* out, std::size_t size) noexcept override { return guarded_copy(out, p, size); }
+    bool write(void* p, const void* data, std::size_t size) noexcept override { return guarded_copy(p, data, size); }
+    std::byte* buffer(void* constant, uint32_t stage) noexcept override {
+        if (!get_constant_buffer_fn || !image) return nullptr;
+        __try { return get_constant_buffer_fn(image + srp().backend_rva + backend_constants_offset, constant, stage); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    }
+};
+EnginePositionConstants position_constants;
 
 // True while the engine draws its loading screen over the world: the precache frames and the "Press any key to continue"
 // wait (sr_profile.h). Unreadable counts as loading, so a capture never starts on a guess.
@@ -299,6 +313,9 @@ struct Host final : SwapHost {
     void set_viewport(uint32_t width, uint32_t height) noexcept override { set_full_viewport(context(), width, height); }
     bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
     bool set_mip_bias(float value) noexcept override { return call_set_mip_bias(value); }
+    bool correct_position_constant(void* constant, float x, float y) noexcept override {
+        return sr::correct_position_constant(position_constants, constant, x, y);
+    }
     bool round_trip(const TargetFields& twin, const TargetFields& engine) noexcept override {
         auto* ctx = context();
         if (capture && capture->active)
@@ -432,7 +449,7 @@ GpuTimer gpu_timer;
 double reported_world_ms[2]{}, reported_seam_ms{};
 uint64_t reported_world_samples[2]{}, reported_seam_samples{};
 std::atomic<bool> hooks_active{};
-std::array<void*, 5> originals{};
+std::array<void*, 6> originals{};
 uint64_t session{};
 uint64_t world_frames{}, frames{}, frames_without_world{};
 bool prepared_this_frame{};
@@ -545,8 +562,6 @@ FrameFacts gather(void* self) noexcept {
         facts.mip_bias = configured_options.mip_bias;
         facts.mip_bias_delta = window_mip_bias_delta(facts.render_width, facts.device_width, configured_options.mip_bias_offset);
         facts.sampler_bias = image + srp().sampler_cache_rva + sampler_mip_lod_bias_offset;
-        facts.sun_depth_margin = configured_options.sun_depth_margin;
-        facts.sun_depth_scale = {image + srp().sun_depth_near_scale_rva, image + srp().sun_depth_far_scale_rva};
     }
     return facts;
 }
@@ -764,6 +779,11 @@ struct SunCameraScope {
     SunCameraScope() { std::lock_guard lock(guard); suspended = controller.sun_cascades_begin(); }
     ~SunCameraScope() { std::lock_guard lock(guard); controller.sun_cascades_end(suspended); }
 };
+void __fastcall position_setup_hook(void* self, void* constant) {
+    reinterpret_cast<void(__fastcall*)(void*, void*)>(originals[5])(self, constant);
+    std::lock_guard lock(guard);
+    controller.position_constant_setup(constant);
+}
 void __fastcall sun_cascades_hook(void* self) {
     SunCameraScope camera;
     reinterpret_cast<Unary>(originals[4])(self);
@@ -831,7 +851,7 @@ bool guards_match(std::byte* module, uint32_t image_size, const BuildProfile& se
     }
     if (configured_options.temporal() && !stage3_guards_match(module, image_size, sr_profile, failed)) return false;
     if (configured_options.temporal()) {
-        for (const auto& site : sr_profile.sun_depth_guards) {
+        for (const auto& site : sr_profile.reconstruction_guards) {
             const auto length = std::strlen(site.expected_hex) / 2;
             if (site.rva > image_size || length > image_size - site.rva || !bytes_match(module + site.rva, site.expected_hex)) {
                 *failed = site.name; return false;
@@ -840,7 +860,7 @@ bool guards_match(std::byte* module, uint32_t image_size, const BuildProfile& se
     }
     // rmNear is not checked here: the geometry producer verified and patched it, and Stage 1 reaches it only through
     // the shared slot.
-    for (const auto index : {site_phase_scene_prepare, site_phase_combine, site_phase_sunshafts, site_phase_blur, site_sun_cascades}) {
+    for (const auto index : {site_phase_scene_prepare, site_phase_combine, site_phase_sunshafts, site_phase_blur, site_sun_cascades, site_position_setup}) {
         const auto& site = sr_profile.sr_function_sites[index];
         std::array<std::byte, 16> bytes{};
         if (site.rva > image_size - bytes.size() || !guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) {
@@ -1021,14 +1041,6 @@ StageOptions read_options(const wchar_t* ini) noexcept try {
     result.scale = read_scale(ini, &result.scale_defaulted);
     result.jitter = GetPrivateProfileIntW(L"Anomaly", L"SRJitter", 1, ini) != 0;
     result.mip_bias_offset = read_mip_bias(ini, &result.mip_bias);
-    wchar_t margin_text[32]{};
-    GetPrivateProfileStringW(L"Anomaly", L"SRSunDepthMargin", L"5", margin_text, 32, ini);
-    wchar_t* margin_end{};
-    const auto margin = std::wcstol(margin_text, &margin_end, 10);
-    if (margin_end != margin_text) {
-        while (*margin_end == L' ' || *margin_end == L'\t') ++margin_end;
-        if (!*margin_end) result.sun_depth_margin = static_cast<uint32_t>(clamp_sun_depth_margin(margin));
-    }
     result.ini = ini;
     result.capture = GetPrivateProfileIntW(L"Anomaly", L"SRStageCapture", 0, ini) != 0;
     result.capture_start = GetPrivateProfileIntW(L"Anomaly", L"SRStageCaptureStart", 600, ini);
@@ -1113,12 +1125,6 @@ void register_live_options() noexcept {
             configured_options.jitter = v != 0;
             options::write_int(L"SRJitter", v ? 1 : 0);
         }});
-    add({"Sun shadow margin with jitter", false, 0, 20, 1, 10000, false,
-        []() noexcept { return static_cast<int32_t>(configured_options.sun_depth_margin); },
-        [](int32_t v) noexcept {
-            configured_options.sun_depth_margin = static_cast<uint32_t>(clamp_sun_depth_margin(v));
-            options::write_int(L"SRSunDepthMargin", static_cast<int32_t>(configured_options.sun_depth_margin));
-        }});
     add({"Texture mip bias", true, 0, 1, 1, 1, false,
         []() noexcept { return configured_options.mip_bias ? 1 : 0; },
         [](int32_t v) noexcept {
@@ -1144,7 +1150,6 @@ void configure(const StageOptions& value, rsf_game_log_fn log, void* user) noexc
     std::lock_guard lock(guard);
     if (hooks_active.load()) return;
     configured_options = value;
-    if (configured_options.sun_depth_margin > 20) configured_options.sun_depth_margin = 20;
     register_live_options();
     log_fn = log;
     log_user = user;
@@ -1200,6 +1205,7 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
     no_world_mark = ~0ull;
     jitter_enabled = configured_options.temporal() && geometry::geometry_hooks_active();
     if (configured_options.temporal()) {
+        get_constant_buffer_fn = reinterpret_cast<GetConstantBuffer>(module + srp().get_constant_buffer_rva);
         set_projection_fn = reinterpret_cast<SetProjection>(module + srp().sr_function_sites[site_set_p].rva);
         set_mip_bias_fn = reinterpret_cast<SetMipBias>(module + srp().sr_function_sites[site_set_mip_lod_bias].rva);
         if (!jitter_enabled)
@@ -1212,7 +1218,7 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
     frame_camera = previous_camera = {};
     frame_cut = false;
     last_main_qpc = 0;
-    const std::array<HookSite, 5> sites{{
+    const std::array<HookSite, 6> sites{{
         {srp().sr_function_sites[site_phase_scene_prepare].name, srp().sr_function_sites[site_phase_scene_prepare].rva,
             srp().sr_function_sites[site_phase_scene_prepare].expected, reinterpret_cast<void*>(&prepare_hook), &originals[0]},
         {srp().sr_function_sites[site_phase_combine].name, srp().sr_function_sites[site_phase_combine].rva,
@@ -1222,7 +1228,9 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
         {srp().sr_function_sites[site_phase_blur].name, srp().sr_function_sites[site_phase_blur].rva,
             srp().sr_function_sites[site_phase_blur].expected, reinterpret_cast<void*>(&blur_hook), &originals[3]},
         {srp().sr_function_sites[site_sun_cascades].name, srp().sr_function_sites[site_sun_cascades].rva,
-            srp().sr_function_sites[site_sun_cascades].expected, reinterpret_cast<void*>(&sun_cascades_hook), &originals[4]}}};
+            srp().sr_function_sites[site_sun_cascades].expected, reinterpret_cast<void*>(&sun_cascades_hook), &originals[4]},
+        {srp().sr_function_sites[site_position_setup].name, srp().sr_function_sites[site_position_setup].rva,
+            srp().sr_function_sites[site_position_setup].expected, reinterpret_cast<void*>(&position_setup_hook), &originals[5]}}};
     const bool installed = hooks.created() ? hooks.enable() : hooks.install(module, image_size, sites);
     if (!installed) { say("Anomaly SR stage refused: guarded detour installation failed; game left stock."); return false; }
     if (configured_options.stage == 1 || configured_options.world_window()) geometry::geometry_set_rm_near_callback(&rm_near_callback);
@@ -1428,9 +1436,8 @@ void report(void (*emit)(void*, const char*), void* user) noexcept {
     std::snprintf(text, sizeof(text), "Anomaly SR sun cascades calls=%llu unjittered=%llu restored=%llu refused=%llu",
         d(&SwapCounters::sun_calls), d(&SwapCounters::sun_unjittered), d(&SwapCounters::sun_restored), d(&SwapCounters::sun_refused));
     emit(user, text);
-    std::snprintf(text, sizeof(text), "Anomaly SR sun depth margin applied=%llu restored=%llu foreign=%llu units=%u scale=%.4f",
-        d(&SwapCounters::sun_depth_applied), d(&SwapCounters::sun_depth_restored), d(&SwapCounters::sun_depth_foreign),
-        configured_options.sun_depth_margin, 1.0 - double(configured_options.sun_depth_margin) / 10000.0);
+    std::snprintf(text, sizeof(text), "Anomaly SR position reconstruction corrected=%llu stock=%llu refused=%llu",
+        d(&SwapCounters::position_corrected), d(&SwapCounters::position_stock), d(&SwapCounters::position_refused));
     emit(user, text);
     if (configured_options.sr_inputs()) driver.report(emit, user);
     reported = now; reported_frames = now_frames; reported_without_world = now_without;

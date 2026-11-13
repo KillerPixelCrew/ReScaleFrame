@@ -139,7 +139,7 @@ def parse(text):
 
 def verify_guards(pe, p, log):
     declared = {
-        'sr_function_sites': 16,
+        'sr_function_sites': 17,
         'sr_call_sites': 6,
         'sr_unique_guards': int(re.search(r'array<UniqueGuard, (\d+)> sr_unique_guards', TEXT).group(1)),
         'sr_first_person_sites': 6,
@@ -263,62 +263,63 @@ def verify_sun_cascades(pe, f, p, log):
                'full projection read, no Device.mFullTransform read; tail set_V/set_P needs jittered re-upload')
 
 
-def verify_sun_depth(pe, log):
+def verify_position_reconstruction(pe, f, log):
     text = geometry.profile_text(PROFILE)
-    block = re.search(r'array<UniqueGuard, (\d+)> sun_depth_(?:standard|avx)_guards\{\{(.*?)\}\};', text, re.S)
-    guards = [(n, int(r, 16), bytes.fromhex(h)) for n, r, h in
-              re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}', block[2])]
-    assert len(guards) == int(block[1]) == (5 if geometry.BUILD == 'avx' else 3), 'sun depth guard count'
-    by_name = {n: (r, raw) for n, r, raw in guards}
+    match = re.search(r'\.reconstruction_guards = \{\{(.*?)\}\},', text, re.S)
+    guards = [(n, int(a, 16), bytes.fromhex(h)) for n, a, h in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}', match[1])]
+    assert len(guards) == 4, 'reconstruction guards'
+    by_name = {n: (a, h) for n, a, h in guards}
     for name, rva, raw in guards:
-        assert pe.read(rva, len(raw)) == raw and pe.unique_in_text(raw), ('sun depth guard', name)
-    near, far = ints(TEXT, 'sun_depth_near_scale_rva'), ints(TEXT, 'sun_depth_far_scale_rva')
-    assert near != far and all(pe.read(rva, 4) == struct.pack('<f', 1.0) for rva in (near, far)), 'sun depth static defaults'
+        assert pe.read(rva, len(raw)) == raw and pe.unique_in_text(raw), ('reconstruction code guard', name)
+    setup, getter = ((0x82c1c0, 0x842380) if geometry.BUILD == 'avx' else (0x834f70, 0x84b820))
+    assert f['cl_pos_decompress_params::setup'] == setup and ints(TEXT, 'get_constant_buffer_rva') == getter, 'position anchors'
+    table = next(t for t in pe.tables('cl_pos_decompress_params') if t['this_offset'] == 0)
+    assert int(table['vtable'], 16) == ints(TEXT, 'position_setup_vtable_rva') and int(table['slots'][0], 16) == setup, 'binder RTTI slot 0'
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     md.detail = True
-    def target(i, op):
-        assert op.type == x86.X86_OP_MEM and op.mem.base == x86.X86_REG_RIP, ('expected RIP operand', i.op_str)
+    def rip(i, operand):
+        op = i.operands[operand]
+        assert op.type == x86.X86_OP_MEM and op.mem.base == x86.X86_REG_RIP, ('RIP operand', i.op_str)
         return i.address + i.size + op.mem.disp
-    for label, global_rva in (('near', near), ('far', far)):
-        rva, raw = by_name['sun depth ' + label + ' console registration']
-        code = list(md.disasm(raw, rva))
-        assert code[0].mnemonic == 'lea' and code[0].operands[0].reg == x86.X86_REG_RDX
-        assert pe.read(target(code[0], code[0].operands[1]), len('r2_sun_depth_' + label + '_scale') + 1) == ('r2_sun_depth_' + label + '_scale\0').encode(), 'console name'
-        obj = target(code[1], code[1].operands[1])
-        global_lea = next(i for i in code if i.mnemonic == 'lea' and i.operands[0].reg == x86.X86_REG_RAX)
-        assert target(global_lea, global_lea.operands[1]) == global_rva, ('console global', label)
-        pointer_store = next(i for i in code if i.mnemonic == 'mov' and i.operands[0].type == x86.X86_OP_MEM and
-                             i.operands[1].type == x86.X86_OP_REG and i.operands[1].reg == x86.X86_REG_RAX)
-        assert target(pointer_store, pointer_store.operands[0]) == obj + 0x30, 'CCC_Float value pointer'
-        for offset, bits, register in ((0x38, 0x3f000000, x86.X86_REG_XMM9), (0x3c, 0x3fc00000, x86.X86_REG_XMM6)):
-            store = next(i for i in code if i.operands and i.operands[0].type == x86.X86_OP_MEM and
-                         i.operands[0].mem.base == x86.X86_REG_RIP and target(i, i.operands[0]) == obj + offset)
-            if geometry.BUILD == 'standard':
-                assert store.operands[1].imm == bits, 'console range 0.5..1.5'
-            else:
-                assert store.mnemonic == 'vmovss' and store.operands[1].reg == register, 'AVX console range registers'
-        if geometry.BUILD == 'avx' and label == 'far':
-            load = next(i for i in code if i.mnemonic == 'vmovss' and i.operands[0].reg == x86.X86_REG_XMM6)
-            assert pe.read(target(load, load.operands[1]), 4) == struct.pack('<f', 1.5), 'far maximum 1.5'
-    if geometry.BUILD == 'avx':
-        for key, reg, value in (('minimum', x86.X86_REG_XMM9, 0.5), ('maximum', x86.X86_REG_XMM6, 1.5)):
-            rva, raw = by_name['sun depth console ' + key]
-            load = next(md.disasm(raw, rva))
-            assert load.mnemonic == 'vmovss' and load.operands[0].reg == reg and pe.read(target(load, load.operands[1]), 4) == struct.pack('<f', value), 'shared console range constant'
-    rva, raw = by_name['sun depth cascade selection']
+    rva, raw = by_name['position binder registration']
+    reg = list(md.disasm(raw, rva))
+    assert [i.mnemonic for i in reg] == ['lea', 'mov', 'lea', 'call'], 'RegisterConstantSetup arguments'
+    assert reg[0].operands[0].reg == x86.X86_REG_R8 and pe.read(rip(reg[2], 1), 25) == b'pos_decompression_params\0', 'registration literal'
+    assert struct.unpack('<Q', pe.read(rip(reg[0], 1), 8))[0] == pe.base + int(table['vtable'], 16), 'registered binder object vptr'
+    rva, raw = by_name['position binder body']
+    assert rva == setup
     code = list(md.disasm(raw, rva))
-    assert len(code) == 6 and code[0].mnemonic == 'test' and code[0].op_str == 'r14d, r14d', 'SE_SUN_NEAR == sub_phase (zero)'
-    assert code[1].mnemonic == 'jne' and code[1].operands[0].imm == code[4].address, 'non-near selects far'
-    assert target(code[2], code[2].operands[1]) == near and target(code[4], code[4].operands[1]) == far, 'cascade scale readers'
-    assert code[3].mnemonic == 'jmp' and code[3].operands[0].imm == code[5].address, 'merge scale'
-    assert code[5].operands[0].mem.base == x86.X86_REG_RBP and code[5].operands[1].reg == code[2].operands[0].reg == code[4].operands[0].reg, 'fRange stored in texel-adjust matrix'
-    accum, fit, fit_size = ((0x853b40, 0x80be60, 0x216d) if geometry.BUILD == 'avx' else (0x85d840, 0x813170, 0x28b6))
-    assert any(t == accum for _, t in pe.calls_in(fit, fit + fit_size)), 'cascade fit calls accumulation'
-    head = list(md.disasm(pe.read(accum, 0x100), accum))
-    assert any(i.mnemonic == 'mov' and i.op_str == 'r14d, edx' for i in head), 'sub_phase saved from edx'
-    assert accum < rva < accum + 0x2000, 'selection inside accumulation'
-    log.append(f'sun depth: near {near:#x}, far {far:#x}, console pointer/range 0.5..1.5 and default 1.0; '
-               f'cascade accumulation {accum:#x} selection {rva:#x}, {len(guards)} exact unique guards')
+    assert code[-1].mnemonic == 'ret' and code[-1].address + code[-1].size == setup + len(raw), 'complete binder body'
+    assert [(i.mnemonic, i.op_str, i.size) for i in code[:2]] == [('push', 'rdi', 2), ('sub', 'rsp, 0x30', 4)], 'detour relocates six integer bytes before SSE/AVX'
+    calls = [i for i in code if i.mnemonic == 'call' and i.operands[0].type == x86.X86_OP_IMM and i.operands[0].imm == getter]
+    assert len(calls) == 6, 'all six shader stages call GetCBuffer'
+    constants = ints(TEXT, 'backend_rva') + 0x5c0
+    stages = (1, 2, 8, 16, 32, 64)
+    for stage, call in enumerate(calls):
+        assert constants in {t for _, t in pe.rip_operands(call.address - 14, call.address)}, 'RCache.constants +0x5c0'
+        after = [i for i in code if call.address < i.address < call.address + 0x58]
+        assert any(i.mnemonic == 'movzx' and i.operands[1].type == x86.X86_OP_MEM and i.operands[1].mem.base == x86.X86_REG_RDI and i.operands[1].mem.disp == 0x14 + stage * 4 for i in after), 'stage byte offset'
+        assert any(i.mnemonic == 'movzx' and i.operands[1].type == x86.X86_OP_MEM and i.operands[1].mem.disp == 0x16 + stage * 4 for i in after), 'stage vector class'
+        assert any(i.mnemonic == 'add' and i.operands[1].type == x86.X86_OP_MEM and i.operands[1].mem.disp == 0x60 for i in after), 'buffer CPU data +0x60'
+        assert any(i.mnemonic == 'mov' and i.operands[0].type == x86.X86_OP_MEM and i.operands[0].mem.disp == 0x68 and i.operands[1].type == x86.X86_OP_IMM and i.operands[1].imm == 1 for i in after), 'buffer dirty +0x68'
+        assert bytes([0xf6, 0x47, 0x10, stages[stage]]) in raw, 'destination bit at C+0x10'
+    rva, raw = by_name['R_constants::GetCBuffer']
+    assert rva == getter and len(raw) == 0xd2, 'complete successful GetCBuffer branches'
+    get = list(md.disasm(raw, rva))
+    # Slot-array indexing encodes stage-specific destination nibbles and 8-byte ref_cbuffer entries.
+    slot_offsets = [i.operands[1].mem.disp for i in get if i.mnemonic == 'mov' and i.operands[0].reg == x86.X86_REG_RAX and i.operands[1].type == x86.X86_OP_MEM and i.operands[1].mem.index == x86.X86_REG_RAX]
+    assert slot_offsets == [0x328, 0x2b8, 0x398, 0x408, 0x478, 0x4e8], 'six RCache buffer arrays'
+    shifts = [i.operands[1].imm for i in get if i.mnemonic == 'shr']
+    assert shifts == [12, 8, 20, 28], 'VS/GS/HS/CS destination shifts; PS uses +0x12, DS uses +0x13 low nibble'
+    assert all(t == ints(TEXT, 'backend_rva') for _, t in pe.rip_operands(getter, getter + 0xd2)), 'GetCBuffer array owner'
+    rva, raw = by_name['constant buffer reflected size']
+    ctor = list(md.disasm(raw, rva))
+    assert any(i.mnemonic == 'lea' and i.op_str == 'rdx, [rsp + 0x40]' for i in ctor), 'reflection GetDesc output'
+    assert any(i.mnemonic == 'call' and i.operands[0].type == x86.X86_OP_MEM and i.operands[0].mem.disp == 0 for i in ctor), 'reflection GetDesc vtable slot 0'
+    assert bytes.fromhex('8b442450894358') in raw, 'D3D11_SHADER_BUFFER_DESC.Size (+0x10) stored at buffer+0x58'
+    # Existing geometry proof independently checks Flush reads data+0x60, tests dirty+0x68 and uploads it via UpdateSubresource.
+    log.append(f'position: setup {setup:#x}, RTTI vtable {table["vtable"]}, engine GetCBuffer {getter:#x}; '
+               'all six stages, C destination+0x10/load+0x14+4*stage; buffer size/data/dirty +0x58/+0x60/+0x68')
 
 
 def verify_render_modes(pe, f, log):
@@ -1040,7 +1041,7 @@ def verify(pe):
     geometry.verify_detour_prefix(pe, p['functions'])
     verify_calls(pe, f, p, log)
     verify_sun_cascades(pe, f, p, log)
-    verify_sun_depth(pe, log)
+    verify_position_reconstruction(pe, f, log)
     verify_render_modes(pe, f, log)
     set_p = verify_xforms(pe, f, log)
     verify_first_person(pe, f, p, set_p, log)

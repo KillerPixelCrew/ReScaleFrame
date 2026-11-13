@@ -117,8 +117,7 @@ constexpr bool sun_call_reaches_wrapper(const sr::SrProfile& p) {
 }
 constexpr bool consistent(const BuildProfile& b) {
     const auto& n = *b.native; const auto& g = *b.geometry; const auto& s = *b.sr; const auto& m = *b.motion;
-    return in_image(b, s.sun_depth_near_scale_rva) && in_image(b, s.sun_depth_far_scale_rva) &&
-        s.sun_depth_near_scale_rva != s.sun_depth_far_scale_rva && s.sun_depth_guards.size() >= 3 &&
+    return in_image(b, s.get_constant_buffer_rva) && in_image(b, s.position_setup_vtable_rva) &&
         sun_call_reaches_wrapper(s) && unique_rvas(s) && sites_in_image(b) && first_person_ordered(s) && ssao_code_ends_with_viewport_lea(s) &&
         create_calls_reach_detour(m) &&
         extended_guards_match(n.native_unique_guards, n.native_sites) && geometry_guards_match(g) &&

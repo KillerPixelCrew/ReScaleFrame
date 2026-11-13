@@ -49,7 +49,7 @@ void fill_guards(std::vector<std::byte>& image) {
     for (const auto& site : B->sr->sr_function_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
     for (const auto& guard : B->sr->sr_unique_guards) put_hex(image.data() + guard.rva, guard.expected_hex);
     for (const auto& site : B->sr->sr_call_sites) std::memcpy(image.data() + site.rva, site.expected.data(), 16);
-    for (const auto& site : B->sr->sun_depth_guards) put_hex(image.data() + site.rva, site.expected_hex);
+    for (const auto& site : B->sr->reconstruction_guards) put_hex(image.data() + site.rva, site.expected_hex);
     put_hex(image.data() + B->sr->ssao_set_viewport_rva, B->sr->ssao_set_viewport_code);
 }
 
@@ -239,7 +239,6 @@ void options_from_ini() {
 void stage3_install_refusals() {
     sr::StageOptions options{};
     options.stage = 3;
-    options.sun_depth_margin = 0;   // guards still authorize a later live enable
     sr::configure(options, &collect, nullptr);
     std::vector<std::byte> image(B->image_size());
     const auto refused_at = [&](const char* text) {
@@ -282,8 +281,8 @@ void stage3_install_refusals() {
     fill_sites();
     put_call(B->sr->sr_first_person_sites[5].rm_near_call, B->sr->sr_function_sites[sr::site_rm_far].rva);   // direct call to rmFar
     CHECK(refused_at("guard mismatch at CRenderTarget::accum_point"));
-    // These guards are required even if the live margin starts at zero, so enabling it later remains safe.
-    for (const auto& site : B->sr->sun_depth_guards) {
+    // Every layout-dependent reconstruction body must match before temporal hooks can run.
+    for (const auto& site : B->sr->reconstruction_guards) {
         fill_sites();
         image[site.rva + std::strlen(site.expected_hex) / 2 - 1] ^= std::byte{0x01};
         CHECK(refused_at(site.name));
@@ -293,36 +292,6 @@ void stage3_install_refusals() {
     CHECK(uv.current_u == 0 && uv.current_v == 0 && uv.previous_u == 0 && uv.previous_v == 0 && !sr::current_jitter().applied);
     sr::configure({}, nullptr, nullptr);
 }
-void sun_margin_option() {
-    wchar_t directory[MAX_PATH]{}, path[MAX_PATH]{};
-    GetTempPathW(MAX_PATH, directory);
-    GetTempFileNameW(directory, L"rsf", 0, path);
-    CHECK(sr::read_options(path).sun_depth_margin == 5 && sr::read_options(nullptr).sun_depth_margin == 5);
-    options::registry().clear();
-    options::ini_path() = path;
-    sr::configure({}, nullptr, nullptr);
-    const options::Option* control{};
-    for (const auto& option : options::registry())
-        if (std::string_view(option.label) == "Sun shadow margin with jitter") control = &option;
-    CHECK(control && !control->toggle && !control->restart && control->minimum == 0 && control->maximum == 20 &&
-        control->step == 1 && control->divisor == 10000 && control->get() == 5);
-    if (control) {
-        for (const int32_t value : {0, 5, 20, 7, -1, 21}) {
-            control->set(value);
-            const auto expected = sr::clamp_sun_depth_margin(value);
-            CHECK(control->get() == expected && sr::options().sun_depth_margin == static_cast<uint32_t>(expected));
-            CHECK(sr::read_options(path).sun_depth_margin == static_cast<uint32_t>(expected));
-            CHECK(GetPrivateProfileIntW(L"Anomaly", L"SRSunDepthMargin", 99, path) == static_cast<uint32_t>(expected));
-        }
-    }
-    for (const auto* text : {L"x", L"nan", L"5x", L""}) {
-        WritePrivateProfileStringW(L"Anomaly", L"SRSunDepthMargin", text, path);
-        CHECK(sr::read_options(path).sun_depth_margin == 5);
-    }
-    options::ini_path().clear();
-    DeleteFileW(path);
-}
-
 }
 
 int main(int argc, char** argv) {
@@ -332,7 +301,6 @@ int main(int argc, char** argv) {
     install_refusals();
     stage3_install_refusals();
     options_from_ini();
-    sun_margin_option();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

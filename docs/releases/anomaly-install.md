@@ -23,7 +23,7 @@ separate licenses and notices in `ReScaleFrame/licenses` and beside the vendor D
 4. Launch normally and press **Insert** to open the overlay. Choose SR provider, quality, sharpening and FG there.
    First use can compile and cache verified motion shader variants.
 
-Defaults: SR on with DLSS Quality, motion vectors on, subpixel jitter on, sun shadow margin 0.0005, FG off, FG bridge
+Defaults: SR on with DLSS Quality, motion vectors on, subpixel jitter on, FG off, FG bridge
 available for live switching, and captures/diagnostics off. Choose FSR or XeSS in the overlay if DLSS is unavailable;
 those alternative GPU vendors have not been tested. Overlay changes are saved to `ReScaleFrame.ini` in bin.
 Ultra Performance is available, but its image quality depends on the scene and output resolution. Scope behavior needs
@@ -32,7 +32,7 @@ more testing. The package does not imply broad adapter readiness or measured low
 ## Logs and uninstall
 
 `bin/ReScaleFrame.Loader.log` records carrier startup and refusals. `bin/ReScaleFrame.Anomaly.log` records profile
-selection, hook installation, SR/FG status and the sun cascade/depth-margin counters. Include those logs, the executable
+selection, hook installation, SR/FG status and the sun cascade and position-reconstruction counters. Include those logs, the executable
 name, GPU, provider/quality, resolution and a short recording with a bug report.
 
 To disable startup, set `[Loader] AutoStart=0` while the game is closed. To uninstall, close the game, remove this
