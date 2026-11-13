@@ -784,6 +784,32 @@ void __fastcall position_setup_hook(void* self, void* constant) {
     std::lock_guard lock(guard);
     controller.position_constant_setup(constant);
 }
+// cl_pos_decompress_params::setup is only ever reached through the binder's vtable (R_constant_setup::setup, slot 0).
+// The AVX build's body has a VEX instruction (vmovss) seven bytes in, which MinHook's decoder cannot relocate
+// (MH_ERROR_UNSUPPORTED_FUNCTION on the real executable; the SSE build is fine). So this site swaps the vtable slot on
+// both builds instead of detouring the body. The slot must hold the profiled function, and the function its guard.
+void** position_slot{};
+bool set_position_slot(void* value) noexcept {
+    DWORD old{};
+    if (!position_slot || !VirtualProtect(position_slot, sizeof(void*), PAGE_READWRITE, &old)) return false;
+    *position_slot = value;
+    DWORD ignored{};
+    VirtualProtect(position_slot, sizeof(void*), old, &ignored);
+    return true;
+}
+bool install_position_slot(std::byte* module) noexcept {
+    const auto& site = srp().sr_function_sites[site_position_setup];
+    auto* function = module + site.rva;
+    auto* slot = reinterpret_cast<void**>(module + srp().position_setup_vtable_rva);
+    if (position_slot == slot && *slot == reinterpret_cast<void*>(&position_setup_hook)) return true;   // already swapped
+    if (*slot != function || std::memcmp(function, site.expected.data(), site.expected.size()) != 0) return false;
+    originals[5] = function;
+    position_slot = slot;
+    return set_position_slot(reinterpret_cast<void*>(&position_setup_hook));
+}
+void remove_position_slot() noexcept {
+    if (position_slot && *position_slot == reinterpret_cast<void*>(&position_setup_hook)) (void)set_position_slot(originals[5]);
+}
 void __fastcall sun_cascades_hook(void* self) {
     SunCameraScope camera;
     reinterpret_cast<Unary>(originals[4])(self);
@@ -1218,7 +1244,7 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
     frame_camera = previous_camera = {};
     frame_cut = false;
     last_main_qpc = 0;
-    const std::array<HookSite, 6> sites{{
+    const std::array<HookSite, 5> sites{{
         {srp().sr_function_sites[site_phase_scene_prepare].name, srp().sr_function_sites[site_phase_scene_prepare].rva,
             srp().sr_function_sites[site_phase_scene_prepare].expected, reinterpret_cast<void*>(&prepare_hook), &originals[0]},
         {srp().sr_function_sites[site_phase_combine].name, srp().sr_function_sites[site_phase_combine].rva,
@@ -1228,11 +1254,14 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
         {srp().sr_function_sites[site_phase_blur].name, srp().sr_function_sites[site_phase_blur].rva,
             srp().sr_function_sites[site_phase_blur].expected, reinterpret_cast<void*>(&blur_hook), &originals[3]},
         {srp().sr_function_sites[site_sun_cascades].name, srp().sr_function_sites[site_sun_cascades].rva,
-            srp().sr_function_sites[site_sun_cascades].expected, reinterpret_cast<void*>(&sun_cascades_hook), &originals[4]},
-        {srp().sr_function_sites[site_position_setup].name, srp().sr_function_sites[site_position_setup].rva,
-            srp().sr_function_sites[site_position_setup].expected, reinterpret_cast<void*>(&position_setup_hook), &originals[5]}}};
+            srp().sr_function_sites[site_sun_cascades].expected, reinterpret_cast<void*>(&sun_cascades_hook), &originals[4]}}};
     const bool installed = hooks.created() ? hooks.enable() : hooks.install(module, image_size, sites);
     if (!installed) { say("Anomaly SR stage refused: guarded detour installation failed; game left stock."); return false; }
+    if (!install_position_slot(module)) {
+        (void)hooks.disable();
+        say("Anomaly SR stage refused: the position binder's vtable slot does not hold the profiled setup; game left stock.");
+        return false;
+    }
     if (configured_options.stage == 1 || configured_options.world_window()) geometry::geometry_set_rm_near_callback(&rm_near_callback);
     hooks_active = true;
     lock.unlock();
@@ -1275,6 +1304,7 @@ bool install(std::byte* module, uint32_t image_size, const BuildProfile& selecte
 bool quiesce() noexcept {
     if (!hooks.created()) return true;
     geometry::geometry_set_rm_near_callback(nullptr);
+    remove_position_slot();
     const bool disabled = hooks.disable();
     std::lock_guard lock(guard);
     controller.shutdown();
