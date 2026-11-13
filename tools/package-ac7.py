@@ -78,7 +78,17 @@ def dependency_notices(stage: Path) -> None:
     (stage / "ReScaleFrame/licenses/RUST-DEPENDENCIES.md").write_text("\n".join(index), encoding="utf-8")
 
 
-def main() -> None:
+def release_identity(revision=None):
+    """Standalone calls check cleanliness; a release-set caller supplies its checked commit."""
+    if revision is None and git("status", "--porcelain"):
+        raise RuntimeError("Commit the intended release source before packaging.")
+    current = git("rev-parse", "HEAD")
+    if revision is not None and revision != current:
+        raise RuntimeError("Release source commit changed during packaging.")
+    return current
+
+
+def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--streamline-root", required=True, type=Path)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
@@ -87,11 +97,9 @@ def main() -> None:
     parser.add_argument("--expected-proxy-sha256", help="Require the game-tested proxy bytes")
     parser.add_argument("--expected-plugin-sha256", help="Require the game-tested AC7 plugin bytes")
     parser.add_argument("--expected-overlay-sha256", help="Require the tested overlay bytes")
-    args = parser.parse_args()
-    if git("status", "--porcelain"):
-        raise RuntimeError("Commit the intended release source before packaging.")
+    args = parser.parse_args(argv)
+    revision = release_identity(release_revision)
     version = (ROOT / "VERSION").read_text().strip()
-    revision = git("rev-parse", "HEAD")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     stage = output / f"stage-ac7-{uuid.uuid4().hex[:8]}"
@@ -187,6 +195,9 @@ def main() -> None:
         for name, expected in manifest["files"].items():
             if hashlib.sha256(bundle.read(name)).hexdigest() != expected:
                 raise RuntimeError(f"Archive hash mismatch: {name}")
+    if game_only:
+        release_identity(revision)
+        return {"archive": str(archive), "revision": revision}
     source_archive = output / f"ReScaleFrame-{version}-source.zip"
     subprocess.run(["git", "archive", "--format=zip", f"--prefix=ReScaleFrame-{version}/",
                     "-o", str(source_archive), revision], cwd=ROOT, check=True)

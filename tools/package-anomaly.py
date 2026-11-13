@@ -208,15 +208,31 @@ def archive_stage(stage, archive, stamp):
                 bundle.writestr(entry, path.read_bytes(), compresslevel=9)
 
 
-def main():
+def source_additions():
+    """Only the reviewed, hash-pinned incorporated MIT source, never a game shader corpus."""
+    lock = json.loads((ROOT / 'runtime/shader_patch/yyjson.lock.json').read_text(encoding='utf-8'))
+    additions = {}
+    for name, expected in lock['files'].items():
+        relative = safe_relative('vendor/shader-patch/yyjson/' + name)
+        path = ROOT / relative
+        if path.is_symlink() or digest(path) != expected:
+            raise RuntimeError('Incorporated yyjson source differs from its pin: ' + name)
+        additions[str(relative)] = path
+    return additions
+
+
+def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--streamline-root', required=True, type=Path)
     parser.add_argument('--fidelityfx-root', type=Path, default=ROOT / 'vendor/fidelityfx')
     parser.add_argument('--xess-root', type=Path, default=ROOT / 'vendor/xess')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/releases/anomaly')
     parser.add_argument('--dry-run', action='store_true', help='validate inputs; permit dirty source; emit no archives')
-    args = parser.parse_args()
-    revision = git('rev-parse', 'HEAD') if args.dry_run else require_clean()
+    args = parser.parse_args(argv)
+    if args.dry_run and release_revision is not None:
+        raise ValueError('Release-set callers cannot bypass source checks with Anomaly dry-run.')
+    revision = (ac7.release_identity(release_revision) if release_revision is not None else
+                git('rev-parse', 'HEAD') if args.dry_run else require_clean())
     version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     validate_config(CONFIG)
     plan = input_plan(args)
@@ -258,6 +274,9 @@ def main():
     archive = output / f'ReScaleFrame-{version}-Anomaly-Windows-x64.zip'
     archive_stage(stage, archive, stamp)
     verify_archive(archive)
+    if game_only:
+        ac7.release_identity(revision)
+        return {'archive': str(archive), 'revision': revision}
     source = output / f'ReScaleFrame-{version}-Anomaly-source.zip'
     subprocess.run(['git', 'archive', '--format=zip', f'--prefix=ReScaleFrame-{version}/', '-o', str(source), revision],
                    cwd=ROOT, check=True)
@@ -265,11 +284,11 @@ def main():
     # Never append generated game-source trees or a local compiled cache.
     # Include the incorporated MIT dependency at the location CMake expects.
     with zipfile.ZipFile(source, 'a') as bundle:
-        for name in ('src/yyjson.c', 'src/yyjson.h', 'LICENSE'):
-            entry = zipfile.ZipInfo(f'ReScaleFrame-{version}/vendor/shader-patch/yyjson/' + name, stamp)
+        for name, path in source_additions().items():
+            entry = zipfile.ZipInfo(f'ReScaleFrame-{version}/' + name, stamp)
             entry.compress_type = zipfile.ZIP_DEFLATED
             entry.external_attr = 0o100644 << 16
-            bundle.writestr(entry, (ROOT / 'vendor/shader-patch/yyjson' / name).read_bytes(), compresslevel=9)
+            bundle.writestr(entry, path.read_bytes(), compresslevel=9)
     with zipfile.ZipFile(source) as bundle:
         if len(bundle.namelist()) != len(set(bundle.namelist())) or bundle.testzip() is not None:
             raise RuntimeError('Corresponding-source archive duplicate entry or CRC failure.')
