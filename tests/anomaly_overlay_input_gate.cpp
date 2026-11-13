@@ -123,6 +123,25 @@ void slot_numbers_match_the_com_vtable() {
     check(stub.last_method == 13, "vtable slot 13 is SetCooperativeLevel");
 }
 
+void latency_observes_only_hardware_records_returned_to_the_engine() {
+    current_capture=0; InputGate gate(capture,nullptr); Stub keyboard;
+    gate.add(iface(keyboard),DeviceKind::Keyboard); keyboard.events={event(key_w,0x80)};
+    DIDEVICEOBJECTDATA out[4]{}; DWORD count=4; bool hardware{};
+    check(gate.get_data(iface(keyboard),calls,sizeof(DIDEVICEOBJECTDATA),out,&count,0,&hardware)==DI_OK && hardware,
+        "received hardware key is a latency input fact");
+    current_capture=capture_keyboard; count=4; hardware=true;
+    check(gate.get_data(iface(keyboard),calls,sizeof(DIDEVICEOBJECTDATA),out,&count,0,&hardware)==DI_OK && count==1 && !hardware,
+        "synthetic release on overlay capture is not new hardware input");
+    count=4; hardware=true;
+    check(gate.get_data(iface(keyboard),calls,sizeof(DIDEVICEOBJECTDATA),out,&count,DIGDD_PEEK,&hardware)==DI_OK && !hardware,
+        "peek/captured records are not received hardware");
+    current_capture=0; count=4;
+    (void)gate.get_data(iface(keyboard),calls,sizeof(DIDEVICEOBJECTDATA),out,&count,0,&hardware);
+    keyboard.events={event(key_a,0x80)}; count=4;
+    check(gate.get_data(iface(keyboard),calls,sizeof(DIDEVICEOBJECTDATA),out,&count,0,&hardware)==DI_OK && hardware,
+        "fresh post-overlay hardware resumes latency facts");
+}
+
 void closed_panel_passes_everything_through() {
     current_capture = 0;
     InputGate gate(capture, nullptr);
@@ -364,6 +383,7 @@ void engine_flush_requests_pass_through() {
 
 int main() {
     slot_numbers_match_the_com_vtable();
+    latency_observes_only_hardware_records_returned_to_the_engine();
     closed_panel_passes_everything_through();
     untracked_devices_are_never_touched();
     captured_mouse_sees_nothing_and_edges_flush();

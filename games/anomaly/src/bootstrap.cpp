@@ -3,6 +3,7 @@
 #include "native_observer.h"
 #include "build_profile.h"
 #include "fg_stage.h"
+#include "input_hooks.h"
 #include "overlay_service.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
@@ -129,6 +130,18 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
             rsf::anomaly::fg::configure(fg_options, log, nullptr);
             (void)rsf::anomaly::fg::install(runtime, *build);
         }
+    }
+    if (rsf::anomaly::fg::installed() && !observed) {
+        const char* reason = nullptr;
+        if (rsf::anomaly::overlay::install_input_hooks(rsf::anomaly::overlay::input_gate(), &reason)) {
+            rsf::anomaly::overlay::set_input_observer(+[](rsf::anomaly::overlay::DeviceKind kind) noexcept {
+                rsf::anomaly::input::received(kind == rsf::anomaly::overlay::DeviceKind::Keyboard ?
+                    RSF_GAME_INPUT_KEYBOARD : RSF_GAME_INPUT_MOUSE);
+            });
+            if (!rsf::anomaly::input::install(reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr)), build->image_size(), *build, &reason))
+                log(nullptr, reason ? reason : "Anomaly input hook refused.");
+            else log(nullptr, "Anomaly input facts: guarded CInput slot 0 installed; buffered keyboard/mouse reads observed.");
+        } else log(nullptr, reason ? reason : "Anomaly DirectInput observation refused.");
     }
     if (observe && !observed) {
         const auto observe_status = start_observation(runtime, *build);

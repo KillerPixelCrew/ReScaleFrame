@@ -85,6 +85,7 @@ void release(void* object) noexcept {
 
 // ---- DirectInput ---------------------------------------------------------------------------------
 InputGate* gate{};
+std::atomic<void (*)(DeviceKind) noexcept> input_observer{};
 
 // The trampoline of the method the engine called, found from the object's own vtable so Unicode and
 // ANSI device classes each reach their own original. An unhooked slot is called directly.
@@ -135,8 +136,16 @@ HRESULT STDMETHODCALLTYPE hook_get_device_state(void* self, DWORD size, void* da
 }
 HRESULT STDMETHODCALLTYPE hook_get_device_data(void* self, DWORD object_size, DIDEVICEOBJECTDATA* data, DWORD* count, DWORD flags) {
     const auto calls = calls_for(self);
-    try { if (gate) return gate->get_data(self, calls, object_size, data, count, flags); } catch (...) {}
-    return calls.get_data(self, object_size, data, count, flags);
+    HRESULT result{}; bool hardware_data{};
+    try { result = gate ? gate->get_data(self, calls, object_size, data, count, flags, &hardware_data) :
+        calls.get_data(self, object_size, data, count, flags); }
+    catch (...) { result = calls.get_data(self, object_size, data, count, flags); }
+    if (hardware_data && SUCCEEDED(result) && data && count && *count && !(flags & DIGDD_PEEK) && gate) {
+        DeviceKind kind{};
+        if (const auto observer = input_observer.load(std::memory_order_acquire); observer && gate->device_kind(self, kind))
+            observer(kind);
+    }
+    return result;
 }
 HRESULT STDMETHODCALLTYPE hook_set_cooperative_level(void* self, HWND window, DWORD flags) {
     const auto original = reinterpret_cast<HRESULT (STDMETHODCALLTYPE*)(void*, HWND, DWORD)>(
@@ -237,10 +246,13 @@ struct DummyChain {
 };
 }
 
+void set_input_observer(void (*observer)(DeviceKind) noexcept) noexcept {
+    input_observer.store(observer, std::memory_order_release);
+}
 bool install_input_hooks(InputGate& input, const char** reason) noexcept {
     const char* unused = nullptr;
     if (!reason) reason = &unused;
-    if (input_installed.exchange(true)) { *reason = "input hooks were already installed"; return false; }
+    if (input_installed.exchange(true)) { *reason = "input hooks already own a different gate"; return gate == &input; }
     if (!initialize_minhook(reason)) return false;
     // Hooks are created for all probed device classes first and enabled together, so a refusal
     // leaves no half-routed device class.

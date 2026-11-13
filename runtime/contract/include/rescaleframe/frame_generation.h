@@ -65,6 +65,7 @@ typedef uint32_t rsf_pacing_owner;
 #define RSF_PACING_NONE 0u
 #define RSF_PACING_REFLEX 1u
 #define RSF_PACING_XELL 2u
+#define RSF_PACING_ANTILAG2 3u
 typedef uint32_t rsf_reflex_mode;
 #define RSF_REFLEX_OFF 0u
 #define RSF_REFLEX_ON 1u

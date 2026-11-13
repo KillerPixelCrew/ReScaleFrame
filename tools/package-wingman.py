@@ -43,6 +43,7 @@ def main() -> None:
         ("LICENSE", "ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt"),
         ("sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
         ("build/windows-x64/_deps/minhook-src/LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
+        ("runtime/orchestrator/ANTILAG2-LICENSE.txt", "ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt"),
         ("runtime/backends/dlss/third_party/mfg_unlocker/LICENSE", "ReScaleFrame/licenses/MFG-Unlocker-MIT.txt"),
     ):
         destination = stage / target

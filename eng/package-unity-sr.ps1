@@ -41,7 +41,8 @@ $taskExpected = @(
     'ReScaleFrame/fidelityfx/license.md', 'ReScaleFrame/fidelityfx/3rdpartynotice.md',
     'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/libxess_fg.dll', 'ReScaleFrame/xess/libxell.dll',
     'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt',
-    'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
+    'ReScaleFrame/MFG-Unlocker-LICENSE.txt',
+    'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt'
 )
 if (!$taskDeployment) {
     if (& git -C $taskRoot status --porcelain) { throw 'Commit the intended source before packaging Release artifacts.' }
@@ -68,6 +69,7 @@ if (!$taskDeployment) {
                 else { Join-Path $taskRoot "vendor/xess/bin/$taskLeaf" }; break
             }
             'ReScaleFrame/MFG-Unlocker-LICENSE.txt' { Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'; break }
+            'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt' { Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'; break }
             default { Join-Path $taskBin $taskLeaf }
         }
         $taskDestination = Join-Path $taskGame $taskRelative

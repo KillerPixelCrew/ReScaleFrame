@@ -80,6 +80,8 @@ int32_t rsf_d3d11_present_switch_result(void);
 uint64_t rsf_d3d11_present_generation(void);
 /* Main-thread calls skip a provider during retirement, rather than blocking window messages. */
 int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation);
+/* Runtime-only mechanism: the core supplies the chosen owner. This function never chooses another pacer. */
+int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation);
 int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller);
 int32_t rsf_d3d11_present_acquire(uint64_t id);
 int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message);

@@ -151,6 +151,15 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_CPU_INPUT_EVENT 5u
 /* After native BeginFrame was queued, before the engine's time update and input handling. */
 #define RSF_GAME_CPU_PACING 6u
+/* CPU event version 1: engine facts, with pacing owned by the Runtime at INPUT_SAMPLE. */
+#define RSF_GAME_CPU_EVENT_VERSION 1u
+#define RSF_GAME_CPU_INPUT_KEYED 1u
+/* Runtime-generated substitute for a missing input boundary, never a measured input poll. */
+#define RSF_GAME_CPU_INPUT_SUBSTITUTE 2u
+/* INPUT_EVENT with a delivered/dequeued message ID; source 0 means no engine frame owns it yet. */
+#define RSF_GAME_CPU_WINDOW_MESSAGE 4u
+/* FRAME_END: the engine did not render/present this source (for example an inactive update). */
+#define RSF_GAME_CPU_RENDER_SKIPPED 8u
 #define RSF_GAME_INPUT_KEYBOARD 1u
 #define RSF_GAME_INPUT_MOUSE 2u
 #define RSF_GAME_INPUT_CONTROLLER 4u
@@ -168,6 +177,10 @@ typedef struct rsf_game_cpu_event {
        candidate. The runtime validates its SDK message ID. Never contains key/button values. */
     uint32_t input_kind;
     uint32_t message_id;
+    /* Game ABI 21, append-only. Zero version retains the legacy pre-input PACING fact.
+       Version 1 INPUT_KEYED frames pace at the actual INPUT_SAMPLE callback, once per source. */
+    uint32_t event_version;
+    uint32_t flags;
 } rsf_game_cpu_event;
 /* Runs at the actual native CPU boundary. Borrowed only during the call; no graphics-context
    work may be performed here. FRAME_END closes CPU ownership, not GPU or Present ownership. */

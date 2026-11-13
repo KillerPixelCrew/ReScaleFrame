@@ -9,7 +9,8 @@
 //   CHUDManager::RenderUI  fg::ui_boundary         (SR-off depth/motion pass, FINAL_SCENE, HUD-less copy, FG dump)
 //   End, before          fg::end_before            (submission end, WINDOW scope)
 //   Present              the bridge facade the engine received from D3D11CreateDeviceAndSwapChain (cold start)
-//   End, after           fg::end_after             (frame end, next frame begin, the one pacing sleep)
+//   CInput::OnFrame      fg::input_begin           (actual input boundary; Runtime decides the single pacing call)
+//   End, after           fg::end_after             (frame end)
 //
 // Sequence: gameplay, a main-menu run (no UI boundary), gameplay with the overlay panel drawn in before_present, a
 // scope run (every other engine frame an SVP frame without Present), gameplay again, a device reset (ResizeBuffers),
@@ -24,6 +25,8 @@
 #include "sr_stage.h"
 #include "sr_temporal.h"
 #include <rescaleframe/d3d11_fg_api.h>
+#include <rescaleframe/native_cpu.h>
+#include <vector>
 #include <rescaleframe/d3d11_present_api.h>
 #include <d3d11_1.h>
 #include <dxgi1_6.h>
@@ -121,7 +124,51 @@ void overlay_sink(void*, IDXGISwapChain*) noexcept {
 }
 }
 
+namespace {
+std::vector<rsf_game_cpu_event> input_facts;
+int (*core_cpu)(const rsf_game_cpu_event*);
+int observe_input(const rsf_game_cpu_event* event) { input_facts.push_back(*event); return core_cpu(event); }
+int input_contract(const rsf::anomaly::BuildProfile& build) {
+    rsf_native_cpu_release();
+    rsf_d3d11_present_api present{}; present.struct_size=sizeof(present); present.abi_version=RSF_D3D11_PRESENT_API_VERSION;
+    rsf_d3d11_fg_api api{}; api.struct_size=sizeof(api); api.abi_version=RSF_D3D11_FG_API_VERSION;
+    CHECK(rsf_get_d3d11_present_api(&present)==RSF_OK && rsf_get_d3d11_fg_api(&api)==RSF_OK);
+    present.install=+[](const rsf_d3d11_present_setup*) { return 1; }; // no graphics/SDK creation in this contract
+    core_cpu=api.cpu; api.cpu=&observe_input;
+    fg::Options options{}; options.bridge=true; fg::configure(options,nullptr,nullptr);
+    CHECK(fg::install_with(present,api));
+    CHECK(build.input && build.input->frame.rva && build.input->frame_vtable_rva);
+    fg::input_begin(100);
+    CHECK(input_facts.size()==3 && input_facts[0].stage==RSF_GAME_CPU_FRAME_BEGIN &&
+        input_facts[1].stage==RSF_GAME_CPU_INPUT_SAMPLE && input_facts[2].stage==RSF_GAME_CPU_SIMULATION_BEGIN);
+    const auto session=input_facts[0].session_id, first=input_facts[0].source_frame_id;
+    fg::input_received(RSF_GAME_INPUT_KEYBOARD); fg::input_received(RSF_GAME_INPUT_KEYBOARD);
+    fg::input_received(RSF_GAME_INPUT_MOUSE); fg::input_received(RSF_GAME_INPUT_CONTROLLER);
+    fg::render_begin(100,1280,720); fg::scope_frame(); fg::end_before(); fg::end_after();
+    rsf_native_cpu_frame frame{}; frame.struct_size=sizeof(frame);
+    CHECK(rsf_native_cpu_read(session,first,&frame) && frame.ended && frame.input_mask==7);
+    CHECK(frame.input_events[0]==1 && frame.input_events[1]==1 && frame.input_events[2]==1);
+    rsf_native_cpu_ping_message(0xc123); fg::input_received(0,0xc123); // unframed delivered message
+    CHECK(input_facts.back().source_frame_id==0 && (input_facts.back().flags & RSF_GAME_CPU_WINDOW_MESSAGE));
+    fg::input_begin(101); const auto second=input_facts.back().source_frame_id;
+    CHECK(rsf_native_cpu_read(session,second,&frame) && frame.pings==1 && frame.input_mask==0);
+    fg::render_begin(101,1280,720); fg::end_before(); fg::end_after();
+    fg::input_begin(102); fg::input_begin(103); // actual update without a render is explicitly closed
+    bool skipped{}; for(const auto& event:input_facts) skipped |= event.stage==RSF_GAME_CPU_FRAME_END && (event.flags & RSF_GAME_CPU_RENDER_SKIPPED);
+    CHECK(skipped); fg::render_begin(103,1280,720); fg::end_before(); fg::end_after();
+    fg::render_begin(104,1280,720); const auto paint=input_facts.back().source_frame_id;
+    CHECK(rsf_native_cpu_read(session,paint,&frame) && (frame.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE));
+    fg::end_before(); fg::end_after();
+    for(const auto& event:input_facts) CHECK(event.stage!=RSF_GAME_CPU_PACING);
+    rsf_native_cpu_counters totals{}; totals.struct_size=sizeof(totals); CHECK(rsf_native_cpu_counters_get(&totals));
+    CHECK(totals.order_violations==0 && totals.substitutes==1 && totals.pings==1);
+    std::printf("%s input facts: %d failures\n",build.label,failures); return failures ? 1 : 0;
+}
+}
+
 int main(int argc, char** argv) {
+    if(argc==3 && std::strcmp(argv[1],"--input-contract")==0)
+        return input_contract(std::strcmp(argv[2],"avx")==0 ? rsf::anomaly::avx_build : rsf::anomaly::standard_build);
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 4) { std::puts("SKIP: <sr off|5> <backend 1|3|5> <vendor root> [--switch]"); return 77; }
     const bool stage5 = std::strcmp(argv[1], "5") == 0;
@@ -253,6 +300,7 @@ int main(int argc, char** argv) {
         const float x = 0.002f * float(engine_frame);
         const auto camera = camera_at(x);
         fg::camera(camera.view.data(), camera.projection.data());
+        fg::input_begin(engine_frame); // fixture engine input boundary, before simulation/render
         fg::render_begin(engine_frame, width, height);
         // World: a moving box over a gradient background; depth 0.5; motion target valid for the box.
         const float t = float(engine_frame % 240) / 240.0f;

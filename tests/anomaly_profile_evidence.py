@@ -19,11 +19,13 @@ CASES = {
 }
 
 
-def run(script, build, profile=None):
+def run(script, build, profile=None, input_profile=None):
     args = [sys.executable, '-I', str(ROOT / 'tests' / ('anomaly_' + script + '_evidence.py')),
             '--verify', '--exe', build]
     if profile:
         args.extend(['--profile', str(profile)])
+    if input_profile:
+        args.extend(['--input-profile', str(input_profile)])
     return subprocess.run(args, capture_output=True, text=True, timeout=120)
 
 
@@ -79,9 +81,33 @@ def main():
                     result = run(domain, build, path)
                     assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
                     checks += 1
+            if domain == 'fg':
+                input_text = (ROOT / 'games/anomaly/src/input_profile.h').read_text(encoding='utf-8')
+                begin = input_text.index('// ---- ' + section + ' 1.5.3 DX11')
+                stop = input_text.find('// ---- ', begin + 10)
+                stop = len(input_text) if stop < 0 else stop
+                part = input_text[begin:stop]
+                changes = []
+                for m in re.finditer(r'signature\("([0-9a-f]{32})"\)', part):
+                    changes.append((begin+m.start(1), begin+m.end(1), '00'+m[1][2:]))
+                m = re.search(r'signature\("[0-9a-f]+"\)\},\s*(0x[0-9a-f]+),', part)
+                changes.append((begin+m.start(1), begin+m.end(1), hex(int(m[1],16)+8)))
+                m = list(re.finditer(r'"([0-9a-f]{64,})"', part))[-1]
+                changes.append((begin+m.start(1), begin+m.end(1), m[1][:-2]+'cc'))
+                for field in ('keyboard','mouse'):
+                    m = re.search(r'input_'+field+r'_offset = (0x[0-9a-f]+)', input_text)
+                    changes.append((m.start(1),m.end(1),hex(int(m[1],16)+8)))
+                assert len(changes)==7
+                with tempfile.TemporaryDirectory(prefix='rsf-input-evidence-') as temp:
+                    for a,b,new in changes:
+                        path=pathlib.Path(temp)/'input_profile.h'
+                        path.write_text(input_text[:a]+new+input_text[b:],encoding='utf-8')
+                        result=run('fg',build,input_profile=path)
+                        assert result.returncode != 0 and 'AssertionError' in result.stderr, (build,result.stdout,result.stderr)
+                        checks+=1
             extra = '; cascade and reconstruction guard/owner mutations refused' if domain == 'sr' else ''
             print(f'PASS: {build} {domain}: original accepted; guard/RVA/layout mutations refused{extra}', flush=True)
-    print(f'PASS: {checks} checks (8 originals, 40 negative mutations)')
+    print(f'PASS: {checks} checks (8 originals, 54 negative mutations)')
 
 
 if __name__ == '__main__':

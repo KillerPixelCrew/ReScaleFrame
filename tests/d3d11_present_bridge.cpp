@@ -425,7 +425,13 @@ int main(int argc, char** argv) {
             if (!rsf_ac7_render_scope_open(scopes, &commands, &full_frame, &frame_ticket)) return 1;
             run(commands); // Native BeginFrame can execute before game-thread Reflex sleep.
             cpu_event(id, RSF_GAME_CPU_PACING);
-            if (rsf_d3d11_present_backend() == RSF_FG_BACKEND_DLSS) ++sleeps_expected;
+            rsf_native_fg_status pacing{}; pacing.struct_size=sizeof(pacing);
+            if (!rsf_native_fg_status_get(&pacing)) return 1;
+            // Pacing is a core choice, independent of which FG provider is selected.
+            if (pacing.vendor.pacing_owner==RSF_PACING_REFLEX) ++sleeps_expected;
+            rsf_streamline_latency_status paced{}; paced.struct_size=sizeof(paced);
+            if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(),&paced)!=RSF_BACKEND_OK ||
+                paced.sleep_calls!=sleeps_expected) return 1;
             if (!switching && rsf_streamline_host_sleep(rsf_d3d11_present_host(), id) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return 1;
             MSG message{}; PeekMessageW(&message, window, 0, 0, PM_NOREMOVE);
             cpu_event(id, RSF_GAME_CPU_INPUT_SAMPLE);
@@ -498,7 +504,9 @@ int main(int argc, char** argv) {
             rsf_native_fg_status activity{}; activity.struct_size = sizeof(activity);
             if (!rsf_native_fg_status_get(&activity)) return 1;
             const auto provider = frame_provider;
-            if (provider == RSF_FG_BACKEND_DLSS && activity.vendor.effective_reflex !=
+            // Present may complete a queued provider switch. Historical frame eligibility
+            // then belongs to the old provider, while latency status describes the new owner.
+            if (provider == RSF_FG_BACKEND_DLSS && rsf_d3d11_present_backend() == provider && activity.vendor.effective_reflex !=
                 (activity.vendor.effective_mode == RSF_FG_OFF ? options.reflex_mode : options.reflex_mode ? options.reflex_mode : RSF_REFLEX_ON)) { std::printf("Reflex mismatch source=%llu effective=%u requested=%u mode=%u\n", static_cast<unsigned long long>(id), activity.vendor.effective_reflex, options.reflex_mode, activity.vendor.effective_mode); return 1; }
             if (switching) {
                 std::printf("adapter source=%llu backend=%u mode=%u active=%u result=%d generated=%u max=%u\n",

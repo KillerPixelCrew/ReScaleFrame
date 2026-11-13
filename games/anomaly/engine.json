@@ -17,11 +17,21 @@
   },
   "deferred_position_reconstruction": {
     "evidence": "../../docs/research/anomaly-sr-seam.md#jittered-deferred-position-reconstruction-13-november-2026",
-    "validation": "built; numeric and six-stage staging fixtures; both exact-build binary evidence; game acceptance pending",
+    "validation": "user game-accepted after guarded vtable-slot fix 43619d9 (corrected=4505 refused=0); both exact-build evidence retained",
     "binder_rvas": {
       "AnomalyDX11.exe": "0x834f70",
       "AnomalyDX11AVX.exe": "0x82c1c0"
     },
     "policy": "correct xy by render-pixel jitter times zw only while world raster jitter is active; preserve unjittered sun fitting"
+  },
+  "input_keyed_latency": {
+    "evidence": "../../docs/research/anomaly-fg.md#frame-timeline-pacing-and-latency-markers",
+    "validation": "both native maps and actual-image slot-swap probes verified; 62 evidence checks; 115 native tests passed and 5 skipped; explicit D3D11 bridge and Reflex/PCL fixtures passed; no game or AMD hardware acceptance",
+    "frame_rvas": {
+      "AnomalyDX11.exe": "0x67810",
+      "AnomalyDX11AVX.exe": "0x66540"
+    },
+    "controller": "no stock OnFrame controller poll; protocol supports the kind",
+    "contract": "Game ABI 21 CPU event version 1; core owns pacing and marker policy"
   }
 }

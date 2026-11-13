@@ -67,7 +67,14 @@ int main(int argc, char** argv)
             if (result != 0) { std::printf("Reflex mode %u refused=%d\n", frame / 4, result); return result == RSF_BACKEND_ERROR_NOT_SUPPORTED ? 77 : 1; }
         }
         const uint64_t id = UINT64_C(0x100000000) + frame + 1;
-        if (rsf_streamline_host_begin(host, id) != 0) return 1;
+        if (rsf_streamline_host_acquire(host, id) != 0) return 1;
+        rsf_streamline_latency_status input_state{}; input_state.struct_size = sizeof(input_state);
+        if (rsf_streamline_host_latency_status(host, &input_state) != 0 || !input_state.pcl_message_id) return 1;
+        // Model a queued ping and controller receipt before pre-input pacing. Both markers
+        // must survive a combined fact, while repeating that fact emits neither twice.
+        if (rsf_streamline_host_input(host, id, 4, input_state.pcl_message_id) != 0 ||
+            rsf_streamline_host_input(host, id, 4, input_state.pcl_message_id) != 0 ||
+            rsf_streamline_host_sleep(host, id) != 0) return 1;
         const bool pressed = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
         if (rsf_streamline_host_marker(host, id, RSF_LATENCY_INPUT_SAMPLE, 0) != 0 ||
             rsf_streamline_host_marker(host, id, RSF_LATENCY_SIMULATION_START, 0) != 0) return 1;
@@ -94,7 +101,7 @@ int main(int argc, char** argv)
     std::printf("profile=%u sleepCalls=%llu markerCalls=%llu lastID=%llu ReflexAvailable=%u latencyReport=%u\n",
         state.profile, static_cast<unsigned long long>(state.sleep_calls), static_cast<unsigned long long>(state.marker_calls),
         static_cast<unsigned long long>(state.last_begin_id), state.low_latency_available, state.latency_report_available);
-    if (state.sleep_calls != (profile == RSF_SL_PROFILE_PCL ? 0u : 12u) || state.marker_calls != 72) return 1;
+    if (state.sleep_calls != (profile == RSF_SL_PROFILE_PCL ? 0u : 12u) || state.marker_calls != 96) return 1;
     heap.Reset(); fence.Reset(); list.Reset(); allocator.Reset(); swap.Reset();
     DestroyWindow(window); UnregisterClassW(wc.lpszClassName, wc.hInstance);
     if (rsf_streamline_host_destroy(host) != 0) return 1;

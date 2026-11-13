@@ -50,12 +50,13 @@ public:
     void remove(void* device);
     void cooperative_level(void* device, DWORD flags);
     bool tracked(void* device);
+    bool device_kind(void* device, DeviceKind& kind);
 
     HRESULT acquire(void* device, const DeviceCalls&);
     HRESULT unacquire(void* device, const DeviceCalls&);
     HRESULT get_state(void* device, const DeviceCalls&, DWORD size, void* data);
     HRESULT get_data(void* device, const DeviceCalls&, DWORD object_size, DIDEVICEOBJECTDATA* data,
-        DWORD* count, DWORD flags);
+        DWORD* count, DWORD flags, bool* hardware_data = nullptr);
 
 private:
     struct Entry {

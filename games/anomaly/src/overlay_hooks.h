@@ -17,7 +17,9 @@ struct PresentSink {
 };
 
 // Both return false with `reason` (a static string) and install nothing further on refusal.
-// One call per process; a second returns false.
+// Present installs once. Input installation is idempotent for the same gate.
 bool install_present_hooks(const PresentSink& sink, const char** reason) noexcept;
 bool install_input_hooks(InputGate& gate, const char** reason) noexcept;
+// Reports successful buffered data returned to the engine. No key/button contents cross this callback.
+void set_input_observer(void (*observer)(DeviceKind) noexcept) noexcept;
 }

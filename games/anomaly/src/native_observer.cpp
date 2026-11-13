@@ -4,6 +4,7 @@
 #include "native_hooks.h"
 #include "build_profile.h"
 #include "fg_stage.h"
+#include "input_hooks.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
 #include <rescaleframe/game_plugin_util.h>
@@ -221,6 +222,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept {
     if (sr::options().selected() && !sr::install(image, build->image_size(), *build)) report("Anomaly SR stage not installed; rendering is stock.");
     // Record variants for live pack enablement; disabled packs keep draws stock.
     if (!motion::install(image, build->image_size(), *build)) report("Anomaly motion stage not installed; shaders stay stock.");
+    if (!input::enable()) { reason = "Input fact hook enable refused."; return RSF_ERROR_NATIVE_REFUSED; }
     active.store(true, std::memory_order_release);
     reason = geometry_installed
         ? "Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
@@ -238,6 +240,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept {
     if (const auto error = rsf_game::validate(args); error != RSF_OK) return error;
     std::lock_guard lock(control_guard);
     active.store(false, std::memory_order_release);
+    if (!input::disable()) return RSF_ERROR_NATIVE_REFUSED;
     if (!sr::quiesce()) return RSF_ERROR_NATIVE_REFUSED;
     if (!motion::quiesce()) return RSF_ERROR_NATIVE_REFUSED;
     if (!hooks.disable()) return RSF_ERROR_NATIVE_REFUSED;
@@ -245,7 +248,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept {
         if (!geometry::disable_native_geometry()) return RSF_ERROR_NATIVE_REFUSED;
         geometry_installed = false;
     }
-    return in_flight.load(std::memory_order_acquire) ? RSF_ERROR_BUSY : RSF_OK;
+    return in_flight.load(std::memory_order_acquire) || !input::idle() ? RSF_ERROR_BUSY : RSF_OK;
 }
 rsf_result stop(const rsf_game_control_args* args) noexcept {
     const auto result = quiesce(args);

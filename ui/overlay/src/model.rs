@@ -106,7 +106,7 @@ pub struct GenerationStats {
     pub mfg_unlock_status: u32,
     /// SDK-reported low-latency availability (Reflex or XeLL).
     pub reflex_available: bool,
-    /// Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL.
+    /// Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL, 3 AMD Anti-Lag 2.
     pub latency_owner: u32,
     /// Frames the pacing owner has paced.
     pub latency_paced_frames: u64,

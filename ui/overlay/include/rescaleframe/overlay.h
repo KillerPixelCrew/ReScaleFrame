@@ -177,7 +177,7 @@ typedef struct rsf_overlay_stats {
        the last `intent.ui_preferences` the host stored, or zero for the defaults. Hosts save it
        next to the FPS overlay switch. */
     uint32_t ui_preferences;
-    /* ABI 17. Latency technology that owns pacing (0 none, 1 NVIDIA Reflex, 2 Intel XeLL) and the
+    /* ABI 17. Latency technology that owns pacing (0 none, 1 NVIDIA Reflex, 2 Intel XeLL, 3 AMD Anti-Lag 2) and the
        frames it has actually paced. A rising count shows the SDK is running. */
     uint32_t latency_pacing_owner;
     uint32_t latency_reserved;

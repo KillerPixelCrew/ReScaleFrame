@@ -994,6 +994,15 @@ extern "C" int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation) {
         return api && context ? api->begin_frame(context, id) : RSF_BACKEND_OK;
     });
 }
+extern "C" int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation) {
+    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
+        if (generation) *generation=chain_generation.load();
+        if (!id || owner>RSF_PACING_ANTILAG2) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        if (owner==RSF_PACING_REFLEX) return host ? rsf_streamline_host_sleep(host,id) : RSF_BACKEND_ERROR_NOT_READY;
+        if (owner==RSF_PACING_XELL) return api && context ? api->begin_frame(context,id) : RSF_BACKEND_ERROR_NOT_READY;
+        return RSF_BACKEND_OK; // Anti-Lag update lives in the core; none has no sleeper.
+    });
+}
 extern "C" int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller) {
     return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
         if (generation != chain_generation.load()) return RSF_BACKEND_ERROR_NOT_READY;
@@ -1007,8 +1016,10 @@ extern "C" int32_t rsf_d3d11_present_acquire(uint64_t id) {
     });
 }
 extern "C" int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message) {
-    return with_provider([&](const rsf_generation_provider*, void*, rsf_streamline_host* host) -> int32_t {
-        return host ? rsf_streamline_host_input(host, id, kinds, message) : RSF_BACKEND_OK;
+    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
+        const auto result = host ? rsf_streamline_host_input(host, id, kinds, message) : RSF_BACKEND_OK;
+        if (result != RSF_BACKEND_OK || host_paced.load() || !api || !context || !kinds) return result;
+        return api->marker(context, RSF_LATENCY_INPUT_SAMPLE, id, (kinds & 4u) ? 1u : 0u);
     });
 }
 extern "C" int32_t rsf_d3d11_present_abort(uint64_t id) {

@@ -382,3 +382,47 @@ or Runtime change. Reproduce with `-DRSF_ANOMALY_SR_VENDOR_ROOT=D:/Coding/ReScal
 Logs: `.local/anomaly/position-reconstruction/{configure,build-full,configure-pinned-vendors,build-final,ctest,
 ctest-stale-vendors,evidence-suite,package-tests,fg-pinned-probe}.log`. The explicit assigned-directory build/tests
 replace `eng/verify.ps1`, which hardcodes the prohibited shared build directory. No Rust behavior or public ABI changed.
+
+## Input facts and latency boundary
+
+13 November 2026, source revision 028ccf5f5189b393396480076b11e40852ba3ecd, implementation baseline 43619d9.
+CInput was located through its RTTI primary pureFrame table, then every instruction in OnFrame was read on each build.
+The callback tests pKeyboard at +0x28, calls KeyUpdate, then tests pMouse at +0x20 and calls MouseUpdate; its other three
+direct calls are statistics/timing. The two update bodies issue GetDeviceData through DirectInput slot 10 (+0x50), with
+24-byte DIDEVICEOBJECTDATA and an initial 64-entry buffer, including reacquire/retry. No XInput polling is present in this
+stock callback; the matched source implementation is commented out. Third-party controller mods are outside this mapping.
+
+| Site | Standard RVA / expected16 | AVX RVA / expected16 |
+| --- | --- | --- |
+| CInput::OnFrame | 0x67810 / 48895c2408574883ec20833d0f81cd00 | 0x66540 / 48895c2408574883ec20833ddf73cc00 |
+| CInput::KeyUpdate | 0x66db0 / 4c8bdc534881ec40060000833d7a10cd | 0x65ae0 / 4c8bdc534881ec40060000833d4a03cc |
+| CInput::MouseUpdate | 0x67020 / 4c8bdc534881ec80060000488bd941c7 | 0x65d50 / 4c8bdc534881ec80060000488bd941c7 |
+| CInput primary vtable, slot 0 | 0xa55a20 -> 0x67810 | 0xa42a60 -> 0x66540 |
+
+All three expected16 guards are unique in each executable's .text. input_profile.h also carries the complete unique
+0xc3-byte OnFrame guard, checked before replacing the slot. The pointer must still hold the exact profiled function.
+Both actual executables were mapped read-only with DONT_RESOLVE_DLL_REFERENCES; the production installer swapped,
+restored, re-enabled and restored their slots successfully without executing game code. No new detour decoder or stack
+layout assumption is required. Synthetic install fixtures reject all three altered entries, a changed final body byte
+and an altered slot target on both profiles. FG evidence independently reconstructs RTTI, field offsets, call order and
+buffered API arguments; its negative suite also alters all new entries, full body, table RVA and both field offsets.
+
+Constructor references establish callback registration rather than relying only on RTTI similarity. Standard
+CInput::CInput at 0x668c0 loads its primary table at 0x668df, then registers primary this with Device.seqFrame at
+0xd379c8: mov r8d,0x33333333 at 0x66a99, mov rdx,rbx at 0x66a9f, call CRegistrator::Add at 0x66aa2 -> 0x2c2d0.
+AVX constructor 0x655f0 loads the table at 0x6560f and registers with seqFrame 0xd259c8 using the same high priority
+at 0x657cd, primary this at 0x657d3, and Add at 0x657d6 -> 0x2ca40. Both seqFrame globals are Device.dwFrame +0x348.
+The matched source registers CInput at REG_PRIORITY_HIGH, before the ordinary frame update callbacks. The wrapper
+calls the core synchronously before invoking the original OnFrame, so pacing returns before either DirectInput read.
+
+The engine callback reports facts; the core owns pacing, marker mapping, registered-ping routing, tokens and per-source
+deduplication. See [the corrected timeline](anomaly-fg.md#frame-timeline-pacing-and-latency-markers) and
+[the event contract](input-keyed-latency.md). Counters to check in game are Latency window inputs_keyboard/mouse,
+pcl_ping with a tool, zero marker_order_violations, and the Reflex driver report's matching input counters. Anti-Lag 2
+is a shared Runtime mechanism with stub-driver coverage; AMD hardware and game acceptance remain unverified.
+No required native input owner is unmapped for these stock executables. No game process or analysis database was opened.
+
+Validation: both real-image slot probes passed, all 62 evidence checks passed (8 positives, 54 rejected mutations),
+and the requested Release native selection passed 115 tests with five skips. Explicit plain/switch/borderless D3D11
+and Reflex/PCL SDK fixtures passed; AMD hardware and Anomaly game acceptance remain pending. See the latency note
+and .local/anomaly/input-latency/report.md for exact counts, skipped capabilities and game checks.

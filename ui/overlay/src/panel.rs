@@ -63,6 +63,7 @@ const RAIL: f32 = 84.0;
 /// Pacing owners reported by the runtime.
 const LATENCY_REFLEX: u32 = 1;
 const LATENCY_XELL: u32 = 2;
+const LATENCY_ANTILAG2: u32 = 3;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
 const SR_BACKENDS: [(u32, &str); 6] = [
@@ -1140,7 +1141,23 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     separator(ui);
-    if generation.latency_owner == LATENCY_XELL {
+    if generation.latency_owner == LATENCY_ANTILAG2 {
+        heading(ui, "AMD Anti-Lag 2");
+        note(
+            ui,
+            format!(
+                "AMD Anti-Lag 2: {} driver updates",
+                generation.latency_paced_frames
+            ),
+            MUTED,
+        );
+        latency_toggle(ui, &generation, intent, controls);
+        note(
+            ui,
+            "AMD driver support is required. Boost maps to On.",
+            MUTED,
+        );
+    } else if generation.latency_owner == LATENCY_XELL {
         heading(ui, "Intel XeLL");
         let status = if generation.latency_paced_frames == 0 {
             "Intel XeLL: waiting for paced frames".to_owned()
@@ -1151,7 +1168,11 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             )
         };
         note(ui, status, MUTED);
-        note(ui, "Low-latency mode follows frame generation.", MUTED);
+        latency_toggle(ui, &generation, intent, controls);
+        if generation.requested_reflex == 0 && generation.effective_mode != 0 {
+            note(ui, "XeSS FG requires On while generating frames.", AMBER);
+        }
+        note(ui, "Boost maps to On for XeLL.", MUTED);
     } else {
         heading(ui, "Reflex");
         if generation.backend == 1 && generation.effective_reflex != generation.requested_reflex {
@@ -1199,6 +1220,36 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     frame_limit(ui, &generation, intent, controls);
+}
+
+fn latency_toggle(
+    ui: &mut Ui,
+    generation: &GenerationStats,
+    intent: &mut Intent,
+    controls: &mut Controls,
+) {
+    let items: Vec<Segment> = ["Off", "On"]
+        .iter()
+        .enumerate()
+        .map(|(id, label)| Segment {
+            label: (*label).to_owned(),
+            sub: None,
+            enabled: generation.reflex_available,
+            mark: if (generation.requested_reflex != 0) == (id != 0) {
+                Mark::On
+            } else {
+                Mark::Off
+            },
+        })
+        .collect();
+    let (chosen, rects) = segments(ui, "latency_toggle", &items, 2);
+    store(&mut controls.reflex, &rects);
+    if let Some(index) = chosen
+        && (generation.requested_reflex != 0) != (index != 0)
+    {
+        intent.reflex_changed = true;
+        intent.reflex_mode = index as u32;
+    }
 }
 
 /// Reflex's own limiter. The value is rendered frames, so generation multiplies it. The panel
@@ -2392,6 +2443,20 @@ mod tests {
         selection.reconcile(stats);
         selection.apply(&intent);
         selection
+    }
+
+    #[test]
+    fn amd_antilag_reports_driver_work_without_claiming_measured_latency() {
+        let mut stats = Stats::default();
+        stats.generation.available = true;
+        stats.generation.reflex_available = true;
+        stats.generation.latency_owner = LATENCY_ANTILAG2;
+        stats.generation.latency_paced_frames = 120;
+        let text = words(&Selection::default(), &stats, Tab::Frames);
+        assert!(text.contains("AMD Anti-Lag 2"));
+        assert!(text.contains("120 driver updates"));
+        assert!(text.contains("Off") && text.contains("On"));
+        assert!(!text.contains("On + Boost"));
     }
 
     #[test]

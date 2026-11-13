@@ -62,7 +62,7 @@ struct rsf_streamline_host {
     PFun_slPCLSetOptions* pcl_options{};
     PFun_slPCLGetState* pcl_state{};
     struct Token { uint64_t id = 0; sl::FrameToken* token = nullptr; bool common[2]{};
-        uint32_t markers = 0; bool controller_sampled = false, sleep_claimed = false; } tokens[sl::MAX_FRAMES_IN_FLIGHT];
+        uint32_t markers = 0; bool controller_sampled = false, ping_sampled = false, sleep_claimed = false; } tokens[sl::MAX_FRAMES_IN_FLIGHT];
     uint32_t cursor = 0, native_index = 0;
     uint64_t last_begin = 0;
     uint64_t sleep_calls = 0, marker_calls = 0;
@@ -390,7 +390,7 @@ extern "C" rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host* p
     if (host.new_token(slot.token, &index) != sl::Result::eOk || !slot.token) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     host.cursor = (host.cursor + 1) % sl::MAX_FRAMES_IN_FLIGHT; host.last_begin = id;
     slot.id = id; slot.common[0] = slot.common[1] = false; slot.markers = 0; slot.controller_sampled = false;
-    slot.sleep_claimed = false;
+    slot.sleep_claimed = false; slot.ping_sampled = false;
     return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host* pointer, uint64_t id)
@@ -492,12 +492,20 @@ extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host* hos
     auto* slot = find_slot(*host, id);
     if (!slot) return RSF_BACKEND_ERROR_NOT_READY;
     for (uint32_t i = 0; i < 3; ++i) if (kinds & (1u << i)) ++host->input_counts[i];
-    sl::PCLMarker marker{};
-    if (message_id && message_id == host->pcl_message) { marker = sl::PCLMarker::ePCLatencyPing; ++host->input_counts[3]; }
-    else if ((kinds & 4u) && !slot->controller_sampled) { marker = sl::PCLMarker::eControllerInputSample; slot->controller_sampled = true; }
-    else return RSF_BACKEND_OK; // Mouse/keyboard timing uses real dequeue records and PCL pings, never deprecated marker 6.
-    if (!host->pcl_marker || host->pcl_marker(marker, *slot->token) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    ++host->marker_calls; return RSF_BACKEND_OK;
+    const auto emit=[&](sl::PCLMarker marker) {
+        if (!host->pcl_marker || host->pcl_marker(marker,*slot->token)!=sl::Result::eOk) return false;
+        ++host->marker_calls; return true;
+    };
+    if ((kinds & 4u) && !slot->controller_sampled) {
+        if (!emit(sl::PCLMarker::eControllerInputSample)) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        slot->controller_sampled=true;
+    }
+    if (message_id && message_id==host->pcl_message && !slot->ping_sampled) {
+        if (!emit(sl::PCLMarker::ePCLatencyPing)) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        slot->ping_sampled=true; ++host->input_counts[3];
+    }
+    // Keyboard/mouse timing uses real dequeue records and registered pings, never deprecated marker 6.
+    return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host* host, uint64_t id)
 {
@@ -551,7 +559,7 @@ extern "C" rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_
     if (host->pcl_state) {
         sl::PCLState state{};
         if (host->pcl_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        out->pcl_message_id = state.statsWindowMessage;
+        out->pcl_message_id = state.statsWindowMessage; host->pcl_message=state.statsWindowMessage;
     }
     return RSF_BACKEND_OK;
 }
