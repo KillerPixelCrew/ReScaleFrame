@@ -23,6 +23,13 @@ void InputGate::remove(void* device) {
     std::lock_guard lock(guard_);
     devices_.erase(device);
 }
+bool InputGate::device_kind(void* device, DeviceKind& kind) {
+    std::lock_guard lock(guard_);
+    const auto found = devices_.find(device);
+    if (found == devices_.end()) return false;
+    kind = found->second.kind;
+    return true;
+}
 bool InputGate::tracked(void* device) {
     std::lock_guard lock(guard_);
     return devices_.find(device) != devices_.end();
@@ -120,7 +127,8 @@ HRESULT InputGate::get_state(void* device, const DeviceCalls& calls, DWORD size,
 }
 
 HRESULT InputGate::get_data(void* device, const DeviceCalls& calls, DWORD object_size,
-    DIDEVICEOBJECTDATA* data, DWORD* count, DWORD flags) {
+    DIDEVICEOBJECTDATA* data, DWORD* count, DWORD flags, bool* hardware_data) {
+    if (hardware_data) *hardware_data=false;
     std::unique_lock lock(guard_);
     const auto it = devices_.find(device);
     if (it == devices_.end()) { lock.unlock(); return calls.get_data(device, object_size, data, count, flags); }
@@ -157,6 +165,7 @@ HRESULT InputGate::get_data(void* device, const DeviceCalls& calls, DWORD object
         return DI_OK;
     }
     if (!peek) track(entry, at(data, pending, object_size), received, object_size);
+    if (hardware_data) *hardware_data = !peek && received != 0;
     *count = pending + received;
     return result;
 }

@@ -120,6 +120,7 @@ def main() -> None:
         (ROOT / "docs/releases/ac7-development-install.md", "ReScaleFrame/README.md"),
         (ROOT / "LICENSE", "ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt"),
         (ROOT / "sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
+        (ROOT / "runtime/orchestrator/ANTILAG2-LICENSE.txt", "ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt"),
         (ROOT / "runtime/backends/dlss/third_party/mfg_unlocker/LICENSE", "ReScaleFrame/licenses/MFG-Unlocker-MIT.txt"),
         (ROOT / "build/windows-x64/_deps/minhook-src/LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
         (args.streamline_root / "license.txt", "ReScaleFrame/licenses/Streamline.txt"),

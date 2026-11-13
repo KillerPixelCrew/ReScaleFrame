@@ -5,12 +5,9 @@
 #include <rescaleframe/native_window.h>
 
 namespace {
-int cpu(const rsf_game_cpu_event* event) noexcept
-{
-    // The record comes first; latency and pacing act only on an accepted, ordered frame.
-    if (!rsf_native_cpu_event(event)) return 0;
-    rsf_native_fg_cpu(event);
-    return 1;
+void cpu_sink(void*, const rsf_game_cpu_event* event) noexcept { rsf_native_fg_cpu(event); }
+int cpu(const rsf_game_cpu_event* event) noexcept {
+    return rsf_native_cpu_dispatch(event, &cpu_sink, nullptr);
 }
 // The same dispatch a statically linked carrier applies to its queued native passes.
 int pass(void* context, const rsf_game_render_pass* pass, uint32_t begin) noexcept

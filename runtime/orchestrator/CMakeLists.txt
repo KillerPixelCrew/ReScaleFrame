@@ -153,3 +153,11 @@ target_sources(rsf_orchestrator PRIVATE src/overlay_api.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_fg_api.cpp)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
+
+# Optional AMD driver SDK; the Runtime remains available when it is absent.
+set(RSF_ANTILAG2_INCLUDE "${PROJECT_SOURCE_DIR}/vendor/antilag2" CACHE PATH "Pinned Anti-Lag 2 SDK headers")
+target_sources(rsf_orchestrator_core PRIVATE src/latency_antilag.cpp)
+if(EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx11.h" AND EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx12.h")
+    target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_HAVE_ANTILAG2=1)
+    target_include_directories(rsf_orchestrator_core SYSTEM PRIVATE "${RSF_ANTILAG2_INCLUDE}")
+endif()

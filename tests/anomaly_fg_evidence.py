@@ -1,6 +1,6 @@
 """Frame generation: read-only check of the engine sites games/anomaly/src/fg_stage.cpp relies on, against the installed exe.
 
-FG adds no new detour. It is driven from guarded boundaries the native observer already hooks
+FG input facts additionally use the guarded CInput primary vtable slot 0. It is driven from guarded boundaries the native observer already hooks
 (games/anomaly/src/native_profile.h) and reads HW.pBaseZB (games/anomaly/src/sr_profile.h) for the SR-off depth.
 This script proves, on --exe standard (default) or --exe avx, that those sites are what the FG timeline assumes:
 
@@ -22,10 +22,13 @@ import importlib.util
 import pathlib
 import re
 import struct
+import capstone
+from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
 SR_PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
+INPUT_PROFILE = ROOT / 'games/anomaly/src/input_profile.h'
 _spec = importlib.util.spec_from_file_location('anomaly_sr_evidence', ROOT / 'tests/anomaly_sr_evidence.py')
 sr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sr)
@@ -64,8 +67,43 @@ def indirect_calls(code, base, displacement):
     return found
 
 
+def verify_input(pe, log):
+    text = sr.geometry.profile_text(INPUT_PROFILE)
+    sites = [(n, int(r, 16), bytes.fromhex(h)) for n, r, h in re.findall(
+        r'\{"(CInput::[^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]+)"\)\}', text)]
+    assert len(sites) == 3, 'input profile entries'
+    for name, rva, raw in sites:
+        assert len(raw) == 16 and pe.read(rva, 16) == raw and pe.unique_in_text(raw), ('input expected16', name)
+    frame, keyboard, mouse = [r for _, r, _ in sites]
+    table_rva = int(re.search(r'signature\("[0-9a-f]+"\)\},\s*(0x[0-9a-f]+),', text)[1], 16)
+    table = next(t for t in pe.tables('CInput') if t['this_offset'] == 0)
+    assert int(table['vtable'], 16) == table_rva and int(table['slots'][0], 16) == frame, 'CInput primary pureFrame slot 0'
+    raw = bytes.fromhex(re.findall(r'"([0-9a-f]{64,})"', text)[-1])
+    assert pe.read(frame, len(raw)) == raw and pe.unique_in_text(raw), 'CInput complete OnFrame guard'
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64); md.detail = True
+    code = list(md.disasm(raw, frame))
+    assert code[-1].mnemonic == 'ret' and code[-1].address + code[-1].size == pe.function_end(frame), 'complete input callback'
+    calls = [i for i in code if i.mnemonic == 'call' and i.operands[0].type == x86.X86_OP_IMM]
+    assert [i.operands[0].imm for i in calls if i.operands[0].imm in (keyboard, mouse)] == [keyboard, mouse], 'keyboard before mouse'
+    full = INPUT_PROFILE.read_text(encoding='utf-8')
+    offsets = [int(re.search(r'input_' + name + r'_offset = (0x[0-9a-f]+)', full)[1], 16) for name in ('keyboard', 'mouse')]
+    for target, offset in zip((keyboard, mouse), offsets):
+        call = next(i for i in calls if i.operands[0].imm == target)
+        prior = [i for i in code if call.address-16 <= i.address < call.address]
+        assert any(i.mnemonic == 'cmp' and i.operands[0].type == x86.X86_OP_MEM and
+                   i.operands[0].mem.base == x86.X86_REG_RDI and i.operands[0].mem.disp == offset for i in prior), 'input device field'
+        head = pe.read(target, 0x100)
+        assert len(indirect_calls(head, target, 0x50)) == 2, 'GetDeviceData initial/reacquire retry, COM slot 10'
+        assert bytes.fromhex('ba18000000') in head and b'\x40\x00\x00\x00' in head, '24-byte DIDEVICEOBJECTDATA / 64-entry buffer'
+    # Five direct calls: two input reads and three statistics/timer calls. No controller poll occurs in OnFrame.
+    assert len(calls) == 5 and not pe.string_rvas('XInputGetState'), 'stock callback has no XInput poll'
+    log.append(f'input: OnFrame {frame:#x} primary vtable {table_rva:#x} slot 0; keyboard {keyboard:#x} (+{offsets[0]:#x}), '
+               f'mouse {mouse:#x} (+{offsets[1]:#x}); GetDeviceData buffered reads; no native controller poll')
+
+
 def verify(pe):
     log = [f'image sha256 {sr.geometry.HASH}']
+    verify_input(pe, log)
     sites, size = native_sites()
     nt = struct.unpack_from('<I', pe.data, 60)[0]
     assert struct.unpack_from('<I', pe.data, nt + 24 + 56)[0] == size, 'SizeOfImage'
@@ -136,8 +174,11 @@ if __name__ == '__main__':
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--exe', choices=sorted(sr.geometry.BUILDS), default=sr.geometry.BUILD)
     parser.add_argument('--profile', type=pathlib.Path)
+    parser.add_argument('--input-profile', type=pathlib.Path)
     args = parser.parse_args()
     if args.profile:
         NATIVE = args.profile
+    if args.input_profile:
+        INPUT_PROFILE = args.input_profile
     if args.verify:
         verify(sr.Image())

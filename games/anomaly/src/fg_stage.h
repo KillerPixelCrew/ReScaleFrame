@@ -76,6 +76,9 @@ void set_overlay_sink(const overlay::PresentSink& sink) noexcept;
 // the overlay must not draw on it.
 bool foreign_chain(IDXGISwapChain* chain) noexcept;
 
+// Native engine facts. The Runtime owns pacing, marker mapping and input deduplication.
+void input_begin(uint32_t engine_frame) noexcept;
+void input_received(uint32_t kinds, uint32_t message_id = 0) noexcept;
 // Native boundaries (native_observer.cpp), engine thread.
 void camera(const float* view, const float* projection) noexcept;              // SetCacheXform, after the original
 void render_begin(uint32_t engine_frame, uint32_t width, uint32_t height) noexcept;   // after IRenderDeviceRender::Begin

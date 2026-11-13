@@ -153,6 +153,7 @@ def input_plan(args):
         'ReScaleFrame/README.md': ROOT / 'docs/releases/anomaly-install.md',
         'ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt': ROOT / 'LICENSE',
         'ReScaleFrame/licenses/GameSDK-MIT.txt': ROOT / 'sdk/game/LICENSE',
+        'ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt': ROOT / 'runtime/orchestrator/ANTILAG2-LICENSE.txt',
         'ReScaleFrame/licenses/MFG-Unlocker-MIT.txt': ROOT / 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE',
         'ReScaleFrame/licenses/yyjson-MIT.txt': ROOT / 'vendor/shader-patch/yyjson/LICENSE',
         'ReScaleFrame/licenses/ShaderPatch-THIRD_PARTY.md': ROOT / 'runtime/shader_patch/THIRD_PARTY.md',

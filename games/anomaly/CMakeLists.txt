@@ -51,3 +51,5 @@ target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runti
 target_sources(rsf_game_anomaly PRIVATE src/fg_stage.cpp src/fg_inputs.cpp)
 # The FG tables name presentation-bridge and Streamline-host types; include paths only, nothing is linked.
 target_include_directories(rsf_game_anomaly PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
+
+target_sources(rsf_game_anomaly PRIVATE src/input_hooks.cpp)

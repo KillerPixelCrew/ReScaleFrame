@@ -52,7 +52,8 @@ struct State {
     Policy policy{};
     enum class Phase : uint8_t { Idle, Open, Rendering } phase{Phase::Idle};
     uint64_t next_id{}, id{};
-    bool window_open{};
+    bool window_open{}, input_started{};
+    uint32_t input_native_frame{};
     std::atomic<void*> facade{};          // the bridge's engine-facing chain, compared and used only while is_owner
     HWND window{};
     Decision decision{};
@@ -156,6 +157,8 @@ bool borderless_off_origin(HWND window, RECT& monitor_rect, RECT& rect) noexcept
         (rect.left != m.left || rect.top != m.top);
 }
 LRESULT CALLBACK borderless_subclass(HWND window, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR) {
+    // The Runtime recognises its registered PCL message; the adapter forwards only message IDs.
+    input_received(0, message);
     const auto result = DefSubclassProc(window, message, wparam, lparam);
     if (message == WM_DWMNCRENDERINGCHANGED || message == WM_WINDOWPOSCHANGED) {
         static bool correcting = false;
@@ -202,20 +205,18 @@ void present_event(void* user, const rsf_observer_present_event* event) noexcept
 void latency_event(void* user, const rsf_observer_present_event* event) noexcept { state().api.latency_event(user, event); }
 
 // ---- the engine-thread frame -------------------------------------------------------------------------------------------
-bool cpu(uint32_t stage) noexcept {
+bool cpu(uint32_t stage, uint32_t kinds = 0, uint32_t message = 0, uint32_t expected = 1, uint32_t flags = 0) noexcept {
     auto& s = state();
-    rsf_game_cpu_event event{sizeof(event), stage, s.session, s.id, qpc(), uint64_t(s.frequency.QuadPart), 1, 0, 0};
+    rsf_game_cpu_event event{sizeof(event), stage, s.session, s.id, qpc(), uint64_t(s.frequency.QuadPart), expected, kinds, message,
+        RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED | flags};
     return s.api.cpu(&event) != 0;
 }
-// FRAME_BEGIN reserves the frame, PACING is the single sleep (Reflex, or the provider's own pacing), INPUT_SAMPLE marks
-// simulation start. All of it precedes the next on_idle's FrameMove, where X-Ray reads input and simulates.
-void open_frame(bool pace) noexcept {
+// Frame reservation is an identity fact. Only the native input callback reports INPUT_SAMPLE.
+void open_frame() noexcept {
     auto& s = state();
     s.id = ++s.next_id;
+    s.input_started = false;
     cpu(RSF_GAME_CPU_FRAME_BEGIN);
-    if (pace) cpu(RSF_GAME_CPU_PACING);
-    cpu(RSF_GAME_CPU_INPUT_SAMPLE);
-    cpu(RSF_GAME_CPU_SIMULATION_BEGIN);
     s.phase = State::Phase::Open;
 }
 rsf_game_render_pass make_identity(uint32_t role) noexcept {
@@ -432,7 +433,6 @@ bool start_bridge() noexcept {
     s.capture_dir = utf8(s.options.capture_dir);
     s.capture_next = s.options.capture_start;
     s.api.set_log(&bridge_log, nullptr);
-    s.api.reflex_ordering(0);   // previous Present, then one sleep, then input; submit end before PresentStart
     rsf_native_fg_options options{sizeof(options), s.options.enabled ? RSF_FG_FIXED : RSF_FG_OFF, s.options.generated,
         s.options.latency, s.options.frame_limit_us, s.options.debug ? 1u : 0u};
     s.api.options(&options);
@@ -533,10 +533,39 @@ void camera(const float* view, const float* projection) noexcept {
         if (!std::isfinite(view[i]) || !std::isfinite(projection[i])) s.camera_now.valid = false;
 }
 
+void input_begin(uint32_t engine_frame) noexcept {
+    auto& s = state();
+    if (!installed() || s.phase == State::Phase::Rendering) return;
+    if (s.phase == State::Phase::Open && s.input_started) {
+        if (s.input_native_frame == engine_frame) {
+            cpu(RSF_GAME_CPU_INPUT_SAMPLE); cpu(RSF_GAME_CPU_SIMULATION_BEGIN); return;
+        }
+        // A simulation frame can run without rendering while inactive/loading. Close its own identity now.
+        cpu(RSF_GAME_CPU_SIMULATION_END, 0, 0, 0);
+        cpu(RSF_GAME_CPU_FRAME_END, 0, 0, 0, RSF_GAME_CPU_RENDER_SKIPPED);
+        s.phase = State::Phase::Idle;
+    }
+    if (s.phase == State::Phase::Idle) open_frame();
+    s.input_native_frame = engine_frame; s.input_started = true;
+    cpu(RSF_GAME_CPU_INPUT_SAMPLE);
+    cpu(RSF_GAME_CPU_SIMULATION_BEGIN);
+}
+void input_received(uint32_t kinds, uint32_t message_id) noexcept {
+    auto& s = state();
+    if (!installed()) return;
+    if (!kinds) {
+        // A window message outside a frame has no source identity. The core alone may match or expire it.
+        rsf_game_cpu_event event{sizeof(event),RSF_GAME_CPU_INPUT_EVENT,s.session,
+            s.phase == State::Phase::Idle ? 0 : s.id,qpc(),uint64_t(s.frequency.QuadPart),0,0,message_id,
+            RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE};
+        (void)s.api.cpu(&event);
+    } else if (s.phase == State::Phase::Open) cpu(RSF_GAME_CPU_INPUT_EVENT,kinds,message_id);
+}
+
 void render_begin(uint32_t engine_frame, uint32_t width, uint32_t height) noexcept {
     auto& s = state();
     if (!installed() || s.phase == State::Phase::Rendering) return;
-    if (s.phase == State::Phase::Idle) open_frame(false);   // first frame: no pacing sleep after simulation
+    if (s.phase == State::Phase::Idle) open_frame(); // Runtime labels a missing input callback as a substitute
     s.engine_frame = engine_frame; s.width = width; s.height = height;
     s.camera_frame = s.camera_now;
     LARGE_INTEGER now{};
@@ -621,7 +650,7 @@ void end_after() noexcept {
     cpu(RSF_GAME_CPU_FRAME_END);
     s.policy.end();
     publish();
-    open_frame(true);
+    s.phase = State::Phase::Idle;
 }
 
 void device_reset() noexcept {

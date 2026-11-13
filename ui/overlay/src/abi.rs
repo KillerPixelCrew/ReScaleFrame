@@ -204,7 +204,7 @@ pub struct RsfOverlayStats {
     pub sharpening_debug: u32,
     /// ABI 16. Panel layout word the host stored, opaque to it.
     pub ui_preferences: u32,
-    /// ABI 17. Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL.
+    /// ABI 17. Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL, 3 AMD Anti-Lag 2.
     pub latency_pacing_owner: u32,
     /// Keeps the following counter eight-byte aligned, as in the header.
     pub latency_reserved: u32,

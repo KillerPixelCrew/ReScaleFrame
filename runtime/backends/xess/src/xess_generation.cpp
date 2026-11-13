@@ -44,7 +44,7 @@ struct XegSession {
     uint64_t prepared_gap = 0;
     rsf_fg_options options{};
     uint64_t last_begin = 0;
-    struct FrameId { uint64_t source = 0; uint32_t sdk = 0; };
+    struct FrameId { uint64_t source = 0; uint32_t sdk = 0; bool input_sampled = false; };
     std::array<FrameId, 128> frame_ids;
     uint32_t sdk_frame = 0;
     uint32_t reserved = 0;
@@ -135,21 +135,22 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     auto& self = *static_cast<XegSession*>(pointer);
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
     if (options->mode > RSF_FG_FIXED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (options->reflex_mode != RSF_REFLEX_OFF) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const uint32_t count = options->generated_frames > self.reserved ? self.reserved : options->generated_frames;
     if (options->mode != RSF_FG_OFF && !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self.options.struct_size && self.options.mode == options->mode &&
         self.options.generated_frames == options->generated_frames &&
-        self.options.frame_limit_us == options->frame_limit_us) return RSF_BACKEND_OK;
+        self.options.frame_limit_us == options->frame_limit_us && self.options.reflex_mode == options->reflex_mode) return RSF_BACKEND_OK;
     const bool reset_history = !self.options.struct_size || self.options.mode != options->mode ||
         self.options.generated_frames != options->generated_frames;
     if (count && self.count(self.context, count) != XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     xell_sleep_params_t sleep{}; sleep.minimumIntervalUs = options->frame_limit_us;
-    sleep.bLowLatencyMode = options->mode != RSF_FG_OFF;
+    // The field's ABI name predates non-NVIDIA pacers. Boost maps to On; active XeFG requires low latency.
+    sleep.bLowLatencyMode = options->mode != RSF_FG_OFF || options->reflex_mode != RSF_REFLEX_OFF;
     { std::lock_guard<std::mutex> lock(self.latency_guard);
       if (self.xell_options(self.xell, &sleep) != XELL_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     if (self.enabled(self.context, options->mode != RSF_FG_OFF) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    self.state.effective_reflex = sleep.bLowLatencyMode ? RSF_REFLEX_ON : RSF_REFLEX_OFF;
     self.options = *options; self.state.effective_mode = options->mode;
     self.state.configured_mode = options->mode;
     self.state.effective_generated_frames = options->mode == RSF_FG_OFF ? 0 : count;
@@ -178,8 +179,10 @@ rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id,
     if (!pointer || !id || marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<XegSession*>(pointer);
     std::lock_guard<std::mutex> lock(self.latency_guard);
-    const auto frame = self.frame_ids[id % self.frame_ids.size()];
+    auto& frame = self.frame_ids[id % self.frame_ids.size()];
     if (frame.source != id) return RSF_BACKEND_ERROR_NOT_READY;
+    if (marker == RSF_LATENCY_INPUT_SAMPLE && frame.input_sampled) return RSF_BACKEND_OK;
+    if (marker == RSF_LATENCY_INPUT_SAMPLE) frame.input_sampled = true;
     return self.marker(self.xell, frame.sdk, static_cast<xell_latency_marker_type_t>(marker)) == XELL_RESULT_SUCCESS ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }

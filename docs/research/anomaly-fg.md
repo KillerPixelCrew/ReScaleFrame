@@ -19,7 +19,7 @@ observer already hooks. No new detour was needed.
 ## Runtime additions (generic, Rule 1)
 
 - `rsf_get_d3d11_fg_api` (version 1, size-checked, C and C++ contract tests through the real DLL): log, options,
-  status, Reflex ordering, `cpu` (record + latency/pacing), `pass` (the AC7 dispatch by role), `bind_source`,
+  status, Reflex ordering, `cpu` (record + latency/pacing), `pass` (the shared dispatch by role), `bind_source`,
   `capture`, `inputs_ready`, `dump_inputs`, and the bridge callbacks `prepare`, `retire`, `present_event`,
   `latency_event`. Every entry is the existing native_fg/native_cpu/native_scene/native_window function or a
   three-line dispatcher.
@@ -40,7 +40,7 @@ observer already hooks. No new detour was needed.
 | Site | RVA | FG use |
 | --- | --- | --- |
 | `IRenderDeviceRender::Begin` | `0x822cb0` | after the original: simulation end, FRAME and SUBMISSION begin, SR source binding |
-| `IRenderDeviceRender::End` | `0x822eb0` | before: submission end, WINDOW scope; after: frame end, next frame begin, pacing sleep |
+| `IRenderDeviceRender::End` | `0x822eb0` | before: submission end, WINDOW scope; after: frame end |
 | Present inside End | `0x822f16` | `jmp [rax+40h]` tail jump on `HW.m_pSwapChain` (`0xceb8e0`), skipped on SVP frames |
 | `SetCacheXform` | `0x823250` | the frame's main camera (SR-off camera record, cut test) |
 | `CHUDManager::RenderUI` | `0x0f1e60` | the HUD-less boundary, entered as a tail jump (`0xedad6`, vtable +0x60) |
@@ -64,20 +64,72 @@ Unverified: `OnRenderPPUI_main/PP` inside `phase_combine` (menu postprocess UI);
 
 ## Frame timeline, pacing and latency markers
 
-One engine frame (`on_idle`) is one source frame. The adapter emits:
+13 November correction: the adapter reports engine facts under [the shared latency contract](input-keyed-latency.md).
+It no longer invents an input sample or asks for pacing when the previous Present returns.
 
-| When (engine) | CPU event / pass | Marker or effect |
+| When (engine) | Facts / pass | Core orchestrator behavior |
 | --- | --- | --- |
-| End returned (Present done) | `FRAME_END` (N), then N+1: `FRAME_BEGIN`, `PACING`, `INPUT_SAMPLE`, `SIMULATION_BEGIN` | token reserve; the one sleep (Reflex for DLSS-G, the provider's own pacing for FSR3/XeSS); SimulationStart |
-| Begin returned | `SIMULATION_END`, FRAME begin, SUBMISSION begin, bind source | SimulationEnd; RenderSubmitStart |
-| RenderUI entry | SR-off capture, FINAL_SCENE begin/end (back buffer), dump | HUD-less copy |
-| End, before original | SUBMISSION end, WINDOW begin (facade) | |
-| Present (bridge) | `latency_event` | RenderSubmitEnd, PresentStart, PresentEnd |
-| End, after original | WINDOW end, FRAME end | an unpresented frame is abandoned |
+| CInput::OnFrame entry, before KeyUpdate/MouseUpdate | FRAME_BEGIN, INPUT_SAMPLE, SIMULATION_BEGIN | Reserve a token, join previous Present as required, run the one pre-input pacing operation, then SimulationStart |
+| Successful buffered DirectInput return during that callback | INPUT_EVENT kind bits | Deduplicate each received kind for this source, route Reflex/PCL or XeLL input events, count them |
+| Window subclass receives a message | INPUT_EVENT with WINDOW_MESSAGE and its ID, source 0 outside a frame | Recognize the Runtime's registered PCL ping; match an unframed candidate within 250 ms or expire it |
+| IRenderDeviceRender::Begin returned | SIMULATION_END, FRAME/SUBMISSION begin, source identity | SimulationEnd then RenderSubmitStart |
+| RenderUI entry | Capture, FINAL_SCENE, HUD-less image | Prepare resources independently of input/latency policy |
+| End before original / real Present | SUBMISSION end / WINDOW / actual Present callbacks | RenderSubmitEnd then PresentStart/End with the same source identity |
+| End returned | FRAME_END | Close source ownership; do not reserve or pace the next frame here |
+| Another native input update without a render | Previous SIMULATION_END and FRAME_END with RENDER_SKIPPED | Retire that unpresented token, then reserve the new input frame |
+| Render without an input callback | Only observed frame/render facts | Label a core input substitute, skip a late sleep and refuse FG for that source |
 
-The sleep sits after the previous Present returned and before the next `FrameMove` (input and simulation) with
-synchronous ordering (`reflex_ordering(0)`). It precedes the secondary-thread join and message pump at the end of
-`on_idle`. The first frame opens at Begin without a sleep and does not generate.
+The input callback is the primary CInput pureFrame slot 0 on both exact builds, found through RTTI and verified by its
+keyboard-then-mouse calls. A guarded slot swap avoids MinHook's VEX decoding limit. The complete 0xc3-byte OnFrame body,
+the three unique entry guards and the expected slot target are checked. Standard/AVX RVAs and bytes are in the
+[profile note](anomaly-avx-profile.md#input-facts-and-latency-boundary). The existing DirectInput hooks observe the
+successful count returned by GetDeviceData, including reacquire/retry, and report only while this thread executes the
+verified callback. Empty, failed and peek-only reads do not produce received-input facts. The hooks also work with the
+overlay disabled; input installation is idempotent for the same overlay gate. The overlay's filtering remains intact.
+The stock source's controller implementation is commented out; the shipped OnFrame has no controller poll. Controller
+counts therefore remain zero in this exact build, while the common protocol and fixtures cover that kind.
+
+The former frame-open sequence was a synthetic timing approximation. Source revision
+028ccf5f5189b393396480076b11e40852ba3ecd registers CInput on seqFrame at REG_PRIORITY_HIGH and reads keyboard then mouse
+inside OnFrame (Xr_input.cpp:647-654); game input-receiver callbacks occur inside those updates. Native Begin is the
+existing simulation-end boundary, followed by render submission and the real Present. The core default synchronous
+join completes the previous Present before pacing the next sampled source; the adapter no longer selects Reflex ordering.
+Scope, menus and pause retain their real input facts independently of FG eligibility. Loading frames without a poll are
+explicit substitutes, and inactive updates that do not render cannot leave a token blocking the next frame.
+
+`Latency window` logs per-window keyboard/mouse/controller counts, registered ping count, substitutions, duplicates,
+marker-order violations and Anti-Lag 2 driver updates/refusals. The existing Reflex driver report must show nonzero
+keyboard and mouse counts after real input, with PCL ping nonzero when a ping tool targets the game window. Expected
+marker-order violations are zero. These are SDK/fact counters, not measured end-to-end latency.
+
+The shared Runtime now has owner 3, AMD Anti-Lag 2, alongside Reflex and XeLL. Its pinned MIT SDK is initialized only
+for an AMD physical device; non-AMD and failed SDK initialization are unavailable. DX11 uses its loaded-driver interface;
+DX12 FSR uses MarkEndOfFrameRendering before the provider's Present and the SDK-defined swapchain private data so
+FSR 3.1.1+ marks real/generated frames. A required Reflex/XeLL provider keeps its single pacing owner; Anti-Lag is disabled
+rather than stacking a second sleeper. The overlay reports driver updates and offers Off/On through the existing saved
+latency setting; Boost maps to On for AMD. The stub contract covers gating, settings, one update per identity, failure,
+DX11/DX12 selection and FSR metadata. No AMD hardware test was possible on this NVIDIA/Intel machine. SDK reference:
+[AntiLag2-SDK integration guide](https://github.com/GPUOpen-LibrariesAndSDKs/AntiLag2-SDK#integration).
+
+Pacing selection is independent of generation provider: an available NVIDIA Reflex host also paces FSR, while a
+required XeLL owner takes precedence for XeSS FG. XeLL has the same saved Off/On control; Boost maps to On and active
+XeSS FG still requires XeLL enabled. The SDK fixtures verify queued ping acceptance before pacing and combined
+controller/ping deduplication for Reflex and PCL profiles; their synthetic inputs are not an external latency-tool run.
+
+This input-keyed correction passed static/fixture validation and has not been run in Anomaly. No game or installed
+file was touched. First game checks: hook install without refusal; real keyboard/mouse counts; ping count with the tool;
+zero marker-order violations; one sleep per sampled source; Latency Off/On/Boost, frame limit, pause/menu/scope/loading,
+resize and provider switching. AMD acceptance additionally needs its supported driver and latency monitor/FLM. Existing
+rendering-readiness flags stay zero.
+
+Validation: full Release build in build/wk-avx passed; the requested anomaly|thin|motion|shader_patch|latency|fg
+selection passed 115 tests with five skips in 207.09 seconds. Four skips need SDK arguments; the DLSS SR-off device
+fixture could not obtain foreground ownership. Both executable maps pass 62 evidence checks (8 originals and 54
+negative mutations) and production read-only mapped-image slot probes. Explicit D3D11 bridge plain/switch/borderless
+runs passed on vendor 0x10de. Switching recorded 99 Reflex sleeps across 120 mixed-provider frames, 840 markers,
+zero order violations, active FSR3/XeSS, and inactive DLSS-G without foreground ownership. Independent Reflex/PCL
+fixtures passed with 12/0 sleeps and 96 markers each. Rust formatting, Clippy, 74 tests and Release overlay build
+passed; package tests passed 10/10. Logs and the complete limits are in .local/anomaly/input-latency/report.md.
 
 ## Which frames feed history (`fg_policy.h`)
 

@@ -184,3 +184,19 @@ under vendor/shader-patch with their original licences, but neither is linked or
 copied into this milestone. DXBC's synthetic-only same-instruction rewrite and
 checksum implementation are first-party. DXC/dxil, Khronos and Mesa backends are
 not added. See docs/research/runtime-shader-patching.md for approved later scope.
+
+## AMD Anti-Lag 2
+
+The optional Direct3D driver SDK is under ignored `vendor/antilag2`, from
+[GPUOpen AntiLag2-SDK](https://github.com/GPUOpen-LibrariesAndSDKs/AntiLag2-SDK) revision
+`390aa4a8c8655d0ae6e90079db2c85e103a96da3` (MIT). Only its DX11 and DX12 inline headers are used; no sample code or
+runtime DLL is shipped. `RSF_ANTILAG2_INCLUDE` selects the SDK directory. Without both headers the core compiles an
+unavailable driver endpoint, while its stub contract remains testable. The Runtime owns initialization, the pre-input
+Update, device/vendor gating, status and FSR DX12 frame typing. AMD hardware and supported Adrenalin drivers are required;
+the NVIDIA/Intel development machine cannot establish AMD acceptance. The original licence is preserved in vendor and
+`runtime/orchestrator/ANTILAG2-LICENSE.txt`, included by the game packagers.
+
+Pinned header SHA-256:
+
+- `ffx_antilag2_dx11.h`: `72659da3673d0d04ebcc7c3c4d5442bf4189c3cc99b5d2eb06ba832e5c288d31`
+- `ffx_antilag2_dx12.h`: `bf4e292c040103c7d2dd25d8c86c4ecd3a35338d539428a8db6535da4f82d52f`

@@ -10,7 +10,8 @@
 extern "C" {
 #endif
 
-#define RSF_D3D11_FG_API_VERSION 1u
+/* Version 2 carries Game ABI 21 CPU facts; old runtimes must refuse this table. */
+#define RSF_D3D11_FG_API_VERSION 2u
 #define RSF_D3D11_FG_API_ENTRY_POINT "rsf_get_d3d11_fg_api"
 
 /* DLL access to the Runtime's one D3D11 frame-generation tagging path (native_fg.h), the
@@ -26,11 +27,11 @@ extern "C" {
    Execution:
    - set_log/options/status/reflex_ordering: any thread. options takes effect at the next
      prepare; reflex_ordering must be set before the first frame.
-   - cpu: the game thread's real CPU boundaries, in ABI order. It records the frame
-     (rsf_native_cpu_event) and only then runs the latency/pacing work (rsf_native_fg_cpu):
-     FRAME_BEGIN reserves the frame, PACING is the one sleep, INPUT_SAMPLE marks simulation
-     start, SIMULATION_END marks its end. Returns the record's acceptance. Do not add another
-     pacing owner for the same frame.
+   - cpu: the game thread's observed CPU boundaries. The core normalizes and deduplicates
+     facts before dispatching latency work: FRAME_BEGIN reserves the frame; version-1
+     INPUT_SAMPLE places the single pacing operation immediately before the native input
+     read and marks simulation start. Legacy PACING is accepted only for legacy events.
+     Missing input is labelled as a substitute, without a late sleep. Returns acceptance.
    - pass, bind_source, capture, inputs_ready, dump_inputs: the graphics thread that owns the
      D3D11 immediate context, which must also be the thread that calls the bridge's Present
      (scene and window identity are per-thread). pass dispatches one render pass exactly as
