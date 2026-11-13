@@ -12,8 +12,9 @@ engine integration policy. This boundary is mandatory for every adapter, includi
 
 - Keep executable detection, fingerprints, RVAs, expected patch bytes, native engine symbols and
   layouts, engine startup, window-class selection, game settings translation, input conventions,
-  and game-specific quality, timing or lifecycle policy in `games/<id>/` or the relevant engine
-  integration under `integrations/`.
+  and game-specific quality or lifecycle policy in `games/<id>/` or the relevant engine
+  integration under `integrations/`. Frame timing, pacing and latency are not integration policy:
+  see Rule 3.
 - Keep vendor SDK ownership, GPU processing, resource retirement, presentation mechanisms,
   plugin-session management, shared settings storage and the shared overlay generic. When a game
   needs reusable functionality, implement it through a general, size/version-checked C ABI and
@@ -44,6 +45,28 @@ An INI key alone is not enough: a setting that needs a restart to try costs a ga
 - If an option truly cannot change without a restart, the control still exists, says so, and
   saves the value for the next start.
 - Adding an option without its overlay control is an incomplete change.
+
+## Rule 3: the orchestrator decides, the integration reports
+
+A game integration delivers facts about its engine. The core orchestrator turns them into behavior.
+One implementation serves every game and every vendor.
+
+- The orchestrator owns latency and pacing completely: which technology paces (Reflex/PCL, XeLL,
+  Anti-Lag 2 or none), the single sleep per frame and where it falls, marker mapping, ordering and
+  deduplication, PCL ping registration and routing, frame tokens, frame-generation frame typing,
+  vendor fallbacks, and the counters and status the overlay shows. The same applies to choosing SR
+  and FG backends and to any other vendor policy.
+- The integration reports what its engine does, through the versioned game API
+  (`sdk/game/include/rescaleframe/game_api.h`): frame identity, frame begin, the moment the engine
+  samples input, input received (keyboard, mouse, controller), window messages it dequeued,
+  simulation begin and end, render submit, present, and its resources. It reports when these happen;
+  it does not decide what they mean.
+- An integration never calls a vendor latency or frame-generation SDK, never places a sleep, never
+  picks a latency technology and never chooses marker semantics. If an engine cannot report an event,
+  the orchestrator derives the substitute in one place and says so in its status.
+- Extend the existing event interface (append-only, versioned) instead of adding a parallel one per
+  game. Latency or vendor policy found in an adapter or host is a Rule 1 violation: move it into the
+  orchestrator and leave the integration with the calls that report its engine's events.
 
 ## Research and tool setup
 
