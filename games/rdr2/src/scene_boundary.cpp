@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 #include <MinHook.h>
 #include <intrin.h>
+#include "../../../integrations/windows/xinput_facts.h"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -58,13 +59,52 @@ bool latency(uint32_t kind, uint64_t frame)
         static_cast<uint64_t>(now.QuadPart), static_cast<uint64_t>(frequency.QuadPart)};
     return host.process_latency(host.user, &event) == 0;
 }
+
+std::atomic<uint64_t> input_source{};
+HHOOK message_hook{};
+void received_input(uint32_t kind,uint32_t message) {
+    if (!active.load() || !host.cpu_event) return;
+    const auto source=input_source.load();
+    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    const rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,host.session_id,source,
+        uint64_t(now.QuadPart),uint64_t(frequency.QuadPart),0,kind,message,RSF_GAME_CPU_EVENT_VERSION,
+        RSF_GAME_CPU_INPUT_KEYED | (message ? RSF_GAME_CPU_WINDOW_MESSAGE : 0u) | (!source && kind ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
+    host.cpu_event(host.user,&fact);
+}
+LRESULT CALLBACK received_message(int code,WPARAM removed,LPARAM argument) {
+    Scope scope;
+    if (code>=0 && removed==PM_REMOVE) {
+        const auto& message=*reinterpret_cast<const MSG*>(argument); uint32_t kind=0;
+        if (message.message>=WM_KEYFIRST && message.message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
+        if (message.message>=WM_MOUSEFIRST && message.message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
+        if (message.message==WM_INPUT) {
+            RAWINPUTHEADER header{}; UINT bytes=sizeof(header);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(message.lParam),RID_HEADER,&header,&bytes,sizeof(header))==sizeof(header))
+                kind=header.dwType==RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD : header.dwType==RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
+        }
+        received_input(kind,message.message);
+    }
+    return CallNextHookEx(nullptr,code,removed,argument);
+}
+rsf::windows::XInputFacts controller_facts;
+void controller_received() {
+    Scope scope;
+    if (input_source.load()) received_input(RSF_GAME_INPUT_CONTROLLER,0);
+}
+void input_thread(uint64_t frame) {
+    input_source.store(frame);
+    if (!message_hook) message_hook=SetWindowsHookExW(WH_GETMESSAGE,received_message,nullptr,GetCurrentThreadId());
+    controller_facts.install_loaded(controller_received);
+}
 bool sleep()
 {
     Scope scope;
     uint32_t current{};
     // Same producer as the game's INPUT_SAMPLE caller at abcfea: direct counter + 1.
     if (at(reinterpret_cast<uintptr_t>(image) + 0x542904c, current) &&
-        latency(RSF_GAME_LATENCY_SLEEP, static_cast<uint32_t>(current + 1u))) return true;
+        latency(RSF_GAME_LATENCY_SLEEP, static_cast<uint32_t>(current + 1u))) {
+        input_thread(static_cast<uint32_t>(current+1u)); return true;
+    }
     return original_sleep();
 }
 int32_t mode(void* device, const void* parameters)
@@ -159,6 +199,7 @@ bool marker(uint32_t kind, uint64_t frame)
 {
     Scope scope;
     const bool handled = kind <= 6 && latency(kind, frame);
+    if (kind==1 && input_source.load()==frame) input_source.store(0);
     rsf_game_render_pass window{};
     ComPtr<IDXGISwapChain3> chain;
     if (active.load() && frame && kind <= 6) {
@@ -254,16 +295,19 @@ bool rsf_rdr2_scene_start() noexcept
     MH_DisableHook(const_cast<unsigned char*>(image + 0x1e800));
     return false;
 }
-bool rsf_rdr2_scene_quiesce() noexcept { active.store(false); return readers.load() == 0; }
+bool rsf_rdr2_scene_quiesce() noexcept { active.store(false); controller_facts.disable(); return readers.load() == 0 && controller_facts.idle(); }
 void rsf_rdr2_scene_stop() noexcept
 {
     if (!prepared || active.load()) return;
+    input_source.store(0);
+    if (message_hook) {UnhookWindowsHookEx(message_hook);message_hook=nullptr;}
+    controller_facts.disable();
     MH_DisableHook(const_cast<unsigned char*>(image + 0x5c1254));
     MH_DisableHook(const_cast<unsigned char*>(image + 0x26d4674));
     MH_DisableHook(const_cast<unsigned char*>(image + 0x5f1e08));
     MH_DisableHook(const_cast<unsigned char*>(image + 0x2687fb4));
     MH_DisableHook(const_cast<unsigned char*>(image + 0x1e800));
-    if (readers.load()) return;
+    if (readers.load() || !controller_facts.remove()) return;
     MH_RemoveHook(const_cast<unsigned char*>(image + 0x5c1254));
     MH_RemoveHook(const_cast<unsigned char*>(image + 0x26d4674));
     MH_RemoveHook(const_cast<unsigned char*>(image + 0x5f1e08));

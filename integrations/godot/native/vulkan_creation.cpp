@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "vulkan_creation.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
+#include <rescaleframe/native_latency_vulkan_requirements.h>
 #include <atomic>
 #include <cstring>
 #include <vector>
@@ -43,6 +44,8 @@ size_t feature_size(VkStructureType type) {
     RSF_FEATURE(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_VALIDATION_FEATURES_NV, VkPhysicalDeviceRayTracingValidationFeaturesNV);
     RSF_FEATURE(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES, VkPhysicalDeviceScalarBlockLayoutFeatures);
     RSF_FEATURE(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES, VkPhysicalDeviceShaderIntegerDotProductFeatures);
+    RSF_FEATURE(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD, VkPhysicalDeviceAntiLagFeaturesAMD);
+    RSF_FEATURE(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT, VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT);
 #undef RSF_FEATURE
     default: return 0;
     }
@@ -149,8 +152,50 @@ VkResult create_with_external(PFN_vkCreateDevice create, VkPhysicalDevice physic
     }
     return result;
 }
+VkResult VKAPI_PTR create_latency_device(VkPhysicalDevice physical,const VkDeviceCreateInfo* info,
+    const VkAllocationCallbacks* allocator,VkDevice* output) noexcept try {
+    const auto create=entry<PFN_vkCreateDevice>(owner_instance,"vkCreateDevice");
+    if (!create || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
+    Chain chain;auto request=*info;
+    std::vector<const char*> extensions;
+    const VkDeviceCreateInfo* actual=info;
+    if (chain.copy(info->pNext)) {
+        const rsf_latencyvk_device_query query{sizeof(query),1,owner_instance,physical,underlying,chain.head};
+        rsf_latencyvk_device_requirements requirements{sizeof(requirements),1};
+        if (rsf_latencyvk_require_device(&query,&requirements)==RSF_BACKEND_OK && requirements.extension_count) {
+            if (info->enabledExtensionCount) extensions.assign(info->ppEnabledExtensionNames,info->ppEnabledExtensionNames+info->enabledExtensionCount);
+            for (uint32_t i=0;i<requirements.extension_count;++i) {
+                bool present=false;for (const char* value:extensions) if (std::strcmp(value,requirements.extensions[i])==0) present=true;
+                if (!present) extensions.push_back(requirements.extensions[i]);
+            }
+            request.pNext=requirements.features;request.enabledExtensionCount=static_cast<uint32_t>(extensions.size());
+            request.ppEnabledExtensionNames=extensions.data();actual=&request;
+        }
+    }
+    auto result=create(physical,actual,allocator,output);
+    if (actual!=info && (result==VK_ERROR_FEATURE_NOT_PRESENT || result==VK_ERROR_EXTENSION_NOT_PRESENT)) {
+        diagnostic("Optional core latency device requirements refused; retrying the caller's unchanged request.");
+        actual=info;result=create(physical,actual,allocator,output);
+    }
+    if (result==VK_SUCCESS) {
+        const rsf_latencyvk_created_device facts{sizeof(facts),1,owner_instance,physical,*output,underlying,actual};
+        if (rsf_latencyvk_device_created(&facts)==RSF_BACKEND_OK) diagnostic("Core Vulkan latency device requirements enabled.");
+    }
+    return result;
+} catch (...) {return VK_ERROR_OUT_OF_HOST_MEMORY;}
+void VKAPI_PTR destroy_device(VkDevice device,const VkAllocationCallbacks* allocator) {
+    const auto get=entry<PFN_vkGetDeviceProcAddr>(owner_instance,"vkGetDeviceProcAddr");
+    const auto destroy=get ? reinterpret_cast<PFN_vkDestroyDevice>(get(device,"vkDestroyDevice")) : nullptr;
+    rsf_latencyvk_device_destroyed(device);
+    if (destroy) destroy(device,allocator);
+}
+PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device,const char* name) {
+    if (name && std::strcmp(name,"vkDestroyDevice")==0) return reinterpret_cast<PFN_vkVoidFunction>(destroy_device);
+    const auto get=entry<PFN_vkGetDeviceProcAddr>(owner_instance,"vkGetDeviceProcAddr");
+    return get ? get(device,name) : nullptr;
+}
 VkResult VKAPI_PTR create_device(VkPhysicalDevice physical, const VkDeviceCreateInfo* info, const VkAllocationCallbacks* allocator, VkDevice* output) noexcept try {
-    const auto native_create = entry<PFN_vkCreateDevice>(owner_instance, "vkCreateDevice");
+    const auto native_create = &create_latency_device;
     if (!native_create || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
     const auto create = [native_create](VkPhysicalDevice target, const VkDeviceCreateInfo* request, const VkAllocationCallbacks* callbacks, VkDevice* result) {
         return create_with_external(native_create, target, request, callbacks, result);
@@ -195,6 +240,7 @@ VkResult VKAPI_PTR create_device(VkPhysicalDevice physical, const VkDeviceCreate
 rsf_godot_vk_function resolver(void* instance, const char* name) {
     if (!name || !underlying) return nullptr;
     if (std::strcmp(name, "vkCreateInstance") == 0) return reinterpret_cast<rsf_godot_vk_function>(create_instance);
+    if (std::strcmp(name, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<rsf_godot_vk_function>(device_proc);
     if (std::strcmp(name, "vkCreateDevice") == 0) {
         if (instance) owner_instance = static_cast<VkInstance>(instance);
         return reinterpret_cast<rsf_godot_vk_function>(create_device);

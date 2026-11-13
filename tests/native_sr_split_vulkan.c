@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_split_vulkan.h>
+#include <rescaleframe/native_latency_vulkan_requirements.h>
 #include <stddef.h>
 _Static_assert(RSF_SRVK_ABI_VERSION == 2, "SR ABI 2 appends sharpening");
 _Static_assert(RSF_SRVK_SPLIT_ABI_VERSION == 1, "split ABI starts at 1");

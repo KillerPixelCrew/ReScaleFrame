@@ -562,10 +562,6 @@ int32_t process_latency(void* user, const rsf_game_latency_event* event) noexcep
     {
         std::lock_guard lock(owner.guard); owner.settings();
     }
-    // Native graphics Apply also sends driver sleep options before gameplay has
-    // produced its first CPU frame. RSF owns that request as soon as its host is
-    // installed; the game preference must not overwrite the overlay's latency mode.
-    if (owner.fg_installed && event->marker == RSF_GAME_LATENCY_MODE) return RSF_OK;
     const auto result = owner.fg_installed ? rsf_fg12_latency(event) : RSF_BACKEND_ERROR_NOT_READY;
     if (result == RSF_BACKEND_OK && owner.latency_reports++ < 12) {
         char message[112]{}; std::snprintf(message, sizeof(message), "Native renderer latency boundary=%u source=%llu thread=%lu owned=1.",
@@ -641,6 +637,7 @@ extern "C" int32_t rsf_render_host_create(const rsf_render_host_setup* setup, rs
         "FG presentation interception refused; native presentation retained.");
     services->process_upscale = process; services->submit = submit; services->present = present;
     services->render_pass = render_pass;
+    services->cpu_event = [](void*,const rsf_game_cpu_event* event) {rsf_fg12_cpu(event);};
     services->process_latency = process_latency;
     services->render_feedback = render_feedback;
     frontend_host.store(owner.get(), std::memory_order_release);

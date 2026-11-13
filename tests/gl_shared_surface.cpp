@@ -3,6 +3,7 @@
 #include "../games/minecraft/native/input_observer.h"
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/gl_pipeline.h>
+#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/input_dump.h>
 #include <windows.h>
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <iterator>
 using Microsoft::WRL::ComPtr;
+UINT probe_message_id{}; uint32_t probe_dequeued{};
 extern "C" __declspec(dllexport) DWORD NvOptimusEnablement=1;
 extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
 namespace {
@@ -118,17 +120,17 @@ int main() try {
         require(SwapBuffers(window.dc)!=0,"present WGL before adopting native presentation");
         void* child=rsf_gl_window_create(window.window);require(child!=nullptr,"create native child on GLFW owner thread");
         auto& observer=MinecraftInputObserver::instance();
-        require(observer.install(window.window,static_cast<HWND>(child)),"observe GLFW owner's dequeued messages");
+        require(observer.install(window.window,static_cast<HWND>(child),[](UINT message) {if (message==probe_message_id) ++probe_dequeued;}),"observe GLFW owner's dequeued messages");
         const UINT probe=RegisterWindowMessageW(L"ReScaleFrame.HiddenInputProbe");
-        observer.set_message(probe);
+        probe_message_id=probe; probe_dequeued=0;
         require(PostMessageW(window.window,probe,0,0)!=0,"post ping to hidden GLFW parent");
         MSG probe_message{};
         require(PeekMessageW(&probe_message,window.window,probe,probe,PM_NOREMOVE)!=0,"peek tool message without consuming");
-        require(observer.consume()==0,"a non-removing peek must not sample the ping");
+        require(probe_dequeued==0,"a non-removing peek must not sample the ping");
         require(PeekMessageW(&probe_message,window.window,probe,probe,PM_REMOVE)!=0,"dequeue tool message");
-        require(observer.consume()==probe&&observer.consume()==0,"dequeued ping reaches exactly one next simulation");
+        require(probe_dequeued==1,"dequeued ping reaches exactly one next simulation");
         require(PostThreadMessageW(GetCurrentThreadId(),probe,0,0)!=0,"post SDK-style thread ping to hidden event owner");
-        require(PeekMessageW(&probe_message,nullptr,probe,probe,PM_REMOVE)!=0&&observer.consume()==probe,"thread-targeted tool pings share the same input boundary");
+        require(PeekMessageW(&probe_message,nullptr,probe,probe,PM_REMOVE)!=0&&probe_dequeued==2,"thread-targeted tool pings share the same input boundary");
         require(SendMessageW(static_cast<HWND>(child),WM_NCHITTEST,0,0)==HTTRANSPARENT,"native child must pass hit tests to the GLFW parent");
         require(wglMakeCurrent(nullptr,nullptr)!=0,"release GL context before threaded rendering");
         std::atomic<bool> done=false;std::exception_ptr render_error;
@@ -167,19 +169,19 @@ int main() try {
             require(rsf_gl_pipeline_present(pipeline,0,0)==RSF_BACKEND_ERROR_INVALID_ARGUMENT,"menus must not replace their input frame ID with zero");
             for(uint32_t menu=0;menu<32;++menu) {
                 ++frame;
-                for(uint32_t stage:{0u,6u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+                for(uint32_t stage:{0u,1u,2u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 require(rsf_gl_pipeline_input(pipeline,frame,7,0)==RSF_BACKEND_OK,"sample keyboard mouse and controller on the acquired CPU token");
                 require(rsf_gl_pipeline_input(pipeline,frame,4,0)==RSF_BACKEND_OK,"multiple polls retain one controller sample marker");
                 if(const auto ping=rsf_gl_pipeline_pcl_message(pipeline))
                     require(rsf_gl_pipeline_input(pipeline,frame,0,ping)==RSF_BACKEND_OK,"SDK registered latency ping uses the consuming input frame");
-                for(uint32_t stage:{1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+                for(uint32_t stage:{3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)!=nullptr,"menu frame must acquire a real SDK token");
                 require(rsf_gl_pipeline_present(pipeline,frame,0)==RSF_BACKEND_OK,"menu present closes its real CPU frame without a scene");
                 if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)==nullptr,"menu present must release its SDK token");
                 require(rsf_gl_pipeline_input(pipeline,frame,1,0)!=RSF_BACKEND_OK,"post-present input must never reuse the closed SDK token");
             }
             ++frame;
-            for(uint32_t stage:{0u,6u,1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+            for(uint32_t stage:{0u,1u,2u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
             require(rsf_gl_pipeline_abort(pipeline,frame)==RSF_BACKEND_OK,"incomplete resized frame closes its CPU ownership");
             if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)==nullptr,"aborted resize frame must release its SDK token");
             rsf_game_render_pass pass{};pass.struct_size=sizeof(pass);pass.history_key=pass.view_key=1;pass.camera_valid=1;pass.screen=RSF_SCREEN_FLIGHT;
@@ -191,7 +193,7 @@ int main() try {
             for(uint32_t iteration=0;iteration<(generation_backend?16u:3u);++iteration) {
                 if(!capture_root.empty()&&!capture_requested&&backend==3&&iteration==0) {rsf_input_dump_request();capture_requested=true;}
                 pass.native_frame=pass.source_frame_id=++frame;pass.flags=iteration?0:RSF_GAME_RENDER_RESET;
-                for(uint32_t stage:{0u,6u,1u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
+                for(uint32_t stage:{0u,1u,2u,3u})rsf_gl_pipeline_cpu(pipeline,frame,stage);
                 require(rsf_gl_pipeline_evaluate(pipeline,&pass)==RSF_BACKEND_OK,"real vendor SR evaluate from GL shared inputs");
                 require(rsf_gl_pipeline_hudless(pipeline,&pass)==RSF_BACKEND_OK,"capture actual HUDless surface");
                 require(rsf_gl_pipeline_present(pipeline,frame,0)==RSF_BACKEND_OK,"present composed OpenGL image through native DXGI owner");
@@ -227,6 +229,12 @@ int main() try {
             std::printf("PASS: native SR backend %u, plan %ux%u -> %ux%u, runtime switch and DXGI presentation\n",backend,surfaces.render_width,surfaces.render_height,width,height);
         }
         bind(0x8d40,0);remove(1,&held_framebuffer);
+        rsf_native_latency_status latency{sizeof(latency),1};
+        require(rsf_native_latency_status_get(&latency)!=0 && latency.events.order_violations==0 && latency.events.substitutes==0,
+            "all measured GL input frames preserve core ordering without substitute polls");
+        std::printf("GL core latency: owner=%u paced=%llu input=%llu/%llu/%llu pings=%llu order=%llu substitutes=%llu\n",
+            latency.owner,latency.paced_frames,latency.events.input_events[0],latency.events.input_events[1],
+            latency.events.input_events[2],latency.events.pings,latency.events.order_violations,latency.events.substitutes);
         require(rsf_gl_pipeline_close(pipeline)==RSF_BACKEND_OK,"close GL native pipeline");
         if(capture_requested) {
             std::filesystem::path bundle;

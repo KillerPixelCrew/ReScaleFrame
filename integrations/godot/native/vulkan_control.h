@@ -10,7 +10,5 @@ int settings(rsf_godot_settings*);
 int shutdown();
 void cpu(const rsf_game_cpu_event*);
 void render_begin(uint64_t);
-int input(uint64_t frame, uint32_t kind, uint32_t message);
-uint32_t ping_message();
 void capture_present(const void* present_info, int32_t result, uint32_t begin);
 }

@@ -10,7 +10,7 @@ import net.minecraft.client.Minecraft;
 
 /** Graphics calls stay on the render thread. Images remain on the GPU; JNI carries metadata and handles. */
 final class NativeBridge {
-    static final int FRAME_BEGIN=0,INPUT_SAMPLE=1,SIMULATION_END=3,PACING=6;
+    static final int FRAME_BEGIN=0,INPUT_SAMPLE=1,SIMULATION_BEGIN=2,SIMULATION_END=3,FRAME_END=4;
     private static Path loadedRoot;
     static Path load() throws Exception {
         if(loadedRoot!=null)return loadedRoot;

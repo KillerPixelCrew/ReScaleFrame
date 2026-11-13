@@ -89,6 +89,7 @@ Dictionary ReScaleFrameRuntime::get_status() const
     RSF_FIELD(total_presented); RSF_FIELD(generated_presented); RSF_FIELD(presentation_statistics_valid);
     RSF_FIELD(presentation_statistics_flags); RSF_FIELD(source_frame_id); RSF_FIELD(provider_generation); RSF_FIELD(generated_callbacks);
     RSF_FIELD(window_foreground); RSF_FIELD(window_visible); RSF_FIELD(foreground_process_id);
+    RSF_FIELD(latency_owner); RSF_FIELD(input_substitutes); RSF_FIELD(order_violations); RSF_FIELD(derived_boundaries);
     RSF_FIELD(keyboard_inputs); RSF_FIELD(mouse_inputs); RSF_FIELD(controller_inputs); RSF_FIELD(pcl_pings);
 #undef RSF_FIELD
     return result;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/gl_pipeline.h>
+#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
@@ -183,14 +184,24 @@ extern "C" rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline* self
 }
 extern "C" void rsf_gl_pipeline_cpu(rsf_gl_pipeline* self,uint64_t frame,uint32_t stage) {
     if(!self)return;LARGE_INTEGER now{},frequency{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event event{sizeof(event),stage,self->session,frame,static_cast<uint64_t>(now.QuadPart),static_cast<uint64_t>(frequency.QuadPart),0,0,0};rsf_fg12_cpu(&event);
+    rsf_game_cpu_event event{sizeof(event),stage,self->session,frame,static_cast<uint64_t>(now.QuadPart),static_cast<uint64_t>(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};rsf_fg12_cpu(&event);
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_abort(rsf_gl_pipeline* self,uint64_t frame) {
     return self&&frame?rsf_d3d11_present_abort(frame):RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 }
 extern "C" int32_t rsf_gl_pipeline_input(rsf_gl_pipeline* self,uint64_t frame,uint32_t kinds,uint32_t message) {
-    if(!self||!frame||(kinds&~7u)||(!kinds&&message<0xc000u))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return rsf_d3d11_present_input(frame,kinds,message);
+    if(!self||(kinds&~7u)||(!kinds&&message==0))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (frame) {
+        rsf_native_cpu_frame facts{}; facts.struct_size=sizeof(facts);
+        rsf_native_latency_frame timing{sizeof(timing),1,frame};
+        if (!rsf_native_cpu_read(self->session,frame,&facts) || facts.ended ||
+            (rsf_native_latency_frame_get(&timing) && timing.completed)) return RSF_BACKEND_ERROR_NOT_READY;
+    }
+    LARGE_INTEGER now{},frequency{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&frequency);
+    rsf_game_cpu_event event{sizeof(event),RSF_GAME_CPU_INPUT_EVENT,self->session,frame,uint64_t(now.QuadPart),
+        uint64_t(frequency.QuadPart),0,kinds,message,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+    if (!frame) event.flags|=message ? RSF_GAME_CPU_WINDOW_MESSAGE : RSF_GAME_CPU_INPUT_UNFRAMED;
+    rsf_fg12_cpu(&event); return RSF_BACKEND_OK;
 }
 extern "C" uint32_t rsf_gl_pipeline_pcl_message(rsf_gl_pipeline* self) {
     if(!self)return 0;
@@ -242,6 +253,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_close(rsf_gl_pipeline* self) {
     if(!self)return RSF_BACKEND_OK;const auto drained=rsf_gl_drain(self->sharing);if(drained!=RSF_BACKEND_OK)return drained;
     // DLSS SR borrows the chain's Streamline host, so release SR before that host.
     release_surfaces(*self);self->chain.Reset();const auto closed=rsf_gl_close(self->sharing);if(closed!=RSF_BACKEND_OK)return closed;self->sharing=nullptr;
+    rsf_native_latency_end_session(self->session);
     rsf_input_dump_cancel(self->session);
     if(self->own_window)rsf_gl_window_destroy(self->window);self->window=nullptr;
     // Installed presentation callbacks are process-lifetime. Keep this small owner alive.

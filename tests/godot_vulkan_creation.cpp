@@ -17,6 +17,8 @@ const VkAllocationCallbacks* original_allocator = nullptr;
 uint32_t device_calls = 0, requirement_calls = 0, instance_calls = 0;
 bool sdk_failure = false, instance_failure = false, expect_augmented = true, aggregate_case = false;
 bool external_extensions = false;
+bool amd_case=false,amd_extension=true,amd_feature=true,amd_refused=false;
+uint32_t amd_resolved{};
 VkResult first_device_result = VK_SUCCESS;
 VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT sdk_mutable{};
 void* forwarded_instance = nullptr;
@@ -39,17 +41,25 @@ uint32_t extension_count(uint32_t count, const char* const* names, const char* n
     return found;
 }
 void VKAPI_PTR unrelated_function() {}
-VkResult VKAPI_PTR fake_extensions(VkPhysicalDevice physical, const char*, uint32_t* count, VkExtensionProperties* values) {
-    require(physical == fixture_physical, "interop extension query uses the selected physical device");
-    if (!external_extensions) { *count = 0; return VK_SUCCESS; }
-    if (values) {
-        require(*count >= 2, "interop extension query has sufficient storage");
-        constexpr char memory_name[] = "VK_KHR_external_memory_win32";
-        constexpr char semaphore_name[] = "VK_KHR_external_semaphore_win32";
-        std::memcpy(values[0].extensionName, memory_name, sizeof(memory_name));
-        std::memcpy(values[1].extensionName, semaphore_name, sizeof(semaphore_name));
-    }
-    *count = 2; return VK_SUCCESS;
+VkResult VKAPI_PTR fake_extensions(VkPhysicalDevice physical,const char*,uint32_t* count,VkExtensionProperties* values) {
+    require(physical==fixture_physical,"requirements query uses selected physical device");
+    const char* names[3]{};uint32_t size=0;
+    if (external_extensions) {names[size++]="VK_KHR_external_memory_win32";names[size++]="VK_KHR_external_semaphore_win32";}
+    if (amd_case && amd_extension) names[size++]=VK_AMD_ANTI_LAG_EXTENSION_NAME;
+    if (values) {require(*count>=size,"extension storage size");for(uint32_t i=0;i<size;++i) std::strcpy(values[i].extensionName,names[i]);}
+    *count=size;return VK_SUCCESS;
+}
+void VKAPI_PTR fake_properties(VkPhysicalDevice,VkPhysicalDeviceProperties* values) {values->vendorID=amd_case ? 0x1002 : 0x10de;}
+void VKAPI_PTR fake_features(VkPhysicalDevice,VkPhysicalDeviceFeatures2* root) {
+    auto* amd=static_cast<VkPhysicalDeviceAntiLagFeaturesAMD*>(root->pNext);
+    require(amd && amd->sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD,"core queries AMD feature");
+    amd->antiLag=amd_feature;
+}
+void VKAPI_PTR fake_update(VkDevice,const VkAntiLagDataAMD*) {require(false,"creation does not pace");}
+PFN_vkVoidFunction VKAPI_PTR fake_device_proc(VkDevice target,const char* name) {
+    require(target==fixture_device,"created device reported to core");
+    if (!std::strcmp(name,"vkAntiLagUpdateAMD")) {++amd_resolved;return reinterpret_cast<PFN_vkVoidFunction>(fake_update);}
+    return nullptr;
 }
 VkResult VKAPI_PTR fake_create_instance(const VkInstanceCreateInfo* info, const VkAllocationCallbacks*, VkInstance* output) {
     ++instance_calls;
@@ -66,6 +76,17 @@ VkResult VKAPI_PTR fake_create_device(VkPhysicalDevice physical, const VkDeviceC
     require(physical == fixture_physical && allocator == original_allocator, "physical device and allocator are forwarded");
     require(info->pQueueCreateInfos == original_request->pQueueCreateInfos && info->queueCreateInfoCount == original_request->queueCreateInfoCount,
         "engine queue request remains borrowed and unchanged");
+    if (amd_case) {
+        const bool augmented=amd_extension && amd_feature && device_calls==1;
+        if (augmented) {
+            require(info!=original_request && extension_count(info->enabledExtensionCount,info->ppEnabledExtensionNames,VK_AMD_ANTI_LAG_EXTENSION_NAME)==1,
+                "integration appends exactly the core-returned optional extension");
+            const auto* enabled_amd=feature<VkPhysicalDeviceAntiLagFeaturesAMD>(info->pNext,VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD);
+            require(enabled_amd && enabled_amd->antiLag,"core feature reaches actual create");
+            if (amd_refused) return VK_ERROR_FEATURE_NOT_PRESENT;
+        } else require(info==original_request,"absent/refused AMD feature preserves the original device request");
+        *output=fixture_device;return VK_SUCCESS;
+    }
     if (!expect_augmented || device_calls > 1) {
         require(info == original_request, "fallback forwards the original create-info pointer");
         *output = fixture_device;
@@ -111,6 +132,9 @@ VkResult VKAPI_PTR fake_create_device(VkPhysicalDevice physical, const VkDeviceC
     return VK_SUCCESS;
 }
 rsf_godot_vk_function fake_gipa(void* instance, const char* name) {
+    if (!std::strcmp(name,"vkGetPhysicalDeviceProperties")) return reinterpret_cast<rsf_godot_vk_function>(fake_properties);
+    if (!std::strcmp(name,"vkGetPhysicalDeviceFeatures2")) return reinterpret_cast<rsf_godot_vk_function>(fake_features);
+    if (!std::strcmp(name,"vkGetDeviceProcAddr")) return reinterpret_cast<rsf_godot_vk_function>(fake_device_proc);
     if (std::strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0)
         return reinterpret_cast<rsf_godot_vk_function>(fake_extensions);
     if (std::strcmp(name, "vkCreateInstance") == 0) {
@@ -255,6 +279,21 @@ int main() {
     external_extensions = false;
     rsf::godot_vk::stop_creation_requirements();
     require(!rsf::godot_vk::xess_device_ready() && !rsf::godot_vk::interop_device_ready(), "creation shutdown clears readiness");
+    info=original_info;half=original_half;timeline=original_timeline;enabled=original_enabled;
+    amd_case=true;external_extensions=false;
+    call=begin_device_case(false);
+    require(call(fixture_physical,&info,&allocator,&device)==VK_SUCCESS && amd_resolved==1 && !requirement_calls,
+        "AMD negotiation is core-owned and independent of XeSS");
+    require(!std::memcmp(&info,&original_info,sizeof(info)) && !std::memcmp(&timeline,&original_timeline,sizeof(timeline)),
+        "AMD negotiation preserves caller feature links and create info");
+    rsf_latencyvk_device_destroyed(device);
+    amd_extension=false;amd_resolved=0;call=begin_device_case(false);
+    require(call(fixture_physical,&info,&allocator,&device)==VK_SUCCESS && !amd_resolved,"missing AMD extension stays unavailable");
+    amd_extension=true;amd_feature=false;call=begin_device_case(false);
+    require(call(fixture_physical,&info,&allocator,&device)==VK_SUCCESS && !amd_resolved,"missing AMD feature stays unavailable");
+    amd_feature=true;amd_refused=true;call=begin_device_case(false);
+    require(call(fixture_physical,&info,&allocator,&device)==VK_SUCCESS && device_calls==2 && !amd_resolved,
+        "driver-refused optional latency feature retries original and does not claim readiness");
     std::puts("PASS: Godot Vulkan creation clone, requirements, fallback and resolver boundary");
     return 0;
 }

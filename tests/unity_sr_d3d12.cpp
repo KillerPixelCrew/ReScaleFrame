@@ -10,6 +10,7 @@
 #include <rescaleframe/render_frontend.h>
 #include "../games/rdr2/src/runtime_setup.h"
 #include <rescaleframe/native_fg_d3d12.h>
+#include <rescaleframe/native_cpu.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -115,8 +116,21 @@ static int rdr2_generation(ID3D12Device* device, ID3D12CommandQueue* queue,
         const uint64_t frame = ordinal + 141;
         if (ordinal && (FAILED(allocator->Reset()) || FAILED(list->Reset(allocator, nullptr)))) return 1;
         pass.native_frame = pass.source_frame_id = frame;
-        for (uint32_t marker : {RSF_GAME_LATENCY_SLEEP, RSF_LATENCY_INPUT_SAMPLE, RSF_LATENCY_SIMULATION_START,
-            RSF_LATENCY_SIMULATION_END, RSF_LATENCY_RENDER_SUBMIT_START}) if (!latency(marker, frame)) return 1;
+        for (uint32_t marker : {RSF_GAME_LATENCY_SLEEP, RSF_LATENCY_INPUT_SAMPLE, RSF_LATENCY_SIMULATION_START}) if (!latency(marker, frame)) return 1;
+        LARGE_INTEGER input_now{}, input_frequency{}; QueryPerformanceCounter(&input_now); QueryPerformanceFrequency(&input_frequency);
+        rsf_game_cpu_event received{sizeof(received),RSF_GAME_CPU_INPUT_EVENT,pass.session_id,frame,
+            uint64_t(input_now.QuadPart),uint64_t(input_frequency.QuadPart),1,7,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+        if (!host.cpu_event) return 1;
+        host.cpu_event(host.user,&received); host.cpu_event(host.user,&received);
+        if (rsf_native_latency_ping(window)) {
+            MSG message{};
+            while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
+                auto dequeued=received; dequeued.input_kind=0; dequeued.message_id=message.message;
+                dequeued.flags|=RSF_GAME_CPU_WINDOW_MESSAGE;
+                host.cpu_event(host.user,&dequeued);
+            }
+        }
+        for (uint32_t marker : {RSF_LATENCY_SIMULATION_END,RSF_LATENCY_RENDER_SUBMIT_START}) if (!latency(marker,frame)) return 1;
         if (host.process_upscale(host.user, list, &pass) != 0) return 1;
         ComPtr<ID3D12Resource> target;
         if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&target)))) return 1;
@@ -157,6 +171,15 @@ static int rdr2_generation(ID3D12Device* device, ID3D12CommandQueue* queue,
     std::fprintf(stderr, "RDR2 cold FG: available=%u tagged=%llu mode=%u reason=%u result=%d.\n",
         status.available, static_cast<unsigned long long>(status.tagged_frames),
         status.vendor.configured_mode, status.reason, status.last_result);
+    rsf_native_latency_status latency_status{sizeof(latency_status),1};
+    if (!rsf_native_latency_status_get(&latency_status)) return 1;
+    std::fprintf(stderr,"Core latency: owner=%u paced=%llu kinds=%llu/%llu/%llu pings=%llu order=%llu duplicates=%llu.\n",
+        latency_status.owner,latency_status.paced_frames,latency_status.events.input_events[0],
+        latency_status.events.input_events[1],latency_status.events.input_events[2],latency_status.events.pings,
+        latency_status.events.order_violations,latency_status.events.duplicates);
+    if (latency_status.events.input_events[0]!=40 || latency_status.events.input_events[1]!=40 ||
+        latency_status.events.input_events[2]!=40 || latency_status.events.order_violations || latency_status.paced_frames<180 ||
+        (latency_status.pcl_available && !latency_status.events.pings)) return 1;
     // The host is process-owned, as in RDR2. Keep its presentation interface alive to exit.
     (void)chain.Detach(); (void)created.Detach();
     return validation(device) && status.available && status.tagged_frames && status.last_result == 0 &&
@@ -164,7 +187,7 @@ static int rdr2_generation(ID3D12Device* device, ID3D12CommandQueue* queue,
 }
 int main(int argc, char** argv)
 {
-    static_assert(sizeof(rsf_camera_frame) == 384 && sizeof(rsf_unity_packet) == 520 && sizeof(rsf_unity_native_api) == 64);
+    static_assert(sizeof(rsf_camera_frame) == 384 && sizeof(rsf_unity_packet) == 520 && sizeof(rsf_unity_native_api) == 72);
     rsf_sr12* invalid = reinterpret_cast<rsf_sr12*>(1);
     if (rsf_sr12_create(nullptr, &invalid) != RSF_BACKEND_ERROR_INVALID_ARGUMENT || invalid ||
         rsf_sr12_evaluate(nullptr, nullptr, nullptr, 0) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return 1;

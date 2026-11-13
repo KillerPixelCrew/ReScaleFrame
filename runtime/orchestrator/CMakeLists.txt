@@ -13,12 +13,16 @@ foreach(rsf_dump_backend rsf_dlss rsf_fsr rsf_xess)
     target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
 endforeach()
 
+add_library(rsf_native_cpu STATIC src/native_cpu.cpp)
+target_include_directories(rsf_native_cpu PUBLIC include)
+target_compile_definitions(rsf_native_cpu PRIVATE RSF_RUNTIME_BUILD)
+target_link_libraries(rsf_native_cpu PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
+
 add_library(rsf_orchestrator_core OBJECT
     src/runtime.cpp
     src/plugin_session.cpp
     src/native_scene.cpp
     src/native_window.cpp
-    src/native_cpu.cpp
     src/native_fg.cpp
     src/native_fg_d3d12.cpp
     src/native_composition.cpp
@@ -46,6 +50,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/dlss_pipeline.cpp)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
+target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
@@ -58,10 +63,15 @@ add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
 set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
 add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.cpp)
+target_sources(rsf_native_vulkan PRIVATE src/latency_amd_vulkan.cpp)
+if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
+    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_ANTILAG_VK=1)
+    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
+endif()
 target_include_directories(rsf_native_vulkan PUBLIC include)
 target_sources(rsf_native_vulkan PRIVATE src/native_sr_split_vulkan.cpp)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump PRIVATE rsf_build_options)
+target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_native_cpu PRIVATE rsf_build_options)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FFX_VK=1)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_SR_ENABLED=1)

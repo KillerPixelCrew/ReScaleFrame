@@ -160,6 +160,10 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_CPU_WINDOW_MESSAGE 4u
 /* FRAME_END: the engine did not render/present this source (for example an inactive update). */
 #define RSF_GAME_CPU_RENDER_SKIPPED 8u
+/* Received kind without an engine source yet; the core may associate it within its bounded window. */
+#define RSF_GAME_CPU_INPUT_UNFRAMED 16u
+/* Core-derived lifecycle boundary, distinct from a missing input poll. */
+#define RSF_GAME_CPU_DERIVED_BOUNDARY 32u
 #define RSF_GAME_INPUT_KEYBOARD 1u
 #define RSF_GAME_INPUT_MOUSE 2u
 #define RSF_GAME_INPUT_CONTROLLER 4u

@@ -2,6 +2,10 @@
 #include <rescaleframe/native_cpu.h>
 #include <array>
 #include <mutex>
+#include <windows.h>
+#include <cstdio>
+#include <cwchar>
+#include <iterator>
 namespace {
 std::mutex guard;
 std::array<rsf_native_cpu_frame, 128> frames{};
@@ -12,24 +16,65 @@ rsf_native_cpu_counters totals{sizeof(totals)};
 uint32_t ping_message{};
 std::array<rsf_game_cpu_event,16> pending_messages{};
 uint32_t next_message{};
+std::mutex lease_guard;
+HANDLE pacing_lease{};
+uint32_t pacing_client{};
+void clear_facts() {
+    frames = {}; pending_messages={}; next_message=0; totals = {sizeof(totals)}; ping_message=0; current_session = last_begin = 0; consumer = nullptr; consumer_user = nullptr;
+}
+}
+extern "C" RSF_RUNTIME_API int rsf_native_latency_claim(uint32_t client) {
+    if (client!=1 && client!=2) return 0;
+    std::lock_guard lock(lease_guard);
+    if (pacing_lease) return pacing_client==client;
+    wchar_t name[96]{};std::swprintf(name,std::size(name),L"Local\\ReScaleFrame.LatencyOwner.%lu",GetCurrentProcessId());
+    SetLastError(ERROR_SUCCESS);
+    const auto event=CreateEventW(nullptr,TRUE,FALSE,name);
+    const auto result=GetLastError();
+    if (!event) return 0;
+    if (result==ERROR_ALREADY_EXISTS) {CloseHandle(event);return 0;}
+    pacing_lease=event;pacing_client=client;return 1;
+}
+extern "C" RSF_RUNTIME_API int rsf_native_latency_has_claim(uint32_t client) {
+    std::lock_guard lock(lease_guard);return pacing_lease && pacing_client==client;
+}
+extern "C" RSF_RUNTIME_API void rsf_native_latency_release_claim(uint32_t client) {
+    std::lock_guard lock(lease_guard);
+    if (pacing_lease && pacing_client==client) {CloseHandle(pacing_lease);pacing_lease=nullptr;pacing_client=0;}
 }
 extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event* incoming,
     rsf_game_cpu_event_fn supplied_sink, void* supplied_user)
 {
     if (!incoming || incoming->struct_size < sizeof(*incoming) || incoming->event_version > RSF_GAME_CPU_EVENT_VERSION ||
-        incoming->flags & ~(RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_WINDOW_MESSAGE | RSF_GAME_CPU_RENDER_SKIPPED)) return 0;
+        incoming->flags & ~(RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_WINDOW_MESSAGE | RSF_GAME_CPU_RENDER_SKIPPED | RSF_GAME_CPU_INPUT_UNFRAMED | RSF_GAME_CPU_DERIVED_BOUNDARY)) return 0;
     auto copy = *incoming;
     const auto* event = &copy;
     const bool window_message = event->event_version == RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_WINDOW_MESSAGE);
-    if (window_message && event->stage == RSF_GAME_CPU_INPUT_EVENT && !event->input_kind && !event->source_frame_id) {
+    const bool unframed=event->event_version==RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_UNFRAMED);
+    if ((window_message || unframed) && event->stage==RSF_GAME_CPU_INPUT_EVENT && !event->source_frame_id) {
         if (!event->session_id || !event->timestamp_qpc || !event->qpc_frequency) return 0;
-        if (event->message_id < 0xc000 || event->message_id > 0xffff) return 1;
+        if (event->input_kind & ~7u) return 0;
+        if (!event->input_kind && (event->message_id<0xc000 || event->message_id>0xffff)) return 1;
+        if (event->input_kind && !unframed) return 0;
         std::lock_guard lock(guard);
         if (current_session && current_session != event->session_id) return 0;
         pending_messages[next_message++ % pending_messages.size()] = *event;
         return 1;
     }
     const bool facts = event->event_version == RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_KEYED);
+    if (facts && event->stage==RSF_GAME_CPU_FRAME_BEGIN) {
+        rsf_native_cpu_frame previous{};
+        {
+            std::lock_guard lock(guard);
+            if (current_session==event->session_id && last_begin && last_begin<event->source_frame_id)
+                previous=frames[last_begin%frames.size()];
+        }
+        if (previous.stage_mask==15u && !previous.ended) {
+            auto end=*event; end.stage=RSF_GAME_CPU_FRAME_END; end.source_frame_id=previous.source_frame_id;
+            end.flags|=RSF_GAME_CPU_DERIVED_BOUNDARY; end.render_expected=0;
+            if (!rsf_native_cpu_dispatch(&end,supplied_sink,supplied_user)) return 0;
+        }
+    }
     // A renderer can run without an engine input callback (loading/first frame). Normalize that absence centrally,
     // label it, and skip a late pacing sleep. Adapters report only the simulation end they actually observed.
     if (facts && event->stage == RSF_GAME_CPU_SIMULATION_END) {
@@ -67,7 +112,14 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             }
         }
         if (facts && event->stage <= RSF_GAME_CPU_FRAME_END && event->stage != RSF_GAME_CPU_FRAME_BEGIN &&
-            (frame.stage_mask & (1u << event->stage))) { ++totals.duplicates; return 1; } // repeated fact, no duplicate SDK action
+            (frame.stage_mask & (1u << event->stage))) {
+            if (event->stage==RSF_GAME_CPU_SIMULATION_END && !(event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY) &&
+                (frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY)) {
+                frame.timestamps_qpc[event->stage]=event->timestamp_qpc;
+                frame.flags &= ~RSF_GAME_CPU_DERIVED_BOUNDARY;
+            }
+            ++totals.duplicates; return 1;
+        }
         if (event->stage == RSF_GAME_CPU_PACING) {
             if (facts) return 1; // version 1 pacing is selected at INPUT_SAMPLE, not at a guessed frame-open boundary
             if (frame.stage_mask != 1u || frame.pacing_qpc || frame.qpc_frequency != event->qpc_frequency ||
@@ -76,8 +128,11 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             sink = supplied_sink ? supplied_sink : consumer; user = supplied_sink ? supplied_user : consumer_user;
         } else if (event->stage == RSF_GAME_CPU_INPUT_EVENT) {
             if (event->input_kind & ~7u || (!event->input_kind && event->message_id < 0xc000u && !window_message) ||
-                event->qpc_frequency != frame.qpc_frequency || event->timestamp_qpc < frame.timestamps_qpc[0]) return 0;
+                event->qpc_frequency != frame.qpc_frequency || (!unframed && event->timestamp_qpc < frame.timestamps_qpc[0]) ||
+                (unframed && frame.timestamps_qpc[0]>event->timestamp_qpc &&
+                 frame.timestamps_qpc[0]-event->timestamp_qpc>event->qpc_frequency/4)) return 0;
             if (window_message && copy.message_id != ping_message && !copy.input_kind) return 1;
+            if (unframed && copy.input_kind) ++totals.unframed_inputs;
             if (facts) {
                 const auto previous=copy.input_kind; copy.input_kind &= ~frame.input_mask;
                 if (previous != copy.input_kind) ++totals.duplicates;
@@ -112,8 +167,10 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             frame.flags |= RSF_GAME_CPU_INPUT_SUBSTITUTE; ++totals.substitutes;
         }
         frame.timestamps_qpc[event->stage] = event->timestamp_qpc;
+        if (event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY) frame.flags|=RSF_GAME_CPU_DERIVED_BOUNDARY;
         frame.stage_mask |= 1u << event->stage;
         frame.ended = event->stage == RSF_GAME_CPU_FRAME_END;
+        if (frame.ended && (event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY)) ++totals.derived_frame_ends;
         sink = supplied_sink ? supplied_sink : consumer; user = supplied_sink ? supplied_user : consumer_user;
         }
     }
@@ -123,12 +180,13 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
         {
             std::lock_guard lock(guard);
             for (auto& pending : pending_messages) {
-                if (!pending.message_id) continue;
-                if (pending.session_id == event->session_id && pending.message_id == ping_message &&
+                if (!pending.message_id && !pending.input_kind) continue;
+                if (pending.session_id == event->session_id && (pending.message_id == ping_message || (pending.input_kind && (pending.flags & RSF_GAME_CPU_INPUT_UNFRAMED))) &&
                     pending.qpc_frequency == event->qpc_frequency && event->timestamp_qpc >= pending.timestamp_qpc) {
                     if (event->timestamp_qpc-pending.timestamp_qpc <= event->qpc_frequency/4) {
                         ready[count]=pending; ready[count].source_frame_id=event->source_frame_id;
-                        ready[count++].timestamp_qpc=event->timestamp_qpc;
+                        if (!(ready[count].flags & RSF_GAME_CPU_INPUT_UNFRAMED)) ready[count].timestamp_qpc=event->timestamp_qpc;
+                        ++count;
                     } else ++totals.expired_messages;
                 }
                 pending={};
@@ -154,7 +212,13 @@ extern "C" RSF_RUNTIME_API void rsf_native_cpu_set_sink(rsf_game_cpu_event_fn si
 extern "C" RSF_RUNTIME_API void rsf_native_cpu_release(void)
 {
     std::lock_guard<std::mutex> lock(guard);
-    frames = {}; pending_messages={}; next_message=0; totals = {sizeof(totals)}; ping_message=0; current_session = last_begin = 0; consumer = nullptr; consumer_user = nullptr;
+    clear_facts();
+}
+
+extern "C" RSF_RUNTIME_API int rsf_native_cpu_release_session(uint64_t session) {
+    std::lock_guard lock(guard);
+    if (!session || current_session!=session) return 0;
+    clear_facts(); return 1;
 }
 
 extern "C" RSF_RUNTIME_API int rsf_native_cpu_counters_get(rsf_native_cpu_counters* out) {

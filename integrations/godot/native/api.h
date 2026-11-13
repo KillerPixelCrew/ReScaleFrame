@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 // Engine module to native runtime contract. Godot objects never cross this interface.
-#define RSF_GODOT_ABI_VERSION 1u
+#define RSF_GODOT_ABI_VERSION 2u
 typedef struct rsf_godot_setup {
     uint32_t struct_size, abi_version;
     const char* runtime_directory;
@@ -37,6 +37,8 @@ typedef struct rsf_godot_status {
     uint64_t source_frame_id, provider_generation, generated_callbacks;
     uint32_t window_foreground, window_visible, foreground_process_id;
     uint64_t keyboard_inputs, mouse_inputs, controller_inputs, pcl_pings;
+    uint32_t latency_owner;
+    uint64_t input_substitutes, order_violations, derived_boundaries;
 } rsf_godot_status;
 typedef struct rsf_godot_engine_services {
     uint32_t struct_size, abi_version;

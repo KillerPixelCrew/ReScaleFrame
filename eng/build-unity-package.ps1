@@ -43,6 +43,7 @@ $taskCopies['fidelityfx/license.md'] = Join-Path $taskFidelity 'docs/license.md'
 $taskCopies['fidelityfx/3rdpartynotice.md'] = Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md'
 foreach ($taskName in @('libxess.dll','libxess_fg.dll','libxell.dll')) { $taskCopies["xess/$taskName"] = Join-Path $taskRoot "vendor/xess/bin/$taskName" }
 foreach ($taskName in @('LICENSE.txt','third-party-programs.txt')) { $taskCopies["xess/$taskName"] = Join-Path $taskRoot "vendor/xess/$taskName" }
+$taskCopies['AMD-Anti-Lag-2-MIT.txt'] = Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'
 $taskCopies['Unity-Companion-LICENSE.md'] = Join-Path $UnityPluginApiDirectory 'LICENSE.md'
 $taskCopies['MFG-Unlocker-LICENSE.txt'] = Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'
 foreach ($taskCopy in $taskCopies.GetEnumerator()) {

@@ -64,5 +64,23 @@ int main() {
     CHECK(rsf_native_cpu_marker(6,4)==-1); // even a threaded Present needs a render submission
     for (uint32_t marker : {0u,2u,4u,5u,1u,3u}) CHECK(rsf_native_cpu_marker(6,marker)==1);
     CHECK(rsf_native_cpu_counters_get(&stats) && stats.order_violations==2);
+    CHECK(send(fact(6,RSF_GAME_CPU_INPUT_SAMPLE,1310)));
+    CHECK(send(fact(6,RSF_GAME_CPU_SIMULATION_BEGIN,1320)));
+    CHECK(send(fact(6,RSF_GAME_CPU_SIMULATION_END,1330)));
+    auto outside=fact(0,RSF_GAME_CPU_INPUT_EVENT,1340); outside.flags|=RSF_GAME_CPU_INPUT_UNFRAMED;
+    outside.input_kind=3; CHECK(send(outside));
+    delivered.clear(); CHECK(send(fact(7,RSF_GAME_CPU_FRAME_BEGIN,1400)));
+    CHECK(delivered.size()==3 && delivered[0].stage==RSF_GAME_CPU_FRAME_END &&
+        (delivered[0].flags & RSF_GAME_CPU_DERIVED_BOUNDARY) && delivered[2].source_frame_id==7 && delivered[2].timestamp_qpc==1340);
+    CHECK(rsf_native_cpu_counters_get(&stats) && stats.unframed_inputs==1 && stats.derived_frame_ends>=1);
+    CHECK(send(fact(7,RSF_GAME_CPU_FRAME_END,1410)));
+    CHECK(send(outside)); delivered.clear(); CHECK(send(fact(8,RSF_GAME_CPU_FRAME_BEGIN,2000)));
+    CHECK(delivered.size()==1 && rsf_native_cpu_counters_get(&stats) && stats.expired_messages==2);
+    CHECK(!rsf_native_cpu_release_session(10));
+    rsf_native_cpu_frame current{};current.struct_size=sizeof(current);CHECK(rsf_native_cpu_read(9,8,&current));
+    CHECK(rsf_native_cpu_release_session(9) && !rsf_native_cpu_read(9,8,&current));
+    auto next_session=fact(1,RSF_GAME_CPU_FRAME_BEGIN,2100);next_session.session_id=10;
+    CHECK(send(next_session));
+    rsf_native_cpu_release();
     std::printf("%d failures\n",failures); return failures ? 1 : 0;
 }

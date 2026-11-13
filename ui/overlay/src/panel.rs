@@ -64,6 +64,7 @@ const RAIL: f32 = 84.0;
 const LATENCY_REFLEX: u32 = 1;
 const LATENCY_XELL: u32 = 2;
 const LATENCY_ANTILAG2: u32 = 3;
+const LATENCY_ANTILAG_VULKAN: u32 = 4;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
 const SR_BACKENDS: [(u32, &str); 6] = [
@@ -1141,13 +1142,21 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     separator(ui);
-    if generation.latency_owner == LATENCY_ANTILAG2 {
-        heading(ui, "AMD Anti-Lag 2");
+    if matches!(
+        generation.latency_owner,
+        LATENCY_ANTILAG2 | LATENCY_ANTILAG_VULKAN
+    ) {
+        let technology = if generation.latency_owner == LATENCY_ANTILAG_VULKAN {
+            "AMD Vulkan Anti-Lag"
+        } else {
+            "AMD Anti-Lag 2"
+        };
+        heading(ui, technology);
         note(
             ui,
             format!(
-                "AMD Anti-Lag 2: {} driver updates",
-                generation.latency_paced_frames
+                "{}: {} driver updates",
+                technology, generation.latency_paced_frames
             ),
             MUTED,
         );
@@ -2457,6 +2466,10 @@ mod tests {
         assert!(text.contains("120 driver updates"));
         assert!(text.contains("Off") && text.contains("On"));
         assert!(!text.contains("On + Boost"));
+        stats.generation.latency_owner = LATENCY_ANTILAG_VULKAN;
+        let text = words(&Selection::default(), &stats, Tab::Frames);
+        assert!(text.contains("AMD Vulkan Anti-Lag"));
+        assert!(!text.contains("AMD Anti-Lag 2"));
     }
 
     #[test]

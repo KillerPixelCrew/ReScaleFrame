@@ -15,6 +15,8 @@ public abstract class RenderSystemMixin {
         NativeRenderer.beginDisplay();
         try {original.call(window);} finally {NativeRenderer.endDisplay();}
     }
+    @WrapOperation(method="flipFrame",at=@At(value="INVOKE",target="Lcom/mojang/blaze3d/systems/RenderSystem;pollEvents()V",ordinal=1))
+    private static void rfc$inputPoll(Operation<Void> original) {NativeRenderer.beforePostPresentPoll();original.call();}
     @WrapOperation(method="flipFrame",at=@At(value="INVOKE",target="Lorg/lwjgl/glfw/GLFW;glfwSwapBuffers(J)V",remap=false))
     private static void rfc$present(long window,Operation<Void> original) {if(!NativeRenderer.present())original.call(window);}
 }

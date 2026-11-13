@@ -102,6 +102,9 @@ int main(int argc, char** argv)
         state.profile, static_cast<unsigned long long>(state.sleep_calls), static_cast<unsigned long long>(state.marker_calls),
         static_cast<unsigned long long>(state.last_begin_id), state.low_latency_available, state.latency_report_available);
     if (state.sleep_calls != (profile == RSF_SL_PROFILE_PCL ? 0u : 12u) || state.marker_calls != 96) return 1;
+    if (rsf_streamline_host_reset_sources(host)!=0 || rsf_streamline_host_acquire(host,1)!=0 ||
+        rsf_streamline_host_reset_sources(host)!=RSF_BACKEND_ERROR_NOT_READY || rsf_streamline_host_abort(host,1)!=0 ||
+        rsf_streamline_host_reset_sources(host)!=0) return 1;
     heap.Reset(); fence.Reset(); list.Reset(); allocator.Reset(); swap.Reset();
     DestroyWindow(window); UnregisterClassW(wc.lpszClassName, wc.hInstance);
     if (rsf_streamline_host_destroy(host) != 0) return 1;

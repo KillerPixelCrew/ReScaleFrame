@@ -52,7 +52,7 @@ namespace ReScaleFrame.Unity
     {
         internal uint Size, Version;
         internal ulong Session;
-        internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent;
+        internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent, CpuFact;
     }
 
     internal static class Native
@@ -61,9 +61,15 @@ namespace ReScaleFrame.Unity
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ConfigDelegate(uint width, uint height, ref Configuration config);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr EnqueueDelegate(ref Packet packet);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void StateDelegate(uint state);
+        [StructLayout(LayoutKind.Sequential)] internal struct CpuFact {
+            internal uint Size, Stage;
+            internal ulong Session, Source, Timestamp, Frequency;
+            internal uint Expected, Kinds, Message, EventVersion, Flags;
+        }
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FactDelegate(ref CpuFact fact);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CpuDelegate(uint stage, ulong frame);
         // RSF_UNITY_BRIDGE_ABI_VERSION and RSF_UNITY_NATIVE_ABI_VERSION.
-        internal const uint BridgeVersion = 2, NativeVersion = 4;
+        internal const uint BridgeVersion = 2, NativeVersion = 5;
         private static readonly int ApiSize = Marshal.SizeOf<Api>();
         internal static readonly uint PacketSize = (uint)Marshal.SizeOf<Packet>();
         internal static readonly uint CameraFrameSize = (uint)Marshal.SizeOf<CameraFrame>();
@@ -74,6 +80,14 @@ namespace ReScaleFrame.Unity
         internal static EnqueueDelegate Enqueue;
         internal static StateDelegate ReportState;
         internal static CpuDelegate ReportCpu;
+        internal static FactDelegate ReportFact;
+        internal static void InputFact(ulong frame, uint kinds) {
+            if (ReportFact == null || kinds == 0) return;
+            var fact = new CpuFact {Size=(uint)Marshal.SizeOf<CpuFact>(),Stage=5,Session=Api.Session,Source=frame,
+                Timestamp=(ulong)System.Diagnostics.Stopwatch.GetTimestamp(),Frequency=(ulong)System.Diagnostics.Stopwatch.Frequency,
+                Kinds=kinds,EventVersion=1,Flags=1};
+            ReportFact(ref fact);
+        }
 
         // Resolve through Unity's native-plugin loader so UnityPluginLoad receives its registry.
         [DllImport("ReScaleFrame.Game.UnityMono.dll", CallingConvention = CallingConvention.Cdecl)]
@@ -92,6 +106,7 @@ namespace ReScaleFrame.Unity
             Enqueue = Marshal.GetDelegateForFunctionPointer<EnqueueDelegate>(Api.Enqueue);
             ReportState = Marshal.GetDelegateForFunctionPointer<StateDelegate>(Api.ManagedState);
             ReportCpu = Api.CpuEvent == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<CpuDelegate>(Api.CpuEvent);
+            ReportFact = Api.CpuFact == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<FactDelegate>(Api.CpuFact);
         }
 
         private static Configuration cached;

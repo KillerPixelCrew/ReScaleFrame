@@ -2,6 +2,7 @@
 #if ENABLE_UPSCALER_FRAMEWORK
 namespace ReScaleFrame
 {
+    public enum LatencyTechnology { None = 0, Reflex = 1, XeLL = 2, AntiLag2 = 3 }
     public readonly struct ReScaleFrameStatus
     {
         public SuperResolution RequestedSR { get; }
@@ -25,6 +26,14 @@ namespace ReScaleFrame
         public ulong TaggedFrames { get; }
         public ulong SleepCalls { get; }
         public ulong MarkerCalls { get; }
+        public LatencyTechnology LatencyOwner { get; }
+        public ulong KeyboardInputs { get; }
+        public ulong MouseInputs { get; }
+        public ulong ControllerInputs { get; }
+        public ulong PclPings { get; }
+        public ulong InputSubstitutes { get; }
+        public ulong OrderViolations { get; }
+        public ulong DerivedBoundaries { get; }
         public bool PclAvailable { get; }
         public bool LatencyReportAvailable { get; }
         internal ReScaleFrameStatus(Native.Status value) {
@@ -38,6 +47,9 @@ namespace ReScaleFrame
             EffectiveLatency = (LatencyMode)value.EffectiveLatency; DeferredReason = value.Reason;
             EvaluatedFrames = value.EvaluatedFrames; RefusedFrames = value.RefusedFrames; TaggedFrames = value.TaggedFrames;
             SleepCalls = value.SleepCalls; MarkerCalls = value.MarkerCalls;
+            LatencyOwner=(LatencyTechnology)value.LatencyOwner;KeyboardInputs=value.KeyboardInputs;MouseInputs=value.MouseInputs;
+            ControllerInputs=value.ControllerInputs;PclPings=value.PclPings;InputSubstitutes=value.InputSubstitutes;
+            OrderViolations=value.OrderViolations;DerivedBoundaries=value.DerivedBoundaries;
             PclAvailable = value.PclAvailable != 0; LatencyReportAvailable = value.LatencyReportAvailable != 0;
         }
     }

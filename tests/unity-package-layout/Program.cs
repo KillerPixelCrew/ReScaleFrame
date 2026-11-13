@@ -11,6 +11,7 @@ internal static class Program {
         var module=NativeLibrary.Load(args[0]);
         NativeLibrary.SetDllImportResolver(typeof(Program).Assembly,(name,assembly,path)=>name=="ReScaleFrame.Unity.Native.dll"?module:IntPtr.Zero);
         Require(Marshal.SizeOf<Native.Settings>()==100&&Marshal.SizeOf<Native.Sharpening>()==56,"settings ABI sizes");
+        Require(Marshal.SizeOf<Native.Status>()==184&&Marshal.SizeOf<Native.Api>()==72&&Marshal.SizeOf<Native.CpuFact>()==64,"latency status and Game CPU fact ABI sizes");
         Require(Marshal.OffsetOf<Native.Settings>(nameof(Native.Settings.Sharpen)).ToInt32()==44,"settings append offset");
         Require(Marshal.OffsetOf<Native.Sharpening>(nameof(Native.Sharpening.mode)).ToInt32()==8,"mode ABI offset");
         Require(Marshal.OffsetOf<Native.Sharpening>(nameof(Native.Sharpening.sharpness)).ToInt32()==12,"sharpness ABI offset");

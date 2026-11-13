@@ -261,13 +261,59 @@ catch (...) { if (++refusals <= 3) log("Unity render callback refused; spatial f
 }
 
 namespace {
+
+std::atomic<uint64_t> input_source{};
+std::atomic<uint32_t> input_calls{};
+struct InputCall { InputCall() { ++input_calls; } ~InputCall() { --input_calls; } };
+HHOOK message_hook{};
+void received_input(uint32_t kind,uint32_t message) {
+    if (!active.load() || !services.cpu_event) return;
+    const auto source=input_source.load();
+    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    const rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,services.session_id,source,
+        uint64_t(now.QuadPart),uint64_t(frequency.QuadPart),0,kind,message,RSF_GAME_CPU_EVENT_VERSION,
+        RSF_GAME_CPU_INPUT_KEYED | (message ? RSF_GAME_CPU_WINDOW_MESSAGE : 0u) | (!source && kind ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
+    services.cpu_event(services.user,&fact);
+}
+LRESULT CALLBACK received_message(int code,WPARAM removed,LPARAM argument) {
+    InputCall call;
+    if (code>=0 && removed==PM_REMOVE) {
+        const auto& message=*reinterpret_cast<const MSG*>(argument); uint32_t kind=0;
+        if (message.message>=WM_KEYFIRST && message.message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
+        if (message.message>=WM_MOUSEFIRST && message.message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
+        if (message.message==WM_INPUT) {
+            RAWINPUTHEADER header{}; UINT bytes=sizeof(header);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(message.lParam),RID_HEADER,&header,&bytes,sizeof(header))==sizeof(header))
+                kind=header.dwType==RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD : header.dwType==RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
+        }
+        received_input(kind,message.message);
+    }
+    return CallNextHookEx(nullptr,code,removed,argument);
+}
+void cpu_fact(const rsf_game_cpu_event* fact) {
+    InputCall call;
+    if (!active.load() || !fact || fact->struct_size<sizeof(*fact) || fact->session_id!=services.session_id || !services.cpu_event) return;
+    auto copy=*fact;
+    if (copy.stage==RSF_GAME_CPU_INPUT_EVENT) {
+        copy.source_frame_id=input_source.load();
+        if (!copy.source_frame_id) copy.flags|=RSF_GAME_CPU_INPUT_UNFRAMED;
+    }
+    services.cpu_event(services.user,&copy);
+}
 void cpu_event(uint32_t stage, uint64_t frame_id) {
+    InputCall call;
     if (!active.load() || !frame_id || !services.cpu_event) return;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.stage = stage;
     event.session_id = services.session_id; event.source_frame_id = frame_id;
     event.timestamp_qpc = uint64_t(now.QuadPart); event.qpc_frequency = uint64_t(frequency.QuadPart);
+    event.event_version=RSF_GAME_CPU_EVENT_VERSION; event.flags=RSF_GAME_CPU_INPUT_KEYED;
+    if (stage==RSF_GAME_CPU_FRAME_BEGIN) {
+        input_source.store(frame_id);
+        if (!message_hook) message_hook=SetWindowsHookExW(WH_GETMESSAGE,received_message,nullptr,GetCurrentThreadId());
+    }
     services.cpu_event(services.user, &event);
+    if (stage==RSF_GAME_CPU_FRAME_END) input_source.store(0);
 }
 }
 bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_native_api* api) noexcept
@@ -276,20 +322,21 @@ bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_nati
     std::lock_guard<std::mutex> lock(guard);
     services = host;
     *api = {sizeof(*api), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id, log, config, enqueue,
-        reinterpret_cast<void*>(render), report_state, cpu_event};
+        reinterpret_cast<void*>(render), report_state, cpu_event, cpu_fact};
     return true;
 }
 void rsf_unity_bridge_activate(bool enabled) noexcept { active.store(enabled); }
 bool rsf_unity_bridge_drained() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    if (callbacks.load() || submission_unknown) return false;
+    if (callbacks.load() || input_calls.load() || submission_unknown) return false;
     for (const auto& entry : pending) if (entry.used) return false;
     return !in_flight(commands);
 }
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
+    if (message_hook) {UnhookWindowsHookEx(message_hook);message_hook=nullptr;} input_source.store(0);
     commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = 0;
     output_width = output_height = 0;
     input_width = input_height = 0;

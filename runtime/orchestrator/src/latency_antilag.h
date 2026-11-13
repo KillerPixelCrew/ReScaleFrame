@@ -53,6 +53,12 @@ public:
         ++state_.end_markers; return true;
     }
     AntiLagState state() const noexcept { return state_; }
+    void reset_sources() noexcept {
+        if (state_.available && state_.enabled && !driver_.update(false,0)) {
+            ++state_.refused;state_.available=false;
+        }
+        state_.enabled=false;last_update_=last_end_=0;
+    }
 };
 std::unique_ptr<AntiLagDriver> make_antilag_driver();
 }

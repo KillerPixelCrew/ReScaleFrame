@@ -3,7 +3,7 @@
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/game_renderer.h>
 
-#define RSF_LATENCYVK_ABI_VERSION 1u
+#define RSF_LATENCYVK_ABI_VERSION 2u
 typedef struct rsf_latencyvk_setup {
     uint32_t struct_size, abi_version;
     const char* runtime_directory_utf8;
@@ -14,6 +14,7 @@ typedef struct rsf_latencyvk_status {
     uint32_t low_latency_available, report_available, pcl_message, mode;
     uint64_t sleep_calls, marker_calls, refused_calls;
     int32_t last_result;
+    uint32_t owner;
 } rsf_latencyvk_status;
 
 #ifdef __cplusplus
@@ -27,6 +28,10 @@ RSF_RUNTIME_API rsf_vk_function rsf_latencyvk_instance_proc(void* instance, cons
 /* Call after device creation, on the simulation/input thread. The SDK PCL
    options bind its ping message to this thread. Unsupported nonzero modes fail. */
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_options(uint32_t mode, uint32_t frame_limit_us);
+/* Borrow the Runtime-owned presentation context until the caller retires/unbinds it. */
+RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_presentation(void* context);
+RSF_RUNTIME_API void rsf_latencyvk_submit_end(uint64_t frame);
+RSF_RUNTIME_API int rsf_latencyvk_ping(void* window);
 RSF_RUNTIME_API void rsf_latencyvk_cpu(const rsf_game_cpu_event*);
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_input(uint64_t frame, uint32_t kind, uint32_t message);
 RSF_RUNTIME_API void rsf_latencyvk_render(uint64_t frame);

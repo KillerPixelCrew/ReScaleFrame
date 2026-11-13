@@ -857,5 +857,14 @@
     "research": "../../docs/research/ac7-dlss-fg-20261003.md",
     "game_run_observation": "Hidden D3D11 Present worsened dips and was removed. Audit sees Streamline setters with zero FPS limit and disabled Reflex Sync. 09:40 fixes supported windowed flip-model VSync-off/tearing creation, Present and resize handling; live acceptance pending. All input types and PCL ping execute in game. 10:55: user reports hangar dips persist and gameplay is stable; the game-thread sleep now waits for the previous Present and RenderSubmitEnd precedes PresentStart (RSF_REFLEX_ASYNC=1 restores the overlap). Device fixture and Release gate pass; deployed 11:01. 11:15: user reports dips persist; the ordered path ran and 5 of 38 hangar seconds still stall, ownership audit clean. A driver latency-ring dump was deployed 11:31. 11:39 run: all five 33333 us stalls follow by four frames a frame with invalid crossAdapterCopyTimeUs (0x88000000/0x90000000) on this hybrid laptop; cause of the invalid sample not established. 12:17: user frame limit before generation deployed (ini RSF_FRAME_LIMIT_FPS, panel control, overlay ABI 8); effect on the stalls not yet game-tested.",
     "fps_hud": "QPC-derived application and SDK aggregate present rates; no requested-multiplier estimate"
+  },
+  "input_keyed_latency": {
+    "date": "2026-11-13",
+    "game_abi": 21,
+    "cpu_event_version": 1,
+    "research": "../../docs/research/latency-integration-audit.md",
+    "facts": "Real native Slate/message sample boundaries, removed-message/raw keyboard and mouse receipts, successful XInput state reads scoped to native controller polling; loader dispatches normalized CPU facts. No adapter pacing or SDK marker policy.",
+    "owner": "Core orchestrator, shared Direct3D Reflex/PCL, required XeLL or AMD Anti-Lag 2 owner",
+    "validation": "Source migration and synthetic/device fixture validation; no new game acceptance or AMD hardware acceptance. Rendering readiness remains unchanged."
   }
 }

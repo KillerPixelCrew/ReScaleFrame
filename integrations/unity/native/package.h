@@ -4,7 +4,7 @@
 #define RSF_UNITY_SETTINGS_ABI_VERSION 2u
 #include <stdint.h>
 #include <rescaleframe/unity_bridge.h>
-#define RSF_UNITY_PACKAGE_ABI_VERSION 1u
+#define RSF_UNITY_PACKAGE_ABI_VERSION 2u
 typedef struct rsf_unity_package_settings {
     uint32_t struct_size, abi_version;
     uint32_t sr_backend, quality, dlss_preset;
@@ -21,6 +21,8 @@ typedef struct rsf_unity_package_status {
     uint64_t evaluated_frames, refused_frames, tagged_frames;
     uint64_t sleep_calls, marker_calls;
     uint32_t pcl_available, latency_report_available;
+    uint32_t latency_owner;
+    uint64_t keyboard_inputs, mouse_inputs, controller_inputs, pcl_pings, input_substitutes, order_violations, derived_boundaries;
 } rsf_unity_package_status;
 void rsf_unity_package_bridge_error(int32_t result, const char* message) noexcept;
 bool rsf_unity_package_graphics(void** device, void** queue) noexcept;

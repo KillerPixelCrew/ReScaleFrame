@@ -24,8 +24,35 @@ typedef struct rsf_native_cpu_frame {
 } rsf_native_cpu_frame;
 typedef struct rsf_native_cpu_counters {
     uint32_t struct_size;
-    uint64_t frames, input_events[3], pings, substitutes, duplicates, order_violations, expired_messages;
+    uint64_t frames, input_events[3], pings, substitutes, duplicates, order_violations, expired_messages, unframed_inputs, derived_frame_ends;
 } rsf_native_cpu_counters;
+/* Shared latency status, independent of the selected rendering provider. Version 1. */
+typedef struct rsf_native_latency_status {
+    uint32_t struct_size, version, owner, available, effective_mode, pcl_available, report_available;
+    uint64_t paced_frames, marker_calls, derived_boundaries;
+    rsf_native_cpu_counters events;
+} rsf_native_latency_status;
+typedef struct rsf_native_latency_frame {
+    uint32_t struct_size, version;
+    uint64_t source, generation, ready_qpc;
+    uint32_t paced, failed, completed;
+} rsf_native_latency_frame;
+RSF_RUNTIME_API int rsf_native_latency_status_get(rsf_native_latency_status*);
+RSF_RUNTIME_API int rsf_native_latency_frame_get(rsf_native_latency_frame*);
+/* Runtime graphics paths report their API and execution boundaries. No vendor policy in callers. */
+RSF_RUNTIME_API void rsf_native_latency_graphics(uint32_t api);
+RSF_RUNTIME_API void rsf_native_latency_render(uint64_t source, uint32_t begin);
+RSF_RUNTIME_API void rsf_native_latency_present(uint64_t source, void* chain, uint32_t begin);
+/* Diagnostic tool request; registration/message selection remains in the core. */
+RSF_RUNTIME_API int rsf_native_latency_ping(void* window);
+/* An engine's completed native output can retire earlier CPU sources that never submitted. */
+RSF_RUNTIME_API void rsf_native_latency_retire(uint64_t session, uint64_t through);
+/* Only after CPU/render/Present producers and their GPU leases have drained. */
+RSF_RUNTIME_API void rsf_native_latency_end_session(uint64_t session);
+/* Process-wide pacing lease: 1 Direct3D, 2 Vulkan. The first active orchestrator owns it. */
+RSF_RUNTIME_API int rsf_native_latency_claim(uint32_t client);
+RSF_RUNTIME_API int rsf_native_latency_has_claim(uint32_t client);
+RSF_RUNTIME_API void rsf_native_latency_release_claim(uint32_t client);
 RSF_RUNTIME_API int rsf_native_cpu_counters_get(rsf_native_cpu_counters*);
 /* Core endpoints register the SDK-owned Windows ping identifier, never an adapter. */
 RSF_RUNTIME_API void rsf_native_cpu_ping_message(uint32_t message);
@@ -46,6 +73,8 @@ RSF_RUNTIME_API int rsf_native_cpu_read(uint64_t session, uint64_t source, rsf_n
 RSF_RUNTIME_API void rsf_native_cpu_set_sink(rsf_game_cpu_event_fn sink, void* user);
 /* After the plugin has stopped CPU producers. */
 RSF_RUNTIME_API void rsf_native_cpu_release(void);
+/* Quiescent session shutdown must not clear another active host's facts. */
+RSF_RUNTIME_API int rsf_native_cpu_release_session(uint64_t session);
 #ifdef __cplusplus
 }
 #endif
