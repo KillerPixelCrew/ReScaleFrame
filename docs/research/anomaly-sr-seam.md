@@ -119,8 +119,9 @@ to source/binary evidence or marked **UNVERIFIED**.
   them by `screen_res` (`stub_screen_space.vs:9-10`). `screen_res = Device.dwWidth/Height`
   (`Blender_Recorder_StandartBinding.cpp:389-396`). Half/quarter-size passes rely on the viewport
   staying at full size, with quads covering a corner (`rendertarget_phase_blur.cpp:27-40`).
-- G-buffer reconstruction: `pos_decompression_params{,2}` use `Device.fFOV`, `Device.fASPECT` and
-  `Device.dwWidth/Height` (`r4.cpp:106-125`). `gbuffer_load_data` (`gbuffer_stage.h:115-143`) uses
+- G-buffer reconstruction: `pos_decompression_params` uses `Device.fFOV`, `Device.fASPECT` and
+  `Device.dwWidth/Height`; `pos_decompression_params2` contains dimensions only (`r4.cpp:106-125`). The
+  Stage 3 binder correction below adds the raster center offset. `gbuffer_load_data` (`gbuffer_stage.h:115-143`) uses
   `Sample(uv)` without MSAA but reconstructs view XY from `pos2d` (`SV_Position`), so position
   texture size, `pos2d` space and constants must agree.
 - All render-target binds go through `CBackend::set_RT/set_ZB` and then a single
@@ -222,7 +223,7 @@ Rejected alternatives:
 | Assumption | Sites | Satisfied by |
 | --- | --- | --- |
 | Pixel quads from `Device.dwWidth` | `phase_combine.cpp:215-228,447-492`, `phase_scene.cpp:84-101`, `rendertarget.cpp:126-146,1200-1218`, all `rendertarget_phase_*.cpp` | Dimension swap in W; restored in P |
-| `screen_res`, `pos_decompression_params` | `StandartBinding.cpp:389-396`, `r4.cpp:106-125` | Same; binders run when an element's constant table binds. Constant-cache staleness across a swap is **UNVERIFIED** and needs a forced constant re-setup |
+| `screen_res`, `pos_decompression_params` | `StandartBinding.cpp:389-396`, `r4.cpp:106-125` | Dimension swap and forced ctable invalidation at both boundaries (implemented in Stage 2); binders run again on the next constant-table bind. The Stage 3 binder correction below also supplies raster jitter |
 | Jitter-texture tiling | `phase_combine.cpp:215-216`, `rendertarget.cpp:198-199` | Dimension swap |
 | `CopyResource` same size/format | `phase_combine.cpp:286`; P `rt_Color` to `generic0` copies | Twin pairs share size/format inside each window |
 | RTV/DSV dimension match | Every `u_setrt(..., HW.pBaseZB)` | W uses the render-size DSV twin; P uses the original. Stock already binds `pBaseZB` with half-size blur targets (`rendertarget_phase_blur.cpp:30`). Whether D3D11 drops such binds is **UNVERIFIED**: check with the debug layer in Stage 1 |
@@ -406,10 +407,10 @@ during eye adaptation. Choosing between the two is a measurement, not a guess.
 - Untouched: sun and spot shadow passes set their own projections and viewports
   (`phase_smap_D.cpp:33-45`, `phase_smap_S.cpp:22-24`), as do SSAO (`phase_ssao.cpp:3-9`) and fluid.
   Full-screen passes use no projection.
-- Known side effects (**UNVERIFIED** magnitude): culling and HOM use the jittered `mFullTransform`
-  (subpixel, harmless). The motion-blur matrices in `phase_combine.cpp:126-140` include the jitter
-  delta, which becomes micro-blur when `r2_mblur > 0`. `pos_decompression_params` ignores jitter, so
-  lighting reconstruction is offset by at most half a render pixel.
+- Camera consumers: sun cascade fitting temporarily borrows the saved unjittered Device camera. Deferred
+  position reconstruction uses the saved raster jitter through the guarded constant binder correction below.
+  Culling/HOM boundaries and motion blur remain subject to the acceptance limits in that consumer audit;
+  their effects have not been measured in this task.
 - Motion convention: the core shader ABI subtracts the current and previous jitter in UV inside the
   PS (`core/README.md`, PS b13), so RTV2 motion is unjittered. Foliage previous projection is
   unjittered (`PROGRESS.md`).
@@ -1032,9 +1033,10 @@ E as C with `Motion=1` and F10 motion captures. Check:
 6. Counters as above; a level load, the menu, `vid_restart` and a scale change each add one `resets`.
 
 Open or **UNVERIFIED**: the sampler rebind lag above; the jittered `mFullTransform` in culling, HOM and the light scissor
-(subpixel); motion-blur matrices with `r2_mblur > 0` (section 4); `pos_decompression_params` ignoring the jitter (lighting
-offset of at most half a render pixel); jittered PDA and item-attached UI drawn through the first-person sites; and the
-jittered final image flickering by up to half a render pixel until temporal SR (Stage 5) consumes it.
+(subpixel); motion-blur matrices with `r2_mblur > 0` (section 4); jittered PDA and item-attached UI drawn through the
+first-person sites; and the jittered final image flickering by up to half a render pixel until temporal SR (Stage 5)
+consumes it. The initial Stage 3 implementation also left `pos_decompression_params` unjittered; the 13 November
+correction below now repairs that deferred-ray mismatch, with visual acceptance pending.
 
 ### Sun cascade camera correction (12 November 2026)
 
@@ -1099,76 +1101,114 @@ analysis are under `.local/anomaly/sun-cascade/` (`configure.log`, `build-all.lo
 in `eng/verify.ps1`; the explicit configure/full build/requested tests above are the native checks for this task.
 No Rust behavior or public ABI changed. Visual acceptance remains pending.
 
-### Jitter-aware sun receiver-depth margin (12 November 2026)
+### Jittered deferred position reconstruction (13 November 2026)
 
-The coordinator reports that the unjittered-cascade correction works in game (`calls=unjittered=restored`, `refused=0`).
-Remaining distant sun-lit flicker was removed by setting both `r2_sun_depth_near_scale` and `r2_sun_depth_far_scale` to
-0.9995 in the console. This is a separate receiver self-shadowing boundary: jitter changes the G-buffer positions sampled
-against the sun shadow map even when the fitted cascades themselves are stable. Source revision
-028ccf5f5189b393396480076b11e40852ba3ecd uses these scales for `m_TexelAdjust[2][2]` in
-`r4_rendertarget_accum_direct.cpp:479`, and a small per-cascade bias in `r2_R_sun.cpp:1090-1103`. The console experiment
-is game evidence for that scene, not acceptance of every automatic lifecycle path below.
+The user confirmed that the previous receiver-depth adjustment was the wrong remedy: it did not remove the flicker and
+it distorted character shadows. The earlier console observation was insufficient evidence for that conclusion. The
+adjustment, option, overlay control, native scale sites, guards and associated tests have been removed. The adapter no
+longer changes the user's sun depth scales. The separately accepted unjittered sun-cascade wrapper remains.
 
-`SRSunDepthMargin` is an integer in [0,20], default 5. The live shared-overlay control **Sun shadow margin with jitter**
-shows the integer divided by 10000 (0.0000..0.0020). It saves the integer to the Anomaly INI section and applies at the next
-world window. The multiplier is `1 - margin/10000`, so the default multiplies each user's near/far base by 0.9995; it does
-not replace a non-default base with 0.9995. Zero disables the adjustment. Parsing clamps integer values and defaults invalid
-text to 5. All option registration, translation and native ownership remain in `games/anomaly`.
+There are two camera descriptions during the world window. Rasterization uses the render-size Device projection with
+`_31 += 2*jx/W * _34`, `_32 -= 2*jy/H * _34` and the corresponding full transform; positive render-pixel jitter is right
+and down. Deferred shaders instead used `cl_pos_decompress_params::setup` (`r4.cpp:106-116`), which derives
+`v = [HorzTan, VertTan, 2*HorzTan/W, 2*VertTan/H]` from unjittered FOV and aspect. The vanilla `gbuffer_stage.h:128`
+rebuilds `P.xy = depth * (pixel_center * v.zw - v.xy)`. A scene point projects from unjittered pixel q to p=q+j, so using
+the stock vector at p reconstructs the wrong ray by `depth * j * v.zw`. The error grows with distance and can put a grazing
+sun receiver on alternating sides of its shadow surface. Changing shadow depth scales hides or moves the comparison
+error instead of repairing the ray, and can detach or distort contact shadows.
 
-| Owner | Standard RVA | AVX RVA |
+The correction is `v.xy += (jx,jy) * v.zw`, leaving zw unchanged. Substituting p=q+j cancels the extra term exactly. The
+numeric fixture projects view-space points through `jitter_engine_projection`, converts NDC to pixel coordinates, then
+reconstructs the original point with these constants. It covers 18 Halton phases, three aspect/size pairs (including odd
+render sizes), three FOVs and depths 0.5, 5, 40 and 200; tolerance is 2e-6 times one plus the coordinate magnitude.
+It also proves the stock lateral error has the predicted sign and size.
+
+**Native mechanism.** Detour the registered binder's slot-0 implementation, run its original first, then correct the CPU
+constant-buffer staging copy before the engine uploads it. Find the literal `pos_decompression_params` registration,
+follow its r8 binder object's vptr, identify `cl_pos_decompress_params` through RTTI, and inspect slot 0 and every stage
+branch. This avoids replacing FOV arithmetic or calling an unproven overloaded set_c entry. The exact-build profile
+contains the complete binder body, all successful GetCBuffer branches, registration arguments and the reflection-size
+store. Full bytes and per-build addresses are recorded in the [profile note](anomaly-avx-profile.md#deferred-position-binder).
+The binaries retain the [fingerprints](anomaly-avx-profile.md#scope-and-evidence) listed there; no runtime scan is used.
+
+Both binders inline `RCache.set_c` for PS, VS, GS, HS, DS and CS. `R_constant.destination` is at +0x10, stage bits are
+1/2/8/16/32/64, and six `(u16 byte_offset, u16 class)` pairs start at +0x14 with stride 4. A float4 has class 1. The
+adapter calls the original `R_constants::GetCBuffer(&RCache.constants, C, stage)` with constants at backend+0x5c0;
+it preserves the engine's stage/slot selection. The getter extracts destination nibbles at shifts 16/12/8/20/24/28 and
+selects PS/VS/GS/HS/DS/CS arrays at backend+0x328/+0x2b8/+0x398/+0x408/+0x478/+0x4e8. There are 14 supported slots.
+Reflection's GetDesc writes `D3D11_SHADER_BUFFER_DESC` on the constructor stack, and its Size is stored at buffer+0x58.
+The CPU data pointer is +0x60 and changed byte +0x68. The already verified geometry Flush proof observes that byte,
+uploads that data through UpdateSubresource, then clears it. Thus a corrected CPU float4 and changed=1 use the normal
+engine upload protocol in every destination stage, including compute.
+
+All destinations are preflighted for class, slot, size, pointers and finite floats before any correction. Aliased storage
+is corrected once; distinct stages are all corrected. A failed write rolls attempted destinations back and refuses further
+SR swaps. The fixtures cover all six stages independently and together, aliasing, every write-failure position and invalid
+class/slot/size/flags/data. The hook and extended-guard fixtures run against both profiles, with negative byte mutations.
+
+Only an open world window with successfully applied jitter is corrected. SR off, scope frames, jitter off and calls after
+the seam use the stock binder result. The correction uses the saved raster jitter even while the sun wrapper lends
+Device an unjittered camera: cascade fitting needs stable frustum corners, but accumulation inside that wrapper samples
+the already jittered G-buffer. Testing the current Device projection or suppressing correction while sun_suspended would
+reintroduce this defect. The existing cache invalidation at open/restore forces the binder to run again across the window
+boundary; corrected constants are not retained as post-window stock state.
+
+The periodic report is `Anomaly SR position reconstruction corrected=... stock=... refused=...`. Counts are binder
+invocations, not frames or individual shader stages. In an active jittered world, corrected must rise and refused must
+stay zero; stock can rise outside that window. The sun cascade counters must still balance unjittered/restored with zero
+refusals. There is no new setting: this is required camera consistency, controlled by the existing SR/jitter window.
+
+**Consumer audit.** Source revision `028ccf5f5189b393396480076b11e40852ba3ecd`, files under `src/Layers` unless
+otherwise stated, and the user's vanilla r3 shader corpus were searched for FOV/aspect/tan, dimensions and projection/full
+transform readers. These rows are source/corpus review, not new game acceptance or independent native mappings of every
+optional effect. The binder and its upload path above are proven in both shipped binaries.
+
+| Consumer | Inputs and effect | Required camera and disposition |
 | --- | --- | --- |
-| ps_r2_sun_depth_near_scale (float) | 0xceb32c | 0xcd932c |
-| ps_r2_sun_depth_far_scale (float) | 0xceb324 | 0xcd9324 |
-| accum_direct_cascade selection guard | 0x85e69c | 0x85494b |
-| near console registration guard | 0x7f9569 | 0x7f2f47 |
-| far console registration guard | 0x7f943d | 0x7f2e11 |
+| Deferred direct/spot/point light and sun receivers | gbuffer_stage reconstructs depth with pos_decompression_params | Jittered raster rays; corrected by this binder, including accumulation inside the sun wrapper. |
+| Sun cascade fitting (r2_R_sun.cpp:1134) | Copies Device.mProject and inverts the view frustum | Unjittered fit; existing wrapper retained. Legacy FOV-built sun paths also describe a stable shadow fit, not G-buffer inversion. |
+| Volumetric sun and light volume raster | accum_volumetric_sun.ps uses gbuffer_load_data; accum_volumetric.vs uses m_P | Jittered receiver rays corrected; volume vertices follow current RCache projection. Shadow-map matrices remain light-space. No extra fix identified. |
+| Rain shadow fit and wet-surface passes (r4_R_rain.cpp:57-67,268) | Rebuilds a FOV/aspect projection for rain coverage, later restores Device.mProject; rain_layer and rain_patch_normal read gbuffer_load_data | Unjittered coverage fit is intentional; jittered depth reconstruction now corrected. No separate visible fault established. |
+| Forward water/refraction (water/waterd shaders) | m_VP rasterizes water; gbuffer_load_data(PosTc,hpos.xy) reconstructs the receiver | Current jittered matrix and rays inside the window; binder fixes reconstruction. Distorted UV versus screen-position approximations are pre-existing shader behavior, not changed here. |
+| SSAO main/hbao and half-depth (phase_ssao.cpp:3-9,42-47; ssao_calc.ps) | Device dimensions/static viewport; FOV scales noise/kernel radius; common G-buffer load | Render dimensions already repaired by Stage 2. FOV controls cone size, which jitter does not change. Main reconstruction gets corrected rays. |
+| SSAO uv_to_eye (ssao.ps:86-89,160) | Uses (2uv-1)*v.xy*depth as a symmetric extent helper | Corrected xy changes its extents by relative 2jx/W and 2jy/H, at most about 0.21% at 853x481. This helper is not a matching inverse camera; the change is subpixel within the screen. No separate patch; validate enabled SSAO visually. |
+| HDAO PS/CS (phase_hdao.cpp; ssao_hdao*.ps) | screen_res/dwWidth/dwHeight choose texels, clamp taps and compute dispatch groups | Jitter does not change dimensions or linear depth. Stage 2 dimensions and normal constant binding apply; no additional FOV-based inverse found in this corpus. |
+| Screen-space sunshafts (rendertarget_phase_sunshafts.cpp; ogse_sunshafts*.ps) | Sizes, depth mask, m_VP-projected world sun and radial blur | Runs after the seam with restored camera/output size. Existing nearest-upsampled jittered depth can still move silhouettes; outside this world-ray fix and needs a capture with the effect enabled. |
+| Light scissor and occlusion query (enable_scissor.cpp:34,71; light_vis.cpp:25-31; phase_occq.cpp) | Full transform bounds volumes; FOV derives conservative near-camera safe area; query volume is rasterized | Jittered raster bounds/query must match depth; current matrix provides them outside shadow-fit scopes. FOV safe-area size needs no ray correction. Threshold visibility at silhouette edges remains an unmeasured subpixel effect. |
+| Lens flare visibility (xrEngine/xr_efflensflare.cpp; dxLensFlareRender.cpp) | World-space ray queries from camera toward sun; full transform only for screen blend; vertices use current RCache | Visibility rays are unjittered world directions; raster placement follows current camera, or restored camera after seam. No FOV-derived deferred inverse found. |
+| m_texgen / mVPTexgen and clip planes (StandartBinding.cpp:70-130; R_Backend_Runtime.cpp:170) | RCache world/view/projection products; inverse current full matrix for clip planes | Current draw camera, which is jittered for main geometry and light-space for shadow rendering. Not an independent unjittered FOV reconstruction. |
+| screen_res / screen_params binders (StandartBinding.cpp:390-406; r4.cpp:118) | Width/height and reciprocals; FOV/aspect/tan/far range; pos_decompression_params2 is dimensions only | Render-size values inside window; jitter changes center, not extent. No active screen_params reference in this vanilla r3 corpus; params2 usage in depth_downs is commented. No extra correction. |
+| Culling/HOM/detail and LOD (r4_R_render.cpp:250-278; HOM.cpp:24,184-202; DetailManager.cpp:269; r2_R_calculate.cpp:18) | ViewBase/HOM formed before H1 or uses saved full transform; some later render_main/detail readers see current full matrix; FOV sets LOD scale | Stable unjittered culling is preferable; later current-matrix reads can move a boundary subpixel. No observed rejection or additional native patch justified here. |
+| Wallmarks (WallmarksEngine.cpp:376-379,504-506) | Temporarily changes projection _43 for depth bias, preserving _31/_32 | Current jittered center survives; deliberate decal depth offset, not a second screen-to-view inverse. No patch. |
+| Offline/debug camera tools (r__screenshot.cpp; r__pixel_calculator.cpp) | Explicit 60-degree cubemap or orthographic camera | Separate capture/calculation views, not main deferred reconstruction. Not covered by this game acceptance. |
+| HOM debug depth boxes (occRasterizer.cpp:144-166) | Inverse _11/_22 ignores projection center | DEBUG-only visualization; not Release deferred shading. No patch. |
+| First-person HUD, particles, point lights (r__dsgraph_render.cpp; ParticleEffect.cpp; accum_point.cpp) | Rebuild FOV-specific local projections then rmNear | Same raster jitter is already applied at six verified rmNear sites and restored by engine. Their different FOV extent is intentional. |
+| Motion blur/combine and CPU screen projection | phase_combine.cpp:136-140 retains matrices captured before seam; D3DUtils transforms points with current full matrix | Window matrices include jitter; possible micro-blur when r2_mblur > 0 is an existing unmeasured post-effect issue. Post-seam UI/tracers use restored camera. No additional confirmed flicker fix. |
 
-These were found from the console name strings, then corroborated independently in accum_direct_cascade, reached from the
-already proven cascade fit. The registration stores the value pointer at CCC_Float+0x30 and the 0.5/1.5 bounds at +0x38/
-+0x3c (`xrRender_console.cpp:236-239,1001-1004`). The reader preserves sub_phase in r14d and selects near when zero,
-otherwise far, then stores fRange into the texel-adjust matrix. Standard loads xmm9 with movss; AVX loads xmm14 with
-vmovss. Both file-backed globals default to 1.0. Three standard code guards and five AVX guards cover the selection,
-registrations and AVX's shared range constants. Full exact bytes are in `sr_profile.h` and the
-[AVX profile note](anomaly-avx-profile.md#sun-depth-scale-globals-and-guards); none of these guards patches engine code.
-They are validated at temporal-stage install even when the margin initially starts at zero, since it can be enabled live.
+The only newly confirmed visible cause addressed here is the deferred ray mismatch. Optional effect variants, the SSAO
+extent approximation, post-seam depth sampling and culling edge cases above remain visual acceptance limits, not claims
+that another native site has been mapped or fixed. Bounded disassembly, site JSON and validation logs are under
+`.local/anomaly/position-reconstruction/`; no analysis database or game process was opened.
 
-When and only when the world window successfully applied projection jitter, the controller reads both bases, applies the
-multiplier and tracks each changed float independently. The scales remain adjusted through the unjittered shadow-fit wrap,
-so cascade accumulation uses the margin. The SR seam and every existing close path (stale prepare, combine/frame end,
-shutdown and fault rollback) restore the values still owned by the window. If a console command changes one during the
-window, that value is preserved and read as the new base at the next H1; the other scale is still restored. This is normal
-ownership transfer, counted as `foreign`, and does not refuse SR. No multiplier compounds across frames. Ownership uses
-value comparison and does not intercept console commands. SR off, jitter off, scopes and margin zero leave the scales alone.
-Projection jitter, camera identities, vendor inputs and GPU resource leases are unchanged.
-
-The periodic log adds `Anomaly SR sun depth margin applied=... restored=... foreign=... units=... scale=...`.
-Counters count individual floats: normally applied=restored=2 per adjusted world window and foreign=0. A console edit can
-replace a restore with a foreign count, without write faults or SR refusal. The existing sun cascade counters remain useful
-and should still balance. A failed read/write uses the existing rollback/refusal path; it is not described as a successful
-restoration.
-
-New fixtures cover unequal user bases, margin bounds, non-compounding windows, all normal and emergency closes, independent
-foreign near-scale edits during seam/quiesce and between windows, no-jitter/scope/off/zero pass-through, partial near/far
-writes and a later mip-bias failure. Both profile hook fixtures reject every altered new guard even with margin initially zero.
-The option test exercises the actual registered live getter/setter, range/divisor metadata, saved INI round trip, clamping,
-missing-key default and invalid text. Static evidence checks both complete hashes, the two registrations, defaults and
-reader branch; negative tests alter each global RVA and the reader/registration guards. Bounded analysis and logs are under
-`.local/anomaly/sun-depth/`; no new database, game launch or install write was used.
-
-The console remedy is user-tested. The automatic window lifecycle still needs an in-game check with the default 5, then
-0/5 live switching, console edits to distinct near/far bases, scope alternation and quiesce; verify the counters and the
-same sun-lit wall/terrain view, plus shadow detachment at contact edges. Rendering-readiness flags remain unchanged.
+For the first game check, use the normal near/far sun depth scales (1.0 if the console experiment left 0.9995), verify
+hook install without refusal, rising corrected and zero refused, then compare the same grazing sun-lit ground and character
+contact shadows with jitter toggled. Verify scope/SR-off pass-through and enabled SSAO, rain, water and volumetric effects.
+This worker did not alter those console values or any installed file. This correction is built and fixture/static-tested;
+its visual acceptance is pending. Rendering readiness stays zero.
 
 
-Validation for the automatic depth margin: `cmake --preset windows-x64-vs18 -B build/wk-avx` and the full MSVC Release
-build passed. `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 94/94,
-without skips, in 114.32 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 44/44 (eight originals, 36 negative
-mutations), including both executable hashes and the new global/reader/registration mutations. The focused margin,
-standard/AVX hook and profile fixtures also passed. `git diff --check` passed for the affected files. Logs are
-`.local/anomaly/sun-depth/{configure,build-all,ctest,evidence-suite}.log`; bounded analysis is in the same directory.
-The explicit assigned-directory build/tests replace the hardcoded shared build directory in `eng/verify.ps1` for this
-worker; no Rust behavior or public ABI changed. No game was launched or installed file changed. The automatic lifecycle
-is built and fixture-tested; its visual acceptance remains pending.
+Validation (13 November 2026): MSVC Release configure and full build in `build/wk-avx` passed; the requested
+`ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion|shader_patch" --output-on-failure` passed 96/96,
+without skips, in 92.78 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
+against both hashes, with 40 negative mutations rejected. Package unittests passed 10/10 and `git diff --check` passed.
+The first CTest run passed 94/96 but failed FSR3 activation in two FG fixtures: its cached vendor root held AMD DLL
+SHA-256 `02297bee...`, while the current SDK/header pin uses `e6843252...`. Pointing only the assigned build's
+`RSF_ANOMALY_SR_VENDOR_ROOT` at local fixture junctions (unchanged Streamline/XeSS and the current pinned FidelityFX
+signedbin) fixed both failures; the entire requested selection then passed. This is a test-input correction, not a game
+or Runtime change. Reproduce with `-DRSF_ANOMALY_SR_VENDOR_ROOT=D:/Coding/ReScaleFrame/.local/anomaly/position-reconstruction/vendors`.
+Logs: `.local/anomaly/position-reconstruction/{configure,build-full,configure-pinned-vendors,build-final,ctest,
+ctest-stale-vendors,evidence-suite,package-tests,fg-pinned-probe}.log`. The explicit assigned-directory build/tests
+replace `eng/verify.ps1`, which hardcodes the prohibited shared build directory. No Rust behavior or public ABI changed.
 
 ## 12. Stages 4 and 5 implementation (SR inputs and temporal SR at the seam)
 

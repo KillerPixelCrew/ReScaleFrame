@@ -29,10 +29,10 @@ namespace rsf::anomaly::sr {
 //   u_setrt(W,H): void CRenderTarget::u_setrt(u32 W, u32 H, RTV0, RTV1, RTV2, DSV) (r4_rendertarget.cpp:111).
 //   CParticleEffect::Render, accum_point: first-person projection rebuild sites outside geometry_profile.h (see
 //     sr_first_person_sites).
-inline constexpr std::size_t sr_function_site_count = 16;
+inline constexpr std::size_t sr_function_site_count = 17;
 inline constexpr std::size_t site_phase_scene_prepare = 0, site_phase_combine = 1, site_phase_sunshafts = 2,
     site_phase_blur = 3, site_rm_near = 4, site_rm_far = 5, site_set_p = 6, site_set_v = 7, site_surface_set = 8,
-    site_set_mip_lod_bias = 9, site_set_max_anisotropy = 10, site_backend_invalidate = 11, site_u_setrt_wh = 12, site_sun_cascades = 15;
+    site_set_mip_lod_bias = 9, site_set_max_anisotropy = 10, site_backend_invalidate = 11, site_u_setrt_wh = 12, site_sun_cascades = 15, site_position_setup = 16;
 
 // Where 16 bytes are not unique in .text: the shortest prefix at the same RVA that is (sr_unique_guards). rmNear/rmFar/
 // rmNormal differ only in their rip-relative MaxDepth displacement near the end of the guard.
@@ -90,8 +90,8 @@ struct SrProfile {
     uint32_t ssao_set_viewport_rva, ssao_viewport_rva, ssao_viewport_guard_rva;
     const char* ssao_set_viewport_code;
     uint32_t backend_rva;
-    uint32_t sun_depth_near_scale_rva, sun_depth_far_scale_rva;
-    std::span<const UniqueGuard> sun_depth_guards;
+    uint32_t position_setup_vtable_rva, get_constant_buffer_rva;
+    std::array<UniqueGuard, 4> reconstruction_guards;
 };
 
 // ---- Layout shared by both builds (same source; the evidence script re-derives each value from each build's code) ----
@@ -187,11 +187,6 @@ inline constexpr std::array<UniqueGuard, 7> sr_standard_unique{{
     {"R_xforms::set_V", 0x83f970, "48895c240848896c2410488974241857415641574883ec208b02"},
     {"CBackend::Invalidate", 0x842c50, "48895c240848896c24104889742418574883ec2033ed488bd94889a9"},
 }};
-inline constexpr std::array<UniqueGuard, 3> sun_depth_standard_guards{{
-    {"sun depth near console registration", 0x7f9569, "488d15f0a43600488d0d19855600e8943287ff488d05a91d4f004c892506855600488d0d1f02250048890528855600c705268556000000003fc705208556000000c03f"},
-    {"sun depth far console registration", 0x7f943d, "488d15eca53600488d0da5855600e8c03387ff488d05cd1e4f004c892592855600488d0dcb022500488905b4855600c705b28556000000003fc705ac8556000000c03f"},
-    {"sun depth cascade selection", 0x85e69c, "4585f6750bf3440f100d82cc4800eb09f3440f100d6fcc4800f3440f114db0"},
-}};
 inline constexpr SrProfile sr_standard{
     .sr_function_sites = {{
         {"CRenderTarget::phase_scene_prepare", 0x8e4310, signature("40534883ec50f7058c0f480000400000")},
@@ -210,6 +205,7 @@ inline constexpr SrProfile sr_standard{
         {"PS::CParticleEffect::Render", 0x8d8420, signature("40534881ec80010000488bd9e87fa40f")},
         {"CRenderTarget::accum_point", 0x90dca0, signature("488bc45553488da8d8feffff4881ec18")},
         {"CRender::render_sun_cascades", 0x815a30, signature("48895c240848896c2410488974241848")},
+        {"cl_pos_decompress_params::setup", 0x834f70, signature("40574883ec30f30f1005d6285000488b")},
     }},
     .sr_unique_guards = sr_standard_unique,
     .sr_call_sites = {{
@@ -252,9 +248,14 @@ inline constexpr SrProfile sr_standard{
     .ssao_set_viewport_code =
         "40534883ec408b0514704600488bd965488b1425580000000f297424300f28f2b9100002000f297c24200f28f9488b14c28b041139055afc47007f28488b034c8d059a553f00",
     .backend_rva = 0xd63bc0,
-    .sun_depth_near_scale_rva = 0xceb32c,
-    .sun_depth_far_scale_rva = 0xceb324,
-    .sun_depth_guards = sun_depth_standard_guards,
+    .position_setup_vtable_rva = 0xb665f8,
+    .get_constant_buffer_rva = 0x84b820,
+    .reconstruction_guards = {{
+        {"position binder body", 0x834f70, "40574883ec30f30f1005d6285000488bfaf30f590513a12100f30f5905cba22100f30f5e05cba22100e84eed0e000f28d0f30f59157baf21000f28caf30f5e0da42850000f570d05a121004885ff0f8482020000f64710010f57c08b0597265000f30f114c2420f30f58c9f30f11542424f30f58d248895c2440bb04000000f3480f2ac08b0572265000f30f5ec80f57c0f3480f2ac0f30f114c2428f30f5ed0f30f1154242c74564533c0488d0d5ef15200488bd7e8f6670100440fb74f14448bc34c034860c64068010fb74f1683e901741683e901740b83f901750c448d43feeb0641b8030000004e8d048500000000498bc9488d542420e83cec0e00f6471002745941b801000000488d0dfff05200488bd7e897670100440fb74f184c8bc34c034860c64068010fb74f1a83e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e8ddeb0e00f6471008745941b802000000488d0da0f05200488bd7e838670100440fb74f1c4c8bc34c034860c64068010fb74f1e83e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e87eeb0e00f6471010745941b803000000488d0d41f05200488bd7e8d9660100440fb74f204c8bc34c034860c64068010fb74f2283e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e81feb0e00f64710207456448bc3488d0de5ef5200488bd7e87d660100440fb74f244c8bc34c034860c64068010fb74f2683e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e8c3ea0e00f6471040745441b805000000488d0d86ef5200488bd7e81e660100440fb74f284c034860c64068010fb74f2a83e901741483e901740a83f901750a8d5901eb05bb030000004c8d049d00000000498bc9488d542420e869ea0e00488b5c24404883c4305fc3"},
+        {"R_constants::GetCBuffer", 0x84b820, "4883ec384585c0751b0fb74212488d0d8c83510083e00f488b84c1280300004883c438c34183f801751e8b4210488d0d6c83510048c1e80c83e00f488b84c1b80200004883c438c34183f802751e8b4210488d0d4883510048c1e80883e00f488b84c1980300004883c438c34183f803751e8b4210488d0d2483510048c1e81483e00f488b84c1080400004883c438c34183f804751b0fb64213488d0dff82510083e00f488b84c1780400004883c438c34183f805751b8b4210488d0ddf82510048c1e81c488b84c1e80400004883c438c3"},
+        {"position binder registration", 0x838b4f, "4c8d05ca324b00488bcb488d15c0e43200e83bedffff"},
+        {"constant buffer reflected size", 0x83db90, "488d5424404c896b10498bcc4c896b204c896b284c896b304c896b384c896b404c896b48c6436801498b0424ff10488b542440488b0dfe1b5000e8011186ff4885c07402ff00488b4b104885c9740fff09488b4b1044392975044c896b108b54244c488d4b20488943108b4424488943188b442450894358"},
+    }},
 };
 
 // ---- AVX 1.5.3 DX11 (AnomalyDX11AVX.exe) ---------------------------------------------------------------------------
@@ -267,13 +268,6 @@ inline constexpr std::array<UniqueGuard, 6> sr_avx_unique{{
     {"R_xforms::set_P", 0x835fc0, "48895c240848896c2410488974241848897c242041564883ec208b02"},
     {"R_xforms::set_V", 0x836c60, "48895c240848896c2410488974241857415641574883ec208b02"},
     {"CBackend::Invalidate", 0x839f80, "48895c240848896c24104889742418574883ec2033ed488bd94889a9"},
-}};
-inline constexpr std::array<UniqueGuard, 5> sun_depth_avx_guards{{
-    {"sun depth near console registration", 0x7f2f47, "488d1502dc3500488d0d3bcb5500e8368687ff488d05cb634e004c892d28cb5500488d0d313a24004889054acb5500c57a110d4acb5500c5fa113546cb5500"},
-    {"sun depth far console registration", 0x7f2e11, "488d1508dd3500488d0dd1cb5500e86c8787ffc5fa103590dd2400488d05f1644e004c892db6cb5500488d0ddf3a2400488905d8cb5500c57a110dd8cb5500c5fa1135d4cb5500"},
-    {"sun depth cascade selection", 0x85494b, "4585f6750ac57a1035d4494800eb08c57a1035c2494800c57a1175c0"},
-    {"sun depth console minimum", 0x7f2dc7, "c57a100dcd922400488b0d7230530048"},
-    {"sun depth console maximum", 0x7f2e6b, "c5fa103549dd2400488b0dce2f530048"},
 }};
 inline constexpr SrProfile sr_avx{
     .sr_function_sites = {{
@@ -293,6 +287,7 @@ inline constexpr SrProfile sr_avx{
         {"PS::CParticleEffect::Render", 0x8cd840, signature("40534881ec80010000488bd9e87f470f")},
         {"CRenderTarget::accum_point", 0x9021d0, signature("488bc45553488da8c8feffff4881ec28")},
         {"CRender::render_sun_cascades", 0x80dfd0, signature("48895c240848896c2410488974241848")},
+        {"cl_pos_decompress_params::setup", 0x82c1c0, signature("40574883ec30c5fa100586964f00c5fa")},
     }},
     .sr_unique_guards = sr_avx_unique,
     .sr_call_sites = {{
@@ -335,8 +330,13 @@ inline constexpr SrProfile sr_avx{
     .ssao_set_viewport_code =
         "40534883ec408b0534074600488bd965488b142558000000c5f829742430b910000200c5f8297c2420488b14c2c5f828f2c5f828f98b04113905769347007f2a488b034c8d05b6ec3e00",
     .backend_rva = 0xd51bc0,
-    .sun_depth_near_scale_rva = 0xcd932c,
-    .sun_depth_far_scale_rva = 0xcd9324,
-    .sun_depth_guards = sun_depth_avx_guards,
+    .position_setup_vtable_rva = 0xb53768,
+    .get_constant_buffer_rva = 0x842380,
+    .reconstruction_guards = {{
+        {"position binder body", 0x82c1c0, "40574883ec30c5fa100586964f00c5fa590dc6fe2000c5f25915ae002100c5ea5e05ae002100488bfae86eb50e00c5fa5915720d2100c5ea5e0d5a964f00c5f05705bafe20004885ff0f8484020000f64710018b054f944f00c5fa58c8c5fa11442420c5f857c0c4e1fa2ac08b053a944f00c5f25ec8c5f857c0c5fa11542424c4e1fa2ac0c5ea58d2c5fa114c2428c5ea5ec848895c2440bb04000000c5fa114c242c74564533c0488d0d115f5200488bd7e809610100440fb74f14448bc34c034860c64068010fb74f1683e901741683e901740b83f901750c448d43feeb0641b8030000004e8d048500000000498bc9488d542420e85fb40e00f6471002745941b801000000488d0db25e5200488bd7e8aa600100440fb74f184c8bc34c034860c64068010fb74f1a83e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e800b40e00f6471008745941b802000000488d0d535e5200488bd7e84b600100440fb74f1c4c8bc34c034860c64068010fb74f1e83e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e8a1b30e00f6471010745941b803000000488d0df45d5200488bd7e8ec5f0100440fb74f204c8bc34c034860c64068010fb74f2283e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e842b30e00f64710207456448bc3488d0d985d5200488bd7e8905f0100440fb74f244c8bc34c034860c64068010fb74f2683e901741683e901740b83f901750c448d4101eb0641b8030000004e8d048500000000498bc9488d542420e8e6b20e00f6471040745441b805000000488d0d395d5200488bd7e8315f0100440fb74f284c034860c64068010fb74f2a83e901741483e901740a83f901750a8d5901eb05bb030000004c8d049d00000000498bc9488d542420e88cb20e00488b5c24404883c4305fc3"},
+        {"R_constants::GetCBuffer", 0x842380, "4883ec384585c0751b0fb74212488d0d2cf8500083e00f488b84c1280300004883c438c34183f801751e8b4210488d0d0cf8500048c1e80c83e00f488b84c1b80200004883c438c34183f802751e8b4210488d0de8f7500048c1e80883e00f488b84c1980300004883c438c34183f803751e8b4210488d0dc4f7500048c1e81483e00f488b84c1080400004883c438c34183f804751b0fb64213488d0d9ff7500083e00f488b84c1780400004883c438c34183f805751b8b4210488d0d7ff7500048c1e81c488b84c1e80400004883c438c3"},
+        {"position binder registration", 0x82fdf0, "4c8d0529a04a00488bcb488d158f433200e8eaecffff"},
+        {"constant buffer reflected size", 0x834e80, "488d5424404c896b10498bcc4c896b204c896b284c896b304c896b384c896b404c896b48c6436801498b0424ff10488b542440488b0d0e894f00e8d18986ff4885c07402ff00488b4b104885c9740fff09488b4b1044392975044c896b108b54244c488d4b20488943108b4424488943188b442450894358"},
+    }},
 };
 }

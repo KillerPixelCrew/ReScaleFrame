@@ -50,7 +50,6 @@ SRBackend=1
 SRQuality=1
 DLSSPreset=0
 SRJitter=1
-SRSunDepthMargin=5
 SRMipBias=off
 SRColourTransport=0
 SRExposure=auto

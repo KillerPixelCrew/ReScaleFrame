@@ -22,14 +22,11 @@
 #include <string>
 
 namespace rsf::anomaly::sr {
-inline constexpr uint32_t default_sun_depth_margin = 5;
-inline constexpr int32_t clamp_sun_depth_margin(int32_t value) noexcept { return value < 0 ? 0 : value > 20 ? 20 : value; }
 struct StageOptions {
     uint32_t stage{};               // 0 off, 1 scale-1.0 swap, 2 render-size window, 3 = 2 + jitter/mip bias, 4 = 3 + SR inputs, 5 = 4 + SR
     float scale{0.67f};             // SRScale, clamped (sr_plan.h); stages 2 to 4, and stage 5 while no backend plans
     bool scale_defaulted{true};     // SRScale missing or unparsable
     bool jitter{true};              // SRJitter (stage 3 and 4; stage 5 needs it), default 1
-    uint32_t sun_depth_margin{default_sun_depth_margin};   // SRSunDepthMargin: units of 1/10000, 0..20
     bool mip_bias{true};            // SRMipBias=off disables the bias change (stages 3 to 5)
     float mip_bias_offset{default_mip_bias_offset};   // SRMipBias, added to log2(render/output), clamped [-2, 1]
     bool capture{};

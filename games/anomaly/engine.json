@@ -14,5 +14,14 @@
       "AnomalyDX11.exe": "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e",
       "AnomalyDX11AVX.exe": "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12"
     }
+  },
+  "deferred_position_reconstruction": {
+    "evidence": "../../docs/research/anomaly-sr-seam.md#jittered-deferred-position-reconstruction-13-november-2026",
+    "validation": "built; numeric and six-stage staging fixtures; both exact-build binary evidence; game acceptance pending",
+    "binder_rvas": {
+      "AnomalyDX11.exe": "0x834f70",
+      "AnomalyDX11AVX.exe": "0x82c1c0"
+    },
+    "policy": "correct xy by render-pixel jitter times zw only while world raster jitter is active; preserve unjittered sun fitting"
   }
 }

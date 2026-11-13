@@ -52,19 +52,20 @@ def main():
                 sun_call = re.search(r'\{"CRender::Render -> render_sun_cascades[^\n]+signature\("([0-9a-f]+)"', selected)
                 assert sun_call
                 mutations.append(('sun_call', sun_call))
-                for field in ('sun_depth_near_scale_rva', 'sun_depth_far_scale_rva'):
+                for field in ('get_constant_buffer_rva', 'position_setup_vtable_rva'):
                     match = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
                     assert match
                     mutations.append((field, match))
-                for name in ('sun depth cascade selection', 'sun depth near console registration'):
+                for name in ('position binder body', 'R_constants::GetCBuffer',
+                             'position binder registration', 'constant buffer reflected size'):
                     match = re.search(r'\{"' + name + r'", (0x[0-9a-f]+), "([0-9a-f]+)"', selected)
                     assert match
-                    mutations.append(('sun_depth_guard', match))
+                    mutations.append(('reconstruction_guard', match))
             with tempfile.TemporaryDirectory(prefix='rsf-anomaly-evidence-') as temp:
                 for kind, match in mutations:
-                    group = 2 if kind in ('sun_extended', 'sun_depth_guard') else 1
+                    group = 2 if kind in ('sun_extended', 'reconstruction_guard') else 1
                     old = match[group]
-                    if kind in ('guard', 'sun_depth_guard'):
+                    if kind in ('guard', 'reconstruction_guard'):
                         new = ('00' if old[:2] != '00' else 'ff') + old[2:]
                     elif kind == 'sun_extended':
                         new = old[:32] + ('00' if old[32:34] != '00' else 'ff') + old[34:]
@@ -78,9 +79,9 @@ def main():
                     result = run(domain, build, path)
                     assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
                     checks += 1
-            extra = '; cascade extended guard/call refused' if domain == 'sr' else ''
+            extra = '; cascade and reconstruction guard/owner mutations refused' if domain == 'sr' else ''
             print(f'PASS: {build} {domain}: original accepted; guard/RVA/layout mutations refused{extra}', flush=True)
-    print(f'PASS: {checks} checks (8 originals, 36 negative mutations)')
+    print(f'PASS: {checks} checks (8 originals, 40 negative mutations)')
 
 
 if __name__ == '__main__':

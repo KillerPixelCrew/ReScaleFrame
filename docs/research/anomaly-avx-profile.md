@@ -18,7 +18,7 @@ The existing named standard analysis under `.local/anomaly/sr-stage0/ida` and th
 
 * Observer: eight entry guards, image size and unique prefixes; FG checks End's swapchain read and sole Present tail jump, RTTI-derived RenderUI and RenderToTarget slots, scope/PDA call order in CLevel::OnRender, and the depth owner. These hooks bracket native rendering, reset and HUD transitions; source-frame identity does not prove simulation ownership.
 * Geometry: lifecycle and visual entries matched to CRender slots 36-39, rmNear/rmNormal slots 55/57 and visual slot 7 through PE RTTI. The hierarchy whitelist is reconstructed from FHierrarhyVisual, CKinematics, CKinematicsAnimated and FLOD RTTI. World transforms are derived from set_W callers and the matrix-copy body; bone stride 0xa8 and render matrix +0x40 are decoded. constants.flush's 128 AVX callers and subsequent DrawIndexed calls establish the per-draw seam. Detail/tree bodies prove constant-table ownership, grass dump flushes and tree PM last_lod +0x108. These values are read under the existing geometry callbacks and leases, not by scanning during gameplay.
-* SR: 15 function entries, five call instructions and six first-person projection/upload pairs checked against call targets and complete caller sets. The render target constructor identifies every one of the 26 ref_rt members by its name, object displacement and format argument. u_setrt, CRT::create, surface_set and Invalidate prove CRT/CTexture/RCache offsets; SetupStates and scene_begin prove sampler ownership. Nine world twins and four absent targets are checked against those slots. Half-depth option bits, SSAO dispatch and the static viewport guard/initializer are decoded. Loading-screen flags are independently found from the game_loaded message and PreCache writes. These tables serve Stages 1-5; Stage 4/5 GPU passes add no further executable sites.
+* SR: the original 15 function entries, five call instructions and six first-person projection/upload pairs checked against call targets and complete caller sets. The render target constructor identifies every one of the 26 ref_rt members by its name, object displacement and format argument. u_setrt, CRT::create, surface_set and Invalidate prove CRT/CTexture/RCache offsets; SetupStates and scene_begin prove sampler ownership. Nine world twins and four absent targets are checked against those slots. Half-depth option bits, SSAO dispatch and the static viewport guard/initializer are decoded. Loading-screen flags are independently found from the game_loaded message and PreCache writes. These tables serve Stages 1-5; Stage 4/5 GPU passes add no further executable sites.
 * Motion: create_shader's error strings, device slots +0x60/+0x68/+0x78, D3DReflect and D3DGetInputSignatureBlob imports identify shader creation before reflection/signature extraction. Its complete caller set is exactly cache-hit and freshly compiled bytecode paths inside shader_compile. The caller stack is re-derived below. scene_begin/end callers all belong to CRender::Render. Hull/domain dispatch, wrapper device slots, shader-object store and constant destinations are independently decoded. The motion callback and shader loader borrow the selected profile and retain the existing frame/resource lifetimes.
 * FG and overlay: FG adds no separate executable-site table or detour; it consumes the selected observer boundaries, camera/viewport/Device data and SR HW depth table. Present ownership, reset and the HUD-less seam are proved above. The overlay uses the existing generic Runtime services and adapter options, with no additional AVX addresses.
 
@@ -128,6 +128,8 @@ Per-build scalar addresses (the paired values are read independently from code, 
 | CRenderTarget::u_setrt(W,H) | 0x859cb0 | 0x8502c0 | `4883ec288951084489410c4c3b0d661e` |
 | PS::CParticleEffect::Render | 0x8d8420 | 0x8cd840 | `40534881ec80010000488bd9e87f470f` |
 | CRenderTarget::accum_point | 0x90dca0 | 0x9021d0 | `488bc45553488da8c8feffff4881ec28` |
+| CRender::render_sun_cascades | 0x815a30 | 0x80dfd0 | `48895c240848896c2410488974241848` |
+| cl_pos_decompress_params::setup | 0x834f70 | 0x82c1c0 | `40574883ec30c5fa100586964f00c5fa` |
 | CRender::Render -> phase_scene_prepare (z-prepass, r4_R_render.cpp:278) | 0x897d2c | 0x88d957 | `e804b8040033d2488d0d4bc54400e866` |
 | CRender::Render -> phase_scene_prepare (r4_R_render.cpp:285) | 0x897d66 | 0x88d991 | `e8cab70400488b1d4b814900833d8cff` |
 | CRender::Render -> phase_combine (r4_R_render.cpp:538) | 0x8985bf | 0x88e1ed | `e85e470200eb39488b05f5b644004889` |
@@ -285,7 +287,8 @@ The initial continuation runs exposed evidence-tool assumptions, not observed ga
 ## Sun cascade jitter correction
 
 The SR profile now appends render_sun_cascades as function index 15 and its sole CRender::Render call as call index 5,
-keeping all earlier indices stable: 16 function guards and six call-site guards per build. The new AVX wrapper is
+keeping all earlier indices stable: initially 16 function guards and six call-site guards per build. The later
+position binder below makes 17 function guards. The new AVX wrapper is
 0x80dfd0, called at 0x88e0d6, looping over cascade fit 0x80be60. Standard equivalents are 0x815a30, 0x8984a8 and
 0x813170. Both expected16 entries are `48895c240848896c2410488974241848`, extended to the same unique 30 bytes:
 `48895c240848896c2410488974241848897c242041564883ec20488bd948`. Call expected16 is
@@ -313,52 +316,69 @@ analysis are under `.local/anomaly/sun-cascade/` (`configure.log`, `build-all.lo
 in `eng/verify.ps1`; the explicit configure/full build/requested tests above are the native checks for this task.
 No Rust behavior or public ABI changed. Visual acceptance remains pending.
 
-## Sun depth scale globals and guards
+## Deferred position binder
 
-The added dimensionless float owners are standard near/far 0xceb32c/0xceb324 and AVX 0xcd932c/0xcd9324. Console
-registration names and CCC_Float value-pointer/range stores prove both owners; accum_direct_cascade independently selects
-the near or far value using sub_phase (r14d) and stores it into the texel-adjust matrix. Defaults are 1.0 and console range
-is 0.5..1.5. The guarded reader is 0x85e69c on standard, 0x85494b on AVX. AVX needs separate guards for its shared minimum
-and maximum register loads; standard encodes the range as immediate constants in each registration. Each listed byte
-sequence is unique in its executable's .text and matches exactly. These are installation evidence guards, not detours.
+13 November 2026. The user rejected the preceding sun receiver-depth adjustment: it did not fix the flicker and distorted
+character shadows. Its globals/registration/reader guards and option have been removed. The separately accepted
+render_sun_cascades unjitter wrapper stays. The current SR function table appends cl_pos_decompress_params::setup at
+index 16, preserving all existing indices: 17 functions and six call guards per executable.
+
+The binder was found independently in each binary from the pos_decompression_params registration, its static binder
+object's vptr, RTTI class identity and primary vtable slot 0. Reading the body confirms the FOV-derived xy, render-size zw,
+then the six per-stage RCache.set_c expansions. AVX changes FOV arithmetic to VEX instructions, not the float4 ABI or
+stage/constant-buffer layouts. The first relocated entry instructions are push rdi (2 bytes) and sub rsp,0x30 (4 bytes)
+on both builds. The five-byte detour therefore relocates six integer bytes with no RIP operand and never reaches the
+following SSE/AVX arithmetic instruction. No shader-hook stack offset or frame layout was changed.
+
+| Exact-build site | Standard RVA | AVX RVA | Guard |
+| --- | --- | --- | --- |
+| cl_pos_decompress_params::setup | 0x834f70 | 0x82c1c0 | expected16 below, plus complete 0x2dc / 0x2d9-byte body |
+| RTTI primary vtable, slot 0 | 0xb665f8 | 0xb53768 | File slot points to setup; registered object vptr independently matches |
+| R_constants::GetCBuffer | 0x84b820 | 0x842380 | Complete successful stage branches, 0xd2 bytes per build |
+| pos_decompression_params registration | 0x838b4f | 0x82fdf0 | Complete 22-byte argument/call sequence below |
+| Reflected buffer-size constructor fragment | 0x83db90 | 0x834e80 | 0x78 bytes through GetDesc and Size store |
+
+Setup expected16 is `40574883ec30f30f1005d6285000488b` on standard and
+`40574883ec30c5fa100586964f00c5fa` on AVX. Registration bytes are
+`4c8d05ca324b00488bcb488d15c0e43200e83bedffff` and
+`4c8d0529a04a00488bcb488d158f433200e8eaecffff` respectively. All four full byte sequences per build are
+literal reconstruction_guards in [sr_profile.h](../../games/anomaly/src/sr_profile.h), checked byte-for-byte at temporal
+stage install and checked unique in .text by the evidence script. They are not wildcards or scan signatures.
+
+The binder uses destination +0x10; stage load pairs (u16 byte offset, u16 class) at +0x14+4*stage; float4 class 1.
+PS/VS/GS/HS/DS/CS stage bits are 1/2/8/16/32/64. The original GetCBuffer receives backend+0x5c0, reads destination
+nibbles at shifts 16/12/8/20/24/28 and uses backend arrays +0x328/+0x2b8/+0x398/+0x408/+0x478/+0x4e8. The constructor
+fragment proves reflected byte size +0x58 from D3D11_SHADER_BUFFER_DESC.Size, and every binder stage proves CPU data
++0x60 / dirty byte +0x68. Existing geometry evidence proves Flush uploads the same data and clears dirty (standard
+0x83de40, AVX 0x835130). Each of these layouts is read from code in each executable, not inferred from source similarity.
+
+The original binder runs first. While saved raster jitter is active, the adapter corrects each enabled stage's staging
+float4 with xy += jitter_pixels * zw, preserves zw and marks the buffer dirty. It preflights every destination and handles
+aliased storage once. Scope, SR-off, jitter-off and post-window calls retain the original stock result. Sun accumulation
+inside the temporary unjittered shadow-fit scope still requires the saved raster jitter. See the
+[derivation, lifetime and consumer audit](anomaly-sr-seam.md#jittered-deferred-position-reconstruction-13-november-2026).
+The SR report adds position reconstruction corrected/stock/refused counters; corrected must rise in jittered world frames
+and refused must remain zero. Binder calls are counted, not stages or frames.
+
+No required owner for this correction is unmapped. The source/corpus consumer table explicitly lists optional effects
+and post-seam/culling approximations that lack new game acceptance; they are not extra native mappings. Both profile
+hook fixtures reject altered reconstruction guards; the static evidence suite also mutates both owner RVAs and all four
+new code guards. Numeric and staging fixtures cover projection round trip, six stages, aliasing, rejection and rollback.
+Bounded analysis and logs are in .local/anomaly/position-reconstruction. No game launch or install write was performed.
+Visual acceptance of the corrected binder remains pending; the first run must check hook installation without refusal,
+position corrected rising/refused zero and balanced sun unjittered/restored counters, with the console experiment's sun
+scales restored to normal by the tester.
 
 
-### Standard depth guards
-
-| Site | RVA | Exact bytes |
-| --- | --- | --- |
-| sun depth near console registration | 0x7f9569 | `488d15f0a43600488d0d19855600e8943287ff488d05a91d4f004c892506855600488d0d1f02250048890528855600c705268556000000003fc705208556000000c03f` |
-| sun depth far console registration | 0x7f943d | `488d15eca53600488d0da5855600e8c03387ff488d05cd1e4f004c892592855600488d0dcb022500488905b4855600c705b28556000000003fc705ac8556000000c03f` |
-| sun depth cascade selection | 0x85e69c | `4585f6750bf3440f100d82cc4800eb09f3440f100d6fcc4800f3440f114db0` |
-
-### Avx depth guards
-
-| Site | RVA | Exact bytes |
-| --- | --- | --- |
-| sun depth near console registration | 0x7f2f47 | `488d1502dc3500488d0d3bcb5500e8368687ff488d05cb634e004c892d28cb5500488d0d313a24004889054acb5500c57a110d4acb5500c5fa113546cb5500` |
-| sun depth far console registration | 0x7f2e11 | `488d1508dd3500488d0dd1cb5500e86c8787ffc5fa103590dd2400488d05f1644e004c892db6cb5500488d0ddf3a2400488905d8cb5500c57a110dd8cb5500c5fa1135d4cb5500` |
-| sun depth cascade selection | 0x85494b | `4585f6750ac57a1035d4494800eb08c57a1035c2494800c57a1175c0` |
-| sun depth console minimum | 0x7f2dc7 | `c57a100dcd922400488b0d7230530048` |
-| sun depth console maximum | 0x7f2e6b | `c5fa103549dd2400488b0dce2f530048` |
-
-The adapter saves the user's independent bases and multiplies them by `1 - SRSunDepthMargin/10000` only while actual
-projection jitter is applied; default 5 gives x0.9995 and zero leaves both untouched. Each owned value is restored at window
-close, while a foreign console value becomes the new base. The live, saved overlay control is Sun shadow margin with
-jitter (integer 0..20, display divisor 10000). The report is Anomaly SR sun depth margin applied/restored/foreign, counted
-per float, normally two applications and two restorations per world window. Full lifetime, source and acceptance details
-are in the [jitter margin note](anomaly-sr-seam.md#jitter-aware-sun-receiver-depth-margin-12-november-2026).
-
-No further required native owner is unmapped for this change. The prior sun-fit correction is now reported working in game;
-the automatic depth-margin lifecycle is fixture-tested and awaits the coordinator's game acceptance. Other existing
-acceptance boundaries remain in force.
-
-
-Validation for the automatic depth margin: `cmake --preset windows-x64-vs18 -B build/wk-avx` and the full MSVC Release
-build passed. `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 94/94,
-without skips, in 114.32 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 44/44 (eight originals, 36 negative
-mutations), including both executable hashes and the new global/reader/registration mutations. The focused margin,
-standard/AVX hook and profile fixtures also passed. `git diff --check` passed for the affected files. Logs are
-`.local/anomaly/sun-depth/{configure,build-all,ctest,evidence-suite}.log`; bounded analysis is in the same directory.
-The explicit assigned-directory build/tests replace the hardcoded shared build directory in `eng/verify.ps1` for this
-worker; no Rust behavior or public ABI changed. No game was launched or installed file changed. The automatic lifecycle
-is built and fixture-tested; its visual acceptance remains pending.
+Validation (13 November 2026): MSVC Release configure and full build in `build/wk-avx` passed; the requested
+`ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion|shader_patch" --output-on-failure` passed 96/96,
+without skips, in 92.78 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
+against both hashes, with 40 negative mutations rejected. Package unittests passed 10/10 and `git diff --check` passed.
+The first CTest run passed 94/96 but failed FSR3 activation in two FG fixtures: its cached vendor root held AMD DLL
+SHA-256 `02297bee...`, while the current SDK/header pin uses `e6843252...`. Pointing only the assigned build's
+`RSF_ANOMALY_SR_VENDOR_ROOT` at local fixture junctions (unchanged Streamline/XeSS and the current pinned FidelityFX
+signedbin) fixed both failures; the entire requested selection then passed. This is a test-input correction, not a game
+or Runtime change. Reproduce with `-DRSF_ANOMALY_SR_VENDOR_ROOT=D:/Coding/ReScaleFrame/.local/anomaly/position-reconstruction/vendors`.
+Logs: `.local/anomaly/position-reconstruction/{configure,build-full,configure-pinned-vendors,build-final,ctest,
+ctest-stale-vendors,evidence-suite,package-tests,fg-pinned-probe}.log`. The explicit assigned-directory build/tests
+replace `eng/verify.ps1`, which hardcodes the prohibited shared build directory. No Rust behavior or public ABI changed.
