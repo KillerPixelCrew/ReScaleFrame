@@ -31,17 +31,15 @@ StatusOverlay=1
 """
 
 
-def main() -> None:
+def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--streamline-root", required=True, type=Path)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
     parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases/rdr2")
-    args = parser.parse_args()
-    if git("status", "--porcelain"):
-        raise RuntimeError("Commit the intended release source before packaging.")
+    args = parser.parse_args(argv)
+    revision = ac7.release_identity(release_revision)
     version = (ROOT / "VERSION").read_text().strip()
-    revision = git("rev-parse", "HEAD")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     stage = output / f"stage-rdr2-{uuid.uuid4().hex[:8]}"
@@ -124,6 +122,9 @@ def main() -> None:
         for name, expected in manifest["files"].items():
             if hashlib.sha256(bundle.read(name)).hexdigest() != expected:
                 raise RuntimeError(f"Archive hash mismatch: {name}")
+    if game_only:
+        ac7.release_identity(revision)
+        return {"archive": str(archive), "revision": revision}
     source = output / f"ReScaleFrame-{version}-RDR2-source.zip"
     subprocess.run(["git", "archive", "--format=zip", f"--prefix=ReScaleFrame-{version}/",
                     "-o", str(source), revision], cwd=ROOT, check=True)
