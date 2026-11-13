@@ -270,5 +270,14 @@
     "vulkan": "rdr2_Present_Vulkan RVA 0x26df458",
     "rsf_fg_source": "RDR2Host installs FG12 before graphics for sgaWindow; the bridge fence-joins the game queue and required Streamline proxy queue. AD with guarded skipped-token retirement accepts normal SDR source/input/camera/scene/submission/Present association, DLSS active1 with driver multiplier2/4, Off/resume and SR-provider switching. RTSS and Social Club remain loaded. FSR/XeSS FG have GPU-fixture evidence only; generated-image quality, visible overlay and all-mode acceptance remain separate.",
     "rsf_fg_evidence": ".local/rdr2-tools/native-adapter-game-ad-20261026/:live-tokens.json, token-fix.log, dlss-2x-rdr2.log, dlss-4x-rdr2.log, dlss-off-rdr2.log, dlss-resume-rdr2.log, fsr3-sr-dlss-fg-rdr2.log, returned-dlss-rdr2.log, hud-pixel-comparison.json and sr-pixel-validation.json"
+  },
+  "input_keyed_latency": {
+    "date": "2026-11-13",
+    "game_abi": 21,
+    "cpu_event_version": 1,
+    "research": "../../docs/research/latency-integration-audit.md",
+    "facts": "Native wait/sample/marker observations converted by the core; WH_GETMESSAGE forwards removed keyboard/mouse/raw/ping candidates; successful reads of loaded XInput exports report controller receipt. Existing exact executable hooks are unchanged.",
+    "owner": "Core orchestrator, shared Direct3D Reflex/PCL, required XeLL or AMD Anti-Lag 2 owner",
+    "validation": "Source migration and synthetic/device fixture validation; no new game acceptance or AMD hardware acceptance. Rendering readiness remains unchanged."
   }
 }

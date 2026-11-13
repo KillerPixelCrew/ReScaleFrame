@@ -32,7 +32,7 @@ namespace ReScaleFrame
         [StructLayout(LayoutKind.Sequential)] internal struct Api {
             internal uint Size, Version;
             internal ulong Session;
-            internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent;
+            internal IntPtr Log, Config, Enqueue, RenderEvent, ManagedState, CpuEvent, CpuFact;
         }
         [StructLayout(LayoutKind.Sequential)] internal struct Sharpening {
             internal uint Size, Version;
@@ -64,11 +64,18 @@ namespace ReScaleFrame
             public uint LatencyAvailable, EffectiveLatency, Reason;
             public ulong EvaluatedFrames, RefusedFrames, TaggedFrames;
             public ulong SleepCalls, MarkerCalls;
-            public uint PclAvailable, LatencyReportAvailable;
+            public uint PclAvailable, LatencyReportAvailable, LatencyOwner;
+            public ulong KeyboardInputs, MouseInputs, ControllerInputs, PclPings, InputSubstitutes, OrderViolations, DerivedBoundaries;
         }
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ConfigDelegate(uint width, uint height, ref Configuration config);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr EnqueueDelegate(ref Packet packet);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void StateDelegate(uint state);
+        [StructLayout(LayoutKind.Sequential)] internal struct CpuFact {
+            internal uint Size, Stage;
+            internal ulong Session, Source, Timestamp, Frequency;
+            internal uint Expected, Kinds, Message, EventVersion, Flags;
+        }
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FactDelegate(ref CpuFact fact);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CpuDelegate(uint stage, ulong frame);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int rsfu_initialize(
             [MarshalAs(UnmanagedType.LPUTF8Str)] string runtime, [MarshalAs(UnmanagedType.LPUTF8Str)] string version,
@@ -106,7 +113,7 @@ namespace ReScaleFrame
         internal static bool Start(string runtime, string project) {
             InitializationResult = rsfu_initialize(runtime, Application.unityVersion, project, out Bridge);
             if (InitializationResult != 1) return false;
-            if (Bridge.Size != Marshal.SizeOf<Api>() || Bridge.Version != 4 || Bridge.Session == 0)
+            if (Bridge.Size != Marshal.SizeOf<Api>() || Bridge.Version != 5 || Bridge.Session == 0)
                 throw new InvalidOperationException("ReScaleFrame native bridge ABI mismatch.");
             Config = Marshal.GetDelegateForFunctionPointer<ConfigDelegate>(Bridge.Config);
             Enqueue = Marshal.GetDelegateForFunctionPointer<EnqueueDelegate>(Bridge.Enqueue);

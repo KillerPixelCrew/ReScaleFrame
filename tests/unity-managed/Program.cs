@@ -54,14 +54,39 @@ internal static class Program
             throw new InvalidOperationException("Imported metadata differs from its declared render target.");
         Console.WriteLine("PASS: imported backbuffer descriptor is invalid; its declared metadata is readable but is not a native copy source.");
     }
+    private struct UpdateInputManager { }
+    private struct NewInputUpdate { }
+    private static void InputLoopContract() {
+        var seen = new System.Collections.Generic.List<int>();
+        var loop = new UnityEngine.LowLevel.PlayerLoopSystem { subSystemList = new[] {
+            new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.EarlyUpdate), subSystemList = new[] {
+                new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UpdateInputManager), updateDelegate = () => seen.Add(2) },
+                new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(NewInputUpdate), updateDelegate = () => seen.Add(3) } } },
+            new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.PreLateUpdate), updateDelegate = () => seen.Add(5) } } };
+        UnityEngine.LowLevel.PlayerLoopSystem.UpdateFunction begin = () => seen.Add(1), received = () => seen.Add(4), end = () => seen.Add(6);
+        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, end);
+        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, end);
+        if (!ReScaleFrame.Engine.InputLoop.PollBoundaryAvailable) throw new InvalidOperationException("Real input phases were not found.");
+        Action<UnityEngine.LowLevel.PlayerLoopSystem> run = null;
+        run = node => { node.updateDelegate?.Invoke(); foreach (var child in node.subSystemList ?? Array.Empty<UnityEngine.LowLevel.PlayerLoopSystem>()) run(child); };
+        run(loop);
+        if (string.Join(",",seen) != "1,2,3,4,5,6") throw new InvalidOperationException("Input loop duplicated or misplaced a boundary.");
+        seen.Clear(); run(ReScaleFrame.Engine.InputLoop.Remove(loop));
+        if (string.Join(",",seen) != "2,3,5") throw new InvalidOperationException("Input cleanup removed engine delegates.");
+        var missing = new UnityEngine.LowLevel.PlayerLoopSystem { subSystemList = new[] { new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.EarlyUpdate) } } };
+        ReScaleFrame.Engine.InputLoop.Plan(missing, begin, received, end);
+        if (ReScaleFrame.Engine.InputLoop.PollBoundaryAvailable) throw new InvalidOperationException("Missing input phase was reported as measured.");
+        Console.WriteLine("PASS: real input phase insertion, idempotence, cleanup and missing-phase reporting.");
+    }
     private static int Main()
     {
         try
         {
             if (Marshal.SizeOf<CameraFrame>() != 384 || Marshal.SizeOf<Packet>() != 520 ||
-                Marshal.SizeOf<Api>() != 64 || Marshal.SizeOf<Configuration>() != 40 ||
+                Marshal.SizeOf<Api>() != 72 || Marshal.SizeOf<Native.CpuFact>() != 64 || Marshal.SizeOf<Configuration>() != 40 ||
                 Marshal.OffsetOf<Packet>(nameof(Packet.Camera)).ToInt32() != 72)
                 throw new InvalidOperationException("Managed/native packet layout differs.");
+            InputLoopContract();
             var methods = UrpAdapter.Contracts();
             if (methods.Length != 13) throw new InvalidOperationException("Incomplete URP contract.");
             foreach (var method in methods) Console.WriteLine("Matched " + method.DeclaringType.FullName + "." + method.Name);

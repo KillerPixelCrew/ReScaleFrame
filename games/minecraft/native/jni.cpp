@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/input_dump.h>
+#include <rescaleframe/native_cpu.h>
 #include <windows.h>
 #include <string>
 #include <cstdio>
@@ -11,6 +12,7 @@
 #include "input_observer.h"
 namespace {
 using Pipeline=rsf_gl_pipeline;
+std::atomic<Pipeline*> input_pipeline{};
 FILE* logfile=nullptr;
 void log(void*,const char* message) {if(logfile) {std::fprintf(logfile,"%s\n",message);std::fflush(logfile);}}
 struct Text {
@@ -41,7 +43,9 @@ rsf_game_render_pass pass(JNIEnv* env,Pipeline* self,jlong frame,jobject camera,
 JNI_METHOD(jlong) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_createSurface(JNIEnv*,jclass,jlong parent) {
     auto owner=reinterpret_cast<HWND>(static_cast<uintptr_t>(parent));
     auto surface=static_cast<HWND>(rsf_gl_window_create(owner));
-    if(surface&&!MinecraftInputObserver::instance().install(owner,surface)) {rsf_gl_window_destroy(surface);return 0;}
+    if(surface&&!MinecraftInputObserver::instance().install(owner,surface,[](UINT message) {
+        (void)rsf_gl_pipeline_input(input_pipeline.load(),0,0,message);
+    })) {rsf_gl_window_destroy(surface);return 0;}
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(surface));
 }
 JNI_METHOD(void) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_destroySurface(JNIEnv*,jclass,jlong window) {
@@ -55,6 +59,7 @@ JNI_METHOD(jlong) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_ope
     rsf_input_dump_configure(nullptr,"Minecraft",nullptr,log,nullptr);
     Pipeline* self=nullptr;const auto result=rsf_gl_pipeline_open(&setup,&self);
     if(result!=RSF_BACKEND_OK) {char message[96];std::snprintf(message,sizeof(message),"Minecraft native open failed: %d",result);log(nullptr,message);}
+    input_pipeline.store(self);
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(self));
 }
 JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_configure(JNIEnv* env,jclass,jlong pointer,jint width,jint height,jint sr,jint quality,jint preset,jint fg,jint count,jint reflex,jint limit,jboolean debug,jfloatArray sharpening) {
@@ -86,11 +91,6 @@ JNI_METHOD(jintArray) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge
 }
 JNI_METHOD(void) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_cpu(JNIEnv*,jclass,jlong pointer,jlong frame,jint stage) {
     auto* self=pipeline(pointer);
-    auto& observer=MinecraftInputObserver::instance();
-    if(stage==RSF_GAME_CPU_FRAME_BEGIN)observer.set_message(rsf_gl_pipeline_pcl_message(self));
-    if(stage==RSF_GAME_CPU_INPUT_SAMPLE) {
-        if(const auto message=observer.consume())rsf_gl_pipeline_input(self,frame,0,message);
-    }
     rsf_gl_pipeline_cpu(self,frame,stage);
 }
 JNI_METHOD(void) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_input(JNIEnv*,jclass,jlong pointer,jlong frame,jint kinds) {
@@ -108,9 +108,16 @@ JNI_METHOD(void) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_stat
     if(!destination||env->GetArrayLength(destination)<14)return;
     rsf_gl_pipeline_status status{};status.struct_size=sizeof(status);rsf_gl_pipeline_status_get(pipeline(pointer),&status);
     const auto& fg=status.generation;
-    const std::array<jlong,16> values{status.requested_sr,status.effective_sr,status.requested_fg,status.effective_fg,status.sr_result,status.fg_switch_result,
+    rsf_native_latency_status latency{sizeof(latency),1};rsf_native_latency_status_get(&latency);
+    const std::array<jlong,25> values{status.requested_sr,status.effective_sr,status.requested_fg,status.effective_fg,status.sr_result,status.fg_switch_result,
         static_cast<jlong>(status.evaluated),fg.reason,fg.last_result,fg.vendor.effective_generated_frames,static_cast<jlong>(fg.tagged_frames),static_cast<jlong>(fg.vendor.generated_presented),fg.vendor.active,fg.vendor.valid_statistics,
-        fg.vendor.max_generated_frames,fg.vendor.supported};
+        fg.vendor.max_generated_frames,fg.vendor.supported,latency.owner,static_cast<jlong>(latency.paced_frames),
+        static_cast<jlong>(latency.events.input_events[0]),static_cast<jlong>(latency.events.input_events[1]),
+        static_cast<jlong>(latency.events.input_events[2]),static_cast<jlong>(latency.events.pings),
+        static_cast<jlong>(latency.events.substitutes),static_cast<jlong>(latency.events.order_violations),
+        static_cast<jlong>(latency.derived_boundaries)};
     env->SetLongArrayRegion(destination,0,std::min(env->GetArrayLength(destination),static_cast<jsize>(values.size())),values.data());
 }
-JNI_METHOD(jint) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_close(JNIEnv*,jclass,jlong pointer) {return rsf_gl_pipeline_close(pipeline(pointer));}
+JNI_METHOD(jint) JNICALL Java_org_kpc_rescaleframecraft_render_NativeBridge_close(JNIEnv*,jclass,jlong pointer) {
+    input_pipeline.store(nullptr);return rsf_gl_pipeline_close(pipeline(pointer));
+}

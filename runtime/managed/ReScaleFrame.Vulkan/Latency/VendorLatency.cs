@@ -104,6 +104,7 @@ internal sealed unsafe class VendorLatency : IDisposable
     private readonly IVulkanProviderContext _context;
     private readonly NvLowLatency2Functions? _nv;
     private readonly AmdAntiLagFunctions? _amd;
+    private readonly LatencyOwnerLease _ownerLease;
     private readonly Semaphore _sleepSemaphore;
     private SwapchainKHR _swapchain;
     private ulong _sleepValue;
@@ -116,11 +117,12 @@ internal sealed unsafe class VendorLatency : IDisposable
     private bool _reflexReady;
     private bool _disposed;
 
-    private VendorLatency(IVulkanProviderContext context, NvLowLatency2Functions? nv, AmdAntiLagFunctions? amd)
+    private VendorLatency(IVulkanProviderContext context, NvLowLatency2Functions? nv, AmdAntiLagFunctions? amd, LatencyOwnerLease ownerLease)
     {
         _context = context;
         _nv = nv;
         _amd = amd;
+        _ownerLease = ownerLease;
         if (nv == null) return;
         var type = new SemaphoreTypeCreateInfo
         {
@@ -136,17 +138,30 @@ internal sealed unsafe class VendorLatency : IDisposable
     /// <returns>A latency owner, or null when the selected extension functions are unavailable.</returns>
     public static VendorLatency? TryCreate(IVulkanProviderContext context, VendorLatencyKind kind)
     {
+        using var pending = new PendingLease();
         if (kind == VendorLatencyKind.Reflex)
         {
             NvLowLatency2Functions? nv = NvLowLatency2Functions.Load(context.Api, context.Device);
-            return nv == null ? null : new VendorLatency(context, nv, null);
+            if (nv == null || !pending.Acquire()) return null;
+            var owner = new VendorLatency(context, nv, null, pending.Lease!);
+            pending.Transfer(); return owner;
         }
         if (kind == VendorLatencyKind.AntiLag)
         {
             AmdAntiLagFunctions? amd = AmdAntiLagFunctions.Load(context.Api, context.Device);
-            return amd == null ? null : new VendorLatency(context, null, amd);
+            if (amd == null || !pending.Acquire()) return null;
+            var owner = new VendorLatency(context, null, amd, pending.Lease!);
+            pending.Transfer(); return owner;
         }
         return null;
+    }
+
+    private sealed class PendingLease : IDisposable
+    {
+        public LatencyOwnerLease? Lease { get; private set; }
+        public bool Acquire() { Lease = LatencyOwnerLease.TryAcquire(); return Lease != null; }
+        public void Transfer() => Lease = null;
+        public void Dispose() => Lease?.Dispose();
     }
 
     /// <summary>Vendor implementation selected or loaded for this device.</summary>
@@ -354,5 +369,6 @@ internal sealed unsafe class VendorLatency : IDisposable
         if (_sleepSemaphore.Handle != 0)
             _context.Api.DestroySemaphore(_context.Device, _sleepSemaphore, null);
         System.Runtime.InteropServices.Marshal.FreeHGlobal((nint)_swapchainCreateInfo);
+        _ownerLease.Dispose();
     }
 }

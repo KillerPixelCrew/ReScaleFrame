@@ -127,7 +127,9 @@ namespace ReScaleFrame.Demo
             if (haveStatus) {
                 GUILayout.Label("Active SR: " + status.ActiveSR + " (" + status.RenderWidth + " × " + status.RenderHeight + " → " + status.OutputWidth + " × " + status.OutputHeight + ")");
                 GUILayout.Label("Frame generation: " + (status.FrameGenerationActive ? "Active" : "Inactive") + ", maximum " + status.MaxGeneratedFrames + " additional frames");
-                GUILayout.Label("Latency: " + status.EffectiveLatency + "; PCL " + (status.PclAvailable ? "available" : "unavailable"));
+                GUILayout.Label("Latency: " + status.LatencyOwner + " " + status.EffectiveLatency + "; PCL " + (status.PclAvailable ? "available" : "unavailable"));
+                GUILayout.Label("Paced " + status.SleepCalls + "; input K/M/C " + status.KeyboardInputs + "/" + status.MouseInputs + "/" + status.ControllerInputs + "; pings " + status.PclPings);
+                GUILayout.Label("Derived " + status.DerivedBoundaries + "; missing poll " + status.InputSubstitutes + "; order errors " + status.OrderViolations);
             } else GUILayout.Label(ReScaleFrameRuntime.LastError ?? "Preparing rendering");
             GUILayout.EndScrollView();
             GUILayout.EndArea();

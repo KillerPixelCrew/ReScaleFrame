@@ -99,6 +99,12 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 - Track implementation in `docs/implementation.md`. Distinguish built, synthetic-tested, game-tested, and device-tested results.
 - Run `eng/verify.ps1` for native/SDK/Rust changes. Use focused checks for documentation-only edits.
 - Keep component versions aligned through `VERSION` and the Cargo workspace version; verification checks the match.
+- Release RSF as a whole, never one integration at a time. One GitHub release per RSF version
+  (tag `vX.Y.Z`, built from one commit) carries every shipping integration as its own download
+  (`ReScaleFrame-<version>-<Game>-Windows-x64.zip`, the Minecraft JAR under its own mod version),
+  one corresponding-source archive and one `SHA256SUMS.txt`. `tools/package-release.py` builds the
+  set. The notes have one short player-facing section per integration and say which were played on
+  that build. Fetch and merge `origin/main` before preparing a release.
 - Keep downloaded reference checkouts and licensed engine/game source outside Git. Never copy reference code merely because it was useful to study.
 
 ## Build and verify

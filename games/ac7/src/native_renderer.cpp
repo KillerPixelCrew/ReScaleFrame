@@ -13,6 +13,7 @@
 #include <vector>
 #include <windows.h>
 #include <MinHook.h>
+#include "../../../integrations/windows/xinput_facts.h"
 #include <atomic>
 #include <cstring>
 #include <cmath>
@@ -381,18 +382,21 @@ uint32_t render_screen(uint32_t& reset, uint32_t& why, uint64_t& view_target)
 thread_local uint64_t submitting_viewport = 0;
 void cpu_event(rsf_ac7_native_renderer* self, uint64_t source, uint32_t stage, uint32_t kind = 0, uint32_t message = 0)
 {
-    if (!self || !source || !self->options.cpu_event) return;
+    if (!self || !self->options.cpu_event || (!source && stage!=RSF_GAME_CPU_INPUT_EVENT)) return;
     LARGE_INTEGER now{}, frequency{};
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    const uint32_t flags=RSF_GAME_CPU_INPUT_KEYED | (message ? RSF_GAME_CPU_WINDOW_MESSAGE : 0u) |
+        (!source && kind ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u);
     rsf_game_cpu_event event{sizeof(event), stage, self->options.session_id, source,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), source_render_expected, kind, message};
+        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), source_render_expected, kind, message, RSF_GAME_CPU_EVENT_VERSION, flags};
     self->options.cpu_event(self->options.user, &event);
 }
 thread_local std::array<uint64_t, 2> shared_repaint_targets{};
 LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
 {
     OuterGuard lifetime;
-    if (code >= 0 && removed == PM_REMOVE && inside_engine_tick && input_source_frame) {
+    auto* self=installed.load(std::memory_order_acquire);
+    if (code >= 0 && removed == PM_REMOVE && self && self->active.load()) {
         const auto* message = reinterpret_cast<const MSG*>(argument);
         uint32_t kind = 0;
         if (message->message >= WM_KEYFIRST && message->message <= WM_KEYLAST) kind = RSF_GAME_INPUT_KEYBOARD;
@@ -403,8 +407,7 @@ LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
                 kind = header.dwType == RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD :
                     header.dwType == RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
         }
-        if (kind || message->message >= 0xc000u)
-            cpu_event(installed.load(std::memory_order_acquire), input_source_frame, RSF_GAME_CPU_INPUT_EVENT, kind, message->message);
+        cpu_event(self, inside_engine_tick ? input_source_frame : 0, RSF_GAME_CPU_INPUT_EVENT, kind, message->message);
     }
     return CallNextHookEx(nullptr, code, removed, argument);
 }
@@ -540,6 +543,13 @@ void hooked_viewport_draw(void* viewport, uint8_t should_present)
     reinterpret_cast<void(*)(void*, uint8_t)>(sites[hook_viewport_draw].original)(viewport, should_present);
     submitting_viewport = saved;
 }
+thread_local bool controller_poll_scope{};
+rsf::windows::XInputFacts controller_facts;
+void controller_received() {
+    auto* self=installed.load(std::memory_order_acquire);
+    if (controller_poll_scope && self && self->active.load() && input_source_frame)
+        cpu_event(self,input_source_frame,RSF_GAME_CPU_INPUT_EVENT,RSF_GAME_INPUT_CONTROLLER);
+}
 void hooked_poll_input(void* slate)
 {
     EntryGuard entry;
@@ -548,11 +558,10 @@ void hooked_poll_input(void* slate)
         input_sampled = true;
         cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_SAMPLE);
     }
-    int32_t modal_count = -1;
-    if (self && self->active.load() && inside_engine_tick && input_source_frame &&
-        read(uint64_t(uintptr_t(slate)), 0x1b0, modal_count) && modal_count == 0)
-        cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_INPUT_CONTROLLER);
+    if (self && self->active.load()) controller_facts.install_loaded(controller_received);
+    const auto previous=controller_poll_scope; controller_poll_scope=inside_engine_tick;
     reinterpret_cast<void(*)(void*)>(sites[hook_poll_input].original)(slate);
+    controller_poll_scope=previous;
 }
 void hooked_pump_messages(uint8_t main_loop)
 {
@@ -576,10 +585,7 @@ void hooked_frame_sync(void* sync, uint8_t one_frame_lag)
 void hooked_engine_pacing(void* object)
 {
     OuterGuard lifetime;
-    if (inside_engine_tick && reserved_source_frame && current_game_engine(object))
-        cpu_event(installed.load(std::memory_order_acquire), reserved_source_frame, RSF_GAME_CPU_PACING);
-    // This runs after BeginFrame dispatch, and before PumpMessages/PollGameDeviceState.
-    // Sleeping before the native time update also includes that delay in FApp's delta time.
+    // This native time-update boundary does not report a poll. The input hooks report it.
     reinterpret_cast<void(*)(void*)>(sites[hook_engine_pacing].original)(object);
 }
 struct NativeShaderCode { const uint8_t* data; int32_t count, capacity; };
@@ -3004,7 +3010,7 @@ extern "C" int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer* self)
 extern "C" int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer* self)
 { return self && installed.load(std::memory_order_acquire) == self && self->active.load(std::memory_order_acquire); }
 extern "C" void rsf_ac7_native_renderer_quiesce(rsf_ac7_native_renderer* self)
-{ if (self) { self->quiescing.store(true); self->active.store(false); rsf_ac7_render_scopes_quiesce(self->scopes); } }
+{ if (self) { self->quiescing.store(true); self->active.store(false); controller_facts.disable(); rsf_ac7_render_scopes_quiesce(self->scopes); } }
 extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
 {
     if (!self) return 1;
@@ -3019,7 +3025,7 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     }
     // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
     for (const auto& site : sites) if (site.target) MH_DisableHook(site.target);
-    if (guards_held(true)) return 0;
+    if (guards_held(true) || !controller_facts.remove()) return 0;
     if (!restore_velocity_patches(*self)) {
         log(*self, "AC7 temporal velocity patch could not restore; renderer retained"); return 0;
     }

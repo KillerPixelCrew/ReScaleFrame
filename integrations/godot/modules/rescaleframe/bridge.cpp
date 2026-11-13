@@ -62,7 +62,7 @@ bool ready = false;
 std::atomic<bool> enabled{false};
 std::atomic<uint32_t> requested_sr{7};
 std::atomic<bool> reset_requested{true};
-uint32_t pending_input = 0;
+
 bool cpu_open = false, simulation_ended = false, frame_queued = false, render_gameplay = true;
 uint64_t cpu_frame = 0, render_frame = 0, session = 0, last_frame = 0;
 uint64_t previous_cpu_usec = 0;
@@ -106,7 +106,7 @@ void cpu(uint32_t stage, uint32_t expected = 0) {
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     const rsf_game_cpu_event event{sizeof(event), stage, session, cpu_frame,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), expected, 0, 0};
+        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), expected, 0, 0, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED};
     native_cpu(&event);
 }
 void set_primary(RID viewport) {
@@ -250,6 +250,8 @@ Dictionary ReScaleFrameBridge::get_status() const {
     RSF_FIELD(tagged_frames); RSF_FIELD(sleep_calls); RSF_FIELD(marker_calls);
     RSF_FIELD(total_presented); RSF_FIELD(generated_presented); RSF_FIELD(presentation_statistics_valid);
     RSF_FIELD(presentation_statistics_flags); RSF_FIELD(source_frame_id); RSF_FIELD(provider_generation); RSF_FIELD(generated_callbacks);
+    RSF_FIELD(latency_owner); RSF_FIELD(input_substitutes); RSF_FIELD(order_violations); RSF_FIELD(derived_boundaries);
+    RSF_FIELD(keyboard_inputs); RSF_FIELD(mouse_inputs); RSF_FIELD(controller_inputs); RSF_FIELD(pcl_pings);
 #undef RSF_FIELD
     return result;
 }
@@ -336,12 +338,11 @@ void cpu_begin() {
     previous_cpu_usec = now;
     ++cpu_frame;
     cpu_open = true; simulation_ended = false; frame_queued = false;
-    cpu(RSF_GAME_CPU_FRAME_BEGIN); cpu(RSF_GAME_CPU_PACING);
+    cpu(RSF_GAME_CPU_FRAME_BEGIN); cpu(RSF_GAME_CPU_INPUT_SAMPLE);
 }
 void cpu_simulation_begin() {
     if (!cpu_open) return;
-    cpu(RSF_GAME_CPU_INPUT_SAMPLE); cpu(RSF_GAME_CPU_SIMULATION_BEGIN);
-    if (pending_input) { const uint32_t kind = pending_input; pending_input = 0; input_event(kind); }
+    cpu(RSF_GAME_CPU_SIMULATION_BEGIN);
 }
 void queue_frame(bool present) {
     if (!ready || !enabled.load()) return;
@@ -359,10 +360,9 @@ void cpu_end() {
 }
 void input_event(uint32_t kind) {
     if (!ready || !enabled.load() || !kind || (kind & ~7u)) return;
-    if (!cpu_open) { pending_input |= kind; return; }
     LARGE_INTEGER now, frequency; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    const rsf_game_cpu_event event{sizeof(event), RSF_GAME_CPU_INPUT_EVENT, session, cpu_frame,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, kind, 0};
+    const rsf_game_cpu_event event{sizeof(event), RSF_GAME_CPU_INPUT_EVENT, session, cpu_open ? cpu_frame : 0,
+        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, kind, 0, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED | (!cpu_open ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
     native_cpu(&event);
 }
 void render_size(RID target, const Vector2i &output, Vector2i &internal) {

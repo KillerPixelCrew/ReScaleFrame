@@ -224,11 +224,16 @@ void UNITY_INTERFACE_API render_event(int id, void* address) noexcept try
     }
 } catch (...) { log("Unity DX11 bridge refused its render event."); }
 void state(uint32_t value) { managed.store(value); }
+void cpu_fact(const rsf_game_cpu_event* fact) {
+    if (active.load() && fact && fact->struct_size>=sizeof(*fact) && fact->session_id==services.session_id && services.cpu_event)
+        services.cpu_event(services.user,fact);
+}
 void cpu(uint32_t stage, uint64_t frame)
 {
     if (!active.load() || !frame || !services.cpu_event) return;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{sizeof(event), stage, services.session_id, frame, static_cast<uint64_t>(now.QuadPart), static_cast<uint64_t>(frequency.QuadPart), 0, 0, 0};
+    event.event_version=RSF_GAME_CPU_EVENT_VERSION; event.flags=RSF_GAME_CPU_INPUT_KEYED;
     services.cpu_event(services.user, &event);
 }
 int configuration(uint32_t width, uint32_t height, rsf_unity_config* output)
@@ -262,7 +267,7 @@ bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_nati
     if (!output || !host.render_pass || !host.render_config || !host.log) return false;
     services = host;
     *output = {sizeof(*output), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id, [](const char* text) { log(text); }, configuration, enqueue,
-        reinterpret_cast<void*>(render_event), state, cpu}; return true;
+        reinterpret_cast<void*>(render_event), state, cpu, cpu_fact}; return true;
 }
 void rsf_unity_bridge_activate(bool enabled) noexcept
 {

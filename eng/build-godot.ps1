@@ -99,6 +99,7 @@ if ($StageRuntime) {
             $taskPayload["fidelityfx-vulkan/$taskFile"] = Join-Path $taskVulkan $taskFile
         }
     }
+    $taskPayload['AMD-Anti-Lag-2-MIT.txt'] = Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'
     $taskPayload['MFG-Unlocker-LICENSE.txt'] = Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'
     $taskManifest = @()
     foreach ($taskEntry in $taskPayload.GetEnumerator()) {

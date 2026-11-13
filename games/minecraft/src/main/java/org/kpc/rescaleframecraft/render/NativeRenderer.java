@@ -3,7 +3,6 @@ package org.kpc.rescaleframecraft.render;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.nio.FloatBuffer;
-import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
@@ -18,11 +17,12 @@ import org.lwjgl.opengl.*;
 
 /** Game ownership, render resolution, input conventions and HUD boundaries live here. */
 public final class NativeRenderer {
-    private static long handle,surfaceWindow,frame,closedFrame,lastFrameTime,lastPacing;
+    private static long handle,surfaceWindow,frame,closedFrame,lastFrameTime;
+    private static final CpuFrameFacts cpuFrames=new CpuFrameFacts((source,stage)->NativeBridge.cpu(handle,source,stage));
     private static Configuration applied,failed;
     private static String status="native processing off";
     private static int[] surfaces;
-    private static final long[] nativeStatus=new long[16];
+    private static final long[] nativeStatus=new long[25];
     private static RenderTarget display;
     private static WorldRenderTarget world;
     private static boolean worldRendering;
@@ -56,12 +56,7 @@ public final class NativeRenderer {
         inputs.end();
         var game=Minecraft.getInstance();var s=TaaSettings.current;
         long now=System.nanoTime();
-        if(handle!=0&&s.frameLimit>0&&lastPacing!=0) {
-            long remaining=lastPacing+1_000_000_000L/s.frameLimit-now;
-            if(remaining>0)LockSupport.parkNanos(remaining);
-            now=System.nanoTime();
-        }
-        lastPacing=now;frameTime=lastFrameTime==0?.016f:Math.clamp((now-lastFrameTime)*1e-9f,.001f,1f);lastFrameTime=now;
+        frameTime=lastFrameTime==0?.016f:Math.clamp((now-lastFrameTime)*1e-9f,.001f,1f);lastFrameTime=now;
         if(handle!=0&&frame>closedFrame)abortFrame();
         ++frame;worldRendering=false;
         if(!GL.getCapabilities().OpenGL33)return;
@@ -70,9 +65,8 @@ public final class NativeRenderer {
         if(handle==0&&s.upscaler==TaaSettings.Upscaler.OFF&&s.frameGeneration==TaaSettings.FrameGeneration.OFF)return;
         configure(game,s);
         if(handle!=0&&surfaces!=null) {
-            NativeBridge.cpu(handle,frame,NativeBridge.FRAME_BEGIN);NativeBridge.cpu(handle,frame,NativeBridge.PACING);
+            cpuFrames.simulation(frame);
             inputs.begin(frame);
-            NativeBridge.cpu(handle,frame,NativeBridge.INPUT_SAMPLE);
             NativeBridge.status(handle,nativeStatus);
             var limits=FrameGenerationLimits.INSTANCE;
             if(limits.record((int)nativeStatus[2],(int)nativeStatus[3],(int)nativeStatus[14],nativeStatus[15]!=0)) {
@@ -231,8 +225,12 @@ public final class NativeRenderer {
             // capture disables interpolation without leaking Streamline tokens.
             int result=NativeBridge.present(handle,frame,Minecraft.getInstance().options.enableVsync().get());
             if(result!=0)throw new IllegalStateException("Native presentation failed: "+result);
-            closedFrame=frame;return true;
+            closedFrame=frame;cpuFrames.ended(frame);return true;
         }
+    }
+    public static void beforePostPresentPoll() {
+        if(handle!=0&&surfaces!=null&&displayDepth==1&&closedFrame==frame)
+            inputs.begin(cpuFrames.beforeNextPoll(frame));
     }
     public static void beginDisplay() {++displayDepth;}
     public static void endDisplay() {--displayDepth;}
@@ -240,9 +238,12 @@ public final class NativeRenderer {
         if(status!=null)return status;
         return "SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+", frames="+nativeStatus[6]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
             ", active="+(nativeStatus[12]!=0)+", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", generated presented="+
-            ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8];
+            ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8]+", latency="+
+            switch((int)nativeStatus[16]) {case 1->"Reflex";case 2->"XeLL";case 3->"AMD Anti-Lag 2";default->"none";}+
+            ", paced="+nativeStatus[17]+", input="+nativeStatus[18]+"/"+nativeStatus[19]+"/"+nativeStatus[20]+
+            ", ping="+nativeStatus[21]+", substitutes="+nativeStatus[22]+", order violations="+nativeStatus[23]+", derived="+nativeStatus[24];
     }
-    private static void abortFrame() {NativeBridge.abort(handle,frame);closedFrame=frame;}
+    private static void abortFrame() {NativeBridge.abort(handle,frame);closedFrame=frame;cpuFrames.ended(frame);}
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}
     public static void shutdown() {
         inputs.end();
@@ -255,6 +256,7 @@ public final class NativeRenderer {
         if(readFramebuffer!=0)GL30.glDeleteFramebuffers(readFramebuffer);
         if(vao!=0)GL30.glDeleteVertexArrays(vao);
         framebuffer=readFramebuffer=vao=0;
+        cpuFrames.reset();
         applied=failed=null;display=null;status="native processing off";
         FrameGenerationLimits.INSTANCE.reset();SodiumConfig.capabilitiesChanged();
     }

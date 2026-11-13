@@ -71,8 +71,10 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
 static void route_dump(void* context, void* texture, const char* name);
 static void on_native_scope(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
 { (void)user; (void)list; rsf_ac7_motion_capture_native_pass(pass, begin); rsf_ac7_velocity_scope(pass); }
+static void deliver_native_cpu(void* user, const rsf_game_cpu_event* event)
+{ (void)user; rsf_native_fg_cpu(event); }
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
-{ (void)user; if (rsf_native_cpu_event(event)) rsf_native_fg_cpu(event); }
+{ (void)user; rsf_native_cpu_dispatch(event, deliver_native_cpu, NULL); }
 
 int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
                             rsf_bridge_log_fn log, void* log_user)

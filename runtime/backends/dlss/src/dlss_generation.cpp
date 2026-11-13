@@ -514,6 +514,12 @@ extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host* hos
     if (auto* slot = find_slot(*host, id)) slot->id = 0;
     return RSF_BACKEND_OK;
 }
+extern "C" rsf_backend_result rsf_streamline_host_reset_sources(rsf_streamline_host* host) {
+    if (!host) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard lock(host->marker_guard);
+    for (const auto& slot:host->tokens) if (slot.id) return RSF_BACKEND_ERROR_NOT_READY;
+    host->last_begin=0;return RSF_BACKEND_OK;
+}
 extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host* host, uint64_t id)
 {
     if (!host || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -847,6 +853,7 @@ extern "C" rsf_backend_result rsf_streamline_host_acquire(rsf_streamline_host*, 
 extern "C" rsf_backend_result rsf_streamline_host_sleep(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, uint64_t, rsf_latency_marker, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_reset_sources(rsf_streamline_host*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t) { return 0; }
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t, uint32_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }

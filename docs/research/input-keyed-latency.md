@@ -22,8 +22,9 @@ invent it at frame open. Core policy makes the pacing call at the real input bou
 same frame. Game ABI 21 appends event_version and flags to rsf_game_cpu_event; event version 1 opts into INPUT_KEYED facts.
 The D3D11 FG access table is version 2 so an older Runtime cannot silently ignore this pacing contract. WINDOW_MESSAGE
 marks a delivered message and permits source 0 when no engine frame owns it. The core matches a registered PCL
-candidate at the next frame reservation only within 250 ms, or expires it. It does not retain ordinary keyboard/mouse
-kind events across frames. INPUT_SUBSTITUTE is core-generated for a missing input callback, skips a late sleep and
+candidate at the next frame reservation only within 250 ms, or expires it. INPUT_UNFRAMED permits a real received kind
+outside an open update. The core associates it with the next reservation within the same bound, retaining its timestamp.
+Ordinary messages without received kinds or the registered ping ID are discarded. INPUT_SUBSTITUTE is core-generated for a missing input callback, skips a late sleep and
 refuses FG for that source. RENDER_SKIPPED reports an update that did not render; the core retires its token rather
 than making the next input boundary wait for a Present that cannot occur.
 
@@ -31,7 +32,9 @@ Required source-frame order: previous Present completion (or the Runtime's docum
 core pacing, native input sample and simulation start, simulation end, render submission begin/end, actual Present
 begin/end. The engine may still poll input in menus, scopes and pause: these are valid input frames, independent of FG
 eligibility. A frame without an input callback must be labelled as a substitute, never presented as measured real input.
-No queued kind or ping may leak into a later source identity after a skipped render, load, reset or pause.
+No queued kind or ping may survive its bounded association or a session reset. DERIVED_BOUNDARY labels core-supplied
+simulation/frame end separately from a missing input poll. A later real simulation end replaces the derived CPU
+timestamp without emitting the SDK marker twice. These append flag values to event v1 and require matched bundles.
 
 The migration retains the existing legacy threaded marker dependencies: simulation can overlap rendering, and
 EndFrame can follow Present. Their marker ledger requires simulation start before simulation end/render start,
@@ -46,3 +49,19 @@ must not receive a second independent pacing sleep. No AMD hardware acceptance i
 Migration order: Anomaly and shared mechanisms first, then AC7, RDR2, Unity Mono/URP, Godot and Minecraft. Project
 Wingman currently observes only; its unavailable rendering/input lifecycle must be stated explicitly. The final evidence
 matrix will identify each fact's file/line, fixture coverage, missing substitutions and game-run acceptance limits.
+
+The cross-integration implementation is recorded in [the integration audit](latency-integration-audit.md).
+native_fg.cpp supplies one Direct3D owner to both graphics APIs. native_cpu.cpp normalizes facts for Direct3D and
+Vulkan. A native engine's separate observed wait/sample markers are converted by the core compatibility entry:
+one pace at the verified pre-input deadline, measured simulation start at the later sample, no duplicate sleep.
+Ended input-only sources that never began rendering may retire under token pressure; they lose FG eligibility and
+increment the derived counter. Submitted GPU leases remain owned.
+
+Native Vulkan requests VK_AMD_anti_lag through device-requirements ABI 1 before creation and binds only when the
+successful request actually enabled the extension and antiLag feature and exports vkAntiLagUpdateAMD. INPUT and
+PRESENT pair with the same 64-bit source, once each. Off sends a mode-only disable; Boost maps to On. The driver
+INPUT call runs outside core locks so the previous image's PRESENT can advance on another thread.
+Pacing owners are 0 none, 1 Reflex, 2 required XeLL, 3 D3D Anti-Lag 2, 4 Vulkan AMD Anti-Lag.
+A process-local named Windows event excludes a second native or managed orchestrator from pacing. The first active
+owner retains this lease through its session; a contender reports none/unavailable. The managed Vulkan SDK protocol
+is otherwise unchanged. This is session ownership arbitration, not another per-frame wait.

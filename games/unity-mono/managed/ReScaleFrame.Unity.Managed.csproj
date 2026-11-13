@@ -11,10 +11,12 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../drag-n-wash/managed/CharacterMotion.cs" Link="CharacterMotion.cs" />
+    <Compile Include="../../../integrations/unity/com.kpc.rescaleframe/Runtime/Engine/*.cs" Link="Engine/%(Filename)%(Extension)" />
     <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
     <Reference Include="0Harmony"><HintPath>$(PkgLib_Harmony)/lib/net472/0Harmony.dll</HintPath><Private>true</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.SharedInternalsModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.SharedInternalsModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityManagedDirectory)/UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.RenderPipelines.Core.Runtime.Shared"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Core.Runtime.Shared.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(UnityManagedDirectory)/Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>false</Private></Reference>

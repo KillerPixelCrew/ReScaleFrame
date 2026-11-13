@@ -1,3 +1,4 @@
+#include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: GPL-3.0-only
 #include "package.h"
 #include "bridge.h"
@@ -46,18 +47,23 @@ HANDLE log_file = INVALID_HANDLE_VALUE;
 std::mutex logging;
 HWND input_window = nullptr;
 WNDPROC previous_proc = nullptr;
-std::atomic<uint32_t> input_kinds{0}, ping_message{0};
-std::atomic<bool> ping_pending{false};
+std::atomic<uint64_t> input_frame{0};
 LRESULT CALLBACK input_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    if (message == ping_message.load() && message >= 0xc000u) ping_pending.store(true);
-    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN || message == WM_KEYUP || message == WM_SYSKEYUP) input_kinds.fetch_or(1);
-    if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST)) input_kinds.fetch_or(2);
-    if (message == WM_INPUT) {
-        RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
-        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_HEADER, &header, &bytes, sizeof(header)) != UINT(-1))
-            input_kinds.fetch_or(header.dwType == RIM_TYPEKEYBOARD ? 1u : header.dwType == RIM_TYPEMOUSE ? 2u : 4u);
+    uint32_t kind=0;
+    if (message>=WM_KEYFIRST && message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
+    if (message>=WM_MOUSEFIRST && message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
+    if (message==WM_INPUT) {
+        RAWINPUTHEADER header{}; UINT bytes=sizeof(header);
+        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam),RID_HEADER,&header,&bytes,sizeof(header))==sizeof(header))
+            kind=header.dwType==RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD : header.dwType==RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
     }
+    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    const auto source=input_frame.load();
+    rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,api.session_id,source,uint64_t(now.QuadPart),
+        uint64_t(frequency.QuadPart),0,kind,message,RSF_GAME_CPU_EVENT_VERSION,
+        RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE | (!source && kind ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
+    rsf_fg12_cpu(&fact);
     return previous_proc ? CallWindowProcW(previous_proc, hwnd, message, wparam, lparam) : DefWindowProcW(hwnd, message, wparam, lparam);
 }
 BOOL CALLBACK find_input_window(HWND hwnd, LPARAM)
@@ -219,7 +225,12 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     }
     else { ++status.refused_frames; status.sr_result = result; }
 }
-void cpu_event(void*, const rsf_game_cpu_event* event) { rsf_fg12_cpu(event); }
+void cpu_event(void*, const rsf_game_cpu_event* event) {
+    if (!event) return;
+    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) input_frame.store(event->source_frame_id);
+    rsf_fg12_cpu(event);
+    if (event->stage==RSF_GAME_CPU_FRAME_END) input_frame.store(0);
+}
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
@@ -361,11 +372,14 @@ extern "C" __declspec(dllexport) int rsfu_status(rsf_unity_package_status* outpu
     status.reason = fg.reason; status.tagged_frames = fg.tagged_frames;
     status.fg_result = fg.last_result ? fg.last_result : rsf_d3d11_present_switch_result();
     if (bridge_result.load()) { status.sr_result = bridge_result.load(); status.active_sr = 0; }
-    rsf_streamline_latency_status latency{}; latency.struct_size = sizeof(latency);
-    if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency) == RSF_BACKEND_OK) {
-        status.sleep_calls = latency.sleep_calls; status.marker_calls = latency.marker_calls;
-        status.pcl_available = latency.pcl_message_id >= 0xc000u;
-        status.latency_report_available = latency.latency_report_available;
+    rsf_native_latency_status latency{sizeof(latency),1};
+    if (rsf_native_latency_status_get(&latency)) {
+        status.sleep_calls=latency.paced_frames; status.marker_calls=latency.marker_calls;
+        status.pcl_available=latency.pcl_available; status.latency_report_available=latency.report_available;
+        status.latency_owner=latency.owner; status.keyboard_inputs=latency.events.input_events[0];
+        status.mouse_inputs=latency.events.input_events[1];status.controller_inputs=latency.events.input_events[2];
+        status.pcl_pings=latency.events.pings;status.input_substitutes=latency.events.substitutes;
+        status.order_violations=latency.events.order_violations;status.derived_boundaries=latency.derived_boundaries;
     }
     *output = status; return 1;
 } catch (...) { return 0; }
@@ -373,13 +387,12 @@ extern "C" __declspec(dllexport) int rsfu_status(rsf_unity_package_status* outpu
 extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) noexcept try
 {
     if (!frame || (kinds & ~7u)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    rsf_streamline_latency_status latency{}; latency.struct_size = sizeof(latency);
-    if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency) == RSF_BACKEND_OK)
-        ping_message.store(latency.pcl_message_id);
-    const uint32_t pending = input_kinds.exchange(0) | kinds;
-    const uint32_t ping = ping_pending.exchange(false) ? ping_message.load() : 0u;
-    if (!pending && !ping) return RSF_BACKEND_OK;
-    return rsf_d3d11_present_input(frame, pending, ping);
+    if (!kinds) return RSF_BACKEND_OK;
+    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    const auto source=input_frame.load()==frame ? frame : 0;
+    rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,api.session_id,source,uint64_t(now.QuadPart),
+        uint64_t(frequency.QuadPart),0,kinds,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED | (!source ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
+    rsf_fg12_cpu(&fact); return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try

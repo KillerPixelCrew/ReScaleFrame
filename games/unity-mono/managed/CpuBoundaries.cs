@@ -12,28 +12,38 @@ namespace ReScaleFrame.Unity
     // keyboard/controller device timing or an OS input-to-display latency measurement.
     internal static class CpuBoundaries
     {
-        private struct BeforeInput { }
-        private struct AfterSimulation { }
+        private static IDisposable subscription;
+        private static bool legacy = true, mouseKnown;
+        private static readonly KeyCode[] keys = (KeyCode[])Enum.GetValues(typeof(KeyCode));
+        private static Vector3 mouse;
+        private static void ReceivedKinds(uint kinds) {
+            using (var producer = Bootstrap.EnterProducer()) if (producer.Valid) Native.InputFact(0, kinds);
+        }
+        private static void Received()
+        {
+            using (var producer = Bootstrap.EnterProducer()) {
+                if (!producer.Valid) return;
+                if (subscription == null) subscription = ReScaleFrame.Engine.InputSystemFacts.AttachLoaded(ReceivedKinds);
+                if (subscription != null || !legacy) return;
+                try {
+                uint kinds = 0;
+                foreach (var key in keys) {
+                    int code = (int)key;
+                    if (code == 0 || (!Input.GetKeyDown(key) && !Input.GetKeyUp(key))) continue;
+                    kinds |= code >= (int)KeyCode.JoystickButton0 ? 4u : code >= (int)KeyCode.Mouse0 ? 2u : 1u;
+                }
+                var current = Input.mousePosition;
+                if ((mouseKnown && current != mouse) || Input.mouseScrollDelta != Vector2.zero) kinds |= 2u;
+                mouse = current; mouseKnown = true;
+                Native.InputFact((ulong)(uint)Time.frameCount + 1, kinds);
+                } catch (InvalidOperationException) { legacy = false; }
+            }
+        }
         internal static void Install()
         {
             if (Native.ReportCpu == null) return;
-            var loop = PlayerLoop.GetCurrentPlayerLoop();
-            var nodes = new List<PlayerLoopSystem>();
-            bool input = false, simulation = false;
-            foreach (var node in loop.subSystemList) {
-                if (node.type == typeof(BeforeInput) || node.type == typeof(AfterSimulation)) continue;
-                if (node.type == typeof(EarlyUpdate)) {
-                    nodes.Add(new PlayerLoopSystem { type = typeof(BeforeInput), updateDelegate = Begin });
-                    input = true;
-                }
-                nodes.Add(node);
-                if (node.type == typeof(PreLateUpdate)) {
-                    nodes.Add(new PlayerLoopSystem { type = typeof(AfterSimulation), updateDelegate = End });
-                    simulation = true;
-                }
-            }
-            if (!input || !simulation) throw new NotSupportedException("Unity input/simulation player-loop phases unavailable.");
-            loop.subSystemList = nodes.ToArray(); PlayerLoop.SetPlayerLoop(loop);
+            subscription = ReScaleFrame.Engine.InputSystemFacts.AttachLoaded(ReceivedKinds);
+            ReScaleFrame.Engine.InputLoop.Install(Begin, Received, End);
         }
         private static void Begin()
         {
@@ -41,24 +51,23 @@ namespace ReScaleFrame.Unity
                 if (!producer.Valid) return;
                 ulong frame = (ulong)(uint)Time.frameCount + 1;
                 Native.ReportCpu(0, frame); // reserve identity
-                Native.ReportCpu(6, frame); // vendor sleep before input
-                Native.ReportCpu(1, frame); // input/simulation interval starts
+                if (ReScaleFrame.Engine.InputLoop.PollBoundaryAvailable) Native.ReportCpu(1, frame);
                 Native.ReportCpu(2, frame);
             }
         }
         private static void End()
         {
             using (var producer = Bootstrap.EnterProducer()) {
-                if (producer.Valid) Native.ReportCpu(3, (ulong)(uint)Time.frameCount + 1);
+                if (producer.Valid) {
+                    Native.ReportCpu(3, (ulong)(uint)Time.frameCount + 1);
+                    Native.ReportCpu(4, (ulong)(uint)Time.frameCount + 1);
+                }
             }
         }
         internal static void Clear()
         {
-            var loop = PlayerLoop.GetCurrentPlayerLoop();
-            var nodes = new List<PlayerLoopSystem>();
-            foreach (var node in loop.subSystemList)
-                if (node.type != typeof(BeforeInput) && node.type != typeof(AfterSimulation)) nodes.Add(node);
-            loop.subSystemList = nodes.ToArray(); PlayerLoop.SetPlayerLoop(loop);
+            subscription?.Dispose(); subscription = null;
+            ReScaleFrame.Engine.InputLoop.Clear();
         }
     }
 }

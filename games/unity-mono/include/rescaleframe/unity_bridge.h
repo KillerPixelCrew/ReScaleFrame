@@ -3,7 +3,7 @@
 #include <rescaleframe/game_api.h>
 
 #define RSF_UNITY_BRIDGE_ABI_VERSION 2u
-#define RSF_UNITY_NATIVE_ABI_VERSION 4u
+#define RSF_UNITY_NATIVE_ABI_VERSION 5u
 
 // rsf_unity_packet::flags. The managed adapter mirrors these in PacketFlags (Native.cs).
 // History restarts at this frame.
@@ -51,4 +51,6 @@ typedef struct rsf_unity_native_api {
     void* render_event;
     void (*managed_state)(uint32_t stage);
     void (*cpu_event)(uint32_t stage, uint64_t frame_id);
+    /* The existing Game API event, also used by managed received-input producers. */
+    void (*cpu_fact)(const rsf_game_cpu_event* event);
 } rsf_unity_native_api;

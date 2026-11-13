@@ -894,7 +894,7 @@ static void start_generation(void)
     rsf_native_fg_options options = {0}; options.struct_size = sizeof(options);
     options.mode = read_number("RSF_FG_MODE", RSF_FG_FIXED);
     options.generated_frames = read_number("RSF_FG_GENERATED", 1);
-    options.reflex_mode = backend == RSF_FG_BACKEND_DLSS ? read_number("RSF_REFLEX_MODE", RSF_REFLEX_ON) : RSF_REFLEX_OFF;
+    options.reflex_mode = read_number("RSF_REFLEX_MODE", RSF_REFLEX_ON);
     /* A limit on rendered frames, applied before generation. FPS wins over the interval form. */
     {
         const DWORD limit_fps = read_number("RSF_FRAME_LIMIT_FPS", 0);
@@ -902,8 +902,6 @@ static void start_generation(void)
     }
     options.debug = read_number("RSF_FG_DEBUG", 0);
     rsf_native_fg_options_set(&options);
-    /* RSF_REFLEX_ASYNC=1 restores the sleep that overlaps the previous frame's Present, for comparison. */
-    rsf_native_fg_reflex_ordering_set(read_number("RSF_REFLEX_ASYNC", 0));
     rsf_native_fg_set_log(observer_note, NULL);
     rsf_d3d11_present_setup setup = {0}; setup.struct_size = sizeof(setup);
     setup.runtime_directory_utf8 = directory; setup.development_runtime = read_number("RSF_FG_DEVELOPMENT", 0);
@@ -932,9 +930,7 @@ static void start_generation(void)
         directory, setup.development_runtime ? "development" : "production");
     note("frame limit before generation: %lu us between rendered frames (0 is unlimited)",
         (unsigned long)options.frame_limit_us);
-    note(read_number("RSF_REFLEX_ASYNC", 0) ?
-        "Reflex ordering: sleep may precede the previous Present (RSF_REFLEX_ASYNC=1)" :
-        "Reflex ordering: previous Present, then one sleep, then input; submit end before PresentStart");
+    note("Latency pacing, input markers and Present ordering are owned by the core orchestrator.");
 }
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {

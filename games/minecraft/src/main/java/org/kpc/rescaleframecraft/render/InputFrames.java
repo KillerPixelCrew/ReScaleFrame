@@ -6,16 +6,14 @@ final class InputFrames {
     private final Sink sink;
     private Thread owner;
     private long frame;
-    private int pending;
     private boolean open;
     InputFrames(Sink sink) {this.sink=sink;}
     synchronized void begin(long id) {
         owner=Thread.currentThread();frame=id;open=true;
-        if(pending!=0) {int kinds=pending;pending=0;sink.input(frame,kinds);}
     }
     synchronized void sample(int kinds) {
         if(open&&Thread.currentThread()==owner)sink.input(frame,kinds);
-        else pending|=kinds;
+        else sink.input(0,kinds); // the core owns bounded association and expiry
     }
     synchronized void end() {open=false;}
 }

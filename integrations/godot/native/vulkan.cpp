@@ -183,20 +183,18 @@ int configure(const rsf_godot_settings* value) {
     }
     if (selected_fg == 5) {
 #if defined(RSF_VULKAN_XESS_FG_ENABLED)
-        if (!interop_device_ready() || !primary_window || value->latency_mode > 1 || (value->fg_mode && value->latency_mode != 1)) return 0;
+        if (!interop_device_ready() || !primary_window) return 0;
 #else
         return 0;
 #endif
     }
     if (value->fg_mode && (!presentation ||
-        (selected_fg == 3 && value->generated_frames != 1) || (selected_fg == 1 && !value->latency_mode))) return 0;
+        (selected_fg == 3 && value->generated_frames != 1))) return 0;
     uint32_t owned_backend = 0, maximum = 0;
     if (presentation) (void)rsf_fgvk_backend(presentation, &owned_backend);
     if (value->fg_mode && owned_backend == selected_fg &&
         (rsf_fgvk_max_generated(presentation, &maximum) != RSF_BACKEND_OK || value->generated_frames > maximum)) return 0;
-    if (owned_backend == 5 && rsf_fgvk_latency_options(presentation, value->latency_mode, value->frame_limit_us) != RSF_BACKEND_OK) return 0;
-    const bool xell_transition = selected_fg == 5 || owned_backend == 5;
-    if (rsf_latencyvk_options(xell_transition ? 0u : value->latency_mode, xell_transition ? 0u : value->frame_limit_us) != RSF_BACKEND_OK) return 0;
+    if (rsf_latencyvk_options(value->latency_mode,value->frame_limit_us)!=RSF_BACKEND_OK) return 0;
     if (value->sr_backend != requested.sr_backend || value->quality != requested.quality || value->dlss_preset != requested.dlss_preset) ++generation;
     requested = *value;
     return 1;
@@ -208,15 +206,7 @@ int status(rsf_godot_status* value) {
     if (rsf_latencyvk_get_status(&latency) == RSF_BACKEND_OK) {
         value->latency_available = latency.low_latency_available; value->latency_report_available = latency.report_available;
         value->pcl_available = latency.pcl_message >= 0xc000u; value->latency_mode = latency.mode;
-        value->sleep_calls = latency.sleep_calls; value->marker_calls = latency.marker_calls;
-    }
-    uint32_t backend = 0;
-    if (presentation && rsf_fgvk_backend(presentation, &backend) == RSF_BACKEND_OK && backend == 5) {
-        rsf_fgvk_latency_status pacing{sizeof(pacing), RSF_FGVK_LATENCY_ABI_VERSION};
-        if (rsf_fgvk_latency_get_status(presentation, &pacing) == RSF_BACKEND_OK) {
-            value->latency_available = pacing.available; value->latency_mode = pacing.mode;
-            value->sleep_calls = pacing.sleep_calls;
-        }
+        value->sleep_calls = latency.sleep_calls; value->marker_calls = latency.marker_calls; value->latency_owner=latency.owner;
     }
     return active ? 1 : 0;
 }
@@ -244,28 +234,10 @@ int shutdown() {
     device = nullptr; device_proc = nullptr; directory.clear();
     return 1;
 }
-void cpu(const rsf_game_cpu_event* event) {
-    rsf_latencyvk_cpu(event);
-    if (!event || event->struct_size < sizeof(*event)) return;
-    std::lock_guard lock(guard);
-    uint32_t backend = 0;
-    if (!presentation || rsf_fgvk_backend(presentation, &backend) != RSF_BACKEND_OK || backend != 5) return;
-    if (event->stage == RSF_GAME_CPU_PACING && rsf_fgvk_latency_sleep(presentation, event->source_frame_id) == RSF_BACKEND_OK)
-        (void)rsf_fgvk_latency_marker(presentation, event->source_frame_id, 0);
-    if (event->stage == RSF_GAME_CPU_SIMULATION_END) (void)rsf_fgvk_latency_marker(presentation, event->source_frame_id, 1);
-    if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE) (void)rsf_fgvk_latency_marker(presentation, event->source_frame_id, 6);
-}
+void cpu(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
 void render_begin(uint64_t frame) {
     rsf_latencyvk_render(frame);
-    std::lock_guard lock(guard); render_source_frame = frame;
-    uint32_t backend = 0;
-    if (presentation && rsf_fgvk_backend(presentation, &backend) == RSF_BACKEND_OK && backend == 5)
-        (void)rsf_fgvk_latency_marker(presentation, frame, 2);
-}
-int input(uint64_t frame, uint32_t kind, uint32_t message) { return rsf_latencyvk_input(frame, kind, message) == RSF_BACKEND_OK ? 1 : 0; }
-uint32_t ping_message() {
-    rsf_latencyvk_status latency{sizeof(latency), RSF_LATENCYVK_ABI_VERSION};
-    return rsf_latencyvk_get_status(&latency) == RSF_BACKEND_OK ? latency.pcl_message : 0;
+    std::lock_guard lock(guard); render_source_frame=frame;
 }
 void capture_present(const void* info, int32_t result, uint32_t begin) {
 #if defined(RSF_FRAME_DUMP_VULKAN)
@@ -329,7 +301,7 @@ extern "C" int rsfg_boot_vulkan(const rsf_godot_setup* setup) try {
     resolver = rsf::godot_vk::creation_resolver(base, xess_result == RSF_BACKEND_OK, setup->log, setup->log_user);
     active = true;
     if (setup->log) setup->log(setup->log_user, latency_result == RSF_BACKEND_OK ?
-        "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; latency is unavailable.");
+        "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation.");
     return 1;
 } catch (...) { return 0; }
 extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, uint64_t* chain) try {
@@ -365,8 +337,8 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
         presentation_guides_recorded = false;
         presentation_graphics = setup->graphics;
         presentation_graphics.runtime_directory_utf8 = nullptr;
-        if (selected == 5) (void)rsf_fgvk_latency_options(presentation, requested.latency_mode, requested.frame_limit_us);
-        else (void)rsf_latencyvk_options(requested.latency_mode, requested.frame_limit_us);
+        (void)rsf_latencyvk_presentation(presentation);
+        (void)rsf_latencyvk_options(requested.latency_mode, requested.frame_limit_us);
     }
     if (logger) {
         char message[128]; std::snprintf(message, sizeof(message), "Godot Vulkan swapchain owner: create=%d reserved queues=%u", code, presentation ? 4u : 0u);
@@ -408,9 +380,7 @@ extern "C" uint32_t rsfg_vk_image_layout(void* value) {
 extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
     std::lock_guard lock(guard);
     auto* target = static_cast<rsf_fgvk*>(value);
-    uint32_t backend = 0;
-    if (rsf_fgvk_backend(target, &backend) == RSF_BACKEND_OK && backend == 5)
-        (void)rsf_fgvk_latency_marker(target, render_source_frame, 3);
+    rsf_latencyvk_submit_end(render_source_frame);
 #if defined(RSF_FRAME_DUMP_VULKAN)
     capture_present_impl(target, info, 0, 1);
 #endif

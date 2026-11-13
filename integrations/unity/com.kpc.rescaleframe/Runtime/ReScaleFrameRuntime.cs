@@ -14,9 +14,11 @@ namespace ReScaleFrame
 {
     public static class ReScaleFrameRuntime
     {
-        private struct BeforeInput { }
-        private struct AfterSimulation { }
         private static bool ready, failed;
+#if ENABLE_LEGACY_INPUT_MANAGER && !ENABLE_INPUT_SYSTEM
+        private static bool mouseKnown;
+        private static Vector3 lastMouse;
+#endif
         private static Native.Settings previous;
         private static Native.Settings rejected;
         private static ReScaleFrameOptions active;
@@ -138,30 +140,33 @@ namespace ReScaleFrame
             if (!ready || (Application.isEditor && !previewVisible)) return;
             ulong frame = Native.FrameId;
             Native.rsfu_surface((uint)Screen.width, (uint)Screen.height);
-            Native.Cpu(0, frame); Native.Cpu(6, frame); Native.Cpu(1, frame); Native.Cpu(2, frame);
+            Native.Cpu(0, frame); if (Engine.InputLoop.PollBoundaryAvailable) Native.Cpu(1, frame); Native.Cpu(2, frame);
             Native.rsfu_input(frame, 0);
         }
         public static void NotifyInput(uint kinds) {
             if ((kinds & ~7u) != 0) throw new ArgumentOutOfRangeException(nameof(kinds));
             if (ready) Native.rsfu_input(Native.FrameId, kinds);
         }
-        private static void End() { if (ready && (!Application.isEditor || previewVisible)) Native.Cpu(3, Native.FrameId); }
-        private static void InstallLoop() {
-            RemoveLoop();
-            var loop = PlayerLoop.GetCurrentPlayerLoop(); var nodes = new List<PlayerLoopSystem>();
-            foreach (var node in loop.subSystemList) {
-                if (node.type == typeof(EarlyUpdate)) nodes.Add(new PlayerLoopSystem { type = typeof(BeforeInput), updateDelegate = Begin });
-                nodes.Add(node);
-                if (node.type == typeof(PreLateUpdate)) nodes.Add(new PlayerLoopSystem { type = typeof(AfterSimulation), updateDelegate = End });
+        private static void End() { if (ready && (!Application.isEditor || previewVisible)) { Native.Cpu(3, Native.FrameId); Native.Cpu(4, Native.FrameId); } }
+        private static void ReceivedLegacy() {
+#if ENABLE_LEGACY_INPUT_MANAGER && !ENABLE_INPUT_SYSTEM
+            if (!ready) return;
+            uint kinds = 0;
+            foreach (KeyCode key in Enum.GetValues(typeof(KeyCode))) {
+                int code = (int)key;
+                if (code == 0 || (!Input.GetKeyDown(key) && !Input.GetKeyUp(key))) continue;
+                kinds |= code >= (int)KeyCode.JoystickButton0 ? 4u : code >= (int)KeyCode.Mouse0 ? 2u : 1u;
             }
-            loop.subSystemList = nodes.ToArray(); PlayerLoop.SetPlayerLoop(loop);
+            var mouse = Input.mousePosition;
+            if ((mouseKnown && mouse != lastMouse) || Input.mouseScrollDelta != Vector2.zero) kinds |= 2u;
+            lastMouse = mouse; mouseKnown = true;
+            if (kinds != 0) NotifyInput(kinds);
+#endif
         }
-        private static void RemoveLoop() {
-            var loop = PlayerLoop.GetCurrentPlayerLoop(); if (loop.subSystemList == null) return;
-            var nodes = new List<PlayerLoopSystem>();
-            foreach (var node in loop.subSystemList) if (node.type != typeof(BeforeInput) && node.type != typeof(AfterSimulation)) nodes.Add(node);
-            loop.subSystemList = nodes.ToArray(); PlayerLoop.SetPlayerLoop(loop);
+        private static void InstallLoop() {
+            Engine.InputLoop.Install(Begin, ReceivedLegacy, End);
         }
+        private static void RemoveLoop() { Engine.InputLoop.Clear(); }
         public static void Stop() {
             RemoveLoop(); Application.quitting -= Stop;
             if (!ready) return;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/fg_choice.h>
+#include <rescaleframe/native_cpu.h>
 #include "../../backends/common/d3d12_helpers.h"
 #include "../../backends/common/frame_capture12.h"
 #include <windows.h>
@@ -217,8 +218,12 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     auto& slot = slots[window_frame % slots.size()];
     const bool captured = window_frame && slot.ready && slot.submitted && slot.record.frame_id == window_frame &&
         slot.record.session_id == window_session && slot.record.view_id == window_view;
+    rsf_native_cpu_frame facts{};facts.struct_size=sizeof(facts);
+    rsf_native_latency_frame latency_frame{sizeof(latency_frame),1,window_frame};
     const bool cpu_valid = timing.id == window_frame && timing.generation == rsf_d3d11_present_generation() &&
-        timing.begun && timing.simulation && !timing.failed;
+        timing.begun && !timing.failed && rsf_native_latency_frame_get(&latency_frame) && !latency_frame.failed &&
+        rsf_native_cpu_read(window_session,window_frame,&facts) &&
+        (facts.stage_mask&15u)==15u && !facts.failed && !(facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE);
     const bool hudless = ui_mode == RSF_UI_MODE_NONE || (slot.hudless_ready && slot.hudless_submitted);
     // The plugin decides through the record's screen class or RSF_FRAME_FLAG_NO_FG.
     const bool reset = (slot.record.flags & RSF_FRAME_FLAG_RESET) != 0;
@@ -226,7 +231,7 @@ void prepare(void*, void* swapchain, void*, void* commands, void* buffer, rsf_st
     const bool valid = captured && cpu_valid && hudless && allowed && !reset;
     rsf_fg_options request{sizeof(request), RSF_FG_ABI_VERSION, valid ? options.mode : RSF_FG_OFF,
         std::min(options.generated_frames, capability.max_generated_frames), 0,
-        capability.pacing_owner == RSF_PACING_REFLEX ? options.reflex_mode : RSF_REFLEX_OFF,
+        capability.pacing_owner != RSF_PACING_NONE ? options.reflex_mode : RSF_REFLEX_OFF,
         capability.pacing_owner == RSF_PACING_XELL || capability.pacing_owner == RSF_PACING_REFLEX ? options.frame_limit_us : 0u};
     consumed = nullptr;
     state.last_result = provider->configure(context, &request);
@@ -325,10 +330,8 @@ void retire(void*, void* context) {
 }
 void latency(void*, const rsf_observer_present_event* event) {
     if (!window_frame || event->flags & DXGI_PRESENT_TEST) return;
-    const auto generation = window_generation;
     if (!event->completed) {
-        rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_RENDER_SUBMIT_END, 0);
-        rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_PRESENT_START, 0);
+        rsf_native_latency_present(window_frame,event->swapchain,1);
     } else {
         rsf_frame_record capture_record{}; capture_record.struct_size = sizeof(capture_record);
         if (rsf_input_dump_current(&capture_record) && capture_record.session_id == window_session &&
@@ -336,8 +339,8 @@ void latency(void*, const rsf_observer_present_event* event) {
             (void)core_capture.submitted(static_cast<ID3D12CommandQueue*>(rsf_d3d11_present_queue()));
             rsf_input_dump_complete(&capture_record, event->result);
         }
-        rsf_d3d11_present_marker(generation, window_frame, RSF_LATENCY_PRESENT_END, 0);
-        if (auto* host = rsf_d3d11_present_host()) rsf_streamline_host_abort(host, window_frame);
+        rsf_native_latency_present(window_frame,event->swapchain,0);
+        rsf_native_latency_retire(window_session,window_frame);
         std::lock_guard<std::mutex> lock(guard);
         auto& timing = cpu[window_frame % cpu.size()];
         if (timing.id == window_frame) timing.completed = true;
@@ -356,7 +359,9 @@ static rsf_backend_result install(const rsf_fg12_setup* request, bool explicit_c
          !(request->backend == RSF_FG_BACKEND_AUTO && request->runtime_switching)))
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     directory = request->runtime_directory_utf8; options = request->options;
-    options.reflex_mode = RSF_REFLEX_OFF; logger = request->log; logger_user = request->user;
+    rsf_native_latency_graphics(12); rsf_native_fg_options_set(&options);
+    logger = request->log; logger_user = request->user;
+    rsf_native_fg_set_log(logger,logger_user);
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup); setup.runtime_directory_utf8 = directory.c_str();
     setup.backend = request->backend; setup.max_generated_frames = request->max_generated_frames;
     setup.depth_inverted = request->depth_inverted; setup.depth_infinite = request->depth_infinite;
@@ -380,26 +385,26 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_se
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install_explicit(const rsf_fg12_setup* request) {
     return install(request, true);
 }
+namespace {
+void cpu_fact(void*,const rsf_game_cpu_event* event) {
+    rsf_native_fg_cpu(event); // one core owner for D3D11 and D3D12
+    rsf_native_latency_frame core{sizeof(core),1,event->source_frame_id};
+    if (!rsf_native_latency_frame_get(&core)) return;
+    std::lock_guard lock(guard);
+    auto& frame=cpu[event->source_frame_id%cpu.size()];
+    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {frame={};frame.id=event->source_frame_id;frame.session=event->session_id;}
+    if (frame.id!=event->source_frame_id) return;
+    frame.generation=core.generation; frame.failed|=core.failed!=0;
+    frame.begun=core.paced!=0;
+    if (event->stage==RSF_GAME_CPU_INPUT_SAMPLE) {
+        frame.input=std::max(event->timestamp_qpc,core.ready_qpc);
+        frame.failed|=(event->flags & RSF_GAME_CPU_INPUT_SUBSTITUTE)!=0;
+    }
+    if (event->stage==RSF_GAME_CPU_SIMULATION_END) frame.simulation=true;
+}
+}
 extern "C" RSF_RUNTIME_API void rsf_fg12_cpu(const rsf_game_cpu_event* event) {
-    if (!event || !event->source_frame_id || !rsf_d3d11_present_has_owner()) return;
-    rsf_fg_choice_resolve_auto(rsf_d3d11_present_backend());
-    // Sleep is a CPU operation. Do not retain a lock needed by the presenting thread.
-    uint64_t generation = rsf_d3d11_present_generation();
-    const auto acquired = event->stage == RSF_GAME_CPU_FRAME_BEGIN ? rsf_d3d11_present_acquire(event->source_frame_id) : RSF_BACKEND_OK;
-    const auto slept = event->stage == RSF_GAME_CPU_PACING ? rsf_d3d11_present_begin(event->source_frame_id, &generation) : RSF_BACKEND_OK;
-    std::lock_guard<std::mutex> lock(guard);
-    auto& frame = cpu[event->source_frame_id % cpu.size()];
-    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) { frame = {}; frame.id = event->source_frame_id; frame.session = event->session_id; frame.failed = acquired != RSF_BACKEND_OK; }
-    if (frame.id != event->source_frame_id) return;
-    if (event->stage == RSF_GAME_CPU_PACING) { frame.generation = generation; frame.begun = slept == RSF_BACKEND_OK; frame.failed |= !frame.begun; }
-    if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE) {
-        frame.input = event->timestamp_qpc;
-        frame.failed |= rsf_d3d11_present_marker(frame.generation, frame.id, RSF_LATENCY_SIMULATION_START, 0) != RSF_BACKEND_OK;
-    }
-    if (event->stage == RSF_GAME_CPU_SIMULATION_END) {
-        frame.simulation = true;
-        frame.failed |= rsf_d3d11_present_marker(frame.generation, frame.id, RSF_LATENCY_SIMULATION_END, 0) != RSF_BACKEND_OK;
-    }
+    if (rsf_d3d11_present_has_owner()) (void)rsf_native_cpu_dispatch(event,cpu_fact,nullptr);
 }
 extern "C" RSF_RUNTIME_API void rsf_fg12_capture(void* commands, const rsf_frame_record* record, void* depth, void* motion) {
     if (!commands || !record || !record->frame_id || !rsf_d3d11_present_has_owner()) return;
@@ -419,71 +424,40 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_capture(void* commands, const rsf_frame
     auto& timing = cpu[record->frame_id % cpu.size()];
     if (timing.id == record->frame_id && !timing.render_started) {
         timing.render_started = true;
-        timing.failed |= rsf_d3d11_present_marker(timing.generation, record->frame_id, RSF_LATENCY_RENDER_SUBMIT_START, 0) != RSF_BACKEND_OK;
+        rsf_native_latency_render(record->frame_id,1);
     }
 }
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_latency(const rsf_game_latency_event* event) try {
-    if (!event || event->struct_size < sizeof(*event) || !event->session_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!rsf_d3d11_present_has_owner()) return RSF_BACKEND_ERROR_NOT_READY;
-    if (event->marker == RSF_GAME_LATENCY_MODE) {
-        std::lock_guard lock(guard);
-        for (const auto& frame : cpu) if (frame.session == event->session_id && frame.native) return RSF_BACKEND_OK;
-        return RSF_BACKEND_ERROR_NOT_READY;
-    }
-    if (!event->source_frame_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto id = event->source_frame_id;
-    if (event->marker == RSF_GAME_LATENCY_SLEEP) {
-        rsf_fg_choice_resolve_auto(rsf_d3d11_present_backend());
-        uint64_t generation = rsf_d3d11_present_generation();
-        const auto acquired = rsf_d3d11_present_acquire(id);
-        const auto slept = acquired == RSF_BACKEND_OK ? rsf_d3d11_present_begin(id, &generation) : acquired;
-        std::lock_guard lock(guard);
-        auto& frame = cpu[id % cpu.size()]; frame = {};
-        frame.id = id; frame.session = event->session_id; frame.generation = generation; frame.native = true;
-        frame.begun = slept == RSF_BACKEND_OK; frame.failed = acquired != RSF_BACKEND_OK || !frame.begun;
-        if (frame.failed) { state.last_result = slept; state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED; }
+    if (!event || event->struct_size<sizeof(*event) || !event->session_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!installed) return RSF_BACKEND_ERROR_NOT_READY;
+    // Compatibility for an engine with native driver calls: report their boundaries through
+    // the CPU fact contract. The shared owner suppresses native SDK policy and duplicate sleeps.
+    if (event->marker==RSF_GAME_LATENCY_MODE) return RSF_BACKEND_OK;
+    if (!event->source_frame_id || !event->timestamp_qpc || !event->qpc_frequency) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    rsf_game_cpu_event fact{sizeof(fact),0,event->session_id,event->source_frame_id,event->timestamp_qpc,
+        event->qpc_frequency,1,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+    if (event->marker==RSF_GAME_LATENCY_SLEEP) {
+        fact.stage=RSF_GAME_CPU_FRAME_BEGIN; rsf_fg12_cpu(&fact);
+        // A native engine wait is a verified pre-input deadline. Keep that deadline while
+        // the later native input marker supplies the measured simulation-start boundary.
+        auto deadline=fact;deadline.stage=RSF_GAME_CPU_PACING;deadline.event_version=deadline.flags=0;
+        rsf_fg12_cpu(&deadline);
+        std::lock_guard lock(guard); auto& timing=cpu[fact.source_frame_id%cpu.size()]; timing.native=true;
         return RSF_BACKEND_OK;
     }
-    uint64_t generation{};
-    {
-        std::lock_guard lock(guard);
-        auto& frame = cpu[id % cpu.size()];
-        if (frame.id != id || frame.session != event->session_id || !frame.native) return RSF_BACKEND_ERROR_NOT_READY;
-        generation = frame.generation;
-        if (event->marker == RSF_LATENCY_INPUT_SAMPLE) frame.input = event->timestamp_qpc;
-        if (event->marker == RSF_LATENCY_SIMULATION_END) frame.simulation = true;
-        if (event->marker == RSF_LATENCY_RENDER_SUBMIT_START) frame.render_started = true;
-    }
-    // The presentation bridge emits RenderSubmitEnd/PresentStart/PresentEnd around its actual
-    // native Present. Do not forward duplicate producer markers into the
-    // SDK lifecycle owned by this presentation bridge.
-    if (event->marker == RSF_LATENCY_RENDER_SUBMIT_END || event->marker == RSF_LATENCY_PRESENT_START)
-        return RSF_BACKEND_OK;
-    if (event->marker == RSF_LATENCY_PRESENT_END) {
-        // A producer can simulate inputs that never reach submission. Ordered
-        // Present completion also retires those older skipped inputs.
-        // Waiting for a scene match leaks their SDK tokens and eventually blocks all SR/FG.
-        {
-            std::lock_guard lock(guard);
-            for (auto& frame : cpu) if (frame.native && frame.session == event->session_id &&
-                frame.id && frame.id <= id && !frame.completed) {
-                frame.completed = true;
-            }
-        }
-        // These are completed/skipped CPU inputs, not cancelled prepared GPU frames.
-        // Provider abort invalidates XeFG history even when the retired input never
-        // supplied interpolation resources. Only retire the shared token pool here.
-        // The SDK pool is authoritative even if loading has already wrapped the CPU ring.
-        if (auto* host = rsf_d3d11_present_host()) rsf_streamline_host_retire_through(host, id);
-        return RSF_BACKEND_OK;
-    }
-    if (event->marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto result = rsf_d3d11_present_marker(generation, id, event->marker, 0);
-    if (result != RSF_BACKEND_OK) {
-        std::lock_guard lock(guard);
-        auto& frame = cpu[id % cpu.size()]; if (frame.id == id) frame.failed = true;
-        state.last_result = result; state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED;
-    }
+    if (event->marker==RSF_LATENCY_INPUT_SAMPLE) {
+        fact.stage=RSF_GAME_CPU_INPUT_SAMPLE; rsf_fg12_cpu(&fact);
+        fact.stage=RSF_GAME_CPU_SIMULATION_BEGIN; rsf_fg12_cpu(&fact);
+    } else if (event->marker==RSF_LATENCY_SIMULATION_START || event->marker==RSF_LATENCY_SIMULATION_END) {
+        fact.stage=event->marker==RSF_LATENCY_SIMULATION_START ? RSF_GAME_CPU_SIMULATION_BEGIN : RSF_GAME_CPU_SIMULATION_END;
+        rsf_fg12_cpu(&fact);
+    } else if (event->marker==RSF_LATENCY_RENDER_SUBMIT_START) {
+        return rsf_fg12_render_begin(event->session_id,event->source_frame_id);
+    } else if (event->marker==RSF_LATENCY_PRESENT_END) {
+        fact.stage=RSF_GAME_CPU_FRAME_END; rsf_fg12_cpu(&fact);
+        rsf_native_latency_retire(event->session_id,event->source_frame_id);
+    } else if (event->marker>RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // Render-end and Present boundaries come from the actual Runtime presentation path.
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t session, uint64_t id) try {
@@ -493,7 +467,8 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t ses
     if (timing.id != id || timing.session != session || !timing.begun) return RSF_BACKEND_ERROR_NOT_READY;
     if (timing.render_started) return RSF_BACKEND_OK;
     timing.render_started = true;
-    const auto result = rsf_d3d11_present_marker(timing.generation, id, RSF_LATENCY_RENDER_SUBMIT_START, 0);
+    rsf_native_latency_render(id,1);
+    const auto result = RSF_BACKEND_OK;
     timing.failed |= result != RSF_BACKEND_OK;
     return result;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
@@ -533,7 +508,7 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_window(const rsf_game_render_pass* pass
     auto& timing = cpu[pass->source_frame_id % cpu.size()];
     if (timing.id == pass->source_frame_id && !timing.render_started) {
         timing.render_started = true;
-        timing.failed |= rsf_d3d11_present_marker(timing.generation, timing.id, RSF_LATENCY_RENDER_SUBMIT_START, 0) != RSF_BACKEND_OK;
+        rsf_native_latency_render(timing.id,1);
     }
 }
 extern "C" RSF_RUNTIME_API void rsf_fg12_submitted(uint64_t session, uint64_t id) {
@@ -551,13 +526,12 @@ extern "C" RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session) {
     for (auto& slot : slots)
         if (slot.record.session_id == session && !finished(slot)) return 0;
     (void)core_capture.flush_ready();
-    auto* host = rsf_d3d11_present_host();
     for (auto& frame : cpu) if (frame.session == session) {
-        if (host && frame.id && !frame.completed) rsf_streamline_host_abort(host, frame.id);
         frame = {};
     }
     for (auto& slot : slots) if (slot.record.session_id == session) slot.ready = false;
     for (auto& window : windows) if (window.session == session) window = {};
+    rsf_native_latency_end_session(session);
     return 1;
 }
 static int status_snapshot(rsf_native_fg_status* output, bool wait) {
@@ -569,6 +543,11 @@ static int status_snapshot(rsf_native_fg_status* output, bool wait) {
     // A drained provider switch can precede its first prepare. Never label the
     // retired provider's cached capabilities with the replacement backend.
     if (status_generation != rsf_d3d11_present_generation()) output->vendor = {};
+    rsf_native_latency_status latency{sizeof(latency),1};
+    if (rsf_native_latency_status_get(&latency)) {
+        output->vendor.pacing_owner=latency.owner; output->vendor.low_latency_available=latency.available;
+        output->vendor.effective_reflex=latency.effective_mode; output->vendor.latency_paced_frames=latency.paced_frames;
+    }
     return 1;
 }
 extern "C" RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status* output) { return status_snapshot(output,true); }
@@ -576,6 +555,7 @@ extern "C" RSF_RUNTIME_API int rsf_fg12_status_try(rsf_native_fg_status* output)
 extern "C" RSF_RUNTIME_API void rsf_fg12_options(const rsf_native_fg_options* request) {
     if (!request || request->struct_size < sizeof(*request) || request->mode > RSF_FG_FIXED ||
         request->reflex_mode > RSF_REFLEX_BOOST || !request->generated_frames) return;
+    rsf_native_fg_options_set(request);
     std::lock_guard<std::mutex> lock(guard); options = *request;
 }
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_capture_outputs(const char* path) try {
