@@ -99,3 +99,21 @@ extern "C" int32_t rsf_srvk_fsr4_submitted(rsf_fsr4vk* owner, void* commands) tr
     return RSF_BACKEND_ERROR_NOT_COMPILED;
 #endif
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+extern "C" int32_t rsf_srvk_fsr4_info(const rsf_fsr4vk* owner, rsf_srvk_fsr4_provider_info* info) try {
+    if (!info || info->struct_size < sizeof(*info)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    info->adapter_luid = info->provider_version = 0;
+    info->vendor_id = info->int8_compatibility = 0;
+    if (info->abi_version != RSF_SRVK_FSR4_INFO_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (!owner) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    rsf_fsr4_bridge_info native{sizeof(native), RSF_FSR4_BRIDGE_ABI_VERSION};
+    const int32_t result = public_result(rsf_fsr4vk_info(owner, &native));
+    if (result) return result;
+    info->adapter_luid = native.adapter_luid; info->provider_version = native.provider_version;
+    info->vendor_id = native.vendor_id; info->int8_compatibility = native.int8_compatibility;
+    return RSF_BACKEND_OK;
+#else
+    return RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

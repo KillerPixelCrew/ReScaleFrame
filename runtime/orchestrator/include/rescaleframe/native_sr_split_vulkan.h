@@ -69,3 +69,23 @@ RSF_RUNTIME_API int32_t rsf_srvk_fsr4_destroy(rsf_fsr4vk*);
 #ifdef __cplusplus
 }
 #endif
+
+/* Optional additive query. Opaque provider_version is the effective SDK version
+   identifier, not a version inferred from backend selection. No GPU work. */
+#define RSF_SRVK_FSR4_INFO_ABI_VERSION 1u
+typedef struct rsf_srvk_fsr4_provider_info {
+    uint32_t struct_size, abi_version;
+    uint64_t adapter_luid, provider_version;
+    uint32_t vendor_id, int8_compatibility;
+} rsf_srvk_fsr4_provider_info;
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* Size accepts appended fields; version must match. On error a full-size known
+   output prefix has zero facts; size/version and unknown appended bytes survive.
+   Older runtimes may omit this export. Query failure means unknown identity and
+   does not replace provider admission or successful-evaluation checks. */
+RSF_RUNTIME_API int32_t rsf_srvk_fsr4_info(const rsf_fsr4vk*, rsf_srvk_fsr4_provider_info*);
+#ifdef __cplusplus
+}
+#endif
