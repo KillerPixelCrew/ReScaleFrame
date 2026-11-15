@@ -56,6 +56,44 @@ int main()
         } else passed &= static_cast<const float*>(mapped.pData)[0] == 0.5f;
         context->Unmap(staging.Get(), 0);
     }
+    // Camera-inclusive canonical UV input has no sentinel. Normalize it and native D24 depth
+    // for shared evaluation without interpreting a valid zero as missing camera motion.
+    {
+        uint32_t packed_depth[64];
+        for (auto& pixel : packed_depth) pixel = 0x00800000;
+        D3D11_TEXTURE2D_DESC input_desc{};
+        input_desc.Width = input_desc.Height = 8;
+        input_desc.MipLevels = input_desc.ArraySize = input_desc.SampleDesc.Count = 1;
+        input_desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+        input_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL;
+        D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = packed_depth; initial.SysMemPitch = 32;
+        ComPtr<ID3D11Texture2D> native_depth;
+        if (FAILED(device->CreateTexture2D(&input_desc, &initial, &native_depth))) return 1;
+        auto normalized = params;
+        normalized.has_sentinel = 0; normalized.sentinel = 0;
+        normalized.decoded_to_pixels[0] = normalized.decoded_to_pixels[1] = -8;
+        passed &= rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), native_depth.Get(), &normalized) != 0;
+        for (uint32_t i = 0; i < 2; ++i) {
+            auto* output = static_cast<ID3D11Texture2D*>(i == 0 ? rsf_motion_resolve_motion(pass) : rsf_motion_resolve_depth(pass));
+            D3D11_TEXTURE2D_DESC desc{}; output->GetDesc(&desc);
+            passed &= desc.Format == (i == 0 ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R32_FLOAT);
+            desc.BindFlags = 0; desc.Usage = D3D11_USAGE_STAGING; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> staging;
+            if (FAILED(device->CreateTexture2D(&desc, nullptr, &staging))) return 1;
+            context->CopyResource(staging.Get(), output);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return 1;
+            if (i == 0) {
+                const auto* pixels = static_cast<const uint16_t*>(mapped.pData);
+                passed &= DirectX::PackedVector::XMConvertHalfToFloat(pixels[0]) == 0 &&
+                    DirectX::PackedVector::XMConvertHalfToFloat(pixels[1]) == 0 &&
+                    DirectX::PackedVector::XMConvertHalfToFloat(pixels[2]) == -4 &&
+                    DirectX::PackedVector::XMConvertHalfToFloat(pixels[3]) == 4 &&
+                    DirectX::PackedVector::XMConvertHalfToFloat(pixels[4]) == 8000;
+            } else passed &= std::fabs(static_cast<const float*>(mapped.pData)[0] - 0.5f) < 1e-6f;
+            context->Unmap(staging.Get(), 0);
+        }
+    }
     // A depth layer: previous.x = ndc.x + 0.5 * depth, so only the reprojection depth moves a
     // pixel. Scene depth is 0 (sky). Pixel 2 has a nearer layer at 0.5 and moves one pixel;
     // pixel 3 has none and stays; pixel 0 is written and ignores the layer.
