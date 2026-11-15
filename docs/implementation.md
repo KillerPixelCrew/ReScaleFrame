@@ -2,6 +2,17 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The native sampler path now supplies resolution-derived material mip bias through
+a generic runtime-owned sampler cache. A guarded state-flush hook limits changes
+to reduced main colour/depth draws and restores native bindings outside that scope.
+Comparison/no-mip filters and foreign bindings are preserved. Focused Release
+builds and one WARP sampler check passed; the game logs bias−0.584962 at DLSS
+Quality1280x720, with a settled complete capture. Moving/all-material coverage,
+active shadow/water/refraction and CS/ENB validation remain open. See the native
+material sampler correction in [research](research/skyrim-se-integration.md).
+
+The following preserves the preceding jitter correction and its then-open gaps.
+
 User reports of XeSS smearing and blurry DLSS exposed an inverted temporal
 jitter sign. The adapter now matches native projected geometry displacement;
 auxiliary sampling keeps its previous source mapping. The focused camera
