@@ -28,7 +28,10 @@ struct Frame {
     NativeJobOwnership::Ticket jobs{};
     void* main{};
     uint32_t movement_calls{}, player_update_calls{};
+    uint32_t player_camera_updates{}; // TESCamera::Update 0x558e70 on PlayerCamera, any state
     ProspectiveSources::Reservation reservation{}; // adopted at tick entry, if any
+    bool entry_readable{}, queued_move{}; // player queued-move gates read at tick entry
+    BindRefusal refusal{BindRefusal::none};
 };
 thread_local Frame* current{};
 std::atomic<uint64_t> next_source{1};
@@ -56,7 +59,7 @@ std::atomic<uint32_t> prospective_reports{};
 struct Entry { Entry() { ++entered; } ~Entry() { --entered; } };
 // Version 2 source lifetime fact. The runtime decides what, if anything, it means.
 void emit_source(const rsf_game_host_services& host, uint32_t stage, uint64_t source, uint64_t predecessor,
-    uint64_t generation, uint32_t flags, uint32_t kinds, uint32_t reason)
+    uint64_t generation, uint32_t flags, uint32_t kinds, uint32_t reason, uint64_t poll_begin = 0)
 {
     if (!host.cpu_event || !source) return;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
@@ -66,6 +69,7 @@ void emit_source(const rsf_game_host_services& host, uint32_t stage, uint64_t so
     event.header.qpc_frequency = frequency; event.header.event_version = RSF_GAME_CPU_EVENT_VERSION_SOURCE;
     event.header.flags = flags; event.header.input_kind = kinds;
     event.predecessor_source_id = predecessor; event.native_generation = generation; event.reason = reason;
+    event.poll_begin_qpc = poll_begin;
     try { host.cpu_event(host.user, &event.header); } catch (...) {}
 }
 void abort_source(const rsf_game_host_services& host, uint64_t source, uint32_t reason)
@@ -98,6 +102,7 @@ uint32_t jobs_join();
 uintptr_t named_poll(void*);
 void movement(void*, float, void*, float*);
 uintptr_t player_update(void*, float);
+void player_camera_update(void*);
 struct Hook {
     uint32_t rva;
     std::array<unsigned char, 19> bytes;
@@ -106,7 +111,7 @@ struct Hook {
     void* target{};
     bool created{}, enabled{};
 };
-std::array<Hook, 12> hooks{{
+std::array<Hook, 13> hooks{{
     {0x658870, {0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x30,0x01,0x00,0x00}, reinterpret_cast<void*>(&tick)},
     {0xcf95f0, {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x30,0x0f,0x29,0x74,0x24}, reinterpret_cast<void*>(&poll)},
     {0x6565b0, {0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x60,0x01,0x00,0x00,0x48}, reinterpret_cast<void*>(&render)},
@@ -118,7 +123,9 @@ std::array<Hook, 12> hooks{{
     {0x60eb80, {0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0x1d,0x03,0x1f,0xc1,0x02,0x48,0x85,0xdb,0x74,0x26,0x83}, reinterpret_cast<void*>(&jobs_join)},
     {0x6e6030, {0x48,0x8b,0x0d,0xf9,0xa4,0xb4,0x02,0xe9,0xb4,0x3d,0xf7,0xff,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc}, reinterpret_cast<void*>(&named_poll)},
     {0x776290, {0x48,0x8b,0xc4,0x41,0x56,0x48,0x81,0xec,0xe0,0x00,0x00,0x00,0x48,0xc7,0x44,0x24,0x30,0xfe,0xff}, reinterpret_cast<void*>(&movement)},
-    {0x745200, {0x48,0x8b,0xc4,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0x98,0xfe}, reinterpret_cast<void*>(&player_update)}
+    {0x745200, {0x48,0x8b,0xc4,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0x98,0xfe}, reinterpret_cast<void*>(&player_update)},
+    // TESCamera::Update(this) -> current state vfunc +0x18; void, RCX only.
+    {0x558e70, {0x40,0x57,0x48,0x83,0xec,0x30,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x5c,0x24}, reinterpret_cast<void*>(&player_camera_update)}
 }};
 struct NativeQueryGuard { uint32_t rva; std::array<unsigned char, 19> bytes; };
 constexpr std::array<NativeQueryGuard, 2> screen_query_guards{{
@@ -170,8 +177,22 @@ uint32_t jobs_submit()
             // This is ownership of that poll, not evidence that earlier main-thread work
             // (0x743090 at 0x6588de) or later worker consumers were covered.
             if (current->reservation.source) {
+                // 0x659ea0 runs next, at 0x658b17: free camera there bypasses the 0x745200 envelope.
+                uintptr_t camera{}, state{}, free_state{};
+                const bool camera_read = copy_input(&camera, reinterpret_cast<const void*>(base + 0x31a5478), sizeof(camera)) &&
+                    camera && copy_input(&state, reinterpret_cast<const void*>(camera + 0x28), sizeof(state)) &&
+                    copy_input(&free_state, reinterpret_cast<const void*>(camera + 0xd0), sizeof(free_state));
+                current->refusal = bind_refusal(current->entry_readable && camera_read, current->queued_move,
+                    current->player_update_calls || current->movement_calls || current->camera_updates ||
+                        current->player_camera_updates,
+                    state == free_state); // the native test, including both null
                 const auto stamp = input_ownership.snapshot();
-                if (prospective.bind(current->source, stamp.generation)) {
+                if (current->refusal != BindRefusal::none) {
+                    if (prospective.release(current->source).source) {
+                        current->reservation.phase = ProspectiveSources::none;
+                        abort_source(current->host, current->source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
+                    }
+                } else if (prospective.bind(current->source, stamp.generation)) {
                     worker_consumption.source.store(0);
                     worker_consumption.movement.store(0); worker_consumption.player_update.store(0);
                     worker_consumption.camera.store(0); worker_consumption.mismatched.store(0);
@@ -400,8 +421,19 @@ short tick(void* main)
     // Its actual input therefore predates this FRAME_BEGIN; binding still waits for the
     // normal-simulation submit. Anything else is withdrawn before this frame begins.
     frame.reservation = prospective.adopt(services.session_id, job_ownership.retired());
-    if (frame.reservation.source) frame.source = frame.reservation.source;
-    else {
+    if (frame.reservation.source) {
+        frame.source = frame.reservation.source;
+        // 0x743090 runs at 0x6588de, before the bind. It calls nothing unless player +0xBEC bit
+        // 0x40 (test at 0x7430ed) or byte +0x692 (0x74314e) is set; its queued-move path reaches
+        // camera update 0x7468b0 through 0x75ed50. Only 0xec1c40 and GetAsyncKeyState run between
+        // this read and those tests on this thread.
+        const auto base = uintptr_t(GetModuleHandleW(nullptr));
+        uintptr_t player{}; uint8_t flags{}, pending{};
+        frame.entry_readable = copy_input(&player, reinterpret_cast<const void*>(base + 0x3230778), sizeof(player)) &&
+            player && copy_input(&flags, reinterpret_cast<const void*>(player + 0xbec), sizeof(flags)) &&
+            copy_input(&pending, reinterpret_cast<const void*>(player + 0x692), sizeof(pending));
+        frame.queued_move = (flags & 0x40) || pending;
+    } else {
         if (const auto withdrawn = prospective.withdraw_pending())
             abort_source(frame.host, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
         frame.source = next_source.fetch_add(1);
@@ -413,14 +445,20 @@ short tick(void* main)
         // An adopted, unbound reservation (paused/frozen tick) closes unbound with FRAME_END.
         const auto owned = prospective.release(frame.source);
         if (owned.phase == ProspectiveSources::bound) worker_consumption.source.store(0);
-        if (owned.source && services.log && prospective_reports.fetch_add(1) < 16) {
-            char message[384]{};
+        const auto& facts = owned.source ? owned : frame.reservation; // a refused bind released it early
+        if (services.log && prospective_reports.fetch_add(1) < 16) {
+            // PlayerCharacter update 0x745200 runs on this thread at 0x659f4d (via 0x659ea0, after
+            // the submit) and drives PlayerCamera/camera-state updates; movement runs on workers.
+            char message[560]{};
             std::snprintf(message, sizeof(message),
-                "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d kinds=0x%x worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; diagnostic facts, no input timeline",
-                static_cast<unsigned long long>(owned.source), static_cast<unsigned long long>(owned.predecessor),
-                static_cast<unsigned long long>(owned.poll_generation), static_cast<unsigned long long>(owned.job_generation),
-                owned.phase == ProspectiveSources::bound, owned.kinds, worker_consumption.movement.load(),
-                worker_consumption.player_update.load(), worker_consumption.camera.load(), worker_consumption.mismatched.load());
+                "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d refusal=%u kinds=0x%x main_player_update=%u main_camera=%u main_player_camera=%u main_movement=%u main_generation_match=%d main_ambiguous=%d worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; diagnostic facts, no input timeline",
+                static_cast<unsigned long long>(frame.source), static_cast<unsigned long long>(facts.predecessor),
+                static_cast<unsigned long long>(facts.poll_generation), static_cast<unsigned long long>(facts.job_generation),
+                owned.phase == ProspectiveSources::bound, static_cast<unsigned>(frame.refusal), facts.kinds,
+                frame.player_update_calls, frame.camera_updates, frame.player_camera_updates,
+                frame.movement_calls, frame.consumed.generation == facts.poll_generation, frame.input_ambiguous,
+                worker_consumption.movement.load(), worker_consumption.player_update.load(), worker_consumption.camera.load(),
+                worker_consumption.mismatched.load());
             try { services.log(services.user, message); } catch (...) {}
         }
     }
@@ -440,6 +478,16 @@ uintptr_t poll(void* manager, float timestep)
     const bool running = active.load(std::memory_order_acquire);
     CpuPollProvenance provenance{};
     const bool scheduled = running && cpu_poll_provenance(provenance);
+    if (running && poll_samples.fetch_add(1) < 16 && services.log) {
+        char message[352]{};
+        std::snprintf(message, sizeof(message),
+            "Skyrim native poll thread=%lu scoped_source=%llu native_job_generation=%llu submitting_source=%llu poll_generation=%llu; submitting source is not input consumption",
+            GetCurrentThreadId(), static_cast<unsigned long long>(current ? current->source : 0),
+            static_cast<unsigned long long>(provenance.native_job_generation),
+            static_cast<unsigned long long>(provenance.submitting_source_frame_id),
+            static_cast<unsigned long long>(provenance.poll_generation));
+        try { services.log(services.user, message); } catch (...) {}
+    }
     uint64_t reserved{};
     if (running) {
         const auto host = services;
@@ -464,21 +512,15 @@ uintptr_t poll(void* manager, float timestep)
             if (worker_consumption.source.load()) worker_consumption.mismatched.fetch_add(1);
         }
     }
-    if (running && poll_samples.fetch_add(1) < 16 && services.log) {
-        char message[352]{};
-        std::snprintf(message, sizeof(message),
-            "Skyrim native poll thread=%lu scoped_source=%llu native_job_generation=%llu submitting_source=%llu poll_generation=%llu; submitting source is not input consumption",
-            GetCurrentThreadId(), static_cast<unsigned long long>(current ? current->source : 0),
-            static_cast<unsigned long long>(provenance.native_job_generation),
-            static_cast<unsigned long long>(provenance.submitting_source_frame_id),
-            static_cast<unsigned long long>(provenance.poll_generation));
-        try { services.log(services.user, message); } catch (...) {}
-    }
     // A scheduled late poll never samples the tick that happens to run it.
     if (current && !current->sampled && !scheduled) {
         current->sampled = true;
         emit(*current, RSF_GAME_CPU_INPUT_SAMPLE);
     }
+    // The actual sample time: after the synchronous RESERVE callback (and anything the runtime
+    // does inside it) has returned, immediately before the unchanged native poll.
+    LARGE_INTEGER poll_begin{};
+    if (reserved) QueryPerformanceCounter(&poll_begin);
     const auto result = reinterpret_cast<uintptr_t (*)(void*, float)>(hooks[1].original)(manager, timestep);
     current_poll = previous_poll;
     input_ownership.end_poll(scope.ticket, scope.produced && !previous_poll);
@@ -491,7 +533,7 @@ uintptr_t poll(void* manager, float timestep)
         } else if (prospective.still_reserved(reserved)) {
             // Report before the adapter can adopt it, so the runtime never sees the frame first.
             emit_source(host, RSF_GAME_CPU_SOURCE_SAMPLED, reserved, 0, scope.ticket.generation,
-                RSF_GAME_CPU_SOURCE_PRODUCED, scope.kinds, 0);
+                RSF_GAME_CPU_SOURCE_PRODUCED, scope.kinds, 0, uint64_t(poll_begin.QuadPart));
             if (!prospective.sample(reserved, true, scope.kinds) && prospective.withdraw_pending(reserved))
                 abort_source(host, reserved, RSF_GAME_CPU_ABORT_STATE_CHANGED);
         }
@@ -577,6 +619,20 @@ uintptr_t camera_update(void* state)
         record_consumption(stamp, current->camera_updates);
     } else if (active.load(std::memory_order_acquire) && consumes) record_worker_consumption(stamp, worker_consumption.camera);
     return result;
+}
+// Every PlayerCamera state update (first person, third person, furniture, free, load and
+// queued-move paths) runs through this TESCamera::Update with the PlayerCamera singleton.
+void player_camera_update(void* camera)
+{
+    Entry lease;
+    const auto stamp = input_ownership.snapshot();
+    uintptr_t singleton{};
+    const bool player_camera = copy_input(&singleton,
+        reinterpret_cast<const void*>(uintptr_t(GetModuleHandleW(nullptr)) + 0x31a5478), sizeof(singleton)) &&
+        singleton && singleton == uintptr_t(camera);
+    reinterpret_cast<void (*)(void*)>(hooks[12].original)(camera);
+    if (active.load(std::memory_order_acquire) && current && player_camera)
+        record_consumption(stamp, current->player_camera_updates);
 }
 uintptr_t render(void* main)
 {

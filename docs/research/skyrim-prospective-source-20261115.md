@@ -137,3 +137,178 @@ reservations sampled, adopted and bound in steady gameplay, withdrawn on pause, 
 mode2, with worker movement/player-update counts and zero mismatches before any
 INPUT_TIMELINE work; a bounded probe of `0x743090` reads of PlayerControls; coverage of the
 remaining derived-state writers.
+
+## Consumer coverage and pre-input boundary, continuation (static, IDA session `77f0f198`)
+
+Question: why did the bounded run (PID 41756) log bound sources with
+worker_movement=1 but worker_player_update=0 and worker_camera=0, and where is the
+earliest safe pre-input boundary?
+
+- PlayerCharacter vtable is `0x19296c0` (PE RTTI: COL `0x1c06598`, meta pointer
+  `0x19296b8`). `0x745200` is slot +0x568; the movement wrapper `0x746c30` is +0x8d0.
+- Main tick calls `0x659ea0` at `0x658b17`, immediately after the gameplay submit at
+  `0x658b0f`. Its normal branch calls player vfunc +0x568, i.e. `0x745200`, at
+  `0x659f4d` on the main thread. `0x745200` reads PlayerControls at `0x745844` and calls
+  `0x7468b0` (`0x745c80`/`0x74615e`), which signals bank/event2 through `0xec1d30(2)` and
+  then runs PlayerCamera update `0x8f8680` -> TESCamera::Update `0x558e70` (PlayerCamera
+  vtable `0x196d980` slot 2) -> current camera state +0x18. Player update and camera look
+  therefore consume P on the main thread inside the bound tick, after the bind. That is why
+  the worker counters showed 0. Only movement through `0x746c30` ran on a worker.
+- When the current camera state is PlayerCamera +0xd0 (free camera), `0x659ea0` calls
+  `0x746a10` -> `0x558e70` directly, without `0x745200`. When paused, it calls `0x743c10`.
+- Camera states reached this way: ThirdPersonState/Dragon/Horse `0x8fd590` (hooked),
+  first person `0x8f47a0` (vtable `0x196d908`), and `0x8f66f0` (vtable `0x196dae8`). The
+  last two also call derived-state writer `0x8fb2e0` and are not hooked. The `0x745200`
+  envelope covers them in the normal branch, but not on the free-camera branch.
+- `0x558e70` calls state +0x18 with `(state, &next)`. In `0x8fd590`, every path writes RDX
+  before reading it (`0x8fd5b3`, or calls at `0x8fd5d5`/`0x8fd60f`), so the one-pointer hook
+  is ABI-safe.
+- `0x743090` (before the bind, every tick) has no direct PlayerControls reference. Its
+  transitive callees were not exhaustively proven.
+- Ordering: the next late poll P' runs in the Main render end group. That group is
+  submitted only after group 5 completes, which waits for event7 from main's World render.
+  World render runs in RenderEntry after `0x659ea0` returns. So the main-thread
+  player/camera consumption of P strictly precedes P'. Worker movement (Main update player
+  group) also precedes P' by manager group order.
+
+Change: the existing prospective log line now also reports main-thread player-update,
+camera and movement counts, whether the main-thread stamp generation equals the bound
+poll generation, and ambiguity. No new hook, ledger or event.
+
+Earliest safe pre-input boundary: the scheduled poll hook on the worker, inside
+`0x6e6030` scope, before the original PollDevices (the existing SOURCE_RESERVE point).
+Main never waits on the Main render end group before its join `0x65932f`. S's Present
+(`0x100a012`) is not ordered after this callback. Only the manager's group completion and
+then Main's join wait on it. A sleep there therefore delays P's input and tick n+1 without
+blocking S's Present. Any later point (FRAME_BEGIN, the bind) is after P's sample and
+would be a late sleep. Pacing there needs a narrow core change, not implemented: accept a
+bound reservation's reserve QPC as the INPUT_SAMPLE of an INPUT_KEYED frame, and acquire
+the vendor frame token for P at RESERVE (today `frame_acquire` runs at FRAME_BEGIN in
+`native_fg.cpp`), with the sleep inside RESERVE and abort on withdrawal. (Corrected below:
+the reserve timestamp is not the sample time, and SIMULATION_START does not belong at RESERVE.)
+
+Remaining proof: a bounded run printing main_player_update>0, main_generation_match=1,
+main_ambiguous=0 for bound sources; free-camera and first-person camera hooks or explicit
+refusal; transitive PlayerControls reads under `0x743090`; then the core contract above.
+
+## Coverage completion and sample-time contract (static, IDA session `77f0f198`)
+
+`0x743090` (before the bind): the only branches that call anything are `test [player+0xBEC],
+0x40` at `0x7430ed` and `cmp [player+0x692], 0` at `0x74314e` (jump to epilogue `0x743b0c`).
+With both clear it makes no call and reads no PlayerControls. When set it handles a queued
+move, which reaches `0x75ed50` -> `0x7468b0` (PlayerCamera update) before the bind. The tick
+hook reads both gates of player `0x3230778`. Only `0xec1c40` and GetAsyncKeyState run
+between that read and the native test on the same thread. A set gate refuses the bind.
+
+Camera states (PE RTTI): `0x8f47a0` is FirstPersonState (COL type `0x214b8e0`), `0x8f66f0` is
+FurnitureCameraState (`0x214bba0`), `0x8fd590` is Third/Dragon/Horse. In the normal branch
+all run inside the hooked `0x745200` envelope through `0x7468b0`, so `main_player_update`
+covers first person without a separate hook. The free-camera branch of `0x659ea0` is taken
+when PlayerCamera (`[0x31a5478]`) `+0x28 == +0xd0`, and it updates through `0x746a10`
+outside that envelope. The submit hook evaluates exactly this test and refuses the bind.
+It also refuses when any hooked player, movement or camera consumer already ran on the main
+thread before the submit, or when the gates are unreadable. Refusal emits ABORT(NOT_CONSUMED)
+and the log prints `refusal=` (1 unreadable, 2 queued move, 3 consumer before bind,
+4 free camera). Pure decision `bind_refusal` is tested in `tests/skyrim_input.cpp`.
+
+Sample-time correction. RESERVE is emitted inside the poll hook before the original
+PollDevices. Any future runtime sleep would run inside that synchronous callback, so the
+RESERVE timestamp marks the reservation opening, before such work. SAMPLED is emitted after
+PollDevices returns. Neither is the physical sample. `rsf_game_cpu_source_event` now appends
+`poll_begin_qpc` (`RSF_GAME_CPU_SOURCE_EVENT_SIZE_1` marks the first version). The adapter
+reads QPC after RESERVE returned and after the existing non-scheduled INPUT_SAMPLE branch,
+immediately before the original PollDevices call, and reports it in SAMPLED. The poll
+diagnostic log was moved ahead of RESERVE so nothing but that read separates the callback
+from the poll. The core requires reserve <= poll_begin <= sampled. It stores the value in
+`rsf_native_cpu_reservation.poll_begin_qpc` and reads a first-version packet only to its
+size, leaving the sample time unknown.
+
+Simulation begin is not at RESERVE: P's native simulation starts in its own tick after
+FRAME_BEGIN. The first consumer-capable call is `0x743090` at `0x6588de` on queued-move ticks,
+and otherwise the normal-branch work after the submit. Marker semantics remain core policy.
+The native ordering facts for a future core are: sleep boundary = inside RESERVE (worker,
+before the poll); input sample = `poll_begin_qpc`; simulation begin = the consuming tick,
+never before its FRAME_BEGIN.
+
+Residual: transitive PlayerControls reads by the other pre-submit main-thread callees
+(`0x65c730`, `0x625b90`, `0x6e4a90`, `0x645d60`, `0x642750`, scene-graph vfunc `+0x200` at
+`0x658ac1`) are not proven. The hooked-consumer refusal covers player update, movement and
+third-person camera only. Other callers of `0x7468b0`/`0x558e70` (`0x750450`, `0x7600f0`)
+were not placed in the tick.
+
+## Pre-submit callee reachability and timeline specification (static, IDA session `4708573f`)
+
+Each main-thread call between tick entry and the gameplay submit was decompiled:
+
+| Call | Identity (evidence) | PlayerControls/derived reads |
+| --- | --- | --- |
+| `0x65c730` at `0x6588e3` | walks the high-actor array `0x3230788`, counts actors via vfunc +0x380 (player: `0x747af0`, a 3D/state query) | none |
+| `0x204dd0` | drains a deferred reference queue through `0x204ba0` | none found; not an input path |
+| `0x625b90` at `0x65890a` | save/load request queue processor (BSTCommonStaticMessageQueue<bgs::saveload::Request>) | only when a load is processed: `0x61c2f0` (LoadGlobalData) -> `0x61d5f0` -> `0x75ed50` -> camera update `0x7468b0` |
+| `0x6e4a90` | per-thread bit in `0x3244170` | none |
+| `0x645d60` | calendar/game-hour advance | none |
+| `0x642750` | timed list expiry | none |
+| `0x3230740` vfunc +0x200 at `0x658ac1` | Main-constructed (`0x652600`) world SceneGraph; SceneGraph vtable `0x1914b00` slot +0x200 = `0xff4bc0`, frame-time camera frustum adjustment | none |
+| `[0x331f570]` vfunc +0x80 at `0x658a3e` | refcounted handle/task manager referenced from ~140 actor/sound/UI sites; target unresolved statically | none known |
+| `0x743090` at `0x6588de` | queued-move processor; gated by player +0xBEC&0x40 / +0x692 (refused when set) | only on the gated path |
+
+Other camera callers: `0x7600f0` is called only from `0x745200` (inside the envelope).
+`0x750450`, PlayerCharacter vfunc +0x88, takes a load-form buffer and runs at load, not in the
+ordinary tick.
+
+Envelope correction (implemented): `0x75ed50` (queued move and load) and `0x746a10` (free
+camera) reach PlayerCamera TESCamera::Update `0x558e70` outside `0x745200`. In first person
+the only hooked state update, third-person `0x8fd590`, never runs. `0x558e70` is now
+hooked with guard `40 57 48 83 ec 30 48 c7 44 24 20 fe ff ff ff 48 89 5c 24`. It takes `this`
+in RCX and returns void; RDX is set at `0x558eaf` before the state call. It counts only
+when `this` equals the PlayerCamera singleton `[0x31a5478]` on the owning main tick, using
+the same unchanged-stamp check (`main_player_camera` in the log). Any such update before the
+submit refuses the bind as consumed_before_bind. The free-camera mirror and queued-move
+gate refusals are kept: the free path also skips player update, and the gate covers
+non-camera queued-move work.
+
+Timeline proposal for an ordinary covered gameplay tick (bound, refusal none,
+main_generation_match=1, mismatched=0). Not implemented; the capability stays disabled.
+
+1. Input sample: SAMPLED `poll_begin_qpc` of P (worker, late group of generation n, after
+   RESERVE returned). The pacing sleep belongs inside RESERVE.
+2. FRAME_BEGIN(P): tick entry (existing).
+3. SIMULATION_BEGIN(P): at the bind, immediately before the original submit `0x60eaf0`
+   wakes generation n+1. Everything earlier in the tick (calendar, scene-graph frustum,
+   queues; `0x743090` inert when its gates are clear) consumes no controls. Actor/player
+   simulation (workers' process lists, main `0x659ea0`/`0x745200`, camera) starts here.
+   The adapter change would be emitting the existing keyed v1 SIMULATION_BEGIN at that
+   point for bound frames only. Today's core accepts it in rendered mode
+   (`early_simulation`, mask 13 at FRAME_END).
+4. SIMULATION_END(P): existing, at RenderEntry `0x6565b0`, after `0x659ea0` returned. World
+   render's event7 is required before the late poll group can start, so all main-thread
+   consumption of P precedes P'.
+5. Present: the actual application Present of P's frame (core already records the
+   session/source HRESULT).
+
+Required shared-core work before any adapter capability: a frame whose reservation is BOUND
+satisfies INPUT_SAMPLE with `poll_begin_qpc` (predating FRAME_BEGIN) instead of requiring a
+v1 INPUT_SAMPLE; the vendor frame token for P is acquired at RESERVE; the single sleep runs
+inside the RESERVE callback; an unbound, aborted or refused reservation falls back to the
+existing substitute path. Only then would Skyrim declare INPUT_TIMELINE. That requires a
+bounded run showing the counters above for steady gameplay, including first person
+(`main_player_camera>0`).
+
+### Final pre-submit target resolved
+
+Offline inspection of the matching 1.7.104 IDA database (session `47c19d47`)
+resolved `[0x331f570]+0x80` as IOManager's pure field getter `0xfc4fa0`:
+it returns the uint32 at `this+0x30` without a call. TES initialization
+`0x19ef60` allocates 296 bytes, constructs the singleton through `0xfc6710`
+with IOManager vtable `0x1a68fd8`, and stores it at `0x19f41f`. The only other
+store is the null assignment at `0x19fea3` in TES destruction `0x19f8d0`.
+Vtable slot `0x1a69058` is the getter. The tick branch at `0x658a46` reaches
+`0x63bf40/0x63bf70`, which toggle `[0x331c370]+0x20` through
+`0xed8180/0xed8250`; no PlayerControls reference or known consumer was found.
+
+This closes the unresolved static pre-submit callee in the table above. It
+does not replace runtime consumption evidence. Ordinary covered ticks still
+need observed bound source ownership, main player/camera updates, matching
+generation and zero mismatches; queued-move, load-camera and free-camera
+exceptions retain their existing refusal gates. No new hook or game run was
+used to resolve this target.

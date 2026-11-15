@@ -489,3 +489,61 @@ contract checks in that batch. No new runtime validation, game/GPU fixture,
 build or commit was performed here. The updated user goal limits follow-up to
 necessary integration/menu/verified shader fixes; no new telemetry or optional
 display-statistics mechanism is introduced by this correction.
+
+
+### Prospective input source integration, 15 November 2026
+
+Question: can the existing source reservation facts place the single runtime pacing
+operation before an actual future poll, without moving the native poll or treating
+FRAME_END as completed presentation? The native timing/consumption evidence and
+remaining refusal sites are recorded in
+[the prospective-source investigation](skyrim-prospective-source-20261115.md).
+This change is shared-core source implementation, not new game acceptance.
+
+Validated v2 source facts now reach the existing native CPU sink synchronously,
+after releasing its ledger lock, only outside rendered-source mode. At RESERVE the
+existing CpuOwner and provider token are acquired for the prospective identity.
+The existing completion event supports a bounded 20 ms wait, but its wake alone
+never authorizes pacing: the reservation ledger must report the exact predecessor's
+successful actual Present (or no predecessor). Pending timeout, failed, cancelled,
+unverified and superseded outcomes refuse this source. FRAME_END never satisfies
+this dependency. The existing vendor selector then performs the one pacing
+operation; None and inactive Anti-Lag do not set paced or publish a pacing duration.
+The existing diagnostic labels describe the pacing operation and input-to-simulation
+interval, since a prospective sample can precede its consuming tick. FRAME_BEGIN reuses the
+reserved token and publishes timing from that earlier operation.
+
+Only a sampled reservation adopted by FRAME_BEGIN and subsequently bound to native
+consumption promotes poll_begin_qpc into the CPU INPUT_SAMPLE stage. This actual
+poll entry may predate FRAME_BEGIN. Neither RESERVE nor poll completion is used as
+an input sample; no synthetic input event, input-received count or PCL ping is
+created by binding. Pending unframed/window observations are not assigned to a
+prospective token as consumed input. The simulation-start marker is emitted only
+at the real SIMULATION_BEGIN after BIND. A substituted simulation start refuses
+this prospective owner. Old packets without poll_begin_qpc remain unknown and do
+not gain input ownership. The existing partial-appended-timestamp rejection is
+preserved.
+
+Aborted, superseded and unbound reservations withdraw unsubmitted tokens through
+the existing owner lifecycle. A later callback observes implicit ledger withdrawal;
+quiescent session teardown clears outstanding ownership. Provider generation must
+still match the source. Measured FG retains native CPU stages, actual input,
+submission/view, final scene/window, HUD, resource/reset and retirement checks.
+Only FSR with pacing None, latency Off and no limiter may proceed without a pacing
+operation; DLSS/XeSS still require actual provider pacing. The older input-keyed
+path and rendered-source FSR path retain their existing behavior.
+
+Focused source coverage extends native_cpu_reservation: synchronous callback
+ledger reentry, one delivery for duplicate-refused facts, actual input predating
+FRAME_BEGIN, no invented marker/pacing/input/PCL counts, real simulation ordering,
+unknown old-size packets and abort-before-bind. Existing rendered-source and short
+packet cases remain. The worker performed source review and diff whitespace checks
+only, with no builds, tests, GPU runs, deployment or game launch. Coordinator batch
+validation should include native_cpu_reservation_contract, d3d11_host_contract,
+fg_session, latency_host and existing latency/provider contracts.
+
+Skyrim INPUT_TIMELINE remains disabled. The later offline IOManager getter
+resolution in the prospective-source note closes 331F570 virtual +80 controls
+reachability. Bounded native consumption acceptance remains an integration
+prerequisite; this implementation does not establish lower measured latency or
+physical scanout.

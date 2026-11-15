@@ -10,8 +10,8 @@ and FSR activation through repeated prepare/Present/retirement, with normal exit
 Its runtime sample reported106tags,212provider presentations and58/116FPS.
 PresentMon could not acquire ETW access, so physical display cadence and latency
 are unverified. After validation, the exact tested Runtime/Entry and matched FSR
-DLL set was installed with hash-verified backups; settings were preserved and
-the game is closed.
+DLL set was installed with hash-verified backups; settings were preserved.
+Automatic game shutdown is now disabled while the user captures.
 
 The completed-frame overlay fix now reports active FG in bounded game runs;
 FG Off and SR Off/On checks also passed. Claude's native source reservation,
@@ -29,8 +29,30 @@ gate passed: 220 tests passed, 14 skipped, zero failed; Cargo fmt and Clippy pas
 
 The third-person draw capture verified actual motion bindings and byte-exact
 previous/current bones for three skins, including valid indexed weight ranges.
-No shader defect was demonstrated, so no replacement was added. Effect,
-Particle, Grass, Tree, Sky and shadow coverage remain open outside QASmoke.
+Claude's offline census now accounts for all16,044 shader containers, including
+the233-container tail, against CS latest038a0a04 and the pinned release.
+Riverwood captures include Effect motion and correct draw-time rigid history
+for carried firewood. Pickup-only ghosting remains unresolved; steady carrying
+does not verify the transition. No shader replacement was justified by these
+draws. Remaining family/pass coverage is listed in the live draw research.
+
+Independent offline review of the user's F10 frame confirms the native motion
+crop, decode and pixel scale. It also establishes real differences from CS in
+colour/exposure, motion conditioning, masks and model selection. None is yet a
+verified pickup fix; this single frame cannot establish an animation trail.
+See [SR reference parity](research/skyrim-sr-reference-parity-20261115.md).
+
+The later poll-entry, consumer-refusal, CS and prospective-pacing batch passed
+the Windows MSVC Release gate: 220 passed, 14 skipped, zero failed, with Cargo
+fmt and Clippy passing. The latency_host device check was skipped, so this is
+not runtime pacing acceptance. The batch implements token acquisition and pacing at RESERVE,
+actual poll-entry promotion at BIND, and CS pre-initializer Upscaling exclusion.
+Skyrim INPUT_TIMELINE remains disabled pending native consumption acceptance.
+CS HDR wrapper forwarding is implemented, but float16 input readers, applied
+colour-space facts and its post-composite HUD-less lease remain unfinished.
+The final static pre-submit gap was resolved as IOManager's pure field getter.
+No game interaction or deployment accompanied this verification batch; evidence
+is retained in `.local/skyrim-research/verify-skyrim-prospective-cs-batch-20261115.log`.
 
 See [FG handoff](research/skyrim-fg-handoff-20261115.md),
 [core capabilities](research/d3d11-host-fg-capabilities-20261115.md),

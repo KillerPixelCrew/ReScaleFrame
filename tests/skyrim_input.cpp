@@ -74,6 +74,13 @@ int main() {
     check(!sources.withdraw_pending() && !sources.owned().source, "quiesce drops every reservation");
     check(!sources.reserve(25, 17, 23, 0, 12).reserved.source && !sources.reserve(25, 17, 23, 4, 0).reserved.source,
         "reservation requires native job and poll generations");
+    using rsf::skyrim::BindRefusal;
+    using rsf::skyrim::bind_refusal;
+    check(bind_refusal(true, false, false, false) == BindRefusal::none, "covered gameplay tick binds");
+    check(bind_refusal(false, false, false, false) == BindRefusal::unreadable, "unreadable native gates refuse binding");
+    check(bind_refusal(true, true, false, false) == BindRefusal::queued_move, "queued move consumes before the bind");
+    check(bind_refusal(true, false, true, false) == BindRefusal::consumed_before_bind, "earlier hooked consumer refuses binding");
+    check(bind_refusal(true, false, false, true) == BindRefusal::free_camera, "free camera bypasses the player envelope");
     rsf::skyrim::NativeScreenFacts screen{};
     using rsf::skyrim::classify_screen;
     check(classify_screen(screen) == RSF_SCREEN_UNKNOWN, "unreadable native screen refuses classification");

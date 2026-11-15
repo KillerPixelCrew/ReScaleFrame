@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_creation.h"
+#include "compatibility.h"
 #include <rescaleframe/d3d11_host.h>
 #include <MinHook.h>
 #include <windows.h>
@@ -75,6 +76,16 @@ HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE sof
         return result;
     }
     auto* before = *chain;
+    if (!compatibility_render_allowed()) {
+        if (services.log) {
+            const auto reason = compatibility_status();
+            try { services.log(services.user, reason ? reason : "CS ownership not established before native device creation; facade refused."); } catch (...) {}
+        }
+        return result;
+    }
+    if (services.log) if (const auto reason = compatibility_status()) {
+        try { services.log(services.user, reason); } catch (...) {}
+    }
     // ABI4 consumes only the caller's native-chain reference after a successful
     // replacement. Device/context and every original API argument stay native.
     const rsf_d3d11_native_chain request{sizeof(request), RSF_D3D11_HOST_ABI_VERSION,

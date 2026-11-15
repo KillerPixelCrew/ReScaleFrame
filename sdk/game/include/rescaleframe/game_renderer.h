@@ -204,8 +204,14 @@ typedef void (*rsf_game_cpu_event_fn)(void* user, const rsf_game_cpu_event* even
    known. header.source_frame_id names the future source P, from the same identity namespace as
    FRAME_BEGIN; P must be newer than every source begun so far and is never reused, including
    after an abort. A reservation is not FRAME_BEGIN, INPUT_SAMPLE, SIMULATION_BEGIN or any
-   Present marker, and it implies no pacing request. Facts stay in the runtime's CPU ledger. */
-#define RSF_GAME_CPU_SOURCE_RESERVE 7u /* immediately before the unchanged native poll */
+   Present marker. The runtime retains these facts and may use the synchronous RESERVE
+   boundary for its pacing policy; the integration does not request a pacing technology. */
+/* RESERVE runs synchronously before the native poll; its timestamp is when the reservation
+   opened, before anything the runtime does inside this callback. The poll starts only after the
+   callback returns. SAMPLED follows the poll's return and carries poll_begin_qpc, the moment the
+   unchanged native poll was entered after RESERVE returned: the actual input sample time. Neither
+   is the source's simulation begin, which happens in its own engine update. */
+#define RSF_GAME_CPU_SOURCE_RESERVE 7u
 #define RSF_GAME_CPU_SOURCE_SAMPLED 8u /* after that poll returned; input_kind lists delivered kinds */
 /* The proven native branch at which the open source P, begun with the reserved identity,
    starts consuming the sampled state. Binding asserts ownership of that poll, not that every
@@ -234,7 +240,13 @@ typedef struct rsf_game_cpu_source_event {
     uint64_t native_generation;
     uint32_t reason; /* ABORT: RSF_GAME_CPU_ABORT_* */
     uint32_t reserved;
+    /* Appended. SAMPLED only: QPC immediately before the unchanged native poll call, taken after
+       the RESERVE callback returned. Zero elsewhere. Packets ending before this field are valid
+       and report the sample time as unknown. A packet containing only part of this field is refused. */
+    uint64_t poll_begin_qpc;
 } rsf_game_cpu_source_event;
+/* Size of the first version of rsf_game_cpu_source_event, before poll_begin_qpc. */
+#define RSF_GAME_CPU_SOURCE_EVENT_SIZE_1 (sizeof(rsf_game_cpu_event) + 24u)
 
 /* Synchronous replacement of an engine upscale. Zero accepts the replacement only after the
    host has recorded a complete output. Any other result leaves native evaluation enabled.
