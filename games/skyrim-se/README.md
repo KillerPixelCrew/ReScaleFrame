@@ -25,6 +25,9 @@ currently causes activation to refuse until ownership handover is implemented.
 `rendering_ready` remains zero. A subsequent bounded starting-cell run also
 recorded sixteen post-processing calls and native colour/motion-candidate texture
 descriptors. This verifies descriptor access, not pixel contents or vector units.
+The probe also logs four main-camera cache/projection/history samples and the
+native main-depth descriptor. The first sample has zero previous-history components;
+no vendor inputs or input-frame identity are inferred from these logs.
 
 See [research](../../docs/research/skyrim-se-integration.md) for fingerprints,
 the source/binary evidence, deployment receipt location and remaining work.

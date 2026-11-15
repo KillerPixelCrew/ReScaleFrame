@@ -454,3 +454,86 @@ The gate remains failed. Formatting and Clippy passed separately because CTest
 stops the verification script before those steps. Logs are
 `verify-post-process-full.log` and `clippy-post-process.log`. No Rust behavior
 changed. SR, FG, latency and CS/ENB coexistence remain unimplemented.
+
+### Native camera, depth and original motion writers
+
+The next question was how to associate temporal inputs with the actual main
+camera instead of selecting the first cache entry or borrowing a reference
+header's layout. Traced the scene caller into camera construction, history
+advance and shadow-state upload in the installed executable. Named all six
+functions in the saved IDA database:
+
+| RVA | Evidence |
+| --- | --- |
+| `0x101CB50` | Camera cache lookup/allocation. State `+0xB8` points to entries, count is `+0xC8`, stride `0x290`; key is NiCamera at entry `+0` and jitter flag `+0x284`. |
+| `0x101E4E0` | Builds view/projection, preserves unjittered copies, conditionally applies temporal jitter and records the camera origin. |
+| `0x101D400` | Perspective/orthographic matrix construction from NiCamera frustum. Perspective depth is standard, with `P22=f/(f-n)`, `P23=1`, `P32=-nf/(f-n)`. |
+| `0x101CA60` | Advances cached matrices and origin history. First-frame zero history must not be used for reprojection. |
+| `0x101C660` / `0x101E7F0` | Selects the camera cache by identity/flags and copies its matrices and origins into rendering shadow state. |
+| `0x15399DF` | Native CopyResource reads main-depth index 0 at renderer `+0x2018`, global `0x3333F58`, depth-entry stride `0x98`. |
+| `0x15447A0` | Independent depth SRV consumer uses global `0x3333FE0`, the same entry's `+0x88` SRV. |
+
+The cache's unjittered projection is `+0x1C0`, current unjittered VP `+0x140`,
+previous VP `+0x180`, current origin `+0x26C`, previous origin `+0x278`.
+NiCamera frustum near/far are `+0x160/+0x164`. Current dynamic ratios are state
+`+0x114/+0x118`. These are native instruction matches, not imported C++ types.
+
+Correction to reference material: this build's jitter producer writes floats to
+state `+0x4C/+0x50`. CommonLib's State declarations label those positions as a
+frame count and flag. Neither is a usable input-frame identity here. The
+eight-way jitter index at `+0xD0` is also not a monotonic frame ID. The observer
+continues to report observation numbers only.
+
+The bounded native-input run matched the main camera global `0x33D3D28` to one
+of five cache entries and read all four samples successfully. Near was 15 game
+units, far 353840; projection diagonal was approximately 1.19175/2.11867, with
+depth terms 1.00004/1/-15.0006, consistent with the native standard-depth formula.
+Dynamic ratios were 1/1. The first logged previous-VP components and origin were zero; subsequent
+samples contained the prior state. Only two VP components were logged. This
+suggests empty initial history, but does not establish all sixteen components;
+first-frame reprojection remains unproven and must reset. Main depth was 1711x1048, single-sample,
+format 44, R24G8_TYPELESS. These are descriptor/CPU-state observations, not depth
+pixels or temporal-quality acceptance. The current CS FidelityFX source uses
+0.01428222656 metres per game unit; this is a source convention, not a measured
+scene scale in this experiment.
+
+The observer reads these values synchronously at the existing native pass, logs
+four bounded samples, and retains no camera/cache/texture pointers. No render
+pass is yet admitted to a vendor backend. The run was responsive and closed
+gracefully; the experiment-only custom INI was removed after checking its exact
+contents. Deployment backup: `deploy-backups/20261115-123652-native-inputs/`.
+Evidence: `native-inputs-game-20261115.log`, `native-inputs-modules.json`,
+`ida-camera-candidate-*.json`, `ida-camera-producer-*.json`,
+`ida-scene-depth-owner.json` and `ida-native-depth-srv-consumer.json`.
+Release verification again reached 223 checks with the same two Anomaly FSR3 FG
+failures; formatting and Clippy passed separately (`verify-native-inputs-full.log`,
+`clippy-native-inputs.log`). GPU processing readiness remains false.
+
+Original packaged shaders were also disassembled read-only using the installed
+System32 d3dcompiler_47 D3DDisassemble, against the exact FXP/hash inventory.
+For Lighting PS descriptor 1, Grass PS 0 and Sky PS 0, instructions project
+current/previous positions with cb12 registers 12..15/16..19, divide by W,
+subtract previous NDC from current and multiply XY by `(-0.5,+0.5)`. Written
+motion in these paths is therefore previous-minus-current UV with Y down,
+without projection jitter. Canonical current-minus-previous UV would negate
+both channels. This proves the selected shader paths' arithmetic, not runtime
+coverage, object history or unwritten-sample detection.
+
+Effect PS descriptor 0 writes literal `(1,0)` to target 1 instead of that formula.
+Lighting PS 1 has a conditional literal write. The same shader may serve an
+auxiliary pass, so neither is yet proof of a missing live motion sample.
+An original-bytecode census found literal mov/movc target-1 candidates in
+1673 Effect, 4 Particle and all 6924 Lighting permutations, with no disassembly
+failures. This is a textual candidate search, not complete control-flow analysis.
+Some families/permutations have no target-1 signature because they serve other
+passes. Actual target bindings and draw eligibility must establish repair scope.
+Zero must not become a blanket unwritten-motion rule: zero is valid static motion.
+
+Original hashes and selected disassemblies are recorded in
+`native-motion-shader-disassembly-receipt.json`; the bounded candidate census is
+`original-motion-candidate-census.json`. This evidence makes the next shader work
+specific: correlate family/descriptor/hash with live motion-target draws, acquire
+previous transforms at their native producer, and extend the shared replacement
+mechanism when an interface/resource change is required. The existing whole,
+same-length DXBC instruction operation cannot add missing vertex interpolators
+or previous skeletal/object data, and must not be presented as that repair.
