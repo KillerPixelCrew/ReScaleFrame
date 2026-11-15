@@ -2,14 +2,24 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The user reports a visible improvement after the direct DLSS motion correction.
+Continued audit verified1997 native CPU bone-history samples and four actual
+VS b9/b10 GPU buffer pairs against their CPU arrays. Two active Lighting VS
+bytecodes consume both histories. All74 small-family archive shaders were
+reviewed, including separate grass wind timers and Particle target1 normals.
+Final skinned draw ranges/writes and broader material coverage remain open;
+the final-draw observation window captured no draws. This research-only
+checkpoint required no rebuild or fixtures. See the live skeletal audit in
+[research](research/skyrim-se-integration.md#live-skeletal-history-and-small-family-audit-15-november-2026).
+
 The third-person idle/orbit smear and grain on props exposed another defect:
 canonical motion was passed directly to DLSS with reversed direction. Comparison
 against Community Shaders and NVIDIA's current guide confirms native vectors
 need positive Streamline scale. The generic direct DLSS path now converts once;
 already resolved and legacy paths retain their existing scales. Focused Release
 build/contract passed, and a settled deployed capture verifies motion_scale(1,1).
-The reported third-person idle/pan still needs acceptance; native wall motion
-agreement does not prove skin or final temporal quality. See the latest research.
+The user subsequently reported improvement; native wall motion agreement still
+does not prove skin or complete temporal quality. See the latest research.
 
 The native sampler path now supplies resolution-derived material mip bias through
 a generic runtime-owned sampler cache. A guarded state-flush hook limits changes

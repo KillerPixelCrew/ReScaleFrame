@@ -1128,8 +1128,8 @@ evidence. The current adapter reports NO_FG and rendering_ready=0.
 | Pass/material class | Required inputs and available producer/binding evidence | Gaps and validation |
 | --- | --- | --- |
 | Static/instanced lighting and terrain | Native Lighting family; main depth 0 and motion 7; selected original PS uses current/previous unjittered screen positions. Main camera matrices/origins are captured and converted independently. | Per-variant world/instance/terrain buffers, slot ranges and actual writes are not established. Static dry-room zero motion is not moving coverage. |
-| Skinned/deformed actors | Native updater0x1015800 retains previous bone arrays, uploader0x1578c80 binds VS b9 previous/b10 current; object updater0xeebf40 retains previous world transform. | Static executable evidence only. Partition/index ranges, per-draw buffers, moving/skinned writes and deformation coverage remain unverified. Current bones or camera reprojection will not stand in for previous deformation. |
-| Distant trees and RunGrass | Both native families mapped; selected original grass PS has the native motion formula. | Wind/LOD/instance previous data, alpha-tested coverage and camera/object-motion captures remain unverified. |
+| Skinned/deformed actors | Native updater0x1015800 retains previous bone arrays, uploader0x1578c80 binds VS b9 previous/b10 current; object updater0xeebf40 retains previous world transform. Live CPU history and four uploaded GPU buffer pairs verified below; two actual Lighting VS bytecodes consume both histories. | Final indexed-vertex ranges, draw-time bindings/write masks and deformation output remain unverified. Current bones or camera reprojection will not stand in for previous deformation. |
+| Distant trees and RunGrass | Both native families mapped; all18 grass VS read separate current/previous wind timers. Two tree VS export previous positions; native tree sample reuses model position with separate world transforms. | Timer/instance producers, wind/LOD transitions, alpha-tested coverage and moving captures remain unverified. CS tree wind is an additional deformation path, not proof of native coverage. |
 | Effect and particle/translucent geometry | Native Effect/Particle families mapped; literal-output candidates found in bytecode. | A literal is not proof of a missing live vector. Need actual variants, depth/motion blend/write masks, transforms and particle history before targeted repair. |
 | Water/refraction | Water family mapped; native depth, target 13 normals and conditional target 12 mask identified at their consumers. | Dry-room auxiliary buffers are zero. Active water displacement history, transparency/depth coverage, fractional viewport and vector writes need capture. |
 | Sky | Native Sky family and selected PS motion formula inspected. | Rotation-only/infinite-depth history, native bindings and moving-pan capture remain unverified. |
@@ -1385,3 +1385,73 @@ No vendor device fixture or full gate was rerun. Deployment
 1280x720 to1920x1080 and native final Present. This stationary capture verifies
 the corrected dispatch parameters, not the reported idle/orbit acceptance.
 The third-person smear and broad moving quality remain open pending that check.
+
+### Live skeletal history and small-family audit, 15 November 2026
+
+After the direct DLSS correction, the user reported that rendering looks much
+better and requested continued auditing. This is positive user feedback for the
+current deployment, not acceptance of every material, backend or motion path.
+The remaining question is whether native independent deformation history reaches
+the active shaders. Bounded REA probes avoid adding diagnostic options or changing
+engine inputs. PID16972, executable base0x7ff6c7ed0000 and graphics thread43256
+identify this observation; executable fingerprint and reference revision remain
+those recorded above. Scripts and raw results stay in ignored research material.
+
+The first probe guarded bone binder0x1578c80 and observed1997 samples across
+12 skin instances. Every observed consecutive-frame previous array exactly
+matched the preceding current array, with no history mismatches or read errors.
+Gapped observations were excluded from that comparison. This tests CPU history
+at its actual producer/binder lifetime, not actor identity or rendered coverage.
+Evidence: `native-bone-history-live.json`, REA
+`ev_a13b60e40a6d1cbf610772d85a3919246ee19809b7e961b9163139a331571488`.
+
+A second probe read actual VS b9/b10 through the immediate context after native
+binding, on its graphics owner. Staging copies were mapped and released within
+that callback. Four instances with40,23,20,8 matrices had GPU previous/current
+data bit-identical to their respective CPU arrays for all matrix bytes.
+Each buffer has3840 bytes, matching240 float4 registers or80 matrices. Unused
+trailing bytes are not history. These four partition palettes were identity
+maps with matching counts; actual indexed vertices and weights were not read.
+The attempted root-name read included invalid trailing bytes and is not reliable
+actor identification. Evidence: `native-bone-binding-live-evidence.json`, REA
+`ev_be9b1a2a766b63559e6d21f8e656ca404146f6b235cf87b38f04ff635f5c6b81`.
+
+The two actual native VS bytecodes match packaged Lighting shaders:
+descriptor514, SHA256
+`f5ad2129e298a445bb6e887777e2290c3829876cdc38864ecc4d34e838e10db1`,
+and83886599, SHA256
+`691c1913a9fcc3344940f204796c96d8353afd62bb2af08ae06b7c6625f89bcf`.
+Both dynamically read b9/b10[240] and export current/previous world positions.
+Actual VS/PS COM objects matched their native wrappers. PS descriptors4194817
+and88081927 identify associated archive candidates, but PS bytecode was not
+recovered from the actual COM objects. Those candidates conditionally write
+literal(1,0) when cb2[7].z exceeds1e-5. Pinned CS Lighting.hlsl identifies that
+field as SSRParams.z, selecting auxiliary colour output. Without draw-time
+flag, MRT binding and blend/write-mask evidence, it is not a missing-vector bug.
+Pinned Common/Skinned.hlsli independently agrees on b9/b10 and240 registers.
+
+The first final-draw probe failed on an unsupported UInt64 method and captured
+no records; it detached cleanly. The corrected probe and a separate seven-draw-
+method counter also captured no draws. The native frame counter subsequently
+remained79991 across reads. This observation window provides no draw-coverage
+evidence and does not establish a renderer failure. No graphics call was issued
+from a remote diagnostic thread and no shader repair was made. Corrected probe:
+`probe-skinned-draws-v2.js`, REA
+`ev_b543d09d7dec631176fc879b1f70bb6a4379ffbcf9522c7ddb0a69a4f82e25c4`.
+
+Offline D3DDisassemble review covered all74 containers in the four small native
+families, using the previously fingerprinted shaders011.fxp. Reproduction script
+`audit-small-family-inputs.py` and per-container hashes, constants and signatures
+are in `small-family-inputs/manifest.json`.
+
+| Family | Native VS / PS | Input/output evidence | Remaining scope |
+| --- | --- | --- | --- |
+| RunGrass | 18 / 18 | All18 VS read cb2[17].w and cb2[18].w and export previous position. Selected VS separately evaluate wind and transform previous vertices with cb2[12..14]. Fourteen PS signatures include target1. | Live timers, instance/fade buffers b7/b8, depth permutations, alpha coverage and final target writes. |
+| DistantTree | 4 / 4 | Two VS export previous positions; two PS expose target1. Selected colour VS transforms the same model position through separate current/previous world matrices. | Native depth variants and LOD history. CS TREE_WIND additionally displaces current/previous model positions using separate wind values; vanilla bytecode does not establish that optional path. |
+| Particle | 6 / 6 | All six PS expose target1 with fixed XYZ values and computed alpha; no VS previous-position semantic. CS Particle.hlsl names target1 Normal. | Actual target binding and ordering, particle history and reactive handling. Target1 alone does not identify motion. |
+| Sky | 9 / 9 | All nine VS export previous position and all nine PS expose target1. | Rotation/infinite-depth semantics, live constants and moving-pan output. Signatures alone do not validate vectors. |
+
+These are source/bytecode and bounded live-binding checks. They do not replace
+moving scene captures. Grass, particles, water, sky, auxiliary views, material
+variants and final indexed skinned draws remain open. No build or full fixture
+suite was needed for this research-only checkpoint.
