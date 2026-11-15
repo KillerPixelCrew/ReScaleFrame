@@ -6,7 +6,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_D3D11_HOST_ABI_VERSION 2u
+#define RSF_D3D11_HOST_ABI_VERSION 4u
+/* Implemented fact producers, not backend availability or per-frame acceptance. */
+#define RSF_D3D11_HOST_CAP_FG_INPUTS 1u
+#define RSF_D3D11_HOST_CAP_INPUT_TIMELINE 2u
+#define RSF_D3D11_HOST_CAP_RENDERED_SOURCE 4u
 typedef struct rsf_d3d11_host_setup {
     uint32_t struct_size, abi_version;
     const wchar_t* configuration_path;
@@ -25,9 +29,14 @@ typedef struct rsf_d3d11_host_setup {
     /* Optional cold presentation bridge. The adapter supplies native window
        selection; runtime switching starts with plain presentation and FG Off.
        Callback code/user remain valid for process lifetime. */
+    /* 0 disabled, 1 factory interception, 2 adapter-owned outer creation root. */
     uint32_t presentation_bridge;
     int (*accept_window)(void* user, void* window);
     void* presentation_user;
+    /* FG_INPUTS: FG_INPUTS, FINAL_SCENE, WINDOW, FRAME and SUBMISSION leases.
+       INPUT_TIMELINE: actual input consumption associated with source CPU facts.
+       A declaration never bypasses native ownership, input or screen admission. */
+    uint32_t capabilities;
 } rsf_d3d11_host_setup;
 /* Graphics-free setup, outside DllMain. Input services supply session/log/CPU only.
    Strings are copied; upstream callback code/user and returned services are process-lived.
@@ -38,13 +47,28 @@ typedef struct rsf_d3d11_host_setup {
    Presentation binding may initialize window/UI observation before a scene exists.
    The first verified scene lease separately admits SR preparation; earlier RECONFIGURE requests are refused.
    The host owns SDK selection/settings/overlay/capture. It does not infer engine inputs.
-   This SR host does not authorize generation or pacing from render-only identities. */
+   Generation and pacing require declared input capability and actual native eligibility;
+   render-only identities never authorize them. */
 /* Returned render_pass records adapter-declared FINAL_SCENE and WINDOW ownership.
    These synchronous native leases do not activate a generation provider. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 /* Any thread. Suspend callbacks during adapter quiescence; no graphics retirement occurs here.
    The returned host is process-lived and starts suspended. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* services_user, uint32_t active);
+typedef struct rsf_d3d11_native_chain {
+    uint32_t struct_size, abi_version;
+    void* device;
+    void* immediate_context;
+    void** swapchain;
+} rsf_d3d11_native_chain;
+/* Cold creation owner, after the complete outer native creation call returns.
+   Device/context are borrowed. On success replaces the caller-owned chain reference
+   with the final application facade and releases that original reference. Failure
+   preserves the native outputs/refcounts. No native Present is called or bypassed.
+   The adapter preserves the original creation HRESULT and supplies native policy. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_wrap_native_swapchain(void* services_user,
+    const rsf_d3d11_native_chain*);
+
 typedef struct rsf_d3d11_presentation_binding {
     uint32_t struct_size, abi_version;
     void* swapchain;

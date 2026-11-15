@@ -402,7 +402,7 @@ void upscale(const RenderDataRD *data, double) {
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1;
     pass.motion_camera_included = 1; pass.camera_valid = 1;
     auto &camera = pass.camera;
-    camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     camera.render_width = rb->get_internal_size().x; camera.render_height = rb->get_internal_size().y;
     camera.output_width = rb->get_target_size().x; camera.output_height = rb->get_target_size().y;
     camera.near_plane = scene->z_near; camera.far_plane = scene->z_far;

@@ -291,7 +291,7 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     record.session_id = 43; record.view_id = 1; record.resource_generation = 1; record.frame_time_ms = 16.667f;
     record.render_width = record.camera.render_width = width; record.render_height = record.camera.render_height = height;
     record.output_width = record.camera.output_width = 320; record.output_height = record.camera.output_height = 180;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     record.camera.depth_inverted = 1; record.camera.near_plane = 0.1f; record.camera.far_plane = 100; record.camera.vertical_fov_radians = 1;
     for (auto* matrix : {record.camera.view_to_clip, record.camera.clip_to_view, record.camera.view_to_world, record.camera.world_to_view, record.camera.clip_to_previous_clip})
         for (uint32_t i = 0; i < 4; ++i) matrix[i * 4 + i] = 1;

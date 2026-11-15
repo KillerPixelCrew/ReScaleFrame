@@ -72,7 +72,7 @@ bool camera_frame(const NativeCamera& native, uint32_t width, uint32_t height,
     multiply(adjusted, native.previous_view_projection, out.clip_to_previous_clip);
     history_valid = inverse(out.clip_to_previous_clip, previous_clip_to_clip);
     if (!history_valid) { identity(out.clip_to_previous_clip); identity(previous_clip_to_clip); }
-    out.struct_size = sizeof(out); out.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    out.struct_size = sizeof(out); out.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     std::memcpy(out.view_to_clip, native.projection, sizeof(native.projection));
     // The native cache postmultiplies projection by an NDC translation.
     // Report geometry displacement in pixel coordinates (Y down), as SR expects.

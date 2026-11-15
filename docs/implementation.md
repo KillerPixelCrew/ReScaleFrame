@@ -2,6 +2,41 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+Skyrim now reports native pre-HDR SR/FG inputs, a HUD-less scene before UI,
+and the window/context lease through actual Present. Host ABI4 wraps the final
+swapchain at the guarded outer creation call; frame ABI2 and camera ABI1 stay
+separate. The bounded PID50256 game run passed DLSS Quality1280x720 to1920x1080
+and FSR activation through repeated prepare/Present/retirement, with normal exit.
+Its runtime sample reported106tags,212provider presentations and58/116FPS.
+PresentMon could not acquire ETW access, so physical display cadence and latency
+are unverified. The working installation was restored and the game is closed.
+
+The completed-frame overlay fix now reports active FG in bounded game runs;
+FG Off and SR Off/On checks also passed. Claude's native source reservation,
+adoption and binding report observed worker movement without mismatched sources.
+These observations do not establish complete input consumption or pacing.
+Genuine pre-input pacing, DLSS/XeSS FG,
+CS/ENB handover and moving/all-material acceptance remain incomplete. Native
+recognition and particular test runs do not change general readiness flags.
+
+The device regression passed51sources, including reduced in-place DLSS followed
+by live FSR enablement, with32tags/32callbacks and zero input/pacing/PCL claims.
+The earlier232-test gate's two FSR failures were isolated to an old staged DLL;
+both cases passed with the matched local4.0.2 DLL. The final Windows Release
+gate passed: 220 tests passed, 14 skipped, zero failed; Cargo fmt and Clippy passed.
+
+The third-person draw capture verified actual motion bindings and byte-exact
+previous/current bones for three skins, including valid indexed weight ranges.
+No shader defect was demonstrated, so no replacement was added. Effect,
+Particle, Grass, Tree, Sky and shadow coverage remain open outside QASmoke.
+
+See [FG handoff](research/skyrim-fg-handoff-20261115.md),
+[core capabilities](research/d3d11-host-fg-capabilities-20261115.md),
+[input ownership](research/skyrim-input-ownership-20261115.md),
+[live draw coverage](research/skyrim-native-draw-coverage-20261115.md),
+[prospective sources](research/skyrim-prospective-source-20261115.md) and
+[camera ABI compatibility](research/unity-camera-frame-abi-20261115.md).
+
 The shared SR regression now has actual device evidence: the explicit hidden
 D3D11-host check passes eight shared DLSS evaluations and output readback on
 the RTX4070, with zero D3D11 debug errors and FG Off. The identical executable

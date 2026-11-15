@@ -102,7 +102,7 @@ void camera_matrices() {
     rsf_game_render_pass pass;
     CHECK(build_pass(in, pass) == PassError::None);
     const auto& c = pass.camera;
-    CHECK(pass.struct_size == sizeof(pass) && c.struct_size == sizeof(c) && c.abi_version == RSF_GAME_FRAME_ABI_VERSION);
+    CHECK(pass.struct_size == sizeof(pass) && c.struct_size == sizeof(c) && c.abi_version == RSF_GAME_CAMERA_ABI_VERSION);
     // view_to_clip is the unjittered engine projection, copied (row vectors in both conventions).
     for (int i = 0; i < 16; ++i) CHECK(c.view_to_clip[i] == in.current.projection[i] && c.world_to_view[i] == in.current.view[i]);
     // view_to_world rows: right, up, forward, position (native_sr.cpp reads position from +12, right +0, up +4, forward +8).

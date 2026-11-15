@@ -246,7 +246,7 @@ namespace ReScaleFrame.Unity
                 Frame = (ulong)(uint)Time.frameCount + 1, View = (ulong)(uint)camera.GetInstanceID(),
                 Generation = config.Generation, Flags = probe ? PacketFlags.Probe : reset ? PacketFlags.Reset : 0u,
                 Camera = new CameraFrame {
-                    Size = Native.CameraFrameSize, Version = 1,
+                    Size = Native.CameraFrameSize, Version = Native.CameraFrameVersion,
                     Projection = projection, InverseProjection = projection.inverse,
                     ViewToWorld = view.inverse, WorldToView = view, ClipToPrevious = previous * vp.inverse,
                     Jitter = rasterJitter, PreviousJitter = reset ? rasterJitter : state.PreviousJitter,

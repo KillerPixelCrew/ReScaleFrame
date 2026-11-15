@@ -69,7 +69,7 @@ int main()
     record.frame_id = record.session_id = record.resource_generation = 1;
     record.render_width = record.render_height = 64;
     record.output_width = record.output_height = 128; record.frame_time_ms = 16;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     record.camera.near_plane = 0.1f; record.camera.vertical_fov_radians = 1;
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
     frame.pre_exposure = frame.view_space_to_meters = frame.motion_scale_x = frame.motion_scale_y = 1;
@@ -78,6 +78,15 @@ int main()
         resource->struct_size = sizeof(*resource); resource->resource = &frame; resource->generation = 1;
         resource->width = resource->height = 128;
     }
+    // Frame provenance changed the outer record ABI, not the embedded camera ABI.
+    record.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    check(rsf_sr_session_evaluate(session, &setup, &frame) == RSF_BACKEND_ERROR_ABI_MISMATCH,
+          "camera ABI must not validate an outer frame record");
+    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    check(rsf_sr_session_evaluate(session, &setup, &frame) == RSF_BACKEND_ERROR_ABI_MISMATCH,
+          "frame ABI must not validate an embedded camera");
+    record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && reset_seen, "first frame reset");
     ++record.frame_id;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && !reset_seen, "contiguous frame keeps history");

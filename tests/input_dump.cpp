@@ -135,7 +135,29 @@ int main(int argc, char** argv)
     record.render_width = record.output_width = 4; record.render_height = record.output_height = 2; record.frame_time_ms = 16.67f;
     rsf_fg_frame fg{}; fg.struct_size = sizeof(fg); fg.record = &record; fg.interpolate = 1;
     fg.motion_scale_x = fg.motion_scale_y = 1;
+    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    LARGE_INTEGER input_stamp{}, source_stamp{}, source_frequency{};
+    check(QueryPerformanceCounter(&input_stamp) != 0, "Read measured-record fixture QPC.");
+    record.input_qpc = uint64_t(input_stamp.QuadPart);
+    record.source_provenance = RSF_FRAME_SOURCE_INPUT;
     rsf_input_dump_fg_prepare(&pass, &fg, 0);
+    const auto measured_constants = read(bundle / "fg_constants.json");
+    check(measured_constants.find("\"input_qpc\":" + std::to_string(record.input_qpc) + ',') != std::string::npos &&
+        measured_constants.find("\"source_provenance\":0,") != std::string::npos &&
+        measured_constants.find("\"source_qpc\":0,") != std::string::npos &&
+        measured_constants.find("\"source_qpc_frequency\":0,") != std::string::npos,
+        "Measured-record fixture retains its supplied input QPC without synthesizing a rendered source clock.");
+    check(QueryPerformanceCounter(&source_stamp) != 0 && QueryPerformanceFrequency(&source_frequency) != 0,
+        "Read actual source clock and frequency for rendered-record fixture.");
+    record.input_qpc = 0; record.source_provenance = RSF_FRAME_SOURCE_RENDERED;
+    record.source_qpc = uint64_t(source_stamp.QuadPart); record.source_qpc_frequency = uint64_t(source_frequency.QuadPart);
+    rsf_input_dump_fg_prepare(&pass, &fg, 0);
+    const auto rendered_constants = read(bundle / "fg_constants.json");
+    check(record.input_qpc == 0 && rendered_constants.find("\"input_qpc\":0,") != std::string::npos &&
+        rendered_constants.find("\"source_provenance\":1,") != std::string::npos &&
+        rendered_constants.find("\"source_qpc\":" + std::to_string(record.source_qpc) + ',') != std::string::npos &&
+        rendered_constants.find("\"source_qpc_frequency\":" + std::to_string(record.source_qpc_frequency) + ',') != std::string::npos,
+        "Rendered-record metadata retains unknown physical input and the exact supplied source QPC and frequency.");
     rsf_input_dump_presented(&pass, S_OK); rsf_native_window_scope(&pass, 0);
     const auto metadata = read(bundle / "manifest.json");
     check(metadata.find("\"status\":\"complete\"") != std::string::npos, "Matched handoffs must complete the manifest.");

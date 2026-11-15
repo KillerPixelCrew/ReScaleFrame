@@ -104,7 +104,7 @@ inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
     }
     const auto& record = *frame->record;
     if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION) {
+        record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) {
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     }
     if (record.camera.struct_size < sizeof(rsf_camera_frame) || !record.frame_id ||

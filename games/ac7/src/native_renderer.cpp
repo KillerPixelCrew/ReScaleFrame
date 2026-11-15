@@ -1199,7 +1199,7 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
     p.pass_key = uint64_t(uintptr_t(node)); p.native_frame = frame;
     read(p.view_key, 8, p.history_key);
     p.motion_to_uv[0] = 0.5f; p.motion_to_uv[1] = -0.5f; p.motion_camera_included = 0;
-    p.camera_valid = 1; p.camera.struct_size = sizeof(p.camera); p.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    p.camera_valid = 1; p.camera.struct_size = sizeof(p.camera); p.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     p.camera.render_width = view.view_width; p.camera.render_height = view.view_height;
     p.camera.output_width = config.output_width; p.camera.output_height = config.output_height;
     p.camera.near_plane = view.near_plane; p.camera.vertical_fov_radians = view.vertical_fov; p.camera.depth_inverted = 1;
@@ -1660,7 +1660,7 @@ uint8_t hooked_translucency_mesh(void* list, void* view_object, void* context, v
                 }
                 scope.geometry_capacity = uint32_t(capacity);
                 scope.flags = RSF_GAME_RENDER_PRIMARY | (cut ? RSF_GAME_RENDER_RESET : 0u);
-                scope.camera.struct_size = sizeof(scope.camera); scope.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+                scope.camera.struct_size = sizeof(scope.camera); scope.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
                 scope.camera.render_width = camera.view_width; scope.camera.render_height = camera.view_height;
                 std::memcpy(scope.camera.jitter_pixels, camera.jitter_pixels, sizeof(camera.jitter_pixels));
                 std::memcpy(scope.camera.previous_jitter_pixels, camera.previous_jitter_pixels, sizeof(camera.previous_jitter_pixels));

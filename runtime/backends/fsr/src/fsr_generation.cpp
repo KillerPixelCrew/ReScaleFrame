@@ -183,7 +183,17 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         (setup->motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u) |
         (setup->motion_at_display_resolution ? FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS : 0u) |
         (setup->hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0u);
-    if (self->create(&self->generation, &desc.header, nullptr) != FFX_API_RETURN_OK) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
+    const auto created_generation = self->create(&self->generation, &desc.header, nullptr);
+    if (self->log) {
+        char text[1024]{};
+        std::snprintf(text, sizeof(text),
+            "FSR FG create generation: FFX result=%u requested_major=%u selected=%s id=%llu API=%u.%u.%u root=%s",
+            created_generation, setup->feature_major, self->state.version_name,
+            static_cast<unsigned long long>(self->state.version_id), uint32_t(FFX_FRAMEGENERATION_VERSION_MAJOR),
+            uint32_t(FFX_FRAMEGENERATION_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_VERSION_PATCH), setup->runtime_directory_utf8);
+        self->log(self->log_user, text);
+    }
+    if (created_generation != FFX_API_RETURN_OK) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
     ffxQueryGetProviderVersion actual{}; actual.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     if (self->query(&self->generation, &actual.header) != FFX_API_RETURN_OK || actual.versionId != self->state.version_id) {
         destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
@@ -192,7 +202,14 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     self->state.vsync_supported = 1;
     if (setup->chain.hwnd) {
         ComPtr<IDXGIFactory2> factory;
-        if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
+        const auto created_factory = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+        if (FAILED(created_factory)) {
+            if (self->log) {
+                char text[128]{}; std::snprintf(text, sizeof(text), "FSR FG create DXGI factory failed HRESULT=0x%08lx",
+                    static_cast<unsigned long>(created_factory)); self->log(self->log_user, text);
+            }
+            destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
+        }
         auto chain_desc = rsf::chain_description(setup->chain);
         IDXGISwapChain4* raw = nullptr;
         ffxCreateContextDescFrameGenerationSwapChainVersionDX12 version{};
@@ -202,9 +219,17 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         swap.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
         swap.header.pNext = &version.header; swap.swapchain = &raw; swap.hwnd = static_cast<HWND>(setup->chain.hwnd);
         swap.desc = &chain_desc; swap.dxgiFactory = factory.Get(); swap.gameQueue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
-        if (self->create(&self->swapchain, &swap.header, nullptr) != FFX_API_RETURN_OK || !raw) {
-            destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
+        const auto created_swapchain = self->create(&self->swapchain, &swap.header, nullptr);
+        if (self->log) {
+            char text[256]{};
+            std::snprintf(text, sizeof(text),
+                "FSR FG create swapchain: FFX result=%u chain=%u API=%u.%u.%u size=%ux%u buffers=%u format=%u",
+                created_swapchain, uint32_t(raw != nullptr), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MAJOR),
+                uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH),
+                chain_desc.Width, chain_desc.Height, chain_desc.BufferCount, uint32_t(chain_desc.Format));
+            self->log(self->log_user, text);
         }
+        if (created_swapchain != FFX_API_RETURN_OK || !raw) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
         self->chain.Attach(raw);
     }
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;

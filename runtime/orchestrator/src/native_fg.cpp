@@ -2,6 +2,7 @@
 #include <rescaleframe/native_fg.h>
 #include "latency_antilag.h"
 #include "latency_policy.h"
+#include "fg_status_snapshot.h"
 #include <dxgi1_6.h>
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/sr_session.h>
@@ -29,6 +30,8 @@ using Microsoft::WRL::ComPtr;
 std::mutex settings_guard;
 rsf_native_fg_options requested{sizeof(requested), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
 rsf_native_fg_status cached{};
+rsf::fg_status::Completed completed_status;
+uint64_t pending_status_generation{};
 rsf_backend_log_fn logger = nullptr;
 void* log_user = nullptr;
 uint32_t debug_lines = 0;
@@ -66,12 +69,16 @@ bool generates_on(uint32_t screen) {
     return rsf_frame_allows_fg(&record) != 0;
 }
 thread_local uint64_t presenting_id = 0;
+thread_local uint64_t presenting_session = 0;
+thread_local uint64_t completed_present_source = 0, completed_present_generation = 0;
+thread_local bool completed_present_ok = false;
 thread_local uint64_t rhi_frame_source = 0;
 // Default order: the game thread sleeps once at its pacing boundary, after the presenting
 // thread finished the previous frame's Present and before this frame's input. Nonzero keeps
 // UE's one-frame overlap instead, where that sleep races the previous submit/Present markers.
 std::atomic<uint32_t> threaded_reflex{0};
 std::atomic<uint32_t> graphics_api{11};
+std::atomic<uint32_t> rendered_source{0};
 std::atomic<uint64_t> derived_boundaries{0};
 // Highest source frame whose Present returned, or which ended or was abandoned without one.
 std::atomic<uint64_t> presented_through{0};
@@ -86,6 +93,7 @@ void complete_frame(uint64_t id) {
 uint64_t now_qpc() { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); return uint64_t(now.QuadPart); }
 rsf_backend_result frame_acquire(uint64_t id);
 rsf_backend_result frame_marker(uint64_t id, rsf_latency_marker marker) {
+    if (rendered_source.load()) return RSF_BACKEND_OK;
     const auto accepted=rsf_native_cpu_marker(id,uint32_t(marker));
     return accepted > 0 ? rsf_d3d11_present_marker(rsf_d3d11_present_generation(), id, marker, 0) :
         accepted == 0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -189,7 +197,8 @@ struct CpuOwner {
     uint32_t rhi_begins = 0, rhi_ends = 0, screen = 0, native_frame = 0, mismatched_window = 0;
     uint64_t first_submission = 0, last_submission = 0, first_view = 0, last_view = 0;
     uint64_t join_ticks = 0, reflex_ticks = 0, ready_qpc = 0, submit_begin = 0, submit_end = 0;
-    uint64_t previous = 0;
+    uint64_t previous = 0, source_qpc = 0, source_frequency = 0;
+    float source_delta_ms = 0;
     bool submit_ended = false;
 };
 std::mutex cpu_guard;
@@ -228,7 +237,7 @@ struct OwnershipTotals {
     uint64_t unpresented = 0, multi = 0, mismatched = 0, native_gaps = 0, rhi_begin = 0, rhi_end = 0;
     uint32_t previous_native = 0;
 };
-std::array<OwnershipTotals, 8> ownership{};
+std::array<OwnershipTotals, 9> ownership{};
 void audit_frame(uint64_t id) {
     char text[600]{};
     {
@@ -236,7 +245,7 @@ void audit_frame(uint64_t id) {
         auto& frame = cpu_frames[id % cpu_frames.size()];
         if (frame.id != id || frame.audited || !frame.ended || !frame.rhi_ends) return;
         frame.audited = true;
-        auto& total = ownership[std::min(frame.screen, 7u)];
+        auto& total = ownership[std::min(frame.screen, 8u)];
         LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
         if (!total.epoch) total.epoch = uint64_t(now.QuadPart);
         ++total.frames; total.expected += frame.expected_count; total.scenes += frame.scene_begins;
@@ -477,10 +486,36 @@ uint64_t join_previous_present(uint64_t previous) {
     return now_qpc() - started;
 }
 }
+extern "C" RSF_RUNTIME_API void rsf_native_fg_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result) {
+    rsf_backend_log_fn sink = nullptr; void* user = nullptr;
+    { std::lock_guard lock(settings_guard);
+      if (requested.mode == RSF_FG_OFF) return;
+      sink = logger; user = log_user; }
+    if (!sink || !stage) return;
+    static std::mutex receipt_guard;
+    static uint64_t previous_generation{};
+    static uint32_t lines{};
+    const auto generation = rsf_d3d11_present_generation();
+    { std::lock_guard lock(receipt_guard);
+      if (generation != previous_generation) { previous_generation = generation; lines = 0; }
+      if (lines++ >= 96) return; }
+    char text[256]{}; std::snprintf(text, sizeof(text),
+        "FG stage=%s generation=%llu source=%llu native_frame=%llu result=%d thread=%lu",
+        stage, static_cast<unsigned long long>(generation), static_cast<unsigned long long>(source),
+        static_cast<unsigned long long>(native_frame), result, static_cast<unsigned long>(GetCurrentThreadId()));
+    sink(user, text);
+}
+extern "C" RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled) {
+    rendered_source.store(enabled != 0);
+    rsf_native_cpu_rendered_source_set(enabled);
+}
 extern "C" RSF_RUNTIME_API void rsf_native_fg_options_set(const rsf_native_fg_options* options) {
     if (!options || options->struct_size < sizeof(*options) || options->mode > RSF_FG_DYNAMIC ||
         options->reflex_mode > RSF_REFLEX_BOOST) return;
-    std::lock_guard<std::mutex> lock(settings_guard); requested = *options;
+    std::lock_guard<std::mutex> lock(settings_guard);
+    if (requested.mode != options->mode || requested.generated_frames != options->generated_frames)
+        completed_status.deactivate();
+    requested = *options;
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_reflex_ordering_set(uint32_t threaded) {
     threaded_reflex.store(threaded ? 1u : 0u, std::memory_order_relaxed);
@@ -492,13 +527,20 @@ namespace { void anti_lag_status(rsf_fg_status&); }
 extern "C" RSF_RUNTIME_API int rsf_native_fg_status_get(rsf_native_fg_status* status) {
     if (!status || status->struct_size < sizeof(*status)) return 0;
     std::lock_guard<std::mutex> lock(settings_guard);
-    *status = cached; status->struct_size = sizeof(*status); status->requested = requested;
+    *status = rsf::fg_status::coherent(cached, pending_status_generation, completed_status,
+        rsf_d3d11_present_generation(), rsf_d3d11_present_has_owner() != 0, requested.mode != RSF_FG_OFF);
+    status->struct_size = sizeof(*status); status->requested = requested;
+    status->source_provenance = rendered_source.load() ? RSF_FRAME_SOURCE_RENDERED : RSF_FRAME_SOURCE_INPUT;
     status->available = rsf_d3d11_present_has_owner();
     if (!status->available) {
         status->vendor.active = 0; status->vendor.effective_mode = RSF_FG_OFF;
         status->vendor.effective_generated_frames = 0; status->vendor.low_latency_available = 0;
     }
-    if (status->available) anti_lag_status(status->vendor);
+    if (status->available && !rendered_source.load()) anti_lag_status(status->vendor);
+    if (rendered_source.load()) {
+        status->vendor.effective_reflex = RSF_REFLEX_OFF; status->vendor.low_latency_available = 0;
+        status->vendor.latency_paced_frames = 0; status->vendor.valid_statistics &= ~RSF_FG_STAT_LATENCY_AVAILABLE;
+    }
     return 1;
 }
 namespace {
@@ -643,6 +685,9 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event* even
             frame.join_ticks = joined_at - event->timestamp_qpc;
             frame.ready_qpc = ready_at; frame.previous = previous < id ? previous : 0;
         }
+    } else if (rendered_source.load() && event->stage != RSF_GAME_CPU_FRAME_END) {
+        // Facts remain in native_cpu; no input markers, inferred sleep or PCL claims.
+        return;
     } else if (event->stage == RSF_GAME_CPU_PACING) {
         if (!(event->event_version==RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_KEYED))) pace_cpu_frame(id);
     } else if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE) {
@@ -656,7 +701,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event* even
     } else if (event->stage == RSF_GAME_CPU_FRAME_END) {
         rsf_native_cpu_frame cpu{}; cpu.struct_size = sizeof(cpu);
         const bool aborted = (event->flags & RSF_GAME_CPU_RENDER_SKIPPED) ||
-            (rsf_native_cpu_read(event->session_id, id, &cpu) && (cpu.stage_mask & 15u) != 15u);
+            (rsf_native_cpu_read(event->session_id, id, &cpu) && (rendered_source.load() ? (cpu.stage_mask & 9u) != 9u : (cpu.stage_mask & 15u) != 15u));
         if (aborted) frame_abort(id);
         with_frame(id, [&](CpuOwner& frame) {
             frame.ended = true; frame.expected_count = event->render_expected;
@@ -696,7 +741,22 @@ void end_render_marker(uint64_t id, const char* stage) {
 extern "C" RSF_RUNTIME_API void rsf_native_fg_frame(const rsf_game_render_pass* pass, uint32_t begin) {
     if (!pass || pass->role != RSF_GAME_RENDER_FRAME || !pass->source_frame_id) return;
     auto* host = rsf_d3d11_present_host(); if (!rsf_d3d11_present_has_owner()) return;
-    with_frame(pass->source_frame_id, [&](CpuOwner& frame) { if (begin) ++frame.rhi_begins; else ++frame.rhi_ends; });
+    with_frame(pass->source_frame_id, [&](CpuOwner& frame) {
+        if (begin) {
+            ++frame.rhi_begins;
+            if (rendered_source.load()) {
+                if (frame.rhi_begins != 1 || frame.session != pass->session_id) frame.failed = true;
+                frame.source_qpc = now_qpc();
+                LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+                frame.source_frequency = uint64_t(frequency.QuadPart);
+                static uint64_t last_qpc{}, last_session{}, last_native{};
+                if (last_session == pass->session_id && pass->native_frame == last_native + 1 && frame.source_qpc > last_qpc)
+                    frame.source_delta_ms = float(double(frame.source_qpc - last_qpc) * 1000.0 / frame.source_frequency);
+                last_qpc = frame.source_qpc; last_session = pass->session_id; last_native = pass->native_frame;
+                frame.provider_generation = rsf_d3d11_present_generation();
+            }
+        } else ++frame.rhi_ends;
+    });
     // BeginFrame is queued before CPU sleep/input. On the D3D12 proxy device it contains no
     // rendering yet; a driver marker here measures that empty-queue wait as GPU frame work.
     // Keep its copied identity, but open the vendor interval at actual scene submission.
@@ -714,6 +774,7 @@ void start_render_marker(uint64_t id) {
     bool start = false;
     with_frame(id, [&](CpuOwner& frame) { if (!frame.failed && !frame.render_started) start = frame.render_started = true; });
     if (start) {
+        if (rendered_source.load()) return;
         uint64_t session{}; with_frame(id,[&](const CpuOwner& f) {session=f.session;});
         rsf_native_cpu_frame facts{}; facts.struct_size=sizeof(facts);
         if (rsf_native_cpu_read(session,id,&facts) && (facts.flags & RSF_GAME_CPU_INPUT_KEYED) && !(facts.marker_mask & 2u)) {
@@ -739,7 +800,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_latency_present(uint64_t id,void* cha
     if (begin) {
         start_render_marker(id);
         if (!threaded_reflex.load()) end_render_marker(id,"render submission end before present");
-        anti_lag_present(id,chain);
+        if (!rendered_source.load()) anti_lag_present(id,chain);
         trace("present begin",id,frame_marker(id,RSF_LATENCY_PRESENT_START));
     } else {
         trace("present end",id,frame_marker(id,RSF_LATENCY_PRESENT_END)); complete_frame(id);
@@ -754,7 +815,9 @@ extern "C" RSF_RUNTIME_API int rsf_native_latency_frame_get(rsf_native_latency_f
 }
 extern "C" RSF_RUNTIME_API int rsf_native_latency_status_get(rsf_native_latency_status* out) {
     if (!out || out->struct_size<sizeof(*out) || out->version!=1) return 0;
-    *out={sizeof(*out),1}; rsf_fg_status status{}; status.struct_size=sizeof(status); anti_lag_status(status);
+    *out={sizeof(*out),1};
+    if (rendered_source.load()) return 1; // Physical input timing and low latency unavailable.
+    rsf_fg_status status{}; status.struct_size=sizeof(status); anti_lag_status(status);
     out->owner=status.pacing_owner; out->available=status.low_latency_available;
     out->effective_mode=status.effective_reflex; out->paced_frames=status.latency_paced_frames;
     rsf_streamline_latency_status sdk{}; sdk.struct_size=sizeof(sdk);
@@ -832,6 +895,11 @@ thread_local rsf_game_render_pass bound_source{};
 extern "C" RSF_RUNTIME_API void rsf_native_fg_bind_source(const rsf_game_render_pass* identity) {
     bound_source = identity && identity->struct_size >= sizeof(*identity) && identity->source_frame_id ? *identity : rsf_game_render_pass{};
 }
+extern "C" RSF_RUNTIME_API int rsf_native_fg_scene_swap(rsf_game_render_pass* output) {
+    if (!output || output->struct_size < sizeof(*output)) return 0;
+    const auto previous = scene; scene = *output; *output = previous;
+    output->struct_size = sizeof(*output); return 1;
+}
 extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) {
     scene = pass ? *pass : rsf_game_render_pass{};
     if (!pass || pass->source_frame_id || !bound_source.source_frame_id) return;
@@ -842,7 +910,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* 
     scene.scope_id = bound_source.scope_id; scene.native_frame = bound_source.native_frame;
     scene.screen = bound_source.screen;
     scene.flags = (pass->flags & ~RSF_GAME_RENDER_NO_FG) |
-        (bound_source.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION));
+        (bound_source.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG));
 }
 namespace {
 // Colour formats the HUD-less copy can carry: D3D11-shareable display formats, SDR and HDR.
@@ -862,6 +930,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_final(void* context, const rsf_gam
     // HUD-less colour only feeds generation: no copy while it is off or no provider is live.
     { std::lock_guard<std::mutex> lock(settings_guard); if (requested.mode == RSF_FG_OFF) return; }
     if (!rsf_d3d11_present_provider() || !rsf_d3d11_present_session()) return;
+    rsf_native_fg_stage("final-enter", pass->source_frame_id, pass->native_frame, 0);
     auto& value = transfer(); if (!initialize(value, context)) return;
     auto& slot = slot_for(value, pass->source_frame_id);
     if (!slot.prepared || !holds(slot, *pass)) return;
@@ -887,24 +956,30 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_final(void* context, const rsf_gam
         if (!create_surface(value, slot.hudless, desc.Width, desc.Height, desc.Format)) return;
         slot.hudless_format = desc.Format; slot.hudless_width = desc.Width; slot.hudless_height = desc.Height;
     }
+    rsf_native_fg_stage("final-copy", pass->source_frame_id, pass->native_frame, 0);
     value.context11->CopyResource(surface11(slot.hudless), source.Get());
     slot.hudless_ready = signal11(value, slot.complete);
+    rsf_native_fg_stage("final-done", pass->source_frame_id, pass->native_frame, slot.hudless_ready ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY);
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_dlss_frame* frame) {
     if (context && frame && frame->camera_motion_included) rsf_input_dump_fg(context, &scene, frame);
     if (!rsf_d3d11_present_has_owner() || !context || !frame || !scene.source_frame_id || !frame->camera_motion_included) return;
+    { std::lock_guard lock(settings_guard); if (requested.mode == RSF_FG_OFF) return; }
     auto& value = transfer(); if (!initialize(value, context)) return;
     auto& slot = slot_for(value, scene.source_frame_id);
     // Idempotent per frame: SR evaluation, or an earlier capture, already filled this slot for
     // this pass. Running again would also wait on this frame's own unsubmitted fence value.
     if (slot.prepared && holds(slot, scene)) return;
+    rsf_native_fg_stage("capture-resources", scene.source_frame_id, scene.native_frame, 0);
     if (!frame->depth || !frame->motion || !resources(value, slot, *frame, false)) return;
+    rsf_native_fg_stage("capture-copy", scene.source_frame_id, scene.native_frame, 0);
     slot.prepared = false;
     value.context11->CopyResource(surface11(slot.surfaces[1]), static_cast<ID3D11Resource*>(frame->depth));
     value.context11->CopyResource(surface11(slot.surfaces[2]), static_cast<ID3D11Resource*>(frame->motion));
     if (!signal11(value, slot.complete)) return;
     slot.source = scene.source_frame_id; slot.pass = scene; slot.prepared = true; slot.hudless_ready = false;
     with_frame(scene.source_frame_id, [](CpuOwner& owner) { ++owner.sr_calls; });
+    rsf_native_fg_stage("capture-done", scene.source_frame_id, scene.native_frame, 0);
 }
 extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context, const rsf_dlss_frame* frame) {
     const auto started = now_qpc();
@@ -1014,7 +1089,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         std::lock_guard<std::mutex> lock(cpu_guard);
         const auto& frame = cpu_frames[window.source_frame_id % cpu_frames.size()];
         cpu_owner = frame;
-        submitted_frame = frame.id == window.source_frame_id && frame.submitted && frame.render_complete && frame.paced && !frame.failed &&
+        submitted_frame = frame.id == window.source_frame_id && frame.submitted && frame.render_complete && (rendered_source.load() || frame.paced) && !frame.failed &&
             frame.provider_generation == rsf_d3d11_present_generation();
     }
     const bool inputs = selected && selected->source == window.source_frame_id && selected->prepared;
@@ -1023,15 +1098,28 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         selected->pass.submission_id == final.submission_id && selected->pass.view_key == final.view_key &&
         selected->pass.native_frame == final.native_frame;
     const bool scene_supported = inputs && generates_on(selected->pass.screen);
-    const bool continuous = inputs && !(selected->pass.flags & RSF_GAME_RENDER_RESET);
+    const bool continuous = inputs && !(selected->pass.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG)) &&
+        !(window.flags & RSF_GAME_RENDER_NO_FG);
     const bool vsync = !sync || status.vsync_supported;
-    const bool cpu_valid = window_matched && rsf_native_cpu_read(window.session_id, window.source_frame_id, &cpu) &&
+    const bool rendered = rendered_source.load() != 0;
+    const auto selected_backend = rsf_d3d11_present_backend();
+    const bool rendered_policy = rendered &&
+        (selected_backend == RSF_FG_BACKEND_FSR3 || selected_backend == RSF_FG_BACKEND_FSR4) &&
+        status.pacing_owner == RSF_PACING_NONE && options.reflex_mode == RSF_REFLEX_OFF && !options.frame_limit_us;
+    const bool rendered_valid = rendered_policy && window_matched &&
+        rsf_native_cpu_read(window.session_id, window.source_frame_id, &cpu) && !cpu.failed &&
+        (cpu.stage_mask & 9u) == 9u && cpu_owner.session == window.session_id &&
+        cpu_owner.id == window.source_frame_id && !cpu_owner.failed && cpu_owner.rhi_begins == 1 &&
+        cpu_owner.source_qpc && cpu_owner.source_frequency && cpu_owner.scene_begins == 1 && cpu_owner.scene_ends == 1 &&
+        cpu_owner.first_submission == window.submission_id && cpu_owner.first_view == window.view_key;
+    const bool measured_valid = !rendered && window_matched && rsf_native_cpu_read(window.session_id, window.source_frame_id, &cpu) &&
         !cpu.failed && !(cpu.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) && (cpu.stage_mask & 7u) == 7u &&
         cpu_owner.id==window.source_frame_id && cpu_owner.paced && !cpu_owner.failed;
+    const bool cpu_valid = rendered ? rendered_valid : measured_valid;
     // Slate/RHI may present while the game thread is finishing its frame. The renderer's
     // copied post-update identity authorizes these inputs; full SimulationEnd can arrive later.
     const bool valid = matched && inputs && hudless && submitted_frame && identity && scene_supported && continuous && vsync && cpu_valid;
-    if (options.debug && inputs && cpu_valid && cpu_owner.id == window.source_frame_id)
+    if (!rendered && options.debug && inputs && cpu_valid && cpu_owner.id == window.source_frame_id)
         report_frame_timing(cpu, cpu_owner, *selected);
     // The requested limit is the interval of rendered frames, before generation. With
     // generation active the driver's Reflex limiter counts every presented frame (measured:
@@ -1046,7 +1134,9 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         generated, 0, status.pacing_owner != RSF_PACING_NONE ? options.reflex_mode : RSF_REFLEX_OFF,
         status.pacing_owner == RSF_PACING_NONE ? 0u : options.frame_limit_us / presents_per_frame};
     // Options are owner-thread calls. The provider handles transition-only SDK option updates.
+    rsf_native_fg_stage("prepare-configure", window.source_frame_id, selected ? selected->pass.native_frame : 0, valid ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY);
     const auto configuration = rsf_d3d11_present_provider()->configure(provider, &configured);
+    rsf_native_fg_stage("prepare-configured", window.source_frame_id, selected ? selected->pass.native_frame : 0, configuration);
     rsf_backend_log_fn diagnostic = nullptr; void* diagnostic_user = nullptr;
     const uint32_t eligibility = uint32_t(window_matched) | (uint32_t(scene_matched) << 1) |
         (uint32_t(matched) << 2) | (uint32_t(inputs) << 3) | (uint32_t(submitted_frame) << 4) |
@@ -1055,7 +1145,13 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         ((selected ? selected->pass.screen : 0u) << 12) | (uint32_t(hudless) << 16);
     {
         std::lock_guard<std::mutex> lock(settings_guard);
+        pending_status_generation = rsf_d3d11_present_generation();
         cached.vendor = status; cached.last_result = configuration; cached.source_frame_id = window.source_frame_id;
+        if (rendered) {
+            cached.input_qpc = 0;
+            cached.source_qpc = cpu_owner.id == window.source_frame_id ? cpu_owner.source_qpc : 0;
+            cached.source_qpc_frequency = cpu_owner.id == window.source_frame_id ? cpu_owner.source_frequency : 0;
+        }
         cached.reason = !matched ? RSF_NATIVE_FG_REASON_NO_MATCH : !inputs ? RSF_NATIVE_FG_REASON_NOT_PREPARED :
             !submitted_frame ? RSF_NATIVE_FG_REASON_NO_SUBMISSION : !scene_supported ? RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED :
             !continuous ? RSF_NATIVE_FG_REASON_RESET : !vsync ? RSF_NATIVE_FG_REASON_VSYNC :
@@ -1078,19 +1174,29 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
     if (configuration != RSF_BACKEND_OK || !valid) return;
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = window.session_id; record.frame_id = window.source_frame_id; record.resource_generation = selected->generation;
-    record.input_qpc = std::max(cpu.input_ready_qpc,cpu.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE]); record.phase = RSF_PHASE_UI_COMPLETE; record.screen = selected->pass.screen;
+    record.input_qpc = rendered ? 0 : std::max(cpu.input_ready_qpc,cpu.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE]);
+    if (rendered) {
+        record.source_provenance = RSF_FRAME_SOURCE_RENDERED;
+        record.source_qpc = cpu_owner.source_qpc; record.source_qpc_frequency = cpu_owner.source_frequency;
+    } record.phase = RSF_PHASE_UI_COMPLETE; record.screen = selected->pass.screen;
     record.render_width = selected->width; record.render_height = selected->height;
     record.output_width = selected->output_width; record.output_height = selected->output_height;
     record.camera = selected->pass.camera;
     // One meaning for every provider: the source-frame delta. CPU simulation time is not a frame
     // time, and may not even have ended yet on UE's overlapped render thread.
     const float engine_delta = record.camera.frame_time_seconds * 1000;
-    const auto input = record.input_qpc;
+    const auto input = rendered ? record.source_qpc : record.input_qpc;
+    if (rendered && !(std::isfinite(engine_delta) && engine_delta > 0) &&
+        !(std::isfinite(cpu_owner.source_delta_ms) && cpu_owner.source_delta_ms > 0)) return;
     record.frame_time_ms = std::clamp(std::isfinite(engine_delta) && engine_delta > 0 ? engine_delta :
         value.previous_input_qpc && input > value.previous_input_qpc ?
-            float(double(input - value.previous_input_qpc) * 1000.0 / cpu.qpc_frequency) : 16.67f, 0.01f, 1000.0f);
-    value.previous_input_qpc = input;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+            float(double(input - value.previous_input_qpc) * 1000.0 / (rendered ? record.source_qpc_frequency : cpu.qpc_frequency)) : 16.67f, 0.01f, 1000.0f);
+    if (rendered) record.frame_time_ms = std::isfinite(engine_delta) && engine_delta > 0 ? engine_delta : cpu_owner.source_delta_ms;
+    else value.previous_input_qpc = input;
+    { std::lock_guard lock(settings_guard);
+      cached.input_qpc = record.input_qpc; cached.source_qpc = record.source_qpc;
+      cached.source_qpc_frequency = record.source_qpc_frequency; }
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     rsf_fg_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record; frame.interpolate = options.mode != RSF_FG_OFF;
     frame.motion_scale_x = frame.motion_scale_y = 1;
     // Every provider gets its inputs in the read state. Retirement restores them for D3D11 reuse
@@ -1107,7 +1213,9 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         if (i) rsf::transition(commands, static_cast<ID3D12Resource*>(native[i]), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
     selected->restore = true;
+    rsf_native_fg_stage("provider-prepare-enter", window.source_frame_id, selected->pass.native_frame, 0);
     const auto preparation = rsf_d3d11_present_provider()->prepare(provider, list, &frame);
+    rsf_native_fg_stage("provider-prepare-done", window.source_frame_id, selected->pass.native_frame, preparation);
     rsf_input_dump_fg_prepare(&selected->pass, &frame, preparation);
     selected->prepared = preparation == RSF_BACKEND_OK;
     { std::lock_guard<std::mutex> lock(settings_guard); cached.last_result = preparation; if (selected->prepared && frame.interpolate) ++cached.tagged_frames; }
@@ -1122,16 +1230,28 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_retire(void*, void* provider) {
             std::lock_guard<std::mutex> lock(transfer().vendor_guard); slot->read_state = true; slot->restore = false;
         }
         tagged_slot = nullptr;
-        std::lock_guard<std::mutex> lock(settings_guard); cached.vendor = {}; return;
+        std::lock_guard<std::mutex> lock(settings_guard); cached.vendor = {}; completed_status = {};
+        completed_present_ok = false; return;
     }
     rsf_fg_status state{}; state.struct_size = sizeof(state);
-    if (rsf_d3d11_present_provider()->status(provider, &state) == RSF_BACKEND_OK) {
+    const auto status_result = rsf_d3d11_present_provider()->status(provider, &state);
+    if (status_result == RSF_BACKEND_OK) {
         rsf_backend_log_fn sink = nullptr; void* user = nullptr; bool changed = false;
         { std::lock_guard<std::mutex> lock(settings_guard);
           changed = cached.vendor.active != state.active || cached.vendor.effective_mode != state.effective_mode;
-          cached.vendor = state; sink = logger; user = log_user; }
+          cached.vendor = state;
+          const auto generation = rsf_d3d11_present_generation();
+          completed_status.observe(cached, pending_status_generation, completed_present_generation,
+              completed_present_source, completed_present_ok, generation);
+          completed_present_ok = false;
+          sink = logger; user = log_user; }
         if (changed && sink) { char text[200]; std::snprintf(text, sizeof(text), "FG effective mode=%u generated=%u active=%u total presents=%llu status=%d",
             state.effective_mode, state.effective_generated_frames, state.active, static_cast<unsigned long long>(state.total_presented), state.vendor_status); sink(user, text); }
+    }
+    else {
+        std::lock_guard lock(settings_guard);
+        completed_status = {}; cached.vendor.active = 0; cached.last_result = status_result;
+        completed_present_ok = false;
     }
     auto* slot = tagged_slot; tagged_slot = nullptr;
     auto& value = transfer();
@@ -1179,6 +1299,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_present(const rsf_observer_present
     if (!event->completed) {
         rsf_game_render_pass window{}; window.struct_size = sizeof(window);
         presenting_id = rsf_native_window_match(event->swapchain, &window) ? window.source_frame_id : 0;
+        presenting_session = presenting_id ? window.session_id : 0;
         const auto counted = presenting_id ? presenting_id : rhi_frame_source;
         if (counted) with_frame(counted, [](CpuOwner& frame) {
             ++frame.presents;
@@ -1186,7 +1307,13 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_present(const rsf_observer_present
         });
         rsf_native_latency_present(presenting_id,event->swapchain,1);
     } else {
+        completed_present_source = presenting_id;
+        completed_present_generation = rsf_d3d11_present_generation();
+        completed_present_ok = SUCCEEDED(event->result);
+        if (presenting_id) (void)rsf_native_cpu_present_result(presenting_session, presenting_id,
+            RSF_NATIVE_CPU_PRESENT_RETURNED, event->result);
         rsf_native_latency_present(presenting_id,event->swapchain,0);
+        presenting_session = 0;
         presenting_id = 0;
     }
 }

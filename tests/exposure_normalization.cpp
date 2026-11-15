@@ -53,7 +53,7 @@ int main() try
     if(rsf_sr12_capture(context,directory.string().c_str(),1,1))return 1;
     rsf_game_render_pass pass{};pass.struct_size=sizeof(pass);pass.session_id=7;pass.native_frame=pass.source_frame_id=pass.history_key=1;
     pass.resource_generation=pass.camera_valid=1;pass.color_input=color.Get();pass.depth=depth.Get();pass.motion=motion.Get();pass.exposure=exposure.Get();
-    pass.motion_to_uv[0]=pass.motion_to_uv[1]=-0.125f;pass.camera.struct_size=sizeof(pass.camera);pass.camera.abi_version=RSF_GAME_FRAME_ABI_VERSION;
+    pass.motion_to_uv[0]=pass.motion_to_uv[1]=-0.125f;pass.camera.struct_size=sizeof(pass.camera);pass.camera.abi_version=RSF_GAME_CAMERA_ABI_VERSION;
     pass.camera.render_width=pass.camera.render_height=pass.camera.output_width=pass.camera.output_height=8;
     if(rsf_sr12_evaluate(context,list.Get(),&pass,0)||FAILED(list->Close()))return 1;
     ID3D12CommandList* lists[]={list.Get()};queue->ExecuteCommandLists(1,lists);ComPtr<ID3D12Fence> fence;

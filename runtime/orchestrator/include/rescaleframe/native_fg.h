@@ -32,8 +32,15 @@ typedef struct rsf_native_fg_status {
     uint32_t available, reason;
     int32_t last_result;
     uint64_t source_frame_id, tagged_frames;
+    /* Source provenance is independent of physical input timing; zero input is unknown. */
+    uint32_t source_provenance;
+    uint64_t input_qpc, source_qpc, source_qpc_frequency;
 } rsf_native_fg_status;
 RSF_RUNTIME_API int rsf_native_fg_status_get(rsf_native_fg_status*);
+/* Cold host setup only: rendered source mode never calls a pre-input pacer. */
+RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled);
+/* Bounded first requested-FG operations per provider generation; diagnostics only. */
+RSF_RUNTIME_API void rsf_native_fg_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result);
 RSF_RUNTIME_API void rsf_native_fg_set_log(rsf_backend_log_fn, void* user);
 RSF_RUNTIME_API void rsf_native_fg_options_set(const rsf_native_fg_options*);
 /* Zero (default): the game thread's one sleep waits for the previous frame's Present to
@@ -43,6 +50,8 @@ RSF_RUNTIME_API void rsf_native_fg_reflex_ordering_set(uint32_t threaded);
 RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event*);
 /* Copied identity, scoped around the engine's SR callback. Never uses the latest CPU ID. */
 RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass*);
+/* Graphics owner only. Swap the exact copied scene for nested synchronous scopes; no identity inference. */
+RSF_RUNTIME_API int rsf_native_fg_scene_swap(rsf_game_render_pass*);
 RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context11, const rsf_dlss_frame*);
 /* Preserve normalized depth/motion independently of the chosen SR provider. Idempotent per pass:
    a no-op once rsf_native_fg_evaluate or an earlier capture filled it, so callers need not choose. */

@@ -68,14 +68,17 @@ inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
     if (!frame || frame->struct_size < sizeof(*frame) || !frame->record ||
         frame->record->struct_size < sizeof(rsf_frame_record)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const auto& record = *frame->record;
-    if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION)
+    if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (!record.frame_id || record.camera.struct_size < sizeof(rsf_camera_frame) ||
         !record.output_width || !record.output_height || !record.render_width || !record.render_height ||
         record.output_width > INT32_MAX || record.output_height > INT32_MAX)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (record.source_provenance > RSF_FRAME_SOURCE_RENDERED ||
+        (record.source_provenance == RSF_FRAME_SOURCE_RENDERED && !rsf_frame_has_rendered_source(&record)))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!frame->interpolate) return RSF_BACKEND_OK;
-    if (!record.session_id || !record.resource_generation || !record.input_qpc || record.phase != RSF_PHASE_UI_COMPLETE)
+    if (!record.session_id || !record.resource_generation || (!record.input_qpc && !rsf_frame_has_rendered_source(&record)) || record.phase != RSF_PHASE_UI_COMPLETE)
         return RSF_BACKEND_ERROR_NOT_READY;
     if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID))
         return RSF_BACKEND_ERROR_NOT_READY;

@@ -194,6 +194,47 @@ typedef struct rsf_game_cpu_event {
 /* Runs at the actual native CPU boundary. Borrowed only during the call; no graphics-context
    work may be performed here. FRAME_END closes CPU ownership, not GPU or Present ownership. */
 typedef void (*rsf_game_cpu_event_fn)(void* user, const rsf_game_cpu_event* event);
+/* CPU event version 2, append-only and delivered through the same cpu_event callback:
+   prospective source lifetimes. These stages exist only in rsf_game_cpu_source_event, whose
+   header.struct_size covers the extension and whose header.event_version is 2. Version 2 is
+   not valid for stages 0..6, and these stages are not valid with versions 0 or 1. A runtime
+   that predates them refuses the packet; it never reads past header.struct_size.
+
+   A reservation records an actual native input poll whose consuming engine update is not yet
+   known. header.source_frame_id names the future source P, from the same identity namespace as
+   FRAME_BEGIN; P must be newer than every source begun so far and is never reused, including
+   after an abort. A reservation is not FRAME_BEGIN, INPUT_SAMPLE, SIMULATION_BEGIN or any
+   Present marker, and it implies no pacing request. Facts stay in the runtime's CPU ledger. */
+#define RSF_GAME_CPU_SOURCE_RESERVE 7u /* immediately before the unchanged native poll */
+#define RSF_GAME_CPU_SOURCE_SAMPLED 8u /* after that poll returned; input_kind lists delivered kinds */
+/* The proven native branch at which the open source P, begun with the reserved identity,
+   starts consuming the sampled state. Binding asserts ownership of that poll, not that every
+   consumer of it has already run or has been observed. */
+#define RSF_GAME_CPU_SOURCE_BIND 9u
+#define RSF_GAME_CPU_SOURCE_ABORT 10u /* explicit withdrawal before or after binding */
+#define RSF_GAME_CPU_EVENT_VERSION_SOURCE 2u
+/* SOURCE_RESERVE: the poll may run while the predecessor still renders and presents. */
+#define RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR 64u
+/* SOURCE_SAMPLED: the poll completed the engine's control state without an overlapping poll. */
+#define RSF_GAME_CPU_SOURCE_PRODUCED 128u
+#define RSF_GAME_CPU_ABORT_UNSPECIFIED 0u
+#define RSF_GAME_CPU_ABORT_INTERVENING_POLL 1u
+#define RSF_GAME_CPU_ABORT_NOT_PRODUCED 2u
+#define RSF_GAME_CPU_ABORT_NOT_CONSUMED 3u
+#define RSF_GAME_CPU_ABORT_STATE_CHANGED 4u
+#define RSF_GAME_CPU_ABORT_QUIESCE 5u
+#define RSF_GAME_CPU_ABORT_SUPERSEDED 6u
+#define RSF_GAME_CPU_ABORT_OVERLAP 7u
+typedef struct rsf_game_cpu_source_event {
+    rsf_game_cpu_event header;
+    /* RESERVE: the source whose actual Present this poll may overlap, or 0 when none is known.
+       It is a dependency fact for the runtime, not a request to wait. */
+    uint64_t predecessor_source_id;
+    /* RESERVE/SAMPLED: the adapter's monotonic native poll generation; opaque to the runtime. */
+    uint64_t native_generation;
+    uint32_t reason; /* ABORT: RSF_GAME_CPU_ABORT_* */
+    uint32_t reserved;
+} rsf_game_cpu_source_event;
 
 /* Synchronous replacement of an engine upscale. Zero accepts the replacement only after the
    host has recorded a complete output. Any other result leaves native evaluation enabled.

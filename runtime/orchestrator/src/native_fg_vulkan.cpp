@@ -235,13 +235,13 @@ bool valid_record(const rsf_ffxgvk& self, const rsf_fgvk_frame* frame) {
     if (!frame || frame->struct_size < sizeof(*frame) || frame->abi_version != RSF_FGVK_ABI_VERSION || !frame->record) return false;
     const auto& record = *frame->record;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION) return false;
+        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return false;
     const auto& camera = record.camera;
     bool finite = true;
     for (const auto* matrix : {camera.view_to_clip, camera.clip_to_view, camera.view_to_world, camera.world_to_view, camera.clip_to_previous_clip})
         for (uint32_t i = 0; i < 16; ++i) finite &= std::isfinite(matrix[i]);
     return finite && record.struct_size >= sizeof(record) && record.abi_version == RSF_GAME_FRAME_ABI_VERSION &&
-        record.camera.struct_size >= sizeof(record.camera) && record.camera.abi_version == RSF_GAME_FRAME_ABI_VERSION &&
+        record.camera.struct_size >= sizeof(record.camera) && record.camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION &&
         record.session_id && record.frame_id && record.render_width && record.render_height &&
         record.render_width <= self.width && record.render_height <= self.height && record.output_width == self.width && record.output_height == self.height &&
         camera.render_width == record.render_width && camera.render_height == record.render_height && camera.output_width == self.width && camera.output_height == self.height &&

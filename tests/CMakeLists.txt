@@ -1,4 +1,5 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE rsf_orchestrator rsf_build_options d3d11 dxgi)
@@ -252,6 +253,11 @@ add_executable(rsf_skyrim_input skyrim_input.cpp ../games/skyrim-se/src/cpu_even
 target_link_libraries(rsf_skyrim_input PRIVATE ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 
+add_executable(rsf_native_cpu_reservation_test native_cpu_reservation.cpp)
+target_compile_definitions(rsf_native_cpu_reservation_test PRIVATE RSF_RUNTIME_BUILD)
+target_link_libraries(rsf_native_cpu_reservation_test PRIVATE ReScaleFrame::GameSDK rsf_native_cpu rsf_build_options)
+add_test(NAME native_cpu_reservation_contract COMMAND rsf_native_cpu_reservation_test)
+
 add_executable(rsf_sampler_bias sampler_bias.cpp ../runtime/orchestrator/src/sampler_bias.cpp)
 target_include_directories(rsf_sampler_bias PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_sampler_bias PRIVATE ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
@@ -361,7 +367,8 @@ set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_executable(rsf_fg_session_test fg_session.cpp ../runtime/orchestrator/src/fg_session.cpp
     ../runtime/orchestrator/src/frame_sequencer.cpp)
 target_compile_definitions(rsf_fg_session_test PRIVATE RSF_RUNTIME_BUILD)
-target_include_directories(rsf_fg_session_test PRIVATE ../runtime/orchestrator/include)
+target_include_directories(rsf_fg_session_test PRIVATE ../runtime/orchestrator/include
+    ../runtime/presentation/include ../runtime/backends/dlss/include ../runtime/graphics/include)
 target_link_libraries(rsf_fg_session_test PRIVATE ReScaleFrame::Contract rsf_build_options d3d12)
 add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 120)

@@ -129,7 +129,7 @@ bool valid(const rsf_unity_packet& packet)
     const auto& c = packet.camera;
     if (packet.struct_size != sizeof(packet) || packet.abi_version != RSF_UNITY_BRIDGE_ABI_VERSION ||
         packet.session_id != services.session_id || !packet.frame_id || !packet.view_key || (!(packet.flags & (RSF_UNITY_PACKET_WINDOW | RSF_UNITY_PACKET_HUDLESS)) && !packet.color) ||
-        c.struct_size != sizeof(c) || c.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+        c.struct_size != sizeof(c) || c.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         !c.render_width || !c.render_height || !c.output_width || !c.output_height ||
         c.render_width > 16384 || c.render_height > 16384 || c.output_width > 16384 || c.output_height > 16384 ||
         !std::isfinite(c.near_plane) || !std::isfinite(c.far_plane) || c.near_plane <= 0 || c.far_plane <= c.near_plane)

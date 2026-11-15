@@ -163,7 +163,7 @@ DXGI_FORMAT depth_view_format(DXGI_FORMAT format)
 bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
 {
     if (!pass.camera_valid || pass.camera.struct_size != sizeof(rsf_camera_frame) ||
-        pass.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION || !pass.native_frame || !pass.session_id ||
+        pass.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION || !pass.native_frame || !pass.session_id ||
         !pass.history_key || pass.camera.render_width != self.width || pass.camera.render_height != self.height ||
         pass.camera.output_width != self.output_width || pass.camera.output_height != self.output_height)
         return false;

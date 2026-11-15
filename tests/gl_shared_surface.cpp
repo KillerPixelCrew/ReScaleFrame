@@ -185,7 +185,7 @@ int main() try {
             require(rsf_gl_pipeline_abort(pipeline,frame)==RSF_BACKEND_OK,"incomplete resized frame closes its CPU ownership");
             if(auto* host=rsf_d3d11_present_host())require(rsf_streamline_host_token(host,frame)==nullptr,"aborted resize frame must release its SDK token");
             rsf_game_render_pass pass{};pass.struct_size=sizeof(pass);pass.history_key=pass.view_key=1;pass.camera_valid=1;pass.screen=RSF_SCREEN_FLIGHT;
-            auto& camera=pass.camera;camera.struct_size=sizeof(camera);camera.abi_version=RSF_GAME_FRAME_ABI_VERSION;
+            auto& camera=pass.camera;camera.struct_size=sizeof(camera);camera.abi_version=RSF_GAME_CAMERA_ABI_VERSION;
             for(size_t i=0;i<16;i+=5)camera.view_to_clip[i]=camera.clip_to_view[i]=camera.view_to_world[i]=camera.world_to_view[i]=camera.clip_to_previous_clip[i]=1;
             camera.render_width=surfaces.render_width;camera.render_height=surfaces.render_height;camera.output_width=width;camera.output_height=height;
             camera.near_plane=.05f;camera.far_plane=1024;camera.vertical_fov_radians=1;camera.frame_time_seconds=.016f;

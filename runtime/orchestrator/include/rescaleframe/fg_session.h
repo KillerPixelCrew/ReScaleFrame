@@ -43,6 +43,9 @@ RSF_RUNTIME_API rsf_backend_result rsf_fg_session_create(const rsf_fg_host*, rsf
 RSF_RUNTIME_API rsf_backend_result rsf_fg_session_select(rsf_fg_session*,
     const rsf_generation_provider*, const rsf_generation_setup*, const rsf_fg_options*);
 RSF_RUNTIME_API rsf_backend_result rsf_fg_session_begin(rsf_fg_session*, uint64_t frame_id);
+/* No begin_frame SDK call: only providers explicitly reporting no pacing and
+   configured with latency Off and no limiter may consume this source class. */
+RSF_RUNTIME_API rsf_backend_result rsf_fg_session_begin_rendered(rsf_fg_session*, uint64_t frame_id, uint64_t source_qpc);
 RSF_RUNTIME_API rsf_backend_result rsf_fg_session_marker(rsf_fg_session*, uint64_t frame_id,
     rsf_latency_marker, uint64_t timestamp, uint32_t controller_input);
 RSF_RUNTIME_API rsf_backend_result rsf_fg_session_prepare(rsf_fg_session*, void* command_list, const rsf_fg_frame*);

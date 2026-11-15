@@ -101,7 +101,7 @@ bool rsf_rdr2_decode_render_camera(const void* pointer,size_t bytes,
         if (!inverse(clip_to_previous,previous_to_clip)) return false;
     }
     auto& c=decoded.camera;
-    c.struct_size=sizeof(c);c.abi_version=RSF_GAME_FRAME_ABI_VERSION;
+    c.struct_size=sizeof(c);c.abi_version=RSF_GAME_CAMERA_ABI_VERSION;
     if (!store(view,c.world_to_view) || !store(world,c.view_to_world) || !store(projection,c.view_to_clip) ||
         !store(clip_to_view,c.clip_to_view) || !store(clip_to_previous,c.clip_to_previous_clip) ||
         !store(previous_to_clip,decoded.previous_clip_to_clip)) return false;

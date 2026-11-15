@@ -191,6 +191,7 @@ rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<XegSession*>(pointer);
     auto result = rsf::fg_frame(frame, self.device.Get()); if (result != 0) return result;
+    if (frame->record->source_provenance == RSF_FRAME_SOURCE_RENDERED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const uint64_t id = frame->record->frame_id;
     if (!self.chain || id <= self.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
     uint32_t sdk = 0;

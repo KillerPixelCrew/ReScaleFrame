@@ -556,7 +556,7 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgeCaptureSource(rsf_xess_bri
     const rsf_frame_record* record) {
     if (!value || !record || record->struct_size < sizeof(*record) || record->camera.struct_size < sizeof(record->camera) ||
         !record->frame_id || record->frame_id > UINT32_MAX || !record->session_id) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION || record->camera.abi_version != RSF_GAME_FRAME_ABI_VERSION)
+    if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
         return RSF_XESS_BRIDGE_ABI_MISMATCH;
     return value->capture.source(*record, value->activeInterpolations) ? 0 : -7012;
 }

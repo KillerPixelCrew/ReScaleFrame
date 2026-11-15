@@ -65,7 +65,7 @@ extern "C" int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk* owner, void* commands,
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (frame->record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (frame->record->camera.struct_size < sizeof(frame->record->camera)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->record->camera.abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (frame->record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (frame->reactive.image || frame->composition.image) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #if defined(RSF_VULKAN_FSR4_ENABLED)
     return public_result(rsf_fsr4vk_evaluate(owner, commands, frame, continuation));

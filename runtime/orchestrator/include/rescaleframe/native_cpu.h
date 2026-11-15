@@ -62,6 +62,8 @@ RSF_RUNTIME_API void rsf_native_cpu_paced(uint64_t source, uint64_t began, uint6
 /* Copies CPU ownership/ordering only, with no GPU or presentation authorization. A bounded
    cache may reuse ended records; absent or overwritten IDs refuse lookup. Live records never
    evict. The optional vendor sink runs at the real CPU boundary, outside the cache lock. */
+/* Cold runtime setup: preserve only reported CPU stages; never infer input sampling. */
+RSF_RUNTIME_API void rsf_native_cpu_rendered_source_set(uint32_t enabled);
 RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* event);
 /* Runtime hosts deliver accepted and normalized facts to their backend endpoint. No adapter supplies this sink. */
 RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event* event, rsf_game_cpu_event_fn sink, void* user);
@@ -71,6 +73,43 @@ RSF_RUNTIME_API int rsf_native_cpu_read(uint64_t session, uint64_t source, rsf_n
 /* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
    work (see docs/representation-plan.md). Do not delete as dead code. */
 RSF_RUNTIME_API void rsf_native_cpu_set_sink(rsf_game_cpu_event_fn sink, void* user);
+/* Prospective source reservations (CPU event version 2). Retained facts only: nothing here
+   paces, marks a vendor, admits an input timeline or reaches a dispatch sink. */
+#define RSF_NATIVE_CPU_RESERVATION_OPEN 1u     /* poll in flight */
+#define RSF_NATIVE_CPU_RESERVATION_SAMPLED 2u  /* poll returned; consuming source unknown */
+#define RSF_NATIVE_CPU_RESERVATION_ADOPTED 3u  /* FRAME_BEGIN used the identity; not yet bound */
+#define RSF_NATIVE_CPU_RESERVATION_BOUND 4u    /* consumption bound inside the open source */
+#define RSF_NATIVE_CPU_RESERVATION_CLOSED 5u   /* bound source ended */
+#define RSF_NATIVE_CPU_RESERVATION_UNBOUND 6u  /* adopted source ended without binding */
+#define RSF_NATIVE_CPU_RESERVATION_ABORTED 7u
+/* Predecessor actual-Present outcome, as known when the reservation is read. */
+#define RSF_NATIVE_CPU_DEPENDENCY_NONE (-1)     /* no predecessor reported */
+#define RSF_NATIVE_CPU_DEPENDENCY_PENDING 0
+#define RSF_NATIVE_CPU_DEPENDENCY_PRESENTED 1   /* the actual call returned success */
+#define RSF_NATIVE_CPU_DEPENDENCY_SUPERSEDED 2  /* a later source presented; none reported for this one */
+#define RSF_NATIVE_CPU_DEPENDENCY_CANCELLED 3   /* the engine will not present it */
+#define RSF_NATIVE_CPU_DEPENDENCY_FAILED 4      /* the actual call returned failure */
+#define RSF_NATIVE_CPU_DEPENDENCY_UNVERIFIED 5  /* returned without a result; not success */
+typedef struct rsf_native_cpu_reservation {
+    uint32_t struct_size, state;
+    uint64_t session_id, source_frame_id, predecessor_source_id, native_generation, qpc_frequency;
+    uint64_t reserve_qpc, sampled_qpc, frame_begin_qpc, bind_qpc;
+    uint32_t input_kind, flags, abort_reason;
+    int32_t predecessor_present; /* RSF_NATIVE_CPU_DEPENDENCY_* at read time */
+} rsf_native_cpu_reservation;
+typedef struct rsf_native_cpu_reservation_counters {
+    uint32_t struct_size;
+    uint64_t reserved, sampled, adopted, bound, closed, unbound, aborted, rejected;
+} rsf_native_cpu_reservation_counters;
+RSF_RUNTIME_API int rsf_native_cpu_reservation_read(uint64_t session, uint64_t source, rsf_native_cpu_reservation* out);
+RSF_RUNTIME_API int rsf_native_cpu_reservation_counters_get(rsf_native_cpu_reservation_counters* out);
+/* Actual application Present outcome for a copied session/source identity, reported after the
+   real call returned (RETURNED with its native result, RESULT_UNKNOWN when it is unavailable) or
+   when the engine will not present that source (ABORTED). Independent of FRAME_END and binding. */
+#define RSF_NATIVE_CPU_PRESENT_RETURNED 1u
+#define RSF_NATIVE_CPU_PRESENT_RESULT_UNKNOWN 2u
+#define RSF_NATIVE_CPU_PRESENT_ABORTED 3u
+RSF_RUNTIME_API int rsf_native_cpu_present_result(uint64_t session, uint64_t source, uint32_t outcome, int32_t native_result);
 /* After the plugin has stopped CPU producers. */
 RSF_RUNTIME_API void rsf_native_cpu_release(void);
 /* Quiescent session shutdown must not clear another active host's facts. */

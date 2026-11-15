@@ -107,7 +107,7 @@ int wmain(int argc, wchar_t** argv) {
         record.frame_id = frame; record.session_id = 1; record.view_id = 1; record.resource_generation = 1;
         record.render_width = width; record.render_height = height; record.output_width = 640; record.output_height = 360;
         record.frame_time_ms = 16.666667f; record.flags = frame == 1 ? RSF_FRAME_FLAG_RESET : 0;
-        record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
         record.camera.render_width = width; record.camera.render_height = height;
         record.camera.output_width = 640; record.camera.output_height = 360;
         record.camera.near_plane = 0.1f; record.camera.far_plane = 0; record.camera.vertical_fov_radians = 1;

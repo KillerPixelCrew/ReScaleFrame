@@ -61,6 +61,8 @@ struct rsf_streamline_host {
     PFun_slPCLSetMarker* pcl_marker{};
     PFun_slPCLSetOptions* pcl_options{};
     PFun_slPCLGetState* pcl_state{};
+    HRESULT (*common_present)(IDXGISwapChain*, UINT, UINT, bool&){};
+    HRESULT (*common_after_present)(UINT){};
     struct Token { uint64_t id = 0; sl::FrameToken* token = nullptr; bool common[2]{};
         uint32_t markers = 0; bool controller_sampled = false, ping_sampled = false, sleep_claimed = false; } tokens[sl::MAX_FRAMES_IN_FLIGHT];
     uint32_t cursor = 0, native_index = 0;
@@ -478,6 +480,24 @@ extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host* po
     }
     return result == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
+extern "C" rsf_backend_result rsf_streamline_host_present_common(rsf_streamline_host* host,
+    void* chain, uint32_t interval, uint32_t flags, uint32_t begin)
+{
+    if (!host || !chain || begin > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!host->initialized) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!host->common_present || !host->common_after_present) {
+        void* before = nullptr; void* after = nullptr;
+        if (host->function(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
+            host->function(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
+            return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+        host->common_present = reinterpret_cast<decltype(host->common_present)>(before);
+        host->common_after_present = reinterpret_cast<decltype(host->common_after_present)>(after);
+    }
+    bool skip = false;
+    const auto result = begin ? host->common_present(static_cast<IDXGISwapChain*>(chain), interval, flags, skip) :
+        host->common_after_present(flags);
+    return SUCCEEDED(result) && !skip ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+}
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host* host, uint64_t id)
 {
     if (!host || !id) return 0;
@@ -584,7 +604,9 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     auto& self = *static_cast<DlssSession*>(pointer);
     auto result = rsf::fg_frame(frame, self.host->native_device.Get()); if (result != 0) return result;
     if (!self.chain || frame->record->frame_id <= self.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
-    const auto& record = *frame->record; const auto& camera = record.camera;
+    const auto& record = *frame->record;
+    if (record.source_provenance == RSF_FRAME_SOURCE_RENDERED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    const auto& camera = record.camera;
     const bool enabled = frame->interpolate && self.options.mode != RSF_FG_OFF;
     if (enabled) {
         if (!command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
@@ -855,6 +877,7 @@ extern "C" rsf_backend_result rsf_streamline_host_marker(rsf_streamline_host*, u
 extern "C" rsf_backend_result rsf_streamline_host_abort(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_reset_sources(rsf_streamline_host*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
+extern "C" rsf_backend_result rsf_streamline_host_present_common(rsf_streamline_host*, void*, uint32_t, uint32_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t) { return 0; }
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t, uint32_t, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_generation_load(rsf_streamline_host*, uint32_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
