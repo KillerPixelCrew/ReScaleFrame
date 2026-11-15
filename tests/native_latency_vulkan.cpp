@@ -169,6 +169,36 @@ int main() {
     require(xell_sleeps==1 && slept==reflex_sleeps,"exactly one selected pacer, no Reflex sleep stacked on XeLL");
     require(xell_markers.size()==3 && xell_markers[0].kind==0 && xell_markers[1].kind==6 && xell_markers[2].kind==1,
         "shared accepted input facts reach XeLL once in order");
+    rsf_game_render_pass execution{}; execution.struct_size=sizeof(execution);
+    execution.session_id=77; execution.source_frame_id=100; execution.role=RSF_GAME_RENDER_PRESENT;
+    require(rsf_latencyvk_execution(nullptr,1)==RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,
+        "explicit Present cannot invent a missing submission");
+    execution.role=RSF_GAME_RENDER_SUBMISSION;
+    auto foreign_execution=execution;foreign_execution.session_id=76;
+    require(rsf_latencyvk_execution(&foreign_execution,1)==RSF_BACKEND_ERROR_NOT_READY,"foreign execution session refused");
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK &&
+        rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK && xell_markers.size()==4,
+        "many submissions open one render marker without prematurely closing it");
+    fact={sizeof(fact),RSF_GAME_CPU_FRAME_BEGIN,77,101,2000,1000,1,0,0,1,RSF_GAME_CPU_INPUT_KEYED};
+    rsf_latencyvk_cpu(&fact);
+    fact.stage=RSF_GAME_CPU_INPUT_SAMPLE;fact.timestamp_qpc=2010;rsf_latencyvk_cpu(&fact);
+    fact.stage=RSF_GAME_CPU_SIMULATION_BEGIN;fact.timestamp_qpc=2011;rsf_latencyvk_cpu(&fact);
+    fact.stage=RSF_GAME_CPU_SIMULATION_END;fact.timestamp_qpc=2020;rsf_latencyvk_cpu(&fact);
+    execution.source_frame_id=101;
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK,"newer rendering may overlap previous presentation");
+    execution.source_frame_id=100;execution.role=RSF_GAME_RENDER_PRESENT;
+    require(rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_ERROR_NOT_READY,"unpaired explicit Present end refused");
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK,
+        "previous output presents with its own source");
+    const auto n=xell_markers.size();
+    require(n>=3 && xell_markers[n-3].frame==100 && xell_markers[n-3].kind==3 &&
+        xell_markers[n-2].frame==100 && xell_markers[n-2].kind==4 && xell_markers[n-1].frame==100 && xell_markers[n-1].kind==5,
+        "Present never takes the newer render token");
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK &&
+        xell_markers.size()==n,"repeated explicit presentation is deduplicated");
+    execution.role=RSF_GAME_RENDER_SUBMISSION;
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,"late rendering cannot reopen a presented source");
     require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_OK && rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"keyed owner retired");
     require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"new keyed session initialized");
     require(rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"new session owns pacing");
@@ -187,7 +217,7 @@ int main() {
     require(rsf_latencyvk_options(1,10000)==RSF_BACKEND_ERROR_NOT_SUPPORTED,"required XeLL cannot take another owner's lease");
     const auto denied_markers=xell_markers.size();
     rsf_latencyvk_render(999);rsf_latencyvk_submit_end(999);rsf_latencyvk_present(1);rsf_latencyvk_present(0);
-    require(xell_markers.size()==denied_markers && xell_sleeps==1,"contending owner emits no XeLL marker or sleep");
+    require(xell_markers.size()==denied_markers && xell_sleeps==2,"contending owner emits no XeLL marker or sleep");
     require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"contending session retired");
     rsf_native_latency_release_claim(1);
     return 0;
