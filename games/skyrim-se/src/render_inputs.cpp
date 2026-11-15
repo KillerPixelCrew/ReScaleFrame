@@ -2,6 +2,7 @@
 #include "render_inputs.h"
 #include "camera.h"
 #include "resolution.h"
+#include "auxiliary.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -122,6 +123,8 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
     pass.color_input = pass.color_output = color.Get(); pass.depth = depth.Get(); pass.motion = motion.Get();
     pass.swapchain = chain.Get(); pass.camera_valid = 1;
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1; pass.motion_camera_included = 1;
-    return host.process_upscale(host.user, context.Get(), &pass) == RSF_OK;
+    const auto result = host.process_upscale(host.user, context.Get(), &pass);
+    observe_auxiliaries(context.Get(), pass, host);
+    return result == RSF_OK;
 }
 }

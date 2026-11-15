@@ -30,6 +30,9 @@ ProcessMain original_process = nullptr;
 void* process_target = nullptr;
 UpdateJitter original_resolution = nullptr;
 void* resolution_target = nullptr;
+using RendererEnd = uintptr_t (*)();
+RendererEnd original_end = nullptr;
+void* end_target = nullptr;
 std::mutex lifecycle;
 std::atomic<bool> accepting{false};
 std::atomic<uint32_t> calls{0};
@@ -39,6 +42,8 @@ rsf_game_host_services services{};
 rsf_game_host_services bound_services{}, bound_upstream{};
 using SetHostActive = int32_t (*)(void*, uint32_t);
 SetHostActive host_active = nullptr;
+using BindPresentation = int32_t (*)(void*, const rsf_d3d11_presentation_binding*);
+BindPresentation bind_presentation = nullptr;
 bool prepared = false;
 bool enabled = false;
 const char* reason = "Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
@@ -222,6 +227,22 @@ void observe_resolution(void* state) noexcept {
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
+uintptr_t observe_end() noexcept {
+    calls.fetch_add(1, std::memory_order_acq_rel);
+    if (accepting.load(std::memory_order_acquire) && bind_presentation) {
+        uintptr_t window{}; void* chain{};
+        const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+        if (copy(&window, base + 0x3330198, sizeof(window)) && window &&
+            copy(&chain, reinterpret_cast<const void*>(window + 0x18), sizeof(chain)) && chain) {
+            const rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, chain};
+            try { (void)bind_presentation(services.user, &binding); } catch (...) {}
+        }
+    }
+    const auto result = original_end();
+    calls.fetch_sub(1, std::memory_order_acq_rel);
+    return result;
+}
+
 bool match_target()
 {
     wchar_t path[32768]{};
@@ -251,12 +272,16 @@ bool match_target()
     constexpr unsigned char resolution_expected[]{0x83,0xb9,0x28,0x01,0x00,0x00,0x00,0x48,0x8b,0xd1,0x0f,0x85,0x7f,0x01,0x00,0x00};
     unsigned char resolution_actual[sizeof(resolution_expected)]{};
     resolution_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x101e130;
+    constexpr unsigned char end_expected[]{0x48,0x83,0xec,0x48,0xb9,0x01,0x00,0x00,0x00,0xe8,0x22,0xa9,0x58,0x00};
+    unsigned char end_actual[sizeof(end_expected)]{};
+    end_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009f70;
     return copy(process_actual, process_target, sizeof(process_actual)) &&
         !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
         copy(call_actual, site, sizeof(call_actual)) &&
         !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
         copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)) &&
-        copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual));
+        copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual)) &&
+        copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual));
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -269,6 +294,21 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     if (!match_target()) {
         reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
         return RSF_ERROR_NATIVE_REFUSED;
+    }
+    static bool dpi_requested = false;
+    if (!dpi_requested) {
+        dpi_requested = true;
+        using SetDpi = BOOL (WINAPI*)(HANDLE);
+        const auto set_dpi = reinterpret_cast<SetDpi>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+        SetLastError(0);
+        const bool accepted = set_dpi && set_dpi(reinterpret_cast<HANDLE>(INT_PTR(-4)));
+        const auto error = accepted ? 0ul : static_cast<unsigned long>(GetLastError());
+        if (args->host->log) {
+            char message[180]{}; std::snprintf(message, sizeof(message),
+                "Skyrim DPI startup per-monitor-v2 accepted=%u error=%lu; window creation must use physical pixels.",
+                accepted ? 1u : 0u, error);
+            args->host->log(args->host->user, message);
+        }
     }
     if (GetModuleHandleW(L"CommunityShaders.dll")) {
         reason = "Community Shaders ownership handover is not implemented; activation refused.";
@@ -288,9 +328,16 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             MH_RemoveHook(target); original = nullptr;
             return RSF_ERROR_NATIVE_REFUSED;
         }
+        if (MH_CreateHook(end_target, reinterpret_cast<void*>(&observe_end), reinterpret_cast<void**>(&original_end)) != MH_OK) {
+            MH_RemoveHook(resolution_target); original_resolution = nullptr;
+            MH_RemoveHook(process_target); original_process = nullptr;
+            MH_RemoveHook(target); original = nullptr;
+            return RSF_ERROR_NATIVE_REFUSED;
+        }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                               reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned)) {
+            MH_RemoveHook(end_target); original_end = nullptr;
             MH_RemoveHook(resolution_target); original_resolution = nullptr;
             MH_RemoveHook(process_target); original_process = nullptr;
             MH_RemoveHook(target); original = nullptr;
@@ -306,9 +353,10 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     const auto runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     const auto create_host = runtime ? reinterpret_cast<CreateHost>(GetProcAddress(runtime, "rsf_d3d11_host_create")) : nullptr;
     host_active = runtime ? reinterpret_cast<SetHostActive>(GetProcAddress(runtime, "rsf_d3d11_host_set_active")) : nullptr;
+    bind_presentation = runtime ? reinterpret_cast<BindPresentation>(GetProcAddress(runtime, "rsf_d3d11_host_bind_presentation")) : nullptr;
     wchar_t runtime_path[32768]{};
     const auto path_length = runtime ? GetModuleFileNameW(runtime, runtime_path, 32768) : 0;
-    if (!create_host || !host_active || !path_length || path_length >= 32768) return RSF_ERROR_NOT_READY;
+    if (!create_host || !host_active || !bind_presentation || !path_length || path_length >= 32768) return RSF_ERROR_NOT_READY;
     const auto separator = std::wcsrchr(runtime_path, L'\\');
     if (!separator) return RSF_ERROR_NOT_READY;
     const std::wstring directory(runtime_path, size_t(separator - runtime_path));
@@ -358,7 +406,13 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (MH_EnableHook(end_target) != MH_OK) {
+        MH_DisableHook(resolution_target);
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (!rsf::skyrim::cpu_start()) {
+        MH_DisableHook(end_target);
         MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
@@ -392,9 +446,11 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
         const auto jitter_result = MH_DisableHook(target);
         const auto process_result = MH_DisableHook(process_target);
         const auto resolution_result = MH_DisableHook(resolution_target);
+        const auto end_result = MH_DisableHook(end_target);
         if ((jitter_result != MH_OK && jitter_result != MH_ERROR_DISABLED) ||
             (process_result != MH_OK && process_result != MH_ERROR_DISABLED) ||
-            (resolution_result != MH_OK && resolution_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
+            (resolution_result != MH_OK && resolution_result != MH_ERROR_DISABLED) ||
+            (end_result != MH_OK && end_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
         enabled = false;
     }
     if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;

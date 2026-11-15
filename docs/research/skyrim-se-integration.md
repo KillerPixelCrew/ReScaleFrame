@@ -932,3 +932,207 @@ was denied. The full gate remains failed. Depth scaling, Skyrim contracts and
 existing graphics/host checks passed. Formatting and Clippy passed separately.
 Logs: `verify-depth-scale.log` and `clippy-depth-scale.log`. No Rust behavior
 changed and no game was launched or installation modified in this checkpoint.
+
+### Live auxiliary allocations and depth units
+
+The adapter now reports native auxiliary descriptors at the verified main
+pre-HDR callback. A generic, size/version-checked D3D11 host capture export adds
+adapter-selected textures to an existing requested bundle. It requires the
+same session, complete view key, native frame and graphics owner, and refuses
+before dereferencing graphics pointers without that lease. It starts no capture
+and retains no borrowed native resources. The existing shared capture action
+controls readback; there is no new diagnostic setting or adapter GPU processing.
+
+Two bounded vanilla QASmoke deployments observed these inputs:
+
+| Native input | Actual allocation and views |
+| --- | --- |
+| Underwater mask, target 12 | 855x524 R8_UNORM, one mip, RTV/SRV mip 0 |
+| Refraction normals, target 13 | 1711x1048 R8G8B8A8_UNORM, one mip, RTV/SRV mip 0 |
+| SAO camera-Z, target 49 | 1711x1048 R32_FLOAT, eleven mips, base SRV spans all eleven |
+| DOF selected target 60, selector 11 | Native texture pointer is null; RTV and SRV alias target 49's allocation at mip 10, one mip, effective size 1x1 |
+
+The first probe inspected only the selected slot's texture pointer and missed
+the DOF allocation. Resolving GetResource through its native view established
+the alias in the second probe. This corrects the earlier working assumption
+that every post-handoff SAO input needed full-resolution spatial reconstruction.
+The observed DOF average-depth input is a 1x1 view; resizing the whole SAO image
+for that consumer would change unrelated data without matching its actual use.
+Other selectors or post-processing paths still require their own evidence.
+
+Complete native capture `scene-20261115-153111-244-14986921-39312-1` includes
+the three base allocations and matched native Present. SAO camera-Z is finite
+from 203.54524 to 3388.69287, whereas device depth is 0.926346 to 0.995616.
+Linearizing the captured main depth using `projectionB / (deviceZ - projectionA)`
+matches camera-Z with median relative error 1.20e-6 and 99th percentile 5.84e-6.
+It is linear camera depth in projection units, not a copy of hardware depth.
+The pinned CS ISSAOCameraZ source is consistent with this distinction. Its
+separate upscaling shader's raw-depth assignment is not a substitute for the
+vanilla buffer's measured meaning.
+
+Earlier complete native capture `scene-20261115-152227-196-14462875-36016-2`
+and reduced-input/native-fallback capture
+`scene-20261115-152423-719-14579406-36016-3` include the underwater mask and
+refraction normals. Both allocations are entirely zero in this dry room.
+These establish readback and descriptors, not active water/refraction coverage
+or their raster rectangles. At primary 1141x699, multiplying the half-size mask
+allocation by primary ratios predicts a fractional 570.16657x349.5 span; this is
+a calculation to investigate, not an observed producer viewport. Main depth's
+stencil is also zero in this scene; nonzero stencil preservation remains WARP
+fixture evidence. Reduced SR is still not admitted.
+
+Evidence: `auxiliary-initial-game.log`, `auxiliary-view-native-game.log`, module
+inventories, `auxiliary-initial-pixels.json`, `auxiliary-view-native-pixels.json`
+and `auxiliary-camera-z-units.json`. Deployment backups are
+`20261115-152137-sr-fallback/` and `20261115-152805-sr-fallback/`.
+Both processes closed gracefully and their exact temporary custom INIs were
+removed. Settings were returned to native quality. No SKSE, CS or ENB was loaded.
+
+The two auxiliary builds passed their shared capture ABI/cold-pointer regression
+and graphics/Skyrim fixtures. Each full gate had 228 discovered checks, with the
+same two Anomaly FG failures. The final auxiliary-view run had 212 passed and
+14 default opt-in skips; its DLSS-G SR-off activity check passed. Formatting and
+Clippy passed separately. These receipts are `verify-auxiliary-capture.log`,
+`verify-auxiliary-views.log` and their corresponding Clippy logs. The gate remains
+failed; water, gameplay, FG, latency and CS/ENB coexistence are not accepted.
+
+### Shared Insert fallback after the user's overlay report
+
+The user reported that Insert did not open the overlay. The active Skyrim log
+showed a successfully installed window subclass and cursor hooks, so repeating
+installation was not the next step. The shared host used the window-message
+toggle without a polling route. Anomaly already had an adapter-local polling
+fallback, but the new generic D3D11 host did not. DirectInput paths that bypass
+WM_KEYDOWN therefore had no equivalent route here. No physical-key trace was
+captured from the user's failed press.
+
+The shared input module now exposes polling of the configured toggle's high
+key-state bit. The generic D3D11 callback host invokes it at Present, before the
+overlay can skip a hidden idle panel. This call stays in the new host so older
+adapters retain their existing polling controls, including Anomaly's
+OverlayKeyPoll option. It accepts
+foreground root-window ownership only. Window messages and polling share the
+held key; a delayed message cannot reverse a polling transition, auto-repeat
+does not toggle, and regaining focus with Insert held is not a fresh press.
+The existing visibility debounce and cursor handling remain in that mechanism.
+No Skyrim-specific input policy or new setting was added to the shared layer.
+
+The new fixture mocks this process's GetAsyncKeyState and GetForegroundWindow,
+without SendInput or desktop focus changes. It verifies opening/closing with no
+window messages, a held key, delayed duplicate messages beyond the debounce,
+message-first handling, auto-repeat, background presses and focus gain while
+held. It passes alongside the existing actual-backbuffer overlay rendering
+fixture. These establish the missing generic route without pretending a
+synthetic key state is a user keyboard test.
+
+Deployment backup `20261115-153837-sr-fallback/` contains the replaced Runtime
+and entry DLLs and their hashes. In its QASmoke process, public diagnostics
+initially reported started=1, input_installed=1, visible=0, at 1711x1048.
+Insert down/up messages posted only to that process's verified HWND opened the
+real panel. Diagnostics observed visible=1 and 429 collected visible frames,
+then 3763 visible frames before the next Insert messages closed it. The closed
+state was visible=0 while native Presents continued. A later read was visible=1
+again, with 4227 visible frames; the probe had posted no further key messages.
+That read failed the proposed closed-idle assertion. Its input source was not
+logged, so it cannot prove stable idle or be attributed to a physical user press.
+Route logging was added for the next experiment. The user's physical Insert
+acceptance remains distinct from the controlled message test and polling fixture.
+No GPU work was run on the diagnostic remote thread; only the documented
+any-thread diagnostics API was queried. Native rendering stayed on its owner.
+
+Evidence: `overlay-insert-before.json`, `overlay-insert-open.json`,
+`overlay-insert-closed.json`, `overlay-insert-idle.json`, game log and modules.
+Release VS2026 verification rebuilt affected adapters: 229 discovered,
+213 passed, 14 default opt-in skips, and the same two Anomaly FG device failures.
+The full gate remains failed. The overlay hotkey, existing overlay host/device,
+Skyrim and capture contracts passed. Formatting and Clippy passed separately.
+Receipts: `verify-overlay-insert.log` and `clippy-overlay-insert.log`.
+
+### Startup window binding, DPI and pointer acceptance
+
+The user then confirmed that RSF started only after loading a game. A normal
+main-menu launch, without the temporary QASmoke setting, reproduced started=0,
+input_installed=0 and zero accepted Presents. The prior valid-scene requirement
+had incorrectly gated window/input/overlay startup together with SR.
+Evidence: `overlay-menu-cold.json` and `overlay-menu-cold-game.log`.
+
+The adapter now guards native RendererEnd at `0x1009F70` with the entry bytes
+`48 83 EC 48 B9 01 00 00 00 E8 22 A9 58 00`. Its wrapper offers the native
+chain from active window `0x3330198 +0x18` to a generic size/version-checked
+presentation-binding service before forwarding the original exactly once.
+This entry contains native sleep and profiler work as well as Present; it is
+not used as a latency marker or a source-frame identity. Actual Present remains
+observed through the shared DXGI observer. All game identity, bytes, native
+pointer selection and hook lifecycle stay in the adapter.
+
+Presentation binding configures window/input/UI observation without starting
+an SR vendor SDK. A separate scene-bound flag still rejects early RECONFIGURE
+requests, even after the menu UI starts. A valid scene lease is required to
+prepare/evaluate SR. This does not repeat the earlier loading-jitter SDK startup
+that stalled in native SetWindowPos.
+
+The first binding attempt still failed after startup. Its log proved that UI
+first drew on thread 31880, while subsequent main ticks/render callbacks ran on
+39988. The host had permanently retained the loading presentation owner.
+`overlay-menu-first-bind-failed.log` preserves that failure. The generic host now
+serializes presentation, binding and SR callbacks and permits a same-chain
+presentation-thread transfer before a scene/SR owner is admitted. The next run
+recorded 34972 ->39608 ->32952 handoffs, and actual foreground-polled Insert
+open/close transitions. Device/chain recreation and owner transfers after SR
+admission remain incomplete; this is not a general retirement solution.
+
+The user next reported an oversized offscreen image and unclickable controls.
+The adapter now requests per-monitor-v2 process DPI awareness during its
+fingerprinted startup, before window creation. This is game window policy, not
+a shared runtime executable switch or an INI resolution override. In the accepted
+run the request succeeded. The existing 1920x1080 game preference produced both
+a 1920x1080 render target and a physical 1920x1080 client area. The real window
+reported per-monitor awareness (2) at 144 DPI; its outer bounds 0,0,1942,1136
+fit inside the monitor's 2560x1528 work area. Earlier 1711x1048 capture dimensions
+are historical evidence from the unaware startup, not the current DPI-aware run.
+
+The shared foreground input poll also now carries left/right/middle button
+levels to the panel when window mouse messages are absent. Those levels are
+merged with the existing message/touch input and cleared on focus/visibility
+changes. Cursor coordinates continue through the existing presentation-space
+mapping. No settings policy or engine input layout moved into the shared layer.
+The accepted log records a foreground-polled Insert open followed by two real
+panel settings changes (SR backend 2 and then 1), both applied and saved, and
+an outside-click close. The user explicitly confirmed both DPI and mouse input
+working and authorized continuing the integration.
+
+Accepted deployment: `20261115-161716-sr-fallback/`; log
+`overlay-dpi-pointer-accepted-game.log`; physical metrics
+`window-dpi-startup.json`. Prior failed startup and thread-transfer deployments
+remain backed up at `20261115-160218-sr-fallback/` and
+`20261115-160750-sr-fallback/`. The user closed the menu test processes; no force
+termination was needed. Normal-menu probes created no temporary custom INI.
+
+The last full-suite checkpoint before final owner/DPI/pointer corrections was
+229 discovered, 213 passed, 14 default opt-in skips and the same two Anomaly FG
+failures (`verify-presentation-bind.log`). Final corrections received focused
+Release MSVC builds and direct game/user validation, following the user's
+instruction to stop rerunning full fixtures for small edits. The exact final
+code has not had another full-suite run. Logs: `build-presentation-owner.log`
+and `build-input-dpi.log`. No Rust behavior changed. This accepts the reported
+startup/DPI/pointer path, not reduced SR, object motion, FG, latency or CS/ENB.
+
+### Shader-input and motion coverage audit status
+
+The following table separates the native archive/source audit from runtime
+coverage. No shader repair has been implemented yet. The first nine native
+families and their descriptors are mapped above; the remaining image-space and
+compute containers and all moving-object paths still need producer/binding
+evidence. The current adapter reports NO_FG and rendering_ready=0.
+
+| Pass/material class | Required inputs and available producer/binding evidence | Gaps and validation |
+| --- | --- | --- |
+| Static/instanced lighting and terrain | Native Lighting family; main depth 0 and motion 7; selected original PS uses current/previous unjittered screen positions. Main camera matrices/origins are captured and converted independently. | Per-variant world/instance/terrain buffers, slot ranges and actual writes are not established. Static dry-room zero motion is not moving coverage. |
+| Skinned/deformed actors | Current and previous object transforms, bone/deformation data and matching depth/motion variants are required. Lighting family inventory supplies candidates. | Native previous-bone producer, lifetime, bindings and moving/skinned capture are missing. Current bones or camera reprojection will not stand in for previous deformation. |
+| Distant trees and RunGrass | Both native families mapped; selected original grass PS has the native motion formula. | Wind/LOD/instance previous data, alpha-tested coverage and camera/object-motion captures remain unverified. |
+| Effect and particle/translucent geometry | Native Effect/Particle families mapped; literal-output candidates found in bytecode. | A literal is not proof of a missing live vector. Need actual variants, depth/motion blend/write masks, transforms and particle history before targeted repair. |
+| Water/refraction | Water family mapped; native depth, target 13 normals and conditional target 12 mask identified at their consumers. | Dry-room auxiliary buffers are zero. Active water displacement history, transparency/depth coverage, fractional viewport and vector writes need capture. |
+| Sky | Native Sky family and selected PS motion formula inspected. | Rotation-only/infinite-depth history, native bindings and moving-pan capture remain unverified. |
+| Volumetrics/clouds/GPU-driven paths | Camera, depth, storage/constant buffers, histories and dispatch resources must be traced at their producers. | Remaining compute/image-space containers are not fully classified; active paths, precision, identities and motion coverage are open. |
+| Depth, HDR and exposure | R24G8 main depth captured; pre-HDR colour and original HDR chain retained; SAO linear-depth units and DOF mip alias measured. | HDR highlights, exposure producer/consumer behavior and post-SR auxiliary corrections remain unaccepted. |
+| Blood splatter, UI, menu and camera-free paths | BloodSplatter family mapped; shared UI draws at actual final Present; menu UI now independent of scene admission. | Native HUD-less/UI leases and blood-splatter ordering require proof. These paths retain native rendering; no blanket camera or velocity shader replacement is applied. |

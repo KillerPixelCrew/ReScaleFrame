@@ -53,7 +53,10 @@ extern "C" {
    the real cursor stays visible for the panel. DirectInput and XInput device reads
    are not intercepted: an adapter that polls devices must call capture() every
    frame and drop mouse/keyboard game input while it reports them captured. The
-   toggle key is Insert. */
+   toggle key is Insert. The generic D3D11 callback host also polls its foreground
+   key-state edge before drawing or skipping a hidden panel, for input paths
+   without WM_KEYDOWN. Message and polling routes share the held key; focus gain
+   while held does not toggle. Other hosts retain their input polling policy. */
 
 #define RSF_OVERLAY_CAPTURE_MOUSE 0x1u
 #define RSF_OVERLAY_CAPTURE_KEYBOARD 0x2u

@@ -49,6 +49,8 @@ struct State {
     std::atomic<HWND> window{nullptr};
     std::atomic<WNDPROC> original{nullptr};
     std::atomic<uint32_t> toggle_key{VK_INSERT};
+    std::atomic<bool> toggle_down{false};
+    std::atomic<bool> poll_focused{false};
 
     // Serialises install against uninstall. The window procedure never takes this one, so the
     // SetWindowLongPtrW calls made under it cannot end up waiting on a message thread that is
@@ -122,6 +124,7 @@ struct State {
        window messages are ignored. See record_raw_mouse. */
     std::atomic<bool> have_raw_input{false};
     uint32_t buttons = 0;
+    uint32_t polled_buttons = 0;
     float scroll = 0.0f;
     uint32_t contact_id = 0;
     bool contact_position = false, contact_down = false, contact_press_pending = false;
@@ -187,6 +190,7 @@ void clear_transient_input(State& self)
 {
     std::lock_guard<std::mutex> lock(self.guard);
     self.buttons = 0;
+    self.polled_buttons = 0;
     self.scroll = 0.0f;
     self.contact_position = self.contact_down = self.contact_press_pending = false;
 }
@@ -692,7 +696,7 @@ void set_cursor_capture(State& self, bool on)
     }
 }
 
-void apply_visibility(State& self, bool visible)
+void apply_visibility(State& self, bool visible, const char* source = "external")
 {
     /* One press, one change.
 
@@ -723,8 +727,8 @@ void apply_visibility(State& self, bool visible)
     // Announced because this is the one thing that happens on the message thread when the toggle
     // is pressed, and a crash on the first opened frame looks identical whether the window
     // procedure or the render thread died. The last line in the log says which.
-    rsf::say(self.log, self.log_user, visible ? "overlay input: toggle pressed, now visible"
-                      : "overlay input: toggle pressed, now hidden");
+    rsf::say(self.log, self.log_user, "overlay input: toggle pressed, now %s (route=%s)",
+        visible ? "visible" : "hidden", source);
 }
 
 LRESULT chain_to_game(WNDPROC forward, HWND window, UINT message, WPARAM wparam, LPARAM lparam)
@@ -872,17 +876,18 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_SYSKEYDOWN: {
         const uint32_t key = static_cast<uint32_t>(wparam);
         if (key == toggle) {
+            const bool already_down = self.toggle_down.exchange(true, std::memory_order_acq_rel);
             // Bit 30 is the previous key state. Holding the toggle down otherwise opens and closes
             // the overlay at the auto repeat rate.
             const bool repeat = (lparam & 0x40000000) != 0;
-            if (repeat) {
+            if (repeat || already_down) {
                 return visible ? 0 : chain_to_game(forward, window, message, wparam, lparam);
             }
             if (visible) {
-                apply_visibility(self, false);
+                apply_visibility(self, false, "window-message");
                 return 0;
             }
-            apply_visibility(self, true);
+            apply_visibility(self, true, "window-message");
             // Chained deliberately. While the overlay is hidden the game's input stream is
             // untouched, toggle included, so the game sees this press exactly as it would with
             // nothing installed. Marking it held means the release is forwarded too, even though
@@ -908,6 +913,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_KEYUP:
     case WM_SYSKEYUP: {
         const uint32_t key = static_cast<uint32_t>(wparam);
+        if (key == toggle) self.toggle_down.store(false, std::memory_order_release);
         const bool owed = release_is_owed_to_game(self, key);
         // System keys chain in both directions, matching the WM_SYSKEYDOWN rule above. Chaining the
         // press and swallowing the release is the one combination that can leave the game holding
@@ -1072,6 +1078,8 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
 
     const uint32_t toggle = options->toggle_virtual_key ? options->toggle_virtual_key : VK_INSERT;
     self.toggle_key.store(toggle, std::memory_order_relaxed);
+    self.toggle_down.store((GetAsyncKeyState(int(toggle)) & 0x8000) != 0, std::memory_order_relaxed);
+    self.poll_focused = false;
     self.window.store(target, std::memory_order_relaxed);
     self.visible.store(0, std::memory_order_relaxed);
     forget_game_holds(self);
@@ -1191,6 +1199,27 @@ extern "C" uint32_t rsf_overlay_input_visible(void)
     return state().visible.load(std::memory_order_acquire);
 }
 
+extern "C" void rsf_overlay_input_poll_toggle(void)
+{
+    auto& self = state();
+    if (!self.installed.load(std::memory_order_acquire)) return;
+    const HWND window = self.window.load(std::memory_order_acquire);
+    const HWND foreground = GetForegroundWindow();
+    const bool focused = window && foreground && GetAncestor(window, GA_ROOT) == GetAncestor(foreground, GA_ROOT);
+    const bool down = (GetAsyncKeyState(int(self.toggle_key.load(std::memory_order_relaxed))) & 0x8000) != 0;
+    const bool was_focused = self.poll_focused.exchange(focused, std::memory_order_acq_rel);
+    const bool was_down = self.toggle_down.exchange(down, std::memory_order_acq_rel);
+    if (focused && was_focused && down && !was_down)
+        apply_visibility(self, !self.visible.load(std::memory_order_acquire), "foreground-poll");
+    uint32_t buttons = 0;
+    if (focused && self.visible.load(std::memory_order_acquire)) {
+        for (const int key : {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON})
+            if (GetAsyncKeyState(key) & 0x8000) buttons |= overlay_button_bit(uint32_t(key));
+    }
+    std::lock_guard lock(self.guard);
+    self.polled_buttons = buttons;
+}
+
 extern "C" void rsf_overlay_input_set_visible(uint32_t visible)
 {
     // Allowed before install so a caller can set the flag in whatever order suits it. It does not
@@ -1262,7 +1291,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
         }
         out->mouse_x = self.mouse_x;
         out->mouse_y = self.mouse_y;
-        out->mouse_buttons = self.buttons;
+        out->mouse_buttons = self.buttons | self.polled_buttons;
         if (self.contact_down || self.contact_press_pending) out->mouse_buttons |= RSF_OVERLAY_MOUSE_LEFT;
         if (out->visible) {
             self.frames_collected_visible.fetch_add(1, std::memory_order_relaxed);
