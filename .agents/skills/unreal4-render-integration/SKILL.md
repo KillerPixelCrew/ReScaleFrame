@@ -9,6 +9,8 @@ license: GPL-3.0-only
 Use this for shared UE4 renderer reasoning in ReScaleFrame. Read
 [AGENTS.md](../../../AGENTS.md) and relevant [render analysis](../game-render-analysis/SKILL.md).
 Determine the game's engine branch and match the implementation before using any private field.
+Perform the shared render-analysis skill's shader-input and motion-coverage audit
+for every integration, even when no specific visual defect has been reported.
 UE4 games can carry custom renderers; concepts transfer more reliably than layouts or addresses.
 For AC7/4.18 specifics, read [ue418-render-integration](../ue418-render-integration/SKILL.md).
 
