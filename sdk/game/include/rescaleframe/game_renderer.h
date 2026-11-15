@@ -115,6 +115,9 @@ typedef struct rsf_game_render_pass {
 /* Queued before native post-processing. motion/depth are engine-owned leased targets; the
    completed translucent velocity/depth producer commits them before temporal/DoF consumers. */
 #define RSF_GAME_RENDER_VELOCITY_FINALIZE 19u
+/* Actual primary-window Present, paired on the execution thread. The copied
+   session/source identity belongs to this output, independently of newer work. */
+#define RSF_GAME_RENDER_PRESENT 20u
 #define RSF_GAME_RENDER_RESET 1u
 #define RSF_GAME_RENDER_PRIMARY 2u
 /* Constructor followed the engine update-to-redraw boundary. This does not promise vendor

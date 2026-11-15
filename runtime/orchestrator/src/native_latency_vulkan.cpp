@@ -11,6 +11,7 @@
 #include <array>
 #include <mutex>
 #include <string>
+#include <cstddef>
 #include <windows.h>
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
@@ -47,6 +48,8 @@ struct Token { uint64_t frame = 0; uintptr_t token = 0; uint32_t stages = 0; };
 // The pinned SDK retains six handles. Validate its current index before every
 // use, since a new acquisition can replace an older SDK-owned handle.
 std::array<Token, 6> tokens{};
+struct Execution { uint64_t session = 0, frame = 0; uint32_t stages = 0; };
+std::array<Execution, 128> executions{};
 rsf_latencyvk_status status{sizeof(status), RSF_LATENCYVK_ABI_VERSION};
 #if defined(RSF_HAVE_STREAMLINE_VK)
 bool accepted(int result) {
@@ -96,7 +99,7 @@ extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) t
         (setup->features & RSF_SLVK_DLSS_FG) ? 1u : 0u,
         (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
     bound = false; mode = interval = 0;
-    tokens = {}; session = render_frame = present_frame = 0;
+    tokens = {}; executions = {}; session = render_frame = present_frame = 0;
     status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
     initialized = true;
     return RSF_BACKEND_OK;
@@ -189,6 +192,9 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     if (skipped) rsf::latency::amd_vk_cancel(id);
     const rsf::VulkanTimingScope timing(pacing ? "cpu_pacing_total" : nullptr,id);
     std::unique_lock lock(mutex);
+    auto& execution = executions[id % executions.size()];
+    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) execution = {event->session_id, id, 0};
+    else if (skipped && execution.session == event->session_id && execution.frame == id) execution = {};
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!initialized || !bind()) return;
     if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {
@@ -284,6 +290,46 @@ extern "C" void rsf_latencyvk_present(uint32_t begin) {
     }
     if (begin && active_owner.load()==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_present(frame);
 }
+extern "C" rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
+    if (!pass || pass->struct_size < offsetof(rsf_game_render_pass, source_frame_id) + sizeof(pass->source_frame_id) ||
+        begin > 1 || !pass->session_id || !pass->source_frame_id ||
+        (pass->role != RSF_GAME_RENDER_SUBMISSION && pass->role != RSF_GAME_RENDER_PRESENT))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
+    if (!rsf_native_cpu_read(pass->session_id, pass->source_frame_id, &facts) || facts.failed ||
+        !(facts.stage_mask & (1u << RSF_GAME_CPU_SIMULATION_END))) return RSF_BACKEND_ERROR_NOT_READY;
+    uint32_t emit = 0;
+    {
+        std::lock_guard lock(mutex);
+        auto& execution = executions[pass->source_frame_id % executions.size()];
+        if (execution.session != pass->session_id || execution.frame != pass->source_frame_id)
+            return RSF_BACKEND_ERROR_NOT_READY;
+        if (pass->role == RSF_GAME_RENDER_SUBMISSION) {
+            if (execution.stages & (1u << 4)) return RSF_BACKEND_ERROR_NOT_READY;
+            if (begin) emit = 1u << 2;
+        } else if (begin) {
+            if (!(execution.stages & (1u << 2))) return RSF_BACKEND_ERROR_NOT_READY;
+            emit = (1u << 3) | (1u << 4);
+        } else {
+            if (!(execution.stages & (1u << 4))) return RSF_BACKEND_ERROR_NOT_READY;
+            emit = 1u << 5;
+        }
+        emit &= ~execution.stages;
+        execution.stages |= emit;
+#if defined(RSF_HAVE_STREAMLINE_VK)
+        // Token lookup includes the session established by accepted CPU facts.
+        if (session == pass->session_id)
+            for (uint32_t kind = 2; kind <= 5; ++kind) if (emit & (1u << kind)) marker(pass->source_frame_id, kind);
+#endif
+    }
+    const auto owner = active_owner.load();
+    if (owner == RSF_PACING_XELL)
+        for (uint32_t kind = 2; kind <= 5; ++kind) if (emit & (1u << kind))
+            (void)rsf_fgvk_latency_marker(presentation.load(), pass->source_frame_id, kind);
+    if ((emit & (1u << 4)) && owner == RSF_PACING_ANTILAG_VULKAN)
+        rsf::latency::amd_vk_present(pass->source_frame_id);
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status* output) {
     if (!output || output->struct_size < sizeof(*output)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (output->abi_version != RSF_LATENCYVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
@@ -333,6 +379,6 @@ extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     rsf_native_latency_release_claim(2);
     (void)rsf_native_cpu_release_session(facts_session.exchange(0));
     presentation.store(nullptr);
-    initialized = bound = false; tokens = {}; render_frame = present_frame = session = 0;
+    initialized = bound = false; tokens = {}; executions = {}; render_frame = present_frame = session = 0;
     return RSF_BACKEND_OK;
 }
