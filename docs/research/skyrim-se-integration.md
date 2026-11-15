@@ -1455,3 +1455,47 @@ These are source/bytecode and bounded live-binding checks. They do not replace
 moving scene captures. Grass, particles, water, sky, auxiliary views, material
 variants and final indexed skinned draws remain open. No build or full fixture
 suite was needed for this research-only checkpoint.
+
+### Native interface boundary capture for FG research, 15 November 2026
+
+The pre-HDR SR point is not the completed scene needed by FG. The native render
+entry0x6565b0 calls world rendering through0x656d10/0x656e60; the latter reaches
+the already verified postprocess caller at0x6578d1. RenderEntry later invokes
+UI drawing at0x656921, then retains screenshot/output branches before its
+RendererEnd call at0x656bb1. Thus neither an SR callback nor a render counter
+alone establishes final HUD-less or Present ownership.
+
+IDA identified UI drawing at RVA0x116ac80 by its menu stack at UI+0x110,
+count+0x120, enabled byte+0x1c0, IMenu flags+0x1c and vfunc+0x30 calls.
+CommonLib's IMenu names slot6 PostDisplay, slot7 PreDisplay and flag0x200
+TopmostRenderedMenu. The earlier UI routine0x116b080 invokes slot7 only for
+flag0x1000 RendersOffscreenTargets. These structural matches corroborate the
+CS dev33d789 MenuManagerDrawInterfaceStartHook lead despite absent tableID82084.
+CS calls PostDisplay before this function and redirects the framebuffer RTV
+for its UI layer. That is a source comparison, not proof of our UI composition.
+The native function can also copy main1 into framebuffer0 at0x116af95. Therefore
+the pre-interface backbuffer remains a candidate until actual contents are read.
+
+The exact-build adapter now hooks this native boundary with expected bytes
+`4c 8b dc 56 57 41 54 41 55 41 57 48 83 ec 50`. Existing F10 captures gain
+`native_before_interface` and `native_after_interface` backbuffer snapshots.
+The pre-HDR callback copies only session/frame/view, chain identity and output
+dimensions into graphics-thread-local storage. The UI callback checks native
+frame and singleton identity, reads the current chain, borrows its backbuffer
+and sends the snapshot synchronously to the existing generic capture service.
+It retains no native texture or context across callbacks. The host still requires
+its armed capture, matching graphics owner and frame/view lease before readback.
+Quiesce stops new capture requests and stop disables the hook and waits for calls.
+No extra setting or per-frame shader replacement is introduced. The generic
+capture header now documents its existing same-frame lifetime through Present.
+
+Focused MSVC Release adapter build and game_plugin_contract passed. No full gate
+or vendor device fixtures were rerun. PID16972 remains on the preceding deployed
+adapter; this new hook is built, not deployed or game-tested. IDA names
+RSF_Research_UI_DrawInterface and RSF_Research_Main_RenderWorld and comments
+were saved in the existing database. Full decompilation evidence is retained in
+ignored `native-interface-boundary-20261115.json`. Next validation must compare
+both snapshots with actual final Present in one F10 capture, including HUD and
+menus, before declaring HUD-less coverage or designing UI extraction. Source
+frame association, FG resource retirement and latency input-job ownership remain
+required; the adapter continues to report NO_FG and readiness0.

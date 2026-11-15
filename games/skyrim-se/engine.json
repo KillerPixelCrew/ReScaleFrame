@@ -329,6 +329,18 @@
     ],
     "native_camera_check": "Right wall native vectors vs depth/camera reprojection p95 below0.009 input pixels; native check does not establish vendor conversion or deformation coverage"
   },
+  "interface_boundary_research": {
+    "date": "2026-11-15",
+    "status": "Guarded F10 capture hook Release-built and plugin-contract checked; not deployed or game-tested",
+    "rva": "0x116ac80",
+    "guard": "4c 8b dc 56 57 41 54 41 55 41 57 48 83 ec 50",
+    "caller": "0x656921 after world/postprocess, before later screenshot/output paths and RendererEnd0x656bb1",
+    "reference": "CS dev33d789 MenuManagerDrawInterfaceStartHook and CommonLib IMenu virtual slots/flags; tableID82084 absent",
+    "captures": ["native_before_interface", "native_after_interface"],
+    "lifetime": "Graphics-thread-local copied identity, fresh callback-scoped backbuffer lease; generic host checks armed same-session/native-frame/view capture before readback",
+    "pending": "Same-frame HUD/menu/actual Present comparison, final HUD-less/UI extraction, input/source identity and FG retirement",
+    "evidence": "docs/research/skyrim-se-integration.md#native-interface-boundary-capture-for-fg-research-15-november-2026"
+  },
   "small_family_input_audit": {
     "date": "2026-11-15",
     "scope": "Offline disassembly of all74 native DistantTree, RunGrass, Particle and Sky containers, not live draw coverage",

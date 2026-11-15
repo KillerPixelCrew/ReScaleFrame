@@ -61,7 +61,8 @@ typedef struct rsf_d3d11_host_capture {
     uint32_t view; /* rsf_dump_view: 0 storage-range, 3 linear HDR, 4 depth preview. */
     float scale;
 } rsf_d3d11_host_capture;
-/* Graphics owner only, immediately after process_upscale for the same pass.
+/* Graphics owner only, after process_upscale and before the matching actual Present
+   completes. Later native callbacks must preserve the same frame/view identity.
    Adds an adapter-selected texture to an already requested capture. No capture
    is started here. Full session/native/view identity must match; borrowed
    immediate context and texture are not retained. Refusal before an eligible
