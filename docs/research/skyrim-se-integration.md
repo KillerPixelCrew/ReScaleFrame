@@ -1585,3 +1585,70 @@ This proves the HUD boundary for this vanilla dry-room frame. Menu transitions,
 special output/screenshot branches, CS/ENB composition and a compositable UI
 layer remain open. Source identity remains null and NO_FG remains set. A clean
 HUD-less capture does not by itself make generation or pacing safe.
+
+### Native update, final scene and Present association, 15 November 2026
+
+The same-thread update-to-render association was being discarded: CPU hooks
+already assigned an outer update identity, but the SR pass always published
+source0. The adapter now copies that identity only inside the actual synchronous
+RenderEntry invocation. Each invocation receives a distinct monotonic scope;
+nested invocations restore their enclosing scope. No worker poll, latest-tick
+atomic or native render counter supplies this source. It identifies the CPU
+update which executes rendering, not the physical input consumed by simulation.
+Worker-input association remains unproven. NO_FG remains set and screen unknown.
+
+At the verified before-interface boundary the adapter publishes paired native
+FINAL_SCENE facts with the current backbuffer as scene_surface, then opens a
+WINDOW scope carrying the same copied source, native frame, view and native
+window-owner keys. Its explicit swapchain COM lease lasts through RendererEnd
+and actual Present; the scope closes after RendererEnd returns. No borrowed
+SR texture/context survives its original callback. Quiesce can drain an already
+open window scope; active-call and pending-scope state prevent premature stop.
+
+The generic D3D11 host now supplies the existing render_pass callback for these
+ownership facts. It checks session, graphics thread, context/device and scene
+resource device, then uses the shared scene/window owners. Actual Present is
+reported to the same window owner. This does not create a generation provider,
+submit vendor latency markers or authorize pacing. An older host without this
+callback keeps the adapter's previous source0 capture behavior.
+
+Generic capture records now use a declared CPU source when available and retain
+native frame separately for auxiliary/interface readbacks. Source-bearing final
+capture requires a matching current window and completed scene before reading
+the actual Present backbuffer. Engine metadata records submission and all window
+keys. A later native frame/view/family/scope cannot overwrite an already selected
+capture's metadata, even if its CPU source is the same. Render-only fallback
+continues to carry an ambiguous source and NO_FG.
+
+Focused MSVC Release runtime/adapter builds and d3d11_host_contract plus
+game_skyrim_se_plugin_contract passed. The extended input_dump WARP check
+passed source/native counter separation and stale-native refusal, including
+an attempted metadata rebind before an invalid graphics pointer. It ran after
+the bounded game had exited. No full gate or vendor device suite was rerun.
+
+Deployment backup `20261115-183933-sr-fallback`, PID37560, accepted native prepare
+and start. Runtime logs match source2/submission2/native172 and subsequent
+source4/native174, source5/native175, source6/native176 to a completed scene,
+direct backbuffer ownership and accepted actual Present. Complete settled
+capture `scene-20261115-183956-518-26312203-37560-1` has source541,
+submission/scope541 and native711 at DLSS Quality1280x720 to1920x1080.
+Its record flags4 preserve NO_FG; engine pass flags22 preserve PRIMARY,
+AFTER_SIMULATION and NO_FG. Both interface snapshots are present and the
+after-interface buffer again exactly equals actual final Present bytes.
+Evidence: ignored `native-source-present-game.log` and
+`source-native-present-live-comparison.json`, plus the capture's engine_pass.json.
+
+The experiment-owned starting-cell INI was removed by exact-content check. The
+bounded PID37560 was closed gracefully after its capture. The final metadata
+rebind guard and exception-safe scope retirement were then Release-built and
+focused-tested; the live capture predates those two defensive changes. It is
+not a game test of their refusal/exception branches. Generic runtime builds also
+include concurrent local Vulkan work; no Vulkan behavior was tested here.
+Final built DLLs were installed while Skyrim was closed, preserving both previous
+DLLs and hashes in `20261115-184323-source-scope-final`. That final deployment
+was not relaunched during this checkpoint.
+
+This establishes update/render/scene/window/Present ownership for the sampled
+vanilla path. Primary submission begin/end facts, retained normalized FG inputs,
+HUD-less GPU copies, compositable UI, screen transitions, provider presentation
+and the actual input-to-simulation boundary remain required for FG and latency.

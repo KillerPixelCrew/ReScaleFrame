@@ -2,6 +2,8 @@
 #include <rescaleframe/d3d11_host.h>
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/native_scene.h>
+#include <rescaleframe/native_window.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/overlay_input.h>
@@ -50,6 +52,7 @@ struct Host {
     ComPtr<ID3D11Device> device;
     rsf_frame_record capture_record{};
     uint64_t capture_view{};
+    uint64_t capture_native_frame{};
     bool capture_pending{};
     uint32_t execution_thread{}, backend{}, quality{}, preset{};
     uint32_t output_width{}, output_height{};
@@ -63,6 +66,7 @@ struct Host {
     int32_t last_result{RSF_ERROR_NOT_READY};
     int32_t present_result{RSF_DLSS_OK};
     uint64_t present_pairs{};
+    uint32_t ownership_reports{};
     static void log(void* user, const char* text) {
         auto& self = *static_cast<Host*>(user);
         if (self.upstream.log) self.upstream.log(self.upstream.user, text);
@@ -80,6 +84,26 @@ struct Host {
         auto& self = *static_cast<Host*>(user);
         if (self.upstream.cpu_event) self.upstream.cpu_event(self.upstream.user, event);
         else (void)rsf_native_cpu_event(event);
+    }
+    static void passes(void* user, void* raw_context, const rsf_game_render_pass* pass, uint32_t begin) {
+        auto& self = *static_cast<Host*>(user);
+        if (!pass || pass->struct_size < sizeof(*pass) || begin > 1 || pass->session_id != self.upstream.session_id) return;
+        std::unique_lock presentation(self.presentation_guard, std::try_to_lock);
+        if (!presentation.owns_lock() || !self.configured || self.execution_thread != GetCurrentThreadId() ||
+            (begin && !self.active.load(std::memory_order_acquire))) return;
+        // Native ownership facts remain useful before a generation provider is enabled.
+        if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
+            if (!raw_context || !pass->scene_surface) return;
+            auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+            if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
+            ComPtr<ID3D11Device> device; context->GetDevice(&device);
+            if (device.Get() != self.device.Get()) return;
+            static_cast<ID3D11Texture2D*>(pass->scene_surface)->GetDevice(&device);
+            if (device.Get() != self.device.Get()) return;
+            (void)rsf_native_scene_pass(pass, begin);
+        }
+        else if (pass->role == RSF_GAME_RENDER_WINDOW && pass->swapchain == self.chain.Get())
+            (void)rsf_native_window_scope(pass, begin);
     }
     static int config(void* user, rsf_game_render_config* out) {
         if (!out || out->struct_size < sizeof(*out)) return 0;
@@ -118,6 +142,20 @@ struct Host {
         if (!presentation.owns_lock()) return;
         if (!self.active.load(std::memory_order_acquire) || !event || (event->flags & DXGI_PRESENT_TEST) ||
             GetCurrentThreadId() != self.execution_thread || event->swapchain != self.chain.Get()) return;
+        (void)rsf_native_window_present(event);
+        if (event->completed && self.ownership_reports < 4) {
+            rsf_native_present_record observed{}; observed.struct_size = sizeof(observed);
+            if (rsf_native_window_last_present(&observed) && observed.matched) {
+                ++self.ownership_reports;
+                char message[240]{}; std::snprintf(message, sizeof(message),
+                    "D3D11 native ownership source=%llu submission=%llu native_frame=%llu scene=%u direct=%u accepted=%u; generation still requires complete inputs and policy",
+                    static_cast<unsigned long long>(observed.source_frame_id),
+                    static_cast<unsigned long long>(observed.scene_submission_id),
+                    static_cast<unsigned long long>(observed.scene_native_frame), observed.scene_matched,
+                    observed.scene_direct_present, observed.accepted);
+                log(&self, message);
+            }
+        }
         if (self.running) {
             const auto result = rsf_dlss_native_present(event->swapchain, event->sync_interval, event->flags, !event->completed);
             if (event->completed) ++self.present_pairs;
@@ -127,6 +165,17 @@ struct Host {
                 log(&self, message);
             }
             self.present_result = result;
+        }
+        if (self.capture_pending && rsf_input_dump_wants(&self.capture_record)) {
+            if (!(self.capture_record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID)) {
+                rsf_game_render_pass window{}; window.struct_size = sizeof(window);
+                if (!rsf_native_window_match(event->swapchain, &window) ||
+                    window.session_id != self.capture_record.session_id || window.source_frame_id != self.capture_record.frame_id ||
+                    window.native_frame != self.capture_native_frame || window.view_key != self.capture_view ||
+                    rsf_native_scene_present_path(&window) == RSF_NATIVE_SCENE_PRESENT_NONE) {
+                    rsf_input_dump_complete(&self.capture_record, RSF_ERROR_NOT_READY); self.capture_pending = false;
+                }
+            }
         }
         if (self.capture_pending && rsf_input_dump_wants(&self.capture_record)) {
             if (!event->completed) {
@@ -179,8 +228,9 @@ struct Host {
     }
     void capture_inputs(void* context, const rsf_game_render_pass& pass, rsf_frame_record& record) {
         record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-        record.frame_id = pass.native_frame; record.session_id = pass.session_id; record.view_id = uint32_t(pass.view_key);
-        record.flags = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
+        record.frame_id = pass.source_frame_id ? pass.source_frame_id : pass.native_frame;
+        record.session_id = pass.session_id; record.view_id = uint32_t(pass.view_key);
+        record.flags = RSF_FRAME_FLAG_NO_FG | (pass.source_frame_id ? 0u : RSF_FRAME_FLAG_AMBIGUOUS_ID);
         record.render_width = pass.camera.render_width; record.render_height = pass.camera.render_height;
         record.output_width = pass.camera.output_width; record.output_height = pass.camera.output_height;
         record.camera = pass.camera; record.frame_time_ms = pass.camera.frame_time_seconds * 1000;
@@ -287,7 +337,7 @@ struct Host {
             }
             rsf_input_dump_result(&record, "sr", backend, result);
             rsf_input_dump_pass(context, &pass, 0);
-            capture_record = record; capture_view = pass.view_key; capture_pending = true;
+            capture_record = record; capture_view = pass.view_key; capture_native_frame = pass.native_frame; capture_pending = true;
         }
         {
             std::lock_guard lock(state); report = {sizeof(report)};
@@ -342,6 +392,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
     self->xess = self->root + "/xess"; self->captures = self->root + "/captures";
     *services = {sizeof(*services), RSF_GAME_ABI_VERSION, self->upstream.session_id, Host::log, nullptr, self.get(), Host::config, Host::cpu};
     services->process_upscale = process; services->render_feedback = Host::feedback;
+    services->render_pass = Host::passes;
     owner.store(self.release(), std::memory_order_release); return RSF_OK;
 } catch (...) { return RSF_ERROR_NOT_READY; }
 extern "C" RSF_RUNTIME_API uint32_t rsf_d3d11_host_request_capture(void*) {
@@ -443,7 +494,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, vo
     // Do not touch borrowed graphics pointers before verifying this exact capture lease.
     if (!self->active.load(std::memory_order_acquire) || !self->configured ||
         self->execution_thread != GetCurrentThreadId() || !self->capture_pending ||
-        request->session_id != self->capture_record.session_id || request->native_frame != self->capture_record.frame_id ||
+        request->session_id != self->capture_record.session_id || request->native_frame != self->capture_native_frame ||
         request->view_key != self->capture_view || !rsf_input_dump_wants(&self->capture_record)) return RSF_ERROR_NOT_READY;
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;

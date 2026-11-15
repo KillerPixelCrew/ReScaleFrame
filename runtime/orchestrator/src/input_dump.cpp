@@ -70,7 +70,7 @@ bool matches(const rsf_game_render_pass* pass)
         ((s.record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID) ?
             (!pass->source_frame_id && pass->native_frame == s.record.frame_id && (pass->flags & RSF_GAME_RENDER_NO_FG)) :
             pass->source_frame_id == s.record.frame_id) && uint32_t(pass->view_key) == s.record.view_id &&
-        (!s.native_frame_known || pass->view_key == id.view_key);
+        (!s.native_frame_known || (pass->view_key == id.view_key && pass->native_frame == id.native_frame));
     return state().armed && id.source_frame_id && pass && pass->struct_size >= sizeof(*pass) &&
         (pass->flags & RSF_GAME_RENDER_PRIMARY) && id.session_id == pass->session_id &&
         id.source_frame_id == pass->source_frame_id && id.native_frame == pass->native_frame &&
@@ -508,6 +508,8 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_pass_metadata(const rsf_game_rend
     auto& s = state(); std::lock_guard lock(s.guard);
     if (!s.armed || !s.generic || !pass || pass->struct_size < sizeof(*pass) || pass->session_id != s.record.session_id ||
         (pass->source_frame_id ? pass->source_frame_id : pass->native_frame) != s.record.frame_id) return;
+    if (s.native_frame_known && (pass->native_frame != s.identity.native_frame || pass->view_key != s.identity.view_key ||
+        pass->family_key != s.identity.family_key || pass->scope_id != s.identity.scope_id)) return;
     s.identity.native_frame = pass->native_frame; s.native_frame_known = true;
     s.identity.view_key = pass->view_key; s.identity.family_key = pass->family_key;
     s.identity.scope_id = pass->scope_id; s.identity.viewport_key = pass->viewport_key;
@@ -516,6 +518,8 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_pass_metadata(const rsf_game_rend
     std::ofstream out(s.bundle / "engine_pass.json", std::ios::binary);
     out << "{\"session_id\":" << pass->session_id << ",\"source_frame_id\":" << pass->source_frame_id
         << ",\"native_frame\":" << pass->native_frame << ",\"view_key\":" << pass->view_key << ",\"history_key\":" << pass->history_key
+        << ",\"submission_id\":" << pass->submission_id << ",\"viewport_key\":" << pass->viewport_key
+        << ",\"window_key\":" << pass->window_key << ",\"rhi_viewport_key\":" << pass->rhi_viewport_key
         << ",\"scope_id\":" << pass->scope_id << ",\"camera_valid\":" << pass->camera_valid << ",\"flags\":" << pass->flags
         << ",\"motion_camera_included\":" << pass->motion_camera_included << ",\"motion_to_uv\":";
     array(out, pass->motion_to_uv, 2);

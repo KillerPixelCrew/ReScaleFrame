@@ -246,6 +246,7 @@ uintptr_t observe_end() noexcept {
     }
     rsf::skyrim::finish_sampling();
     const auto result = original_end();
+    rsf::skyrim::finish_presentation_inputs();
     rsf::skyrim::finish_auxiliaries(services);
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
