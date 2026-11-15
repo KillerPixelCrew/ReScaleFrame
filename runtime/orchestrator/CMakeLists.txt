@@ -153,10 +153,9 @@ endif()
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
 target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)
-# Compile the tiny public facade into the DLL as well as the embedded-host
-# library. A normal archive link then pulls only its FSR4 implementation.
-target_sources(rsf_orchestrator PRIVATE src/native_sr_split_vulkan.cpp)
-target_link_libraries(rsf_orchestrator PRIVATE ReScaleFrame::NativeVulkan)
+# Native Vulkan services are public C entry points used by external engines.
+# Keep every service object in the DLL even when no embedded host references it.
+target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_native_vulkan>")
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.cpp)

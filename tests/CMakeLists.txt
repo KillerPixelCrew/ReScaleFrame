@@ -1,4 +1,9 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+add_executable(rsf_native_vulkan_exports_test native_vulkan_exports.cpp)
+target_link_libraries(rsf_native_vulkan_exports_test PRIVATE rsf_build_options)
+add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
+add_test(NAME native_vulkan_dll_exports COMMAND rsf_native_vulkan_exports_test
+    "$<TARGET_FILE:rsf_orchestrator>")
 add_executable(rsf_shader_patch_test shader_patch.cpp)
 target_include_directories(rsf_shader_patch_test PRIVATE ../runtime/shader_patch/src)
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
