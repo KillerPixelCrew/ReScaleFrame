@@ -325,7 +325,10 @@ void device_case(Gpu& gpu, const char* directory, uint32_t quality) {
     frame.motion = gpu.describe(motion, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.output = gpu.describe(output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     frame.motion_scale_x = frame.motion_scale_y = frame.pre_exposure = 1;
     uint32_t fallback_logs=0;frame.log_user=&fallback_logs;
-    frame.log=[](void* user,const char* message){++*static_cast<uint32_t*>(user);std::printf("optional pass fallback: %s\n",message);};
+    frame.log=[](void* user,const char* message){
+        if (std::strncmp(message,"XeSS input range ",sizeof("XeSS input range ")-1)) ++*static_cast<uint32_t*>(user);
+        std::printf("SR diagnostic: %s\n",message);
+    };
     for (uint32_t index = 1; index <= 12; ++index) {
         const std::array<float, 4> value = index < 7 ? std::array<float, 4>{0.18f, 0.05f, 0.7f, 1} : std::array<float, 4>{0.05f, 0.4f, 0.12f, 1};
         frame.sharpening=rsf_sharpening_defaults(); frame.sharpening.mode=(index-1)%4;
