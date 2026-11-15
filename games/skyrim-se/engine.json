@@ -115,5 +115,49 @@
     "bind_flags": "0x28",
     "pixels_captured": false,
     "motion_semantics_verified": false
+  },
+  "native_input_roots": {
+    "camera_cache_update": "0x101cb50",
+    "camera_cache_build": "0x101e4e0",
+    "camera_history_advance": "0x101ca60",
+    "camera_bind": "0x101c660",
+    "camera_shadow_upload": "0x101e7f0",
+    "view_projection_build": "0x101d400",
+    "main_camera_global": "0x33d3d28",
+    "main_depth_texture_global": "0x3333f58",
+    "main_depth_srv_global": "0x3333fe0",
+    "cache_pointer_offset": "0xb8",
+    "cache_count_offset": "0xc8",
+    "cache_stride": "0x290",
+    "jitter_flag_offset": "0x284",
+    "unjittered_projection_offset": "0x1c0",
+    "current_vp_offset": "0x140",
+    "previous_vp_offset": "0x180",
+    "current_origin_offset": "0x26c",
+    "previous_origin_offset": "0x278",
+    "status": "Static producer/consumer match and four bounded live CPU-state/descriptor observations; no pixel validation or admitted GPU leases"
+  },
+  "native_input_observation": {
+    "near_game_units": 15,
+    "far_game_units": 353840,
+    "cache_entries": 5,
+    "depth_format": "R24G8_TYPELESS",
+    "first_previous_history_components_zero": true,
+    "dynamic_ratio": [
+      1,
+      1
+    ],
+    "reference_layout_correction": "State +0x4c/+0x50 are jitter floats in native instructions; do not use CommonLib frameCount/flag names as identity"
+  },
+  "motion_writer_research": {
+    "written_formula": "Selected original Lighting/Grass/Sky PS paths: previous-minus-current UV, Y down, unjittered",
+    "zero_is_valid_motion": true,
+    "literal_target1_candidates": {
+      "Effect": 1673,
+      "Particle": 4,
+      "Lighting": 6924
+    },
+    "scope": "Static textual mov/movc candidate census only; live target binding and draw coverage unverified",
+    "repairs_implemented": false
   }
 }

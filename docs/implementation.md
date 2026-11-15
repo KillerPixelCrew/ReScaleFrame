@@ -21,6 +21,16 @@ both 1711x1048. No pixels, vector units or GPU leases have been validated.
 The temporary starting-cell custom INI was removed and the game closed gracefully.
 HDR, bloom, exposure, native TAA and dynamic-resolution processing are preserved.
 
+Native camera construction/history/binding and main-depth ownership are now
+matched in IDA. A further bounded run matched the main camera to its jitter-keyed
+cache, read unjittered projection/history/origins and R24G8_TYPELESS main depth,
+and exposed zero initial history components. Initial history is not yet validated.
+Reference State frame-count/flag names do not
+match this executable's jitter floats and cannot establish frame identity.
+Original DXBC arithmetic establishes selected written-motion conventions and
+literal target-1 repair candidates; live draw/binding coverage remains open.
+GPU leases, shader repairs and vendor evaluation are still unimplemented.
+
 [Research](research/skyrim-se-integration.md) records the exact executable,
 current references, original shader inventory, matching CS release/PDB, hook
 bytes, deployment and run. [Engine metadata](../games/skyrim-se/engine.json)

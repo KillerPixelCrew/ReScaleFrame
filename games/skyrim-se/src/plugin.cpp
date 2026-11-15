@@ -65,6 +65,54 @@ void describe_target(uint32_t index, char* message, size_t capacity) noexcept
         desc.SampleDesc.Count, desc.BindFlags);
 }
 
+void describe_native_inputs(char* message, size_t capacity) noexcept
+{
+    const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    const auto* state = base + 0x33363a0;
+    uintptr_t camera = 0, cache = 0;
+    uint32_t count = 0;
+    // Native 0x101CB50: state + 0xB8 pointer, +0xC8 count, stride 0x290.
+    bool readable = copy(&camera, base + 0x33d3d28, sizeof(camera)) && camera &&
+        copy(&cache, state + 0xb8, sizeof(cache)) && cache &&
+        copy(&count, state + 0xc8, sizeof(count)) && count && count <= 256;
+    uintptr_t selected = 0;
+    if (readable) {
+        for (uint32_t i = 0; i < count; ++i) {
+            uintptr_t owner = 0;
+            unsigned char jittered = 0;
+            const auto entry = cache + size_t(i) * 0x290;
+            if (!copy(&owner, reinterpret_cast<const void*>(entry), sizeof(owner)) ||
+                !copy(&jittered, reinterpret_cast<const void*>(entry + 0x284), sizeof(jittered))) {
+                readable = false; break;
+            }
+            if (owner == camera && jittered == 1) { selected = entry; break; }
+        }
+    }
+    float projection[16]{}, current_vp[16]{}, previous_vp[16]{};
+    float planes[2]{}, origins[6]{}, jitter[2]{}, scale[2]{};
+    readable = readable && selected &&
+        copy(projection, reinterpret_cast<const void*>(selected + 0x1c0), sizeof(projection)) &&
+        copy(current_vp, reinterpret_cast<const void*>(selected + 0x140), sizeof(current_vp)) &&
+        copy(previous_vp, reinterpret_cast<const void*>(selected + 0x180), sizeof(previous_vp)) &&
+        copy(origins, reinterpret_cast<const void*>(selected + 0x26c), sizeof(origins)) &&
+        copy(planes, reinterpret_cast<const void*>(camera + 0x160), sizeof(planes)) &&
+        copy(jitter, state + 0x44, sizeof(jitter)) && copy(scale, state + 0x114, sizeof(scale));
+    ID3D11Texture2D* depth = nullptr;
+    D3D11_TEXTURE2D_DESC desc{};
+    // Native CopyResource at 0x15399DF reads main depth at renderer + 0x2018.
+    const bool have_depth = copy(&depth, base + 0x3333f58, sizeof(depth)) && depth;
+    if (have_depth) depth->GetDesc(&desc);
+    std::snprintf(message, capacity,
+        "Skyrim native inputs camera=%p cache=%p entries=%u readable=%u near=%g far=%g projection=%g,%g,%g,%g,%g jitter=%g,%g scale=%g,%g origin=%g,%g,%g previous_origin=%g,%g,%g VP=%g,%g previous_VP=%g,%g depth=%p size=%ux%u format=%u samples=%u; no input-frame identity or pixel validation",
+        reinterpret_cast<void*>(camera), reinterpret_cast<void*>(selected), count, readable ? 1u : 0u,
+        double(planes[0]), double(planes[1]), double(projection[0]), double(projection[5]),
+        double(projection[10]), double(projection[11]), double(projection[14]), double(jitter[0]), double(jitter[1]),
+        double(scale[0]), double(scale[1]), double(origins[0]), double(origins[1]), double(origins[2]),
+        double(origins[3]), double(origins[4]), double(origins[5]), double(current_vp[0]), double(current_vp[5]),
+        double(previous_vp[0]), double(previous_vp[5]), static_cast<void*>(depth), desc.Width, desc.Height,
+        unsigned(desc.Format), desc.SampleDesc.Count);
+}
+
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4) noexcept
 {
     calls.fetch_add(1, std::memory_order_acq_rel);
@@ -83,6 +131,11 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
                 if (accepting.load(std::memory_order_relaxed)) host = services;
             }
             if (host.log) { try { host.log(host.user, message); } catch (...) {} }
+            if (host.log && number < 4) {
+                char inputs[1024]{};
+                describe_native_inputs(inputs, sizeof(inputs));
+                try { host.log(host.user, inputs); } catch (...) {}
+            }
         }
     }
     const auto result = original_process(manager, input, output, argument4);
