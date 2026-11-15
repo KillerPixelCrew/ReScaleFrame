@@ -2684,3 +2684,16 @@ managed/native ABI and Minecraft settings tests passed (Minecraft 44/44).
 RDR2 host backends 1/3/4/5 and both D3D11 bridge variants passed with the release
 overlay. The bridge's foreground-game DLSS activity check was not run after
 foreground ownership was denied. These remain device/synthetic results.
+
+## Native Vulkan DLL exports for external engines, 15 November 2026
+
+The runtime DLL now retains the entire native Vulkan archive. Previously its link
+retained only objects referenced internally, leaving SR, FG and latency entry
+points unavailable to external engines. The standalone split facade is no longer
+compiled a second time into the DLL. Release rsf_orchestrator builds, the new
+native_vulkan_dll_exports test passes, and a separate process resolves all 22
+entry points required by the TotK adapter under development. This is build and
+DLL-contract evidence only; no TotK provider or game validation is claimed.
+The full eng/verify.ps1 Release gate is still running and has reported Anomaly
+FG device failures (active/generated-frame assertions). It is not a passing gate;
+see build/totk-native-export-verify.log for the result.
