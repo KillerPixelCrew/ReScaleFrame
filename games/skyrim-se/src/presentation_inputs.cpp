@@ -114,8 +114,15 @@ void identify_presentation_inputs(const rsf_game_render_pass& pass) {
     scene_identity.submission_id = pass.submission_id; scene_identity.scope_id = pass.scope_id;
     scene_identity.family_key = pass.family_key; scene_identity.view_key = pass.view_key;
     scene_identity.history_key = pass.history_key; scene_identity.native_frame = pass.native_frame;
+    scene_identity.pass_key = pass.pass_key; scene_identity.resource_generation = pass.resource_generation;
     scene_identity.viewport_key = pass.viewport_key; scene_identity.window_key = pass.window_key;
     scene_identity.rhi_viewport_key = pass.rhi_viewport_key; scene_identity.flags = pass.flags;
+    scene_identity.screen = pass.screen;
+    scene_identity.camera = pass.camera; scene_identity.camera_valid = pass.camera_valid;
+    scene_identity.motion_camera_included = pass.motion_camera_included;
+    std::memcpy(scene_identity.motion_to_uv, pass.motion_to_uv, sizeof(pass.motion_to_uv));
+    std::memcpy(scene_identity.previous_clip_to_clip, pass.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
+    std::memcpy(scene_identity.render_rect, pass.render_rect, sizeof(pass.render_rect));
     std::memcpy(scene_identity.output_rect, pass.output_rect, sizeof(pass.output_rect));
 }
 void finish_presentation_inputs() {

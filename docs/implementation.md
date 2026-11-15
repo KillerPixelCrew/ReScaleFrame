@@ -2,6 +2,14 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+Native input sinks and the actual third-person camera vector consumer are now
+mapped against the matching executable. A bounded live job-order probe captured
+zero generations and establishes no consuming-frame association. Final-scene
+metadata now retains the SR camera, convention and screen without borrowed
+resources. Focused Release adapter build passed; no deployment or new FG
+readiness is claimed. See
+[input consumer research](research/skyrim-se-integration.md#input-consumers-and-final-scene-metadata-15-november-2026).
+
 The shared DLSS route now normalizes camera-inclusive motion/depth into
 R16G16 pixel displacement and R32 device depth before cross-API transfer.
 Actual sentinel presence preserves valid zero vectors. Focused MSVC Release
