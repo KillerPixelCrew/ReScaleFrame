@@ -45,6 +45,9 @@ int32_t rsf_depth_scale_create(void* immediate_context, const rsf_depth_scale_se
 int32_t rsf_depth_scale_prepare(rsf_depth_scale*, const rsf_depth_scale_frame*);
 int32_t rsf_depth_scale_commit(rsf_depth_scale*);
 int32_t rsf_depth_scale_restore(rsf_depth_scale*);
+/* Release the native texture lease without restoring its contents, preserving
+   writes made by later native consumers. Graphics owner only. */
+int32_t rsf_depth_scale_discard(rsf_depth_scale*);
 int32_t rsf_depth_scale_destroy(rsf_depth_scale*);
 
 #ifdef __cplusplus

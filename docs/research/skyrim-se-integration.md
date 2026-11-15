@@ -1136,3 +1136,57 @@ evidence. The current adapter reports NO_FG and rendering_ready=0.
 | Volumetrics/clouds/GPU-driven paths | Camera, depth, storage/constant buffers, histories and dispatch resources must be traced at their producers. | Remaining compute/image-space containers are not fully classified; active paths, precision, identities and motion coverage are open. |
 | Depth, HDR and exposure | R24G8 main depth captured; pre-HDR colour and original HDR chain retained; SAO linear-depth units and DOF mip alias measured. | HDR highlights, exposure producer/consumer behavior and post-SR auxiliary corrections remain unaccepted. |
 | Blood splatter, UI, menu and camera-free paths | BloodSplatter family mapped; shared UI draws at actual final Present; menu UI now independent of scene admission. | Native HUD-less/UI leases and blood-splatter ordering require proof. These paths retain native rendering; no blanket camera or velocity shader replacement is applied. |
+
+### Reduced SR auxiliary handoff and zoom correction, 15 November 2026
+
+The question was why changing SR quality cropped the displayed image despite
+correct output dimensions. The first connected reduced-SR experiment, deployment
+`20261115-164643-sr-fallback`, completed DLSS at 1280x720 into 1920x1080.
+Capture `scene-20261115-164811-431-19607109-21100-1` shows correct full-view
+`sr_output` and a cropped `final_color`. Thus SDK success and a full viewport
+were insufficient. Merely marking native per-frame constants dirty did not fix
+the postprocessing chain, which never called their uploader at this handoff.
+
+Matched executable analysis in IDA identifies uploader RVA `0x100ae80`, guarded
+by `48 89 5c 24 08 55 48 8d ac 24 e0 fd ff ff 48 81 ec 20 03 00 00`.
+It updates constant buffer global `0x3331f08` only when byte `0x3336400`
+is set. Registers c43/c44 contain current/previous resolution ratios and
+reciprocals/clamps. Callers are camera setup and native scene rendering, rather
+than the later image-space chain. A guarded hook records flags from actual
+uploads on the graphics thread; the adapter reuses those flags when explicitly
+uploading output-size constants before native HDR and producer-size constants
+after RendererEnd. The adapter also calls guarded viewport RVA `0x1009960`.
+No remote thread performs these GPU operations.
+
+The generic host now prepares all auxiliary scratch surfaces and native colour
+rollback snapshots before SR, commits only after evaluation succeeds, and keeps
+a session/native-frame/view/thread scope until the adapter reports completion.
+Main depth/stencil, target13 refraction normals and target7 motion are reconstructed
+from the verified active rectangle with jitter removal, then restored after
+RendererEnd. Target12 uses its fractional half-size rectangle without scene
+jitter. Its producer `0x1546e80`, called by `0x52ddf0`, draws native clip-space
+screen-splitter geometry. DOF clears it at `0x1550cbb` and clears its active flag
+at `0x1550cda`; retirement preserves that later native clear. SAO and its scalar
+DOF mip remain unchanged. These are native sampling/lifetime facts, not vendor
+policy in the adapter.
+
+The first raw reduced capture matched reconstructed depth and all stencil bits
+exactly to the expected point-sampled, jitter-corrected source mapping. A focused
+Release WARP fixture checks fractional bounds, colour channels, depth/stencil,
+rollback, frame identity, overlap refusal and preservation of later native clears.
+Focused MSVC Release builds passed. No full fixture suite was repeated.
+
+Corrected deployment `20261115-165952-sr-fallback`, PID39248, produced complete
+captures `scene-20261115-170305-284-20500968-39248-1` (Quality) and
+`scene-20261115-170335-553-20531234-39248-2` (Performance). In each capture,
+visual comparison of same-frame SR output and final native colour preserves
+landmark placement across the full image. Camera movement between captures
+precludes treating them as a stationary quality comparison. Physical client
+and output both measure 1920x1080, HWND awareness2 at DPI144. Off restored four
+ratios to 1, lock0 and native TAA enabled with its clear mask consumed. Quality
+was restored and SR enabled again. Logs: `build-native-post-constants.log` and
+`auxiliary-sr-zoom-corrected-game.log` under ignored research material.
+
+This establishes the reported cropping correction and bounded dry-room reduced
+DLSS path. Active water/refraction, moving shader coverage, other backends,
+device recreation, FG, latency and CS/ENB coexistence remain unaccepted.

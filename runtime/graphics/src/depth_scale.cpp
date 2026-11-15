@@ -197,3 +197,10 @@ extern "C" int32_t rsf_depth_scale_destroy(rsf_depth_scale* p)
     if (result != RSF_DEPTH_SCALE_OK) return result;
     delete p; return RSF_DEPTH_SCALE_OK;
 }
+
+extern "C" int32_t rsf_depth_scale_discard(rsf_depth_scale* p)
+{
+    if (!p) return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
+    if (p->thread != GetCurrentThreadId()) return RSF_DEPTH_SCALE_BUSY;
+    p->committed = false; p->original.Reset(); return RSF_DEPTH_SCALE_OK;
+}

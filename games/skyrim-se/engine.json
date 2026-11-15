@@ -190,10 +190,13 @@
   },
   "native_sr": {
     "quality_choices": ["native", "quality", "balanced", "performance", "ultra-performance"],
-    "admitted_sr_qualities": ["native"],
-    "reduced_quality_status": "Experimental native raster/input collection only; auxiliary repair is required before SR admission",
+    "admitted_sr_qualities": ["native", "quality", "balanced", "performance", "ultra-performance"],
+    "reduced_quality_status": "Experimental auxiliary transaction admitted; DLSS Quality and Performance final captures preserve full view. Balanced/ultra-performance and active effects unaccepted",
     "tested_backend": "DLSS",
-    "tested_dimensions": [1711, 1048],
+    "tested_dimensions": [
+      1711,
+      1048
+    ],
     "main_call_return_rva": "0x153adec",
     "native_context_global": "0x3331f30",
     "native_window_global": "0x3330198",
@@ -225,7 +228,7 @@
     "pending": "Device/chain recreation, post-SR owner migration and full polled-device input isolation remain incomplete"
   },
   "auxiliary_handoff": {
-    "status": "Vanilla native auxiliary descriptors and raw captures; WARP depth primitive remains unconnected; reduced SR not admitted",
+    "status": "Connected experimental reduced DLSS; same-frame SR/final full-view comparison at Quality and Performance; active water/refraction unverified",
     "post_zprepass_depth_copy": "RVA0x15399df copies main depth into slot7 at global0x3334380, not MAIN_COPY slot1",
     "refraction_render_rva": "0x1565920",
     "refraction_setup_rva": "0x15655b0",
@@ -239,9 +242,10 @@
     "observed_auxiliary_allocations": "Underwater12 R8_UNORM 855x524; refraction13 RGBA8_UNORM 1711x1048; both single mip and entirely zero in dry QASmoke",
     "camera_z_units": "Captured203.54524..3388.69287; projection-linearized main depth relative error median1.20e-6,p99=5.84e-6. Linear camera depth, not hardware device Z",
     "capture": "scene-20261115-153111-244-14986921-39312-1",
-    "mechanism": "Generic graphics depth_scale C ABI1: scratch preparation, nearest depth/all8 stencil bits, temporary commit and exact restore on one immediate context",
-    "validation": "Release WARP: all256 stencil values, representative24-bit depths, offset rectangles, jitter, original contents and graphics state/counters restored",
-    "pending": "Active water/refraction coverage and native fractional rectangles, other selectors, colour auxiliary preparation, native full-size constant/viewport transition, guarded final-consumer restoration and reduced SR game capture"
+    "mechanism": "Generic transactional D3D11 auxiliary C ABI1; scratch preparation, native colour rollback, scoped commit/retirement. Adapter supplies native resource and lifetime policy",
+    "validation": "Focused Release WARP auxiliary fixture passed: fractional rectangles, depth/stencil, colour, rollback, overlap/frame refusal, native-clear retirement. Reduced game depth mapping exact in first capture",
+    "pending": "Active water/refraction and moving coverage, other selectors and auxiliary-view exceptions, other SR backends and device recreation",
+    "underwater_lifetime": "Producer0x1546e80 from0x52ddf0 builds clip-space splitter; DOF0x1550cbb clears target12 and0x1550cda clears flag. Preserve later native clear on retirement"
   },
   "resolution_control": {
     "updater_rva": "0x101e130",
@@ -254,20 +258,22 @@
     "lock_semantics": "State +0x128 nesting counter: false increments, true decrements when nonzero; primary raster requires unlocked state",
     "current_ratios_offset": "0x114",
     "previous_ratios_offset": "0x11c",
-    "constant_buffer_layout": "Native uploader writes current/previous ratios at c43, reciprocals/clamps at c44; static match, no new raw constant-buffer capture",
+    "constant_buffer_layout": "Global0x3331f08, c43 current/previous ratios, c44 reciprocals/clamps. Explicit guarded uploader calls at output/producer handoffs reuse flags observed on actual graphics-thread uploads",
     "control": "Backend plans sizes on scene graphics owner before geometry; adapter supplies ratios and pixel jitter. Native updater bypasses only while owned. Quiesce drains restoration on a native graphics callback.",
     "jitter": "Halton(2,3), phase count floor(8*(outputWidth/renderWidth)^2), bounded 8..256, mapped into both native jitter pairs",
-    "tested_render": [1141, 699],
-    "tested_allocation": [1711, 1048],
-    "tested_phase_count": 17,
-    "capture": "scene-20261115-143322-259-11517937-2804-1",
-    "capture_status": "partial: native inputs and final Present captured; reduced SR intentionally not evaluated",
-    "native_frame": 2121,
+    "tested_render": [1280, 720],
+    "tested_allocation": [1920, 1080],
+    "tested_phase_count": 18,
+    "capture": "scene-20261115-170305-284-20500968-39248-1",
+    "capture_status": "Complete Quality DLSS and actual Present; same-frame SR/final comparison preserves full view. Performance also captured; camera moved between modes",
+    "native_frame": 10675,
     "depth_geometry_inside_fraction": 1,
     "depth_geometry_outside_fraction": 0,
-    "reduced_sr_evaluated": false,
-    "restoration_tested": "Off restored current/previous ratios to 1 and lock to 0; native quality/on resumed DLSS with complete Present capture at render11357",
-    "failed_attempts": "Early loading-thread startup stalled in native SetWindowPos; cold preparation is now refused and scene-thread identity required. Lock=1 kept geometry full resolution; lock=0 produced verified reduced raster.",
-    "pending": "Full-resolution depth/stencil and other post-processing auxiliaries, complete auxiliary-view exceptions, lower-resolution SR evaluation and moving-scene acceptance"
+    "reduced_sr_evaluated": true,
+    "restoration_tested": "Current reduced-SR off transition restored four ratios1, lock0 and native TAA enabled/clearMask0; Quality/on resumed. Historical native-quality capture at render11357 retained in research",
+    "failed_attempts": "Early loading-thread startup stalled in native SetWindowPos; cold preparation is now refused and scene-thread identity required. Lock=1 kept geometry full resolution; lock=0 produced verified reduced raster. First connected reduced SR had correct SDK output but cropped native final colour. Dirty flag alone did not upload constants in image-space chain; explicit uploader call corrected the captured full view.",
+    "pending": "Active auxiliary and moving shader acceptance, other SR backends, device recreation; FG and latency remain incomplete",
+    "per_frame_constants_guard": "48 89 5c 24 08 55 48 8d ac 24 e0 fd ff ff 48 81 ec 20 03 00 00",
+    "depth_coverage_capture": "Historical native-only depth coverage metrics: scene-20261115-143322-259-11517937-2804-1, native2121"
   }
 }
