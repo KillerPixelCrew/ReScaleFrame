@@ -27,7 +27,9 @@ extern "C" {
    - start: once, with the game's device; refuses ALREADY_RUNNING while started. The setup's
      abi_version is RSF_DLSS_PIPELINE_ABI_VERSION, reported here as pipeline_abi_version.
    - evaluate: rsf_native_sr_evaluate. On success the reconstruction is copied into
-     pass->color_output (same format and size as output_texture()), and bindings are restored.
+     pass->color_output at output_rect, and bindings are restored. Matching formats use a raw
+     copy. Floating RGB/RGBA destinations may convert from the linear floating output, without
+     tonemapping or a transfer function. A distinct readable mirror is preflighted before writes.
    - reset: the next evaluate starts without history (RSF_GAME_RENDER_RESET is added to it). The
      adapter can also set that flag itself; history also restarts on any size, rectangle,
      session, history key or non-consecutive native_frame change.

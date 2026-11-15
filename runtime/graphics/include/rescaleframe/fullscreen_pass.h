@@ -63,6 +63,8 @@ typedef uint32_t rsf_fullscreen_mode;
  * curve that a lot of engines actually apply. */
 #define RSF_FULLSCREEN_PREMULTIPLIED_SRGB ((rsf_fullscreen_mode)4)
 #define RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22 ((rsf_fullscreen_mode)5)
+/* Replace RGBA without blending, tonemapping or forcing alpha to one. */
+#define RSF_FULLSCREEN_COPY_RGBA ((rsf_fullscreen_mode)6)
 
 /* How the source is sampled. Point is right when the draw lands every texel on its own pixel, which is
    the composite's case; linear is for a source drawn at a different size from its target. */

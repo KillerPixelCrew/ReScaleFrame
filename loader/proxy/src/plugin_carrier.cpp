@@ -6,6 +6,7 @@
 #include <cwchar>
 #include <mutex>
 #include <string>
+#include <atomic>
 
 namespace {
 HMODULE self = nullptr;
@@ -15,6 +16,19 @@ constexpr WORD ordinals[] = {1,2,3,4,5,6,7,8,100,101,102,103};
 std::wstring log_path;
 std::mutex log_mutex;
 rsf_plugin_session* session = nullptr;
+int (*cpu_sink)(const rsf_game_cpu_event*) = nullptr;
+std::atomic<uint32_t> cpu_samples{};
+void log(void*, const char*);
+void cpu_event(void*, const rsf_game_cpu_event* event)
+{
+    const int accepted = cpu_sink ? cpu_sink(event) : 0;
+    if (event && cpu_samples.fetch_add(1, std::memory_order_relaxed) < 32) {
+        char message[192]{};
+        std::snprintf(message, sizeof(message), "Runtime CPU fact stage=%u source=%llu thread=%lu accepted=%d flags=0x%x",
+            event->stage, static_cast<unsigned long long>(event->source_frame_id), GetCurrentThreadId(), accepted, event->flags);
+        log(nullptr, message);
+    }
+}
 
 BOOL CALLBACK initialize(PINIT_ONCE, void*, void**)
 {
@@ -57,6 +71,8 @@ DWORD WINAPI startup(void*) noexcept try
     const auto start = reinterpret_cast<decltype(&rsf_plugin_session_start)>(
         reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_plugin_session_start")));
     if (!prepare || !start) { log(nullptr, "Runtime session ABI unavailable."); return 1; }
+    cpu_sink = reinterpret_cast<decltype(cpu_sink)>(
+        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_native_cpu_event")));
     wchar_t executable[32768]{};
     const auto executable_length = GetModuleFileNameW(nullptr, executable, 32768);
     if (!executable_length || executable_length >= 32768) return 1;
@@ -80,6 +96,7 @@ DWORD WINAPI startup(void*) noexcept try
     options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = 1;
     options.services.log = log;
+    options.services.cpu_event = cpu_sink ? cpu_event : nullptr;
     const auto prepared = prepare(&options, &session);
     char message[128]{};
     std::snprintf(message, sizeof(message), "Plugin prepare result=%u", unsigned(prepared));

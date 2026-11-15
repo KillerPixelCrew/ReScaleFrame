@@ -221,6 +221,11 @@ target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_bui
 add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
 set_tests_properties(fullscreen_pass PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
+add_executable(rsf_native_reinsert native_reinsert.cpp ../runtime/orchestrator/src/native_reinsert.cpp)
+target_link_libraries(rsf_native_reinsert PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME native_reinsert_device COMMAND rsf_native_reinsert)
+set_tests_properties(native_reinsert_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 add_executable(rsf_resource_roles resource_roles.cpp)
 target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)

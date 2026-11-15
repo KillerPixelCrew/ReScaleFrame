@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cwchar>
 #include <mutex>
+#include "cpu_events.h"
 
 namespace {
 constexpr char fingerprint[] =
@@ -123,8 +124,9 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
             describe_target(input, colour, sizeof(colour));
             describe_target(7, motion, sizeof(motion));
             std::snprintf(message, sizeof(message),
-                "Skyrim native post-process observation=%llu manager=%p input=%u output=%u; %s; motion candidate %s; no GPU processing",
-                static_cast<unsigned long long>(number), manager, input, output, colour, motion);
+                "Skyrim native post-process observation=%llu source=%llu thread=%lu manager=%p input=%u output=%u; %s; motion candidate %s; no GPU processing",
+                static_cast<unsigned long long>(number), static_cast<unsigned long long>(rsf::skyrim::cpu_source()),
+                GetCurrentThreadId(), manager, input, output, colour, motion);
             rsf_game_host_services host{};
             {
                 std::lock_guard<std::mutex> lock(lifecycle);
@@ -209,7 +211,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     valid = rsf_game::validate(args->host); if (valid != RSF_OK) return valid;
     if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(lifecycle);
-    if (prepared || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
+    if (prepared || calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy()) return RSF_ERROR_BUSY;
     if (!match_target()) {
         reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
         return RSF_ERROR_NATIVE_REFUSED;
@@ -235,6 +237,10 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             return RSF_ERROR_NATIVE_REFUSED;
         }
     }
+    if (!rsf::skyrim::cpu_prepare(*args->host)) {
+        reason = "Skyrim CPU event hooks refused: expected bytes, hook ownership or clock unavailable.";
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     services = *args->host;
     observations.store(0, std::memory_order_relaxed);
     pass_observations.store(0, std::memory_order_relaxed);
@@ -256,6 +262,10 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (!rsf::skyrim::cpu_start()) {
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     enabled = true;
     accepting.store(true, std::memory_order_release);
     reason = "Pass-through native jitter and pre-HDR observations active; SR, FG and latency remain unimplemented.";
@@ -267,7 +277,8 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     accepting.store(false, std::memory_order_release);
-    return calls.load(std::memory_order_acquire) ? RSF_ERROR_BUSY : RSF_OK;
+    rsf::skyrim::cpu_quiesce();
+    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() ? RSF_ERROR_BUSY : RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -275,6 +286,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(lifecycle);
     accepting.store(false, std::memory_order_release);
+    const bool cpu_stopped = rsf::skyrim::cpu_stop();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);
         const auto process_result = MH_DisableHook(process_target);
@@ -282,7 +294,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
             (process_result != MH_OK && process_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
         enabled = false;
     }
-    if (calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
+    if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
     services = {}; prepared = false;
     reason = "Native observer stopped; no host services retained.";
     return RSF_OK;

@@ -82,6 +82,7 @@ float4 pixel_main(Varying input) : SV_Target
     {
         return float4(source.aaa, 1.0);
     }
+    if (Mode == 6) return source;
     return float4(source.rgb, 1.0);
 }
 )";
@@ -232,7 +233,7 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* p
         parameters->struct_size < sizeof(rsf_fullscreen_draw)) {
         return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
     }
-    if (parameters->mode > RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22) {
+    if (parameters->mode > RSF_FULLSCREEN_COPY_RGBA) {
         return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
     }
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
