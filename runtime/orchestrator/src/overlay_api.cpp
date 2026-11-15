@@ -12,6 +12,7 @@
 #include <rescaleframe/dlss_pipeline.h>
 #include "../../../loader/proxy/src/overlay_host.h"
 #include "render_settings_store.h"
+#include "fg_status_snapshot.h"
 #include <windows.h>
 #include <dxgi.h>
 #include <atomic>
@@ -109,7 +110,8 @@ struct Service {
         return value.sr_enabled <= 1 && value.fg_enabled <= 1 && value.status_overlay <= 1 && sr_valid(value) &&
             has(latency_choices, value.latency) && value.generated_frames && value.generated_frames <= max_generated &&
             rsf_dlss_preset_valid(value.dlss_preset) && (!value.fg_enabled || fg_choices) &&
-            (value.fg_backend == RSF_FG_BACKEND_AUTO || has(fg_choices, value.fg_backend)) &&
+            ((value.fg_backend == RSF_FG_BACKEND_AUTO && (!fg_choices || has(fg_choices, RSF_FG_BACKEND_AUTO))) ||
+                has(fg_choices, value.fg_backend)) &&
             rsf::sharpening_settings::valid(rsf::render_settings::sharpening(value));
     }
     // A saved value this adapter cannot apply falls back to its default, field by field.
@@ -127,7 +129,7 @@ struct Service {
         if (!has(latency_choices, value.latency)) value.latency = defaults.latency;
         if (!value.generated_frames || value.generated_frames > max_generated) value.generated_frames = defaults.generated_frames;
         if (!rsf_dlss_preset_valid(value.dlss_preset)) value.dlss_preset = defaults.dlss_preset;
-        if (value.fg_backend != RSF_FG_BACKEND_AUTO && !has(fg_choices, value.fg_backend)) value.fg_backend = defaults.fg_backend;
+        if (fg_choices && !has(fg_choices, value.fg_backend)) value.fg_backend = defaults.fg_backend;
         rsf::render_settings::sharpening(value, rsf::sharpening_settings::sanitize(rsf::render_settings::sharpening(value)));
         return value;
     }
@@ -217,6 +219,8 @@ const char* describe(const Service& self, bool idle_text)
         if (self.fg.reason == RSF_NATIVE_FG_REASON_HUDLESS_MISSING) return "HUD-less scene missing";
         if (self.fg.reason) return "Frame inputs or submission not matched";
         if (!self.fg.vendor.active) return "FG requested; the provider reports inactive";
+        if (self.fg.source_provenance == RSF_FRAME_SOURCE_RENDERED)
+            return "FG active; input timing unavailable, latency Off";
     }
     if (self.sr_unavailable()) return "Super resolution is not available in this adapter";
     // A note from the adapter while SR is running, for example a backend that is still being built in the
@@ -253,7 +257,16 @@ void sample(Service& self, IDXGISwapChain* chain, const DXGI_SWAP_CHAIN_DESC& de
         const auto* provider = rsf_d3d11_present_provider();
         void* session = rsf_d3d11_present_session();
         rsf_fg_status fresh{}; fresh.struct_size = sizeof(fresh);
-        if (provider && session && provider->status && provider->status(session, &fresh) == RSF_BACKEND_OK) fg.vendor = fresh;
+        if (provider && session && provider->status) {
+            const auto queried = provider->status(session, &fresh);
+            if (queried == RSF_BACKEND_OK)
+                fg.vendor = rsf::fg_status::with_completed_activity(fresh, fg.vendor, true,
+                    fg.requested.mode != RSF_FG_OFF && fg.reason == RSF_NATIVE_FG_REASON_NONE && fg.last_result == RSF_BACKEND_OK);
+            else {
+                fg.vendor.active = 0; fg.vendor.effective_mode = RSF_FG_OFF;
+                fg.vendor.effective_generated_frames = 0; fg.last_result = queried;
+            }
+        }
     }
     const uint32_t backend = owner ? rsf_d3d11_present_backend() : 0u;
     const uint32_t choices = rsf_d3d11_present_backend_choices();

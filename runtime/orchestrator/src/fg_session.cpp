@@ -17,6 +17,7 @@ struct rsf_fg_session {
     uint32_t in_flight = 0;
     bool transition = false;
     rsf_fg_session_status state{};
+    rsf_fg_options options{};
 };
 namespace {
 bool valid_provider(const rsf_generation_provider* p)
@@ -114,7 +115,7 @@ extern "C" rsf_backend_result rsf_fg_session_select(rsf_fg_session* self,
         if (result == 0) result = provider->configure(context, options);
         if (result == 0) result = self->host.adopt(self->host.user, chain);
         if (result == 0) {
-            self->provider = provider; self->context = context; self->state.has_provider = 1;
+            self->provider = provider; self->context = context; self->state.has_provider = 1; self->options = *options;
         } else if (context) {
             // adopt must be transactional: a failure cannot leave a borrowed chain retained.
             provider->destroy(context);
@@ -141,6 +142,20 @@ extern "C" rsf_backend_result rsf_fg_session_begin(rsf_fg_session* self, uint64_
     else ++self->in_flight;
     return result;
 }
+extern "C" rsf_backend_result rsf_fg_session_begin_rendered(rsf_fg_session* self, uint64_t id, uint64_t source)
+{
+    if (!self) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(self->guard);
+    if (self->transition || !self->provider) return RSF_BACKEND_ERROR_NOT_READY;
+    rsf_fg_status capability{}; capability.struct_size = sizeof(capability);
+    const auto queried = self->provider->status(self->context, &capability);
+    if (queried != RSF_BACKEND_OK) return queried;
+    if (capability.pacing_owner != RSF_PACING_NONE || self->options.reflex_mode != RSF_REFLEX_OFF || self->options.frame_limit_us)
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    const auto result = rsf_frame_sequencer_begin_rendered(self->ledger, id, source);
+    if (result == RSF_BACKEND_OK) ++self->in_flight;
+    return result;
+}
 extern "C" rsf_backend_result rsf_fg_session_marker(rsf_fg_session* self, uint64_t id,
     rsf_latency_marker marker, uint64_t timestamp, uint32_t controller)
 {
@@ -148,7 +163,10 @@ extern "C" rsf_backend_result rsf_fg_session_marker(rsf_fg_session* self, uint64
     std::lock_guard<std::mutex> lock(self->guard);
     if (self->transition) return RSF_BACKEND_ERROR_NOT_READY;
     auto result = rsf_frame_sequencer_marker(self->ledger, id, marker, timestamp);
-    if (result == 0 && self->provider) result = self->provider->marker(self->context, marker, id, controller);
+    rsf_sequence_state sequence{}; sequence.struct_size = sizeof(sequence);
+    if (result == 0) result = rsf_frame_sequencer_get(self->ledger, id, &sequence);
+    if (result == 0 && self->provider && sequence.source_provenance != RSF_FRAME_SOURCE_RENDERED)
+        result = self->provider->marker(self->context, marker, id, controller);
     return result;
 }
 extern "C" rsf_backend_result rsf_fg_session_prepare(rsf_fg_session* self, void* command, const rsf_fg_frame* frame)
@@ -160,13 +178,20 @@ extern "C" rsf_backend_result rsf_fg_session_prepare(rsf_fg_session* self, void*
     if (frame->record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     rsf_sequence_state sequence{}; sequence.struct_size = sizeof(sequence);
     auto result = rsf_frame_sequencer_get(self->ledger, frame->record->frame_id, &sequence);
-    if (result != 0 || sequence.failed || (sequence.marker_mask != 15 && sequence.marker_mask != 31) || self->prepared)
+    const bool rendered = sequence.source_provenance == RSF_FRAME_SOURCE_RENDERED;
+    const bool markers = rendered ? (sequence.marker_mask == 8 || sequence.marker_mask == 24) :
+        (sequence.marker_mask == 15 || sequence.marker_mask == 31);
+    if (result != 0 || sequence.failed || !markers || self->prepared)
         return RSF_BACKEND_ERROR_NOT_READY;
     auto prepared_frame = *frame;
     const auto& record = *frame->record;
     if (!rsf_frame_allows_fg(&record) || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID))
         prepared_frame.interpolate = 0;
-    if (prepared_frame.interpolate && record.input_qpc != sequence.timestamps[0])
+    if (rendered && (!rsf_frame_has_rendered_source(&record) || record.source_qpc != sequence.source_qpc))
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!rendered && record.source_provenance != RSF_FRAME_SOURCE_INPUT)
+        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!rendered && prepared_frame.interpolate && record.input_qpc != sequence.timestamps[0])
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (self->provider) result = self->provider->prepare(self->context, command, &prepared_frame);
     if (result == 0) self->prepared = frame->record->frame_id;

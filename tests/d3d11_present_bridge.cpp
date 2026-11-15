@@ -385,7 +385,7 @@ int main(int argc, char** argv) {
         rsf_game_render_pass source{}; source.struct_size = sizeof(source); source.session_id = 42;
         source.family_key = 1; source.view_key = 2; source.viewport_key = 3; source.screen = RSF_SCREEN_FLIGHT;
         source.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
-        source.camera.struct_size = sizeof(source.camera); source.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        source.camera.struct_size = sizeof(source.camera); source.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
         source.camera.render_width = source.camera.render_height = source.camera.output_width = source.camera.output_height = 512;
         source.camera.near_plane = 0.1f; source.camera.vertical_fov_radians = 1; source.camera.depth_inverted = 1;
         std::memcpy(source.camera.view_to_clip, frame.camera_view_to_clip, 64);

@@ -46,7 +46,7 @@ rsf_frame_record record(uint64_t session, uint64_t frame, uint32_t view = 0, uin
     rsf_frame_record result{}; result.struct_size = sizeof(result); result.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     result.session_id = session; result.frame_id = frame; result.view_id = view; result.resource_generation = generation;
     result.render_width = result.output_width = 640; result.render_height = result.output_height = 360; result.frame_time_ms = 16.667f;
-    auto& camera = result.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    auto& camera = result.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     camera.render_width = camera.output_width = 640; camera.render_height = camera.output_height = 360;
     camera.near_plane = 0.05f; camera.far_plane = 100; camera.vertical_fov_radians = 1; camera.depth_inverted = 1;
     for (auto* matrix : {camera.view_to_clip, camera.clip_to_view, camera.view_to_world, camera.world_to_view, camera.clip_to_previous_clip})

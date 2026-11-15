@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_cpu.h>
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <windows.h>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <iterator>
 namespace {
+std::atomic<bool> rendered_sources{false};
 std::mutex guard;
 std::array<rsf_native_cpu_frame, 128> frames{};
 uint64_t current_session = 0, last_begin = 0;
@@ -19,8 +22,151 @@ uint32_t next_message{};
 std::mutex lease_guard;
 HANDLE pacing_lease{};
 uint32_t pacing_client{};
+// Prospective sources (CPU event version 2). A reservation is a retained fact about an actual
+// input poll whose consuming source is not yet known; it never becomes a frame stage, marker,
+// pacing request or sink delivery. Guarded by `guard`; live entries are never evicted.
+std::array<rsf_native_cpu_reservation, 16> reservations{};
+uint64_t highest_reserved = 0, session_frequency = 0;
+rsf_native_cpu_reservation_counters reservation_totals{sizeof(reservation_totals)};
+std::atomic<uint64_t> reservation_rejected{0};
+// Actual application Present outcomes of the current session, independent of FRAME_END and
+// binding. Guarded by `guard`; the first outcome per source stands.
+struct PresentOutcome { uint64_t source{}; int32_t state{}; };
+std::array<PresentOutcome, 64> present_outcomes{};
+uint32_t next_present_outcome = 0;
+uint64_t presented_through = 0;
+bool record_present(uint64_t session, uint64_t source, int32_t state) {
+    if (!session || session != current_session || !source) return false;
+    for (const auto& entry : present_outcomes) if (entry.source == source) return false;
+    present_outcomes[next_present_outcome++ % present_outcomes.size()] = {source, state};
+    if (state == RSF_NATIVE_CPU_DEPENDENCY_PRESENTED && source > presented_through) presented_through = source;
+    return true;
+}
+int32_t present_state(uint64_t source) {
+    if (!source) return RSF_NATIVE_CPU_DEPENDENCY_NONE;
+    for (const auto& entry : present_outcomes) if (entry.source == source) return entry.state;
+    return presented_through > source ? RSF_NATIVE_CPU_DEPENDENCY_SUPERSEDED : RSF_NATIVE_CPU_DEPENDENCY_PENDING;
+}
+bool reservation_live(uint32_t state) {
+    return state == RSF_NATIVE_CPU_RESERVATION_OPEN || state == RSF_NATIVE_CPU_RESERVATION_SAMPLED;
+}
+bool reservation_owned(uint32_t state) {
+    return state == RSF_NATIVE_CPU_RESERVATION_ADOPTED || state == RSF_NATIVE_CPU_RESERVATION_BOUND;
+}
+rsf_native_cpu_reservation* find_reservation(uint64_t session, uint64_t source) {
+    if (!session || !source) return nullptr;
+    for (auto& entry : reservations)
+        if (entry.state && entry.session_id == session && entry.source_frame_id == source) return &entry;
+    return nullptr;
+}
+void abort_reservation(rsf_native_cpu_reservation& entry, uint32_t reason) {
+    entry.state = RSF_NATIVE_CPU_RESERVATION_ABORTED; entry.abort_reason = reason; ++reservation_totals.aborted;
+}
+// FRAME_BEGIN under `guard`. Adopts a sampled reservation of this identity and withdraws the
+// others. The frame itself is never refused here: the reporting callback cannot tell an adapter
+// that a reservation was refused, so a frame with a withdrawn or still-polling identity begins
+// as an ordinary frame without input ownership rather than losing the engine's CPU frame.
+void reservation_begin(const rsf_game_cpu_event& event) {
+    for (auto& entry : reservations) {
+        if (!entry.state || entry.session_id != event.session_id) continue;
+        if (entry.source_frame_id == event.source_frame_id) {
+            if (entry.state == RSF_NATIVE_CPU_RESERVATION_SAMPLED && entry.qpc_frequency == event.qpc_frequency &&
+                event.timestamp_qpc >= entry.sampled_qpc) {
+                entry.state = RSF_NATIVE_CPU_RESERVATION_ADOPTED; entry.frame_begin_qpc = event.timestamp_qpc;
+                ++reservation_totals.adopted;
+            } else if (reservation_live(entry.state)) {
+                abort_reservation(entry, RSF_GAME_CPU_ABORT_OVERLAP); // poll overlaps its consumer
+            }
+        } else if (reservation_live(entry.state)) {
+            abort_reservation(entry, RSF_GAME_CPU_ABORT_SUPERSEDED);
+        }
+    }
+}
+// Any CPU closure of a frame, under `guard`.
+void reservation_end(uint64_t session, uint64_t source) {
+    auto* entry = find_reservation(session, source);
+    if (!entry) return;
+    if (entry->state == RSF_NATIVE_CPU_RESERVATION_ADOPTED) { entry->state = RSF_NATIVE_CPU_RESERVATION_UNBOUND; ++reservation_totals.unbound; }
+    else if (entry->state == RSF_NATIVE_CPU_RESERVATION_BOUND) { entry->state = RSF_NATIVE_CPU_RESERVATION_CLOSED; ++reservation_totals.closed; }
+}
+int refuse_source() { reservation_rejected.fetch_add(1, std::memory_order_relaxed); return 0; }
 void clear_facts() {
     frames = {}; pending_messages={}; next_message=0; totals = {sizeof(totals)}; ping_message=0; current_session = last_begin = 0; consumer = nullptr; consumer_user = nullptr;
+    reservations = {}; highest_reserved = session_frequency = 0; reservation_totals = {sizeof(reservation_totals)};
+    reservation_rejected.store(0, std::memory_order_relaxed);
+    present_outcomes = {}; next_present_outcome = 0; presented_through = 0;
+}
+int source_event(const rsf_game_cpu_event* incoming) {
+    // Validate the declared size before reading any extension byte.
+    if (incoming->event_version != RSF_GAME_CPU_EVENT_VERSION_SOURCE ||
+        incoming->struct_size < sizeof(rsf_game_cpu_source_event)) return refuse_source();
+    rsf_game_cpu_source_event event{};
+    std::memcpy(&event, incoming, sizeof(event));
+    const auto& fact = event.header;
+    const uint32_t allowed = fact.stage == RSF_GAME_CPU_SOURCE_RESERVE ? RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR :
+        fact.stage == RSF_GAME_CPU_SOURCE_SAMPLED ? RSF_GAME_CPU_SOURCE_PRODUCED : 0u;
+    if (!fact.session_id || !fact.source_frame_id || !fact.timestamp_qpc || !fact.qpc_frequency ||
+        (fact.flags & ~allowed) || fact.message_id || fact.render_expected || (fact.input_kind & ~7u) ||
+        (fact.input_kind && fact.stage != RSF_GAME_CPU_SOURCE_SAMPLED) || event.reserved ||
+        (event.reason && fact.stage != RSF_GAME_CPU_SOURCE_ABORT) ||
+        (event.predecessor_source_id && fact.stage != RSF_GAME_CPU_SOURCE_RESERVE)) return refuse_source();
+    bool refused = false;
+    {
+        std::lock_guard lock(guard);
+        if (!current_session || current_session != fact.session_id || fact.qpc_frequency != session_frequency)
+            return refuse_source();
+        auto* entry = find_reservation(fact.session_id, fact.source_frame_id);
+        if (fact.stage == RSF_GAME_CPU_SOURCE_RESERVE) {
+            if (fact.source_frame_id <= last_begin || fact.source_frame_id <= highest_reserved) return refuse_source();
+            if (const auto predecessor = event.predecessor_source_id) {
+                const auto& owner = frames[predecessor % frames.size()];
+                if (predecessor > last_begin || owner.source_frame_id != predecessor || owner.session_id != fact.session_id)
+                    return refuse_source();
+            }
+            highest_reserved = fact.source_frame_id;
+            bool overlap = false;
+            for (auto& other : reservations) {
+                if (other.session_id != fact.session_id || !reservation_live(other.state)) continue;
+                // A sampled, unadopted poll is replaced by this newer poll's control state.
+                // A poll still in flight means two native polls overlap: neither owns its state.
+                overlap |= other.state == RSF_NATIVE_CPU_RESERVATION_OPEN;
+                abort_reservation(other, other.state == RSF_NATIVE_CPU_RESERVATION_OPEN ?
+                    RSF_GAME_CPU_ABORT_OVERLAP : RSF_GAME_CPU_ABORT_INTERVENING_POLL);
+            }
+            rsf_native_cpu_reservation* slot = nullptr;
+            if (!overlap) for (auto& candidate : reservations) {
+                if (reservation_live(candidate.state) || reservation_owned(candidate.state)) continue;
+                if (!slot || !candidate.state || (slot->state && candidate.source_frame_id < slot->source_frame_id)) slot = &candidate;
+                if (!slot->state) break;
+            }
+            if (slot) {
+                *slot = {}; slot->struct_size = sizeof(*slot); slot->state = RSF_NATIVE_CPU_RESERVATION_OPEN;
+                slot->session_id = fact.session_id; slot->source_frame_id = fact.source_frame_id;
+                slot->predecessor_source_id = event.predecessor_source_id; slot->native_generation = event.native_generation;
+                slot->qpc_frequency = fact.qpc_frequency; slot->reserve_qpc = fact.timestamp_qpc; slot->flags = fact.flags;
+                ++reservation_totals.reserved;
+            } else refused = true; // overlapping polls, or every entry still owned by a live source
+        } else if (!entry || entry->qpc_frequency != fact.qpc_frequency) {
+            return refuse_source();
+        } else if (fact.stage == RSF_GAME_CPU_SOURCE_SAMPLED) {
+            if (entry->state != RSF_NATIVE_CPU_RESERVATION_OPEN || fact.timestamp_qpc < entry->reserve_qpc ||
+                event.native_generation != entry->native_generation) return refuse_source();
+            entry->state = RSF_NATIVE_CPU_RESERVATION_SAMPLED; entry->sampled_qpc = fact.timestamp_qpc;
+            entry->input_kind = fact.input_kind; entry->flags |= fact.flags; ++reservation_totals.sampled;
+        } else if (fact.stage == RSF_GAME_CPU_SOURCE_BIND) {
+            const auto& frame = frames[fact.source_frame_id % frames.size()];
+            if (entry->state != RSF_NATIVE_CPU_RESERVATION_ADOPTED || !(entry->flags & RSF_GAME_CPU_SOURCE_PRODUCED) ||
+                frame.source_frame_id != fact.source_frame_id || frame.session_id != fact.session_id ||
+                frame.ended || frame.failed || fact.timestamp_qpc < entry->frame_begin_qpc ||
+                fact.timestamp_qpc < entry->sampled_qpc) return refuse_source();
+            entry->state = RSF_NATIVE_CPU_RESERVATION_BOUND; entry->bind_qpc = fact.timestamp_qpc;
+            ++reservation_totals.bound;
+        } else {
+            if (!reservation_live(entry->state) && !reservation_owned(entry->state)) return refuse_source();
+            abort_reservation(*entry, event.reason);
+        }
+    }
+    return refused ? refuse_source() : 1;
 }
 }
 extern "C" RSF_RUNTIME_API int rsf_native_latency_claim(uint32_t client) {
@@ -42,11 +188,21 @@ extern "C" RSF_RUNTIME_API void rsf_native_latency_release_claim(uint32_t client
     std::lock_guard lock(lease_guard);
     if (pacing_lease && pacing_client==client) {CloseHandle(pacing_lease);pacing_lease=nullptr;pacing_client=0;}
 }
+extern "C" RSF_RUNTIME_API void rsf_native_cpu_rendered_source_set(uint32_t enabled) {
+    rendered_sources.store(enabled != 0);
+}
 extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event* incoming,
     rsf_game_cpu_event_fn supplied_sink, void* supplied_user)
 {
+    // Version 2 source lifetimes are retained facts, validated and stored before any version 1
+    // rule applies, and never delivered to a sink.
+    if (incoming && incoming->struct_size >= sizeof(*incoming) &&
+        incoming->stage >= RSF_GAME_CPU_SOURCE_RESERVE && incoming->stage <= RSF_GAME_CPU_SOURCE_ABORT)
+        return source_event(incoming);
     if (!incoming || incoming->struct_size < sizeof(*incoming) || incoming->event_version > RSF_GAME_CPU_EVENT_VERSION ||
         incoming->flags & ~(RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_WINDOW_MESSAGE | RSF_GAME_CPU_RENDER_SKIPPED | RSF_GAME_CPU_INPUT_UNFRAMED | RSF_GAME_CPU_DERIVED_BOUNDARY)) return 0;
+    const bool rendered = rendered_sources.load();
+    if (rendered && (incoming->stage == RSF_GAME_CPU_INPUT_SAMPLE || incoming->stage == RSF_GAME_CPU_PACING)) return 0;
     auto copy = *incoming;
     const auto* event = &copy;
     const bool window_message = event->event_version == RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_WINDOW_MESSAGE);
@@ -69,7 +225,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             if (current_session==event->session_id && last_begin && last_begin<event->source_frame_id)
                 previous=frames[last_begin%frames.size()];
         }
-        if (previous.stage_mask==15u && !previous.ended) {
+        if ((previous.stage_mask==15u || (rendered && (previous.stage_mask & 9u)==9u)) && !previous.ended) {
             auto end=*event; end.stage=RSF_GAME_CPU_FRAME_END; end.source_frame_id=previous.source_frame_id;
             end.flags|=RSF_GAME_CPU_DERIVED_BOUNDARY; end.render_expected=0;
             if (!rsf_native_cpu_dispatch(&end,supplied_sink,supplied_user)) return 0;
@@ -77,7 +233,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
     }
     // A renderer can run without an engine input callback (loading/first frame). Normalize that absence centrally,
     // label it, and skip a late pacing sleep. Adapters report only the simulation end they actually observed.
-    if (facts && event->stage == RSF_GAME_CPU_SIMULATION_END) {
+    if (!rendered && facts && event->stage == RSF_GAME_CPU_SIMULATION_END) {
         rsf_native_cpu_frame current{}; current.struct_size = sizeof(current);
         if (!rsf_native_cpu_read(event->session_id, event->source_frame_id, &current)) return 0;
         auto substitute = *event; substitute.flags |= RSF_GAME_CPU_INPUT_SUBSTITUTE;
@@ -95,11 +251,14 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
     rsf_game_cpu_event_fn sink = nullptr; void* user = nullptr;
     {
         std::lock_guard<std::mutex> lock(guard);
-        if (!current_session && event->stage == RSF_GAME_CPU_FRAME_BEGIN) current_session = event->session_id;
+        if (!current_session && event->stage == RSF_GAME_CPU_FRAME_BEGIN) {
+            current_session = event->session_id; session_frequency = event->qpc_frequency;
+        }
         if (current_session != event->session_id) return 0;
         auto& frame = frames[event->source_frame_id % frames.size()];
         if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) {
             if (event->source_frame_id <= last_begin || (frame.source_frame_id && !frame.ended)) return 0;
+            reservation_begin(*event);
             frame = {}; frame.struct_size = sizeof(frame); frame.session_id = event->session_id;
             frame.source_frame_id = event->source_frame_id; frame.qpc_frequency = event->qpc_frequency;
             last_begin = event->source_frame_id; frame.flags=event->flags; ++totals.frames;
@@ -107,7 +266,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             if (frame.source_frame_id != event->source_frame_id || frame.session_id != event->session_id ||
                 frame.ended) return 0;
             if (frame.failed) {
-                if (event->stage == RSF_GAME_CPU_FRAME_END) frame.ended = 1;
+                if (event->stage == RSF_GAME_CPU_FRAME_END) { frame.ended = 1; reservation_end(event->session_id, event->source_frame_id); }
                 return 0;
             }
         }
@@ -153,14 +312,17 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
         // CPU records. They cannot be promoted to a complete render or latency frame.
         const bool partial_end = event->stage == RSF_GAME_CPU_FRAME_END &&
             (frame.stage_mask == 1u || frame.stage_mask == 3u);
+        const bool rendered_end = rendered &&
+            ((event->stage == RSF_GAME_CPU_SIMULATION_END && (frame.stage_mask == 1u || frame.stage_mask == 5u)) ||
+             (event->stage == RSF_GAME_CPU_FRAME_END && (frame.stage_mask == 9u || frame.stage_mask == 13u)));
         const bool early_simulation = facts && event->stage==RSF_GAME_CPU_SIMULATION_BEGIN && frame.stage_mask==1u;
         const bool input_after_begin = facts && event->stage==RSF_GAME_CPU_INPUT_SAMPLE && frame.stage_mask==5u;
         uint64_t previous = 0;
         for (const auto stamp : frame.timestamps_qpc) if (stamp > previous) previous = stamp;
         if (frame.qpc_frequency != event->qpc_frequency || event->timestamp_qpc < previous ||
-            (!partial_end && !early_simulation && !input_after_begin && frame.stage_mask != expected)) {
+            (!rendered_end && !partial_end && !early_simulation && !input_after_begin && frame.stage_mask != expected)) {
             frame.failed = 1; ++totals.order_violations;
-            if (event->stage == RSF_GAME_CPU_FRAME_END) frame.ended = 1;
+            if (event->stage == RSF_GAME_CPU_FRAME_END) { frame.ended = 1; reservation_end(event->session_id, event->source_frame_id); }
             return 0;
         }
         if (event->stage == RSF_GAME_CPU_INPUT_SAMPLE && (event->flags & RSF_GAME_CPU_INPUT_SUBSTITUTE)) {
@@ -171,6 +333,13 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
         frame.stage_mask |= 1u << event->stage;
         frame.ended = event->stage == RSF_GAME_CPU_FRAME_END;
         if (frame.ended && (event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY)) ++totals.derived_frame_ends;
+        if (frame.ended) {
+            reservation_end(event->session_id, event->source_frame_id);
+            // The engine's own statement that this source will not present is a Present outcome.
+            // CPU closure alone says nothing about Present.
+            if ((event->flags & RSF_GAME_CPU_RENDER_SKIPPED) && !(event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY))
+                (void)record_present(event->session_id, event->source_frame_id, RSF_NATIVE_CPU_DEPENDENCY_CANCELLED);
+        }
         sink = supplied_sink ? supplied_sink : consumer; user = supplied_sink ? supplied_user : consumer_user;
         }
     }
@@ -242,6 +411,31 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_marker(uint64_t source, uint32_t m
     frame.marker_mask |= 1u<<marker; return 1;
 }
 
+extern "C" RSF_RUNTIME_API int rsf_native_cpu_reservation_read(uint64_t session, uint64_t source, rsf_native_cpu_reservation* out) {
+    if (!out || out->struct_size < sizeof(*out)) return 0;
+    std::lock_guard lock(guard);
+    const auto* entry = session == current_session ? find_reservation(session, source) : nullptr;
+    if (!entry) return 0;
+    *out = *entry;
+    out->predecessor_present = present_state(out->predecessor_source_id);
+    return 1;
+}
+extern "C" RSF_RUNTIME_API int rsf_native_cpu_reservation_counters_get(rsf_native_cpu_reservation_counters* out) {
+    if (!out || out->struct_size < sizeof(*out)) return 0;
+    std::lock_guard lock(guard);
+    *out = reservation_totals; out->rejected = reservation_rejected.load(std::memory_order_relaxed);
+    return 1;
+}
+extern "C" RSF_RUNTIME_API int rsf_native_cpu_present_result(uint64_t session, uint64_t source, uint32_t outcome, int32_t native_result) {
+    int32_t state{};
+    if (outcome == RSF_NATIVE_CPU_PRESENT_RETURNED)
+        state = native_result >= 0 ? RSF_NATIVE_CPU_DEPENDENCY_PRESENTED : RSF_NATIVE_CPU_DEPENDENCY_FAILED;
+    else if (outcome == RSF_NATIVE_CPU_PRESENT_RESULT_UNKNOWN) state = RSF_NATIVE_CPU_DEPENDENCY_UNVERIFIED;
+    else if (outcome == RSF_NATIVE_CPU_PRESENT_ABORTED) state = RSF_NATIVE_CPU_DEPENDENCY_CANCELLED;
+    else return 0;
+    std::lock_guard lock(guard);
+    return record_present(session, source, state) ? 1 : 0;
+}
 extern "C" RSF_RUNTIME_API void rsf_native_cpu_paced(uint64_t source, uint64_t began, uint64_t ready) {
     if (!source || !began || ready<began) return;
     std::lock_guard lock(guard); auto& frame=frames[source%frames.size()];

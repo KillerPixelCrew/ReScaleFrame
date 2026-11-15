@@ -120,7 +120,7 @@ int main() {
     check(rsf_srvk_fsr4_submitted(nullptr, commands) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "notification owner required");
     check(rsf_srvk_fsr4_submitted(fake, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "notification commands required");
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
     void* continuation = nullptr;
     frame.struct_size = sizeof(frame) - 1; frame.abi_version = 99;
@@ -136,7 +136,7 @@ int main() {
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, &continuation) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "short camera");
     record.camera.struct_size++; record.camera.abi_version = 99;
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, &continuation) == RSF_BACKEND_ERROR_ABI_MISMATCH, "camera version");
-    record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION; frame.reactive.image = 1;
+    record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION; frame.reactive.image = 1;
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, &continuation) == RSF_BACKEND_ERROR_NOT_SUPPORTED, "unsupported masks not ignored");
     frame.reactive.image = 0;
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "continuation output required");

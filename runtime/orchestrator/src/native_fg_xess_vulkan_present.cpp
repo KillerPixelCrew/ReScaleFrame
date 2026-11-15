@@ -132,7 +132,7 @@ bool valid_frame(const rsf_xessgvk& self, const rsf_fgvk_frame* frame) {
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         !record.frame_id || record.frame_id > UINT32_MAX || !record.session_id || !record.render_width || !record.render_height ||
         record.output_width != self.width || record.output_height != self.height ||
-        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         record.camera.motion_jittered || record.camera.depth_inverted != self.setup.graphics.depth_inverted ||
         !std::isfinite(frame->motion_scale_x) || !std::isfinite(frame->motion_scale_y) ||
         !frame->motion_scale_x || !frame->motion_scale_y) return false;

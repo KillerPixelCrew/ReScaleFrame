@@ -239,7 +239,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     if (frame->sharpening.struct_size && !rsf::sharpening_settings::valid(frame->sharpening)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     const auto& record = *frame->record;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         !record.frame_id || record.frame_id <= self->last_frame || !record.session_id || !record.view_id || !record.resource_generation ||
         (self->session && (self->session != record.session_id || self->view != record.view_id)) ||
         self->last_done > UINT64_MAX - 2 || frame->reactive.image || frame->composition.image ||

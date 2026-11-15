@@ -60,6 +60,7 @@ struct Host {
     uint32_t output_width{}, output_height{};
     bool configured{}, scene_bound{}, observer{}, attempted{}, running{}, reset{true};
     bool bridge_installed{};
+    std::atomic<bool> bridge_bound{};
     std::atomic<bool> capture{};
     std::atomic<bool> active{};
     std::atomic<bool> transport{true}, fidelity{false};
@@ -86,6 +87,8 @@ struct Host {
     }
     static void cpu(void* user, const rsf_game_cpu_event* event) {
         auto& self = *static_cast<Host*>(user);
+        // Installation/preparation alone does not prove the engine retained the facade.
+        if (self.setup.presentation_bridge && !self.bridge_bound.load(std::memory_order_acquire)) return;
         if (self.bridge_installed) {
             const auto accepted = rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) {
                 rsf_native_fg_cpu(fact);
@@ -112,19 +115,25 @@ struct Host {
         bridge.accept_window = accept_window; bridge.present_event = present;
         bridge.prepare = rsf_native_fg_prepare; bridge.retire = rsf_native_fg_retire;
         bridge.latency_event = [](void*, const rsf_observer_present_event* event) { rsf_native_fg_present(event); };
-        bridge.backend = 0; bridge.runtime_switching = 1; bridge.max_generated_frames = UINT32_MAX;
+        const bool rendered = (setup.capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE) != 0;
+        rsf_native_fg_rendered_source_set(rendered);
+        if (rendered) bridge.allowed_backend_choices = (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4);
+        bridge.backend = 0; bridge.runtime_switching = 1; bridge.max_generated_frames = 15;
         bridge.depth_inverted = bridge.depth_infinite = setup.depth_inverted;
         bridge.units_to_meters = setup.units_to_meters; bridge.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
         bridge.fsr3_directory_utf8 = bridge.fsr4_directory_utf8 = fidelityfx.c_str();
         bridge.xess_directory_utf8 = xess.c_str(); bridge.streamline_directory_utf8 = streamline.c_str();
         bridge.engine_type = setup.engine_type; bridge.engine_version_utf8 = version.c_str(); bridge.project_id_utf8 = project.c_str();
-        bridge_installed = rsf_d3d11_present_install(&bridge) != 0;
+        bridge_installed = (setup.presentation_bridge == 2 ? rsf_d3d11_present_prepare(&bridge) :
+            rsf_d3d11_present_install(&bridge)) != 0;
         if (bridge_installed) {
             rsf_native_fg_set_log(log, this);
             const rsf_native_fg_options off{sizeof(off), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
             rsf_native_fg_options_set(&off);
         }
-        log(this, bridge_installed ? "D3D11 callback host installed cold presentation bridge; provider and generation start Off." :
+        log(this, bridge_installed ? (setup.presentation_bridge == 2 ?
+            "D3D11 callback host prepared outer creation root; facade ownership awaits engine binding." :
+            "D3D11 callback host installed cold presentation bridge; facade ownership awaits engine binding.") :
             "D3D11 callback host presentation bridge refused; native presentation retained.");
     }
     static void passes(void* user, void* raw_context, const rsf_game_render_pass* pass, uint32_t begin) {
@@ -136,6 +145,16 @@ struct Host {
         // Native ownership facts remain useful before a generation provider is enabled.
         if (pass->role == RSF_GAME_RENDER_FRAME && self.bridge_installed) rsf_native_fg_frame(pass, begin);
         else if (pass->role == RSF_GAME_RENDER_SUBMISSION && self.bridge_installed) rsf_native_fg_submission(pass, begin);
+        else if (pass->role == RSF_GAME_RENDER_FG_INPUTS) {
+            bool requested{}; { std::lock_guard lock(self.state); requested = self.desired.fg_enabled != 0; }
+            if (requested && begin && self.bridge_installed && (self.setup.capabilities & RSF_D3D11_HOST_CAP_FG_INPUTS) && raw_context &&
+                pass->swapchain == self.chain.Get()) {
+                auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+                ComPtr<ID3D11Device> device; context->GetDevice(&device);
+                if (device.Get() == self.device.Get() && context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+                    (void)rsf_native_sr_capture_fg(context, pass, &self.setup.motion);
+            }
+        }
         else if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
             if (!raw_context || !pass->scene_surface) return;
             auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
@@ -239,6 +258,10 @@ struct Host {
     }
     bool initialize(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
         if (configured) return true;
+        if (setup.presentation_bridge && (!bridge_installed || !rsf_d3d11_present_is_owner(pass.swapchain))) {
+            log(this, "D3D11 host refused presentation binding: engine chain is not the final application facade.");
+            return false;
+        }
         context->GetDevice(&device);
         ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter; DXGI_ADAPTER_DESC desc{};
         if (FAILED(device.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetDesc(&desc))) return false;
@@ -249,7 +272,21 @@ struct Host {
         panel.defaults = {sizeof(rsf_render_settings), RSF_RENDER_FRONTEND_ABI_VERSION,
             1, selected, 0, 0, RSF_FG_BACKEND_AUTO, 1, RSF_REFLEX_OFF, 0, 1, 0};
         panel.sr_backend_choices = 0x3e; panel.sr_quality_choices = setup.quality_choices;
-        panel.latency_choices = 1u << RSF_REFLEX_OFF; panel.max_generated_frames = 1;
+        const bool timeline = bridge_installed && (setup.capabilities & RSF_D3D11_HOST_CAP_INPUT_TIMELINE);
+        const bool rendered = bridge_installed && (setup.capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE);
+        const bool generation = (timeline || rendered) && (setup.capabilities & RSF_D3D11_HOST_CAP_FG_INPUTS);
+        panel.fg_backend_choices = generation ? ((1u << RSF_FG_BACKEND_AUTO) | (1u << RSF_FG_BACKEND_DLSS) |
+            (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS)) : 0;
+        if (rendered) {
+            panel.fg_backend_choices = generation ? ((1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_FSR4)) : 0;
+            panel.defaults.fg_backend = RSF_FG_BACKEND_FSR3;
+        }
+        panel.latency_choices = timeline ? ((1u << RSF_REFLEX_OFF) | (1u << RSF_REFLEX_ON) |
+            (1u << RSF_REFLEX_BOOST)) : (1u << RSF_REFLEX_OFF);
+        panel.max_generated_frames = generation ? 15u : 1u;
+        if (rendered) log(this, "D3D11 rendered-source FG: input timing unavailable; latency Off, no pre-input pacing.");
+        else if (!timeline) log(this, "D3D11 host refuses FG/latency controls: native input timeline capability unavailable.");
+        else if (!generation) log(this, "D3D11 host refuses FG controls: native FG input lease capability unavailable.");
         panel.dlss_preset_available = 1; panel.log = log; panel.sr_report = sr_report; panel.settings_changed = changed; panel.user = this;
         transport.store(GetPrivateProfileIntW(section.c_str(), L"ColourTransport", 1, ini.c_str()) != 0);
         fidelity.store(GetPrivateProfileIntW(section.c_str(), L"ColourCorrection", 0, ini.c_str()) != 0);
@@ -271,7 +308,8 @@ struct Host {
         rsf_input_dump_configure(captures.c_str(), identity.c_str(), fingerprint.c_str(), log, this);
         std::snprintf(report.reason, sizeof(report.reason), "Waiting for verified scene inputs");
         configured = true;
-        log(this, "D3D11 callback host configured; generation/pacing disabled until engine ownership is established.");
+        if (observer && setup.presentation_bridge) bridge_bound.store(true, std::memory_order_release);
+        log(this, "D3D11 callback host configured; FG/latency controls follow declared capabilities and native eligibility.");
         return observer;
     }
     void capture_inputs(void* context, const rsf_game_render_pass& pass, rsf_frame_record& record) {
@@ -426,7 +464,11 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
         !std::isfinite(setup->units_to_meters) || setup->units_to_meters <= 0 || !setup->quality_choices || (setup->quality_choices & ~0x1fu) ||
         setup->motion.struct_size < sizeof(setup->motion) || !setup->motion.scale_x || !setup->motion.scale_y ||
         !std::isfinite(setup->motion.scale_x) || !std::isfinite(setup->motion.scale_y) ||
-        setup->presentation_bridge > 1 || (setup->presentation_bridge && !setup->accept_window) ||
+        setup->presentation_bridge > 2 || (setup->presentation_bridge && !setup->accept_window) ||
+        (setup->capabilities & ~(RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE | RSF_D3D11_HOST_CAP_RENDERED_SOURCE)) ||
+        (setup->capabilities && !setup->presentation_bridge) ||
+        ((setup->capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE) &&
+            (setup->capabilities & RSF_D3D11_HOST_CAP_INPUT_TIMELINE)) ||
         services->render_pass || services->render_config || services->process_upscale || services->present || services->scope_state ||
         services->submit || services->process_latency || services->render_feedback) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(creation); if (owner.load()) return RSF_ERROR_BUSY;
@@ -455,6 +497,50 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* user, uint32_
     if (self->active.exchange(active != 0, std::memory_order_acq_rel) != (active != 0)) ++self->requested_generation;
     return RSF_OK;
 }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_wrap_native_swapchain(void* user,
+    const rsf_d3d11_native_chain* request) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !request || request->struct_size < sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (!request->device || !request->immediate_context || !request->swapchain || !*request->swapchain)
+        return RSF_ERROR_INVALID_ARGUMENT;
+    if (self->setup.presentation_bridge != 2 || !self->bridge_installed) return RSF_ERROR_NOT_READY;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock() || self->configured || self->scene_bound) return RSF_ERROR_NOT_READY;
+    auto* context = static_cast<ID3D11DeviceContext*>(request->immediate_context);
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
+    ComPtr<ID3D11Device> context_device; context->GetDevice(&context_device);
+    ComPtr<IUnknown> expected, observed;
+    if (FAILED(static_cast<IUnknown*>(request->device)->QueryInterface(IID_PPV_ARGS(&expected))) ||
+        FAILED(context_device.As(&observed)) || expected.Get() != observed.Get()) return RSF_ERROR_INVALID_ARGUMENT;
+    auto* native = static_cast<IDXGISwapChain*>(*request->swapchain);
+    void* facade = nullptr;
+    const auto result = rsf_d3d11_present_wrap_native_chain(request->device, native, &facade);
+    if (FAILED(result) || !facade) {
+        char text[192]{}; std::snprintf(text, sizeof(text), "D3D11 outer creation facade refused HRESULT=0x%08lx; native outputs preserved",
+            static_cast<unsigned long>(result)); Host::log(self, text); return RSF_ERROR_NOT_READY;
+    }
+    if (!rsf_d3d11_present_is_owner(facade)) {
+        static_cast<IDXGISwapChain*>(facade)->Release();
+        Host::log(self, "D3D11 outer creation refused non-owner facade; native outputs preserved.");
+        return RSF_ERROR_NOT_READY;
+    }
+    void* native_identity = nullptr; void* facade_identity = nullptr;
+    ComPtr<IUnknown> native_owner, facade_owner;
+    (void)native->QueryInterface(IID_PPV_ARGS(&native_owner));
+    (void)static_cast<IDXGISwapChain*>(facade)->QueryInterface(IID_PPV_ARGS(&facade_owner));
+    native_identity = native_owner.Get(); facade_identity = facade_owner.Get();
+    char identity[320]{}; std::snprintf(identity, sizeof(identity),
+        "D3D11 outer creation identity native=%p unknown=%p Present=%p facade=%p unknown=%p Present=%p owner=%d",
+        static_cast<void*>(native), native_identity, (*reinterpret_cast<void***>(native))[8], facade,
+        facade_identity, (*reinterpret_cast<void***>(facade))[8], rsf_d3d11_present_is_owner(facade));
+    Host::log(self, identity);
+    *request->swapchain = facade;
+    native->Release();
+    Host::log(self, "D3D11 outer native creation returned final application facade; native creation HRESULT preserved by adapter.");
+    return RSF_OK;
+} catch (...) { return RSF_ERROR_NOT_READY; }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* user,
     const rsf_d3d11_presentation_binding* binding) try
 {

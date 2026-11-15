@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr.h>
+#include <rescaleframe/game_api.h>
 #include <rescaleframe/native_composition.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_fg.h>
@@ -8,6 +9,7 @@
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/fullscreen_pass.h>
+#include <rescaleframe/motion_resolve.h>
 #include <rescaleframe/srv_format.h>
 #include "native_regions.h"
 #include "native_reinsert.h"
@@ -102,7 +104,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         pass->render_rect[0] < 0 || pass->render_rect[1] < 0 || pass->output_rect[0] < 0 || pass->output_rect[1] < 0)
         return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
     const auto& source = pass->camera;
-    if (source.struct_size < sizeof(source) || source.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+    if (source.struct_size < sizeof(source) || source.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         !source.render_width || !source.render_height) return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
     const uint32_t output_width = uint32_t(pass->output_rect[2] - pass->output_rect[0]);
     const uint32_t output_height = uint32_t(pass->output_rect[3] - pass->output_rect[1]);
@@ -187,11 +189,134 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
 }
 catch (...) { history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
 
+
+namespace {
+struct FgInputs {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    rsf_motion_decode* decode{};
+    rsf_motion_resolve* resolve{};
+    uint32_t width{}, height{};
+    History history{};
+    void release() {
+        rsf_motion_decode_destroy(decode); decode = nullptr;
+        rsf_motion_resolve_destroy(resolve); resolve = nullptr;
+        device.Reset(); width = height = 0; history = {};
+    }
+};
+FgInputs& fg_inputs() { static FgInputs value; return value; }
+}
+extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
+    const rsf_game_render_pass* pass, const rsf_motion_decode_params* motion) try
+{
+    if (!raw_context || !pass || pass->struct_size < sizeof(*pass) ||
+        pass->role != RSF_GAME_RENDER_FG_INPUTS || !motion || motion->struct_size < sizeof(*motion))
+        return RSF_ERROR_INVALID_ARGUMENT;
+    if (!pass->source_frame_id || !pass->camera_valid || !pass->color_input || !pass->depth || !pass->motion ||
+        !pass->session_id || !pass->submission_id || !pass->motion_camera_included ||
+        !pass->motion_to_uv[0] || !pass->motion_to_uv[1]) return RSF_ERROR_NOT_READY;
+    const auto& source = pass->camera;
+    if (source.struct_size < sizeof(source) || source.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
+        return RSF_ERROR_ABI_MISMATCH;
+    if (pass->render_rect[0] < 0 || pass->render_rect[1] < 0 ||
+        pass->render_rect[2] <= pass->render_rect[0] || pass->render_rect[3] <= pass->render_rect[1] ||
+        source.render_width != uint32_t(pass->render_rect[2] - pass->render_rect[0]) ||
+        source.render_height != uint32_t(pass->render_rect[3] - pass->render_rect[1]) ||
+        !source.output_width || !source.output_height) return RSF_ERROR_INVALID_ARGUMENT;
+    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
+    rsf_native_fg_stage("normalize-enter", pass->source_frame_id, pass->native_frame, 0);
+    Bindings bindings(context); if (!bindings.valid) return RSF_ERROR_NOT_READY;
+    context->SetPredication(nullptr, FALSE);
+    Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
+    auto& inputs = fg_inputs();
+    if (inputs.device.Get() != device.Get() || inputs.width != source.render_width || inputs.height != source.render_height)
+        inputs.release();
+    if (!inputs.decode) {
+        inputs.device = device; inputs.width = source.render_width; inputs.height = source.render_height;
+        rsf_motion_decode_setup setup{sizeof(setup), RSF_MOTION_DECODE_ABI_VERSION,
+            inputs.width, inputs.height, DXGI_FORMAT_R32G32_FLOAT, nullptr, nullptr};
+        if (rsf_motion_decode_create(device.Get(), &setup, &inputs.decode) != RSF_MOTION_DECODE_OK ||
+            !rsf_motion_resolve_create(device.Get(), inputs.width, inputs.height, &inputs.resolve)) {
+            inputs.release(); return RSF_ERROR_NOT_READY;
+        }
+    }
+    rsf_native_fg_stage("normalize-regions-decode", pass->source_frame_id, pass->native_frame, 0);
+    ID3D11Texture2D *color{}, *depth{}, *vectors{};
+    if (!rsf_native_regions_prepare(context, static_cast<ID3D11Texture2D*>(pass->color_input),
+        static_cast<ID3D11Texture2D*>(pass->depth), static_cast<ID3D11Texture2D*>(pass->motion),
+        pass->render_rect, &color, &depth, &vectors) ||
+        rsf_motion_decode_run(inputs.decode, context, vectors, motion) != RSF_MOTION_DECODE_OK)
+        return RSF_ERROR_NOT_READY;
+    rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
+    std::memcpy(resolve.clip_to_previous, source.clip_to_previous_clip, sizeof(resolve.clip_to_previous));
+    resolve.decoded_to_pixels[0] = -float(inputs.width) * pass->motion_to_uv[0];
+    resolve.decoded_to_pixels[1] = -float(inputs.height) * pass->motion_to_uv[1];
+    resolve.has_sentinel = motion->zero_means_unwritten || motion->validity_enabled;
+    resolve.sentinel = motion->invalid_value;
+    std::memcpy(resolve.jitter_pixels, source.jitter_pixels, sizeof(resolve.jitter_pixels));
+    rsf_native_fg_stage("normalize-resolve", pass->source_frame_id, pass->native_frame, 0);
+    if (!rsf_motion_resolve_run(inputs.resolve, context, rsf_motion_decode_texture(inputs.decode), depth, &resolve))
+        return RSF_ERROR_NOT_READY;
+    rsf_pipeline_camera_frame camera{};
+    camera.struct_size = sizeof(camera); camera.abi_version = RSF_FRAME_ASSEMBLY_ABI_VERSION;
+    std::memcpy(camera.view_to_clip, source.view_to_clip, 64);
+    std::memcpy(camera.clip_to_view, source.clip_to_view, 64);
+    std::memcpy(camera.clip_to_prev_clip, source.clip_to_previous_clip, 64);
+    std::memcpy(camera.prev_clip_to_clip, pass->previous_clip_to_clip, 64);
+    std::memcpy(camera.camera_position, source.view_to_world + 12, 12);
+    std::memcpy(camera.camera_right, source.view_to_world, 12);
+    std::memcpy(camera.camera_up, source.view_to_world + 4, 12);
+    std::memcpy(camera.camera_forward, source.view_to_world + 8, 12);
+    std::memcpy(camera.jitter_pixels, source.jitter_pixels, 8);
+    camera.has_jitter = 1; camera.depth_inverted = source.depth_inverted;
+    camera.near_plane = source.near_plane; camera.far_plane = source.far_plane;
+    camera.vertical_fov = source.vertical_fov_radians;
+    camera.aspect_ratio = source.view_to_clip[5] / source.view_to_clip[0];
+    camera.camera_motion_included = pass->motion_camera_included;
+    // Canonical UV for every backend; the pipeline's legacy adapter does its own conversion.
+    camera.motion_scale[0] = pass->motion_to_uv[0]; camera.motion_scale[1] = pass->motion_to_uv[1];
+    auto& fg_history = inputs.history;
+    camera.reset = (pass->flags & RSF_GAME_RENDER_RESET) || fg_history.session != pass->session_id ||
+        fg_history.owner != pass->history_key || pass->native_frame != uint32_t(fg_history.frame + 1) ||
+        fg_history.width != source.render_width || fg_history.height != source.render_height ||
+        std::memcmp(fg_history.render_rect, pass->render_rect, sizeof(fg_history.render_rect)) ||
+        std::memcmp(fg_history.output_rect, pass->output_rect, sizeof(fg_history.output_rect));
+
+    camera.motion_decoded = 1; camera.has_motion_sentinel = 0; camera.camera_motion_included = 1;
+    camera.motion_scale[0] = 1.0f / float(inputs.width); camera.motion_scale[1] = 1.0f / float(inputs.height);
+    rsf_frame_resources resources{}; resources.struct_size = sizeof(resources);
+    resources.color_in = color; resources.color_out = color;
+    resources.depth = rsf_motion_resolve_depth(inputs.resolve); resources.motion = rsf_motion_resolve_motion(inputs.resolve);
+    resources.render_width = inputs.width; resources.render_height = inputs.height;
+    resources.output_width = source.output_width; resources.output_height = source.output_height;
+    resources.quality = RSF_DLSS_QUALITY_NATIVE;
+    rsf_dlss_frame frame{}; frame.struct_size = sizeof(frame);
+    if (rsf_assemble_dlss_frame(&camera, &resources, &frame) != RSF_FRAME_ASSEMBLY_OK) return RSF_ERROR_NOT_READY;
+    auto captured = *pass;
+    if (camera.reset) captured.flags |= RSF_GAME_RENDER_RESET;
+    struct SceneScope {
+        rsf_game_render_pass previous;
+        explicit SceneScope(const rsf_game_render_pass& current) : previous(current) {
+            (void)rsf_native_fg_scene_swap(&previous);
+        }
+        ~SceneScope() { (void)rsf_native_fg_scene_swap(&previous); }
+    } scope(captured);
+    rsf_native_fg_stage("normalize-capture", pass->source_frame_id, pass->native_frame, 0);
+    rsf_native_fg_capture(context, &frame);
+    rsf_native_fg_stage("normalize-captured", pass->source_frame_id, pass->native_frame, 0);
+    if (!rsf_native_fg_inputs_ready(pass->source_frame_id)) return RSF_ERROR_NOT_READY;
+    fg_history.session = pass->session_id; fg_history.owner = pass->history_key; fg_history.frame = pass->native_frame;
+    fg_history.width = source.render_width; fg_history.height = source.render_height;
+    std::memcpy(fg_history.render_rect, pass->render_rect, sizeof(fg_history.render_rect));
+    std::memcpy(fg_history.output_rect, pass->output_rect, sizeof(fg_history.output_rect));
+    return RSF_OK;
+} catch (...) { return RSF_ERROR_NOT_READY; }
+
 extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
 {
     rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
     native_enabled.store(0, std::memory_order_release); exposure_resources().release(); rsf_native_regions_release();
-    rsf_native_reinsert_release(); history = {};
+    fg_inputs().release(); rsf_native_reinsert_release(); history = {};
     rsf_native_translucency_release();
     std::lock_guard<std::mutex> lock(surface_guard); surface_config = {};
 }

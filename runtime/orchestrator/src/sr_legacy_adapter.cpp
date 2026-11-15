@@ -115,7 +115,7 @@ rsf_backend_result rsf_sr_legacy_evaluate(rsf_sr_legacy_adapter* adapter, void* 
     record.frame_time_ms = std::clamp(float(double(now.QuadPart - adapter->previous.QuadPart) * 1000 /
                                           double(adapter->frequency.QuadPart)), 0.01f, 1000.0f);
     adapter->previous = now;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     record.camera.near_plane = input->near_plane; record.camera.far_plane = input->far_plane;
     record.camera.vertical_fov_radians = input->vertical_fov; record.camera.depth_inverted = input->depth_inverted;
     rsf_sr_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;

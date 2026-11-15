@@ -11,6 +11,12 @@ extern "C" {
    Native family identity is used for SR history only; it never creates a simulation/FG frame ID. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* d3d11_context,
     const rsf_game_render_pass* pass);
+/* Graphics owner, synchronous FG_INPUTS lease before native inputs are modified.
+   Normalizes/copies depth and motion into native_fg ownership without SR startup or
+   native output writes. Borrows textures only for the call; bindings are restored.
+   Currently requires camera-inclusive motion and explicit canonical UV scales. */
+RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* context,
+    const rsf_game_render_pass*, const rsf_motion_decode_params*);
 /* Frontends set intent; the engine reads one runtime-owned configuration snapshot. */
 RSF_RUNTIME_API void rsf_native_sr_set_enabled(uint32_t enabled);
 /* Publish the whole engine surface after output/quality selection, independently of a cropped

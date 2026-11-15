@@ -42,6 +42,8 @@ typedef struct rsf_d3d11_present_setup {
     uint32_t engine_type;
     const char* engine_version_utf8;
     const char* project_id_utf8;
+    /* Zero retains all providers. Nonzero constrains cold selection and every switch. */
+    uint32_t allowed_backend_choices;
 } rsf_d3d11_present_setup;
 /* Cold startup only, before the game's main swapchain. Unsupported creation forwards unchanged.
    No game-specific sites or policies live in the bridge. Hooks remain for process lifetime. */
@@ -52,6 +54,9 @@ int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup);
 int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup);
 int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
     const void* description, void** out);
+/* Internal cold mechanism, after the outer D3D11 creation wrappers return.
+   Inputs borrowed; out owns one facade reference. Native chain is never consumed. */
+int32_t rsf_d3d11_present_wrap_native_chain(void* device, void* native_chain, void** out);
 rsf_streamline_host* rsf_d3d11_present_host(void);
 /* D3D11 execution thread: shared device plus the dedicated SR/upload queue, borrowed through
    process lifetime. native_queue is null; this proxy queue differs from the FG present queue. */

@@ -59,7 +59,7 @@ int main(int argc, char** argv)
     record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = 1; record.resource_generation = 1; record.frame_time_ms = 16.67f;
     record.render_width = record.render_height = record.output_width = record.output_height = 128;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     record.camera.near_plane = 0.1f; record.camera.far_plane = 10000; record.camera.vertical_fov_radians = 1;
     record.camera.depth_inverted = 1;
     rsf_sr_frame frame{};

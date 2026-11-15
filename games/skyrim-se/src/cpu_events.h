@@ -10,6 +10,24 @@ bool cpu_stop();
 bool cpu_busy();
 uint64_t cpu_source();
 bool cpu_render_identity(rsf_game_render_pass&);
+// Exact native World source and gameplay classification only. This permits the
+// host's rendered-source contract; it does not establish an input timeline.
+bool cpu_rendered_source_eligible() noexcept;
 // Read only the native event headers while the dispatch callback owns the list.
 uint32_t cpu_input_kinds(const void* list) noexcept;
+struct CpuInputConsumption {
+    uint64_t source_frame_id{}, poll_generation{};
+    uint32_t camera_updates{};
+    uint32_t movement_calls{}, player_update_calls{};
+};
+// Mapped camera consumption plus movement/player-update call envelopes only.
+// A call may take a native early return. These counts do not establish complete
+// simulation coverage, pre-input pacing or FG admission.
+bool cpu_input_consumption(CpuInputConsumption&) noexcept;
+struct CpuPollProvenance {
+    uint64_t session_id{}, native_job_generation{}, submitting_source_frame_id{}, poll_generation{};
+};
+// Available only inside the real poll reached through the named mode1 callback.
+// The submitting source is the overlapping render, not a consuming-frame claim.
+bool cpu_poll_provenance(CpuPollProvenance&) noexcept;
 }

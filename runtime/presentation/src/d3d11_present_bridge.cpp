@@ -127,6 +127,15 @@ class Bridge final : public IDXGISwapChain4 {
     uint64_t serial = 0;
     uint32_t next_slot = 0;
     bool faulted = false;
+    uint32_t post_switch_frames = 0;
+    void switch_receipt(const char* stage, HRESULT result = S_OK) {
+        if (!post_switch_frames) return;
+        char text[256]{}; std::snprintf(text, sizeof(text),
+            "Bridge post-switch stage=%s backend=%u generation=%llu HRESULT=0x%08lx thread=%lu",
+            stage, active_backend.load(), static_cast<unsigned long long>(chain_generation.load()),
+            static_cast<unsigned long>(result), static_cast<unsigned long>(GetCurrentThreadId()));
+        log(text);
+    }
     uint64_t timing_epoch = 0, previous_present = 0, timing_frames = 0, timing_sdk_start = 0;
     double tick_ms = 0, interval_min = 0, interval_max = 0;
     std::array<double, 5> timing_sum{}, timing_max{};
@@ -265,6 +274,12 @@ class Bridge final : public IDXGISwapChain4 {
         if (!api) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
         void* chain = nullptr;
         auto result = api->create(&setup, &provider, &chain);
+        if (result != RSF_BACKEND_OK) {
+            char text[256]{}; std::snprintf(text, sizeof(text),
+                "Generation provider create failed backend=%u result=%d allowed=0x%x size=%ux%u runtime=%s",
+                backend, result, settings.allowed_backend_choices, setup.chain.width, setup.chain.height,
+                setup.runtime_directory_utf8); log(text);
+        }
         if (result == RSF_BACKEND_OK && (!chain || FAILED(static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&replacement)))))
             result = RSF_BACKEND_ERROR_INIT_FAILED;
         if (result == RSF_BACKEND_OK) result = api->configure(provider, &fg_off);
@@ -300,6 +315,9 @@ class Bridge final : public IDXGISwapChain4 {
         return host && provider_queue.load() != graphics.queue ? rsf_streamline_host_native(host, list) : list;
     }
     void switch_provider(uint32_t backend) {
+        if (backend && settings.allowed_backend_choices && !(settings.allowed_backend_choices & (1u << backend))) {
+            switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return;
+        }
         if (!settings.runtime_switching || (backend == RSF_FG_BACKEND_DLSS && !host)) { switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return; }
         if (backend == active_backend.load()) { switch_result.store(0); return; }
         std::lock_guard<std::shared_mutex> lock(provider_guard);
@@ -314,6 +332,9 @@ class Bridge final : public IDXGISwapChain4 {
         if (result != RSF_BACKEND_OK) { switch_result.store(result); return; }
         BOOL fullscreen = FALSE; physical->GetFullscreenState(&fullscreen, nullptr);
         if (fullscreen) physical->SetFullscreenState(FALSE, nullptr);
+        char ownership[256]{}; std::snprintf(ownership, sizeof(ownership),
+            "Generation switch identity facade=%p old_physical=%p old_provider=%p requested=%u",
+            static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, backend); log(ownership);
         clear_physical();
         active_session.store(nullptr); host_paced.store(false);
         if (provider) backend_api(previous)->destroy(provider);
@@ -337,9 +358,12 @@ class Bridge final : public IDXGISwapChain4 {
         if (fullscreen && physical) physical->SetFullscreenState(TRUE, nullptr);
         active_backend.store(effective); active_session.store(provider); host_paced.store(paced_by_host()); ++chain_generation;
         timing_epoch = 0; reset_timing();
+        post_switch_frames = 4;
         switch_result.store(result);
         char text[160]; std::snprintf(text, sizeof(text), "Generation runtime switch requested=%u effective=%u result=%d generation=%llu",
             backend, effective, result, static_cast<unsigned long long>(chain_generation.load())); log(text);
+        std::snprintf(ownership, sizeof(ownership), "Generation switch identity facade=%p new_physical=%p new_provider=%p effective=%u",
+            static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, effective); log(ownership);
     }
     ~Bridge() {
         if (active_chain.load() == this) { active_chain.store(nullptr); active_interop.store(nullptr); active_session.store(nullptr); host_paced.store(false); }
@@ -417,7 +441,10 @@ public:
             }
             DXGI_ADAPTER_DESC1 info{};
             if (FAILED(owning_adapter->GetDesc1(&info))) return E_FAIL;
-            const auto backend = rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+            auto backend = rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+            if (settings.allowed_backend_choices && !(settings.allowed_backend_choices & (1u << backend))) {
+                backend = settings.allowed_backend_choices & (1u << RSF_FG_BACKEND_FSR3) ? RSF_FG_BACKEND_FSR3 : 0u;
+            }
             active_backend.store(backend);
             char text[160]; std::snprintf(text, sizeof(text), "Auto FG selected backend %u from owning adapter vendor=0x%x device=0x%x", backend, info.VendorId, info.DeviceId);
             log(text);
@@ -484,6 +511,7 @@ public:
         uint32_t choices = RSF_FG_BACKEND_ALL | 1u;
         if (!rsf_generation_fsr4_supported(graphics.native_device, fsr4_directory.c_str()))
             choices &= ~(1u << RSF_FG_BACKEND_FSR4);
+        if (settings.allowed_backend_choices) choices &= settings.allowed_backend_choices | 1u;
         backend_choices.store(choices);
         D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         if (native12) interop_queue = direct_queue;
@@ -547,14 +575,25 @@ public:
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid, void** out) override { return native12 ? direct_device->QueryInterface(iid, out) : device->QueryInterface(iid, out); }
     // Physical Present and the provider callbacks around it, after the frame's list was submitted.
     HRESULT present_physical(rsf_observer_present_event& event, UINT sync, UINT physical_flags, std::array<uint64_t, 6>& ticks) {
+        switch_receipt("physical-enter");
+        const bool common = host && active_backend.load() != RSF_FG_BACKEND_DLSS;
+        if (common && rsf_streamline_host_present_common(host, physical.Get(), sync, physical_flags, 1) != RSF_BACKEND_OK) {
+            log("presentation bridge: shared Streamline common Present begin refused"); return E_FAIL;
+        }
         if (settings.latency_event) settings.latency_event(settings.user, &event);
         if (settings.debug_timing) ticks[3] = clock_tick();
+        switch_receipt("vendor-present-enter");
         const auto result = physical->Present(sync, physical_flags);
+        switch_receipt("vendor-present-done", result);
+        if (common && rsf_streamline_host_present_common(host, physical.Get(), sync, physical_flags, 0) != RSF_BACKEND_OK)
+            log("presentation bridge: shared Streamline common Present end refused");
         if (settings.debug_timing) ticks[4] = clock_tick();
         event.completed = 1; event.result = result;
         if (settings.latency_event) settings.latency_event(settings.user, &event);
         if (provider) generation_api()->after_present(provider);
+        switch_receipt("retire-enter");
         if (settings.retire) settings.retire(settings.user, provider);
+        switch_receipt("retire-done");
         return result;
     }
     void notify_presented(rsf_observer_present_event& event, HRESULT result) {
@@ -570,6 +609,7 @@ public:
     HRESULT STDMETHODCALLTYPE Present(UINT sync, UINT flags) override {
         if (faulted) return DXGI_ERROR_DEVICE_REMOVED;
         if (flags & DXGI_PRESENT_TEST) return query_physical([&](IDXGISwapChain4* chain) { return chain->Present(sync, flags); });
+        switch_receipt("application-enter");
         const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         // Legacy discard chains cannot request the flip-model tearing creation flag.
         // Translate VSync Off to the supported DX12/windowed immediate-present contract.
@@ -583,6 +623,7 @@ public:
         rsf_observer_notify_application_present(&event);
         if (settings.present_event) settings.present_event(settings.user, &event);
         if (settings.before_present) settings.before_present(settings.user, this);
+        switch_receipt("application-callbacks-done");
         if (settings.debug_timing) ticks[1] = clock_tick();
         HRESULT result = E_FAIL;
         // Fence serial advances three times per frame. It cannot also select the three-slot
@@ -649,6 +690,7 @@ public:
             if (FAILED(result)) { report_device_failure(result); faulted = true; }
             return result;
         }
+        switch_receipt("d3d11-slot-enter");
         if (SUCCEEDED(wait(complete.Get(), slot.fence)) && SUCCEEDED(slot.allocator->Reset()) &&
             SUCCEEDED(slot.list->Reset(slot.allocator.Get(), nullptr))) {
             if (settings.debug_timing) ticks[2] = clock_tick();
@@ -684,7 +726,9 @@ public:
             slot.fence = ++serial;
             if (FAILED(queue->Signal(complete.Get(), slot.fence))) result = DXGI_ERROR_DEVICE_REMOVED;
         }
+        switch_receipt("application-complete", result);
         notify_presented(event, result);
+        if (post_switch_frames) --post_switch_frames;
         if (settings.debug_timing && SUCCEEDED(result)) { ticks[5] = clock_tick(); trace_pacing(ticks, index, sync, physical_flags); }
         if (SUCCEEDED(result)) {
             if (settings.runtime_switching) switch_if_requested();
@@ -892,6 +936,9 @@ extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
     }
     if (setup->backend && !rsf_fg_backend_known(setup->backend) &&
         !(setup->backend == RSF_FG_BACKEND_AUTO && setup->runtime_switching)) return 0;
+    if (setup->allowed_backend_choices && (setup->allowed_backend_choices & ~RSF_FG_BACKEND_ALL)) return 0;
+    if (setup->allowed_backend_choices && setup->backend && setup->backend != RSF_FG_BACKEND_AUTO &&
+        !(setup->allowed_backend_choices & (1u << setup->backend))) return 0;
     settings = *setup; runtime_directory = setup->runtime_directory_utf8;
     engine_version = setup->engine_version_utf8 ? setup->engine_version_utf8 : "";
     project_id = setup->project_id_utf8 ? setup->project_id_utf8 : "";
@@ -921,6 +968,25 @@ extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue,
     if (out) *out = nullptr;
     return E_FAIL;
 }
+extern "C" int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* raw_chain, void** out) try {
+    if (!out) return E_INVALIDARG;
+    *out = nullptr;
+    if (!raw_device || !raw_chain || !settings.accept_window || original_create || active_chain.load()) return E_INVALIDARG;
+    auto* device = static_cast<ID3D11Device*>(raw_device);
+    auto* native_chain = static_cast<IDXGISwapChain*>(raw_chain);
+    DXGI_SWAP_CHAIN_DESC description{};
+    ComPtr<ID3D11Device> chain_device;
+    ComPtr<IUnknown> expected, observed;
+    ComPtr<IDXGIFactory> factory;
+    if (FAILED(native_chain->GetDesc(&description)) || FAILED(native_chain->GetDevice(IID_PPV_ARGS(&chain_device))) ||
+        FAILED(device->QueryInterface(IID_PPV_ARGS(&expected))) || FAILED(chain_device.As(&observed)) ||
+        expected.Get() != observed.Get() || FAILED(native_chain->GetParent(IID_PPV_ARGS(&factory)))) return E_INVALIDARG;
+    ComPtr<IDXGISwapChain> facade;
+    const auto result = create_bridge(factory.Get(), device, description, &facade);
+    if (FAILED(result)) return result;
+    if (!rsf_d3d11_present_is_owner(facade.Get())) return E_UNEXPECTED;
+    *out = facade.Detach(); return S_OK;
+} catch (...) { return E_FAIL; }
 extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (!rsf_d3d11_present_prepare(setup)) return 0;
     ComPtr<IDXGIFactory2> factory;

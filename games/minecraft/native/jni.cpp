@@ -26,7 +26,7 @@ rsf_game_render_pass pass(JNIEnv* env,Pipeline* self,jlong frame,jobject camera,
     auto* data=static_cast<float*>(env->GetDirectBufferAddress(camera));
     if(!data||env->GetDirectBufferCapacity(camera)<88)return out;
     rsf_gl_pipeline_surfaces surfaces{};surfaces.struct_size=sizeof(surfaces);rsf_gl_pipeline_get_surfaces(self,&surfaces);
-    auto& c=out.camera;c.struct_size=sizeof(c);c.abi_version=RSF_GAME_FRAME_ABI_VERSION;
+    auto& c=out.camera;c.struct_size=sizeof(c);c.abi_version=RSF_GAME_CAMERA_ABI_VERSION;
     std::memcpy(c.view_to_clip,data,80*sizeof(float));
     c.jitter_pixels[0]=data[80];c.jitter_pixels[1]=data[81];c.previous_jitter_pixels[0]=data[82];c.previous_jitter_pixels[1]=data[83];
     c.near_plane=data[84];c.far_plane=data[85];c.vertical_fov_radians=data[86];c.frame_time_seconds=data[87];

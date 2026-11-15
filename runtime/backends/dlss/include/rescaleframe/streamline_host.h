@@ -82,6 +82,11 @@ RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_reset_sources(rsf_streaml
 /* Ordered engine Present completion also retires older CPU inputs that produced no image.
    Call only after that completion proves no older frame can still reach SR/FG submission. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_host*, uint64_t frame_id);
+/* Presentation owner only, around an application Present that bypasses the SL
+   swapchain proxy (plain or another provider). Common bookkeeping only, no
+   latency/input markers. Never call in addition to a Streamline proxy Present. */
+RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_present_common(rsf_streamline_host*,
+    void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin);
 RSF_SL_HOST_API int rsf_streamline_host_presented(rsf_streamline_host*, uint64_t frame_id);
 /* Device-kind bits follow game_renderer.h; registered message IDs are checked against PCL. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_input(rsf_streamline_host*, uint64_t frame_id,

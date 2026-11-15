@@ -266,7 +266,7 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
 #if defined(RSF_HAVE_XESS_VK)
     const auto& record = *input->record;
     if (record.struct_size < sizeof(record) || record.camera.struct_size < sizeof(record.camera)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION)
+    if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     const auto& camera = record.camera;
     if (!self->range_logged && input->log) {

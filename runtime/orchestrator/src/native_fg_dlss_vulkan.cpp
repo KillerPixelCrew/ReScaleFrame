@@ -243,7 +243,7 @@ bool valid_record(const rsf_dlssgvk& self, const rsf_fgvk_frame& frame) {
     if (!frame.record) return false;
     const auto& record = *frame.record; const auto& camera = record.camera;
     if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        camera.struct_size < sizeof(camera) || camera.abi_version != RSF_GAME_FRAME_ABI_VERSION) return false;
+        camera.struct_size < sizeof(camera) || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return false;
     for (const auto* values : {camera.view_to_clip, camera.clip_to_view, camera.clip_to_previous_clip, camera.view_to_world})
         for (uint32_t i = 0; i < 16; ++i) if (!std::isfinite(values[i])) return false;
     return record.session_id && record.frame_id && record.render_width && record.render_height &&

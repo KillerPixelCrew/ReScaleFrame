@@ -100,7 +100,7 @@ void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_hos
     record.output_width = static_cast<uint32_t>(back_desc.Width); record.output_height = back_desc.Height;
     record.render_width = static_cast<uint32_t>(depth->GetDesc().Width); record.render_height = depth->GetDesc().Height;
     record.frame_time_ms = 16.67f;
-    auto& camera = record.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    auto& camera = record.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     camera.near_plane = 0.1f; camera.far_plane = 1000; camera.vertical_fov_radians = 1;
     camera.depth_inverted = 1;
     for (uint32_t i = 0; i < 4; ++i) camera.view_to_clip[i * 5] = camera.clip_to_view[i * 5] =

@@ -29,7 +29,9 @@
 extern "C" {
 #endif
 
-#define RSF_GAME_FRAME_ABI_VERSION 1u
+#define RSF_GAME_FRAME_ABI_VERSION 2u
+/* Camera layout and semantics are independent of appended frame-record provenance. */
+#define RSF_GAME_CAMERA_ABI_VERSION 1u
 
 /* Monotonic, plugin-assigned, never reused within a session. Zero means no frame, which is what a
    caller sends when it genuinely does not know rather than guessing at one. */
@@ -61,6 +63,7 @@ typedef uint32_t rsf_screen_class;
 #define RSF_SCREEN_REPLAY ((rsf_screen_class)5)
 #define RSF_SCREEN_VIDEO ((rsf_screen_class)6)
 #define RSF_SCREEN_LOADING ((rsf_screen_class)7)
+#define RSF_SCREEN_GAMEPLAY ((rsf_screen_class)8)
 
 /* Latency markers, numbered as XeLL numbers them so the common case is a pass-through. Streamline's
    PCL uses different values and the backend maps them; putting the mapping there rather than here
@@ -170,7 +173,19 @@ typedef struct rsf_frame_record {
     float frame_time_ms;
 
     rsf_camera_frame camera;
+    /* ABI 2: physical input remains unknown (input_qpc == 0) for rendered sources.
+       source_qpc is the actual native FRAME begin in the platform QPC clock. */
+    uint32_t source_provenance;
+    uint64_t source_qpc, source_qpc_frequency;
 } rsf_frame_record;
+#define RSF_FRAME_SOURCE_INPUT 0u
+#define RSF_FRAME_SOURCE_RENDERED 1u
+static inline int rsf_frame_has_rendered_source(const rsf_frame_record* record)
+{
+    return record && record->struct_size >= sizeof(*record) &&
+        record->source_provenance == RSF_FRAME_SOURCE_RENDERED && !record->input_qpc &&
+        record->source_qpc && record->source_qpc_frequency;
+}
 
 /* Whether a frame may be reconstructed or generated around, given its record.
  *

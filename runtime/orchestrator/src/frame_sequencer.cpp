@@ -34,6 +34,17 @@ extern "C" rsf_backend_result rsf_frame_sequencer_begin(rsf_frame_sequencer* led
     ledger->last_begin = id;
     return RSF_BACKEND_OK;
 }
+extern "C" rsf_backend_result rsf_frame_sequencer_begin_rendered(rsf_frame_sequencer* ledger,
+    uint64_t id, uint64_t source)
+{
+    if (!source) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto result = rsf_frame_sequencer_begin(ledger, id);
+    if (result != RSF_BACKEND_OK) return result;
+    std::lock_guard<std::mutex> lock(ledger->guard);
+    auto& slot = ledger->slots[id % ledger->capacity];
+    slot.source_provenance = RSF_FRAME_SOURCE_RENDERED; slot.source_qpc = source;
+    return RSF_BACKEND_OK;
+}
 extern "C" rsf_backend_result rsf_frame_sequencer_marker(rsf_frame_sequencer* ledger, uint64_t id,
     rsf_latency_marker marker, uint64_t timestamp)
 {
@@ -42,8 +53,10 @@ extern "C" rsf_backend_result rsf_frame_sequencer_marker(rsf_frame_sequencer* le
     std::lock_guard<std::mutex> lock(ledger->guard);
     auto& slot = ledger->slots[id % ledger->capacity];
     if (slot.frame_id != id || slot.failed) return RSF_BACKEND_ERROR_NOT_READY;
-    const uint32_t expected = (1u << index) - 1;
-    if (slot.marker_mask != expected || (index && timestamp < slot.timestamps[index - 1])) {
+    const bool rendered = slot.source_provenance == RSF_FRAME_SOURCE_RENDERED;
+    const uint32_t expected = rendered ? (((1u << index) - 1) & ~7u) : (1u << index) - 1;
+    if ((rendered && (index < 3 || timestamp < slot.source_qpc)) || slot.marker_mask != expected ||
+        (index && timestamp < slot.timestamps[index - 1])) {
         slot.failed = 1;
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
@@ -67,7 +80,7 @@ extern "C" rsf_backend_result rsf_frame_sequencer_finish(rsf_frame_sequencer* le
     std::lock_guard<std::mutex> lock(ledger->guard);
     auto& slot = ledger->slots[id % ledger->capacity];
     if (slot.frame_id != id) return RSF_BACKEND_ERROR_NOT_READY;
-    const bool complete = slot.marker_mask == 127 && !slot.failed;
+    const bool complete = slot.marker_mask == (slot.source_provenance == RSF_FRAME_SOURCE_RENDERED ? 120u : 127u) && !slot.failed;
     slot = {};
     return complete ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
 }

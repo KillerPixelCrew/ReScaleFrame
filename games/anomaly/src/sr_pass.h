@@ -251,7 +251,7 @@ inline PassError build_pass(const PassInputs& in, rsf_game_render_pass& pass) no
     pass.motion_camera_included = motion_camera_included;
     auto& c = pass.camera;
     c.struct_size = sizeof(c);
-    c.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    c.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     const auto store = [](float (&target)[16], const MatrixD& m) { for (std::size_t i = 0; i < 16; ++i) target[i] = float(m[i]); };
     store(c.view_to_clip, projection);
     store(c.clip_to_view, clip_to_view);

@@ -189,7 +189,7 @@ int RunXessPresentationFixture(const rsf_srvk_setup& graphics, uint32_t family, 
         record.frame_id = frame + 1; record.session_id = 1; record.view_id = 1; record.resource_generation = 1;
         record.flags = frame == 0 ? RSF_FRAME_FLAG_RESET : 0; record.frame_time_ms = 16.666667f;
         record.render_width = 640; record.render_height = 360; record.output_width = 1280; record.output_height = 720;
-        record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
         record.camera.render_width = 640; record.camera.render_height = 360;
         record.camera.output_width = 1280; record.camera.output_height = 720;
         record.camera.near_plane = 1; record.camera.far_plane = 100; record.camera.vertical_fov_radians = 1;

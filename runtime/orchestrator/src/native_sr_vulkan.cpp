@@ -320,7 +320,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
 #if defined(RSF_HAVE_FFX_VK)
     const auto* record = input->record;
     if (!record || record->struct_size < sizeof(*record) || record->abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record->camera.struct_size < sizeof(record->camera) || record->camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+        record->camera.struct_size < sizeof(record->camera) || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         !record->session_id || !record->frame_id || record->render_width != self->width || record->render_height != self->height ||
         record->output_width != self->setup.output_width || record->output_height != self->setup.output_height ||
         record->camera.render_width != record->render_width || record->camera.render_height != record->render_height ||

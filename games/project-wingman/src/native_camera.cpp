@@ -100,7 +100,7 @@ bool read_camera(const void* view, rsf_game_render_pass& pass) noexcept
     multiply(previous,previous_projection,previous);
     multiply(inv_current,previous,camera.clip_to_previous_clip);
     if (!inverse(camera.clip_to_previous_clip,pass.previous_clip_to_clip)) return false;
-    camera.struct_size=sizeof(camera); camera.abi_version=RSF_GAME_FRAME_ABI_VERSION;
+    camera.struct_size=sizeof(camera); camera.abi_version=RSF_GAME_CAMERA_ABI_VERSION;
     camera.render_width=uint32_t(pass.render_rect[2]-pass.render_rect[0]);
     camera.render_height=uint32_t(pass.render_rect[3]-pass.render_rect[1]);
     camera.output_width=uint32_t(pass.output_rect[2]-pass.output_rect[0]);

@@ -116,7 +116,7 @@ bool temporal(const rsf_fsr4fg_bridge& self, const rsf_fsr4fg_frame& frame) {
     if (!frame.record || frame.record->struct_size < sizeof(*frame.record) ||
         frame.record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return false;
     const auto& record = *frame.record; const auto& camera = record.camera;
-    if (camera.struct_size < sizeof(camera) || camera.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+    if (camera.struct_size < sizeof(camera) || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
         !record.session_id || !record.frame_id || record.output_width != self.width || record.output_height != self.height ||
         !record.render_width || !record.render_height || record.render_width > self.width || record.render_height > self.height ||
         !std::isfinite(record.frame_time_ms) || record.frame_time_ms <= 0 ||

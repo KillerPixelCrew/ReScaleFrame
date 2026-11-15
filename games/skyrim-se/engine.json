@@ -18,14 +18,14 @@
     "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
-    "status": "experimental native-resolution pre-HDR SR and CPU facts; reduced-resolution SR, FG and vendor pacing incomplete",
+    "status": "Experimental reduced-resolution SR and rendered-source FSR FG bounded-game tested; genuine input pacing and general readiness incomplete",
     "rendering_ready": false,
     "built_windows_msvc": true,
     "contract_tested": true,
     "hooks_implemented": true,
     "game_tested": true,
     "device_tested": true,
-    "game_test_scope": "Vanilla QASmoke: native DLSS/reinsertion and Present captures; reduced raster1141x699 inside1711x1048 allocations through native fallback, native restoration/resume. Normal-menu startup/window binding, DPI-aware1920x1080 and clickable overlay accepted by user. Reduced SR, moving objects, CS/ENB, FG and latency unverified",
+    "game_test_scope": "Vanilla QASmoke: native DLSS/reinsertion and Present captures; reduced raster1141x699 inside1711x1048 allocations through native fallback, native restoration/resume. Normal-menu startup/window binding, DPI-aware1920x1080 and clickable overlay accepted by user. Reduced SR, moving objects, CS/ENB, FG and latency unverified; ABI4 outer facade with reduced DLSS Quality and FSR, completed overlay activity and FG/SR toggles verified in bounded QASmoke runs; three skinned final draws inspected",
     "automatic_loading_implemented": true,
     "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
   },
@@ -88,10 +88,10 @@
     "date": "2026-11-15",
     "msvc": "14.52.37025",
     "configuration": "Release",
-    "native_gate": "Last full-suite checkpoint229:213 passed,14 default skips,same two Anomaly FG failures, before final startup/owner/DPI/pointer fixes",
+    "native_gate": "Final Windows MSVC Release eng/verify.ps1 -VS2026: 220 passed, 14 skipped, zero failed out of234",
     "focused": "Skyrim ABI, generic/existing XInput carrier contracts, fullscreen pass and HDR reinsertion WARP fixture passed",
-    "rust": "formatting and Clippy passed at prior checkpoints; no Rust behavior changed",
-    "latest": "Final startup/owner/DPI/pointer code Release-built with MSVC and directly game/user-accepted; no repeated full fixtures per user instruction",
+    "rust": "Cargo fmt and Clippy passed in final gate; no Rust behavior changed",
+    "latest": "Bounded PID41756 third-person QASmoke: completed FG activity, FG Off and SR Off/On checks; passive draw capture; normal exit0 and original installation restored",
     "readiness": false
   },
   "shader_producer_rvas": {
@@ -190,8 +190,20 @@
     "scope": "Generic WARP format/state/rectangle tests; actual DLSS native-resolution output reinserted into native R11G11B10 colour before HDR"
   },
   "native_sr": {
-    "quality_choices": ["native", "quality", "balanced", "performance", "ultra-performance"],
-    "admitted_sr_qualities": ["native", "quality", "balanced", "performance", "ultra-performance"],
+    "quality_choices": [
+      "native",
+      "quality",
+      "balanced",
+      "performance",
+      "ultra-performance"
+    ],
+    "admitted_sr_qualities": [
+      "native",
+      "quality",
+      "balanced",
+      "performance",
+      "ultra-performance"
+    ],
     "reduced_quality_status": "Experimental auxiliary transaction admitted; DLSS Quality and Performance final captures preserve full view. Balanced/ultra-performance and active effects unaccepted",
     "tested_backend": "DLSS",
     "tested_dimensions": [
@@ -262,8 +274,14 @@
     "constant_buffer_layout": "Global0x3331f08, c43 current/previous ratios, c44 reciprocals/clamps. Explicit guarded uploader calls at output/producer handoffs reuse flags observed on actual graphics-thread uploads",
     "control": "Backend plans sizes on scene graphics owner before geometry; adapter supplies ratios and pixel jitter. Native updater bypasses only while owned. Quiesce drains restoration on a native graphics callback.",
     "jitter": "Halton(2,3), phase count floor(8*(outputWidth/renderWidth)^2), bounded 8..256, mapped into both native jitter pairs",
-    "tested_render": [1280, 720],
-    "tested_allocation": [1920, 1080],
+    "tested_render": [
+      1280,
+      720
+    ],
+    "tested_allocation": [
+      1920,
+      1080
+    ],
     "tested_phase_count": 18,
     "capture": "scene-20261115-170305-284-20500968-39248-1",
     "capture_status": "Complete Quality DLSS and actual Present; same-frame SR/final comparison preserves full view. Performance also captured; camera moved between modes",
@@ -287,16 +305,21 @@
     "pending": "Corrected moving XeSS/DLSS quality and full native input coverage; material mip correction now connected separately"
   },
   "skeletal_history_research": {
-    "status": "Live CPU history and four GPU bone binding pairs verified; final draw coverage and shader repair unverified",
+    "status": "Actual final skinned draws verified in third-person QASmoke; no shader defect demonstrated",
     "producer_rva": "0x1015800",
     "uploader_rva": "0x1578c80",
     "bindings": "VS b9 previous bones, b10 current bones, 3 float4 per matrix",
     "object_history_rva": "0xeebf40",
     "validation": "1997 CPU samples across12 skins: consecutive history exact; four VS b9/b10 pairs match CPU arrays, 3840-byte buffers, identity palettes for40/23/20/8 matrices",
-    "live_vertex_descriptors": [514, 83886599],
+    "live_vertex_descriptors": [
+      514,
+      83886599
+    ],
     "reference_comparison": "Pinned CS Common/Skinned.hlsli agrees on b9 previous/b10 current and240 float4; conditional Lighting literal controlled by SSRParams.z is not independently a missing motion write",
     "evidence": "docs/research/skyrim-se-integration.md#live-skeletal-history-and-small-family-audit-15-november-2026",
-    "pending": "Final indexed vertex/weight ranges, actual draw-time flags/targets/write masks, moving deformation output; final-draw probes captured no draws"
+    "pending": "Broader moving deformation, exterior/effects/shadow coverage and visual acceptance remain open",
+    "final_draw_validation": "PID41756 frames757-760: three skins40/15/5 matrices, final DrawIndexed b9 previous/b10 current byte-exact against CPU history; animated deltas0.114/0.0116/0.028; weighted indices39/14/4 within partitions, finite weights",
+    "draw_evidence": "docs/research/skyrim-native-draw-coverage-20261115.md"
   },
   "material_sampling": {
     "status": "Experimental automatic material mip bias connected; settled DLSS Quality capture, broader coverage unaccepted",
@@ -332,10 +355,10 @@
   },
   "cold_bridge_experiment": {
     "date": "2026-11-15",
-    "status": "Built ABI2 preparation; Skyrim bridge disabled after combined SR failure, working ABI1 DLL pair restored",
+    "status": "Historical null read now absent in bounded ABI4 outer native creation/facade FSR trial; original working installation restored after experiment",
     "world_rva": "0x656e60",
     "world_guard": "48 8b c4 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8d",
-    "native_facts": "FRAME around RenderEntry, SUBMISSION for caller656E32/output0, completed primary count at FRAME_END; NO_FG retained",
+    "native_facts": "FRAME around RenderEntry, SUBMISSION for caller656E32/output0, completed primary count at FRAME_END; current source clears NO_FG only for exactly one proven primary gameplay World, not for unknown/menu/loading sources",
     "first_failure": "Null DXGI read below RTSS/Steam hooks in bounded probe; redundant native observer removed for bridge-owned chains",
     "second_failure": "Scene/presentation responsive, but shared-host DLSS SR backend-9/pipeline-10 and120-failure cutoff; user reported upscale unavailable",
     "recovery": "Restored pre-bridge Runtime/Entry, PID10028 successful SR; scene-20261115-190209-167-27644843-10028-1, source872, Quality1280x720 to1920x1080, result0",
@@ -344,8 +367,47 @@
     "shared_sr_device_validation": "RTX4070 Laptop: explicit hidden D3D11 host to shared D3D12 DLSS, eight sources640x360 to960x540 with full-output R11G11B10/R16G16/R24G8 inputs, valid zero camera-inclusive motion, all evaluates0, accurate constant colour readback, D3D11 debug queue zero errors, FG requested/effective/tagged0. Identical fixture with saved failing Runtime reproduces backend-9/pipeline-10. No game deployment; installed pair unchanged",
     "presentation_metadata_correction": "Built only: final-scene/window identity now retains captured SR camera, validity, clip transform, render rectangle, motion convention, pass/resource generation and screen; no borrowed SR resources retained; NO_FG unchanged",
     "input_consumer_research": "Observed native PlayerControls sink vtable1935070/ProcessInput7AD900, singleton31A5698; executable/RTTI identify shared third-person/dragon/horse update8FD590 reading look vectors. Five-second worker-order probe observed zero generations; consuming-frame association remains unverified",
-    "pending": "Shared SR game evaluation and retirement validation, retained FG inputs, screen admission, missing input pacing; CS/ENB coexistence",
+    "pending": "Menu/resize/device retirement validation, moving quality, true input pacing and CS/ENB coexistence; completed overlay status and bounded FG/SR toggles now verified",
     "evidence": "docs/research/skyrim-se-integration.md#cold-presentation-bridge-experiment-and-sr-rollback-15-november-2026"
+  },
+  "rendered_source_fsr_implementation": {
+    "date": "2026-11-15",
+    "status": "ABI4 outer creation and completed overlay activity Release-built and bounded-game tested; general readiness remains false",
+    "contracts": "D3D11 host ABI4 FG_INPUTS|RENDERED_SOURCE, frame-record ABI2 source provenance/QPC/frequency; unchanged camera schema remains ABI1",
+    "inputs": "Pre-HDR native colour/depth/motion leased before SR auxiliary writes; runtime-owned region/decode/R16G16 pixel motion/R32 depth capture also works independently of SR startup; pure FG GPU work skipped Off",
+    "presentation": "Same-source metadata retained to native pre-interface HUD-less backbuffer and window/context lease through actual Present",
+    "classification": "Guarded exact-build native Main/Loading/frozen-background menu queries, pause/freeze, parent cell and manager-mode facts; exactly one caller656E32/output0 primary World required for GAMEPLAY/NO_FG removal",
+    "input_truth": "Rendered mode keeps physical input timestamp0, uses actual native FRAME source time and delta, and does not fabricate INPUT_SAMPLE, paced, PCL or low-latency evidence",
+    "providers": "Runtime limits rendered-source mode to FSR with pacing None, latency Off and no limiter; cold Auto and provider switches are constrained; measured-input path remains separate",
+    "input_research": "Version2 source reservation/adoption/binding implemented through existing CPU callback. Bounded game observations show bound sources with worker movement1 and mismatched0; complete consumption and real pacing remain unproven",
+    "evidence": [
+      "docs/research/skyrim-fg-handoff-20261115.md",
+      "docs/research/d3d11-host-fg-capabilities-20261115.md",
+      "docs/research/skyrim-input-ownership-20261115.md",
+      "docs/research/unity-camera-frame-abi-20261115.md",
+      "docs/research/skyrim-prospective-source-20261115.md",
+      "docs/research/skyrim-native-draw-coverage-20261115.md"
+    ],
+    "validation": {
+      "native_gate": "Final Windows MSVC Release eng/verify.ps1 -VS2026: 220 passed, 14 skipped, zero failed out of234; Cargo fmt and Clippy passed",
+      "device": "30 sources,26 captures,15 SR evaluates,22 tags and22 callbacks; physical input/pacing/PCL zero; not scanout evidence",
+      "game": "PID20352: DLSSQuality1280x720 to1920x1080 result0; FSR provider3.1.6 create0 and swapchain create0, then process exited before status; no PresentMon capture",
+      "artifacts": ".local/skyrim-research/rendered-fg-second-results.log and rendered-fg-game-second-20261115.log; deployment backup20261115-204449-rendered-fg-trial",
+      "monitored_game": "PID46488 with rebuilt common Present service: FG-Off DLSSQuality result0; after FSR switch exitC0000005, debugger observed no AV/second-chance event and no stack; presentCommon warning absent; game closed and working files/settings restored",
+      "monitored_artifacts": ".local/skyrim-research/fg-monitored-20261115-205820 and monitored-fg-results.log",
+      "late_enable_device": "Passed51sources:1bootstrap+50tests,37captures,35SR,32tags/32callbacks; latephase10captures/10appPresents/9tags/9callbacks; no physical scanout or latency acceptance",
+      "fault_trace": "PID41028: flushed observational exception trace captures null read in dxgi.dll+0x8e3a on native Present thread42576; stack dxgi+0x863a, RTSSHooks64+0x72ed1, Steam overlay+0x9c24f, Skyrim+0x100a016; exception handling unchanged, later NtTerminateProcess C0000005",
+      "fault_artifacts": ".local/skyrim-research/fg-frida-20261115-211524/termination.jsonl,run.json,loader.log; frida-fg-durable-results.log",
+      "restoration": "Owned game exited, Frida session closed; working Runtime/Entry/FG DLL/settings restored and QA INIremoved",
+      "abi4_contracts": "Runtime/adapter built; rebuilt d3d11_host_contract and Skyrim plugin contract both passed. Earlier stale pre-ABI4 test binary result discarded after test compile namecollision",
+      "abi4_game": "PID50256 QASmoke: owned native-to-facade creation result0, nativeHRESULT0; DLSSQuality1280x720->1920x1080 result0; FSR backend3 generation2, source306 tagged106, app477, vendor presentations212, rate58->116; repeated providerprepare/Present/retirement all0 and normal exit0",
+      "abi4_limits": "Bounded QASmoke sessions with RTSS/Steam injection. Completed overlay status corrected in later runs; no broad moving/UI/menu/resize acceptance or physical scanout/latency claim",
+      "display_trace": "PresentMon exit6: ETW trace access denied, no CSV/display-cadence evidence; no elevation or group changes attempted",
+      "abi4_artifacts": ".local/skyrim-research/fg-frida-20261115-213310: exact trial DLL/config/FG DLL, symbols availability, run/log/termination/restoration receipts; outer-creation-abi4-results.log; PresentMon20261115-213332-338-fsr-monitored",
+      "status_fix": "Built and game-tested: completed-source activity reports active1 while enabled, active0 Off, matching provider generation; no public ABI or pacing change",
+      "latest_game": "PID41756 normalexit0: DLSS Quality1280x720->1920x1080, FSR activity1 before Off, FG Off and SR Off/On checks; source1402/tags918/application1573/vendor-output2025 at final Off snapshot; counters do not measure scanout or latency",
+      "latest_artifacts": ".local/skyrim-research/fg-frida-20261115-220603; final-guard-corrected-results.log; verify-skyrim-abi4-input-status-batch-complete-20261115.log"
+    }
   },
   "source_present_association": {
     "date": "2026-11-15",
@@ -378,7 +440,10 @@
     "guard": "4c 8b dc 56 57 41 54 41 55 41 57 48 83 ec 50",
     "caller": "0x656921 after world/postprocess, before later screenshot/output paths and RendererEnd0x656bb1",
     "reference": "CS dev33d789 MenuManagerDrawInterfaceStartHook and CommonLib IMenu virtual slots/flags; tableID82084 absent",
-    "captures": ["native_before_interface", "native_after_interface"],
+    "captures": [
+      "native_before_interface",
+      "native_after_interface"
+    ],
     "live_capture": "scene-20261115-182806-092-25601765-39676-1, native897, DLSS Quality1280x720 to1920x1080",
     "live_validation": "21997 changed HUD pixels; all8294400 after-interface bytes match actual final Present. Source null and NO_FG preserved",
     "deployment_backup": "20261115-182739-native-input-interface; adapter only, runtime preserved",
@@ -394,5 +459,42 @@
     "particles": "6 PS expose target1 with fixed XYZ; CS identifies target1 as Normal, actual binding and temporal handling pending",
     "sky": "9 VS export previous position and9 PS expose target1; live semantics and rotation/infinite depth pending",
     "evidence": "docs/research/skyrim-se-integration.md#live-skeletal-history-and-small-family-audit-15-november-2026"
+  },
+  "effect_water_shader_audit": {
+    "date": "2026-11-15",
+    "status": "Offline descriptor/interface census complete; actual motion-target draw coverage and repairs unverified",
+    "containers": 8686,
+    "effect_motion_vs": 264,
+    "effect_motion_ps": 1543,
+    "effect_nonmotion_ps_literal_xy": [
+      1,
+      0
+    ],
+    "water_motion_descriptors": [
+      20480,
+      20481,
+      20482,
+      20483
+    ],
+    "native_effect_selector_rva": "0x1556840",
+    "reference_revision": "33d7896147b54ca72d1ee5ca938bb85739593167",
+    "evidence": "docs/research/skyrim-effect-water-motion-20261115.md",
+    "pending": "Correlate native primary motion RTV/write masks/indexed draws; acquire actual previous object/bone history before interface repair"
+  },
+  "native_draw_coverage": {
+    "date": "2026-11-15",
+    "capture": "fg-frida-20261115-220603/native-draws",
+    "status": "No verified missing motion vector or buffer in captured QASmoke paths; no shader replacement justified",
+    "census": "Two frames:1080 native draws,496 bind motion target7;462 main Lighting,10 Lighting with depth copy7,2 Water; observed slot1 R16G16_FLOAT, blend Off, RG writes, VS previous position and PS Target1",
+    "render_rectangle": [
+      1280,
+      720
+    ],
+    "output": [
+      1920,
+      1080
+    ],
+    "remaining": "Effect/Particle/Grass/Tree/Sky and shadow absent; separate renderer118B320 actual bindings and timing unverified",
+    "evidence": "docs/research/skyrim-native-draw-coverage-20261115.md"
   }
 }

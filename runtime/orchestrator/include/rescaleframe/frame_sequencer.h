@@ -15,11 +15,15 @@ typedef struct rsf_sequence_state {
     uint32_t marker_mask;
     uint32_t failed;
     uint64_t timestamps[7];
+    uint32_t source_provenance;
+    uint64_t source_qpc;
 } rsf_sequence_state;
 /* A bounded CPU/input-to-present ledger. SDK calls happen at the real caller's boundary,
    outside the ledger's lock. finish() is required before the same slot can be reused. */
 RSF_RUNTIME_API rsf_backend_result rsf_frame_sequencer_create(uint32_t capacity, rsf_frame_sequencer** out);
 RSF_RUNTIME_API rsf_backend_result rsf_frame_sequencer_begin(rsf_frame_sequencer*, uint64_t frame_id);
+RSF_RUNTIME_API rsf_backend_result rsf_frame_sequencer_begin_rendered(rsf_frame_sequencer*,
+    uint64_t frame_id, uint64_t source_qpc);
 RSF_RUNTIME_API rsf_backend_result rsf_frame_sequencer_marker(rsf_frame_sequencer*, uint64_t frame_id,
     rsf_latency_marker marker, uint64_t timestamp);
 RSF_RUNTIME_API rsf_backend_result rsf_frame_sequencer_get(rsf_frame_sequencer*, uint64_t frame_id,

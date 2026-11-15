@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
         pass.swapchain = chain.Get(); pass.color_input = color.Get(); pass.color_output = output.Get();
         pass.depth = depth.Get(); pass.motion = motion.Get(); pass.camera_valid = pass.motion_camera_included = 1;
         pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1;
-        auto& camera = pass.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        auto& camera = pass.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
         identity(camera.view_to_clip); identity(camera.clip_to_view); identity(camera.world_to_view);
         identity(camera.view_to_world); identity(camera.clip_to_previous_clip); identity(pass.previous_clip_to_clip);
         camera.view_to_clip[0] = float(height) / float(width); camera.clip_to_view[0] = float(width) / float(height);

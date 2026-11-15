@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/fg_session.h>
 #include <rescaleframe/frame_sequencer.h>
+#include "../runtime/orchestrator/src/fg_status_snapshot.h"
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <new>
 namespace {
 void check(bool ok, int line) { if (!ok) { std::fprintf(stderr, "FG contract failed at %d\n", line); std::exit(1); } }
 #define CHECK(x) check((x), __LINE__)
 struct Context { bool physical; };
 bool fail_probe = false, fail_chain = false, fail_retire = false, quiescent = false;
-uint32_t physical = 0, destroyed = 0, restored = 0;
+uint32_t physical = 0, destroyed = 0, restored = 0, mock_pacing = RSF_PACING_REFLEX, begins = 0, markers = 0;
 rsf_fg_session* live_session = nullptr;
 rsf_backend_result create(const rsf_generation_setup* setup, void** context, void** chain)
 {
@@ -22,13 +24,13 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** context, voi
     return RSF_BACKEND_OK;
 }
 rsf_backend_result configure(void*, const rsf_fg_options*) { CHECK(quiescent); return RSF_BACKEND_OK; }
-rsf_backend_result begin(void*, uint64_t) { return RSF_BACKEND_OK; }
-rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { return RSF_BACKEND_OK; }
+rsf_backend_result begin(void*, uint64_t) { ++begins; return RSF_BACKEND_OK; }
+rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { ++markers; return RSF_BACKEND_OK; }
 rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_OK; }
 rsf_backend_result after(void*) { return RSF_BACKEND_OK; }
 rsf_backend_result status(void*, rsf_fg_status* out)
 {
-    out->supported = 1; out->max_generated_frames = 1; out->pacing_owner = RSF_PACING_REFLEX;
+    out->supported = 1; out->max_generated_frames = 1; out->pacing_owner = mock_pacing;
     return RSF_BACKEND_OK;
 }
 rsf_backend_result retire(void*, rsf_fg_retirement* out)
@@ -69,6 +71,7 @@ int main()
     options.mode = RSF_FG_DYNAMIC;
     CHECK(rsf_fg_session_select(live_session, &provider, &setup, &options) == RSF_BACKEND_ERROR_NOT_SUPPORTED);
     CHECK(physical == 1 && destroyed == 0); options.mode = RSF_FG_FIXED;
+    CHECK(rsf_fg_session_begin_rendered(live_session, 1, 10) == RSF_BACKEND_ERROR_NOT_SUPPORTED);
     CHECK(rsf_fg_session_begin(live_session, 1) == 0);
     CHECK(rsf_fg_session_select(live_session, nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_NOT_READY);
     CHECK(rsf_fg_session_marker(live_session, 1, RSF_LATENCY_INPUT_SAMPLE, 10, 0) == 0);
@@ -100,6 +103,22 @@ int main()
     CHECK(rsf_fg_session_select(live_session, &provider, &setup, &options) == 0);
     CHECK(rsf_fg_session_destroy(live_session) == 0); live_session = nullptr;
     CHECK(!physical && destroyed == 2);
+    mock_pacing = RSF_PACING_NONE; options.reflex_mode = RSF_REFLEX_OFF;
+    CHECK(rsf_fg_session_create(&host, &live_session) == 0);
+    CHECK(rsf_fg_session_select(live_session, &provider, &setup, &options) == 0);
+    const auto old_begins = begins, old_markers = markers;
+    CHECK(rsf_fg_session_begin_rendered(live_session, 1, 100) == 0);
+    CHECK(begins == old_begins);
+    CHECK(rsf_fg_session_marker(live_session, 1, RSF_LATENCY_RENDER_SUBMIT_START, 101, 0) == 0);
+    CHECK(rsf_fg_session_marker(live_session, 1, RSF_LATENCY_RENDER_SUBMIT_END, 102, 0) == 0);
+    record.input_qpc = 0; record.source_provenance = RSF_FRAME_SOURCE_RENDERED;
+    record.source_qpc = 100; record.source_qpc_frequency = 1000;
+    CHECK(rsf_fg_session_prepare(live_session, nullptr, &frame) == 0);
+    CHECK(rsf_fg_session_marker(live_session, 1, RSF_LATENCY_PRESENT_START, 103, 0) == 0);
+    CHECK(rsf_fg_session_marker(live_session, 1, RSF_LATENCY_PRESENT_END, 104, 0) == 0);
+    CHECK(markers == old_markers);
+    CHECK(rsf_fg_session_after_present(live_session, 1) == 0);
+    CHECK(rsf_fg_session_destroy(live_session) == 0); live_session = nullptr;
     rsf_frame_sequencer* ledger = nullptr;
     CHECK(rsf_frame_sequencer_create(2, &ledger) == 0);
     CHECK(rsf_frame_sequencer_begin(ledger, UINT64_MAX - 2) == 0);
@@ -110,5 +129,70 @@ int main()
     CHECK(rsf_frame_sequencer_marker(ledger, UINT64_MAX, RSF_LATENCY_SIMULATION_START, 99) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
     CHECK(rsf_frame_sequencer_finish(ledger, UINT64_MAX) == RSF_BACKEND_ERROR_NOT_READY);
     rsf_frame_sequencer_destroy(ledger);
-    std::puts("FG switching, fallback, retirement and CPU frame identity contracts passed");
+    CHECK(rsf_frame_sequencer_create(2, &ledger) == 0);
+    CHECK(rsf_frame_sequencer_begin_rendered(ledger, 1, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    CHECK(rsf_frame_sequencer_begin_rendered(ledger, 1, 100) == 0);
+    rsf_sequence_state rendered{sizeof(rendered)};
+    CHECK(rsf_frame_sequencer_get(ledger, 1, &rendered) == 0);
+    CHECK(rendered.source_provenance == RSF_FRAME_SOURCE_RENDERED && rendered.source_qpc == 100 && !rendered.timestamps[0]);
+    CHECK(rsf_frame_sequencer_marker(ledger, 1, RSF_LATENCY_RENDER_SUBMIT_START, 101) == 0);
+    CHECK(rsf_frame_sequencer_marker(ledger, 1, RSF_LATENCY_RENDER_SUBMIT_END, 102) == 0);
+    CHECK(rsf_frame_sequencer_marker(ledger, 1, RSF_LATENCY_PRESENT_START, 103) == 0);
+    CHECK(rsf_frame_sequencer_marker(ledger, 1, RSF_LATENCY_PRESENT_END, 104) == 0);
+    CHECK(rsf_frame_sequencer_finish(ledger, 1) == 0);
+    CHECK(rsf_frame_sequencer_begin_rendered(ledger, 2, 200) == 0);
+    CHECK(rsf_frame_sequencer_marker(ledger, 2, RSF_LATENCY_INPUT_SAMPLE, 201) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    CHECK(rsf_frame_sequencer_finish(ledger, 2) == RSF_BACKEND_ERROR_NOT_READY);
+    rsf_frame_sequencer_destroy(ledger);
+    rsf_native_fg_status pending{};
+    pending.struct_size = sizeof(pending); pending.source_frame_id = 11;
+    pending.vendor.struct_size = sizeof(pending.vendor); pending.vendor.supported = 1;
+    pending.vendor.max_generated_frames = 4; pending.vendor.version_id = 99;
+    pending.vendor.configured_mode = RSF_FG_FIXED; pending.vendor.active = 0;
+    pending.vendor.total_presented = 100; pending.vendor.valid_statistics = RSF_FG_STAT_LATENCY_AVAILABLE;
+    rsf::fg_status::Completed completed;
+    completed.generation = 7; completed.status = pending;
+    completed.status.source_frame_id = 10; completed.status.source_qpc = 1000;
+    completed.status.vendor.active = 1; completed.status.vendor.effective_mode = RSF_FG_FIXED;
+    completed.status.vendor.effective_generated_frames = 1;
+    completed.status.vendor.total_presented = 212; completed.status.vendor.generated_callbacks = 106;
+    completed.status.vendor.valid_statistics = RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_ACTIVITY;
+    auto coherent = rsf::fg_status::coherent(pending, 7, completed, 7, true, true);
+    CHECK(coherent.source_frame_id == 10 && coherent.source_qpc == 1000);
+    CHECK(coherent.vendor.active == 1 && coherent.vendor.total_presented == 212 && coherent.vendor.generated_callbacks == 106);
+    CHECK(coherent.vendor.max_generated_frames == 4 && coherent.vendor.version_id == 99);
+    CHECK(coherent.vendor.valid_statistics & RSF_FG_STAT_LATENCY_AVAILABLE);
+    // A pending provider query cannot replace completed activity, but capabilities stay live.
+    auto fresh = pending.vendor; fresh.max_generated_frames = 2;
+    auto merged = rsf::fg_status::with_completed_activity(fresh, coherent.vendor, true, true);
+    CHECK(merged.active == 1 && merged.total_presented == 212 && merged.max_generated_frames == 2);
+    for (auto reason : {RSF_NATIVE_FG_REASON_RESET, RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED, RSF_NATIVE_FG_REASON_NO_MATCH}) {
+        pending.reason = reason;
+        coherent = rsf::fg_status::coherent(pending, 7, completed, 7, true, true);
+        CHECK(!coherent.vendor.active && coherent.reason == reason && coherent.source_frame_id == 11);
+    }
+    pending.reason = 0; pending.last_result = RSF_BACKEND_ERROR_FEATURE_FAILED;
+    CHECK(!rsf::fg_status::coherent(pending, 7, completed, 7, true, true).vendor.active);
+    pending.last_result = 0;
+    CHECK(!rsf::fg_status::coherent(pending, 7, completed, 7, true, false).vendor.active);
+    coherent = rsf::fg_status::coherent(pending, 7, completed, 8, true, true);
+    CHECK(!coherent.vendor.active && !coherent.vendor.total_presented && !coherent.source_frame_id);
+    CHECK(!rsf::fg_status::coherent(pending, 7, completed, 7, false, true).vendor.active);
+    auto receipt = completed;
+    receipt.observe(completed.status, 7, 7, 11, true, 7);
+    CHECK(!receipt.matches(7)); // Completion source differs from the prepared source.
+    receipt.observe(completed.status, 7, 8, 10, true, 7);
+    CHECK(!receipt.matches(7));
+    receipt.observe(completed.status, 7, 7, 10, false, 7);
+    CHECK(!receipt.matches(7));
+    receipt.observe(completed.status, 7, 7, 10, true, 7);
+    CHECK(receipt.matches(7) && receipt.status.vendor.total_presented == 212);
+    completed.deactivate();
+    coherent = rsf::fg_status::coherent(pending, 7, completed, 7, true, true);
+    CHECK(!coherent.vendor.active && coherent.vendor.total_presented == 212); // Off/On needs a new completion.
+    fresh.supported = 0;
+    CHECK(!rsf::fg_status::with_completed_activity(fresh, merged, true, true).active);
+    fresh.supported = 1; fresh.configured_mode = RSF_FG_OFF;
+    CHECK(!rsf::fg_status::with_completed_activity(fresh, merged, true, true).active);
+    std::puts("FG switching, fallback, retirement, CPU identity and completed-status contracts passed");
 }

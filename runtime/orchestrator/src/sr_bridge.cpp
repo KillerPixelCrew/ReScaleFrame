@@ -371,7 +371,7 @@ extern "C" rsf_backend_result rsf_sr_bridge_warm_up(rsf_sr_bridge* bridge, uint3
     record.render_width = render_width; record.render_height = render_height;
     record.output_width = output_width; record.output_height = output_height;
     record.frame_time_ms = 16.6f;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     record.camera.near_plane = 0.1f; record.camera.far_plane = 10000.0f; record.camera.vertical_fov_radians = 1.0f;
     record.camera.depth_inverted = 1;
     rsf_sr_frame frame{};

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/d3d11_host.h>
+#include <rescaleframe/native_sr.h>
+#include <rescaleframe/native_fg.h>
 #include <cstdio>
 #include <limits>
 namespace {
@@ -29,9 +31,42 @@ int main() {
     setup.presentation_bridge = 1;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT,
         "Cold presentation requires an adapter window filter before any hooks are installed");
-    setup.presentation_bridge = 2;
+    setup.presentation_bridge = 3;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown presentation mode refused");
     setup.presentation_bridge = 0;
+    setup.capabilities = 8;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown capability refused");
+    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "FG facts require presentation bridge");
+    setup.capabilities = RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Input timeline requires presentation bridge");
+    setup.capabilities = RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Rendered source requires presentation bridge");
+    setup.capabilities = 0;
+    rsf_frame_record rendered{}; rendered.struct_size = sizeof(rendered);
+    rendered.source_provenance = RSF_FRAME_SOURCE_RENDERED;
+    check(!rsf_frame_has_rendered_source(&rendered), "Rendered source requires distinct timestamp and frequency");
+    rendered.source_qpc = 10; rendered.source_qpc_frequency = 1000;
+    check(rsf_frame_has_rendered_source(&rendered), "Rendered source admits unknown physical input timestamp");
+    rendered.input_qpc = 10;
+    check(!rsf_frame_has_rendered_source(&rendered), "Rendered provenance cannot claim a physical input timestamp");
+    rsf_frame_record gameplay{}; gameplay.struct_size = sizeof(gameplay); gameplay.screen = RSF_SCREEN_GAMEPLAY;
+    check(rsf_frame_allows_fg(&gameplay), "Generic gameplay eligible for FG screen policy");
+    gameplay.flags = RSF_FRAME_FLAG_NO_FG;
+    check(!rsf_frame_allows_fg(&gameplay), "Gameplay cannot override NO_FG");
+    rsf_game_render_pass outer{sizeof(outer)}; outer.source_frame_id = 42;
+    check(rsf_native_fg_scene_swap(&outer) == 1, "Scene scope saved");
+    rsf_game_render_pass inner{sizeof(inner)}; inner.source_frame_id = 43;
+    check(rsf_native_fg_scene_swap(&inner) == 1 && inner.source_frame_id == 42, "Nested scene saved exactly");
+    check(rsf_native_fg_scene_swap(&inner) == 1 && inner.source_frame_id == 43, "Nested scene restored exactly");
+    check(rsf_native_fg_scene_swap(&outer) == 1 && outer.source_frame_id == 42, "Outer scene restored exactly");
+    rsf_game_render_pass inputs{}; inputs.struct_size = sizeof(inputs); inputs.role = RSF_GAME_RENDER_FG_INPUTS;
+    auto* invalid_context = reinterpret_cast<void*>(uintptr_t(1));
+    check(rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == RSF_ERROR_NOT_READY,
+        "Unidentified FG lease refused before graphics dereference");
+    --inputs.struct_size;
+    check(rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == RSF_ERROR_INVALID_ARGUMENT,
+        "Short FG lease refused before graphics dereference");
     auto upstream = host;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_OK, "Graphics-free creation succeeds without SDK directories");
     check(host.session_id == 91 && host.user != &cookie && host.process_upscale && host.render_config && host.render_feedback && host.render_pass &&
@@ -60,6 +95,19 @@ int main() {
     check(host.render_config(host.user, &config) == 1 && !config.enabled,
         "Cold native pass facts do not touch graphics or activate generation");
     auto* fake = reinterpret_cast<void*>(uintptr_t(1));
+    void* original_chain = fake;
+    rsf_d3d11_native_chain native_creation_request{sizeof(native_creation_request), RSF_D3D11_HOST_ABI_VERSION, fake, fake, &original_chain};
+    check(rsf_d3d11_host_wrap_native_swapchain(&cookie, &native_creation_request) == RSF_ERROR_INVALID_ARGUMENT,
+        "Only returned host owner wraps outer native creation");
+    --native_creation_request.struct_size;
+    check(rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request) == RSF_ERROR_INVALID_ARGUMENT,
+        "Short outer creation call rejected before graphics access");
+    ++native_creation_request.struct_size; ++native_creation_request.abi_version;
+    check(rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request) == RSF_ERROR_ABI_MISMATCH,
+        "Outer creation call ABI checked");
+    --native_creation_request.abi_version;
+    check(rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request) == RSF_ERROR_NOT_READY && original_chain == fake,
+        "Host without outer-root bridge preserves native outputs before graphics access");
     rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, fake};
     check(rsf_d3d11_host_bind_presentation(&cookie, &binding) == RSF_ERROR_INVALID_ARGUMENT, "Presentation owner checked");
     --binding.struct_size;

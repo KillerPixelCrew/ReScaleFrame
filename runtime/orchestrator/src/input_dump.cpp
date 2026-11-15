@@ -628,6 +628,8 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_fg_prepare(const rsf_game_render_
     out << "{\"source_frame_id\":" << record.frame_id << ",\"session_id\":" << record.session_id
         << ",\"prepare_result\":" << result << ",\"resource_generation\":" << record.resource_generation
         << ",\"flags\":" << record.flags << ",\"screen\":" << record.screen << ",\"input_qpc\":" << record.input_qpc
+        << ",\"source_provenance\":" << record.source_provenance
+        << ",\"source_qpc\":" << record.source_qpc << ",\"source_qpc_frequency\":" << record.source_qpc_frequency
         << ",\"interpolate\":" << frame->interpolate << ",\"frame_time_ms\":"; number(out, record.frame_time_ms);
     out << ",\"render\":[" << record.render_width << ',' << record.render_height << "],\"output\":[" << record.output_width << ',' << record.output_height
         << "],\"motion_scale\":["; number(out, frame->motion_scale_x); out << ','; number(out, frame->motion_scale_y);

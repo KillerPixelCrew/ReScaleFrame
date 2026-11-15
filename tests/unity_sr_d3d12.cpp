@@ -321,7 +321,7 @@ int main(int argc, char** argv)
     pass.color_input = images[0].Get(); pass.depth = images[1].Get(); pass.motion = images[2].Get(); pass.color_output = images[3].Get();
     pass.exposure = exposure.Get();
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1;
-    pass.camera.struct_size = sizeof(pass.camera); pass.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    pass.camera.struct_size = sizeof(pass.camera); pass.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     pass.camera.render_width = width; pass.camera.render_height = height; pass.camera.output_width = 640; pass.camera.output_height = 360;
     pass.camera.near_plane = 0.1f; pass.camera.far_plane = 1000; pass.camera.vertical_fov_radians = 1.04719755f;
     pass.camera.depth_inverted = 1; pass.camera.frame_time_seconds = 1.0f/60;

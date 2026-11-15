@@ -270,7 +270,7 @@ bool fill_camera(rsf_game_render_pass& pass, float clip_to_previous[16]) noexcep
     if (!sr::invert(to_previous, from_previous)) return false;
     auto& c = pass.camera;
     c.struct_size = sizeof(c);
-    c.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    c.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     const auto store = [](float (&target)[16], const sr::MatrixD& m) { for (size_t i = 0; i < 16; ++i) target[i] = float(m[i]); };
     store(c.view_to_clip, projection);
     store(c.clip_to_view, clip_to_view);

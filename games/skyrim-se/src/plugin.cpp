@@ -16,6 +16,8 @@
 #include "auxiliary.h"
 #include "sampling.h"
 #include "presentation_inputs.h"
+#include "compatibility.h"
+#include "native_creation.h"
 #include <rescaleframe/d3d11_host.h>
 #include <string>
 #if defined(_MSC_VER)
@@ -155,6 +157,7 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
         caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x153adec) {
         rsf_game_host_services host{};
         { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) host = services; }
+        try { (void)rsf::skyrim::prepare_presentation_inputs(manager, host); } catch (...) {}
         try { reconstructed = rsf::skyrim::reconstruct(manager, host); } catch (...) {}
     }
     if (accepting.load(std::memory_order_acquire)) {
@@ -322,6 +325,10 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(lifecycle);
     if (prepared || calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy()) return RSF_ERROR_BUSY;
+    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
+        if (args->host->log) args->host->log(args->host->user, reason);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (!match_target()) {
         reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
         return RSF_ERROR_NATIVE_REFUSED;
@@ -340,10 +347,6 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
                 accepted ? 1u : 0u, error);
             args->host->log(args->host->user, message);
         }
-    }
-    if (GetModuleHandleW(L"CommunityShaders.dll")) {
-        reason = "Community Shaders ownership handover is not implemented; activation refused.";
-        return RSF_ERROR_NATIVE_REFUSED;
     }
     if (!original) {
         const auto initialized = MH_Initialize();
@@ -406,8 +409,13 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
     setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
     setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
-    // Shared presentation is not admitted until the combined SR transfer is verified.
-    setup.presentation_bridge = 0; setup.accept_window = accept_presentation_window;
+    // The corrected shared SR transfer has device regression evidence. Runtime
+    // capability and per-frame checks still gate generation and latency admission.
+    // Final facade is supplied at the adapter-owned native call return, after external wrappers.
+    setup.presentation_bridge = 2; setup.accept_window = accept_presentation_window;
+    // Rendered-source provenance permits provider-specific admission in the core;
+    // it does not claim pre-input pacing or a measured input timestamp.
+    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
     if (bound_services.user) {
@@ -421,6 +429,11 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
         const auto host_result = create_host(&setup, &services);
         if (host_result != RSF_OK) return host_result;
         bound_services = services; bound_upstream = *args->host;
+    }
+    if (!rsf::skyrim::native_creation_prepare(services)) {
+        reason = "Native creation root refused: cold owner, expected thunk/caller bytes or runtime service unavailable.";
+        if (services.log) services.log(services.user, reason);
+        return RSF_ERROR_NATIVE_REFUSED;
     }
     if (!rsf::skyrim::cpu_prepare(services)) return RSF_ERROR_NATIVE_REFUSED;
     observations.store(0, std::memory_order_relaxed);
@@ -437,7 +450,10 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     std::lock_guard<std::mutex> lock(lifecycle);
     if (!prepared) return RSF_ERROR_NOT_READY;
     if (enabled) return RSF_OK;
-    if (GetModuleHandleW(L"CommunityShaders.dll")) return RSF_ERROR_NATIVE_REFUSED;
+    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
+        if (services.log) services.log(services.user, reason);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
     if (MH_EnableHook(process_target) != MH_OK) {
         MH_DisableHook(target);
@@ -477,6 +493,15 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (!rsf::skyrim::native_creation_start()) {
+        (void)rsf::skyrim::cpu_stop();
+        (void)rsf::skyrim::presentation_inputs_stop();
+        (void)rsf::skyrim::sampling_stop();
+        MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        reason = "Native outer creation thunk could not be enabled; native presentation retained.";
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     enabled = true;
     if (host_active) (void)host_active(services.user, 1);
     accepting.store(true, std::memory_order_release);
@@ -490,10 +515,11 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
+    rsf::skyrim::native_creation_quiesce();
     rsf::skyrim::cpu_quiesce();
     rsf::skyrim::sampling_quiesce();
     rsf::skyrim::presentation_inputs_quiesce();
-    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() || rsf::skyrim::sampling_busy() || rsf::skyrim::presentation_inputs_busy() ? RSF_ERROR_BUSY : RSF_OK;
+    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() || rsf::skyrim::sampling_busy() || rsf::skyrim::presentation_inputs_busy() || rsf::skyrim::native_creation_busy() ? RSF_ERROR_BUSY : RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -503,6 +529,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
     if (rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending()) return RSF_ERROR_BUSY;
+    if (!rsf::skyrim::native_creation_stop()) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::presentation_inputs_stop()) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::sampling_stop()) return RSF_ERROR_BUSY;
     const bool cpu_stopped = rsf::skyrim::cpu_stop();
