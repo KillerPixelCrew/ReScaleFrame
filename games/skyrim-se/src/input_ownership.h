@@ -118,6 +118,18 @@ private:
     mutable std::mutex guard_;
     Reservation pending_{}, owned_{};
 };
+// Why a bound tick cannot own its adopted poll's consumption; none when it can.
+// queued_move: player +0xBEC bit 0x40 or +0x692 at tick entry, the only gates under which
+// 0x743090 (before the bind) calls anything, including camera update 0x7468b0 via 0x75ed50.
+// consumed_before_bind: a hooked player/movement/camera consumer already ran this tick.
+// free_camera: PlayerCamera +0x28 == +0xd0, the exact test by which 0x659ea0 updates the camera
+// through 0x746a10 outside the 0x745200 envelope.
+enum class BindRefusal : uint32_t { none, unreadable, queued_move, consumed_before_bind, free_camera };
+constexpr BindRefusal bind_refusal(bool readable, bool queued_move, bool consumed_before_bind, bool free_camera) noexcept {
+    return !readable ? BindRefusal::unreadable : queued_move ? BindRefusal::queued_move :
+        consumed_before_bind ? BindRefusal::consumed_before_bind : free_camera ? BindRefusal::free_camera :
+        BindRefusal::none;
+}
 // Observes native producers without locking or changing their execution order.
 // A stamp is evidence of an unchanged completed poll, never a pacing token.
 class InputOwnership {

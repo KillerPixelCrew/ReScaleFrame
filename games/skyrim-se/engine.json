@@ -39,7 +39,8 @@
     "community_shaders": "33d7896147b54ca72d1ee5ca938bb85739593167",
     "cs_commonlib": "70c1acd5261210982bd52f6d4468a082fe04d798",
     "latest_commonlib": "909517ba2416bc530abf1d2794b319664850e234",
-    "independent_commonlib": "add17c090cfa312d370bfcdd55d2eb989d086fec"
+    "independent_commonlib": "add17c090cfa312d370bfcdd55d2eb989d086fec",
+    "community_shaders_latest_audit": "038a0a04ce9db5b84707ec662ddfe7824cdac3dd"
   },
   "research": "../../docs/research/skyrim-se-integration.md",
   "native_preflight": {
@@ -74,7 +75,7 @@
       "ps": 12635,
       "cs": 19
     },
-    "status": "Nine native family/stage/descriptor groups matched from package initialization and shader reader instructions; runtime draw coverage unverified",
+    "status": "All16044 containers accounted for by offline census;15811 in named native families and233 tail containers grouped by stage, exact tail effect identities unresolved; live acceptance is per captured path",
     "native_classified_containers": 15811
   },
   "community_shaders_release": {
@@ -82,13 +83,15 @@
     "dll_sha256": "10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e657511097827",
     "pdb_guid": "240F7D4A-CB53-466A-B55C-6BCF3E723338",
     "pdb_age": 1,
-    "status": "matching symbols and selected instruction operands inspected; no live handover implemented"
+    "status": "Guarded pre-initializer Upscaling lifecycle exclusion and five-argument HDR wrapper provenance implemented and Windows MSVC Release built; runtime coexistence acceptance pending",
+    "handover_research": "docs/research/skyrim-cs-handover-20261115.md",
+    "hdr_remaining": "Float16 native scene readers, applied colour-space/source-transfer facts and a correct post-composite HUD-less lease are required; HDR processing remains refused"
   },
   "validation": {
     "date": "2026-11-15",
     "msvc": "14.52.37025",
     "configuration": "Release",
-    "native_gate": "Final Windows MSVC Release eng/verify.ps1 -VS2026: 220 passed, 14 skipped, zero failed out of234",
+    "native_gate": "Windows MSVC Release eng/verify.ps1 -VS2026 prospective/CS batch: 220 passed, 14 skipped, zero failed out of234; .local/skyrim-research/verify-skyrim-prospective-cs-batch-20261115.log. Includes latest poll timestamp, consumer hooks and CS source; latency_host skipped, no new game/deployment acceptance",
     "focused": "Skyrim ABI, generic/existing XInput carrier contracts, fullscreen pass and HDR reinsertion WARP fixture passed",
     "rust": "Cargo fmt and Clippy passed in final gate; no Rust behavior changed",
     "latest": "Bounded PID41756 third-person QASmoke: completed FG activity, FG Off and SR Off/On checks; passive draw capture; normal exit0 and original installation restored",
@@ -485,7 +488,7 @@
   "native_draw_coverage": {
     "date": "2026-11-15",
     "capture": "fg-frida-20261115-220603/native-draws",
-    "status": "No verified missing motion vector or buffer in captured QASmoke paths; no shader replacement justified",
+    "status": "QASmoke and Riverwood draw baselines verified; carried-firewood history is correct, pickup-only ghosting unresolved",
     "census": "Two frames:1080 native draws,496 bind motion target7;462 main Lighting,10 Lighting with depth copy7,2 Water; observed slot1 R16G16_FLOAT, blend Off, RG writes, VS previous position and PS Target1",
     "render_rectangle": [
       1280,
@@ -495,7 +498,26 @@
       1920,
       1080
     ],
-    "remaining": "Effect/Particle/Grass/Tree/Sky and shadow absent; separate renderer118B320 actual bindings and timing unverified",
+    "remaining": "Pickup-phase history/attachment/reset evidence; family/pass-specific runtime gaps and separate renderer ownership remain in research note",
+    "evidence": "docs/research/skyrim-native-draw-coverage-20261115.md",
+    "riverwood_baseline": "prop-draws-20261115-223539: four frames,15records,281censuskeys,errors0; no renderFlags0x10; CarryFirewood02 VS513/PS25089 cb2 current/previous match CPU world-eye/previousWorld-previousEye within3e-8 with real1.65-unit motion",
+    "pickup_watch": "pickup-watch-20261115-224232:11records,487frames,512transitions/5538overflow,errors0. Offline analysis found cap filled by unrelated LOD/sky/bird, no attributable pickup retained; stale AnimObject history observed on first world frame after gap, its relationship to RSF reset and pickup unproven. No repair justified.",
+    "user_f10": "scene-20261115-223624-382-40500062-43160-1: stationary-camera DLSS Quality1280x720->1920x1080. Independent offline checks confirm exact native motion crop/decode and pixel scaling within half-float rounding, finite subpixel NPC/log motion and no large stale displacement in this frame. A single frame cannot verify pickup-only ghosting.",
+    "sr_reference_parity": "docs/research/skyrim-sr-reference-parity-20261115.md: captured display-range colour transport differs from CS native HDR/auto-exposure; CS also applies depth-aware motion conditioning, masks and explicit model presets. These are demonstrated differences, not a proven pickup cause or invalid SDK contract. Existing colour transport control permits a later coordinated comparison; no game setting was changed."
+  },
+  "all_shader_audit": {
+    "date": "2026-11-15",
+    "containers": 16044,
+    "named_family_containers": 15811,
+    "tail": {
+      "vs": 107,
+      "ps": 107,
+      "cs": 19
+    },
+    "latest_cs_revision": "038a0a04ce9db5b84707ec662ddfe7824cdac3dd",
+    "finding": "No missing interface/buffer demonstrated by offline census and captured draws; no shader replacement justified. All-container census does not establish all-material runtime acceptance.",
+    "cs_comparison": "Working CS DLSS neighborhood conditioning absent in RSF; native TAA mask85 consumed by vanilla TAA but contents unverified. CS normals.z transparency recipe does not transfer to vanilla zero-packed channel.",
+    "user_symptom": "Heavy ghosting only during firewood/log pickup animation; carrying is fine",
     "evidence": "docs/research/skyrim-native-draw-coverage-20261115.md"
   }
 }

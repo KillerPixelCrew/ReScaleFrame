@@ -73,8 +73,9 @@ RSF_RUNTIME_API int rsf_native_cpu_read(uint64_t session, uint64_t source, rsf_n
 /* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
    work (see docs/representation-plan.md). Do not delete as dead code. */
 RSF_RUNTIME_API void rsf_native_cpu_set_sink(rsf_game_cpu_event_fn sink, void* user);
-/* Prospective source reservations (CPU event version 2). Retained facts only: nothing here
-   paces, marks a vendor, admits an input timeline or reaches a dispatch sink. */
+/* Prospective source reservations (CPU event version 2). Validated facts reach the
+   existing runtime sink synchronously outside rendered-only mode, after releasing
+   the ledger lock. The runtime may pace RESERVE; the ledger never calls a vendor. */
 #define RSF_NATIVE_CPU_RESERVATION_OPEN 1u     /* poll in flight */
 #define RSF_NATIVE_CPU_RESERVATION_SAMPLED 2u  /* poll returned; consuming source unknown */
 #define RSF_NATIVE_CPU_RESERVATION_ADOPTED 3u  /* FRAME_BEGIN used the identity; not yet bound */
@@ -96,6 +97,10 @@ typedef struct rsf_native_cpu_reservation {
     uint64_t reserve_qpc, sampled_qpc, frame_begin_qpc, bind_qpc;
     uint32_t input_kind, flags, abort_reason;
     int32_t predecessor_present; /* RSF_NATIVE_CPU_DEPENDENCY_* at read time */
+    uint32_t padding0;
+    /* Actual input sample: native poll entry after RESERVE returned. Zero when unreported.
+       reserve_qpc precedes any runtime work inside RESERVE; sampled_qpc is the poll's return. */
+    uint64_t poll_begin_qpc;
 } rsf_native_cpu_reservation;
 typedef struct rsf_native_cpu_reservation_counters {
     uint32_t struct_size;

@@ -11,7 +11,17 @@ int failures{};
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %d: %s\n", __LINE__, #x); ++failures; } } while (false)
 constexpr uint64_t session = 41;
 std::vector<rsf_game_cpu_event> delivered;
-void sink(void*, const rsf_game_cpu_event* event) { delivered.push_back(*event); }
+void sink(void*, const rsf_game_cpu_event* event) {
+    // Source callbacks must see the committed ledger and may reenter it without deadlock.
+    if (event->stage >= RSF_GAME_CPU_SOURCE_RESERVE) {
+        rsf_native_cpu_reservation value{}; value.struct_size = sizeof(value);
+        CHECK(rsf_native_cpu_reservation_read(event->session_id, event->source_frame_id, &value));
+        CHECK(value.state != 0);
+        if (event->stage == RSF_GAME_CPU_SOURCE_RESERVE) CHECK(value.state == RSF_NATIVE_CPU_RESERVATION_OPEN);
+        if (event->stage == RSF_GAME_CPU_SOURCE_BIND) CHECK(value.state == RSF_NATIVE_CPU_RESERVATION_BOUND);
+    }
+    delivered.push_back(*event);
+}
 rsf_game_cpu_event fact(uint64_t source, uint32_t stage, uint64_t stamp, uint32_t flags = 0) {
     return {sizeof(rsf_game_cpu_event), stage, session, source, stamp, 1000, 1, 0, 0,
         RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED | flags};
@@ -31,10 +41,12 @@ int reserve(uint64_t source, uint64_t stamp, uint64_t predecessor) {
     event.header.flags = RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR;
     return send(event);
 }
+// The poll was entered one tick before it returned, after RESERVE returned.
 int sampled(uint64_t source, uint64_t stamp, bool produced = true, uint32_t kinds = RSF_GAME_INPUT_MOUSE) {
     auto event = source_fact(source, RSF_GAME_CPU_SOURCE_SAMPLED, stamp);
     event.header.input_kind = kinds;
     event.header.flags = produced ? RSF_GAME_CPU_SOURCE_PRODUCED : 0;
+    event.poll_begin_qpc = stamp - 1;
     return send(event);
 }
 int bind(uint64_t source, uint64_t stamp) { return send(source_fact(source, RSF_GAME_CPU_SOURCE_BIND, stamp)); }
@@ -94,7 +106,15 @@ int main() {
     CHECK(read(2).state == RSF_NATIVE_CPU_RESERVATION_OPEN && read(2).reserve_qpc == 30);
     CHECK(read(2).predecessor_present == RSF_NATIVE_CPU_DEPENDENCY_PENDING);
     CHECK(!bind(2, 31)); // poll still in flight and no consuming frame
+    auto early = source_fact(2, RSF_GAME_CPU_SOURCE_SAMPLED, 32);
+    early.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED; early.poll_begin_qpc = 29;
+    CHECK(!send(early)); // the poll cannot begin before the reservation opened
+    early.poll_begin_qpc = 33;
+    CHECK(!send(early)); // nor after it returned
     CHECK(sampled(2, 32));
+    // Reservation opened at 30, before anything the runtime might do inside RESERVE; the
+    // actual sample is the poll entry at 31, after RESERVE returned; 32 is the poll's return.
+    CHECK(read(2).poll_begin_qpc == 31 && read(2).sampled_qpc == 32);
     // S's actual Present returns before its CPU FRAME_END; the outcome does not need it.
     CHECK(presented(1));
     CHECK(read(2).predecessor_present == RSF_NATIVE_CPU_DEPENDENCY_PRESENTED);
@@ -194,10 +214,22 @@ int main() {
     CHECK(!send(unknown_flags));
     auto kinds_on_reserve = source_fact(13, RSF_GAME_CPU_SOURCE_RESERVE, 126, 11); kinds_on_reserve.header.input_kind = 1;
     CHECK(!send(kinds_on_reserve));
+    auto sample_on_reserve = source_fact(13, RSF_GAME_CPU_SOURCE_RESERVE, 126, 11); sample_on_reserve.poll_begin_qpc = 126;
+    CHECK(!send(sample_on_reserve)); // a sample time belongs to SAMPLED only
+    sample_on_reserve.header.struct_size = RSF_GAME_CPU_SOURCE_EVENT_SIZE_1 + 1;
+    CHECK(!send(sample_on_reserve)); // a partial timestamp must not become a fabricated QPC
+    // A first-version packet, ending before poll_begin_qpc, is read only to its size: the
+    // sample time stays unknown.
+    CHECK(reserve(13, 127, 12));
+    auto first_version = source_fact(13, RSF_GAME_CPU_SOURCE_SAMPLED, 128);
+    first_version.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED; first_version.poll_begin_qpc = 127;
+    first_version.header.struct_size = RSF_GAME_CPU_SOURCE_EVENT_SIZE_1;
+    CHECK(send(first_version) && read(13).state == RSF_NATIVE_CPU_RESERVATION_SAMPLED && !read(13).poll_begin_qpc);
+    CHECK(abort_source(13, 129, RSF_GAME_CPU_ABORT_UNSPECIFIED));
     CHECK(!source_stage_delivered());
     const auto totals = counters();
-    CHECK(totals.reserved == 9 && totals.sampled == 7 && totals.adopted == 3 && totals.bound == 1 && totals.closed == 1);
-    CHECK(totals.unbound == 2 && totals.aborted == 6 && totals.rejected >= 15);
+    CHECK(totals.reserved == 10 && totals.sampled == 8 && totals.adopted == 3 && totals.bound == 1 && totals.closed == 1);
+    CHECK(totals.unbound == 2 && totals.aborted == 7 && totals.rejected >= 18);
 
     // Quiesce: session release drops every reservation and Present outcome.
     CHECK(send(fact(14, RSF_GAME_CPU_FRAME_BEGIN, 130)));
@@ -212,6 +244,64 @@ int main() {
     // Existing version 1 clients keep their behavior beside reservations.
     CHECK(send(fact(20, RSF_GAME_CPU_SIMULATION_END, 210)) && send(fact(20, RSF_GAME_CPU_FRAME_END, 220)));
     rsf_native_cpu_rendered_source_set(0);
+    rsf_native_cpu_release();
+    // Input-timeline hosts deliver RESERVE synchronously, before the poll. A later
+    // valid binding promotes the real poll entry without moving it to FRAME_BEGIN.
+    delivered.clear();
+    CHECK(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN, 10)));
+    CHECK(send(fact(1, RSF_GAME_CPU_INPUT_SAMPLE, 11)));
+    CHECK(send(fact(1, RSF_GAME_CPU_SIMULATION_BEGIN, 12)));
+    CHECK(send(fact(1, RSF_GAME_CPU_SIMULATION_END, 20)));
+    CHECK(reserve(2, 30, 1));
+    CHECK(delivered.back().stage == RSF_GAME_CPU_SOURCE_RESERVE);
+    const auto after_reserve = delivered.size();
+    CHECK(!reserve(2, 31, 1) && delivered.size() == after_reserve);
+    CHECK(sampled(2, 35));
+    CHECK(presented(1)); // no FRAME_END dependency for pre-input pacing
+    CHECK(send(fact(1, RSF_GAME_CPU_FRAME_END, 40)));
+    auto pending = fact(0, RSF_GAME_CPU_INPUT_EVENT, 45, RSF_GAME_CPU_INPUT_UNFRAMED);
+    pending.input_kind = RSF_GAME_INPUT_MOUSE;
+    CHECK(send(pending));
+    delivered.clear();
+    CHECK(send(fact(2, RSF_GAME_CPU_FRAME_BEGIN, 50)));
+    CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 1u && !frame.timestamps_qpc[1]);
+    CHECK(bind(2, 55));
+    CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 3u && frame.timestamps_qpc[1] == 34);
+    CHECK(!frame.pacing_qpc && !frame.input_ready_qpc && !frame.marker_mask && !frame.input_mask && !frame.pings);
+    CHECK(frame.timestamps_qpc[1] < frame.timestamps_qpc[0]);
+    CHECK(delivered.size() == 2 && delivered[0].stage == RSF_GAME_CPU_FRAME_BEGIN &&
+        delivered[1].stage == RSF_GAME_CPU_SOURCE_BIND); // no synthetic INPUT_SAMPLE/marker
+    const auto after_bind = delivered.size();
+    CHECK(!bind(2, 56) && delivered.size() == after_bind);
+    CHECK(send(fact(2, RSF_GAME_CPU_SIMULATION_BEGIN, 56)));
+    CHECK(send(fact(2, RSF_GAME_CPU_SIMULATION_END, 60)));
+    CHECK(send(fact(2, RSF_GAME_CPU_FRAME_END, 70)));
+    CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 31u && !frame.failed &&
+        !(frame.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) && frame.timestamps_qpc[1] == 34 && frame.timestamps_qpc[2] == 56);
+    CHECK(read(2).state == RSF_NATIVE_CPU_RESERVATION_CLOSED);
+    rsf_native_cpu_counters measured{}; measured.struct_size = sizeof(measured);
+    CHECK(rsf_native_cpu_counters_get(&measured) && !measured.substitutes && !measured.order_violations &&
+        !measured.input_events[1] && !measured.pings);
+
+    // Old packets without actual poll entry remain unknown, even after native bind.
+    CHECK(reserve(3, 71, 2));
+    auto unknown_sample = source_fact(3, RSF_GAME_CPU_SOURCE_SAMPLED, 74);
+    unknown_sample.header.struct_size = RSF_GAME_CPU_SOURCE_EVENT_SIZE_1;
+    unknown_sample.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED;
+    CHECK(send(unknown_sample));
+    CHECK(send(fact(3, RSF_GAME_CPU_FRAME_BEGIN, 80)) && bind(3, 81));
+    CHECK(rsf_native_cpu_read(session, 3, &frame) && frame.stage_mask == 1u && !frame.timestamps_qpc[1]);
+    CHECK(send(fact(3, RSF_GAME_CPU_SIMULATION_BEGIN, 82)));
+    CHECK(send(fact(3, RSF_GAME_CPU_SIMULATION_END, 90)));
+    CHECK(rsf_native_cpu_read(session, 3, &frame) && (frame.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE));
+    CHECK(send(fact(3, RSF_GAME_CPU_FRAME_END, 100)));
+
+    // Aborted consumption cannot promote its otherwise real poll timestamp.
+    CHECK(reserve(4, 101, 3) && sampled(4, 103));
+    CHECK(send(fact(4, RSF_GAME_CPU_FRAME_BEGIN, 110)));
+    CHECK(abort_source(4, 111, RSF_GAME_CPU_ABORT_NOT_CONSUMED) && !bind(4, 112));
+    CHECK(rsf_native_cpu_read(session, 4, &frame) && frame.stage_mask == 1u && !frame.timestamps_qpc[1]);
+    CHECK(send(fact(4, RSF_GAME_CPU_FRAME_END, 113)));
     rsf_native_cpu_release();
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

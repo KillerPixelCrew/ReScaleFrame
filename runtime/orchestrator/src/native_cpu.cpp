@@ -23,8 +23,8 @@ std::mutex lease_guard;
 HANDLE pacing_lease{};
 uint32_t pacing_client{};
 // Prospective sources (CPU event version 2). A reservation is a retained fact about an actual
-// input poll whose consuming source is not yet known; it never becomes a frame stage, marker,
-// pacing request or sink delivery. Guarded by `guard`; live entries are never evicted.
+// input poll whose consuming source is not yet known. Valid binding promotes only the real
+// poll timestamp; the runtime sink owns pacing and markers. Live entries are never evicted.
 std::array<rsf_native_cpu_reservation, 16> reservations{};
 uint64_t highest_reserved = 0, session_frequency = 0;
 rsf_native_cpu_reservation_counters reservation_totals{sizeof(reservation_totals)};
@@ -97,11 +97,14 @@ void clear_facts() {
     present_outcomes = {}; next_present_outcome = 0; presented_through = 0;
 }
 int source_event(const rsf_game_cpu_event* incoming) {
-    // Validate the declared size before reading any extension byte.
+    // Validate the declared size before reading any extension byte. Appended fields beyond a
+    // shorter packet stay zero.
     if (incoming->event_version != RSF_GAME_CPU_EVENT_VERSION_SOURCE ||
-        incoming->struct_size < sizeof(rsf_game_cpu_source_event)) return refuse_source();
+        incoming->struct_size < RSF_GAME_CPU_SOURCE_EVENT_SIZE_1 ||
+        (incoming->struct_size > RSF_GAME_CPU_SOURCE_EVENT_SIZE_1 && incoming->struct_size < sizeof(rsf_game_cpu_source_event)))
+        return refuse_source();
     rsf_game_cpu_source_event event{};
-    std::memcpy(&event, incoming, sizeof(event));
+    std::memcpy(&event, incoming, incoming->struct_size < sizeof(event) ? incoming->struct_size : sizeof(event));
     const auto& fact = event.header;
     const uint32_t allowed = fact.stage == RSF_GAME_CPU_SOURCE_RESERVE ? RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR :
         fact.stage == RSF_GAME_CPU_SOURCE_SAMPLED ? RSF_GAME_CPU_SOURCE_PRODUCED : 0u;
@@ -109,7 +112,9 @@ int source_event(const rsf_game_cpu_event* incoming) {
         (fact.flags & ~allowed) || fact.message_id || fact.render_expected || (fact.input_kind & ~7u) ||
         (fact.input_kind && fact.stage != RSF_GAME_CPU_SOURCE_SAMPLED) || event.reserved ||
         (event.reason && fact.stage != RSF_GAME_CPU_SOURCE_ABORT) ||
-        (event.predecessor_source_id && fact.stage != RSF_GAME_CPU_SOURCE_RESERVE)) return refuse_source();
+        (event.predecessor_source_id && fact.stage != RSF_GAME_CPU_SOURCE_RESERVE) ||
+        (event.poll_begin_qpc && (fact.stage != RSF_GAME_CPU_SOURCE_SAMPLED || event.poll_begin_qpc > fact.timestamp_qpc)))
+        return refuse_source();
     bool refused = false;
     {
         std::lock_guard lock(guard);
@@ -150,16 +155,25 @@ int source_event(const rsf_game_cpu_event* incoming) {
             return refuse_source();
         } else if (fact.stage == RSF_GAME_CPU_SOURCE_SAMPLED) {
             if (entry->state != RSF_NATIVE_CPU_RESERVATION_OPEN || fact.timestamp_qpc < entry->reserve_qpc ||
-                event.native_generation != entry->native_generation) return refuse_source();
+                event.native_generation != entry->native_generation ||
+                (event.poll_begin_qpc && event.poll_begin_qpc < entry->reserve_qpc)) return refuse_source();
             entry->state = RSF_NATIVE_CPU_RESERVATION_SAMPLED; entry->sampled_qpc = fact.timestamp_qpc;
+            entry->poll_begin_qpc = event.poll_begin_qpc;
             entry->input_kind = fact.input_kind; entry->flags |= fact.flags; ++reservation_totals.sampled;
         } else if (fact.stage == RSF_GAME_CPU_SOURCE_BIND) {
-            const auto& frame = frames[fact.source_frame_id % frames.size()];
+            auto& frame = frames[fact.source_frame_id % frames.size()];
             if (entry->state != RSF_NATIVE_CPU_RESERVATION_ADOPTED || !(entry->flags & RSF_GAME_CPU_SOURCE_PRODUCED) ||
                 frame.source_frame_id != fact.source_frame_id || frame.session_id != fact.session_id ||
                 frame.ended || frame.failed || fact.timestamp_qpc < entry->frame_begin_qpc ||
                 fact.timestamp_qpc < entry->sampled_qpc) return refuse_source();
+            if (!rendered_sources.load() && entry->poll_begin_qpc && frame.stage_mask != 1u) return refuse_source();
             entry->state = RSF_NATIVE_CPU_RESERVATION_BOUND; entry->bind_qpc = fact.timestamp_qpc;
+            if (!rendered_sources.load() && entry->poll_begin_qpc) {
+                // This real poll predates FRAME_BEGIN. Promote only after native consumption
+                // is bound; no v1 input event or simulation marker is invented at RESERVE.
+                frame.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE] = entry->poll_begin_qpc;
+                frame.stage_mask |= 1u << RSF_GAME_CPU_INPUT_SAMPLE;
+            }
             ++reservation_totals.bound;
         } else {
             if (!reservation_live(entry->state) && !reservation_owned(entry->state)) return refuse_source();
@@ -194,11 +208,20 @@ extern "C" RSF_RUNTIME_API void rsf_native_cpu_rendered_source_set(uint32_t enab
 extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event* incoming,
     rsf_game_cpu_event_fn supplied_sink, void* supplied_user)
 {
-    // Version 2 source lifetimes are retained facts, validated and stored before any version 1
-    // rule applies, and never delivered to a sink.
+    // Source facts are stored before the synchronous runtime callback. Rendered-only
+    // hosts retain their observation-only behavior; input hosts may pace at RESERVE.
     if (incoming && incoming->struct_size >= sizeof(*incoming) &&
-        incoming->stage >= RSF_GAME_CPU_SOURCE_RESERVE && incoming->stage <= RSF_GAME_CPU_SOURCE_ABORT)
-        return source_event(incoming);
+        incoming->stage >= RSF_GAME_CPU_SOURCE_RESERVE && incoming->stage <= RSF_GAME_CPU_SOURCE_ABORT) {
+        const auto accepted = source_event(incoming);
+        rsf_game_cpu_event_fn source_sink = nullptr; void* source_user = nullptr;
+        if (accepted && !rendered_sources.load()) {
+            std::lock_guard lock(guard);
+            source_sink = supplied_sink ? supplied_sink : consumer;
+            source_user = supplied_sink ? supplied_user : consumer_user;
+        }
+        if (source_sink) source_sink(source_user, incoming);
+        return accepted;
+    }
     if (!incoming || incoming->struct_size < sizeof(*incoming) || incoming->event_version > RSF_GAME_CPU_EVENT_VERSION ||
         incoming->flags & ~(RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_WINDOW_MESSAGE | RSF_GAME_CPU_RENDER_SKIPPED | RSF_GAME_CPU_INPUT_UNFRAMED | RSF_GAME_CPU_DERIVED_BOUNDARY)) return 0;
     const bool rendered = rendered_sources.load();
@@ -286,6 +309,9 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
             frame.pacing_qpc = event->timestamp_qpc;
             sink = supplied_sink ? supplied_sink : consumer; user = supplied_sink ? supplied_user : consumer_user;
         } else if (event->stage == RSF_GAME_CPU_INPUT_EVENT) {
+            // Pending window/unframed observations are not proof of consumption by this
+            // prospective source. Do not attribute input or PCL counts to its future token.
+            if (!rendered && (unframed || window_message) && find_reservation(event->session_id, event->source_frame_id)) return 1;
             if (event->input_kind & ~7u || (!event->input_kind && event->message_id < 0xc000u && !window_message) ||
                 event->qpc_frequency != frame.qpc_frequency || (!unframed && event->timestamp_qpc < frame.timestamps_qpc[0]) ||
                 (unframed && frame.timestamps_qpc[0]>event->timestamp_qpc &&

@@ -35,7 +35,9 @@ int accept_presentation_window(void*, void* window) {
 using UpdateJitter = void (*)(void*);
 UpdateJitter original = nullptr;
 void* target = nullptr;
-using ProcessMain = uintptr_t (*)(void*, uint32_t, uint32_t, uintptr_t);
+// The matched game consumes three arguments. Carry the CS wrapper's two extra
+// machine arguments unchanged, including its fifth stack byte (not a bool read).
+using ProcessMain = uintptr_t (*)(void*, uint32_t, uint32_t, uintptr_t, uint8_t);
 ProcessMain original_process = nullptr;
 void* process_target = nullptr;
 UpdateJitter original_resolution = nullptr;
@@ -60,6 +62,19 @@ BindPresentation bind_presentation = nullptr;
 bool prepared = false;
 bool enabled = false;
 const char* reason = "Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
+void withdraw_compatibility() noexcept {
+    const bool was_active = accepting.exchange(false, std::memory_order_acq_rel);
+    rsf::skyrim::cpu_quiesce();
+    rsf::skyrim::sampling_quiesce();
+    rsf::skyrim::presentation_inputs_quiesce();
+    rsf::skyrim::native_creation_quiesce();
+    // A successful start publishes host services before accepting. A failure
+    // during prepare has no live host to suspend and must not reacquire its lock.
+    if (was_active) try {
+        std::lock_guard<std::mutex> lock(lifecycle);
+        if (host_active && services.user) (void)host_active(services.user, 0);
+    } catch (...) {}
+}
 
 bool copy(void* output, const void* input, size_t size) noexcept
 {
@@ -144,7 +159,7 @@ void describe_native_inputs(char* message, size_t capacity) noexcept
         unsigned(desc.Format), desc.SampleDesc.Count);
 }
 
-uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4) noexcept
+uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
 {
 #if defined(_MSC_VER)
     const auto caller = uintptr_t(_ReturnAddress());
@@ -153,8 +168,8 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
 #endif
     calls.fetch_add(1, std::memory_order_acq_rel);
     bool reconstructed = false;
-    if (accepting.load(std::memory_order_acquire) && input == 1 && output == 0 &&
-        caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x153adec) {
+    if (accepting.load(std::memory_order_acquire) && rsf::skyrim::compatibility_render_allowed() && input == 1 && output == 0 &&
+        rsf::skyrim::compatibility_postprocess_call(caller, manager, input, output, argument4, argument5)) {
         rsf_game_host_services host{};
         { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) host = services; }
         try { (void)rsf::skyrim::prepare_presentation_inputs(manager, host); } catch (...) {}
@@ -195,7 +210,7 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
         *reinterpret_cast<uint32_t*>(taa + 0x30) = clear_mask | 1u;
         *reinterpret_cast<unsigned char*>(taa + 0x18) = 0;
     }
-    const auto result = original_process(manager, input, output, argument4);
+    const auto result = original_process(manager, input, output, argument4, argument5);
     if (bypass) *reinterpret_cast<unsigned char*>(taa + 0x18) = temporal_enabled;
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
@@ -208,7 +223,9 @@ void observe_jitter(void* state) noexcept
     original(state);
     rsf_game_host_services resolution_host{};
     { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) resolution_host = services; }
-    try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
+    if (rsf::skyrim::compatibility_render_allowed()) {
+        try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
+    }
     if (accepting.load(std::memory_order_acquire)) {
         const auto number = observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
@@ -243,7 +260,7 @@ void observe_resolution(void* state) noexcept {
 
 uintptr_t observe_end() noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    if (accepting.load(std::memory_order_acquire) && bind_presentation) {
+    if (accepting.load(std::memory_order_acquire) && rsf::skyrim::compatibility_render_allowed() && bind_presentation) {
         uintptr_t window{}; void* chain{};
         const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
         if (copy(&window, base + 0x3330198, sizeof(window)) && window &&
@@ -325,12 +342,12 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(lifecycle);
     if (prepared || calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy()) return RSF_ERROR_BUSY;
-    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
-        if (args->host->log) args->host->log(args->host->user, reason);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
     if (!match_target()) {
         reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
+    if (!rsf::skyrim::compatibility_checkpoint(reason, withdraw_compatibility)) {
+        if (args->host->log) args->host->log(args->host->user, reason);
         return RSF_ERROR_NATIVE_REFUSED;
     }
     static bool dpi_requested = false;
@@ -449,11 +466,11 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(lifecycle);
     if (!prepared) return RSF_ERROR_NOT_READY;
-    if (enabled) return RSF_OK;
     if (!rsf::skyrim::compatibility_checkpoint(reason)) {
         if (services.log) services.log(services.user, reason);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (enabled) return RSF_OK;
     if (MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
     if (MH_EnableHook(process_target) != MH_OK) {
         MH_DisableHook(target);
@@ -505,6 +522,15 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     enabled = true;
     if (host_active) (void)host_active(services.user, 1);
     accepting.store(true, std::memory_order_release);
+    // Close a refusal racing start: do not republish a live engine source after
+    // the compatibility callback already withdrew it on another thread.
+    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
+        accepting.store(false, std::memory_order_release);
+        if (host_active) (void)host_active(services.user, 0);
+        rsf::skyrim::cpu_quiesce(); rsf::skyrim::sampling_quiesce();
+        rsf::skyrim::presentation_inputs_quiesce(); rsf::skyrim::native_creation_quiesce();
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     reason = "Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
     return RSF_OK;
 }
@@ -561,6 +587,9 @@ rsf_result status(rsf_game_renderer_status* output) noexcept try
     output->active = accepting.load(std::memory_order_acquire) ? 1u : 0u;
     output->rendering_ready = 0;
     output->reason = reason;
+    if (!rsf::skyrim::compatibility_render_allowed()) {
+        if (const auto compatibility = rsf::skyrim::compatibility_status()) output->reason = compatibility;
+    }
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
