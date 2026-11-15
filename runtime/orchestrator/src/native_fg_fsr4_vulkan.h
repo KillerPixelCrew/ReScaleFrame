@@ -23,6 +23,7 @@ int32_t rsf_fsr4gvk_prepare(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*);
 int32_t rsf_fsr4gvk_hudless(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*);
 void rsf_fsr4gvk_submitted(rsf_fsr4gvk*, void* const*, uint32_t);
 int32_t rsf_fsr4gvk_present(rsf_fsr4gvk*, const void*);
+int32_t rsf_fsr4gvk_present_source(rsf_fsr4gvk*, const void*, const rsf_frame_record*);
 int32_t rsf_fsr4gvk_enable(rsf_fsr4gvk*, uint32_t);
 int32_t rsf_fsr4gvk_enable_options(rsf_fsr4gvk*, uint32_t, uint32_t);
 uint32_t rsf_fsr4gvk_max_generated(const rsf_fsr4gvk*);

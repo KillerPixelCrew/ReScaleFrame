@@ -143,6 +143,27 @@ int main() {
     require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 2,
         "presentation admission uses the local recording order, not old session frame IDs");
     require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled, "same recording cannot present twice");
+    auto older = record(99, 3, 8, 3), newer = record(99, 4, 8, 3);
+    complete(self, older, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
+    complete(self, newer, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
+    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 3 && self.latest == 4,
+        "older output selects its own submitted guides without rewinding the producer");
+    require(rsf_ffxgvk_present_source(&self, &info, &newer) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 4,
+        "newer prepared source remains available after the older Present");
+    auto invalid_source = newer; invalid_source.struct_size = 4;
+    require(rsf_ffxgvk_present_source(&self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED,"short Present identity refused");
+    invalid_source = newer; ++invalid_source.abi_version;
+    require(rsf_ffxgvk_present_source(&self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED,"foreign Present identity ABI refused");
+    auto foreign_source = record(99, 5, 8, 3); complete(self, foreign_source, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
+    ++foreign_source.session_id;
+    require(rsf_ffxgvk_present_source(&self, &info, &foreign_source) == VK_SUCCESS && !self.status.enabled && !self.status.source_frame,
+        "foreign identity retains ordinary output without selecting latest guides");
+    auto forbidden_source = record(99, 6, 8, 3); forbidden_source.flags = RSF_FRAME_FLAG_NO_FG;
+    complete(self, forbidden_source, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
+    require(rsf_ffxgvk_present_source(&self, &info, &forbidden_source) == VK_SUCCESS && !self.status.enabled,
+        "explicit source preserves NO_FG admission refusal");
+    require(rsf_ffxgvk_present_source(&self, &info, nullptr) == VK_SUCCESS && !self.status.enabled && !self.status.source_frame,
+        "unassociated output never guesses a prepared source");
     require(sdk_records >= 8, "the scenarios exercised real SDK prepare callsites");
     self.chain = VK_NULL_HANDLE;
     std::puts("PASS: FFX source recording, reused command identity and submission completion");

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "native_fg_ffx_vulkan.h"
+#include "native_fg_source.h"
 #include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include "native_vulkan_timing.h"
@@ -551,21 +552,24 @@ extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk* self, void* const* commands, ui
     (void)self; (void)commands; (void)count;
 #endif
 }
-extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* present_info) try {
+static int32_t ffx_present(rsf_ffxgvk* self, const void* present_info, const rsf_frame_record* source, bool explicit_source) try {
+    if (explicit_source && !rsf::fg_present_identity_valid(source)) return -3;
 #if defined(RSF_HAVE_FFX_VK)
     if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
-    const rsf::VulkanTimingScope timing("ffx_present_total", self->latest);
+    const uint64_t source_frame = rsf::fg_present_frame(self->latest, source, explicit_source);
+    const rsf::VulkanTimingScope timing("ffx_present_total", source_frame);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[self->latest % self->slots.size()];
+    auto& slot = self->slots[source_frame % self->slots.size()];
+    const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
     // A camera reset discards dispatch history through generate(), rather than
     // disabling the presenter and draining its queues and pacing threads. Keep
     // activation stable while this frame's submitted input leases are valid.
-    const bool valid = self->enabled && slot.recording_sequence > self->presented_sequence && slot.record.frame_id == self->latest &&
+    const bool valid = identity && source_frame && self->enabled && slot.recording_sequence > self->presented_sequence && slot.record.frame_id == source_frame &&
         slot.prepared && slot.hudless && slot.submitted_prepare && slot.submitted_hudless && !slot.completion_unknown;
     const auto configured = configure_frame(*self, valid ? &slot : nullptr);
     if (configured != RSF_BACKEND_OK) { self->status.result = configured; return VK_ERROR_INITIALIZATION_FAILED; }
-    const auto result = rsf::vk_timed_call("ffx_queue_present", self->latest, [&] {
+    const auto result = rsf::vk_timed_call("ffx_queue_present", source_frame, [&] {
         return self->functions.pOutQueuePresentKHR(static_cast<VkQueue>(self->setup.queues[0]), &info);
     });
     if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
@@ -574,7 +578,9 @@ extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* present_info
             0, nullptr, reinterpret_cast<uint64_t>(slot.consumer_completion)) != VK_SUCCESS) slot.completion_unknown = true;
         else slot.consumer_pending = true;
     }
-    self->presented = self->latest; self->presented_sequence = slot.recording_sequence; self->status.source_frame = self->latest;
+    self->presented = source_frame;
+    self->presented_sequence = explicit_source && !identity ? self->recording_sequence : slot.recording_sequence;
+    self->status.source_frame = explicit_source && !valid ? 0 : source_frame;
     self->status.enabled = valid ? 1u : 0u; self->status.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (self->functions.pOutGetLastPresentCountFFXAPI) self->status.last_present_count = self->functions.pOutGetLastPresentCountFFXAPI(self->chain);
     return result;
@@ -582,6 +588,10 @@ extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* present_info
     (void)self; (void)present_info; return -3;
 #endif
 } catch (...) { return -3; }
+extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* info) { return ffx_present(self, info, nullptr, false); }
+extern "C" int32_t rsf_ffxgvk_present_source(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source) {
+    return ffx_present(self, info, source, true);
+}
 extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) {
     if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (status->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;

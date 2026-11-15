@@ -13,6 +13,8 @@ uint32_t ffx_creates = 0, dlss_creates = 0, destroys = 0;
 uint32_t enabled = 0, generated_count = 1, calls = 0;
 bool refuse_destroy = false, refuse_create = false, refuse_state = false;
 const rsf_fgvk_setup* borrowed_setup = nullptr;
+const rsf_frame_record* presented_source = nullptr;
+uint32_t explicit_presents = 0;
 void require(bool value, const char* message) {
     if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
 }
@@ -47,6 +49,12 @@ void rsf_ffxgvk_submitted(rsf_ffxgvk*, void* const*, uint32_t) { calls |= 4; }
 void rsf_dlssgvk_submitted(rsf_dlssgvk*, void* const*, uint32_t) { calls |= 64; }
 int32_t rsf_ffxgvk_present(rsf_ffxgvk*, const void*) { calls |= 8; return 1000001003; }
 int32_t rsf_dlssgvk_present(rsf_dlssgvk*, const void*) { calls |= 128; return -1000001004; }
+int32_t rsf_ffxgvk_present_source(rsf_ffxgvk* owner, const void* info, const rsf_frame_record* source) {
+    presented_source = source; ++explicit_presents; return rsf_ffxgvk_present(owner, info);
+}
+int32_t rsf_dlssgvk_present_source(rsf_dlssgvk* owner, const void* info, const rsf_frame_record* source) {
+    presented_source = source; ++explicit_presents; return rsf_dlssgvk_present(owner, info);
+}
 rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk*, rsf_fgvk_status* status) { status->prepared = 30; return RSF_BACKEND_OK; }
 rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk*, rsf_dlssgvk_status* status) {
     if (refuse_state) return RSF_BACKEND_ERROR_NOT_READY;
@@ -89,6 +97,9 @@ int32_t rsf_fsr4gvk_prepare(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*) { calls 
 int32_t rsf_fsr4gvk_hudless(rsf_fsr4gvk*, void*, const rsf_fgvk_frame*) { calls |= 8192; return 0; }
 void rsf_fsr4gvk_submitted(rsf_fsr4gvk*, void* const*, uint32_t) { calls |= 16384; }
 int32_t rsf_fsr4gvk_present(rsf_fsr4gvk*, const void*) { calls |= 32768; return 1000001003; }
+int32_t rsf_fsr4gvk_present_source(rsf_fsr4gvk* owner, const void* info, const rsf_frame_record* source) {
+    presented_source = source; ++explicit_presents; return rsf_fsr4gvk_present(owner, info);
+}
 int32_t rsf_fsr4gvk_status(rsf_fsr4gvk*, rsf_fgvk_status* status) { status->prepared = 40; status->result = -77; return 0; }
 #endif
 #if defined(RSF_HAVE_XESS_FG_VK)
@@ -118,6 +129,9 @@ int32_t rsf_xessgvk_prepare(rsf_xessgvk*, void*, const rsf_fgvk_frame*) { calls 
 int32_t rsf_xessgvk_hudless(rsf_xessgvk*, void*, const rsf_fgvk_frame*) { calls |= 512; return 0; }
 void rsf_xessgvk_submitted(rsf_xessgvk*, void* const*, uint32_t) { calls |= 1024; }
 int32_t rsf_xessgvk_present(rsf_xessgvk*, const void*) { calls |= 2048; return 1000001003; }
+int32_t rsf_xessgvk_present_source(rsf_xessgvk* owner, const void* info, const rsf_frame_record* source) {
+    presented_source = source; ++explicit_presents; return rsf_xessgvk_present(owner, info);
+}
 int32_t rsf_xessgvk_status(rsf_xessgvk*, rsf_fgvk_status* status) { status->prepared = 50; status->result = -77; return 0; }
 int32_t rsf_xessgvk_latency_options(rsf_xessgvk*, uint32_t mode, uint32_t interval) {
     require(interval == 5000, "XeLL frame interval forwarded");
@@ -134,6 +148,8 @@ int32_t rsf_xessgvk_latency(rsf_xessgvk*, uint32_t frame, uint32_t marker) {
 int32_t rsf_xessgvk_latency_status(rsf_xessgvk*, rsf_fgvk_latency_status* status) { *status = xell; return 0; }
 #endif
 int main() {
+    rsf_frame_record identity{}; identity.struct_size = uint32_t(offsetof(rsf_frame_record, phase));
+    identity.abi_version = RSF_GAME_FRAME_ABI_VERSION; identity.frame_id = 42; identity.session_id = 7;
     rsf_fgvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_FGVK_ABI_VERSION;
     setup.graphics.struct_size = sizeof(setup.graphics); setup.graphics.abi_version = RSF_SRVK_ABI_VERSION;
     setup.graphics.backend = 5; // SR selection must not choose the FG provider.
@@ -170,6 +186,16 @@ int main() {
     require(rsf_fgvk_prepare(owner, command, &frame) == RSF_BACKEND_OK && rsf_fgvk_hudless(owner, command, &frame) == RSF_BACKEND_OK, "FFX recording routed");
     rsf_fgvk_submitted(owner, &command, 1);
     require(rsf_fgvk_present(owner, &frame) == 1000001003 && calls == 15, "FFX submitted/Present and result routed");
+    require(rsf_fgvk_present_source(owner, &frame, &identity) == 1000001003 && presented_source == &identity,
+        "FFX explicit identity prefix and WSI result forwarded");
+    auto malformed = identity; --malformed.struct_size; const auto before_invalid = explicit_presents;
+    require(rsf_fgvk_present_source(owner, &frame, &malformed) == -3 && explicit_presents == before_invalid,
+        "short source prefix never reaches WSI provider");
+    malformed = identity; ++malformed.abi_version;
+    require(rsf_fgvk_present_source(owner, &frame, &malformed) == -3 && explicit_presents == before_invalid,
+        "source ABI mismatch never reaches WSI provider");
+    require(rsf_fgvk_present_source(owner, &frame, nullptr) == 1000001003 && !presented_source,
+        "unassociated output is passed explicitly, not replaced by a cached source");
     require(rsf_fgvk_acquire(owner, 123, 4, 5, &value) == 2 && value == 2, "positive Vulkan timeout preserved");
     rsf_fgvk_status status{}; status.struct_size = sizeof(status); status.abi_version = RSF_FGVK_ABI_VERSION;
     require(rsf_fgvk_get_status(owner, &status) == RSF_BACKEND_OK && status.prepared == 30, "FFX status routed");
@@ -191,6 +217,8 @@ int main() {
     require(rsf_fgvk_max_generated(owner, &value) == RSF_BACKEND_ERROR_NOT_READY && value == 77, "failed capability query preserves output"); refuse_state = false;
     calls = 0; (void)rsf_fgvk_prepare(owner, command, &frame); (void)rsf_fgvk_hudless(owner, command, &frame); rsf_fgvk_submitted(owner, &command, 1);
     require(rsf_fgvk_present(owner, &frame) == -1000001004 && calls == 240, "DLSS recording/submission/WSI error forwarded");
+    require(rsf_fgvk_present_source(owner, &frame, &identity) == -1000001004 && presented_source == &identity,
+        "DLSS explicit identity preserves original WSI failure");
     require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "DLSS retirement succeeds");
     refuse_destroy = true; owner = nullptr;
     require(rsf_fgvk_create_for_backend(&setup, 1, 4, &owner, &chain) == RSF_BACKEND_ERROR_NOT_READY && owner && chain == 11,
@@ -237,6 +265,8 @@ int main() {
     require(rsf_fgvk_present(owner, &frame) == 1000001003 && calls == 61440 &&
         rsf_fgvk_acquire(owner, 123, 4, 5, &value) == 2 && value == 1 &&
         rsf_fgvk_images(owner, &value, nullptr) == 0 && value == 3, "FSR4 recording and all WSI routes preserve results");
+    require(rsf_fgvk_present_source(owner, &frame, &identity) == 1000001003 && presented_source == &identity,
+        "FSR4 explicit identity forwarded");
     require(rsf_fgvk_get_status(owner, &status) == RSF_BACKEND_OK && status.prepared == 40 && status.result == -77,
         "FSR4 status preserves private SDK result");
     refuse_destroy = true;
@@ -274,6 +304,8 @@ int main() {
     calls = 0; (void)rsf_fgvk_prepare(owner, command, &frame); (void)rsf_fgvk_hudless(owner, command, &frame); rsf_fgvk_submitted(owner, &command, 1);
     require(rsf_fgvk_present(owner, &frame) == 1000001003 && calls == 3840 &&
         rsf_fgvk_acquire(owner, 0, 0, 0, &value) == 2 && value == 2, "XeSS WSI results and submission routes preserved");
+    require(rsf_fgvk_present_source(owner, &frame, &identity) == 1000001003 && presented_source == &identity,
+        "XeSS explicit identity forwarded");
     require(rsf_fgvk_get_status(owner, &status) == RSF_BACKEND_OK && status.prepared == 50 && status.result == -77,
         "native XeSS errors remain in bounded status");
     require(rsf_fgvk_latency_options(owner, 2, 5000) == RSF_BACKEND_ERROR_NOT_SUPPORTED && xell.mode == 1, "XeLL Boost refused without state mutation");

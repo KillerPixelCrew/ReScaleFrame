@@ -159,6 +159,18 @@ int main() {
     submitted_slot(self, 1, prepare, hudless); rsf_dlssgvk_submitted(&self, lists, 2);
     require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && self.status.presentation.enabled && self.status.presentation.source_frame == 1,
         "new session restarting source IDs is ordered by local recording lease, not old source number");
+    submitted_slot(self, 2, prepare, prepare); rsf_dlssgvk_submitted(&self, &prepare, 1);
+    submitted_slot(self, 3, hudless, hudless); rsf_dlssgvk_submitted(&self, &hudless, 1);
+    rsf_frame_record selected{}; selected.struct_size = sizeof(selected); selected.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    selected.session_id = lease_session; selected.frame_id = lease_frame = 2;
+    require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && self.status.presentation.enabled &&
+        self.status.presentation.source_frame == 2 && self.latest == 3,
+        "explicit old output selects its original token while newer guides remain prepared");
+    selected.frame_id = lease_frame = 3;
+    require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && self.status.presentation.enabled &&
+        self.status.presentation.source_frame == 3,"later output consumes its own retained source");
+    require(rsf_dlssgvk_present_source(&self, &info, nullptr) == VK_SUCCESS && !self.status.presentation.enabled &&
+        !self.status.presentation.source_frame,"unknown output disables interpolation rather than using latest");
     VkSwapchainKHR foreign = reinterpret_cast<VkSwapchainKHR>(99); info.pSwapchains = &foreign;
     const auto previous_presents = present_calls;
     require(rsf_dlssgvk_present(&self, &info) == VK_ERROR_INITIALIZATION_FAILED && present_calls == previous_presents,

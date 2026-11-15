@@ -35,6 +35,7 @@ RSF_RUNTIME_API rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk*, void* comma
    guide and HUD-less command buffers before presentation may enable FG. */
 RSF_RUNTIME_API void rsf_dlssgvk_submitted(rsf_dlssgvk*, void* const* commands, uint32_t count);
 RSF_RUNTIME_API int32_t rsf_dlssgvk_present(rsf_dlssgvk*, const void* present_info);
+RSF_RUNTIME_API int32_t rsf_dlssgvk_present_source(rsf_dlssgvk*, const void* present_info, const rsf_frame_record*);
 RSF_RUNTIME_API rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk*, rsf_dlssgvk_status*);
 /* Drain before retiring engine images or changing providers. Failure preserves
    the owner, SDK feature, chain and resources for a later retry. */

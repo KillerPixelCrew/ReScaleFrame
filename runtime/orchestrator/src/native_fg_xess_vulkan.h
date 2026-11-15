@@ -40,6 +40,7 @@ int32_t rsf_xessgvk_prepare(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
 int32_t rsf_xessgvk_hudless(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
 void rsf_xessgvk_submitted(rsf_xessgvk*, void* const*, uint32_t);
 int32_t rsf_xessgvk_present(rsf_xessgvk*, const void*);
+int32_t rsf_xessgvk_present_source(rsf_xessgvk*, const void*, const rsf_frame_record*);
 int32_t rsf_xessgvk_enable(rsf_xessgvk*, uint32_t);
 int32_t rsf_xessgvk_enable_options(rsf_xessgvk*, uint32_t, uint32_t);
 uint32_t rsf_xessgvk_max_generated(const rsf_xessgvk*);

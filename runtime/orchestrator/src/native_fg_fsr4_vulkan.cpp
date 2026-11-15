@@ -7,6 +7,7 @@
 #include <cstring>
 #include <new>
 #include "native_fg_fsr4_vulkan.h"
+#include "native_fg_source.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include <mutex>
 
@@ -364,15 +365,18 @@ int32_t rsf_fsr4gvk_enable_options(rsf_fsr4gvk* self, uint32_t enabled, uint32_t
 }
 uint32_t rsf_fsr4gvk_max_generated(const rsf_fsr4gvk* self) { return self ? 1u : 0u; }
 
-int32_t rsf_fsr4gvk_present(rsf_fsr4gvk* self, const void* present_info) {
+static int32_t fsr4_present(rsf_fsr4gvk* self, const void* present_info, const rsf_frame_record* source_identity, bool explicit_source) {
+    if (explicit_source && !rsf::fg_present_identity_valid(source_identity)) return VK_ERROR_INITIALIZATION_FAILED;
     if (!self || !present_info || self->terminal) return VK_ERROR_INITIALIZATION_FAILED;
+    const uint64_t source_frame = rsf::fg_present_frame(self->latest, source_identity, explicit_source);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.pNext || info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != reinterpret_cast<VkSwapchainKHR>(self->chain) ||
         !info.pImageIndices || info.pImageIndices[0] >= self->buffers.size() || info.waitSemaphoreCount > 16) return VK_ERROR_INITIALIZATION_FAILED;
     auto& buffer = self->buffers[info.pImageIndices[0]];
     if (!buffer.acquired) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[self->latest % self->slots.size()];
-    const bool valid = self->requested && self->latest > self->last_presented && slot.record.frame_id == self->latest &&
+    auto& slot = self->slots[source_frame % self->slots.size()];
+    const bool identity = rsf::fg_present_identity_matches(slot.record, source_identity, explicit_source);
+    const bool valid = identity && source_frame && self->requested && source_frame > self->last_presented && slot.record.frame_id == source_frame &&
         slot.prepared && slot.prepare_submitted && slot.hudless_recorded && slot.hudless_submitted &&
         !(slot.record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID));
     self->active = valid;
@@ -419,7 +423,7 @@ int32_t rsf_fsr4gvk_present(rsf_fsr4gvk* self, const void* present_info) {
     buffer.done = done; self->last_done = done;
     if (valid) slot.done = done;
     rsf_fsr4fg_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = 1;
-    frame.record = slot.record.frame_id == self->latest ? &slot.record : nullptr;
+    frame.record = identity && slot.record.frame_id == source_frame ? &slot.record : nullptr;
     frame.enabled = valid ? 1u : 0u;
     frame.vsync = self->vsync ? 1u : 0u;
     frame.color = buffer.shared.dx12_resource;
@@ -433,14 +437,19 @@ int32_t rsf_fsr4gvk_present(rsf_fsr4gvk* self, const void* present_info) {
     result = RsfFsr4FgPresent(self->bridge, &frame, &status);
     if (status.terminal) self->terminal = true;
     buffer.acquired = false;
-    self->last_presented = self->latest;
-    self->status.source_frame = self->latest; self->status.last_present_count = status.frames_presented;
+    self->last_presented = explicit_source && !identity ? self->latest : source_frame;
+    self->status.source_frame = explicit_source && !valid ? 0 : source_frame;
+    self->status.last_present_count = status.frames_presented;
     self->status.enabled = status.fg_enabled; self->status.result = result ? result : status.result;
     // This counter comes only from observed genuine SDK output-resource callbacks
     // when pinned diagnostic capture is enabled, never from SDK present counts.
     self->status.generated_callbacks = status.generated_callbacks;
     if (info.pResults) info.pResults[0] = result ? VK_ERROR_UNKNOWN : VK_SUCCESS;
     return result ? VK_ERROR_UNKNOWN : VK_SUCCESS;
+}
+int32_t rsf_fsr4gvk_present(rsf_fsr4gvk* self, const void* info) { return fsr4_present(self, info, nullptr, false); }
+int32_t rsf_fsr4gvk_present_source(rsf_fsr4gvk* self, const void* info, const rsf_frame_record* source) {
+    return fsr4_present(self, info, source, true);
 }
 
 int32_t rsf_fsr4gvk_status(rsf_fsr4gvk* self, rsf_fgvk_status* status) {

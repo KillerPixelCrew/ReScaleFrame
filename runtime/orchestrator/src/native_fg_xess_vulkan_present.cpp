@@ -7,6 +7,7 @@
 #include <cstring>
 #include <new>
 #include "native_fg_xess_vulkan.h"
+#include "native_fg_source.h"
 #include "../../vulkan/xess-fg/capture_api.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include <mutex>
@@ -382,18 +383,21 @@ int32_t rsf_xessgvk_latency_status(rsf_xessgvk* self, rsf_fgvk_latency_status* s
     *status = self->latency_status; return 0;
 }
 
-int32_t rsf_xessgvk_present(rsf_xessgvk* self, const void* present_info) {
+static int32_t xess_present(rsf_xessgvk* self, const void* present_info, const rsf_frame_record* source_identity, bool explicit_source) {
+    if (explicit_source && !rsf::fg_present_identity_valid(source_identity)) return VK_ERROR_INITIALIZATION_FAILED;
     if (!self || !present_info || self->terminal) return VK_ERROR_INITIALIZATION_FAILED;
+    const uint64_t source_frame = rsf::fg_present_frame(self->latest, source_identity, explicit_source);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.pNext || info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != reinterpret_cast<VkSwapchainKHR>(self->chain) ||
         !info.pImageIndices || info.pImageIndices[0] >= self->buffers.size() || info.waitSemaphoreCount > 16) return VK_ERROR_INITIALIZATION_FAILED;
     auto& buffer = self->buffers[info.pImageIndices[0]];
     if (!buffer.acquired) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[self->latest % self->slots.size()];
-    const bool valid = self->requested && self->latest > self->last_presented && slot.record.frame_id == self->latest &&
+    auto& slot = self->slots[source_frame % self->slots.size()];
+    const bool identity = rsf::fg_present_identity_matches(slot.record, source_identity, explicit_source);
+    const bool valid = identity && source_frame && self->requested && source_frame > self->last_presented && slot.record.frame_id == source_frame &&
         slot.prepared && slot.prepare_submitted && slot.hudless_recorded && slot.hudless_submitted &&
         !(slot.record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID)) &&
-        slot.cpu_frame == self->latest && slot.slept && (slot.cpu_markers & 15u) == 15u;
+        slot.cpu_frame == source_frame && slot.slept && (slot.cpu_markers & 15u) == 15u;
     if (self->active != valid) {
         int result = VulkanStoryXessFgSetEnabled(self->bridge, valid ? 1 : 0);
         if (result < 0) return result;
@@ -442,7 +446,7 @@ int32_t rsf_xessgvk_present(rsf_xessgvk* self, const void* present_info) {
     buffer.done = done; self->last_done = done;
     if (valid) slot.done = done;
     rsf_xess_bridge_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = 1;
-    frame.frame_id = static_cast<uint32_t>(self->latest ? self->latest : self->last_presented + 1);
+    frame.frame_id = static_cast<uint32_t>(source_frame ? source_frame : self->last_presented + 1);
     if (frame.frame_id <= self->last_presented) frame.frame_id = static_cast<uint32_t>(self->last_presented + 1);
     frame.reset = !valid || (slot.record.flags & RSF_FRAME_FLAG_RESET) ? 1u : 0u;
     frame.vsync = self->vsync ? 1u : 0u;
@@ -463,19 +467,25 @@ int32_t rsf_xessgvk_present(rsf_xessgvk* self, const void* present_info) {
     }
     frame.ready_fence_value = ready; frame.done_fence_value = done;
     rsf_xess_bridge_present_status status{sizeof(status), 1};
-    if (slot.record.frame_id == frame.frame_id) (void)RsfXessBridgeCaptureSource(self->bridge, &slot.record);
-    (void)rsf_xessgvk_latency(self, frame.frame_id, 4);
+    if (identity && slot.record.frame_id == frame.frame_id) (void)RsfXessBridgeCaptureSource(self->bridge, &slot.record);
+    if (valid || !explicit_source) (void)rsf_xessgvk_latency(self, frame.frame_id, 4);
     result = RsfXessBridgePresent(self->bridge, &frame, &status);
-    (void)rsf_xessgvk_latency(self, frame.frame_id, 5);
+    if (valid || !explicit_source) (void)rsf_xessgvk_latency(self, frame.frame_id, 5);
     buffer.acquired = false;
     self->last_presented = frame.frame_id;
-    self->status.source_frame = self->latest; self->status.last_present_count = status.frames_presented;
+    self->status.source_frame = explicit_source && !valid ? 0 : source_frame;
+    self->status.last_present_count = status.frames_presented;
     self->status.enabled = status.fg_enabled; self->status.result = result ? result : status.fg_result;
     // This counter comes only from observed genuine SDK output-resource callbacks
     // when pinned diagnostic capture is enabled, never from SDK present counts.
     self->status.generated_callbacks = RsfXessBridgeCapturedCallbacks(self->bridge);
     if (info.pResults) info.pResults[0] = result ? VK_ERROR_UNKNOWN : VK_SUCCESS;
     return result ? VK_ERROR_UNKNOWN : VK_SUCCESS;
+}
+
+int32_t rsf_xessgvk_present(rsf_xessgvk* self, const void* info) { return xess_present(self, info, nullptr, false); }
+int32_t rsf_xessgvk_present_source(rsf_xessgvk* self, const void* info, const rsf_frame_record* source) {
+    return xess_present(self, info, source, true);
 }
 
 int32_t rsf_xessgvk_status(rsf_xessgvk* self, rsf_fgvk_status* status) {

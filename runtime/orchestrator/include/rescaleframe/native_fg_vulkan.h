@@ -95,6 +95,11 @@ RSF_RUNTIME_API rsf_backend_result rsf_fgvk_hudless(rsf_fgvk*, void* commands, c
    source identity to submitted work; recording alone never enables FG. */
 RSF_RUNTIME_API void rsf_fgvk_submitted(rsf_fgvk*, void* const* commands, uint32_t count);
 RSF_RUNTIME_API int32_t rsf_fgvk_present(rsf_fgvk*, const void* present_info);
+/* Present this output's copied identity, independently of newer prepared work.
+   The identity prefix through resource_generation is sufficient. A null/zero or
+   unmatched identity presents normally with interpolation disabled. Never falls
+   back to the latest source. Header/version errors return WSI initialization failure. */
+RSF_RUNTIME_API int32_t rsf_fgvk_present_source(rsf_fgvk*, const void* present_info, const rsf_frame_record* identity);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_get_status(rsf_fgvk*, rsf_fgvk_status*);
 /* Drain deferred SDK presentation and engine work before retiring engine views.
    A failing destroy preserves the owner, module and resources for a retry. */
