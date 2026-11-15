@@ -236,15 +236,17 @@ FARPROC WINAPI resolve(HMODULE module, LPCSTR name) {
         module == GetModuleHandleW(L"CommunityShaders.dll")) {
         // Publish the complete scalar record before any thread can enter the
         // wrapper. No native call, hashing or patching occurs under this lock.
+        bool captured = false;
         AcquireSRWLockExclusive(&capture_lock);
         if (state.load() == State::armed) {
             cs_module.store(module);
             initialize_original.store(reinterpret_cast<Initialize>(result));
             state.store(State::captured, std::memory_order_release);
+            captured = true;
         }
         ReleaseSRWLockExclusive(&capture_lock);
         SetLastError(error);
-        return reinterpret_cast<FARPROC>(&initialize);
+        return captured ? reinterpret_cast<FARPROC>(&initialize) : result;
     }
     SetLastError(error); return result;
 }

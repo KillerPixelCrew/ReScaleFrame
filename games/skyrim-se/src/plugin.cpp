@@ -223,9 +223,8 @@ void observe_jitter(void* state) noexcept
     original(state);
     rsf_game_host_services resolution_host{};
     { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) resolution_host = services; }
-    if (rsf::skyrim::compatibility_render_allowed()) {
-        try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
-    }
+    if (!rsf::skyrim::compatibility_render_allowed()) resolution_host = {};
+    try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
     if (accepting.load(std::memory_order_acquire)) {
         const auto number = observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
@@ -260,19 +259,21 @@ void observe_resolution(void* state) noexcept {
 
 uintptr_t observe_end() noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
+    rsf_game_host_services host{};
+    { std::lock_guard<std::mutex> lock(lifecycle); host = services; }
     if (accepting.load(std::memory_order_acquire) && rsf::skyrim::compatibility_render_allowed() && bind_presentation) {
         uintptr_t window{}; void* chain{};
         const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
         if (copy(&window, base + 0x3330198, sizeof(window)) && window &&
             copy(&chain, reinterpret_cast<const void*>(window + 0x18), sizeof(chain)) && chain) {
             const rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, chain};
-            try { (void)bind_presentation(services.user, &binding); } catch (...) {}
+            try { (void)bind_presentation(host.user, &binding); } catch (...) {}
         }
     }
     rsf::skyrim::finish_sampling();
     const auto result = original_end();
     rsf::skyrim::finish_presentation_inputs();
-    rsf::skyrim::finish_auxiliaries(services);
+    rsf::skyrim::finish_auxiliaries(host);
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
@@ -426,13 +427,14 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
     setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
     setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
+    setup.colour_transport_default = 1; // Native colour by default; saved overlay choice wins.
     // The corrected shared SR transfer has device regression evidence. Runtime
     // capability and per-frame checks still gate generation and latency admission.
     // Final facade is supplied at the adapter-owned native call return, after external wrappers.
     setup.presentation_bridge = 2; setup.accept_window = accept_presentation_window;
-    // Rendered-source provenance permits provider-specific admission in the core;
-    // it does not claim pre-input pacing or a measured input timestamp.
-    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
+    // Native prospective-poll ownership connects input and simulation reports;
+    // the runtime owns pacing, marker mapping and provider admission policy.
+    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
     if (bound_services.user) {
@@ -471,6 +473,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         return RSF_ERROR_NATIVE_REFUSED;
     }
     if (enabled) return RSF_OK;
+    if (!match_target()) { reason = "Native hook bytes changed before enable; start refused."; return RSF_ERROR_NATIVE_REFUSED; }
     if (MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
     if (MH_EnableHook(process_target) != MH_OK) {
         MH_DisableHook(target);
@@ -511,7 +514,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         return RSF_ERROR_NATIVE_REFUSED;
     }
     if (!rsf::skyrim::native_creation_start()) {
-        (void)rsf::skyrim::cpu_stop();
+        (void)rsf::skyrim::cpu_disable();
         (void)rsf::skyrim::presentation_inputs_stop();
         (void)rsf::skyrim::sampling_stop();
         MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
@@ -558,7 +561,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     if (!rsf::skyrim::native_creation_stop()) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::presentation_inputs_stop()) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::sampling_stop()) return RSF_ERROR_BUSY;
-    const bool cpu_stopped = rsf::skyrim::cpu_stop();
+    const bool cpu_stopped = rsf::skyrim::cpu_disable();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);
         const auto process_result = MH_DisableHook(process_target);
@@ -573,6 +576,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
         enabled = false;
     }
     if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
+    if (!rsf::skyrim::cpu_stop()) return RSF_ERROR_BUSY;
     services = {}; prepared = false;
     reason = "Native observer stopped; no host services retained.";
     return RSF_OK;

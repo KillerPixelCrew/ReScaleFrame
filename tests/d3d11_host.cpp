@@ -24,6 +24,9 @@ int main() {
     ++setup.abi_version; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_ABI_MISMATCH, "Setup ABI checked"); --setup.abi_version;
     --host.struct_size; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Short services refused"); ++host.struct_size;
     ++host.abi_version; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_ABI_MISMATCH, "Services ABI checked"); --host.abi_version;
+    setup.colour_transport_default = 2;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown colour transport default refused");
+    setup.colour_transport_default = 0; // existing callers preserve the enabled default
     setup.units_to_meters = std::numeric_limits<float>::quiet_NaN();
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Nonfinite units refused"); setup.units_to_meters = 1;
     setup.motion.scale_x = 0; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Zero decode scale refused"); setup.motion.scale_x = 1;

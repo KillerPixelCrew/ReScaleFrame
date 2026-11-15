@@ -18,7 +18,7 @@
     "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
-    "status": "Experimental reduced-resolution SR and rendered-source FSR FG bounded-game tested; genuine input pacing and general readiness incomplete",
+    "status": "Experimental reduced-resolution SR, FSR FG and bounded INPUT_TIMELINE DLSS FG/Reflex observed; broad timing and general readiness incomplete",
     "rendering_ready": false,
     "built_windows_msvc": true,
     "contract_tested": true,
@@ -503,7 +503,23 @@
     "riverwood_baseline": "prop-draws-20261115-223539: four frames,15records,281censuskeys,errors0; no renderFlags0x10; CarryFirewood02 VS513/PS25089 cb2 current/previous match CPU world-eye/previousWorld-previousEye within3e-8 with real1.65-unit motion",
     "pickup_watch": "pickup-watch-20261115-224232:11records,487frames,512transitions/5538overflow,errors0. Offline analysis found cap filled by unrelated LOD/sky/bird, no attributable pickup retained; stale AnimObject history observed on first world frame after gap, its relationship to RSF reset and pickup unproven. No repair justified.",
     "user_f10": "scene-20261115-223624-382-40500062-43160-1: stationary-camera DLSS Quality1280x720->1920x1080. Independent offline checks confirm exact native motion crop/decode and pixel scaling within half-float rounding, finite subpixel NPC/log motion and no large stale displacement in this frame. A single frame cannot verify pickup-only ghosting.",
-    "sr_reference_parity": "docs/research/skyrim-sr-reference-parity-20261115.md: captured display-range colour transport differs from CS native HDR/auto-exposure; CS also applies depth-aware motion conditioning, masks and explicit model presets. These are demonstrated differences, not a proven pickup cause or invalid SDK contract. Existing colour transport control permits a later coordinated comparison; no game setting was changed."
+    "sr_reference_parity": "Historical encoded-colour comparison: docs/research/skyrim-sr-reference-parity-20261115.md; subsequent native-colour/mask observations and limits: docs/research/skyrim-cs-parity-input-wiring-20261115.md. Neither establishes a pickup cause."
+  },
+  "input_timeline_bounded_acceptance": {
+    "evidence": ".local/skyrim-research/input-acceptance-20261115-231558; docs/research/skyrim-cs-parity-input-wiring-20261115.md",
+    "source": "54235df plus SIMULATION_BEGIN/capability connection; plugin requests INPUT_TIMELINE, older rendered-source section is historical",
+    "observed": "DLSS FG active1, Reflex effective1,333tags/676provider presentations; normal exit0 and verified restoration",
+    "limits": "No measured latency or scanout; XeSS FG, complete input consumption, pause/load/menu/frame admission remain unverified"
+  },
+  "parity_bounded_acceptance": {
+    "evidence": ".local/skyrim-research/parity-acceptance-20261115-234222/mask-analysis.json and window.json; docs/research/skyrim-cs-parity-input-wiring-20261115.md",
+    "gate": "Combined review-fix Windows MSVC Release VS2026 gate exit0,220passed/14skipped, Cargo fmt/Clippy clean; .local/skyrim-research/verify-skyrim-opus-fixes-20261115.log",
+    "run": "PID5484 complete F10, normalexit0/restored4files; Survival Mode modal remained, FG SceneNotEligible/no tags is menu refusal, not gameplay FG or pickup acceptance",
+    "colour": "color_encoded0; sr_source_jittered equals sr_color exactly",
+    "mask": "Target85 native1920x1080 DXGI49 R8G8_UNORM cropped1280x720; both R32 normalized masks exactly equal clamp(0.1R+G), maxerror0, finite0..0.09921568632125854,83422nonzero pixels",
+    "window": "Physical client1920x1080 matches output at144DPI; window.json outer[0,0,1942,1136]",
+    "history": "Previous PID44520 capture partial because native raw dump unsupported; earlier stale carrier trial refused before prepare. Both corrected; neither proves gameplay or pickup acceptance",
+    "review_fixes": "Concrete repairs built/gate-tested and covered by bounded resource run, not every failure branch; optional architecture proposals intentionally out; docs/research/skyrim-review-fixes-20261115.md"
   },
   "all_shader_audit": {
     "date": "2026-11-15",
@@ -516,7 +532,7 @@
     },
     "latest_cs_revision": "038a0a04ce9db5b84707ec662ddfe7824cdac3dd",
     "finding": "No missing interface/buffer demonstrated by offline census and captured draws; no shader replacement justified. All-container census does not establish all-material runtime acceptance.",
-    "cs_comparison": "Working CS DLSS neighborhood conditioning absent in RSF; native TAA mask85 consumed by vanilla TAA but contents unverified. CS normals.z transparency recipe does not transfer to vanilla zero-packed channel.",
+    "cs_comparison": "Working CS DLSS neighborhood conditioning absent in RSF; native TAA mask85 producer observed in22census entries/465draws on[1,85,3] over2frames. PID5484 native readback proves both normalized masks equal clamp(0.1R+G) exactly, matching inspected CS expression; modal-scoped input parity, not proven pickup repair. CS normals.z transparency recipe does not transfer to vanilla zero-packed channel.",
     "user_symptom": "Heavy ghosting only during firewood/log pickup animation; carrying is fine",
     "evidence": "docs/research/skyrim-native-draw-coverage-20261115.md"
   }

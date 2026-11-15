@@ -7,7 +7,6 @@
 #include <wrl/client.h>
 #include <atomic>
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -26,6 +25,11 @@ float halton(uint32_t index, uint32_t base) {
     float value = 0, factor = 1;
     while (index) { factor /= float(base); value += factor * float(index % base); index /= base; }
     return value;
+}
+template<class T> bool read(T& value, uintptr_t address) {
+    SIZE_T copied{};
+    return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+        &value, sizeof(value), &copied) && copied == sizeof(value);
 }
 void reset_native_history(uintptr_t base) {
     const auto manager = *reinterpret_cast<uintptr_t*>(base + 0x33d40a0);
@@ -75,10 +79,9 @@ void configure_resolution(void* pointer, const rsf_game_host_services& host) {
     const auto width = *reinterpret_cast<uint32_t*>(state + 0x24), height = *reinterpret_cast<uint32_t*>(state + 0x28);
     rsf_game_render_config config{sizeof(config)};
     if (renderer_thread() == GetCurrentThreadId() && host.process_upscale && host.render_config && width && height && width <= 16384 && height <= 16384) {
-        const auto window = *reinterpret_cast<uintptr_t*>(base + 0x3330198);
-        auto* native_context = *reinterpret_cast<ID3D11DeviceContext**>(base + 0x3331f30);
-        auto* native_chain = window ? *reinterpret_cast<IDXGISwapChain**>(window + 0x18) : nullptr;
-        if (native_context && native_chain) {
+        uintptr_t window{}; ID3D11DeviceContext* native_context{}; IDXGISwapChain* native_chain{};
+        if (read(window, base + 0x3330198) && window && read(native_context, base + 0x3331f30) && native_context &&
+            read(native_chain, window + 0x18) && native_chain) {
             ComPtr<ID3D11DeviceContext> context = native_context;
             ComPtr<IDXGISwapChain> chain = native_chain;
             rsf_game_render_pass prepare{}; prepare.struct_size = sizeof(prepare); prepare.role = RSF_GAME_RENDER_SR;

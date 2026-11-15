@@ -180,6 +180,37 @@ int main(int argc, char* argv[])
         }
     }
 
+    // Two independent numeric channels, including a valid zero first channel.
+    D3D11_TEXTURE2D_DESC mask_desc = desc; mask_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+    const uint8_t mask_pixels[]{0,255,64,128,255,0,17,33};
+    const D3D11_SUBRESOURCE_DATA mask_initial{mask_pixels,width*2,0};
+    ID3D11Texture2D* mask = nullptr;
+    check(SUCCEEDED(device->CreateTexture2D(&mask_desc,&mask_initial,&mask)) && mask,
+        "R8G8 numeric mask fixture must be created.");
+    if (mask) {
+        const std::string mask_prefix = std::string(argv[1]) + "\\numeric_mask";
+        options.output_prefix_utf8 = mask_prefix.c_str(); options.view = RSF_DUMP_VIEW_RAW;
+        check(rsf_dump_texture(device,context,mask,&options,&report) == RSF_TEXTURE_OK,
+            "R8G8 numeric mask preview must decode.");
+        check(report.format == DXGI_FORMAT_R8G8_UNORM && report.width == width && !report.fraction_unwritten,
+            "Numeric mask descriptor and zero samples must remain valid.");
+        check_near(report.min_x,0,1e-6f,"Mask R minimum.");
+        check_near(report.max_x,1,1e-6f,"Mask R maximum.");
+        check_near(report.min_y,0,1e-6f,"Mask G minimum.");
+        check_near(report.max_y,1,1e-6f,"Mask G maximum.");
+        check(rsf_dump_texture_bytes(device,context,mask,&options) == RSF_TEXTURE_OK,
+            "R8G8 numeric mask lossless dump must succeed.");
+        auto* raw = std::fopen((mask_prefix+".bin").c_str(),"rb");
+        check(raw != nullptr,"Numeric mask raw file must exist.");
+        if (raw) {
+            uint8_t actual[sizeof(mask_pixels)]{};
+            check(std::fread(actual,1,sizeof(actual),raw) == sizeof(actual) && std::fgetc(raw) == EOF &&
+                std::memcmp(actual,mask_pixels,sizeof(actual)) == 0,"Mask raw channels must be byte exact.");
+            std::fclose(raw);
+        }
+        mask->Release(); options.output_prefix_utf8 = prefix; options.view = RSF_DUMP_VIEW_VELOCITY;
+    }
+
     // An unsupported format must be refused rather than decoded as something it is not.
     D3D11_TEXTURE2D_DESC other = desc;
     other.Format = DXGI_FORMAT_R32_UINT;

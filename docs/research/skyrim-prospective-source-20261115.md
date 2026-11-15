@@ -267,8 +267,11 @@ submit refuses the bind as consumed_before_bind. The free-camera mirror and queu
 gate refusals are kept: the free path also skips player update, and the gate covers
 non-camera queued-move work.
 
-Timeline proposal for an ordinary covered gameplay tick (bound, refusal none,
-main_generation_match=1, mismatched=0). Not implemented; the capability stays disabled.
+Prior checkpoint: timeline proposal for an ordinary covered gameplay tick (bound,
+refusal none, main_generation_match=1, mismatched=0). At this checkpoint step 3 was
+emitted only after successful BIND, and INPUT_TIMELINE remained disabled pending
+runtime acceptance. The implementation and acceptance updates below supersede
+those restrictions; this proposal is retained as historical context.
 
 1. Input sample: SAMPLED `poll_begin_qpc` of P (worker, late group of generation n, after
    RESERVE returned). The pacing sleep belongs inside RESERVE.
@@ -277,16 +280,20 @@ main_generation_match=1, mismatched=0). Not implemented; the capability stays di
    wakes generation n+1. Everything earlier in the tick (calendar, scene-graph frustum,
    queues; `0x743090` inert when its gates are clear) consumes no controls. Actor/player
    simulation (workers' process lists, main `0x659ea0`/`0x745200`, camera) starts here.
-   The adapter change would be emitting the existing keyed v1 SIMULATION_BEGIN at that
-   point for bound frames only. Today's core accepts it in rendered mode
-   (`early_simulation`, mask 13 at FRAME_END).
+   At that checkpoint, after a successful SOURCE_BIND in the guarded `jobs_submit` hook, the
+   adapter emits the existing keyed v1 SIMULATION_BEGIN, before the original submit wakes
+   workers. It does so only for bound covered frames; refused or unbound frames emit none.
+   Core acceptance: in rendered mode SIMULATION_BEGIN on mask 1 is accepted as
+   `early_simulation`, SIMULATION_END at RenderEntry yields mask 13, and FRAME_END accepts
+   mask 13. Outside rendered mode, the substitute INPUT_SAMPLE on mask 5 is accepted as
+   `input_after_begin`. No hook, ledger, ABI or policy change.
 4. SIMULATION_END(P): existing, at RenderEntry `0x6565b0`, after `0x659ea0` returned. World
    render's event7 is required before the late poll group can start, so all main-thread
    consumption of P precedes P'.
 5. Present: the actual application Present of P's frame (core already records the
    session/source HRESULT).
 
-Required shared-core work before any adapter capability: a frame whose reservation is BOUND
+The proposal required shared-core work before adapter capability activation: a frame whose reservation is BOUND
 satisfies INPUT_SAMPLE with `poll_begin_qpc` (predating FRAME_BEGIN) instead of requiring a
 v1 INPUT_SAMPLE; the vendor frame token for P is acquired at RESERVE; the single sleep runs
 inside the RESERVE callback; an unbound, aborted or refused reservation falls back to the
@@ -312,3 +319,52 @@ need observed bound source ownership, main player/camera updates, matching
 generation and zero mismatches; queued-move, load-camera and free-camera
 exceptions retain their existing refusal gates. No new hook or game run was
 used to resolve this target.
+
+### First-person ownership acceptance and timeline connection
+
+After the user released the capture session, the coordinator ran the verified
+`54235df` DLLs for one bounded QASmoke session, PID 45008. All 16 retained
+prospective records (sources 2 through 17) report bound=1, refusal=0,
+main_player_update=1, main_player_camera=1, main_generation_match=1,
+main_ambiguous=0 and mismatched=0. main_camera=0 distinguishes the first-person
+envelope from the third-person state hook. Worker movement was also observed.
+The game exited normally with code 0; original DLL/settings hashes were
+restored. Receipts and parsed assertions are under ignored
+`input-acceptance-20261115-231108/`.
+
+Together with the static pre-submit graph and guarded refusal paths, these
+facts supplied the prerequisite for connecting the adapter's INPUT_TIMELINE
+capability. The first connection emitted SIMULATION_BEGIN after successful BIND
+and declared FG_INPUTS|INPUT_TIMELINE instead of RENDERED_SOURCE. The shared
+runtime owns the actual pre-poll sleep, tokens and marker mapping. The PID 45008
+run used the earlier observation-only capability and does not demonstrate a
+sleep, DLSS/XeSS FG or lower latency.
+
+### Bounded timeline connection acceptance before the latest fixes
+
+The subsequent `input-acceptance-20261115-231558/` run used the timeline-connected
+entry DLL with runtime SHA256
+`A4C742CB3C17C2FE0999EE84EA6E16770CF057643D67F6DBC671D1B22A588D31`,
+entry SHA256 `90834FD03943CFA9DD32C125E3CE70B8EE43EBDD6E164CE884B6A2FFD7C626AD`,
+and PID 42264. Its retained loader log records DLSS FG effective mode=1,
+generated=1, active=1, status=0, Reflex mode=1 applied and available driver
+reports. It also records transitions through inactive FG states, so this is
+bounded evidence of active DLSS FG and Reflex, not continuous admission for
+every frame class or a measured reduction in latency. The observation completed,
+the game exited with code 0 and all three DLL/settings restorations were verified.
+
+Both this run and the preceding first-person ownership run
+(`input-acceptance-20261115-231108/`, PID 45008) predate the latest CPU lifecycle
+and refused-reservation fixes. They do not validate those fixes, XeSS FG, or the
+free-camera/load/withdrawal cases excluded by ownership checks.
+
+Current source emits the actual keyed SIMULATION_BEGIN on every verified normal
+submit, including refused or unbound input, before the original submit wakes
+workers. This is an engine fact independent of successful SOURCE_BIND.
+For a refused prospective reservation the core preserves real simulation facts
+without fabricating INPUT_SAMPLE or sending those simulation facts to the
+latency sink; see [prospective source refusal](prospective-source-refusal-20261115.md).
+Frames without a prospective record retain the explicitly labelled substitute
+path described there. Neither path establishes measured FG admission for
+excluded frames. These source corrections await the coordinator's current gate
+and any separately authorized bounded runtime validation.

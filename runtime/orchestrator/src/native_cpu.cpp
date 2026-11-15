@@ -259,12 +259,15 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
     if (!rendered && facts && event->stage == RSF_GAME_CPU_SIMULATION_END) {
         rsf_native_cpu_frame current{}; current.struct_size = sizeof(current);
         if (!rsf_native_cpu_read(event->session_id, event->source_frame_id, &current)) return 0;
+        rsf_native_cpu_reservation reservation{sizeof(reservation)};
+        const bool refused_binding = rsf_native_cpu_reservation_read(event->session_id, event->source_frame_id, &reservation) &&
+            reservation.state != RSF_NATIVE_CPU_RESERVATION_BOUND;
         auto substitute = *event; substitute.flags |= RSF_GAME_CPU_INPUT_SUBSTITUTE;
-        if ((current.stage_mask & 1u) && !(current.stage_mask & 2u)) {
+        if (!refused_binding && (current.stage_mask & 1u) && !(current.stage_mask & 2u)) {
             substitute.stage = RSF_GAME_CPU_INPUT_SAMPLE;
             if (!rsf_native_cpu_dispatch(&substitute, supplied_sink, supplied_user)) return 0;
         }
-        if ((current.stage_mask & 1u) && !(current.stage_mask & 4u)) {
+        if (!refused_binding && (current.stage_mask & 1u) && !(current.stage_mask & 4u)) {
             substitute.stage = RSF_GAME_CPU_SIMULATION_BEGIN;
             if (!rsf_native_cpu_dispatch(&substitute, supplied_sink, supplied_user)) return 0;
         }
@@ -341,12 +344,20 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
         const bool rendered_end = rendered &&
             ((event->stage == RSF_GAME_CPU_SIMULATION_END && (frame.stage_mask == 1u || frame.stage_mask == 5u)) ||
              (event->stage == RSF_GAME_CPU_FRAME_END && (frame.stage_mask == 9u || frame.stage_mask == 13u)));
+        const auto* reservation = find_reservation(event->session_id, event->source_frame_id);
+        const bool refused_binding = !rendered && facts && reservation &&
+            reservation->state != RSF_NATIVE_CPU_RESERVATION_BOUND;
+        // Keep actual simulation boundaries when consumption was refused. Missing
+        // input remains missing, rather than being inserted after simulation began.
+        const bool unbound_end = refused_binding &&
+            ((event->stage == RSF_GAME_CPU_SIMULATION_END && (frame.stage_mask == 1u || frame.stage_mask == 5u)) ||
+             (event->stage == RSF_GAME_CPU_FRAME_END && (frame.stage_mask == 9u || frame.stage_mask == 13u)));
         const bool early_simulation = facts && event->stage==RSF_GAME_CPU_SIMULATION_BEGIN && frame.stage_mask==1u;
         const bool input_after_begin = facts && event->stage==RSF_GAME_CPU_INPUT_SAMPLE && frame.stage_mask==5u;
         uint64_t previous = 0;
         for (const auto stamp : frame.timestamps_qpc) if (stamp > previous) previous = stamp;
         if (frame.qpc_frequency != event->qpc_frequency || event->timestamp_qpc < previous ||
-            (!rendered_end && !partial_end && !early_simulation && !input_after_begin && frame.stage_mask != expected)) {
+            (!rendered_end && !unbound_end && !partial_end && !early_simulation && !input_after_begin && frame.stage_mask != expected)) {
             frame.failed = 1; ++totals.order_violations;
             if (event->stage == RSF_GAME_CPU_FRAME_END) { frame.ended = 1; reservation_end(event->session_id, event->source_frame_id); }
             return 0;
@@ -367,6 +378,7 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event*
                 (void)record_present(event->session_id, event->source_frame_id, RSF_NATIVE_CPU_DEPENDENCY_CANCELLED);
         }
         sink = supplied_sink ? supplied_sink : consumer; user = supplied_sink ? supplied_user : consumer_user;
+        if (refused_binding && event->stage != RSF_GAME_CPU_FRAME_BEGIN && event->stage != RSF_GAME_CPU_FRAME_END) sink = nullptr;
         }
     }
     if (sink) sink(user, event);
@@ -428,6 +440,9 @@ extern "C" RSF_RUNTIME_API int rsf_native_cpu_marker(uint64_t source, uint32_t m
     std::lock_guard lock(guard);
     auto& frame=frames[source%frames.size()];
     if (frame.source_frame_id != source || frame.session_id != current_session) return -1;
+    if (const auto* reservation = find_reservation(current_session, source);
+        reservation && reservation->state != RSF_NATIVE_CPU_RESERVATION_BOUND &&
+        reservation->state != RSF_NATIVE_CPU_RESERVATION_CLOSED) return -1;
     if (frame.marker_mask & (1u<<marker)) { ++totals.duplicates; return 0; }
     // Legacy threaded hosts report overlapping simulation/render and EndFrame after Present.
     // Preserve those dependencies until they migrate; input-keyed facts use canonical order.

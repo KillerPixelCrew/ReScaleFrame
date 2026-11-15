@@ -2,6 +2,34 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The INPUT_TIMELINE connection has bounded game evidence in
+`.local/skyrim-research/input-acceptance-20261115-231558`: DLSS FG active1,
+Reflex effective1, 333 tags/676 provider presentations, normal exit0 and verified
+restoration. This does not establish measured latency, every input path, XeSS FG
+or pause/load/menu admission. The latest parity run PID5484
+(`parity-acceptance-20261115-234222`) completed F10, exited normally and restored
+all four files. Native target85 R8G8_UNORM1920x1080, cropped to1280x720, matches
+both R32 reactive/bias masks exactly under clamp(0.1R+G), maximum error0 and
+83,422 nonzero pixels. Colour transport is off and source/backend colour match
+exactly. Physical client1920x1080 matches output at144DPI. The Survival Mode
+modal remained, and FG SceneNotEligible with no tags is expected refusal,
+not gameplay FG or pickup acceptance. The earlier PID44520 partial capture had
+unsupported native mask dumping; a still earlier trial failed before prepare
+with a stale carrier ABI. Both corrections remain in the parity note.
+
+The combined review-fix batch passed Windows MSVC Release verification with
+VS2026:220 passed,14 skipped, exit0, Cargo fmt/Clippy clean
+(`.local/skyrim-research/verify-skyrim-opus-fixes-20261115.log`).
+Optional-mask fallback, CS initializer capture, CPU disable/release retry
+handling, resolution restoration, SR-only NO_FG, guarded reads, service snapshot
+and hook rechecks, the narrow sampler early-out and shared raw-mask dump repair
+are built and covered by that gate plus the bounded resource run above. That
+run does not exercise every rollback/refusal or compatibility branch. Optional
+architecture proposals remain intentionally out; major-mod coexistence
+validation is next and remains unverified.
+See [parity inputs](research/skyrim-cs-parity-input-wiring-20261115.md)
+and [review fixes](research/skyrim-review-fixes-20261115.md).
+
 Skyrim now reports native pre-HDR SR/FG inputs, a HUD-less scene before UI,
 and the window/context lease through actual Present. Host ABI4 wraps the final
 swapchain at the guarded outer creation call; frame ABI2 and camera ABI1 stay
@@ -47,7 +75,8 @@ the Windows MSVC Release gate: 220 passed, 14 skipped, zero failed, with Cargo
 fmt and Clippy passing. The latency_host device check was skipped, so this is
 not runtime pacing acceptance. The batch implements token acquisition and pacing at RESERVE,
 actual poll-entry promotion at BIND, and CS pre-initializer Upscaling exclusion.
-Skyrim INPUT_TIMELINE remains disabled pending native consumption acceptance.
+That earlier batch left INPUT_TIMELINE disabled; the later bounded connection
+and its acceptance limits are recorded above.
 CS HDR wrapper forwarding is implemented, but float16 input readers, applied
 colour-space facts and its post-composite HUD-less lease remain unfinished.
 The final static pre-submit gap was resolved as IOManager's pure field getter.

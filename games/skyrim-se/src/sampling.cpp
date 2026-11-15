@@ -23,16 +23,6 @@ void* target() { return reinterpret_cast<unsigned char*>(GetModuleHandleW(nullpt
 void apply(bool restore) {
     if (!bind || !host.user || renderer_thread() != GetCurrentThreadId()) return;
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    rsf_d3d11_sampler_bias request{sizeof(request), RSF_D3D11_HOST_ABI_VERSION, host.session_id};
-    for (unsigned slot = 0; slot < 16; ++slot) {
-        const auto address = reinterpret_cast<const uint32_t*>(base + 0x20cfcbc)[slot];
-        const auto filter = reinterpret_cast<const uint32_t*>(base + 0x20cfcfc)[slot];
-        if (address >= 6 || filter >= 5) return;
-        request.samplers[slot] = *reinterpret_cast<void**>(base + 0x3331990 + 40 * address + 8 * filter);
-        // Native filters2/3 are mip-linear and anisotropic. Filters0/1 clamp
-        // MaxLOD to zero; filter4 is a comparison sampler used for shadows.
-        if (filter == 2 || filter == 3) request.slot_mask |= 1u << slot;
-    }
     const auto width = *reinterpret_cast<const uint32_t*>(base + 0x33363c4);
     const auto height = *reinterpret_cast<const uint32_t*>(base + 0x33363c8);
     uint32_t rw{}, rh{};
@@ -43,6 +33,17 @@ void apply(bool restore) {
         *reinterpret_cast<const int32_t*>(base + 0x20cfc38) == 0 &&
         *reinterpret_cast<const uint32_t*>(base + 0x33364c8) == 0 &&
         *reinterpret_cast<const float*>(base + 0x33364b4) < 1;
+    if (!scene && !pending.load(std::memory_order_acquire)) return;
+    rsf_d3d11_sampler_bias request{sizeof(request), RSF_D3D11_HOST_ABI_VERSION, host.session_id};
+    for (unsigned slot = 0; slot < 16; ++slot) {
+        const auto address = reinterpret_cast<const uint32_t*>(base + 0x20cfcbc)[slot];
+        const auto filter = reinterpret_cast<const uint32_t*>(base + 0x20cfcfc)[slot];
+        if (address >= 6 || filter >= 5) return;
+        request.samplers[slot] = *reinterpret_cast<void**>(base + 0x3331990 + 40 * address + 8 * filter);
+        // Native filters2/3 are mip-linear and anisotropic. Filters0/1 clamp
+        // MaxLOD to zero; filter4 is a comparison sampler used for shadows.
+        if (filter == 2 || filter == 3) request.slot_mask |= 1u << slot;
+    }
     if (scene) request.bias = std::log2(float(rw) / float(width));
     else request.slot_mask = 0;
     if (!request.slot_mask && !pending.load(std::memory_order_acquire)) return;
@@ -71,6 +72,7 @@ bool sampling_guard() {
 }
 bool sampling_start(const rsf_game_host_services& services) {
     if (!original && (!sampling_guard() || MH_CreateHook(target(), reinterpret_cast<void*>(&observe), reinterpret_cast<void**>(&original)) != MH_OK)) return false;
+    if (!live.load(std::memory_order_acquire) && !sampling_guard()) return false;
     bind = reinterpret_cast<Bind>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ReScaleFrame.Runtime.dll"), "rsf_d3d11_host_bind_sampler_bias")));
     if (!bind) return false;
     host = services;

@@ -714,7 +714,11 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event* even
     if (!event || event->struct_size < sizeof(*event)) return;
     if (!rsf_d3d11_present_has_owner()) return;
     const auto id = event->source_frame_id;
-    if (!rendered_source.load()) withdraw_reserved_sources(event->session_id);
+    // Only these stages can withdraw/adopt/end reservations. Poll completion,
+    // input messages and simulation facts cannot change their lifetime.
+    if (!rendered_source.load() && (event->stage == RSF_GAME_CPU_SOURCE_RESERVE ||
+        event->stage == RSF_GAME_CPU_SOURCE_ABORT || event->stage == RSF_GAME_CPU_FRAME_BEGIN ||
+        event->stage == RSF_GAME_CPU_FRAME_END)) withdraw_reserved_sources(event->session_id);
     if (event->stage >= RSF_GAME_CPU_SOURCE_RESERVE && event->stage <= RSF_GAME_CPU_SOURCE_ABORT) {
         if (rendered_source.load() || event->stage != RSF_GAME_CPU_SOURCE_RESERVE) return;
         rsf_native_cpu_reservation reservation{sizeof(reservation)};
