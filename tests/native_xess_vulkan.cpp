@@ -2,6 +2,13 @@
 #if defined(RSF_TEST_XESS_INPUT_RANGE)
 #include "../runtime/orchestrator/src/native_xess_vulkan.cpp"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+// The CPU contract must execute its checks in Release as well as Debug.
+#undef assert
+#define assert(condition) do { if (!(condition)) { \
+    std::fprintf(stderr, "XeSS input range contract failed: %s\n", #condition); std::abort(); \
+} } while (0)
 namespace {
 unsigned executed{}, copied{};
 uint32_t expected_width{}, expected_height{}, expected_reset{};
