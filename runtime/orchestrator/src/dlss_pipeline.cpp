@@ -10,6 +10,7 @@
 #include <rescaleframe/colour_transport.h>
 #include <rescaleframe/log.h>
 #include "sr_legacy_adapter.h"
+#include "motion_convention.h"
 #include "../../graphics/src/sharpening/d3d11.h"
 #include <rescaleframe/input_dump.h>
 
@@ -772,6 +773,7 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
     }
 
     const BackendNeeds needs = needs_of(self.backend);
+    bool resolved_motion = false;
     if (needs.dense_motion && !camera.camera_motion_included && camera.has_motion_sentinel) {
         bool rebuilt_resolve = false;
         if (!rsf::fit_motion_resolve(self.device, frame->render_width, frame->render_height, self.dense_motion,
@@ -794,6 +796,11 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         dlss_frame.camera_motion_included = 1;
         dlss_frame.motion_scale_x = 1.0f / float(frame->render_width);
         dlss_frame.motion_scale_y = 1.0f / float(frame->render_height);
+        resolved_motion = true;
+    }
+    if (self.backend == RSF_SR_DLSS) {
+        dlss_frame.motion_scale_x = rsf::dlss_motion_scale(dlss_frame.motion_scale_x, motion_in_uv, resolved_motion);
+        dlss_frame.motion_scale_y = rsf::dlss_motion_scale(dlss_frame.motion_scale_y, motion_in_uv, resolved_motion);
     }
     const bool correct_colour = needs.colour_correction && colour_correction.load(std::memory_order_acquire);
     if (correct_colour && !self.colour_fidelity) {

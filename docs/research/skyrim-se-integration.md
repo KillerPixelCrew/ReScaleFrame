@@ -1329,3 +1329,59 @@ The final adapter skips runtime sampler calls when no slot needs replacement
 or draining; it was Release-built and redeployed at
 `20261115-173439-sr-fallback`, PID36664. The sampled capture above predates
 that no-op optimization; the correction and scope policy are unchanged.
+
+### Direct DLSS motion-direction correction after third-person smear report
+
+The user identified skin smearing during a third-person orbit after idling and
+then grain/trailing across props as well. Their F10 captures are
+`scene-20261115-173508-646-22424328-36664-1` and
+`scene-20261115-173512-096-22427781-36664-2`, both settled DLSS Quality.
+This remains a temporal-quality defect, not accepted moving rendering.
+
+Raw native vectors in a right-wall region match previous-minus-current UV
+computed from captured depth and clip-to-previous matrices. Subtracting the
+actual geometry jitter from current raster positions gives camera motion
+medians7.53/9.07 input pixels in the two frames, with residual p95 below0.009
+pixels (`native-moving-wall-motion-check.json`). Thus the sampled native camera
+path is coherent; this does not validate the final vendor conversion. Manual
+skin/torso rectangles have nonzero motion and roughly0.24..0.27 pixel residual
+from camera-only prediction. That is not proof of correct deformation history
+or a missing-buffer repair (`third-person-skin-motion-regions.json`).
+
+The requested comparison against pinned Community Shaders dev33d7896147b54ca72d1ee5ca938bb85739593167
+resolves the dispatch direction: Common/MotionBlur.hlsli returns
+`(-0.5,+0.5)*(currentNDC-previousNDC)`, previous-minus-current Y-down UV.
+Its Streamline.cpp supplies cameraMotionIncluded=true, unjittered vectors,
+mvecScale(1,1) and jitterOffset(-jitter.x,-jitter.y). Upscaling.cpp writes native
+projection offsets(-2*jitter.x/renderWidth,+2*jitter.y/renderHeight), agreeing
+with RSF's corrected geometry-displacement jitter. FidelityFX.cpp likewise
+scales those native vectors by positive render dimensions. This was source
+comparison, not a Community Shaders runtime coexistence test.
+
+NVIDIA's [DLSS programming guide](https://github.com/NVIDIA/DLSS/blob/main/doc/DLSS_Programming_Guide_Release.pdf)
+section3.6 defines vectors that, added to current pixel position, reach the
+previous position. The latest main PDF fetched15 November2026 has SHA256
+`dca4d2e68ccedc04a431803595867a893474b1cce033e65a41e9eab9f6b436f8`.
+Streamline's inspected dlssEntry.cpp forwards mvecScale multiplied by render
+dimensions to NGX without another direction flip.
+
+RSF's adapter correctly declares native-to-canonical scale(-1,-1), but the
+generic D3D11 pipeline passed that canonical direction directly to DLSS when
+camera motion was already included. Its separate dense-resolve and alternate
+backend paths already converted back to previous-minus-current. This explains
+why the earlier native-buffer check could pass while DLSS received reversed
+motion. The direct canonical DLSS path now negates its scale once. Already
+resolved pixel motion and unspecified legacy encodings retain their scales;
+no game or engine identity selects this correction in the runtime.
+
+Focused Release runtime build and the frame-assembly contract passed. The
+contract maps known current/previous feature locations through the actual
+conversion helper and checks resolved motion is not flipped twice and legacy
+scale is preserved. The initial build invocation used the nonexistent target
+rsf_frame_assembly_test; the corrected rsf_frame_assembly target built and passed.
+No vendor device fixture or full gate was rerun. Deployment
+`20261115-174240-sr-fallback`, PID16972, has complete settled capture
+`scene-20261115-174318-760-22914437-16972-1`: motion_scale(1,1), reset0,
+1280x720 to1920x1080 and native final Present. This stationary capture verifies
+the corrected dispatch parameters, not the reported idle/orbit acceptance.
+The third-person smear and broad moving quality remain open pending that check.

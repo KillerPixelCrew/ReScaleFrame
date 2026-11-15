@@ -264,6 +264,10 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start(
     void* d3d11_device, const rsf_dlss_pipeline_setup* setup);
 
 /* Run one frame: decode the motion, assemble the frame, evaluate.
+   A nonzero camera.motion_scale declares decoded motion scaled into canonical
+   current-minus-previous UV. The pipeline converts that to each vendor's
+   current-to-previous displacement. Both scale components zero retain the
+   legacy unspecified encoding. Already resolved vectors are not negated twice.
 
    `d3d11_context` is the `ID3D11DeviceContext*` the game renders with, and must be the immediate
    context on the thread that owns it. Streamline does not restore pipeline state, so a caller that

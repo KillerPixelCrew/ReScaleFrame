@@ -5,6 +5,7 @@
 // jitter at all, which produces an integration that works and is quietly soft.
 
 #include <rescaleframe/frame_assembly.h>
+#include "../runtime/orchestrator/src/motion_convention.h"
 
 #include <cmath>
 #include <cstdio>
@@ -95,6 +96,20 @@ rsf_frame_resources make_resources()
 
 int main()
 {
+    // A rendered feature is left/up of its previous location. Native storage
+    // describes current->previous, while the adapter's canonical scale is -1.
+    const float current_uv[]{.4f, .3f}, previous_uv[]{.5f, .7f};
+    for (unsigned axis = 0; axis < 2; ++axis) {
+        const float native = previous_uv[axis] - current_uv[axis];
+        const float vendor_scale = rsf::dlss_motion_scale(-1, true, false);
+        check(std::abs(current_uv[axis] + native * vendor_scale - previous_uv[axis]) < 1e-6f,
+            "direct canonical motion must reach the previous feature location");
+        const float pixels = native * 1000;
+        check(std::abs(current_uv[axis] + pixels * rsf::dlss_motion_scale(.001f, true, true) - previous_uv[axis]) < 1e-6f,
+            "resolved current-to-previous pixels must not be negated twice");
+    }
+    check(rsf::dlss_motion_scale(.5f, false, false) == .5f,
+        "unspecified legacy encoding preserves the existing scale");
     const rsf_pipeline_camera_frame camera = make_camera();
     const rsf_frame_resources resources = make_resources();
 
