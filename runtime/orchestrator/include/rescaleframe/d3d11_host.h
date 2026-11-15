@@ -69,6 +69,48 @@ typedef struct rsf_d3d11_host_capture {
    the runtime; native resource selection and meaning stay in the adapter. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* services_user, void* immediate_context,
     const rsf_d3d11_host_capture*);
+
+#define RSF_D3D11_AUXILIARY_DEPTH_STENCIL 0u
+#define RSF_D3D11_AUXILIARY_COLOUR 1u
+#define RSF_D3D11_AUXILIARY_RESTORE_CONTENTS 0x1u
+typedef struct rsf_d3d11_auxiliary_surface {
+    uint32_t struct_size, kind;
+    void* texture;
+    /* Source viewport bounds may be fractional. Depth/stencil requires integer bounds.
+       Destination bounds are integer pixel edges. Samples subtract source-pixel jitter. */
+    float source_rect[4];
+    int32_t output_rect[4];
+    float jitter_pixels[2];
+    const char* name; /* Optional capture name, describing the reconstructed auxiliary. */
+    const char* source_name; /* Optional capture name for original auxiliary contents. */
+    /* Restore original contents after the final consumer when the owner requires
+       reduced history. Zero preserves later native writes, including clears.
+       Failed SR always rolls back every modified auxiliary regardless of this flag. */
+    uint32_t flags;
+} rsf_d3d11_auxiliary_surface;
+typedef struct rsf_d3d11_auxiliary_pass {
+    uint32_t struct_size, abi_version;
+    const rsf_game_render_pass* pass;
+    uint32_t surface_count;
+    const rsf_d3d11_auxiliary_surface* surfaces;
+} rsf_d3d11_auxiliary_pass;
+typedef struct rsf_d3d11_auxiliary_scope {
+    uint32_t struct_size, abi_version;
+    uint64_t session_id, native_frame, view_key;
+} rsf_d3d11_auxiliary_scope;
+/* One synchronous SR transaction on the admitted graphics owner. Prepares all
+   auxiliaries without native writes, evaluates SR, then commits auxiliaries.
+   On failure restores native colour and auxiliaries for the native fallback.
+   Success leases auxiliary contents through restore_auxiliaries, after the last
+   native consumer and before the next producer. Each surface's flags specify
+   content restoration or retirement preserving native writes. Identity/thread must match.
+   The adapter supplies resources/rectangles/jitter and native consumer lifetime;
+   shader work, copies, snapshots and binding restoration belong to the runtime. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* services_user, void* immediate_context,
+    const rsf_d3d11_auxiliary_pass*);
+/* Restoration is permitted while the host is suspended so quiesce can drain. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* services_user,
+    const rsf_d3d11_auxiliary_scope*);
 #ifdef __cplusplus
 }
 #endif

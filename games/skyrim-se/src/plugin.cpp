@@ -13,6 +13,7 @@
 #include "cpu_events.h"
 #include "render_inputs.h"
 #include "resolution.h"
+#include "auxiliary.h"
 #include <rescaleframe/d3d11_host.h>
 #include <string>
 #if defined(_MSC_VER)
@@ -33,6 +34,9 @@ void* resolution_target = nullptr;
 using RendererEnd = uintptr_t (*)();
 RendererEnd original_end = nullptr;
 void* end_target = nullptr;
+using UploadFrame = void (*)(void*, uint8_t);
+UploadFrame original_upload = nullptr;
+void* upload_target = nullptr;
 std::mutex lifecycle;
 std::atomic<bool> accepting{false};
 std::atomic<uint32_t> calls{0};
@@ -239,8 +243,18 @@ uintptr_t observe_end() noexcept {
         }
     }
     const auto result = original_end();
+    rsf::skyrim::finish_auxiliaries(services);
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
+}
+
+void observe_upload(void* renderer, uint8_t flags) noexcept {
+    calls.fetch_add(1, std::memory_order_acq_rel);
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    const bool uploading = uintptr_t(renderer) == base + 0x3331f40 && *reinterpret_cast<const unsigned char*>(base + 0x3336400) != 0;
+    original_upload(renderer, flags);
+    if (uploading) rsf::skyrim::record_per_frame_flags(flags);
+    calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 bool match_target()
@@ -275,13 +289,21 @@ bool match_target()
     constexpr unsigned char end_expected[]{0x48,0x83,0xec,0x48,0xb9,0x01,0x00,0x00,0x00,0xe8,0x22,0xa9,0x58,0x00};
     unsigned char end_actual[sizeof(end_expected)]{};
     end_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009f70;
+    constexpr unsigned char viewport_expected[]{0x48,0x83,0xec,0x68,0x0f,0x29,0x74,0x24,0x50,0xf3,0x0f,0x10,0x35,0xb7,0x24,0xb5,0x00};
+    unsigned char viewport_actual[sizeof(viewport_expected)]{};
+    constexpr unsigned char upload_expected[]{0x48,0x89,0x5c,0x24,0x08,0x55,0x48,0x8d,0xac,0x24,0xe0,0xfd,0xff,0xff,0x48,0x81,0xec,0x20,0x03,0x00,0x00};
+    unsigned char upload_actual[sizeof(upload_expected)]{};
+    upload_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x100ae80;
     return copy(process_actual, process_target, sizeof(process_actual)) &&
         !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
         copy(call_actual, site, sizeof(call_actual)) &&
         !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
         copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)) &&
         copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual)) &&
-        copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual));
+        copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual)) &&
+        copy(viewport_actual, reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009960, sizeof(viewport_actual)) &&
+        !std::memcmp(viewport_actual, viewport_expected, sizeof(viewport_actual)) &&
+        copy(upload_actual, upload_target, sizeof(upload_actual)) && !std::memcmp(upload_actual, upload_expected, sizeof(upload_actual));
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -334,9 +356,17 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             MH_RemoveHook(target); original = nullptr;
             return RSF_ERROR_NATIVE_REFUSED;
         }
+        if (MH_CreateHook(upload_target, reinterpret_cast<void*>(&observe_upload), reinterpret_cast<void**>(&original_upload)) != MH_OK) {
+            MH_RemoveHook(end_target); original_end = nullptr;
+            MH_RemoveHook(resolution_target); original_resolution = nullptr;
+            MH_RemoveHook(process_target); original_process = nullptr;
+            MH_RemoveHook(target); original = nullptr;
+            return RSF_ERROR_NATIVE_REFUSED;
+        }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                               reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned)) {
+            MH_RemoveHook(upload_target); original_upload = nullptr;
             MH_RemoveHook(end_target); original_end = nullptr;
             MH_RemoveHook(resolution_target); original_resolution = nullptr;
             MH_RemoveHook(process_target); original_process = nullptr;
@@ -411,7 +441,13 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (MH_EnableHook(upload_target) != MH_OK) {
+        MH_DisableHook(end_target); MH_DisableHook(resolution_target);
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (!rsf::skyrim::cpu_start()) {
+        MH_DisableHook(upload_target);
         MH_DisableHook(end_target);
         MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
@@ -431,7 +467,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
     rsf::skyrim::cpu_quiesce();
-    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() ? RSF_ERROR_BUSY : RSF_OK;
+    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() ? RSF_ERROR_BUSY : RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -440,17 +476,19 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     std::lock_guard<std::mutex> lock(lifecycle);
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
-    if (rsf::skyrim::resolution_owned()) return RSF_ERROR_BUSY;
+    if (rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending()) return RSF_ERROR_BUSY;
     const bool cpu_stopped = rsf::skyrim::cpu_stop();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);
         const auto process_result = MH_DisableHook(process_target);
         const auto resolution_result = MH_DisableHook(resolution_target);
         const auto end_result = MH_DisableHook(end_target);
+        const auto upload_result = MH_DisableHook(upload_target);
         if ((jitter_result != MH_OK && jitter_result != MH_ERROR_DISABLED) ||
             (process_result != MH_OK && process_result != MH_ERROR_DISABLED) ||
             (resolution_result != MH_OK && resolution_result != MH_ERROR_DISABLED) ||
-            (end_result != MH_OK && end_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
+            (end_result != MH_OK && end_result != MH_ERROR_DISABLED) ||
+            (upload_result != MH_OK && upload_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
         enabled = false;
     }
     if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;

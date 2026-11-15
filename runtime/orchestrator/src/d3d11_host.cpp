@@ -11,6 +11,7 @@
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/frame_generation.h>
 #include "render_settings_store.h"
+#include "auxiliary_sr.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -33,6 +34,7 @@ std::string utf8(const std::wstring& value) {
 struct Host {
     std::mutex state;
     std::mutex presentation_guard;
+    std::unique_ptr<AuxiliarySurfaces> auxiliaries;
     rsf_game_host_services upstream{};
     std::wstring ini, section;
     std::string root, identity, fingerprint, version, project;
@@ -233,10 +235,12 @@ struct Host {
         planned = {sizeof(planned), uint32_t(ready && settings.sr_enabled), pass.camera.output_width, pass.camera.output_height,
             ready ? status.render_width : pass.camera.output_width, ready ? status.render_height : pass.camera.output_height};
     }
-    int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
+    int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass,
+        const rsf_d3d11_auxiliary_pass* auxiliary = nullptr) {
         std::unique_lock presentation(presentation_guard, std::try_to_lock);
         if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
         if (!active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
+        if (auxiliaries && auxiliaries->pending()) return RSF_ERROR_BUSY;
         // Bind ownership from a verified scene lease, never from an early loading callback.
         if ((pass.flags & RSF_GAME_RENDER_RECONFIGURE) && !scene_bound) return RSF_ERROR_NOT_READY;
         if (!initialize(context, pass) || !observer || execution_thread != GetCurrentThreadId()) return RSF_ERROR_NOT_READY;
@@ -253,17 +257,32 @@ struct Host {
         const bool configure_only = (pass.flags & RSF_GAME_RENDER_RECONFIGURE) != 0;
         if (configure_only && !pass.camera_valid) return RSF_ERROR_NOT_READY;
         rsf_frame_record record{}; capture_inputs(context, pass, record);
+        if (auxiliary && rsf_input_dump_wants(&record)) for (uint32_t i = 0; i < auxiliary->surface_count; ++i) {
+            const auto& a = auxiliary->surfaces[i];
+            if (a.source_name) (void)rsf_input_dump_texture_record(context, &record, a.source_name,
+                "Original auxiliary before reconstruction", a.texture, RSF_DUMP_VIEW_RAW, 1);
+        }
         int32_t result = RSF_ERROR_NOT_READY;
         if (settings.sr_enabled) {
             if (running && present_result == RSF_DLSS_OK && !configure_only) {
                 auto evaluated_pass = pass;
                 if (reset) evaluated_pass.flags |= RSF_GAME_RENDER_RESET;
-                result = rsf_native_sr_evaluate(context, &evaluated_pass);
+                if (auxiliary && !auxiliaries) auxiliaries = std::make_unique<AuxiliarySurfaces>();
+                const bool prepared = !auxiliary || auxiliaries->prepare(context, evaluated_pass, *auxiliary, log, this);
+                result = prepared ? rsf_native_sr_evaluate(context, &evaluated_pass) : RSF_ERROR_NOT_READY;
+                if (!result && auxiliary && !auxiliaries->commit()) result = RSF_ERROR_NOT_READY;
+                if (result && auxiliary) (void)auxiliaries->restore();
                 if (!result) { reset = false; ++evaluated; } else { reset = true; ++refused; }
             } else { result = configure_only ? RSF_ERROR_NOT_READY : running ? present_result : last_result; reset = true; }
         } else reset = true;
         if (rsf_input_dump_wants(&record)) {
             if (!result) (void)rsf_input_dump_texture_record(context, &record, "sr_reinserted", "Reconstructed linear colour before native HDR", pass.color_output, RSF_DUMP_VIEW_HDR, 1);
+            if (!result && auxiliary) for (uint32_t i = 0; i < auxiliary->surface_count; ++i) {
+                const auto& a = auxiliary->surfaces[i];
+                if (a.name) (void)rsf_input_dump_texture_record(context, &record, a.name,
+                    "Reconstructed auxiliary before native post-processing", a.texture,
+                    a.kind == RSF_D3D11_AUXILIARY_DEPTH_STENCIL ? RSF_DUMP_VIEW_DEPTH : RSF_DUMP_VIEW_RAW, 1);
+            }
             rsf_input_dump_result(&record, "sr", backend, result);
             rsf_input_dump_pass(context, &pass, 0);
             capture_record = record; capture_view = pass.view_key; capture_pending = true;
@@ -367,6 +386,32 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* user,
     if (!self->initialize(context.Get(), lease)) return RSF_ERROR_NOT_READY;
     Host::log(self, "D3D11 host presentation/window bound; overlay available before scene admission, SR SDK not started.");
     return RSF_OK;
+}
+catch (...) { return RSF_ERROR_NOT_READY; }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* user, void* context,
+    const rsf_d3d11_auxiliary_pass* request) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !context || !request || request->struct_size < sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (!request->pass || request->pass->struct_size < sizeof(*request->pass) || request->pass->role != RSF_GAME_RENDER_SR ||
+        !request->pass->camera_valid || !request->pass->swapchain || (request->pass->flags & RSF_GAME_RENDER_RECONFIGURE) ||
+        !request->surface_count || request->surface_count > 8 || !request->surfaces || request->pass->session_id != self->upstream.session_id)
+        return RSF_ERROR_INVALID_ARGUMENT;
+    for (uint32_t i = 0; i < request->surface_count; ++i)
+        if (request->surfaces[i].struct_size < sizeof(rsf_d3d11_auxiliary_surface)) return RSF_ERROR_INVALID_ARGUMENT;
+    return self->process(static_cast<ID3D11DeviceContext*>(context), *request->pass, request);
+}
+catch (...) { return RSF_ERROR_NOT_READY; }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* user, const rsf_d3d11_auxiliary_scope* scope) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !scope || scope->struct_size < sizeof(*scope)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (scope->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
+    if (!self->auxiliaries || !self->auxiliaries->matches(*scope)) return RSF_ERROR_NOT_READY;
+    return self->auxiliaries->restore() ? RSF_OK : RSF_ERROR_NOT_READY;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, void* raw_context,

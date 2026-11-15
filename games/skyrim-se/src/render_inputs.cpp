@@ -117,14 +117,14 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
     pass.flags |= RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG;
     pass.render_rect[2] = int32_t(render_width); pass.render_rect[3] = int32_t(render_height);
     pass.output_rect[2] = int32_t(width); pass.output_rect[3] = int32_t(height);
-    // Observe the native scaled path before admitting reconstruction. Depth and
-    // post-processing auxiliaries must be repaired before full-resolution HDR.
-    if (render_width != width || render_height != height) pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
     pass.color_input = pass.color_output = color.Get(); pass.depth = depth.Get(); pass.motion = motion.Get();
     pass.swapchain = chain.Get(); pass.camera_valid = 1;
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1; pass.motion_camera_included = 1;
-    const auto result = host.process_upscale(host.user, context.Get(), &pass);
+    const bool reduced = render_width != width || render_height != height;
+    bool reconstructed = false;
+    if (reduced) reconstructed = reconstruct_auxiliaries(context.Get(), pass, host);
+    else reconstructed = host.process_upscale(host.user, context.Get(), &pass) == RSF_OK;
     observe_auxiliaries(context.Get(), pass, host);
-    return result == RSF_OK;
+    return reconstructed;
 }
 }

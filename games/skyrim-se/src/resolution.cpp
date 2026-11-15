@@ -18,6 +18,10 @@ std::atomic<bool> owned{};
 uint32_t render_width{}, render_height{}, surface_width{}, surface_height{};
 float saved_ratios[4]{}, last_ratios[2]{};
 uint32_t saved_lock{};
+bool output_active{};
+float producer_ratios[4]{};
+thread_local bool have_per_frame_flags{};
+thread_local uint8_t per_frame_flags{};
 float halton(uint32_t index, uint32_t base) {
     float value = 0, factor = 1;
     while (index) { factor /= float(base); value += factor * float(index % base); index /= base; }
@@ -31,11 +35,38 @@ void reset_native_history(uintptr_t base) {
 }
 }
 bool resolution_owned() { return owned.load(std::memory_order_acquire); }
+void record_per_frame_flags(uint8_t flags) { per_frame_flags = flags; have_per_frame_flags = true; }
+bool output_resolution_ready() { return resolution_owned() && !output_active && have_per_frame_flags; }
+bool enter_output_resolution() {
+    if (!output_resolution_ready()) return false;
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    auto* ratios = reinterpret_cast<float*>(base + 0x33364b4);
+    std::memcpy(producer_ratios, ratios, sizeof(producer_ratios));
+    for (unsigned i = 0; i < 4; ++i) ratios[i] = 1;
+    *reinterpret_cast<unsigned char*>(base + 0x3336400) = 1;
+    using Upload = void (*)(void*, uint8_t);
+    reinterpret_cast<Upload>(base + 0x100ae80)(reinterpret_cast<void*>(base + 0x3331f40), per_frame_flags);
+    using Viewport = uintptr_t (*)(void*, uint32_t, uint32_t, uint8_t);
+    reinterpret_cast<Viewport>(base + 0x1009960)(reinterpret_cast<void*>(base + 0x3331f40), surface_width, surface_height, 0);
+    output_active = true; return true;
+}
+void leave_output_resolution() {
+    if (!output_active) return;
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    std::memcpy(reinterpret_cast<void*>(base + 0x33364b4), producer_ratios, sizeof(producer_ratios));
+    *reinterpret_cast<unsigned char*>(base + 0x3336400) = 1;
+    using Upload = void (*)(void*, uint8_t);
+    reinterpret_cast<Upload>(base + 0x100ae80)(reinterpret_cast<void*>(base + 0x3331f40), per_frame_flags);
+    using Viewport = uintptr_t (*)(void*, uint32_t, uint32_t, uint8_t);
+    reinterpret_cast<Viewport>(base + 0x1009960)(reinterpret_cast<void*>(base + 0x3331f40), render_width, render_height, 0);
+    output_active = false;
+}
 bool resolution_extent(uint32_t width, uint32_t height, uint32_t& rw, uint32_t& rh) {
     if (!resolution_owned() || surface_width != width || surface_height != height) return false;
     rw = render_width; rh = render_height; return true;
 }
 void configure_resolution(void* pointer, const rsf_game_host_services& host) {
+    if (output_active) return;
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
     auto* state = static_cast<unsigned char*>(pointer);
     if (uintptr_t(pointer) != base + 0x33363a0) return;
@@ -86,7 +117,7 @@ void configure_resolution(void* pointer, const rsf_game_host_services& host) {
         reset_native_history(base);
         if (host.log) {
             char message[220]{}; std::snprintf(message, sizeof(message),
-                "Skyrim native resolution plan %ux%u -> %ux%u ratios=%g,%g phases=%u saved_lock=%u; reduced SR admission awaits auxiliary-buffer repair",
+                "Skyrim native resolution plan %ux%u -> %ux%u ratios=%g,%g phases=%u saved_lock=%u; native auxiliary handoff required for reduced SR",
                 render_width, render_height, width, height, double(ratios[0]), double(ratios[1]), phases, saved_lock);
             host.log(host.user, message);
         }

@@ -1,6 +1,20 @@
 # Implementation tracker
 
-## Skyrim SE experimental native-resolution SR, 15 November 2026
+## Skyrim SE experimental reduced-resolution SR, 15 November 2026
+
+Reduced DLSS now runs through a transactional auxiliary handoff. Depth/stencil,
+normals and motion are reconstructed for native postprocessing and restored at
+RendererEnd; underwater-mask retirement preserves the native DOF clear. The
+reported quality-change zoom came from stale native per-frame resolution constants.
+The adapter now explicitly refreshes those constants and the viewport at the
+output/producer handoffs. Same-frame SR/final captures at Quality and Performance
+preserve full-view landmark placement at 1920x1080. Off restores ratios, lock and
+native TAA. Focused Release builds and the auxiliary WARP fixture passed; no full
+suite was rerun. Active water, shader motion coverage, other SR backends, FG,
+latency and CS/ENB remain unfinished. See the latest
+[research correction](research/skyrim-se-integration.md#reduced-sr-auxiliary-handoff-and-zoom-correction-15-november-2026).
+
+The following records the preceding native-only checkpoint and its failures.
 
 Native captures now establish the auxiliary allocations and show that the DOF
 average-depth input aliases a 1x1 mip of the eleven-mip SAO texture. Camera-Z
