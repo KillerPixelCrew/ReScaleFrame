@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstddef>
 #include <stdexcept>
+#include "../runtime/orchestrator/src/native_sr_split_lease.h"
 
 namespace {
 int failures = 0;
@@ -44,6 +45,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk*, void*, const rsf_srvk_frame*, void** co
 }
 int32_t rsf_fsr4vk_destroy(rsf_fsr4vk*) { return provider_result; }
 void rsf_fsr4vk_retire_commands(rsf_fsr4vk*,void*) {}
+int32_t rsf_fsr4vk_submitted(rsf_fsr4vk*,void*) { return provider_result; }
 #endif
 
 #if defined(RSF_TEST_SPLIT_STUB) || defined(RSF_TEST_SPLIT_DISABLED)
@@ -51,6 +53,20 @@ void rsf_fsr4vk_retire_commands(rsf_fsr4vk*,void*) {}
 #endif
 
 int main() {
+    rsf::sr::SplitLease lease;
+    void* producer = reinterpret_cast<void*>(10);
+    void* resumed = reinterpret_cast<void*>(11);
+    lease.begin(producer);
+    check(!lease.pending() && !lease.submitted(producer), "legacy submission contract unchanged");
+    lease.tracked = true; lease.begin(producer); lease.continuation = resumed;
+    check(lease.pending(), "recorded work retains owner before submission");
+    check(!lease.submitted(resumed) && lease.pending(), "out of order continuation refused");
+    check(!lease.submitted(reinterpret_cast<void*>(12)), "unrelated submission cannot release lease");
+    check(lease.submitted(producer) && lease.pending(), "producer alone cannot release continuation");
+    check(!lease.submitted(producer), "duplicate notification refused");
+    check(lease.submitted(resumed) && !lease.pending(), "both successful submissions release CPU admission");
+    lease.begin(producer);
+    check(lease.pending(), "failed split retains partially recorded producer");
     auto* fake = reinterpret_cast<rsf_fsr4vk*>(1);
     void* commands = reinterpret_cast<void*>(1);
     rsf_srvk_setup setup{};
@@ -84,6 +100,8 @@ int main() {
     uint32_t width = 9, height = 9;
     check(rsf_srvk_fsr4_plan(nullptr, &width, &height) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !width && !height, "invalid plan clears outputs");
     check(rsf_srvk_fsr4_destroy(nullptr) == 0, "null destroy");
+    check(rsf_srvk_fsr4_submitted(nullptr, commands) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "notification owner required");
+    check(rsf_srvk_fsr4_submitted(fake, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "notification commands required");
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
@@ -110,17 +128,22 @@ int main() {
     check(rsf_srvk_fsr4_plan(fake, &width, &height) == RSF_BACKEND_ERROR_NOT_COMPILED && !width && !height, "disabled plan");
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, &continuation) == RSF_BACKEND_ERROR_NOT_COMPILED && continuation == commands, "disabled evaluation leaves original recording");
     check(rsf_srvk_fsr4_destroy(fake) == RSF_BACKEND_ERROR_NOT_COMPILED, "disabled checked destroy");
+    check(rsf_srvk_fsr4_submitted(fake, commands) == RSF_BACKEND_ERROR_NOT_COMPILED, "disabled notification is honest");
 #elif defined(RSF_TEST_SPLIT_STUB)
     check(!creates && !evaluations, "invalid calls never reached provider");
     // Forward-compatible size extensions keep the original prefix and version.
     setup.struct_size += 8; handoff.struct_size += 8;
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0 && owner == &instance &&
         forwarded_setup == &setup && forwarded_handoff == &handoff, "compiled route forwards the actual setup and callback lease");
+    handoff.abi_version = RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
+    check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0, "tracked ABI routes to actual provider");
+    check(rsf_srvk_fsr4_submitted(owner, commands) == 0, "notification reaches provider");
     check(rsf_srvk_fsr4_plan(owner, &width, &height) == 0 && width == 320 && height == 180, "provider plan");
     frame.struct_size = uint32_t(offsetof(rsf_srvk_frame, bias_current_color));
     check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == 0, "old ABI 2 frame prefix remains accepted");
     frame.struct_size = sizeof(frame);
     provider_result = -71;
+    check(rsf_srvk_fsr4_submitted(owner, commands) == -71, "notification preserves native errors");
     check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == -71 && continuation == reinterpret_cast<void*>(2), "SDK failure preserves continuation and native error");
     check(rsf_srvk_fsr4_destroy(owner) == -71, "checked destroy failure preserves owner");
     owner = nullptr;

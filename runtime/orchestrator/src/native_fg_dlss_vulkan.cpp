@@ -479,7 +479,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
     slot.prepare_commands = commands; slot.hudless_commands = nullptr;
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, prepare, record.session_id, record.frame_id, &call);
-    if (result == RSF_BACKEND_OK) { self->latest = record.frame_id; self->present_capture.remember(slot.record, self->count); }
+    if (result == RSF_BACKEND_OK) { self->latest = record.frame_id; self->present_capture.remember(slot.record, self->count, self->status, self->enabled); }
     self->status.presentation.result = result; return result;
 #else
     return RSF_BACKEND_ERROR_NOT_COMPILED;
@@ -565,6 +565,7 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     }
     // SDK proxy operations may wait for their CPU presenter. Its real WSI
     // operations take the LL2 broker internally, not around this outer call.
+    if (valid) self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
     const auto result = self->present(static_cast<VkQueue>(self->setup.queues[0]), &info);
     if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
         const auto device = static_cast<VkDevice>(self->setup.graphics.device);

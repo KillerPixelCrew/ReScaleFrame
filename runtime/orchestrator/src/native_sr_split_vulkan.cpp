@@ -22,7 +22,7 @@ extern "C" int32_t rsf_srvk_fsr4_create(const rsf_srvk_setup* setup,
     *owner = nullptr;
     if (!setup || setup->struct_size < sizeof(*setup) || !handoff || handoff->struct_size < sizeof(*handoff))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION || handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION)
+    if (setup->abi_version != RSF_SRVK_ABI_VERSION || (handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION && handoff->abi_version != RSF_SRVK_SPLIT_TRACKED_ABI_VERSION))
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (setup->backend != RSF_SR_FSR4) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (setup->quality > 4 || !setup->instance || !setup->physical_device || !setup->device ||
@@ -90,3 +90,12 @@ extern "C" void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk* self,void* commands) {
     (void)self; (void)commands;
 #endif
 }
+
+extern "C" int32_t rsf_srvk_fsr4_submitted(rsf_fsr4vk* owner, void* commands) try {
+    if (!owner || !commands) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    return public_result(rsf_fsr4vk_submitted(owner, commands));
+#else
+    return RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
