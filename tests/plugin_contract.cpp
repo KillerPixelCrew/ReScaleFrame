@@ -17,6 +17,9 @@ struct Fixture {
 };
 
 constexpr Fixture fixtures[] = {
+    {L"skyrim-se", "skyrim-se", "SkyrimSE.exe",
+     "846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f",
+     RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
     {L"ac7", "ac7", "Ace7Game.exe",
      "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
      RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
@@ -147,7 +150,8 @@ int wmain(int argc, wchar_t* argv[])
     passed &= check(api.detect(&probe) == RSF_GAME_UNKNOWN, "A missing executable name must not match.");
     probe.executable_name_utf8 = fixture->executable;
 
-    if (fixture->prepare_result == RSF_ERROR_NOT_READY || std::strcmp(fixture->id, "project-wingman") == 0) {
+    if (fixture->prepare_result == RSF_ERROR_NOT_READY || std::strcmp(fixture->id, "project-wingman") == 0 ||
+        std::strcmp(fixture->id, "skyrim-se") == 0) {
         passed &= check(api.hooks.prepare(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.start(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.quiesce(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&

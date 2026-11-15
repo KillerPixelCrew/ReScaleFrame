@@ -1,5 +1,7 @@
 # Rendering research
 
+- [Skyrim SE integration](skyrim-se-integration.md): 1.7.104 fingerprint, current Community Shaders source leads and standalone coexistence requirements.
+
 
 Use [current status](../current-status.md) for implemented/released features and acceptance limits.
 These notes are dated evidence and development history. Older pending claims do not override later

@@ -1,0 +1,97 @@
+{
+  "game": {
+    "id": "skyrim-se",
+    "title": "Skyrim Special Edition",
+    "steam_appid": 489830,
+    "build": "24914197",
+    "file_version": "1.7.104.0",
+    "executable": "SkyrimSE.exe",
+    "sha256": "846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f",
+    "bytes": 37910440,
+    "pe_machine": "0x8664",
+    "image_base": "0x140000000",
+    "examined": "2026-11-15"
+  },
+  "engine": {
+    "family": "Creation Engine",
+    "version": null,
+    "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
+  },
+  "plugin": {
+    "status": "exact-build pass-through native jitter observer; SR/FG/latency unimplemented",
+    "rendering_ready": false,
+    "built_windows_msvc": true,
+    "contract_tested": true,
+    "hooks_implemented": true,
+    "game_tested": true,
+    "device_tested": false,
+    "game_test_scope": "Bounded vanilla startup: runtime session and sixteen readable native jitter samples only; no visual gameplay acceptance",
+    "automatic_loading_implemented": true,
+    "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
+  },
+  "requirements": {
+    "skse_dependency": false,
+    "community_shaders_compatibility": true,
+    "enb_compatibility": true,
+    "disable_cs_upscaling_and_fg_when_rsf_active": true
+  },
+  "reference_revisions": {
+    "community_shaders": "33d7896147b54ca72d1ee5ca938bb85739593167",
+    "cs_commonlib": "70c1acd5261210982bd52f6d4468a082fe04d798",
+    "latest_commonlib": "909517ba2416bc530abf1d2794b319664850e234",
+    "independent_commonlib": "add17c090cfa312d370bfcdd55d2eb989d086fec"
+  },
+  "research": "../../docs/research/skyrim-se-integration.md",
+  "native_preflight": {
+    "status": "Jitter root is installed/game-observed; input call statically matched; GPU pass leases unimplemented",
+    "table_sha256": "a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce",
+    "jitter_call_rva": "0x1009e63",
+    "jitter_target_rva": "0x101e360",
+    "input_dispatch_call_rva": "0xcf966b",
+    "input_dispatch_target_rva": "0xcfa650",
+    "render_target_manager_candidate_rva": "0x3335600",
+    "unresolved": [
+      "post-processing",
+      "UI boundary",
+      "colour/depth/motion leases",
+      "shader replacement roots",
+      "CS ownership handover",
+      "ENB path"
+    ]
+  },
+  "shader_corpus": {
+    "bsa_sha256": "fd1ba630f443353ed21ed4ca0380968f9c7091c8434518ea3cc79bc6d38c18e7",
+    "fxp_sha256": "72cfc73eb0938d5949f0b3a8683722a33b671a34b41b750ba138de8d154c5fbc",
+    "bounded_dxbc_count": 16044,
+    "stages": {
+      "vs": 3390,
+      "ps": 12635,
+      "cs": 19
+    },
+    "status": "Nine native family/stage/descriptor groups matched from package initialization and shader reader instructions; runtime draw coverage unverified",
+    "native_classified_containers": 15811
+  },
+  "community_shaders_release": {
+    "version": "1.9.1",
+    "dll_sha256": "10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e657511097827",
+    "pdb_guid": "240F7D4A-CB53-466A-B55C-6BCF3E723338",
+    "pdb_age": 1,
+    "status": "matching symbols and selected instruction operands inspected; no live handover implemented"
+  },
+  "validation": {
+    "date": "2026-11-15",
+    "msvc": "14.52.37025",
+    "configuration": "Release",
+    "native_gate": "222 tests reached; two existing Anomaly FSR3 FG fixture failures reproduced; full gate not green",
+    "focused": "Skyrim ABI and both XInput carrier contracts passed",
+    "rust": "formatting and Clippy passed; no Rust behavior changed",
+    "readiness": false
+  },
+  "shader_producer_rvas": {
+    "vertex_reader": "0x100fc10",
+    "pixel_reader": "0x100ffe0",
+    "compute_reader": "0x10102d0",
+    "packed_family_loader": "0x1578f50",
+    "package_initialization": "0x14ea2d0"
+  }
+}

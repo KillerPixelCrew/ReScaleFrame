@@ -25,7 +25,7 @@ int main(int argc, char** argv)
     if (!original) {
         const auto error = GetLastError();
         std::fprintf(stderr, "System XInput 1.3 unavailable: Win32 error %lu; carrier exports checked.\n", error);
-        FreeLibrary(carrier);
+        // Keep the carrier mapped: its generic startup worker may still be running.
         return error == ERROR_MOD_NOT_FOUND || error == ERROR_FILE_NOT_FOUND ? 77 : 1;
     }
     using GetState = DWORD (WINAPI*)(DWORD, XINPUT_STATE*);
@@ -39,7 +39,6 @@ int main(int argc, char** argv)
     // An invalid user index tests real forwarding without reading or changing any controller.
     if (state(0xffffffffu, &input) != native_state(0xffffffffu, &input) ||
         vibration(0xffffffffu, &output) != native_vibration(0xffffffffu, &output)) return 1;
-    FreeLibrary(carrier);
-    std::puts("PASS: Wingman XInput names/ordinals and native state/vibration forwarding.");
+    std::puts("PASS: XInput names/ordinals and native state/vibration forwarding.");
     return 0;
 }
