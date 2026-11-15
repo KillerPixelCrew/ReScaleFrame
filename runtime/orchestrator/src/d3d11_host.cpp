@@ -37,6 +37,7 @@ struct Host {
     std::string streamline, fidelityfx, xess, captures;
     rsf_d3d11_host_setup setup{};
     rsf_render_settings desired{sizeof(rsf_render_settings), RSF_RENDER_FRONTEND_ABI_VERSION};
+    rsf_game_render_config planned{sizeof(rsf_game_render_config)};
     rsf_overlay_api overlay{sizeof(rsf_overlay_api), RSF_OVERLAY_API_VERSION};
     rsf_overlay_sr_report report{sizeof(rsf_overlay_sr_report)};
     ComPtr<IDXGISwapChain> chain;
@@ -76,8 +77,9 @@ struct Host {
     static int config(void* user, rsf_game_render_config* out) {
         if (!out || out->struct_size < sizeof(*out)) return 0;
         auto& self = *static_cast<Host*>(user); std::lock_guard lock(self.state);
-        *out = {sizeof(*out), self.desired.sr_enabled, self.report.output_width, self.report.output_height,
-            self.report.render_width, self.report.render_height}; return 1;
+        *out = self.planned;
+        out->enabled = out->enabled && self.desired.sr_enabled && self.active.load(std::memory_order_acquire);
+        return 1;
     }
     static void feedback(void* user, const rsf_game_render_feedback* event) {
         auto& self = *static_cast<Host*>(user);
@@ -180,19 +182,7 @@ struct Host {
         (void)rsf_input_dump_texture_record(context, &record, "native_depth", "Native scene device depth", pass.depth, RSF_DUMP_VIEW_DEPTH, 1);
         (void)rsf_input_dump_texture_record(context, &record, "native_motion", "Native motion in adapter-declared encoding", pass.motion, RSF_DUMP_VIEW_DENSE_MOTION, 8);
     }
-    int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
-        if (!active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
-        if (!initialize(context, pass) || !observer || execution_thread != GetCurrentThreadId()) return RSF_ERROR_NOT_READY;
-        ComPtr<ID3D11Device> current; context->GetDevice(&current);
-        if (current.Get() != device.Get() || pass.swapchain != chain.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
-            return RSF_ERROR_NOT_READY;
-        rsf_render_settings settings{}; { std::lock_guard lock(state); settings = desired; }
-        const auto generation = requested_generation.load();
-        if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
-        rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
-        rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
-        rsf_frame_record record{}; capture_inputs(context, pass, record);
-        int32_t result = RSF_ERROR_NOT_READY;
+    void prepare_pipeline(const rsf_game_render_pass& pass, const rsf_render_settings& settings) {
         if (settings.sr_enabled) {
             if (!running && !attempted) {
                 attempted = true;
@@ -226,11 +216,41 @@ struct Host {
                 }
                 const auto sharpen = rsf::render_settings::sharpening(settings);
                 (void)rsf_dlss_pipeline_set_sharpening(&sharpen);
+            }
+        }
+        rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
+        const bool ready = running && rsf_dlss_pipeline_get_status(&status) == RSF_DLSS_PIPELINE_OK &&
+            status.running && status.output_width == pass.camera.output_width && status.output_height == pass.camera.output_height &&
+            quality == settings.sr_quality && backend == settings.sr_backend && present_result == RSF_DLSS_OK;
+        std::lock_guard lock(state);
+        planned = {sizeof(planned), uint32_t(ready && settings.sr_enabled), pass.camera.output_width, pass.camera.output_height,
+            ready ? status.render_width : pass.camera.output_width, ready ? status.render_height : pass.camera.output_height};
+    }
+    int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
+        if (!active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
+        // Bind ownership from a verified scene lease, never from an early loading callback.
+        if ((pass.flags & RSF_GAME_RENDER_RECONFIGURE) && !configured) return RSF_ERROR_NOT_READY;
+        if (!initialize(context, pass) || !observer || execution_thread != GetCurrentThreadId()) return RSF_ERROR_NOT_READY;
+        ComPtr<ID3D11Device> current; context->GetDevice(&current);
+        if (current.Get() != device.Get() || pass.swapchain != chain.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+            return RSF_ERROR_NOT_READY;
+        rsf_render_settings settings{}; { std::lock_guard lock(state); settings = desired; }
+        const auto generation = requested_generation.load();
+        if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
+        rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
+        rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
+        prepare_pipeline(pass, settings);
+        const bool configure_only = (pass.flags & RSF_GAME_RENDER_RECONFIGURE) != 0;
+        if (configure_only && !pass.camera_valid) return RSF_ERROR_NOT_READY;
+        rsf_frame_record record{}; capture_inputs(context, pass, record);
+        int32_t result = RSF_ERROR_NOT_READY;
+        if (settings.sr_enabled) {
+            if (running && present_result == RSF_DLSS_OK && !configure_only) {
                 auto evaluated_pass = pass;
                 if (reset) evaluated_pass.flags |= RSF_GAME_RENDER_RESET;
                 result = rsf_native_sr_evaluate(context, &evaluated_pass);
                 if (!result) { reset = false; ++evaluated; } else { reset = true; ++refused; }
-            } else { result = running ? present_result : last_result; reset = true; }
+            } else { result = configure_only ? RSF_ERROR_NOT_READY : running ? present_result : last_result; reset = true; }
         } else reset = true;
         if (rsf_input_dump_wants(&record)) {
             if (!result) (void)rsf_input_dump_texture_record(context, &record, "sr_reinserted", "Reconstructed linear colour before native HDR", pass.color_output, RSF_DUMP_VIEW_HDR, 1);
@@ -247,7 +267,8 @@ struct Host {
             report.last_result = result; report.quality_locked = setup.quality_choices == 1;
             report.inputs = RSF_OVERLAY_SR_INPUT_COLOR | RSF_OVERLAY_SR_INPUT_DEPTH | RSF_OVERLAY_SR_INPUT_MOTION | RSF_OVERLAY_SR_INPUT_JITTER;
             report.jitter_pixels[0] = pass.camera.jitter_pixels[0]; report.jitter_pixels[1] = pass.camera.jitter_pixels[1];
-            if (result) std::snprintf(report.reason, sizeof(report.reason), "SR result %d; native temporal processing retained", result);
+            if (configure_only) std::snprintf(report.reason, sizeof(report.reason), "Renderer preparation only; native temporal processing retained");
+            else if (result) std::snprintf(report.reason, sizeof(report.reason), "SR result %d; native temporal processing retained", result);
         }
         if (result != last_result || logged < 3) {
             ++logged;
@@ -261,7 +282,9 @@ struct Host {
 std::mutex creation;
 std::atomic<Host*> owner{};
 int32_t process(void* user, void* context, const rsf_game_render_pass* pass) noexcept try {
-    if (!context || !pass || pass->struct_size < sizeof(*pass) || !pass->camera_valid || !pass->swapchain) return RSF_ERROR_INVALID_ARGUMENT;
+    if (!context || !pass || pass->struct_size < sizeof(*pass) || pass->role != RSF_GAME_RENDER_SR || !pass->swapchain ||
+        (!pass->camera_valid && !(pass->flags & RSF_GAME_RENDER_RECONFIGURE)) ||
+        !pass->camera.output_width || !pass->camera.output_height) return RSF_ERROR_INVALID_ARGUMENT;
     return static_cast<Host*>(user)->process(static_cast<ID3D11DeviceContext*>(context), *pass);
 } catch (...) { return RSF_ERROR_NOT_READY; }
 }

@@ -38,6 +38,14 @@ int main() {
     check(cpu_calls == 1 && logs == 1, "Callbacks forwarded exactly once");
     rsf_game_render_config config{sizeof(config)};
     check(host.render_config(host.user, &config) == 1 && !config.enabled && !config.output_width, "Cold config does not invent graphics dimensions");
+    rsf_game_render_pass early{}; early.struct_size = sizeof(early); early.role = RSF_GAME_RENDER_SR;
+    early.flags = RSF_GAME_RENDER_RECONFIGURE; early.swapchain = reinterpret_cast<void*>(uintptr_t(1));
+    early.camera.output_width = early.camera.output_height = 64;
+    check(rsf_d3d11_host_set_active(host.user, 1) == RSF_OK, "Activate for early planning refusal");
+    check(host.process_upscale(host.user, reinterpret_cast<void*>(uintptr_t(1)), &early) == RSF_ERROR_NOT_READY,
+        "Early loading-style planning must not consume a graphics context or bind an execution owner");
+    check(host.render_config(host.user, &config) == 1 && !config.enabled && !config.output_width,
+        "Refused cold planning publishes no invented size");
     check(host.process_upscale(host.user, nullptr, nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null graphics lease refused");
     check(rsf_d3d11_host_request_capture(nullptr) == RSF_OK, "Any-thread capture request does no graphics work");
     return errors ? 1 : 0;

@@ -124,8 +124,10 @@ typedef struct rsf_game_render_pass {
 #define RSF_GAME_RENDER_TRANSLUCENCY_LAYER 8u
 /* This pass has usable SR inputs but cannot establish generation eligibility. */
 #define RSF_GAME_RENDER_NO_FG 16u
-/* The render or output configuration is changing; the pass carries no usable frame. Jitter lives in
-   camera.jitter_pixels. */
+/* The render or output configuration is changing; do not evaluate or accept a reconstructed frame.
+   A graphics-owner process_upscale callback may prepare its backend and publish render_config,
+   while returning nonzero to retain native evaluation. Optional valid inputs are diagnostic only.
+   Jitter lives in camera.jitter_pixels. */
 #define RSF_GAME_RENDER_RECONFIGURE 0x80000000u
 typedef struct rsf_game_render_config {
     uint32_t struct_size;

@@ -747,3 +747,105 @@ Clippy passed separately because the CTest failure stops the gate first.
 No Rust behavior was changed. Receipts: `verify-native-sr-final.log` and
 `clippy-native-sr-final.log`. This is a development checkpoint, not a release or
 completed Skyrim integration.
+
+### Native raster size production and restoration
+
+Question: can backend-requested render dimensions control actual native raster
+production, rather than cropping or resizing a completed full-resolution image?
+The current CS source supplies useful leads, but its lock assignments depend on
+its other hooks. The independent MIT table did not map the relevant private
+updater/camera-update IDs. Native global references and call-chain matching were
+therefore used instead of guessed Address Library relocations.
+
+Main render entry `0x6565B0 + 0x2D` calls `0x101E130` with State. Bytes at
+`0x6565DD`: `E8 4E 7B 9C 00`. This matches CS's original-DRS bypass lead.
+The function advances State previous ratios +0x11C/+0x120 and may adjust current
+ratios +0x114/+0x118 from native timing flags. The adapter now guards and detours
+it, bypassing only while RSF owns the ratios, with entry bytes
+`83 B9 28 01 00 00 00 48 8B D1 0F 85 7F 01 00 00`.
+Original execution resumes after ownership release; no permanent NOP or game
+INI override is installed.
+
+`0x1009960` derives the native viewport from the active target dimensions and
+those ratios when State +0x128 is zero. `0x100AE80` uploads a 720-byte per-frame
+buffer: c43 holds current/previous ratios; c44 holds reciprocals and width
+clamps. When locked, it supplies unit ratios. These are static producer matches,
+not a new raw constant-buffer capture. The important correction is `0x101E2D0`:
+the native "lock" is a nesting counter. False increments it; true decrements
+when nonzero. Treating it as a boolean silently changes scoped native behavior.
+The matched functions and consumers have saved IDA names/comments.
+
+The shared D3D11 host now separates backend preparation from evaluation.
+A graphics-owner RECONFIGURE callback may apply quality/backend changes and
+publish planned render/output dimensions through render_config; it returns
+nonzero and never claims a reconstructed output. A verified scene lease binds
+the initial device/thread. The adapter requests subsequent preparation at its
+native jitter boundary, before geometry. It applies the backend's actual integer
+sizes, not a hard-coded quality ratio, carries previous ratios, and supplies
+Halton pixel jitter using the real render extent. The render-only Present
+counter selects phase; it is not an input/source identifier. Native updater
+suppression, state layout, jitter and restoration remain inside the adapter.
+
+The first early-preparation attempt initialized the overlay on the loading
+render worker. The process stalled before the first main pre-HDR scene. An
+installed WinDbg `cdb -pv` noninvasive snapshot found main-thread waiting through
+`0x11B2671`/`0x651353`, and loading worker 15088 inside native SetWindowPos at
+`0x1009941`/`0x1009DFB`. It does not establish an NGX or driver deadlock. Evidence
+is `resolution-early-init-stacks.log`, game log and module inventory; deployment
+`20261115-142307-sr-fallback/`. The test process was force-terminated after its
+snapshot and failed close request. Its exact temporary INI was removed. Cold
+RECONFIGURE requests are now refused before touching the graphics context, and
+adapter preparation waits for the verified scene execution thread. A regression
+fixture checks this refusal without a usable graphics pointer. No debugger was
+installed and no desktop control was used.
+
+The next probe set lock=1 at jitter, following the isolated CS source assignment.
+That was wrong for the vanilla path: requested dimensions changed, but the actual
+pre-HDR viewport remained 1711x1048 and raw depth contained geometry outside the
+declared reduced rectangle. This failed experiment is retained as
+`resolution-lock-one-game.log`, `resolution-first-depth-coverage.json` and
+capture `scene-20261115-142842-042-11237718-23060-1`. The probe manifest is partial
+because no reduced SR evaluation occurred. Reference code plus changed ratios
+was not proof of reduced rendering.
+
+With the native primary scope unlocked, a bounded Quality-mode run produced
+1141x699 from DLSS's plan for a 1711x1048 output. State ratios were
+0.66686147/0.66698474 and phase count 17. Actual pre-HDR viewport was 1141x699,
+lock zero, while allocation descriptors remained full size. Raw depth contained
+geometry throughout the active rectangle and clear depth everywhere to its
+right and below. The native colour preview was inspected and shows the complete
+scene inside that rectangle, with unused allocation outside. This establishes
+native raster production at the lower extent, not vendor SR at that extent.
+Capture `scene-20261115-143322-259-11517937-2804-1`, native frame 2121, carries
+source_frame_id=0, PRIMARY|NO_FG|RECONFIGURE and an explicit SR refusal (-3).
+Skyrim's native temporal/spatial path completed the frame. Evidence:
+`resolution-unlocked-game.log`, module inventory, state snapshots and
+`resolution-unlocked-depth-coverage.json`; deployment `20261115-143235-sr-fallback/`.
+
+Live native-quality/off restored current and previous ratios to 1 and lock to 0.
+On resumed native-resolution DLSS, with complete actual-Present capture
+`scene-20261115-143559-729-11675406-2804-2` at native render 11357. The final game
+closed gracefully, its temporary custom INI was removed, and saved RSF settings
+were returned to SR on/native quality. Quiesce keeps the native callback enabled
+until ratio restoration has drained; no control-thread graphics work was added.
+Forced quiesce during a stopped render loop has not been game-tested.
+
+Reduced modes are currently experimental input probes in the shared quality
+control. They retain native evaluation and do not claim an SR output. Before SR
+admission, full-resolution native depth/stencil and post-processing auxiliaries
+must match the reconstructed colour, with the native camera/viewport constants
+updated at that boundary. Face-generation, precipitation and other auxiliary
+view exceptions still need native matching. Moving scenes and all requested
+shader repairs, FG, latency and CS/ENB handover remain incomplete.
+
+Resolution-owner validation: VS2026 Release gate rebuilt the native integrations
+and reached 226 discovered checks: 209 passed, 15 skipped, and the same
+two Anomaly FSR3 FG device fixtures failed. Fourteen skips are the default opt-ins;
+the additional DLSS-G SR-off fixture could not obtain foreground ownership, so
+its activity acceptance was not run. The full gate remains failed and
+their cause remains unresolved. The expanded cold-planning host contract,
+Skyrim plugin/camera and existing capture/overlay/reinsertion checks passed.
+Formatting and Clippy passed separately. Logs: `verify-resolution-owner.log`
+and `clippy-resolution-owner.log`. No Rust behavior changed. Auxiliary loading
+views, device/thread recreation and complete host retirement are not accepted
+by this bounded raster test.
