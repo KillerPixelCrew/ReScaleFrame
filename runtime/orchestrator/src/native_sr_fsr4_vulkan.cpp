@@ -8,6 +8,7 @@
 #include <new>
 #include <string>
 #include "native_sr_fsr4_vulkan.h"
+#include "native_sr_split_lease.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
 
@@ -24,6 +25,7 @@ struct rsf_fsr4vk {
     rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
     rsf_fsr4vk_handoff handoff{};
+    rsf::sr::SplitLease lease;
     rsf_fsr4_bridge* bridge{};
     VkDevice device{};
     VkPhysicalDevice physical{};
@@ -33,7 +35,7 @@ struct rsf_fsr4vk {
     uint32_t width{}, height{};
     uint64_t last_frame{}, last_done{}, session{};
     uint32_t view{}, generation{};
-    bool initialized{}, terminal{}, usable{};
+    bool initialized{}, terminal{}, usable{}, history_valid{};
     rsf::FrameCaptureVk capture;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 image_properties{};
     PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
@@ -136,7 +138,7 @@ int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff*
     if (!output) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
     *output = nullptr;
     if (!setup || setup->struct_size < sizeof(*setup) || !handoff || handoff->struct_size < sizeof(*handoff)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION || handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
+    if (setup->abi_version != RSF_SRVK_ABI_VERSION || (handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION && handoff->abi_version != RSF_SRVK_SPLIT_TRACKED_ABI_VERSION)) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
     if (setup->backend != 4 || setup->quality > 4 || !setup->instance || !setup->physical_device || !setup->device ||
         !setup->instance_proc || !setup->device_proc || !setup->output_width || !setup->output_height ||
         !setup->runtime_directory_utf8 || handoff->timeline_enabled != 1 || !handoff->split_record || handoff->queue_family >= VK_QUEUE_FAMILY_FOREIGN_EXT ||
@@ -148,6 +150,7 @@ int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff*
     auto* self = new (std::nothrow) rsf_fsr4vk{};
     if (!self) return VK_ERROR_OUT_OF_HOST_MEMORY;
     self->setup = *setup; self->setup.runtime_directory_utf8 = nullptr; self->handoff = *handoff;
+    self->lease.tracked = handoff->abi_version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
     self->device = static_cast<VkDevice>(setup->device); self->physical = static_cast<VkPhysicalDevice>(setup->physical_device);
     auto ip = setup->instance_proc; auto dp = setup->device_proc;
 #define I(field, name) self->field = reinterpret_cast<PFN_##name>(ip(setup->instance, #name))
@@ -260,6 +263,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         frame->output.format != VK_FORMAT_R16G16B16A16_SFLOAT || frame->output.width != record.output_width ||
         frame->output.height != record.output_height || frame->output.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    if (self->lease.pending()) return VK_NOT_READY;
     (void)rsf_input_dump_begin_record(&record, 4);
     const auto commands = static_cast<VkCommandBuffer>(current_commands);
     (void)self->capture.record(commands, frame->color, record, "sr-source-jittered", record.flags & RSF_FRAME_FLAG_RESET);
@@ -284,6 +288,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         transition(*self, commands, self->images[3].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, false, true);
     }
     const uint64_t ready = self->last_done + 1, done = ready + 1;
+    self->lease.begin(current_commands);
     *continuation_commands = nullptr;
     int result = 0;
     try {
@@ -297,6 +302,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         *continuation_commands = nullptr;
         self->terminal = true; return result ? result : VK_ERROR_INITIALIZATION_FAILED;
     }
+    if (self->lease.tracked) self->lease.continuation = *continuation_commands;
     self->last_done = done; self->last_frame = record.frame_id; self->session = record.session_id; self->initialized = true;
     rsf_fsr4_bridge_frame dispatch{}; dispatch.struct_size = sizeof(dispatch); dispatch.abi_version = 1;
     dispatch.color = self->images[0].dx12; dispatch.depth = self->images[1].dx12;
@@ -308,16 +314,21 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
     dispatch.delta_ms = record.frame_time_ms; dispatch.near_plane = record.camera.near_plane;
     dispatch.far_plane = record.camera.far_plane; dispatch.vertical_fov = record.camera.vertical_fov_radians;
     dispatch.pre_exposure = frame->pre_exposure;
-    dispatch.reset = (record.flags & RSF_FRAME_FLAG_RESET) || self->generation != record.resource_generation ? 1u : 0u;
+    dispatch.reset = !self->history_valid || (record.flags & RSF_FRAME_FLAG_RESET) || self->generation != record.resource_generation ? 1u : 0u;
     self->view = record.view_id; self->generation = record.resource_generation;
     dispatch.ready_value = ready; dispatch.done_value = done;
     (void)RsfFsr4BridgeSharpness(self->bridge,frame->sharpening.struct_size&&frame->sharpening.mode==RSF_SHARPENING_VENDOR?frame->sharpening.sharpness:0.0f);
+    self->history_valid = false;
     result = RsfFsr4BridgeEvaluate(self->bridge, &dispatch);
     if (result) return result; // Host records fallback in the returned continuation.
+    self->history_valid = true;
     const auto continuation = static_cast<VkCommandBuffer>(*continuation_commands);
     const auto& output = self->images[3];
+    // D3D12 owns the shared output until the continuation's timeline wait.
+    // Acquire it before any Vulkan sharpening access, including its barriers.
+    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, true);
     (void)self->sharpen.run(self->setup,continuation,*frame,output.image);
-    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, true);
+    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkImageCopy copy{}; copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.extent = {record.output_width, record.output_height, 1};
     self->copy(continuation, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -334,7 +345,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
 
 int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
     if (!self) return 0;
-    if (self->terminal) return VK_NOT_READY;
+    if (self->terminal || self->lease.pending()) return VK_NOT_READY;
     int result = wait_done(*self);
     if (!result) result = self->idle(self->device);
     if (!result && self->bridge) result = VulkanStoryFsr4PrepareDestroy(self->bridge);
@@ -356,3 +367,8 @@ int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
 }
 
 void rsf_fsr4vk_retire_commands(rsf_fsr4vk* self,void* commands) { if (self) self->sharpen.retire(commands); }
+
+int32_t rsf_fsr4vk_submitted(rsf_fsr4vk* self, void* commands) {
+    if (!self || !commands || !self->lease.submitted(commands)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+    return 0;
+}

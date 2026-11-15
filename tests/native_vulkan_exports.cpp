@@ -16,6 +16,8 @@ int main(int argc, char** argv) {
         "rsf_latencyvk_execution",
         "rsf_latencyvk_shutdown", "rsf_srvk_create", "rsf_srvk_plan",
         "rsf_srvk_evaluate", "rsf_srvk_retire_commands", "rsf_srvk_destroy",
+        "rsf_srvk_fsr4_create", "rsf_srvk_fsr4_plan", "rsf_srvk_fsr4_evaluate",
+        "rsf_srvk_fsr4_submitted", "rsf_srvk_fsr4_retire_commands", "rsf_srvk_fsr4_destroy",
         "rsf_fgvk_create_with_host", "rsf_fgvk_images", "rsf_fgvk_acquire",
         "rsf_fgvk_enable_options", "rsf_fgvk_prepare", "rsf_fgvk_hudless",
         "rsf_fgvk_submitted", "rsf_fgvk_present", "rsf_fgvk_destroy",

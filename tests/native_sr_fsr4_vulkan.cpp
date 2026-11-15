@@ -61,7 +61,7 @@ int wmain(int argc, wchar_t** argv) {
     graphics.depth_inverted = 1; graphics.depth_infinite = 1;
     graphics.runtime_directory_utf8 = directory.c_str();
     Handoff state{&device};
-    rsf_fsr4vk_handoff handoff{sizeof(handoff), 1, 1, device.family, &state, split};
+    rsf_fsr4vk_handoff handoff{sizeof(handoff), RSF_SRVK_SPLIT_TRACKED_ABI_VERSION, 1, device.family, &state, split};
     rsf_fsr4vk* owner = nullptr;
     result = rsf_srvk_fsr4_create(&graphics, &handoff, &owner);
     const int create_result = result;
@@ -136,6 +136,8 @@ int wmain(int argc, wchar_t** argv) {
         }
         const int provider_result = rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &continuation);
         if (!continuation || continuation == commands[0]) { result = provider_result ? provider_result : -1; break; }
+        // CPU admission must refuse teardown before any host submissions.
+        if (rsf_srvk_fsr4_destroy(owner) != VK_NOT_READY) return 22;
         void* duplicate = nullptr;
         if (rsf_srvk_fsr4_evaluate(owner, commands[0], &input, &duplicate) == RSF_BACKEND_ERROR_INVALID_ARGUMENT) ++duplicate_refused;
         if (provider_result) {
@@ -158,6 +160,12 @@ int wmain(int argc, wchar_t** argv) {
         submits[1].waitSemaphoreCount = 1; submits[1].pWaitSemaphores = &state.timeline; submits[1].pWaitDstStageMask = &stage;
         timelines[1].waitSemaphoreValueCount = 1; timelines[1].pWaitSemaphoreValues = &state.done;
         if (!result) result = device.function<PFN_vkQueueSubmit>("vkQueueSubmit")(device.queue, 2, submits.data(), VK_NULL_HANDLE);
+        if (!result) {
+            if (rsf_srvk_fsr4_submitted(owner, commands[1]) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return 23;
+            result = rsf_srvk_fsr4_submitted(owner, commands[0]);
+            if (!result && rsf_srvk_fsr4_destroy(owner) != VK_NOT_READY) return 24;
+            if (!result) result = rsf_srvk_fsr4_submitted(owner, commands[1]);
+        }
         if (!result) result = device.function<PFN_vkDeviceWaitIdle>("vkDeviceWaitIdle")(device.device);
         if (!result && !provider_result) ++completed;
         if (!result) result = provider_result;

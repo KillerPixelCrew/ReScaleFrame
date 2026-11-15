@@ -18,3 +18,5 @@ int32_t rsf_fsr4vk_info(const rsf_fsr4vk*, rsf_fsr4_bridge_info*);
 int32_t rsf_fsr4vk_destroy(rsf_fsr4vk*);
 
 void rsf_fsr4vk_retire_commands(rsf_fsr4vk*,void* commands);
+
+int32_t rsf_fsr4vk_submitted(rsf_fsr4vk*, void* commands);

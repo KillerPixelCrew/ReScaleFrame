@@ -5,6 +5,8 @@
 /* FSR4 uses the existing Vulkan/DX12 interop owner and a graph recording split.
    This contract is independent of native SR ABI 1, which remains unchanged. */
 #define RSF_SRVK_SPLIT_ABI_VERSION 1u
+/* Same layout, explicit successful-submit notifications and admission guards. */
+#define RSF_SRVK_SPLIT_TRACKED_ABI_VERSION 2u
 typedef struct rsf_fsr4vk rsf_fsr4vk;
 typedef struct rsf_fsr4vk_handoff {
     uint32_t struct_size, abi_version;
@@ -30,7 +32,7 @@ typedef struct rsf_fsr4vk_handoff {
 extern "C" {
 #endif
 /* Serialize all calls on the graphics owner. Sizes accept appended fields;
-   versions must match exactly. Validation uses RSF_BACKEND_ERROR_*; other native
+   versions must be 1 (legacy) or 2 (tracked submission). Validation uses RSF_BACKEND_ERROR_*; other native
    Vulkan, HRESULT and FidelityFX errors pass through as opaque nonzero int32_t
    results. Missing implementation returns NOT_COMPILED, never another SR.
    setup.backend must be RSF_SR_FSR4. runtime_directory_utf8 locates the signed
@@ -54,6 +56,11 @@ RSF_RUNTIME_API int32_t rsf_srvk_fsr4_plan(const rsf_fsr4vk*, uint32_t* width, u
    transfer-dst. Never abandon an owner with unsubmitted graph sections. */
 RSF_RUNTIME_API int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk*, void* current_commands,
     const rsf_srvk_frame*, void** continuation_commands);
+/* ABI 2: notify only AFTER a successful host queue submission, outside its lock.
+   Name each split section exactly once. Failed submits keep the lease pending;
+   retry submission before evaluate/destroy. No CPU completion is implied.
+   ABI 1 retains the original caller-managed submission contract. */
+RSF_RUNTIME_API int32_t rsf_srvk_fsr4_submitted(rsf_fsr4vk*, void* commands);
 RSF_RUNTIME_API void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk*, void* commands);
 /* Submit both sections and drain their GPU users first. Success frees the owner;
    failure retains it and remaining resource/module leases. NULL is a successful

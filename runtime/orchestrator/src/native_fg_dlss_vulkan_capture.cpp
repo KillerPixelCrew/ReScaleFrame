@@ -17,7 +17,7 @@
 
 namespace rsf {
 struct DlssPresentCapture::State {
-    struct Source { rsf_frame_record record; uint32_t generated_count; };
+    struct Source { rsf_frame_record record; uint32_t generated_count; rsf_dlssgvk_status sdk; bool configured; };
     struct Commands { VkCommandPool pool = VK_NULL_HANDLE; VkCommandBuffer commands = VK_NULL_HANDLE; VkFence fence = VK_NULL_HANDLE; bool pending = false; };
     rsf_fgvk_setup setup{};
     rsf_sl_set_present_capture registration = nullptr;
@@ -28,6 +28,7 @@ struct DlssPresentCapture::State {
     std::map<uint32_t, Commands> command_families;
     std::filesystem::path directory;
     uint64_t serial = 0;
+    uint64_t observed_source = 0;
     PFN_vkCreateCommandPool create_pool = nullptr; PFN_vkDestroyCommandPool destroy_pool = nullptr;
     PFN_vkResetCommandPool reset_pool = nullptr; PFN_vkAllocateCommandBuffers allocate_commands = nullptr;
     PFN_vkBeginCommandBuffer begin = nullptr; PFN_vkEndCommandBuffer end = nullptr;
@@ -89,6 +90,26 @@ struct DlssPresentCapture::State {
         // Never acquire a session/PCL/host-queue lock from this presenter thread.
         std::lock_guard lock(guard);
         const auto source = sources.find(packet.source_frame);
+        // Preserve raw producer facts even when the SDK boundary does not map
+        // to a retained source. Otherwise a mapping bug can hide generated
+        // presents and make a real-only capture look like disabled generation.
+        const auto observed = sources.find(observed_source);
+        if (observed != sources.end() && capture.wants(observed->second.record.frame_id)) {
+            const auto& sdk = observed->second.sdk;
+            std::ofstream trace(directory / "dlss-present-boundaries.jsonl", std::ios::app);
+            trace << "{\"capture_anchor_frame\":" << observed->second.record.frame_id
+                << ",\"capture_anchor_session\":" << observed->second.record.session_id << ",\"sdk_source_frame\":" << packet.source_frame
+                << ",\"sdk_present_frame\":" << packet.present_frame << ",\"sdk_generated_index\":" << packet.generated_index
+                << ",\"boundary_valid\":" << (packet.boundary_valid ? "true" : "false")
+                << ",\"source_found\":" << (source != sources.end() ? "true" : "false")
+                << ",\"configured_on\":" << (observed->second.configured ? "true" : "false")
+                << ",\"requested_generated_count\":" << observed->second.generated_count
+                << ",\"sdk_status\":" << sdk.sdk_status << ",\"sdk_result\":" << sdk.sdk_result
+                << ",\"sdk_actual_presents\":" << sdk.presentation.last_present_count
+                << ",\"max_generated\":" << sdk.max_generated_frames << ",\"min_dimension\":" << sdk.min_dimension
+                << ",\"vsync_supported\":" << sdk.vsync_supported << ",\"dynamic_mfg_supported\":" << sdk.dynamic_mfg_supported
+                << ",\"state_sample\":\"previous_sdk_query\"}\n";
+        }
         if (!packet.boundary_valid || source == sources.end() || !capture.wants(source->second.record.frame_id)) return real_present(info);
         const auto& chain_info = *static_cast<const VkSwapchainCreateInfoKHR*>(packet.swapchain_info);
         if (!(chain_info.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || info.swapchainCount != 1 || !info.pSwapchains || !info.pImageIndices ||
@@ -182,9 +203,11 @@ rsf_backend_result DlssPresentCapture::initialize(const rsf_fgvk_setup& setup) {
     if (next->registration(&registration) != VK_SUCCESS) return RSF_BACKEND_ERROR_NOT_READY;
     next->registered = true; state = std::move(next); return RSF_BACKEND_OK;
 }
-void DlssPresentCapture::remember(const rsf_frame_record& record, uint32_t count) {
-    if (!state || !state->capture.wants(record.frame_id)) return;
+void DlssPresentCapture::remember(const rsf_frame_record& record, uint32_t count, const rsf_dlssgvk_status& sdk, bool configured) {
+    if (!state) return;
+    const bool wanted = state->capture.wants(record.frame_id);
     std::lock_guard lock(state->guard);
+    if (!wanted) { state->observed_source = 0; return; }
     // SDK source identity is the uint32 token index. Only bounded requested
     // frames are retained; a collision is refused rather than relabeled.
     const uint64_t key = static_cast<uint32_t>(record.frame_id);
@@ -192,7 +215,8 @@ void DlssPresentCapture::remember(const rsf_frame_record& record, uint32_t count
     if (found != state->sources.end() && (found->second.record.frame_id != record.frame_id || found->second.record.session_id != record.session_id)) {
         state->failure(key, "ambiguous-source-identity", VK_ERROR_INITIALIZATION_FAILED); return;
     }
-    state->sources[key] = {record, count};
+    state->sources[key] = {record, count, sdk, configured};
+    state->observed_source = key;
 }
 void DlssPresentCapture::flush() { if (state) { std::lock_guard lock(state->guard); (void)state->capture.flush(); } }
 rsf_backend_result DlssPresentCapture::shutdown() {
@@ -211,7 +235,7 @@ struct DlssPresentCapture::State {};
 DlssPresentCapture::DlssPresentCapture() = default;
 DlssPresentCapture::~DlssPresentCapture() = default;
 rsf_backend_result DlssPresentCapture::initialize(const rsf_fgvk_setup&) { return RSF_BACKEND_OK; }
-void DlssPresentCapture::remember(const rsf_frame_record&, uint32_t) {}
+void DlssPresentCapture::remember(const rsf_frame_record&, uint32_t, const rsf_dlssgvk_status&, bool) {}
 void DlssPresentCapture::flush() {}
 rsf_backend_result DlssPresentCapture::shutdown() { return RSF_BACKEND_OK; }
 }
