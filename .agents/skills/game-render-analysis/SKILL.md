@@ -1,6 +1,6 @@
 ---
 name: game-render-analysis
-description: Investigate a shipped game's render passes, temporal inputs, camera data and engine hook sites for ReScaleFrame. Use for executable analysis, bounded frame captures, upscaler defects and graphics interoperability. Route Unreal 4 and TrueSky questions to their repository skills.
+description: Integrate or investigate ReScaleFrame rendering, auditing shader inputs, temporal coverage, render passes and engine hook sites. Use for SR/FG/latency integrations, executable analysis, bounded frame captures, upscaler defects and graphics interoperability. Route Unreal 4 and TrueSky details to their repository skills.
 license: GPL-3.0-only
 ---
 
@@ -32,6 +32,40 @@ For the matched 4.18 branch and AC7 private implementation, use
 use [truesky-render-integration](../truesky-render-integration/SKILL.md).
 
 ## Work backward to the producer
+
+### Audit shader inputs as part of every integration
+
+For each SR/FG integration or migration, audit shader inputs and motion coverage
+without waiting for the user to name a broken effect. This is integration work,
+not an optional investigation after vendor initialization succeeds. Apply it to
+the source/render paths available in the current task; use bounded captures to
+resolve unknown active paths when the authorized environment permits them.
+
+- Inventory participating passes and shader stages, including static/instanced,
+  skinned, terrain, GPU-driven, translucent, particle and volumetric geometry.
+  Identify UI and camera-free paths that must retain native behavior.
+- Trace required constant/storage/vertex/index buffers, descriptors, textures,
+  depth, exposure, current/previous transforms, bones and deformation data to their
+  producers and actual consumers. Check slot/array mappings, ranges, formats,
+  precision, dimensions, view/frame identity, synchronization and resource leases.
+- Verify depth and motion production separately. Distinguish valid zero velocity,
+  unwritten pixels, missing bindings and invalid history. Camera reprojection is
+  not independent object/deformation motion; replacing missing buffers with zeros
+  or substituting current bones for previous bones does not establish coverage.
+- Check auxiliary consumers after SR and inputs before FG: bloom/exposure, DoF,
+  reflections, translucency, clouds, particles, depth-dependent effects and UI.
+  Repair verified missing producers/bindings or shader variants at their owner;
+  propagate the correction through backend switches, resize and history reset.
+- Record a coverage table in the integration's evidence: pass/material class,
+  required inputs, producer/binding, missing or corrected inputs, remaining gaps
+  and validation. A source review, synthetic shader test and moving-game capture
+  are different evidence. Keep unverified paths explicit; do not silently exclude
+  them or claim all shaders fixed from one successful SDK call or clean frame.
+
+Before calling an integration complete, account for the audit's missing buffers,
+vectors and coverage gaps. Fix verified defects within the requested integration;
+unsupported paths need an explicit native path/refusal and a recorded limitation.
+Do not ask the user for a symptom as a prerequisite to this general audit.
 
 Use a draw, dispatch, shader or final image to find the affected data. Walk callers, dependencies
 and resource ownership back to the subsystem that creates the state. Determine where resolution,

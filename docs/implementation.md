@@ -2697,3 +2697,15 @@ DLL-contract evidence only; no TotK provider or game validation is claimed.
 The full eng/verify.ps1 Release gate is still running and has reported Anomaly
 FG device failures (active/generated-frame assertions). It is not a passing gate;
 see build/totk-native-export-verify.log for the result.
+
+## Mandatory integration shader-input audit, 15 November 2026
+
+The shared game-render-analysis skill now requires an upfront shader-buffer,
+depth, motion and material-coverage audit for every SR/FG integration or migration,
+without waiting for a user-reported symptom. Codex uses the canonical .agents
+skill; Claude has a discoverable forwarding skill pointing to the same file.
+The UE4 integration skill explicitly invokes the shared audit. This is a
+workflow correction, not evidence that existing integrations' shader gaps are
+fixed. All three skill folders passed skill-creator quick_validate.py, the
+Claude reference resolves, and the focused diff check passes. No runtime changes
+or game deployment are included in this documentation commit.
