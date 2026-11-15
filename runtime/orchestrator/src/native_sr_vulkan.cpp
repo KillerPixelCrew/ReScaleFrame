@@ -319,9 +319,15 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     if (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if defined(RSF_HAVE_FFX_VK)
     const auto* record = input->record;
-    if (!record || record->struct_size < sizeof(*record) || record->abi_version != RSF_GAME_FRAME_ABI_VERSION ||
+    if (!record || record->struct_size < sizeof(*record)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    // XeSS recommends an optimal plan but owns a queried inclusive input range.
+    // Common validation still requires every image and camera to match the real
+    // record; only its backend may admit a size different from the plan.
+    const uint32_t width = self->xess ? record->render_width : self->width;
+    const uint32_t height = self->xess ? record->render_height : self->height;
+    if (!width || !height || record->abi_version != RSF_GAME_FRAME_ABI_VERSION ||
         record->camera.struct_size < sizeof(record->camera) || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
-        !record->session_id || !record->frame_id || record->render_width != self->width || record->render_height != self->height ||
+        !record->session_id || !record->frame_id || record->render_width != width || record->render_height != height ||
         record->output_width != self->setup.output_width || record->output_height != self->setup.output_height ||
         record->camera.render_width != record->render_width || record->camera.render_height != record->render_height ||
         record->camera.output_width != record->output_width || record->camera.output_height != record->output_height ||
@@ -334,13 +340,13 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
         (!self->setup.depth_infinite && record->camera.far_plane <= record->camera.near_plane) ||
         !std::isfinite(record->camera.vertical_fov_radians) || record->camera.vertical_fov_radians <= 0 || record->camera.vertical_fov_radians >= 3.141593f ||
         !std::isfinite(record->camera.jitter_pixels[0]) || !std::isfinite(record->camera.jitter_pixels[1])) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!valid_image(*self, input->color, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->color.format != VK_FORMAT_R16G16B16A16_SFLOAT ||
-        !valid_image(*self, input->depth, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || (input->depth.format != VK_FORMAT_D32_SFLOAT && input->depth.format != VK_FORMAT_R32_SFLOAT) ||
-        !valid_image(*self, input->motion, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->motion.format != VK_FORMAT_R16G16_SFLOAT ||
+    if (!valid_image(*self, input->color, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->color.format != VK_FORMAT_R16G16B16A16_SFLOAT ||
+        !valid_image(*self, input->depth, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || (input->depth.format != VK_FORMAT_D32_SFLOAT && input->depth.format != VK_FORMAT_R32_SFLOAT) ||
+        !valid_image(*self, input->motion, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->motion.format != VK_FORMAT_R16G16_SFLOAT ||
         !valid_image(*self, input->output, self->setup.output_width, self->setup.output_height, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) || input->output.format != VK_FORMAT_R16G16B16A16_SFLOAT)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     for (const auto* mask : {&input->reactive, &input->composition, &input->bias_current_color}) if (mask->image &&
-        (!valid_image(*self, *mask, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
+        (!valid_image(*self, *mask, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     (void)rsf_input_dump_begin_record(record, self->setup.backend);
     if (rsf_input_dump_wants(record)) {
