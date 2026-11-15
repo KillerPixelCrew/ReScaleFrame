@@ -406,7 +406,8 @@
       "abi4_artifacts": ".local/skyrim-research/fg-frida-20261115-213310: exact trial DLL/config/FG DLL, symbols availability, run/log/termination/restoration receipts; outer-creation-abi4-results.log; PresentMon20261115-213332-338-fsr-monitored",
       "status_fix": "Built and game-tested: completed-source activity reports active1 while enabled, active0 Off, matching provider generation; no public ABI or pacing change",
       "latest_game": "PID41756 normalexit0: DLSS Quality1280x720->1920x1080, FSR activity1 before Off, FG Off and SR Off/On checks; source1402/tags918/application1573/vendor-output2025 at final Off snapshot; counters do not measure scanout or latency",
-      "latest_artifacts": ".local/skyrim-research/fg-frida-20261115-220603; final-guard-corrected-results.log; verify-skyrim-abi4-input-status-batch-complete-20261115.log"
+      "latest_artifacts": ".local/skyrim-research/fg-frida-20261115-220603; final-guard-corrected-results.log; verify-skyrim-abi4-input-status-batch-complete-20261115.log",
+      "deployment": "Exact successful PID41756 trial Runtime/Entry and matched FSR4.0.2 DLL installed; all target hashes verified, prior files backed up under .local/skyrim-research/deployment-validated-20261115-221424; settings preserved, game closed"
     }
   },
   "source_present_association": {
