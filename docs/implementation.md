@@ -1,5 +1,30 @@
 # Implementation tracker
 
+## Skyrim SE native observer, 15 November 2026
+
+The no-SKSE exact-build adapter and generic XInput carrier build on Windows.
+A bounded vanilla run prepared/started the runtime session and produced sixteen
+readable samples from the native jitter producer, including the expected state
+RVA and eight-frame sequence. No SR, FG, shader repairs, latency policy or CS/ENB
+compatibility has been implemented or accepted. CS currently refuses activation.
+The code-level readiness flag remains zero.
+IDA also matched the native VS/PS/CS readers and package initialization; 15,811
+original shader containers now have native family/stage/permutation identities.
+The saved research database retains named producer functions. Runtime vector
+coverage, source replacements and missing-motion corrections remain unimplemented.
+
+[Research](research/skyrim-se-integration.md) records the exact executable,
+current references, original shader inventory, matching CS release/PDB, hook
+bytes, deployment and run. [Engine metadata](../games/skyrim-se/engine.json)
+distinguishes observation from processing. The next implementation work is GPU
+pass ownership, complete temporal inputs, CS ownership handover and shader repair.
+
+Validation: Skyrim ABI and generic/existing Wingman XInput contracts passed.
+The Release VS2026 gate reached 222 tests but two Anomaly FSR3 FG device fixtures
+failed, and reproduced in isolation. Three carrier/Skyrim checks passed in the
+focused rerun. Formatting and Clippy passed separately. The full gate remains
+failed pending those device failures; no Rust behavior was changed.
+
 ## Runtime shader patching for Anomaly, 12 November 2026
 
 Core source patching, .rsfpatch loader/build-inspect CLI, original DXBC proof,

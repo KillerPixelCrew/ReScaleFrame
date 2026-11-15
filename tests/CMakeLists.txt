@@ -44,6 +44,7 @@ target_link_libraries(rsf_wingman_camera PRIVATE ReScaleFrame::GameSDK rsf_build
 add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
+add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
@@ -74,11 +75,14 @@ add_test(NAME gpu_sr_policy COMMAND rsf_gpu_policy_test)
 add_executable(rsf_unity_mono_runtime_test unity_mono_runtime.cpp)
 target_link_libraries(rsf_unity_mono_runtime_test PRIVATE rsf_build_options)
 if(MSVC)
-    add_executable(rsf_wingman_carrier_test wingman_carrier.cpp)
+    add_executable(rsf_wingman_carrier_test xinput_carrier.cpp)
     target_link_libraries(rsf_wingman_carrier_test PRIVATE rsf_build_options)
     add_dependencies(rsf_wingman_carrier_test rsf_proxy_wingman)
     add_test(NAME wingman_carrier_contract COMMAND rsf_wingman_carrier_test "$<TARGET_FILE:rsf_proxy_wingman>")
     set_tests_properties(wingman_carrier_contract PROPERTIES SKIP_RETURN_CODE 77)
+    add_dependencies(rsf_wingman_carrier_test rsf_proxy_plugin)
+    add_test(NAME plugin_carrier_contract COMMAND rsf_wingman_carrier_test "$<TARGET_FILE:rsf_proxy_plugin>")
+    set_tests_properties(plugin_carrier_contract PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(rsf_shared_shim_exports shared_shim_exports.cpp)
     target_link_libraries(rsf_shared_shim_exports PRIVATE rsf_build_options)
     add_dependencies(rsf_shared_shim_exports rsf_proxy_dinput8)
@@ -92,6 +96,10 @@ endif()
 # Load the plugin by name from its own directory. That is how it is loaded in practice, and it
 # keeps the test runnable under a cross-build emulator, which cannot take a host path.
 add_test(NAME game_plugin_contract COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:rsf_game_ac7>" ac7)
+add_test(NAME game_skyrim_se_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_skyrim_se>" skyrim-se)
+set_tests_properties(game_skyrim_se_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_skyrim_se>")
 set_tests_properties(game_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_ac7>")
 add_test(NAME game_project_wingman_plugin_contract COMMAND rsf_plugin_contract
