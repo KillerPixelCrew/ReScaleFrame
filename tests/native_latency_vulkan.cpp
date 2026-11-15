@@ -3,12 +3,16 @@
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/native_fg_vulkan.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/frame_generation.h>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
 #include <windows.h>
 #include <thread>
+#include <condition_variable>
+#include <chrono>
+#include "../runtime/orchestrator/src/native_latency_vulkan_presentation.h"
 namespace {
 std::array<uint32_t, 6> sdk_tokens{};
 uint32_t cursor = 0, slept = 0, options = 0;
@@ -29,12 +33,18 @@ void cpu(uint64_t frame, uint32_t stage, uint32_t expected = 1) {
     rsf_latencyvk_cpu(&event);
 }
 }
-namespace {uint32_t xell_sleeps{},xell_mode{}; std::vector<Marker> xell_markers;}
+namespace {std::mutex sleep_guard;std::condition_variable sleep_changed;bool block_xell=false,xell_entered=false,release_xell=false;
+uint32_t xell_sleeps{},xell_mode{}; std::vector<Marker> xell_markers;}
 extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk* context,uint32_t* backend) {
     if (!context || !backend) return RSF_BACKEND_ERROR_INVALID_ARGUMENT; *backend=5;return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_fgvk_latency_options(rsf_fgvk*,uint32_t mode,uint32_t) {xell_mode=mode;return RSF_BACKEND_OK;}
-extern "C" rsf_backend_result rsf_fgvk_latency_sleep(rsf_fgvk*,uint64_t) {++xell_sleeps;return RSF_BACKEND_OK;}
+extern "C" rsf_backend_result rsf_fgvk_latency_sleep(rsf_fgvk* context,uint64_t) {
+    require(context!=nullptr,"XeLL sleep holds a real context lease");++xell_sleeps;
+    std::unique_lock lock(sleep_guard);
+    if(block_xell){xell_entered=true;sleep_changed.notify_all();sleep_changed.wait(lock,[]{return release_xell;});}
+    return RSF_BACKEND_OK;
+}
 extern "C" rsf_backend_result rsf_fgvk_latency_marker(rsf_fgvk*,uint64_t frame,uint32_t kind) {
     xell_markers.push_back({uint32_t(frame),kind});return RSF_BACKEND_OK;
 }
@@ -299,5 +309,34 @@ int main() {
     require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"fresh post-restart ping queued");begin(3);begin(4);
     require(markers.size()==after_restart+1&&markers.back().kind==8,"fresh post-restart ping accepted");
     require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"ping reinitialized session retired");
+    require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK&&rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"Reflex request predates FG attachment");
+    const auto reflex_before_attachment=slept;
+    auto* first_context=reinterpret_cast<rsf_fgvk*>(1);
+    auto* next_context=reinterpret_cast<rsf_fgvk*>(2);
+    require(rsf::latency::presentation_attach(first_context)==RSF_BACKEND_OK,"automatic attach publishes opaque context without vendor calls");
+    xell_mode=0;begin(1);
+    block_xell=true;xell_entered=release_xell=false;
+    std::thread sleeper([&]{
+        LARGE_INTEGER now{},hz{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&hz);
+        rsf_game_cpu_event input{sizeof(input),RSF_GAME_CPU_INPUT_SAMPLE,909,1,
+            uint64_t(now.QuadPart),uint64_t(hz.QuadPart),1,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+        rsf_latencyvk_cpu(&input);
+    });
+    {std::unique_lock lock(sleep_guard);require(sleep_changed.wait_for(lock,std::chrono::seconds(2),[]{return xell_entered;}),"XeLL CPU sleep entered");}
+    require(xell_mode==1&&slept==reflex_before_attachment,"unchanged request selects/applies XeLL at actual input, without Reflex sleep");
+    rsf_latencyvk_status during_sleep{sizeof(during_sleep),RSF_LATENCYVK_ABI_VERSION};
+    require(rsf_latencyvk_get_status(&during_sleep)==RSF_BACKEND_OK&&during_sleep.owner==RSF_PACING_XELL,"SDK mutex is available while XeLL sleep blocks");
+    require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_ERROR_NOT_READY,"unbind refuses outstanding actual CPU sleep without waiting");
+    {rsf::latency::PresentationLease refused;require(!refused.get()&&refused.closing(),"retirement prevents new context borrows");}
+    require(rsf_latencyvk_presentation(next_context)==RSF_BACKEND_ERROR_NOT_READY&&rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_NOT_READY,"rebind/shutdown cannot lose a sleeping owner");
+    {std::lock_guard lock(sleep_guard);release_xell=true;sleep_changed.notify_all();}sleeper.join();block_xell=false;
+    require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_OK,"unbind retry succeeds after CPU lease exits");
+    require(rsf::latency::presentation_attach(next_context)==RSF_BACKEND_OK,"successor context can bind after retirement");
+    require(rsf::latency::presentation_retire(first_context)==RSF_BACKEND_OK,"late exact-owner retire of predecessor is harmless");
+    rsf::latency::presentation_release(first_context);
+    {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"old owner release cannot clear successor");}
+    shutdown_allowed=false;require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_FEATURE_FAILED,"checked shutdown failure is retained");
+    {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"failed SDK shutdown retains live context binding");}
+    shutdown_allowed=true;require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"checked shutdown retry releases binding");
     return 0;
 }
