@@ -309,5 +309,20 @@
     "capture": "scene-20261115-172956-834-22112515-11404-1",
     "deployment_backup": "20261115-172918-sr-fallback",
     "pending": "Moving/all-material coverage, active shadow/water/refraction, CS/ENB and device recreation"
+  },
+  "direct_dlss_motion_correction": {
+    "status": "Built and deployed; third-person idle/orbit smear and broad moving quality remain open",
+    "reference": "Pinned CS dev33d789: native previous-minus-current UV, positive Streamline mvecScale1,1, negative generated jitter",
+    "defect": "Canonical current-minus-previous UV was not converted back in direct D3D11 DLSS camera-inclusive path; alternate/resolved paths already converted",
+    "correction": "Generic pipeline negates direct canonical DLSS scale once; dense-resolved pixels and unspecified legacy scales preserved",
+    "contract": "Known current/previous feature reprojection, no double flip for resolved motion, unchanged legacy scale; focused Release target passed",
+    "capture": "scene-20261115-174318-760-22914437-16972-1",
+    "capture_parameters": "DLSS Quality1280x720 to1920x1080, reset0, effective motion_scale1,1; stationary dispatch validation",
+    "deployment_backup": "20261115-174240-sr-fallback",
+    "reported_smear_captures": [
+      "scene-20261115-173508-646-22424328-36664-1",
+      "scene-20261115-173512-096-22427781-36664-2"
+    ],
+    "native_camera_check": "Right wall native vectors vs depth/camera reprojection p95 below0.009 input pixels; native check does not establish vendor conversion or deformation coverage"
   }
 }

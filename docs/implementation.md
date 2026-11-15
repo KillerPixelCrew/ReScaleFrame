@@ -2,6 +2,15 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The third-person idle/orbit smear and grain on props exposed another defect:
+canonical motion was passed directly to DLSS with reversed direction. Comparison
+against Community Shaders and NVIDIA's current guide confirms native vectors
+need positive Streamline scale. The generic direct DLSS path now converts once;
+already resolved and legacy paths retain their existing scales. Focused Release
+build/contract passed, and a settled deployed capture verifies motion_scale(1,1).
+The reported third-person idle/pan still needs acceptance; native wall motion
+agreement does not prove skin or final temporal quality. See the latest research.
+
 The native sampler path now supplies resolution-derived material mip bias through
 a generic runtime-owned sampler cache. A guarded state-flush hook limits changes
 to reduced main colour/depth draws and restores native bindings outside that scope.
