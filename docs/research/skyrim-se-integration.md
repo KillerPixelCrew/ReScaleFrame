@@ -849,3 +849,86 @@ Formatting and Clippy passed separately. Logs: `verify-resolution-owner.log`
 and `clippy-resolution-owner.log`. No Rust behavior changed. Auxiliary loading
 views, device/thread recreation and complete host retirement are not accepted
 by this bounded raster test.
+
+### Native auxiliary consumers and reversible depth preparation
+
+Question: which buffers must follow a reconstructed full-resolution colour image
+when the native main scene was rasterized into a smaller rectangle? Source review
+of CS dev `33d7896147b54ca72d1ee5ca938bb85739593167` identifies depth,
+refraction normals, SAO camera-Z and the underwater mask as leads. Its
+`DepthRefractionUpscalePS.hlsl` samples depth/normal data after removing jitter;
+its depth state disables stencil. This does not establish stencil preservation
+or the vanilla consumer order. No reference implementation was copied.
+
+Static IDA analysis uses the same executable SHA256 and saved database as above.
+The native call at `0x15399DF` copies selected main depth into depth slot 7,
+POST_ZPREPASS_COPY: destination `0x3334380 = 0x3333F58 + 7 * 0x98`.
+It does not copy into slot 1, MAIN_COPY. The earlier source-owner observation
+was correct; interpreting this destination as MAIN_COPY would be wrong.
+`0x15447A0` can sample an indexed depth SRV, but has only an unwind-data xref;
+it is not evidence of an executed main-chain consumer.
+
+Direct global xrefs alone were insufficient. SAO camera-Z has pre-handoff
+consumers, but the post-processing effects also obtain it through indexed
+ImageSpaceTexture inputs. Following native RTTI, vtables and setup calls gives:
+
+| Consumer | Identification and input evidence | Native timing |
+| --- | --- | --- |
+| Refraction | TypeDescriptor `0x2197DB0`, COL `0x1C81820`, vtable `0x1B4A7B0`; setup `0x15655B0` calls ImageSpaceTexture colour setup with target 13 at `0x15658E8`; render `0x1565920` binds it as input 2 | ProcessMain effect 1, after RSF's pre-HDR handoff and before HDR |
+| Depth of field | TypeDescriptor `0x2197850`, COL `0x1C80A20`, vtable `0x1B48018`; setup `0x1551820` supplies depth input from selector `0x1015790` (returns 0), target `49 + selector(0x153C8F0)`, and conditional underwater target 12 | ProcessMain effect 3; can run before HDR or be deferred until after native TAA according to manager +0x210 |
+
+The depth selector feeds ImageSpaceTexture depth setup `0x1554F90`, which writes
+the depth index at +0xC and invalidates its colour index. The SAO selector reads
+global `0x3436358`; its live value, chosen allocation/mips, formats and active
+rectangles still need capture. Target 13 is refraction normals, 12 underwater
+mask, and 49 SAO camera-Z in independent MIT CommonLib
+`add17c090cfa312d370bfcdd55d2eb989d086fec`. These names are source-assisted
+static matches, not new runtime coverage or visual acceptance. Functions and
+comments were saved in IDA. Ignored evidence: `depth-aux-native-consumers.json`,
+`depth-aux-native-xrefs.json` and `depth-aux-post-effects.json`.
+
+This evidence rules out admitting reduced SR after repairing main depth alone.
+The native HDR chain must receive matching auxiliary images and full-resolution
+viewport/constants. Native histories must retain their original reduced contents
+and previous ratios for the next frame. A candidate lifetime is temporary
+contents from successful SR through final native consumers, followed by exact
+restoration on the graphics owner before the next producer. The frame-end hook
+and all consumers in that interval remain to be guarded and validated.
+
+The generic graphics library now has a C ABI `depth_scale` transaction, separate
+from Skyrim policy. It accepts explicit source/output pixel bounds and source
+jitter, requires an immediate context and a single-mip/slice/sample
+R24G8_TYPELESS native depth target, and refuses overlapping or foreign-thread
+operations. Prepare snapshots the full allocation and renders into separate
+scratch. Commit copies scratch into the original resource without changing its
+views. Restore copies the snapshot back and releases the native texture lease;
+cancelling before commit makes no native writes. Destroy restores a committed
+transaction. The caller must keep native contents unchanged between prepare and
+commit and must restore after its final consumer, before the next native writer.
+Same-context GPU ordering supplies the copy/draw dependency, without a CPU wait.
+
+Sampling is nearest texel at `floor(sourceMin + outputUV * sourceSize - jitter)`,
+clamped to the explicit source rectangle. The first depth draw clears stencil
+only within the output viewport. Eight stencil-only draws then reconstruct each
+bit using the X24_TYPELESS_G8_UINT SRV, avoiding optional stencil-reference shader
+features. Outside pixels retain the original packed contents. All preparation
+and copies save/restore native bindings, including predication and UAV counters.
+Resource and rectangle checks precede native writes. This is a reusable
+mechanism with no game identifiers, settings or vendor policy.
+
+The Release WARP fixture validates all 256 stencil values, representative 24-bit
+depths including clear and endpoint-adjacent values, offset/unequal rectangles,
+both jitter signs, clamping, unchanged outside pixels, deferred preparation,
+bit-for-bit restoration, cancellation/destruction, ABI/refusal behavior and
+foreign-thread refusal. It also verifies inherited depth/UAV/predicate,
+viewport/topology and append-counter restoration. This is synthetic device
+evidence. The helper is not connected to the Skyrim callback or deployed and
+does not change reduced-SR admission.
+
+VS2026 Release verification rebuilt the native tree: 227 discovered, 210 passed,
+15 skipped and the same two Anomaly FG device failures. Fourteen skips are
+default opt-ins; DLSS-G SR-off additionally skipped after foreground ownership
+was denied. The full gate remains failed. Depth scaling, Skyrim contracts and
+existing graphics/host checks passed. Formatting and Clippy passed separately.
+Logs: `verify-depth-scale.log` and `clippy-depth-scale.log`. No Rust behavior
+changed and no game was launched or installation modified in this checkpoint.

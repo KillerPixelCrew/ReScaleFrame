@@ -12,6 +12,7 @@ add_library(rsf_graphics STATIC
     src/resource_ref.cpp
     src/frame_tap.cpp
     src/depth_replay.cpp
+    src/depth_scale.cpp
     src/d3d11_state.cpp
     src/scene_promote.cpp
     src/present_blit.cpp

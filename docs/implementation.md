@@ -2,6 +2,16 @@
 
 ## Skyrim SE experimental native-resolution SR, 15 November 2026
 
+The native auxiliary trace now identifies refraction target 13 and depth-of-field
+inputs from main depth, indexed SAO camera-Z and the conditional underwater mask
+after the SR handoff. A generic reversible depth/stencil transaction is built and
+WARP-tested, including all stencil values, jitter/rectangle mapping, state and
+original-content restoration. It is not connected to Skyrim or deployed. Reduced
+SR remains gated until the other buffers and their consumer lifetimes are ready.
+See [auxiliary research](research/skyrim-se-integration.md). Latest gate: 210
+passed, 15 skipped, the same two Anomaly FG failures, out of 227; formatting and
+Clippy passed separately. This is a failed full gate, with synthetic helper evidence.
+
 Native resolution production is now controlled at the guarded State updater and
 jitter boundary. The runtime prepares a backend size plan on the verified scene
 graphics owner before geometry; the adapter applies its ratios and jitter.
