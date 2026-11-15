@@ -9,7 +9,9 @@ separate. The bounded PID50256 game run passed DLSS Quality1280x720 to1920x1080
 and FSR activation through repeated prepare/Present/retirement, with normal exit.
 Its runtime sample reported106tags,212provider presentations and58/116FPS.
 PresentMon could not acquire ETW access, so physical display cadence and latency
-are unverified. The working installation was restored and the game is closed.
+are unverified. After validation, the exact tested Runtime/Entry and matched FSR
+DLL set was installed with hash-verified backups; settings were preserved and
+the game is closed.
 
 The completed-frame overlay fix now reports active FG in bounded game runs;
 FG Off and SR Off/On checks also passed. Claude's native source reservation,
