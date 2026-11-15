@@ -827,7 +827,8 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
         }
     }
     rsf_input_dump_texture(context_pointer, "sr_source_jittered", "Jittered pre-tonemap linear HDR source at the active render rectangle", frame->scene_color, RSF_DUMP_VIEW_HDR, 1);
-    rsf_input_dump_texture(context_pointer, "sr_game_motion", "Native sparse UE velocity encoding: current-minus-previous NDC, unwritten zero", frame->game_motion, RSF_DUMP_VIEW_VELOCITY, 8);
+    rsf_input_dump_texture(context_pointer, "sr_game_motion", "Native motion in adapter-declared storage and units", frame->game_motion,
+        self.motion.zero_means_unwritten ? RSF_DUMP_VIEW_VELOCITY : RSF_DUMP_VIEW_DENSE_MOTION, 8);
     rsf_input_dump_texture(context_pointer, "sr_motion_decoded", "Decoded sparse game motion before dense camera reconstruction", rsf_motion_decode_texture(self.decode), RSF_DUMP_VIEW_DECODED_MOTION, 8);
     rsf_input_dump_texture(context_pointer, "sr_scene_depth", "Original scene device depth before cloud/motion depth preparation", frame->depth, RSF_DUMP_VIEW_DEPTH, 1);
     rsf_input_dump_texture(context_pointer, "sr_engine_exposure", "Engine exposure guide before colour transport/backend policy", frame->exposure, RSF_DUMP_VIEW_SCALAR, 1);

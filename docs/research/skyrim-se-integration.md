@@ -1,8 +1,9 @@
 # Skyrim Special Edition integration research
 
 Initial investigation: 15 November 2026. Scope: installed executable fingerprint,
-current public source review, integration design and validation plan. No game was
-launched, injected, patched or modified. No hooks have been verified in this binary.
+current public source review, integration design and validation plan. The initial
+read-only findings below are historical. Later sections record exact-build hooks,
+bounded game runs and experimental native-resolution SR evaluation.
 
 ## Question and approach
 
@@ -618,3 +619,131 @@ a forced MinHook enable failure was not exercised in-game.
 The bounded poll log contains 32 accepted emitted facts, sixteen pre-HDR scopes
 1..16, and sixteen unassigned polls across seven threads. These facts do not
 prove actual input-to-render latency, FG eligibility or vendor SR evaluation.
+
+### Native-resolution SR evaluation and camera conversion
+
+Question: can the matched native main-view inputs drive an actual reconstruction
+and return its result without losing the game's HDR chain? Start at native
+resolution to separate temporal conventions and reinsertion from native extent
+allocation. This deliberately admits only dynamic ratios `(1,1)` and quality
+Native. No performance or reduced-resolution claim follows from this experiment.
+
+The adapter now accepts only input 1/output 0 from return RVA `0x153ADEC`, the
+guarded main call. It selects the unique main-camera cache entry with jitter
+flag 1, validates the perspective and `view * projection == current VP`, and
+constructs the SDK row-major matrices independently. For camera-relative native
+coordinates, world-to-view is `Translation(-origin) * nativeView`. Current clip
+to previous clip is `inverse(currentVP) * Translation(origin - previousOrigin) *
+previousVP`. The reverse transform is inverted separately. Standard-Z endpoints,
+origin translation, round-trip projection, jitter signs/pixels, invalid history,
+nonfinite values and mismatched matrices have a dedicated MSVC contract fixture.
+History resets on first use, camera/extent/counter discontinuity or disagreement
+between native previous and last observed current data. An invertible garbage
+initial matrix alone is not accepted as continuous history.
+
+Native context is read at `0x3331F30`; main colour, motion and depth retain the
+owners already matched above. The active window pointer at `0x3330198` holds
+the native swapchain at +0x18, as consumed by actual Present at `0x100A012`.
+`RendererEnd` also increments counter `0x33363F4` after Present. That counter is
+render identity only: source_frame_id stays zero and the pass carries NO_FG.
+Every admitted texture/context/chain receives a callback-local COM lease;
+dimensions, samples, formats, device and immediate-context ownership are checked.
+The camera callback interval is measured with QPC, not claimed as a native
+simulation delta. The first interval is refused rather than invented.
+The approximate units-to-metres value 0.0142875 comes from the pinned CS editor's
+Skyrim-to-Havok conversion, not a new game-unit measurement.
+
+The generic runtime D3D11 host copies configuration and identity, reuses the
+existing settings/overlay services, owns vendor selection/SDKs, and evaluates
+through shared native SR and format-converting reinsertion. The adapter does not
+link or load another runtime. The initial prototype starts suspended; adapter
+start/quiesce controls an atomic activity gate. Services and SDK resources remain
+process-lived. Same-session prepare can reuse that owner; a different session,
+device recreation and complete drained retirement remain explicit work.
+Initial startup currently depends on DLSS/Streamline, including on a machine
+where the desired later SR backend is different. Portable startup is incomplete.
+FG and latency choices stay disabled. Native-only quality is the only offered
+quality. SR enable/backend/preset, sharpening, colour transport/correction and
+a momentary capture action have shared overlay controls. Colour options save to
+the generic host's INI section and apply on the next graphics callback.
+
+After successful complete SR reinsertion, the adapter temporarily bypasses
+native TAA through its enable byte around the original processor and restores
+that byte on return. Native HDR, exposure and bloom still execute. Failure keeps
+the native temporal path. Native TAA at `0x1544DA0` checks clear-mask +0x30,
+calls `0x1545360` and consumes the mask before evaluation. Bit 0 selects main
+history targets 81/82; other bits include water history, motion and auxiliary
+targets. Successful SR frames preserve other bits and set bit 0 so the next
+native fallback cannot consume stale main history. Reader bytes at `0x1544DF4`
+are additionally guarded:
+`44 39 71 30 74 09 E8 61 05 00 00 44 89 73 30`.
+This follows the native consumer, rather than persisting a game INI override.
+IDA evidence is `ida-native-taa-evaluate.json` and `ida-native-taa-clear.json`.
+The original IDA worker expired while idle; the saved database was reopened
+without reanalysis as session `0044e197`, retaining the original input identity.
+
+The first SR run reached the host but failed NGX initialization. Its project
+identifier was ordinary text; Streamline's pinned `sl_core_types.h` documents a
+GUID. Supplying a stable valid GUID allowed initialization and actual evaluation.
+Do not attribute this failure to lack of SKSE, the driver or hook addresses.
+Receipt: `20261115-133537-native-sr/`; logs `native-sr-first-game.log` and
+`native-sr-retry-game.log`, with corresponding module inventories. The first
+capture retained four correct raw snapshots but had an off-by-one render-ID
+join and used a UE motion preview. Its "matched_present" field was premature
+and its unwritten preview statistic was inapplicable. Retain that failed capture
+as a bookkeeping correction, not evidence of input ownership or missing motion.
+
+The corrected complete capture is
+`scene-20261115-134423-927-8579609-34676-1`, under the game's development
+`ReScaleFrame/captures/website/`. Native render 1068, source identity null,
+1711x1048, standard Z, backend DLSS, native quality, colour transport enabled,
+camera-inclusive unjittered motion, scale `(-1,-1)`, settled reset=0 and actual
+Present S_OK join its frame/pass/backend metadata. Native/backend raw inputs,
+reconstructed colour and final Present colour are present. Native motion is
+finite and zero throughout this stationary scene. Native/output RGB is finite
+in [0,1]; 98.575% of pixels differ, mean absolute RGB difference 0.008561.
+This proves neither HDR highlight quality nor motion coverage. The reconstructed
+scene preview was inspected. No moving-camera, actor or gameplay acceptance is
+claimed. Evidence: `native-sr-present-game.log`, module inventory and
+`native-sr-present-pixels.json`; deployment `20261115-134354-sr-present/`.
+
+A subsequent run switched SR off and on through the shared settings API, without
+desktop input. With SR active, native TAA remained enabled outside the callback
+and clear mask was 1. With SR off, it remained enabled and the mask became 0,
+confirming native consumption of the reset request. Resuming SR evaluated again
+and produced another complete capture. This validates fallback routing/reset
+consumption and live settings, not visual quality during the transition.
+Evidence: `native-sr-fallback-game.log`, `native-sr-off-state.txt`,
+`native-sr-resumed-state.txt` and deployment `20261115-135301-sr-fallback/`.
+The sustained run also exposed Streamline's missing presentCommon bookkeeping
+warning. The shared backend now resolves its common-plugin before/after Present
+callbacks for this unwrapped native chain; wrapped/shared-host chains must not
+call it again. A failure suspends SR while native Present continues.
+
+The final sustained run observed two paired common-plugin callback successes,
+remained responsive through native render 4526 and did not repeat the warning.
+Its complete capture `scene-20261115-135811-092-9406765-23512-1` contains settled
+reset=0, backend=DLSS, native quality, source identity null and matched Present
+S_OK. The actual final-colour preview was inspected, including native compass
+and crosshair. This is not a moving-game quality acceptance. Evidence:
+`native-sr-bookkeeping-game.log` and module inventory; deployment backup
+`20261115-135642-sr-fallback/`. The TAA/history native functions and Present
+consumer have names/comments saved in the existing research IDA database.
+
+Moving-camera and independent/skinned/transparent velocity, native extent
+production/scaling, original-shader repair, worker input ownership, final
+HUD-less/UI leases, FG, measured latency and CS/ENB coexistence remain pending.
+CS is still refused until takeover is implemented. No SKSE was deployed or
+loaded. All bounded experiments close gracefully and remove their exact
+temporary QASmoke custom INI; deployment replacements have local backups.
+
+Final checkpoint validation: Release MSVC/VS2026 gate rebuilt all affected
+integrations and ran 226 discovered checks: 210 passed, 14 default opt-ins skipped
+and two failed (`anomaly_fg_dlss_sr5_device`, `anomaly_fg_fsr3_sroff_device`).
+These are the same failures recorded before this host work; their cause remains
+unresolved, and the full gate is failed. Skyrim plugin, camera, D3D11 host ABI,
+shared overlay, input capture and reinsertion fixtures passed. Formatting and
+Clippy passed separately because the CTest failure stops the gate first.
+No Rust behavior was changed. Receipts: `verify-native-sr-final.log` and
+`clippy-native-sr-final.log`. This is a development checkpoint, not a release or
+completed Skyrim integration.

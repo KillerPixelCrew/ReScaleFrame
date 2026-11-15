@@ -1,6 +1,44 @@
 # Implementation tracker
 
-## Skyrim SE native observer, 15 November 2026
+## Skyrim SE experimental native-resolution SR, 15 November 2026
+
+The exact-build no-SKSE adapter now leases native scene colour, depth, motion,
+main camera and actual swapchain synchronously at the guarded pre-HDR call.
+The shared D3D11 host evaluates DLSS at native resolution and returns its output
+to the R11G11B10 target. The native HDR chain continues, with TAA bypassed only
+after successful replacement. Native history is marked for clearing before a
+later fallback. This remains experimental and rendering_ready stays zero.
+
+Two bounded QASmoke runs evaluated DLSS successfully. A complete raw capture
+joins native/backend inputs, reconstructed output and actual native Present:
+1711x1048, standard Z, unjittered camera-inclusive motion, settled reset=0,
+source_frame_id=null and NO_FG. Stationary motion is zero throughout; the
+reinserted output is finite and differs from its source. This proves evaluation
+and reinsertion, not moving-game quality, a speedup or reduced-resolution SR.
+The first attempt failed NGX initialization because the project identifier was
+not a GUID; correcting the identifier enabled initialization. The first capture
+had offset render-ID bookkeeping and a misleading motion preview; the corrected
+capture has matching native identity and completes at actual Present.
+
+Host configuration, vendor selection, bindings, format conversion, SDK ownership,
+settings and shared overlay remain generic. SR backend/preset, sharpening,
+colour transport/correction and capture controls use the existing panel.
+The adapter supplies native conventions and accepts only full native extents.
+Camera conversion and graphics-free host ABI tests pass; the capture fixture
+rejects mismatched render IDs and invented source IDs.
+
+Reduced resolution, portable host startup without DLSS, device recreation/full
+retirement, moving/skinned/transparent motion, shader repairs, job-owned input,
+HUD-less FG/UI, measured latency and CS/ENB coexistence remain incomplete.
+CS activation is still refused until ownership handover exists.
+See [research](research/skyrim-se-integration.md) for captures and validation.
+
+Final VS2026 Release gate: 210 passes, 14 opt-in skips and the same two Anomaly
+FSR3 FG device failures, out of 226 discovered checks. The full gate remains
+failed. Skyrim, camera, host, capture, overlay and reinsertion checks passed;
+formatting and Clippy passed separately. No Rust behavior was changed.
+
+### Earlier observer checkpoints
 
 The no-SKSE exact-build adapter and generic XInput carrier build on Windows.
 A bounded vanilla run prepared/started the runtime session and produced sixteen

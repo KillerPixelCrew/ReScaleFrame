@@ -11,6 +11,12 @@
 #include <cwchar>
 #include <mutex>
 #include "cpu_events.h"
+#include "render_inputs.h"
+#include <rescaleframe/d3d11_host.h>
+#include <string>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace {
 constexpr char fingerprint[] =
@@ -27,9 +33,12 @@ std::atomic<uint32_t> calls{0};
 std::atomic<uint64_t> observations{0};
 std::atomic<uint64_t> pass_observations{0};
 rsf_game_host_services services{};
+rsf_game_host_services bound_services{}, bound_upstream{};
+using SetHostActive = int32_t (*)(void*, uint32_t);
+SetHostActive host_active = nullptr;
 bool prepared = false;
 bool enabled = false;
-const char* reason = "Native observers not prepared; SR, FG and latency are unimplemented.";
+const char* reason = "Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
 
 bool copy(void* output, const void* input, size_t size) noexcept
 {
@@ -116,7 +125,19 @@ void describe_native_inputs(char* message, size_t capacity) noexcept
 
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4) noexcept
 {
+#if defined(_MSC_VER)
+    const auto caller = uintptr_t(_ReturnAddress());
+#else
+    const auto caller = uintptr_t(__builtin_return_address(0));
+#endif
     calls.fetch_add(1, std::memory_order_acq_rel);
+    bool reconstructed = false;
+    if (accepting.load(std::memory_order_acquire) && input == 1 && output == 0 &&
+        caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x153adec) {
+        rsf_game_host_services host{};
+        { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) host = services; }
+        try { reconstructed = rsf::skyrim::reconstruct(manager, host); } catch (...) {}
+    }
     if (accepting.load(std::memory_order_acquire)) {
         const auto number = pass_observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
@@ -124,7 +145,7 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
             describe_target(input, colour, sizeof(colour));
             describe_target(7, motion, sizeof(motion));
             std::snprintf(message, sizeof(message),
-                "Skyrim native post-process observation=%llu source=%llu thread=%lu manager=%p input=%u output=%u; %s; motion candidate %s; no GPU processing",
+                "Skyrim native post-process observation=%llu source=%llu thread=%lu manager=%p input=%u output=%u; %s; motion candidate %s",
                 static_cast<unsigned long long>(number), static_cast<unsigned long long>(rsf::skyrim::cpu_source()),
                 GetCurrentThreadId(), manager, input, output, colour, motion);
             rsf_game_host_services host{};
@@ -140,7 +161,20 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
             }
         }
     }
+    // Retain native bloom, exposure and HDR. Only its temporal evaluation is redundant
+    // after a complete replacement. This byte is consumed on this native render owner.
+    uintptr_t taa = 0; unsigned char temporal_enabled = 0; uint32_t clear_mask = 0;
+    const bool bypass = reconstructed && copy(&taa, static_cast<unsigned char*>(manager) + 0x1f0, sizeof(taa)) && taa &&
+        copy(&temporal_enabled, reinterpret_cast<void*>(taa + 0x18), sizeof(temporal_enabled)) &&
+        copy(&clear_mask, reinterpret_cast<void*>(taa + 0x30), sizeof(clear_mask));
+    if (bypass) {
+        // Native 0x1544DF4 consumes this mask before evaluating TAA. Bit 0 clears
+        // main history targets 81/82, preventing stale history on an SR fallback.
+        *reinterpret_cast<uint32_t*>(taa + 0x30) = clear_mask | 1u;
+        *reinterpret_cast<unsigned char*>(taa + 0x18) = 0;
+    }
     const auto result = original_process(manager, input, output, argument4);
+    if (bypass) *reinterpret_cast<unsigned char*>(taa + 0x18) = temporal_enabled;
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
@@ -166,7 +200,7 @@ void observe_jitter(void* state) noexcept
             if (host.log) {
                 char message[256]{};
                 std::snprintf(message, sizeof(message),
-                    "Skyrim native jitter observation=%llu state=%p readable=%u size=%ux%u projection=%g,%g; no GPU processing",
+                    "Skyrim native jitter observation=%llu state=%p readable=%u size=%ux%u projection=%g,%g",
                     static_cast<unsigned long long>(number), state, readable ? 1u : 0u,
                     dimensions.width, dimensions.height, double(projection.x), double(projection.y));
                 try { host.log(host.user, message); } catch (...) {}
@@ -199,10 +233,14 @@ bool match_target()
     constexpr unsigned char call_expected[] = {0xe8,0x04,0x2e,0xfb,0xff};
     unsigned char call_actual[sizeof(call_expected)]{};
     const auto* site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x153ade7;
+    constexpr unsigned char reset_expected[] = {0x44,0x39,0x71,0x30,0x74,0x09,0xe8,0x61,0x05,0x00,0x00,0x44,0x89,0x73,0x30};
+    unsigned char reset_actual[sizeof(reset_expected)]{};
+    const auto* reset_site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1544df4;
     return copy(process_actual, process_target, sizeof(process_actual)) &&
         !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
         copy(call_actual, site, sizeof(call_actual)) &&
-        !std::memcmp(call_actual, call_expected, sizeof(call_actual));
+        !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
+        copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual));
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -242,10 +280,42 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
         return RSF_ERROR_NATIVE_REFUSED;
     }
     services = *args->host;
+    using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
+    const auto runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
+    const auto create_host = runtime ? reinterpret_cast<CreateHost>(GetProcAddress(runtime, "rsf_d3d11_host_create")) : nullptr;
+    host_active = runtime ? reinterpret_cast<SetHostActive>(GetProcAddress(runtime, "rsf_d3d11_host_set_active")) : nullptr;
+    wchar_t runtime_path[32768]{};
+    const auto path_length = runtime ? GetModuleFileNameW(runtime, runtime_path, 32768) : 0;
+    if (!create_host || !host_active || !path_length || path_length >= 32768) return RSF_ERROR_NOT_READY;
+    const auto separator = std::wcsrchr(runtime_path, L'\\');
+    if (!separator) return RSF_ERROR_NOT_READY;
+    const std::wstring directory(runtime_path, size_t(separator - runtime_path));
+    const auto ini = directory + L"\\ReScaleFrame.ini";
+    rsf_d3d11_host_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+    setup.configuration_path = ini.c_str(); setup.configuration_section = L"Rendering";
+    setup.runtime_directory = directory.c_str(); setup.identity_utf8 = "skyrim-se"; setup.executable_sha256 = fingerprint;
+    setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
+    setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
+    setup.units_to_meters = 0.0142875f; setup.quality_choices = 1;
+    setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
+    setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
+    if (bound_services.user) {
+        if (bound_upstream.session_id != args->host->session_id || bound_upstream.user != args->host->user ||
+            bound_upstream.log != args->host->log || bound_upstream.cpu_event != args->host->cpu_event) {
+            reason = "Experimental D3D11 host is process-lived; a different session requires process restart.";
+            return RSF_ERROR_NATIVE_REFUSED;
+        }
+        services = bound_services;
+    } else {
+        const auto host_result = create_host(&setup, &services);
+        if (host_result != RSF_OK) return host_result;
+        bound_services = services; bound_upstream = *args->host;
+    }
+    if (!rsf::skyrim::cpu_prepare(services)) return RSF_ERROR_NATIVE_REFUSED;
     observations.store(0, std::memory_order_relaxed);
     pass_observations.store(0, std::memory_order_relaxed);
     prepared = true;
-    reason = "Native jitter and pre-HDR observers prepared; no graphics processing or latency policy.";
+    reason = "Native pre-HDR SR prepared at native resolution; FG and latency ownership remain incomplete.";
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
@@ -267,8 +337,9 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         return RSF_ERROR_NATIVE_REFUSED;
     }
     enabled = true;
+    if (host_active) (void)host_active(services.user, 1);
     accepting.store(true, std::memory_order_release);
-    reason = "Pass-through native jitter and pre-HDR observations active; SR, FG and latency remain unimplemented.";
+    reason = "Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
@@ -277,6 +348,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
 {
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     accepting.store(false, std::memory_order_release);
+    if (host_active) (void)host_active(services.user, 0);
     rsf::skyrim::cpu_quiesce();
     return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() ? RSF_ERROR_BUSY : RSF_OK;
 }
@@ -286,6 +358,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(lifecycle);
     accepting.store(false, std::memory_order_release);
+    if (host_active) (void)host_active(services.user, 0);
     const bool cpu_stopped = rsf::skyrim::cpu_stop();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);
@@ -328,7 +401,7 @@ extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     if (requested_abi != RSF_GAME_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
     *api = {sizeof(*api), RSF_GAME_ABI_VERSION,
         {"skyrim-se", "Skyrim Special Edition", RSF_VERSION_STRING, 0,
-         "Native jitter and pre-HDR observation only; SR, FG and latency are unimplemented."},
+         "Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete."},
         detect, {prepare, start, quiesce, stop, status}};
     return RSF_OK;
 }

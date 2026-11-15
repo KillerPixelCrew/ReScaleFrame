@@ -226,6 +226,16 @@ target_link_libraries(rsf_native_reinsert PRIVATE ReScaleFrame::Graphics rsf_bui
 add_test(NAME native_reinsert_device COMMAND rsf_native_reinsert)
 set_tests_properties(native_reinsert_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
+add_executable(rsf_skyrim_camera skyrim_camera.cpp ../games/skyrim-se/src/camera.cpp)
+target_link_libraries(rsf_skyrim_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+add_test(NAME skyrim_camera_contract COMMAND rsf_skyrim_camera)
+
+add_executable(rsf_d3d11_host_test d3d11_host.cpp)
+target_include_directories(rsf_d3d11_host_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
+target_link_libraries(rsf_d3d11_host_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
+add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
+add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
+
 add_executable(rsf_resource_roles resource_roles.cpp)
 target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)

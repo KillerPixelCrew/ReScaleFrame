@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -65,7 +66,11 @@ bool matches(const rsf_game_render_pass* pass)
 {
     const auto& s = state(); const auto& id = s.identity;
     if (s.generic) return s.armed && pass && pass->struct_size >= sizeof(*pass) && (pass->flags & RSF_GAME_RENDER_PRIMARY) &&
-        pass->session_id == s.record.session_id && pass->source_frame_id == s.record.frame_id && uint32_t(pass->view_key) == s.record.view_id;
+        pass->session_id == s.record.session_id &&
+        ((s.record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID) ?
+            (!pass->source_frame_id && pass->native_frame == s.record.frame_id && (pass->flags & RSF_GAME_RENDER_NO_FG)) :
+            pass->source_frame_id == s.record.frame_id) && uint32_t(pass->view_key) == s.record.view_id &&
+        (!s.native_frame_known || pass->view_key == id.view_key);
     return state().armed && id.source_frame_id && pass && pass->struct_size >= sizeof(*pass) &&
         (pass->flags & RSF_GAME_RENDER_PRIMARY) && id.session_id == pass->session_id &&
         id.source_frame_id == pass->source_frame_id && id.native_frame == pass->native_frame &&
@@ -506,6 +511,8 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_pass_metadata(const rsf_game_rend
     s.identity.native_frame = pass->native_frame; s.native_frame_known = true;
     s.identity.view_key = pass->view_key; s.identity.family_key = pass->family_key;
     s.identity.scope_id = pass->scope_id; s.identity.viewport_key = pass->viewport_key;
+    std::memcpy(s.identity.render_rect, pass->render_rect, sizeof(pass->render_rect));
+    std::memcpy(s.identity.output_rect, pass->output_rect, sizeof(pass->output_rect));
     std::ofstream out(s.bundle / "engine_pass.json", std::ios::binary);
     out << "{\"session_id\":" << pass->session_id << ",\"source_frame_id\":" << pass->source_frame_id
         << ",\"native_frame\":" << pass->native_frame << ",\"view_key\":" << pass->view_key << ",\"history_key\":" << pass->history_key
