@@ -25,6 +25,11 @@
 namespace {
 constexpr char fingerprint[] =
     "846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f";
+int accept_presentation_window(void*, void* window) {
+    wchar_t name[128]{};
+    return window && GetClassNameW(static_cast<HWND>(window), name, 128) &&
+        std::wcscmp(name, L"Skyrim Special Edition") == 0;
+}
 using UpdateJitter = void (*)(void*);
 UpdateJitter original = nullptr;
 void* target = nullptr;
@@ -401,6 +406,8 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
     setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
     setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
+    // Shared presentation is not admitted until the combined SR transfer is verified.
+    setup.presentation_bridge = 0; setup.accept_window = accept_presentation_window;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
     if (bound_services.user) {

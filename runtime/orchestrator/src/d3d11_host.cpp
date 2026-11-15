@@ -4,6 +4,8 @@
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_window.h>
+#include <rescaleframe/native_fg.h>
+#include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/overlay_input.h>
@@ -57,6 +59,7 @@ struct Host {
     uint32_t execution_thread{}, backend{}, quality{}, preset{};
     uint32_t output_width{}, output_height{};
     bool configured{}, scene_bound{}, observer{}, attempted{}, running{}, reset{true};
+    bool bridge_installed{};
     std::atomic<bool> capture{};
     std::atomic<bool> active{};
     std::atomic<bool> transport{true}, fidelity{false};
@@ -67,6 +70,7 @@ struct Host {
     int32_t present_result{RSF_DLSS_OK};
     uint64_t present_pairs{};
     uint32_t ownership_reports{};
+    std::atomic<uint32_t> cpu_reports{};
     static void log(void* user, const char* text) {
         auto& self = *static_cast<Host*>(user);
         if (self.upstream.log) self.upstream.log(self.upstream.user, text);
@@ -82,8 +86,46 @@ struct Host {
     }
     static void cpu(void* user, const rsf_game_cpu_event* event) {
         auto& self = *static_cast<Host*>(user);
+        if (self.bridge_installed) {
+            const auto accepted = rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) {
+                rsf_native_fg_cpu(fact);
+            }, nullptr);
+            if (event && self.cpu_reports.fetch_add(1) < 24) {
+                char text[180]{}; std::snprintf(text, sizeof(text),
+                    "D3D11 CPU fact stage=%u source=%llu accepted=%d flags=0x%x",
+                    event->stage, static_cast<unsigned long long>(event->source_frame_id), accepted, event->flags);
+                log(&self, text);
+            }
+            return; // This host owns normalization; do not dispatch the same fact upstream twice.
+        }
         if (self.upstream.cpu_event) self.upstream.cpu_event(self.upstream.user, event);
         else (void)rsf_native_cpu_event(event);
+    }
+    static int accept_window(void* user, void* window) {
+        auto& self = *static_cast<Host*>(user);
+        return self.setup.accept_window && self.setup.accept_window(self.setup.presentation_user, window);
+    }
+    void install_bridge() {
+        if (!setup.presentation_bridge) return;
+        rsf_d3d11_present_setup bridge{}; bridge.struct_size = sizeof(bridge);
+        bridge.runtime_directory_utf8 = streamline.c_str(); bridge.log = log; bridge.user = this;
+        bridge.accept_window = accept_window; bridge.present_event = present;
+        bridge.prepare = rsf_native_fg_prepare; bridge.retire = rsf_native_fg_retire;
+        bridge.latency_event = [](void*, const rsf_observer_present_event* event) { rsf_native_fg_present(event); };
+        bridge.backend = 0; bridge.runtime_switching = 1; bridge.max_generated_frames = UINT32_MAX;
+        bridge.depth_inverted = bridge.depth_infinite = setup.depth_inverted;
+        bridge.units_to_meters = setup.units_to_meters; bridge.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
+        bridge.fsr3_directory_utf8 = bridge.fsr4_directory_utf8 = fidelityfx.c_str();
+        bridge.xess_directory_utf8 = xess.c_str(); bridge.streamline_directory_utf8 = streamline.c_str();
+        bridge.engine_type = setup.engine_type; bridge.engine_version_utf8 = version.c_str(); bridge.project_id_utf8 = project.c_str();
+        bridge_installed = rsf_d3d11_present_install(&bridge) != 0;
+        if (bridge_installed) {
+            rsf_native_fg_set_log(log, this);
+            const rsf_native_fg_options off{sizeof(off), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
+            rsf_native_fg_options_set(&off);
+        }
+        log(this, bridge_installed ? "D3D11 callback host installed cold presentation bridge; provider and generation start Off." :
+            "D3D11 callback host presentation bridge refused; native presentation retained.");
     }
     static void passes(void* user, void* raw_context, const rsf_game_render_pass* pass, uint32_t begin) {
         auto& self = *static_cast<Host*>(user);
@@ -92,7 +134,9 @@ struct Host {
         if (!presentation.owns_lock() || !self.configured || self.execution_thread != GetCurrentThreadId() ||
             (begin && !self.active.load(std::memory_order_acquire))) return;
         // Native ownership facts remain useful before a generation provider is enabled.
-        if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
+        if (pass->role == RSF_GAME_RENDER_FRAME && self.bridge_installed) rsf_native_fg_frame(pass, begin);
+        else if (pass->role == RSF_GAME_RENDER_SUBMISSION && self.bridge_installed) rsf_native_fg_submission(pass, begin);
+        else if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
             if (!raw_context || !pass->scene_surface) return;
             auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
             if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
@@ -100,7 +144,8 @@ struct Host {
             if (device.Get() != self.device.Get()) return;
             static_cast<ID3D11Texture2D*>(pass->scene_surface)->GetDevice(&device);
             if (device.Get() != self.device.Get()) return;
-            (void)rsf_native_scene_pass(pass, begin);
+            const auto accepted = rsf_native_scene_pass(pass, begin);
+            if (accepted && !begin && self.bridge_installed) rsf_native_fg_final(context, pass);
         }
         else if (pass->role == RSF_GAME_RENDER_WINDOW && pass->swapchain == self.chain.Get())
             (void)rsf_native_window_scope(pass, begin);
@@ -218,7 +263,10 @@ struct Host {
         rsf_observer_options observe{}; observe.struct_size = sizeof(observe); observe.abi_version = RSF_OBSERVER_ABI_VERSION;
         observe.format = UINT32_MAX; observe.minimum_width = UINT32_MAX; observe.capacity = 1;
         observe.log = log; observe.log_user = this; observe.on_present_event = present; observe.on_present_event_user = this;
-        observer = rsf_observer_install(&observe) == RSF_OBSERVER_OK;
+        if (rsf_d3d11_present_is_owner(pass.swapchain)) {
+            observer = true;
+            log(this, "D3D11 callback host uses bridge application Present events; native DXGI interception is unnecessary.");
+        } else observer = rsf_observer_install(&observe) == RSF_OBSERVER_OK;
         if (!observer) log(this, "D3D11 callback host: Present observation refused; SR activation suspended.");
         rsf_input_dump_configure(captures.c_str(), identity.c_str(), fingerprint.c_str(), log, this);
         std::snprintf(report.reason, sizeof(report.reason), "Waiting for verified scene inputs");
@@ -378,6 +426,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
         !std::isfinite(setup->units_to_meters) || setup->units_to_meters <= 0 || !setup->quality_choices || (setup->quality_choices & ~0x1fu) ||
         setup->motion.struct_size < sizeof(setup->motion) || !setup->motion.scale_x || !setup->motion.scale_y ||
         !std::isfinite(setup->motion.scale_x) || !std::isfinite(setup->motion.scale_y) ||
+        setup->presentation_bridge > 1 || (setup->presentation_bridge && !setup->accept_window) ||
         services->render_pass || services->render_config || services->process_upscale || services->present || services->scope_state ||
         services->submit || services->process_latency || services->render_feedback) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(creation); if (owner.load()) return RSF_ERROR_BUSY;
@@ -385,11 +434,12 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
     self->ini = setup->configuration_path; self->section = setup->configuration_section; self->root = utf8(setup->runtime_directory);
     self->identity = setup->identity_utf8; self->fingerprint = setup->executable_sha256;
     self->version = setup->engine_version_utf8; self->project = setup->project_id_utf8;
-    // Only numeric configuration is read from setup after this call. Keep no borrowed strings.
+    // Numeric metadata and process-lived policy callbacks survive; strings are copied.
     self->setup.configuration_path = self->setup.configuration_section = self->setup.runtime_directory = nullptr;
     self->setup.identity_utf8 = self->setup.executable_sha256 = self->setup.engine_version_utf8 = self->setup.project_id_utf8 = nullptr;
     self->streamline = self->root + "/streamline"; self->fidelityfx = self->root + "/fidelityfx";
     self->xess = self->root + "/xess"; self->captures = self->root + "/captures";
+    self->install_bridge();
     *services = {sizeof(*services), RSF_GAME_ABI_VERSION, self->upstream.session_id, Host::log, nullptr, self.get(), Host::config, Host::cpu};
     services->process_upscale = process; services->render_feedback = Host::feedback;
     services->render_pass = Host::passes;

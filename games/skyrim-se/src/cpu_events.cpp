@@ -6,6 +6,9 @@
 #include <atomic>
 #include <cstring>
 #include <cstdio>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace rsf::skyrim {
 namespace {
@@ -13,6 +16,7 @@ struct Frame {
     rsf_game_host_services host{};
     uint64_t source{};
     uint64_t render_scope{};
+    uint32_t primary_count{};
     bool sampled{}, render_entered{}, simulation_ended{};
 };
 thread_local Frame* current{};
@@ -35,13 +39,13 @@ void emit(Frame& frame, uint32_t stage)
     event.qpc_frequency = frequency; event.event_version = RSF_GAME_CPU_EVENT_VERSION;
     event.flags = RSF_GAME_CPU_INPUT_KEYED;
     if (stage == RSF_GAME_CPU_FRAME_END && !frame.render_entered) event.flags |= RSF_GAME_CPU_RENDER_SKIPPED;
-    // No primary GPU renderer has been published yet. Source identity alone cannot authorize FG.
-    event.render_expected = 0;
+    event.render_expected = frame.primary_count;
     try { frame.host.cpu_event(frame.host.user, &event); } catch (...) {}
 }
 short tick(void*);
 uintptr_t poll(void*);
 uintptr_t render(void*);
+uintptr_t world(void*, uint32_t, uint8_t);
 int dispatch(void*, void*);
 struct Hook {
     uint32_t rva;
@@ -51,11 +55,12 @@ struct Hook {
     void* target{};
     bool created{}, enabled{};
 };
-std::array<Hook, 4> hooks{{
+std::array<Hook, 5> hooks{{
     {0x658870, {0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x30,0x01,0x00,0x00}, reinterpret_cast<void*>(&tick)},
     {0xcf95f0, {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x30,0x0f,0x29,0x74,0x24}, reinterpret_cast<void*>(&poll)},
     {0x6565b0, {0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x60,0x01,0x00,0x00,0x48}, reinterpret_cast<void*>(&render)},
-    {0xcfa650, {0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48}, reinterpret_cast<void*>(&dispatch)}
+    {0xcfa650, {0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48}, reinterpret_cast<void*>(&dispatch)},
+    {0x656e60, {0x48,0x8b,0xc4,0x89,0x50,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d}, reinterpret_cast<void*>(&world)}
 }};
 bool copy_input(void* out, const void* pointer, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -69,6 +74,43 @@ bool copy_input(void* out, const void* pointer, size_t size) noexcept {
         address + size > uintptr_t(memory.BaseAddress) + memory.RegionSize) return false;
     std::memcpy(out, pointer, size); return true;
 #endif
+}
+rsf_game_render_pass render_fact(uint32_t role) {
+    rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = role;
+    if (!current || !current->host.render_pass || !cpu_render_identity(pass)) return pass;
+    pass.session_id = current->host.session_id;
+    pass.flags |= RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG;
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    uintptr_t window{}, root{}, camera{};
+    (void)copy_input(&pass.native_frame, reinterpret_cast<const void*>(base + 0x33363f4), sizeof(uint32_t));
+    if (copy_input(&root, reinterpret_cast<const void*>(base + 0x3230740), sizeof(root)) && root)
+        (void)copy_input(&camera, reinterpret_cast<const void*>(root + 296), sizeof(camera));
+    pass.family_key = pass.view_key = pass.history_key = camera;
+    if (copy_input(&window, reinterpret_cast<const void*>(base + 0x3330198), sizeof(window)) && window) {
+        pass.viewport_key = pass.window_key = pass.rhi_viewport_key = window;
+        (void)copy_input(&pass.swapchain, reinterpret_cast<const void*>(window + 0x18), sizeof(pass.swapchain));
+    }
+    return pass;
+}
+void report_render(const rsf_game_render_pass& pass, uint32_t begin) {
+    if (current && current->host.render_pass && pass.source_frame_id) {
+        try { current->host.render_pass(current->host.user, nullptr, &pass, begin); } catch (...) {}
+    }
+}
+uintptr_t world(void* main, uint32_t output, uint8_t flags) {
+    Entry lease;
+#if defined(_MSC_VER)
+    const auto caller = uintptr_t(_ReturnAddress());
+#else
+    const auto caller = uintptr_t(__builtin_return_address(0));
+#endif
+    auto pass = render_fact(RSF_GAME_RENDER_SUBMISSION);
+    const bool primary = caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x656e32 && output == 0 &&
+        pass.source_frame_id && pass.view_key && pass.swapchain;
+    if (primary) report_render(pass, 1);
+    const auto result = reinterpret_cast<uintptr_t (*)(void*, uint32_t, uint8_t)>(hooks[4].original)(main, output, flags);
+    if (primary) { ++current->primary_count; report_render(pass, 0); }
+    return result;
 }
 uint32_t input_kinds(const void* list) noexcept {
     struct Event { uintptr_t vtable; uint32_t device, type; uintptr_t next; };
@@ -175,7 +217,10 @@ uintptr_t render(void* main)
             emit(*current, RSF_GAME_CPU_SIMULATION_END);
         }
     }
+    const auto pass = render_fact(RSF_GAME_RENDER_FRAME);
+    report_render(pass, 1);
     const auto result = reinterpret_cast<uintptr_t (*)(void*)>(hooks[2].original)(main);
+    report_render(pass, 0);
     if (current) current->render_scope = previous_scope;
     return result;
 }
