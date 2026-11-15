@@ -2,6 +2,14 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The adapter now has a guarded native interface boundary hook for F10 research.
+It captures the backbuffer before/after native interface drawing using the
+existing same-frame capture lease. Focused Release build and plugin contract
+passed; the running game retains its previous DLL, so the new hook is not yet
+deployed or game-tested. This locates a candidate final-scene/UI boundary and
+does not enable FG. See the native interface boundary section in
+[research](research/skyrim-se-integration.md#native-interface-boundary-capture-for-fg-research-15-november-2026).
+
 The user reports a visible improvement after the direct DLSS motion correction.
 Continued audit verified1997 native CPU bone-history samples and four actual
 VS b9/b10 GPU buffer pairs against their CPU arrays. Two active Lighting VS

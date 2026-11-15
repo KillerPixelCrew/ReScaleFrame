@@ -3,6 +3,7 @@
 #include "camera.h"
 #include "resolution.h"
 #include "auxiliary.h"
+#include "presentation_inputs.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -125,6 +126,7 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
     if (reduced) reconstructed = reconstruct_auxiliaries(context.Get(), pass, host);
     else reconstructed = host.process_upscale(host.user, context.Get(), &pass) == RSF_OK;
     observe_auxiliaries(context.Get(), pass, host);
+    identify_presentation_inputs(pass);
     return reconstructed;
 }
 }
