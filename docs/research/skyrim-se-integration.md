@@ -537,3 +537,84 @@ previous transforms at their native producer, and extend the shared replacement
 mechanism when an interface/resource change is required. The existing whole,
 same-length DXBC instruction operation cannot add missing vertex interpolators
 or previous skeletal/object data, and must not be presented as that repair.
+
+### CPU scope, worker input and HDR reinsertion
+
+Question: which native update owns the inputs and scene, and can shared SR output
+return to the native R11G11B10 colour target without bypassing HDR processing?
+
+The adapter now detours three additional exact-build entries with 19-byte guards:
+
+| RVA | Fact reported |
+| --- | --- |
+| `0x658870` | Outer non-nested Main update, FRAME_BEGIN/FRAME_END with a monotonic CPU scope. Its incoming callers ignore the native SHORT return, which the detour preserves. |
+| `0xCF95F0` | Actual six-device polling entry. INPUT_SAMPLE is reported only when the calling thread owns that CPU scope. |
+| `0x6565B0` | Rendering entry after update work, before state reset, Renderer::Begin and scene/menu routing. Reports SIMULATION_END once inside the scope. |
+
+These hooks report no invented simulation-begin, device activity, Windows message
+or vendor marker. The runtime normalizes missing input/simulation boundaries.
+The carrier forwards the existing CPU-event C ABI into the runtime's generic
+fact cache, with bounded acceptance logs. No sleep, vendor selection or pacing
+SDK call was added to the adapter or carrier. CPU callbacks drain before their
+borrowed host services retire; disabled trampolines remain process-lived with
+the pinned adapter. No primary GPU renderer is published yet, so render_expected
+remains zero and these scopes do not authorize FG.
+
+Two responsive no-SKSE starting-cell runs accepted the initial 32 reported CPU
+facts and carried source IDs 1..16 into the corresponding pre-HDR observations.
+The first run had no scoped INPUT_SAMPLE. A second bounded poll probe explains
+why: startup polling ran on the main thread outside an update, then gameplay
+polling ran on multiple worker threads while the update/render scope was active.
+In the observed log, SIMULATION_END preceded that worker poll. Native callback
+`0x6E6030` routes through `0x659DF0` to polling, and its callback/name record at
+`0x20B5130` names it "Poll controls". Timing overlap, a latest-tick atomic and the
+native counter at `0x33363F8` are diagnostics, not ownership proofs. The adapter
+therefore leaves those polls unassigned, and the runtime derives a labeled
+substitute instead of pacing at a late or mismatched input sample. The next
+latency task is native job submission/join ownership and the relation between
+polled controls and the following simulation, not another render counter.
+
+Evidence: `ida-input-caller-*.json`, `ida-native-render-boundary.json`,
+`ida-tick-incoming-*.json`, `ida-main-frame-owner.json`, `ida-input-job-*.json`,
+`ida-frame-callback-*.json`, `cpu-facts-game-initial.log` and
+`cpu-poll-route-game.log`. The loading-loop owner at `0x6E4C20` is distinct and
+was not substituted for the actual update tick. The IDA names/comments are saved.
+Deployment receipts/backups are in `20261115-125635-cpu-facts/` and
+`20261115-130016-poll-route/` beneath the local deploy-backups directory.
+Both games closed gracefully and their temporary custom INIs were removed.
+
+The shared SR writeback previously rejected different output/native formats.
+`runtime/orchestrator/src/native_reinsert.cpp` now preflights both destinations,
+keeps matching-format copies bit exact, and converts floating RGB/RGBA output
+through rect-local cached scratch targets before copying to the requested native
+rectangle. This preserves surrounding pixels and also works for a native target
+without an RTV bind flag. No tonemapping, transfer function or game switch is
+introduced. The shared binding scope clears conflicting UAVs, inherited stages
+and predication and restores them afterwards; conversion resources retire with
+the existing SR pipeline resources. Engine-specific precision/allocation policy
+remains adapter work. A higher-precision copy cannot repair precision already
+lost in the native source.
+
+The new WARP device fixture covers HDR values up to 32, differing per-pixel
+colours, R32 RGBA to R11G11B10 and RGBA16F destinations, offset rectangles,
+untouched borders, bit-exact matching formats, aliased mirrors, rejection before
+partial native writes, resource reuse/retirement and a conflicting source UAV.
+It first caught the existing plain blit's forced opaque alpha; the new explicit
+COPY_RGBA mode preserves source alpha, and the existing fullscreen-pass fixture
+still passes. This is generic device evidence, not an SR evaluation in Skyrim.
+Actual SR host wiring, reduced-resolution ownership, motion contents/repairs,
+worker input ownership, final HUD-less FG/UI/Present leases and CS/ENB ownership
+remain incomplete. Code-level rendering readiness stays zero.
+
+Final validation for this checkpoint: `eng/verify.ps1 -VS2026 -Configuration Release`
+rebuilt the affected shared runtime, carriers and adapters and reached 224 checks.
+The Skyrim contract, existing fullscreen pass and new reinsertion device fixture
+passed; the same two Anomaly FSR3 FG device fixtures failed. The full gate remains
+failed. Formatting and Clippy passed separately after CTest stopped the script.
+Logs: `verify-cpu-reinsert-retry.log`, `clippy-cpu-reinsert-retry.log`.
+A final start-failure rollback correction retains prepared CPU callback services
+for retry. Its successful hook path is unchanged from the bounded game runs;
+a forced MinHook enable failure was not exercised in-game.
+The bounded poll log contains 32 accepted emitted facts, sixteen pre-HDR scopes
+1..16, and sixteen unassigned polls across seven threads. These facts do not
+prove actual input-to-render latency, FG eligibility or vendor SR evaluation.

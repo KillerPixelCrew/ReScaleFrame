@@ -10,6 +10,7 @@
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/srv_format.h>
 #include "native_regions.h"
+#include "native_reinsert.h"
 #include <d3d11.h>
 #include <cstring>
 #include <wrl/client.h>
@@ -175,20 +176,9 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     auto* output = static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
     auto* target = static_cast<ID3D11Texture2D*>(pass->color_output);
     auto* readable = static_cast<ID3D11Texture2D*>(pass->color_output_readable);
-    auto fits = [&](ID3D11Texture2D* destination) {
-        if (!output || !destination) return false;
-        D3D11_TEXTURE2D_DESC src{}, dst{}; output->GetDesc(&src); destination->GetDesc(&dst);
-        return src.Format == dst.Format && src.SampleDesc.Count == 1 && dst.SampleDesc.Count == 1 &&
-            src.Width == output_width && src.Height == output_height &&
-            uint32_t(pass->output_rect[2]) <= dst.Width && uint32_t(pass->output_rect[3]) <= dst.Height;
-    };
-    if (!fits(target) || (readable && !fits(readable))) { history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
-    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
-    immediate->OMSetRenderTargets(0, nullptr, nullptr);
-    const D3D11_BOX box{0,0,0,output_width,output_height,1};
-    immediate->CopySubresourceRegion(target,0,UINT(pass->output_rect[0]),UINT(pass->output_rect[1]),0,output,0,&box);
-    if (readable && readable != target)
-        immediate->CopySubresourceRegion(readable,0,UINT(pass->output_rect[0]),UINT(pass->output_rect[1]),0,output,0,&box);
+    if (!rsf_native_reinsert(static_cast<ID3D11DeviceContext*>(context), output, target, readable, pass->output_rect)) {
+        history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+    }
     history.session = pass->session_id; history.owner = pass->history_key; history.frame = pass->native_frame;
     history.width = source.render_width; history.height = source.render_height;
     std::memcpy(history.render_rect, pass->render_rect, sizeof(history.render_rect));
@@ -200,7 +190,8 @@ catch (...) { history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
 extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
 {
     rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
-    native_enabled.store(0, std::memory_order_release); exposure_resources().release(); rsf_native_regions_release(); history = {};
+    native_enabled.store(0, std::memory_order_release); exposure_resources().release(); rsf_native_regions_release();
+    rsf_native_reinsert_release(); history = {};
     rsf_native_translucency_release();
     std::lock_guard<std::mutex> lock(surface_guard); surface_config = {};
 }

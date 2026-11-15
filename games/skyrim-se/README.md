@@ -29,5 +29,11 @@ The probe also logs four main-camera cache/projection/history samples and the
 native main-depth descriptor. The first sample has zero previous-history components;
 no vendor inputs or input-frame identity are inferred from these logs.
 
+Native update begin/end and render-entry CPU facts reach the runtime's shared
+event cache. Input polling is hooked, but gameplay polling ran on worker threads
+outside the update's thread-local scope in the bounded run. Worker handoff and
+input-to-simulation ownership are not verified; the runtime uses explicit missing-
+input substitutes. No vendor pacing or low-latency acceptance is claimed.
+
 See [research](../../docs/research/skyrim-se-integration.md) for fingerprints,
 the source/binary evidence, deployment receipt location and remaining work.

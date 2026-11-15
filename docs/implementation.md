@@ -31,6 +31,16 @@ Original DXBC arithmetic establishes selected written-motion conventions and
 literal target-1 repair candidates; live draw/binding coverage remains open.
 GPU leases, shader repairs and vendor evaluation are still unimplemented.
 
+The adapter now reports native update begin/end and render-entry CPU facts through
+the existing game API. Both bounded runs carried update sources into pre-HDR,
+and the runtime accepted the first 32 emitted facts. Gameplay input polling was
+observed on seven threads outside that thread-local scope, so worker input-to-
+simulation ownership remains unresolved and the runtime uses labeled substitutes.
+No vendor sleep or latency policy was added to the adapter or carrier.
+Shared SR reinsertion now converts floating HDR formats into offset native targets
+and mirrors, preserving linear values, alpha and inherited GPU state. Its WARP
+fixture passed; this is not an SR evaluation in Skyrim.
+
 [Research](research/skyrim-se-integration.md) records the exact executable,
 current references, original shader inventory, matching CS release/PDB, hook
 bytes, deployment and run. [Engine metadata](../games/skyrim-se/engine.json)
@@ -38,7 +48,7 @@ distinguishes observation from processing. The next implementation work is GPU
 pass ownership, complete temporal inputs, CS ownership handover and shader repair.
 
 Validation: Skyrim ABI and generic/existing Wingman XInput contracts passed.
-The latest Release VS2026 gate reached 223 tests but two Anomaly FSR3 FG device fixtures
+The latest Release VS2026 gate reached 224 tests but two Anomaly FSR3 FG device fixtures
 failed, and reproduced in isolation. Three carrier/Skyrim checks passed in the
 focused rerun. Formatting and Clippy passed separately. The full gate remains
 failed pending those device failures; no Rust behavior was changed.
