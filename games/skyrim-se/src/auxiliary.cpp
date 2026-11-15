@@ -53,8 +53,10 @@ bool reconstruct_auxiliaries(void* context, const rsf_game_render_pass& pass, co
         // The splitter producer constructs clip-space water-plane geometry from the
         // native frustum, rather than a jittered main-scene vertex projection.
         if (i != 3) {
-            a.jitter_pixels[0] = pass.camera.jitter_pixels[0] * float(d.Width) / float(pass.camera.output_width);
-            a.jitter_pixels[1] = pass.camera.jitter_pixels[1] * float(d.Height) / float(pass.camera.output_height);
+            // The resampler subtracts its offset; sampling jittered geometry at
+            // an unjittered output position requires adding geometry displacement.
+            a.jitter_pixels[0] = -pass.camera.jitter_pixels[0] * float(d.Width) / float(pass.camera.output_width);
+            a.jitter_pixels[1] = -pass.camera.jitter_pixels[1] * float(d.Height) / float(pass.camera.output_height);
         }
     }
     const rsf_d3d11_auxiliary_pass request{sizeof(request), RSF_D3D11_HOST_ABI_VERSION, &pass, uint32_t(surfaces.size()), surfaces.data()};

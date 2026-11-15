@@ -25,7 +25,19 @@ int main()
     native.jitter_ndc[0] = -0.0005f; native.jitter_ndc[1] = 0.001f;
     rsf_camera_frame frame{}; float backward[16]{}; bool history{};
     check(rsf::skyrim::camera_frame(native, 1000, 500, frame, backward, history) && history, "valid perspective and history");
-    check(std::abs(frame.jitter_pixels[0] - 0.25f) < 1e-6f && std::abs(frame.jitter_pixels[1] - 0.25f) < 1e-6f, "jitter signs and pixel units");
+    float jittered_projection[16]{};
+    std::memcpy(jittered_projection, native.projection, sizeof(jittered_projection));
+    // Native BuildCameraCache postmultiplies projection by clip translation.
+    for (unsigned row = 0; row < 4; ++row) {
+        jittered_projection[row * 4] += native.projection[row * 4 + 3] * native.jitter_ndc[0];
+        jittered_projection[row * 4 + 1] += native.projection[row * 4 + 3] * native.jitter_ndc[1];
+    }
+    const float sample[]{1, 2, 5, 1};
+    const float w = transformed(sample, native.projection, 3);
+    const float displacement_x = (transformed(sample, jittered_projection, 0) - transformed(sample, native.projection, 0)) / w * 500;
+    const float displacement_y = -(transformed(sample, jittered_projection, 1) - transformed(sample, native.projection, 1)) / w * 250;
+    check(std::abs(frame.jitter_pixels[0] - displacement_x) < 1e-5f && std::abs(frame.jitter_pixels[1] - displacement_y) < 1e-5f,
+        "reported jitter matches native projected geometry in Y-down pixels");
     const float world[]{10, 0, 5, 1};
     check(std::abs(transformed(world, frame.world_to_view, 0)) < 1e-5f, "absolute world origin conversion");
     const float clip[]{0, 0, 4.04f, 5};

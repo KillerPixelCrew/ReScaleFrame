@@ -74,8 +74,10 @@ bool camera_frame(const NativeCamera& native, uint32_t width, uint32_t height,
     if (!history_valid) { identity(out.clip_to_previous_clip); identity(previous_clip_to_clip); }
     out.struct_size = sizeof(out); out.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     std::memcpy(out.view_to_clip, native.projection, sizeof(native.projection));
-    out.jitter_pixels[0] = -native.jitter_ndc[0] * float(width) * 0.5f;
-    out.jitter_pixels[1] = native.jitter_ndc[1] * float(height) * 0.5f;
+    // The native cache postmultiplies projection by an NDC translation.
+    // Report geometry displacement in pixel coordinates (Y down), as SR expects.
+    out.jitter_pixels[0] = native.jitter_ndc[0] * float(width) * 0.5f;
+    out.jitter_pixels[1] = -native.jitter_ndc[1] * float(height) * 0.5f;
     if (!std::isfinite(out.jitter_pixels[0]) || !std::isfinite(out.jitter_pixels[1])) return false;
     out.render_width = out.output_width = width; out.render_height = out.output_height = height;
     out.near_plane = native.near_plane; out.far_plane = native.far_plane;

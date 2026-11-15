@@ -2,6 +2,16 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+User reports of XeSS smearing and blurry DLSS exposed an inverted temporal
+jitter sign. The adapter now matches native projected geometry displacement;
+auxiliary sampling keeps its previous source mapping. The focused camera
+projection check and Release build passed; the fix is deployed. Settled FSR4
+Ultra Performance captures have reset0; corrected XeSS/DLSS moving quality
+remains unaccepted. Material mip-bias adjustment is still missing and requires
+a verified native consumer. Native bone history production and separate b9/b10
+uploads are now traced, without claiming live skinned coverage or shader repair.
+See the research's temporal-jitter and skeletal-history corrections below.
+
 Reduced DLSS now runs through a transactional auxiliary handoff. Depth/stencil,
 normals and motion are reconstructed for native postprocessing and restored at
 RendererEnd; underwater-mask retirement preserves the native DOF clear. The

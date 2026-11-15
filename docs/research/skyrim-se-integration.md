@@ -1128,7 +1128,7 @@ evidence. The current adapter reports NO_FG and rendering_ready=0.
 | Pass/material class | Required inputs and available producer/binding evidence | Gaps and validation |
 | --- | --- | --- |
 | Static/instanced lighting and terrain | Native Lighting family; main depth 0 and motion 7; selected original PS uses current/previous unjittered screen positions. Main camera matrices/origins are captured and converted independently. | Per-variant world/instance/terrain buffers, slot ranges and actual writes are not established. Static dry-room zero motion is not moving coverage. |
-| Skinned/deformed actors | Current and previous object transforms, bone/deformation data and matching depth/motion variants are required. Lighting family inventory supplies candidates. | Native previous-bone producer, lifetime, bindings and moving/skinned capture are missing. Current bones or camera reprojection will not stand in for previous deformation. |
+| Skinned/deformed actors | Native updater0x1015800 retains previous bone arrays, uploader0x1578c80 binds VS b9 previous/b10 current; object updater0xeebf40 retains previous world transform. | Static executable evidence only. Partition/index ranges, per-draw buffers, moving/skinned writes and deformation coverage remain unverified. Current bones or camera reprojection will not stand in for previous deformation. |
 | Distant trees and RunGrass | Both native families mapped; selected original grass PS has the native motion formula. | Wind/LOD/instance previous data, alpha-tested coverage and camera/object-motion captures remain unverified. |
 | Effect and particle/translucent geometry | Native Effect/Particle families mapped; literal-output candidates found in bytecode. | A literal is not proof of a missing live vector. Need actual variants, depth/motion blend/write masks, transforms and particle history before targeted repair. |
 | Water/refraction | Water family mapped; native depth, target 13 normals and conditional target 12 mask identified at their consumers. | Dry-room auxiliary buffers are zero. Active water displacement history, transparency/depth coverage, fractional viewport and vector writes need capture. |
@@ -1190,3 +1190,82 @@ was restored and SR enabled again. Logs: `build-native-post-constants.log` and
 This establishes the reported cropping correction and bounded dry-room reduced
 DLSS path. Active water/refraction, moving shader coverage, other backends,
 device recreation, FG, latency and CS/ENB coexistence remain unaccepted.
+
+### Temporal jitter sign correction and texture-detail gap
+
+The user reported severe XeSS Ultra Performance smearing and blurry DLSS even
+at Quality after the cropping fix. Those reports invalidate any broader visual
+quality acceptance inferred from correctly fitted landmarks. Capture
+`scene-20261115-171000-331-20916015-39248-3` preserves the reported XeSS
+640x360 input/output path; it has reset1 and is not a settled quality comparison.
+
+Native `State_BuildCameraCache`, RVA `0x101e4e0`, copies unjittered projection
+to cache+0x1c0, then postmultiplies its raster projection at +0x80 by an NDC
+translation built from State+0x44/+0x48 (alternate pair +0x4c/+0x50 for bit9).
+The code at `0x101e6e7..0x101e751` and a read-only live camera-cache sample
+confirm projection entries [8]/[9] carry those translations. Thus projected
+geometry moves by `(nativeX*renderWidth/2, -nativeY*renderHeight/2)` in Y-down
+pixels. The adapter had reported the opposite sign on both axes. Intel's
+[XeSS guide](https://github.com/intel/xess/blob/main/doc/xess_sr_developer_guide_english.md#jitter-offset)
+and the installed SDK's DX12 sample agree with the geometry-displacement
+convention. This is a producer/API mismatch, not evidence of low vendor quality.
+
+The adapter now reports the measured sign. Auxiliary reconstruction retains
+its previous source mapping by negating the API jitter for its subtract-offset
+sampler. A focused camera check independently projects a point through the
+native clip translation and compares screen displacement against reported
+jitter; it replaces the old check that merely asserted the mistaken sign.
+Release plugin/camera builds and that check passed, with no full fixture rerun.
+Deployment `20261115-171418-sr-fallback`, PID39896, contains the correction.
+The user continued live backend switching. Captures
+`scene-20261115-171628-054-21303734-39896-3` and
+`scene-20261115-171740-464-21376140-39896-4` establish settled FSR4
+640x360 evaluation with reset0, corrected jitter and native final Present.
+They do not establish corrected XeSS/DLSS moving quality. No sharpening was
+added to mask the defect. Evidence: `build-skyrim-jitter-sign.log`,
+`jitter-projection-native-live.json`, `jitter-sign-before-game.log`.
+
+After the user closed that process, fresh PID35796 retained the same corrected
+deployment. Settled captures `scene-20261115-172016-537-21532218-35796-1`
+(XeSS Quality1130x636) and `scene-20261115-172048-043-21563718-35796-2`
+(XeSS Ultra Performance640x360) both have reset0 and complete final Present.
+The inspected outputs retain fine chest edges and stone detail without the
+earlier severe streaking. This is a static-room observation, not moving-scene
+acceptance or an isolated numeric comparison against the reset1 earlier capture.
+`scene-20261115-172139-222-21614906-35796-3` also establishes settled
+DLSS Quality1280x720 with reset0 and visibly resolved stone/chest detail in the
+inspected SR output. `jitter-sign-vendor-checks-game.log` retains the switches.
+
+Texture mip selection remains another quality gap. The pinned CS State.cpp
+computes log2(render/output) and its shaders use SampleBias; its DLSS policy
+adds a further -1. RSF's native adapter currently has no equivalent verified
+material sampler adjustment. Native setting string `fMipBias:Display` points
+to setting name field RVA `0x20d6a68`, but no consumer or scene-only lifetime has
+yet been proven. An INI write or global sampler bias is not an implemented
+repair. Trace the material producer/binding and preserve UI/shadow sampling
+before adding the appropriate shader/sampler correction.
+
+### Native skeletal and object history producers
+
+To determine whether skinned motion needs new history or only corrected writes,
+the NiSkinInstance name registration led to factory RVA `0xf09a10`, constructor
+`0xf0a690`, and its matched 0x88-byte layout. Fields +0x48/+0x50 are separate
+current/previous bone arrays, +0x38 a frame stamp, +0x3c matrix count, +0x40
+registers per matrix, +0x44 allocated bytes and +0x60 the critical section.
+Following references to the already proven native renderer counter located
+updater `0x1015800`. Under that lock, once per native counter, it copies old
+current matrices to previous, computes new current matrices, and initializes
+previous from current only after allocation changes. Each matrix occupies
+48 bytes. This first-allocation initialization is a native history reset, not
+a generally valid substitute for previous animation.
+
+The direct caller `0x1578c80` updates the skin, uploads current and previous
+arrays separately, and binds VS constant buffers b10 and b9 respectively.
+It uses three float4 registers per bone and TLS+0x2a00 to skip repeated work
+for the same skin. The actual capacity and partition/index mapping still need
+draw-time verification; the reference shader's 240 float4 declarations do not
+prove all native draws fit that range. Object updater `0xeebf40` preserves the
+old 0x34-byte world transform at object+0xb0 before updating object+0x7c,
+with native counter/initialization/reset branches. These functions were named
+and saved in the matched IDA database. `native-bone-history-producer.json`
+retains the decompilation. No live bone capture or shader repair is claimed.
