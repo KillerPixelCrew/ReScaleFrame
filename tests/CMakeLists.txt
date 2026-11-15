@@ -245,6 +245,9 @@ set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 
 add_executable(rsf_skyrim_camera skyrim_camera.cpp ../games/skyrim-se/src/camera.cpp)
 target_link_libraries(rsf_skyrim_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME skyrim_camera_contract COMMAND rsf_skyrim_camera)
+add_executable(rsf_skyrim_input skyrim_input.cpp ../games/skyrim-se/src/cpu_events.cpp)
+target_link_libraries(rsf_skyrim_input PRIVATE ReScaleFrame::GameSDK minhook rsf_build_options)
+add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 
 add_executable(rsf_sampler_bias sampler_bias.cpp ../runtime/orchestrator/src/sampler_bias.cpp)
 target_include_directories(rsf_sampler_bias PRIVATE ../runtime/orchestrator/include)

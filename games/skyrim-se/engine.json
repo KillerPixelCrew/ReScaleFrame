@@ -329,16 +329,30 @@
     ],
     "native_camera_check": "Right wall native vectors vs depth/camera reprojection p95 below0.009 input pixels; native check does not establish vendor conversion or deformation coverage"
   },
+  "delivered_input_research": {
+    "date": "2026-11-15",
+    "status": "Release-built, focused input and Skyrim plugin contracts passed; deployed startup accepted, positive delivered-kind emission unverified",
+    "dispatch_rva": "0xcfa650",
+    "guard": "48 8b c4 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48",
+    "layout": "InputEvent header24 bytes, device+8/type+C/next+10, corroborated native constructors and queue producer",
+    "fact": "Delivered kind mask through existing INPUT_EVENT/INPUT_UNFRAMED, source0; no key/text/button/delta values retained",
+    "task_ownership": "Main group submission60EAF0 and join60EB80 bracket workers; EBC170 claims callbacks concurrently, so table order is not completion order",
+    "pending": "Live delivered-event reporting, consuming simulation/input source association, native input-sample pacing and FG identity",
+    "evidence": "docs/research/skyrim-se-integration.md#native-delivered-input-kinds-and-task-ownership-15-november-2026"
+  },
   "interface_boundary_research": {
     "date": "2026-11-15",
-    "status": "Guarded F10 capture hook Release-built and plugin-contract checked; not deployed or game-tested",
+    "status": "Deployed: same-frame vanilla QASmoke HUD boundary verified; after-interface bytes exactly match actual final Present",
     "rva": "0x116ac80",
     "guard": "4c 8b dc 56 57 41 54 41 55 41 57 48 83 ec 50",
     "caller": "0x656921 after world/postprocess, before later screenshot/output paths and RendererEnd0x656bb1",
     "reference": "CS dev33d789 MenuManagerDrawInterfaceStartHook and CommonLib IMenu virtual slots/flags; tableID82084 absent",
     "captures": ["native_before_interface", "native_after_interface"],
+    "live_capture": "scene-20261115-182806-092-25601765-39676-1, native897, DLSS Quality1280x720 to1920x1080",
+    "live_validation": "21997 changed HUD pixels; all8294400 after-interface bytes match actual final Present. Source null and NO_FG preserved",
+    "deployment_backup": "20261115-182739-native-input-interface; adapter only, runtime preserved",
     "lifetime": "Graphics-thread-local copied identity, fresh callback-scoped backbuffer lease; generic host checks armed same-session/native-frame/view capture before readback",
-    "pending": "Same-frame HUD/menu/actual Present comparison, final HUD-less/UI extraction, input/source identity and FG retirement",
+    "pending": "Menus, special output branches, compositable UI extraction, CS/ENB, input/source identity and FG retirement",
     "evidence": "docs/research/skyrim-se-integration.md#native-interface-boundary-capture-for-fg-research-15-november-2026"
   },
   "small_family_input_audit": {

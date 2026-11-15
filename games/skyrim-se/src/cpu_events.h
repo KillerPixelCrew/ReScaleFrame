@@ -9,4 +9,6 @@ void cpu_quiesce();
 bool cpu_stop();
 bool cpu_busy();
 uint64_t cpu_source();
+// Read only the native event headers while the dispatch callback owns the list.
+uint32_t cpu_input_kinds(const void* list) noexcept;
 }
