@@ -604,6 +604,10 @@ extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_s
 extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
 #if defined(RSF_HAVE_FFX_VK)
+    // Device idle cannot cover commands the host has not submitted yet.
+    for (const auto& slot : self->slots)
+        if ((slot.recorded_prepare && !slot.submitted_prepare) || (slot.recorded_hudless && !slot.submitted_hudless))
+            return RSF_BACKEND_ERROR_NOT_READY;
     QueueLock lock(*self);
     ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{}; wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
     if (self->dispatch(&self->swapchain, &wait.header) != FFX_API_RETURN_OK || self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS)
@@ -617,6 +621,9 @@ extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) try {
 extern "C" rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
 #if defined(RSF_HAVE_FFX_VK)
+    for (const auto& slot : self->slots)
+        if ((slot.recorded_prepare && !slot.submitted_prepare) || (slot.recorded_hudless && !slot.submitted_hudless))
+            return RSF_BACKEND_ERROR_NOT_READY;
     if (self->effect && configure_frame(*self, nullptr) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (self->chain && rsf_ffxgvk_drain(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
     if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;

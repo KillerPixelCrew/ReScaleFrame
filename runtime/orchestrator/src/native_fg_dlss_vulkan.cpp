@@ -609,6 +609,10 @@ extern "C" rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk* self, rsf_dlss
 extern "C" rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
 #if defined(RSF_HAVE_STREAMLINE_VK)
+    // A recorded copy can still reference SDK resources in an unsubmitted list.
+    for (const auto& slot : self->slots)
+        if ((slot.recorded_prepare && !slot.submitted_prepare) || (slot.recorded_hudless && !slot.submitted_hudless))
+            return RSF_BACKEND_ERROR_NOT_READY;
     const auto timeout_epoch = VulkanStorySlWorkerTimeoutEpoch();
     const auto disabled = invoke(*self, disable); if (disabled != RSF_BACKEND_OK) return disabled;
     QueueLock lock(*self);
