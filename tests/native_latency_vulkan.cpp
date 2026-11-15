@@ -13,10 +13,27 @@
 #include <condition_variable>
 #include <chrono>
 #include "../runtime/orchestrator/src/native_latency_vulkan_presentation.h"
+#if defined(RSF_TEST_LATENCY_AMD_STUBS)
+#include "../runtime/orchestrator/src/latency_amd_vulkan.h"
+namespace rsf::latency {
+bool amd_test_available=false;
+AmdVulkanStatus amd_test_state;
+bool amd_vk_capable(){return amd_test_available;}
+void amd_vk_options(uint32_t mode,uint32_t){amd_test_state.enabled=mode!=0;}
+void amd_vk_begin(uint64_t){}
+void amd_vk_input(uint64_t){++amd_test_state.input_updates;}
+void amd_vk_present(uint64_t){++amd_test_state.present_updates;}
+void amd_vk_cancel(uint64_t){}
+AmdVulkanStatus amd_vk_status(){auto s=amd_test_state;s.available=amd_test_available;return s;}
+void amd_vk_shutdown(){amd_test_state={};}
+}
+#endif
 namespace {
 std::array<uint32_t, 6> sdk_tokens{};
 uint32_t cursor = 0, slept = 0, options = 0;
 uint32_t low_latency = 1;
+int initialization_result=0;
+uint32_t shutdown_calls=0,sdk_resolver_calls=0,sdk_wsi_calls=0;
 bool shutdown_allowed=true, pcl_bind_fail=false;
 uint32_t pcl_binds=0; DWORD pcl_bound_thread=0;
 thread_local bool check_input_registration=false;
@@ -55,10 +72,10 @@ extern "C" rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk*,rsf_fgvk_lat
 // support, actual Reflex sleep, or the Streamline implementation.
 extern "C" {
 int VulkanStorySlInitialize(const wchar_t*, const char*, uint32_t, uint32_t) { return 0; }
-int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t fg, uint32_t sr) { requested_sr = sr; requested_fg = fg; return 0; }
+int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t fg, uint32_t sr) { requested_sr = sr; requested_fg = fg; return initialization_result; }
 void* VulkanStorySlModule() { return reinterpret_cast<void*>(1); }
-int VulkanStorySlShutdownChecked() { return shutdown_allowed ? 0 : -1; }
-rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*) { return nullptr; }
+int VulkanStorySlShutdownChecked() { ++shutdown_calls;return shutdown_allowed ? 0 : -1; }
+rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*) { ++sdk_resolver_calls;return nullptr; }
 int VulkanStorySlBindReflex() { return 0; }
 int VulkanStorySlBindPcl() { ++pcl_binds; if(pcl_bind_fail) return -17; pcl_bound_thread=GetCurrentThreadId(); return 0; }
 uint32_t VulkanStorySlPclWindowMessage() { return 0xc123; }
@@ -74,10 +91,24 @@ uintptr_t VulkanStorySlCurrentFrameToken() { return current; }
 int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) { return token && *reinterpret_cast<uint32_t*>(token) == index; }
 int VulkanStorySlReflexSleep() { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before sleep"); ++slept; return 0; }
 int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t kind) { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before SDK marker"); markers.push_back({*reinterpret_cast<uint32_t*>(token), kind}); return 0; }
-int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { return 0; }
-int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return callback(user); }
-int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call callback, void* user) { return callback(user); }
+int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { ++sdk_wsi_calls;return 0; }
+int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { ++sdk_wsi_calls;return callback(user); }
+int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call callback, void* user) { ++sdk_wsi_calls;return callback(user); }
 }
+#if !defined(RSF_HAVE_STREAMLINE_VK)
+int main() {
+    rsf_slvk_setup native{sizeof(native),RSF_SLVK_ABI_VERSION,nullptr,"no SDK",0};
+    require(rsf_slvk_initialize(&native)==RSF_BACKEND_OK,"latency-only startup works when Streamline is not compiled");
+    require(rsf_latencyvk_instance_proc(nullptr,"vkCreateInstance")!=nullptr,"system loader provides actual native resolver");
+    require(rsf_slvk_initialize(&native)==RSF_BACKEND_ERROR_NOT_READY,"native-only session still owns startup lifecycle");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"native-only shutdown succeeds");
+    require(rsf_latencyvk_instance_proc(nullptr,"vkCreateInstance")!=nullptr,"native resolver retained after shutdown");
+    native.features=RSF_SLVK_DLSS_SR;native.runtime_directory_utf8="unused";
+    require(rsf_slvk_initialize(&native)==RSF_BACKEND_ERROR_NOT_SUPPORTED,"explicit DLSS remains unavailable without SDK compilation");
+    native.features=0;require(rsf_slvk_initialize(&native)==RSF_BACKEND_OK&&rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"native-only reinit succeeds");
+    return 0;
+}
+#else
 int main() {
     require(rsf_slvk_without_dlssg(nullptr, nullptr) == -3, "missing foreign WSI callback refused");
     int foreign_wsi = 7;
@@ -338,5 +369,52 @@ int main() {
     shutdown_allowed=false;require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_FEATURE_FAILED,"checked shutdown failure is retained");
     {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"failed SDK shutdown retains live context binding");}
     shutdown_allowed=true;require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"checked shutdown retry releases binding");
+    initialization_result=-5;
+    rsf_slvk_setup optional{sizeof(optional),RSF_SLVK_ABI_VERSION,"missing Streamline","optional",0};
+    const auto resolver_calls=sdk_resolver_calls;
+    const auto unavailable_binds=pcl_binds, unavailable_sleeps=slept;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_OK,"clean optional Streamline refusal preserves generic startup");
+    require(rsf_latencyvk_instance_proc(nullptr,"vkCreateInstance")!=nullptr&&sdk_resolver_calls==resolver_calls,"failed bridge resolver is bypassed for actual retained system Vulkan loader");
+    require(rsf_slvk_invoke(&lease)==RSF_BACKEND_ERROR_NOT_READY,"optional fallback cannot invoke unavailable SDK");
+    const auto unavailable_wsi=sdk_wsi_calls;
+    int native_result=19;
+    require(rsf_latencyvk_wsi_call([](void* p)->int32_t{return *static_cast<int*>(p);},&native_result)==19&&
+        rsf_slvk_without_dlssg([](void* p)->int32_t{return *static_cast<int*>(p);},&native_result)==19&&sdk_wsi_calls==unavailable_wsi,
+        "optional native WSI calls do not invoke unavailable bridge");
+    auto native_present_callback=+[](void*,const void*)->int32_t{return 23;};
+    require(rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(native_present_callback),&native_result,&native_result)==23&&sdk_wsi_calls==unavailable_wsi,
+        "optional native Present calls supplied actual dispatch without SDK bridge");
+    require(rsf_latencyvk_options(1,12345)==RSF_BACKEND_ERROR_NOT_SUPPORTED,"missing Reflex is an unavailable owner rather than a startup failure");
+    require(rsf::latency::presentation_attach(first_context)==RSF_BACKEND_OK,"generic XeLL presentation attaches without Streamline");
+    begin(1);
+    LARGE_INTEGER optional_now{},optional_hz{};QueryPerformanceCounter(&optional_now);QueryPerformanceFrequency(&optional_hz);
+    rsf_game_cpu_event optional_input{sizeof(optional_input),RSF_GAME_CPU_INPUT_SAMPLE,909,1,
+        uint64_t(optional_now.QuadPart),uint64_t(optional_hz.QuadPart),1,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+    const auto before_optional_xell=xell_sleeps;rsf_latencyvk_cpu(&optional_input);
+    require(xell_sleeps==before_optional_xell+1&&slept==unavailable_sleeps&&pcl_binds==unavailable_binds,"XeLL operates without any Reflex/PCL sleep or bind after optional failure");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK&&rsf_latencyvk_instance_proc(nullptr,"vkCreateInstance")!=nullptr,"fallback shutdown retains resolver for later Vulkan destruction");
+#if defined(RSF_TEST_LATENCY_AMD_STUBS)
+    rsf::latency::amd_test_available=true;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_OK&&rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"optional failure preserves generic AMD owner startup");
+    begin(1);QueryPerformanceCounter(&optional_now);optional_input.timestamp_qpc=uint64_t(optional_now.QuadPart);
+    rsf_latencyvk_cpu(&optional_input);
+    require(rsf::latency::amd_test_state.input_updates==1&&slept==unavailable_sleeps&&pcl_binds==unavailable_binds,
+        "generic AMD pacing facts have no Reflex sleep or PCL bind after optional failure");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"generic AMD fallback shutdown");rsf::latency::amd_test_available=false;
+#endif
+    optional.features=RSF_SLVK_DLSS_SR;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_ERROR_LOAD_FAILED,"requested DLSS SR cannot silently fall back");
+    optional.features=RSF_SLVK_DLSS_FG;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_ERROR_LOAD_FAILED,"requested DLSS FG cannot silently fall back");
+    optional.features=0;shutdown_allowed=false;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_ERROR_FEATURE_FAILED,"uncertain SDK rollback refuses optional startup");
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_ERROR_NOT_READY,"poisoned cleanup prevents reinitialization");
+    require(rsf_latencyvk_wsi_call([](void*)->int32_t{return 99;},&native_result)==-3,"poisoned owner does not invoke WSI callbacks");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_FEATURE_FAILED,"failed checked cleanup retains refusal");
+    shutdown_allowed=true;require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"synthetic checked cleanup recovery releases startup ownership");
+    initialization_result=0;
+    require(rsf_slvk_initialize(&optional)==RSF_BACKEND_OK&&rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"SDK session can reinitialize after checked cleanup");
     return 0;
 }
+
+#endif
