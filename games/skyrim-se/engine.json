@@ -286,12 +286,16 @@
     "pending": "Corrected moving XeSS/DLSS quality and full native input coverage; material mip correction now connected separately"
   },
   "skeletal_history_research": {
-    "status": "Matched executable analysis, no runtime draw coverage or repair",
+    "status": "Live CPU history and four GPU bone binding pairs verified; final draw coverage and shader repair unverified",
     "producer_rva": "0x1015800",
     "uploader_rva": "0x1578c80",
     "bindings": "VS b9 previous bones, b10 current bones, 3 float4 per matrix",
     "object_history_rva": "0xeebf40",
-    "pending": "Partition/index ranges, buffer capacity, moving draws and missing shader writes"
+    "validation": "1997 CPU samples across12 skins: consecutive history exact; four VS b9/b10 pairs match CPU arrays, 3840-byte buffers, identity palettes for40/23/20/8 matrices",
+    "live_vertex_descriptors": [514, 83886599],
+    "reference_comparison": "Pinned CS Common/Skinned.hlsli agrees on b9 previous/b10 current and240 float4; conditional Lighting literal controlled by SSRParams.z is not independently a missing motion write",
+    "evidence": "docs/research/skyrim-se-integration.md#live-skeletal-history-and-small-family-audit-15-november-2026",
+    "pending": "Final indexed vertex/weight ranges, actual draw-time flags/targets/write masks, moving deformation output; final-draw probes captured no draws"
   },
   "material_sampling": {
     "status": "Experimental automatic material mip bias connected; settled DLSS Quality capture, broader coverage unaccepted",
@@ -311,7 +315,7 @@
     "pending": "Moving/all-material coverage, active shadow/water/refraction, CS/ENB and device recreation"
   },
   "direct_dlss_motion_correction": {
-    "status": "Built and deployed; third-person idle/orbit smear and broad moving quality remain open",
+    "status": "Built and deployed; user reports much better rendering, full moving coverage remains open",
     "reference": "Pinned CS dev33d789: native previous-minus-current UV, positive Streamline mvecScale1,1, negative generated jitter",
     "defect": "Canonical current-minus-previous UV was not converted back in direct D3D11 DLSS camera-inclusive path; alternate/resolved paths already converted",
     "correction": "Generic pipeline negates direct canonical DLSS scale once; dense-resolved pixels and unspecified legacy scales preserved",
@@ -324,5 +328,14 @@
       "scene-20261115-173512-096-22427781-36664-2"
     ],
     "native_camera_check": "Right wall native vectors vs depth/camera reprojection p95 below0.009 input pixels; native check does not establish vendor conversion or deformation coverage"
+  },
+  "small_family_input_audit": {
+    "date": "2026-11-15",
+    "scope": "Offline disassembly of all74 native DistantTree, RunGrass, Particle and Sky containers, not live draw coverage",
+    "grass": "18 VS read separate current/previous wind timers cb2[17].w/cb2[18].w; instance/fade producer and output coverage pending",
+    "trees": "2 of4 VS export previous position; selected native colour variant uses separate world matrices, CS TREE_WIND adds separate current/previous displacement",
+    "particles": "6 PS expose target1 with fixed XYZ; CS identifies target1 as Normal, actual binding and temporal handling pending",
+    "sky": "9 VS export previous position and9 PS expose target1; live semantics and rotation/infinite depth pending",
+    "evidence": "docs/research/skyrim-se-integration.md#live-skeletal-history-and-small-family-audit-15-november-2026"
   }
 }
