@@ -1499,3 +1499,89 @@ both snapshots with actual final Present in one F10 capture, including HUD and
 menus, before declaring HUD-less coverage or designing UI extraction. Source
 frame association, FG resource retirement and latency input-job ownership remain
 required; the adapter continues to report NO_FG and readiness0.
+
+### Native delivered input kinds and task ownership, 15 November 2026
+
+The latency investigation now traces the source of worker polling rather than
+assigning it the latest update counter. The executable's callback/name table
+contains 75 records in the inspected range0x20b4d00..0x20b51c0. Group builder
+RVA0x60ef30 reads16-byte callback/name pairs, recognizes signal/sync records,
+adds ordinary callbacks with0xebb070 and stops at JobListEnd. The Main render
+end group starts at0x20b50e0 and includes Post process at0x20b5120 and Poll
+controls at0x20b5130. These are native labels, not claimed GPU pass identities.
+
+During gameplay the outer update calls group submission0x60eaf0 at0x658b0f.
+It wakes manager0x3220a90 through event+0x58; manager loop0x60f1e0 submits and
+joins the main groups from0x3220a78. The outer update joins that manager through
+0x60eb80 at0x65932f, after RenderEntry. Native list executor0xebc170 atomically
+claims callback indices, so another worker may execute the next callback before
+the previous one completes. Table order is not completion order. In particular,
+Post process waits for event20 and signals22, while Poll controls is a separate
+callback. The generation bracket is now identified, but the simulation which
+consumes those controls and a safe pre-input pacing point remain unverified.
+No source ID is assigned from the latest-tick atomic or native render counter.
+
+A separate factual boundary is available without that association: after polling
+six devices,0xcf95f0 passes an InputEvent** to0xcfa650, which calls event sinks.
+It then clears the native queue at0xcfba10. The button producer0xcfb340 writes
+device at event+8 and links next at+0x10. Constructors0x7b1350,0xcfa070 and
+0x972660 confirm the header, button type0, mouse device/type1/1 and controller
+thumbstick device/type2/3. Current CommonLib InputEvent/InputDevices agrees on
+the0x18-byte header and keyboard0, mouse1, gamepad2, virtual keyboard3.
+
+The adapter now guards and hooks dispatch0xcfa650 with19 expected bytes:
+`48 8b c4 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48`.
+Before the native call it copies only event headers into a delivered-kind mask,
+on the native callback thread. After the original dispatch returns, it emits the
+existing versioned INPUT_EVENT with INPUT_UNFRAMED, source0 and the dispatch-entry
+QPC timestamp. It retains no event pointers, text, keys, button values or deltas.
+Buttons, mouse movement, characters and thumbsticks are classified only for
+their known devices; connection/unknown types are not control input. Invalid,
+cyclic or excessive lists refuse the entire observation. This reports delivered
+event kinds, including held-button events if the engine emits them, not a
+measurement of a new physical transition or final input-to-photon latency.
+
+The existing runtime owns bounded association, marker mapping and pacing.
+The adapter adds no sleep, vendor selection or extra setting. CPU lifecycle
+draining includes this new hook. Actual worker input sampling remains unassigned;
+these facts do not authorize FG or enable a latency technology.
+
+Focused MSVC Release adapter/input builds passed. skyrim_input_contract passed
+known kinds, mixed lists, unknown/mismatched types, connection exclusion, empty
+lists, unreadable heads/nodes, cycles and bounded/excessive termination.
+game_skyrim_se_plugin_contract also passed. No full gate or GPU fixtures were
+rerun. At that checkpoint PID16972 still used the preceding deployed DLL.
+The deployment and bounded capture below supersede that deployment status.
+IDA names/comments were saved. Reproduction: ignored
+`inspect-native-frame-tasks.py`, `native-frame-task-table.json`,
+`native-event-signal-sites.json` and `native-input-ownership-20261115.json`.
+The table scan and decompilation are static executable evidence, not a runtime
+job-order experiment. Exact executable fingerprint remains the one above.
+
+PID16972 subsequently exited. Adapter-only deployment backup
+`20261115-182739-native-input-interface` preserves the previous Entry DLL, INI,
+loader log and receipt; the existing Runtime DLL was not replaced. New PID39676
+accepted plugin prepare/start, reached QASmoke and remained responsive. The
+experiment-owned starting-cell Custom INI was removed after startup, only after
+checking its exact contents. No pre-existing custom INI or user settings were
+overwritten. Native dispatch hook startup is therefore game-observed, but no
+deliberate physical-input experiment or positive delivered-kind emission has
+been verified yet. That narrower acceptance must not be described as measured
+latency or complete keyboard/controller coverage.
+
+Complete capture `scene-20261115-182806-092-25601765-39676-1` has native frame897,
+DLSS Quality1280x720 to1920x1080 and both interface snapshots. Visual inspection
+shows a scene without HUD before the interface, with compass/crosshair/stamina
+HUD afterwards. All8,294,400 bytes of the after-interface buffer exactly match
+the actual pre-overlay Present buffer. The before/after difference is21,997
+pixels:20,706 in the compass band,432 around the crosshair and859 in the lower
+HUD rectangle[1400,1004..1816,1026]. The comparison is same-frame, so scene
+animation and differing jitter phases do not contaminate it. Raw buffer SHA256:
+before `fa4b8af1281e7833cad78ba85470b08d8359a0c353a6629753351344eb140cfa`,
+after/final `1e9f207eddda495812468207fae182042c70305c4fc79791676b27fbd60932b6`.
+Receipt: ignored `interface-boundary-live-comparison.json`.
+
+This proves the HUD boundary for this vanilla dry-room frame. Menu transitions,
+special output/screenshot branches, CS/ENB composition and a compositable UI
+layer remain open. Source identity remains null and NO_FG remains set. A clean
+HUD-less capture does not by itself make generation or pacing safe.

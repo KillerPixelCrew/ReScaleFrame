@@ -2,12 +2,24 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+Native input dispatch now reports delivered keyboard/mouse/controller kinds
+through the existing unframed CPU event API. It copies bounded native headers
+before dispatch and emits only the kind mask after the original returns.
+Worker input is not assigned a guessed source frame. Native task submission,
+manager joins and concurrent callback claims are now traced; consuming-simulation
+ownership remains open. Focused Release build, input contract and Skyrim plugin
+contract passed. Adapter-only deployment accepted startup; positive delivered
+input reporting remains unverified. Same-frame QASmoke capture now proves the
+interface boundary: HUD absent before, HUD present afterwards, after-interface
+bytes exactly matching actual final Present. Menus, UI-layer extraction and
+FG source ownership remain open. FG and pacing remain disabled.
+See [input ownership research](research/skyrim-se-integration.md#native-delivered-input-kinds-and-task-ownership-15-november-2026).
+
 The adapter now has a guarded native interface boundary hook for F10 research.
 It captures the backbuffer before/after native interface drawing using the
 existing same-frame capture lease. Focused Release build and plugin contract
-passed; the running game retains its previous DLL, so the new hook is not yet
-deployed or game-tested. This locates a candidate final-scene/UI boundary and
-does not enable FG. See the native interface boundary section in
+passed. Subsequent adapter-only deployment verified the QASmoke HUD boundary
+as recorded above, without enabling FG. See the native interface boundary section in
 [research](research/skyrim-se-integration.md#native-interface-boundary-capture-for-fg-research-15-november-2026).
 
 The user reports a visible improvement after the direct DLSS motion correction.

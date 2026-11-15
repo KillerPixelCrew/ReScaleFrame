@@ -40,6 +40,7 @@ void emit(Frame& frame, uint32_t stage)
 short tick(void*);
 uintptr_t poll(void*);
 uintptr_t render(void*);
+int dispatch(void*, void*);
 struct Hook {
     uint32_t rva;
     std::array<unsigned char, 19> bytes;
@@ -48,11 +49,73 @@ struct Hook {
     void* target{};
     bool created{}, enabled{};
 };
-std::array<Hook, 3> hooks{{
+std::array<Hook, 4> hooks{{
     {0x658870, {0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x30,0x01,0x00,0x00}, reinterpret_cast<void*>(&tick)},
     {0xcf95f0, {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x30,0x0f,0x29,0x74,0x24}, reinterpret_cast<void*>(&poll)},
-    {0x6565b0, {0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x60,0x01,0x00,0x00,0x48}, reinterpret_cast<void*>(&render)}
+    {0x6565b0, {0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x60,0x01,0x00,0x00,0x48}, reinterpret_cast<void*>(&render)},
+    {0xcfa650, {0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48}, reinterpret_cast<void*>(&dispatch)}
 }};
+bool copy_input(void* out, const void* pointer, size_t size) noexcept {
+#if defined(_MSC_VER)
+    __try { std::memcpy(out, pointer, size); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+#else
+    MEMORY_BASIC_INFORMATION memory{};
+    const auto address = uintptr_t(pointer);
+    if (!VirtualQuery(pointer, &memory, sizeof(memory)) || memory.State != MEM_COMMIT ||
+        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || address + size < address ||
+        address + size > uintptr_t(memory.BaseAddress) + memory.RegionSize) return false;
+    std::memcpy(out, pointer, size); return true;
+#endif
+}
+uint32_t input_kinds(const void* list) noexcept {
+    struct Event { uintptr_t vtable; uint32_t device, type; uintptr_t next; };
+    static_assert(sizeof(Event) == 0x18);
+    uintptr_t next{};
+    if (!list || !copy_input(&next, list, sizeof(next))) return 0;
+    uint32_t kinds{};
+    // Native events are borrowed until PollDevices clears its queue after dispatch.
+    // Keep only kinds, never buttons, text, deltas or native event pointers.
+    for (unsigned count = 0; next && count < 128; ++count) {
+        Event event{};
+        if (!copy_input(&event, reinterpret_cast<const void*>(next), sizeof(event))) return 0;
+        if (event.type == 0) {
+            if (event.device == 0 || event.device == 3) kinds |= RSF_GAME_INPUT_KEYBOARD;
+            else if (event.device == 1) kinds |= RSF_GAME_INPUT_MOUSE;
+            else if (event.device == 2) kinds |= RSF_GAME_INPUT_CONTROLLER;
+        } else if (event.type == 1 && event.device == 1) kinds |= RSF_GAME_INPUT_MOUSE;
+        else if (event.type == 2 && (event.device == 0 || event.device == 3)) kinds |= RSF_GAME_INPUT_KEYBOARD;
+        else if (event.type == 3 && event.device == 2) kinds |= RSF_GAME_INPUT_CONTROLLER;
+        next = event.next;
+    }
+    return next ? 0 : kinds; // Cyclic or excessive lists do not publish partial activity.
+}
+int dispatch(void* manager, void* list) {
+    Entry lease;
+    rsf_game_cpu_event event{};
+    rsf_game_host_services host{};
+    const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    uintptr_t native_manager{};
+    if (active.load(std::memory_order_acquire) && copy_input(&native_manager, base + 0x3204b30, sizeof(native_manager)) &&
+        uintptr_t(manager) == native_manager) {
+        event.input_kind = input_kinds(list);
+        if (event.input_kind) {
+            host = services;
+            LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+            event.struct_size = sizeof(event); event.stage = RSF_GAME_CPU_INPUT_EVENT;
+            event.session_id = host.session_id; event.timestamp_qpc = uint64_t(now.QuadPart);
+            event.qpc_frequency = frequency; event.event_version = RSF_GAME_CPU_EVENT_VERSION;
+            event.flags = RSF_GAME_CPU_INPUT_UNFRAMED;
+        }
+    }
+    const auto result = reinterpret_cast<int (*)(void*, void*)>(hooks[3].original)(manager, list);
+    // Worker polling is not assigned the latest tick. The runtime owns any bounded
+    // association of this delivered input with an engine source and vendor policy.
+    if (event.input_kind && host.cpu_event) {
+        try { host.cpu_event(host.user, &event); } catch (...) {}
+    }
+    return result;
+}
 bool disable_hooks()
 {
     bool disabled = true;
@@ -156,4 +219,5 @@ bool cpu_stop()
 }
 bool cpu_busy() { return entered.load(std::memory_order_acquire) != 0; }
 uint64_t cpu_source() { return current ? current->source : 0; }
+uint32_t cpu_input_kinds(const void* list) noexcept { return input_kinds(list); }
 }
