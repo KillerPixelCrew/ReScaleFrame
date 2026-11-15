@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 root=Path(__file__).resolve().parents[1]
 out=root/"build/checks/worker-srvk-xess-range";out.mkdir(parents=True,exist_ok=True)
-s=(root/"runtime/orchestrator/src/native_sr_vulkan.cpp").read_text()
+s=(root/"runtime/orchestrator/src/native_sr_vulkan.cpp").read_text(encoding="utf-8")
 a=s.index('bool valid_image(');b=s.index('\n}',a)+2
 valid=s[a:b]
 a=s.index('extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(')
@@ -70,7 +70,7 @@ int main(){
     std::puts("Common SR XeSS active extent admission/dispatch passed; DLSS/FFX strict plan retained");
 }
 '''
-path=out/'contract.cpp';path.write_text(code)
+path=out/'contract.cpp';path.write_text(code, encoding="utf-8")
 clang='C:/msys64/ucrt64/bin/clang++.exe'
 inc=[]
 for d in ('runtime/orchestrator/include','sdk/game/include','runtime/contract/include'):
