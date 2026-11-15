@@ -26,6 +26,12 @@ int main() {
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Nonfinite units refused"); setup.units_to_meters = 1;
     setup.motion.scale_x = 0; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Zero decode scale refused"); setup.motion.scale_x = 1;
     setup.quality_choices = 0; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Empty capabilities refused"); setup.quality_choices = 1;
+    setup.presentation_bridge = 1;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT,
+        "Cold presentation requires an adapter window filter before any hooks are installed");
+    setup.presentation_bridge = 2;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown presentation mode refused");
+    setup.presentation_bridge = 0;
     auto upstream = host;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_OK, "Graphics-free creation succeeds without SDK directories");
     check(host.session_id == 91 && host.user != &cookie && host.process_upscale && host.render_config && host.render_feedback && host.render_pass &&

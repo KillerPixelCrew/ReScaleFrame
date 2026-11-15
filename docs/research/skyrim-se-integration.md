@@ -1652,3 +1652,75 @@ This establishes update/render/scene/window/Present ownership for the sampled
 vanilla path. Primary submission begin/end facts, retained normalized FG inputs,
 HUD-less GPU copies, compositable UI, screen transitions, provider presentation
 and the actual input-to-simulation boundary remain required for FG and latency.
+
+### Cold presentation bridge experiment and SR rollback, 15 November 2026
+
+The shared providers accept BACKBUFFER_HUDLESS with the native final backbuffer
+and its pre-interface scene. A separately rasterized UI texture is therefore
+not a prerequisite for this provider-supported path. The next experiment used
+the existing shared D3D11-to-D3D12 presentation bridge before native swapchain
+creation, rather than attempting to replace a chain after scene admission.
+
+D3D11 host ABI2 appends an optional bridge capability and process-lived native
+window-selection callback. Only the adapter recognizes the Skyrim window class.
+The runtime owns bridge installation, SDK paths and engine metadata, plain
+presentation at startup, HUD-less mode, shared FG callbacks and CPU normalization.
+Bridge mode initially requests provider0, runtime switching enabled and FG/latency
+Off. A bridge-enabled host normalizes CPU facts once through the shared FG sink;
+it does not dispatch them again through the upstream normalizer. ABI2 short,
+version and missing-window-filter checks precede startup mutations.
+
+Native World entry0x656e60 is now guarded by19 bytes
+`48 8b c4 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8d`.
+Only caller0x656e32 and output0, within an owned RenderEntry scope, publish the
+SUBMISSION begin/end pair. The native camera comes from root0x3230740+296,
+as in the matched World function. Completed primary calls increment the outer
+update's render_expected count. FRAME surrounds the enclosing RenderEntry,
+including UI and Present. These are native execution facts, not vendor marker
+choices. Current passes still declare NO_FG and unknown screen.
+
+Focused Release runtime/adapter builds and host, Skyrim plugin and input contracts
+passed. The first link encountered an active rsf_anomaly_fg_device_test holding
+the build DLL; that process was left untouched. Linking succeeded after its
+observed exit. No full gate or broad GPU fixture suite was rerun.
+
+First bridge deployment `20261115-185607-sr-fallback`, PID38936, exited during
+initial presentation. A distinct bounded exception experiment, PID34964,
+captured a null-read access violation in dxgi.dll+0x8e3a below RTSS and Steam
+overlay frames. First-chance system exceptions also occurred and are not all
+crashes. Evidence is retained in ignored `bridge-first-exception-evidence.json`
+and `bridge-first-exit.log`; the probe detached after process exit.
+
+The host was redundantly installing DXGI observation even though its own bridge
+already publishes application Present callbacks. Bridge-owned chains now use
+those callbacks directly; native chains retain the old DXGI observer. No RTSS
+or Steam settings were changed. Deployment `20261115-185923-sr-fallback`,
+PID37700, then reached the scene and stayed responsive during a second bounded
+probe, with no observed exceptions in its window. That change is consistent
+with the duplicate interception being involved, not proof that either external
+overlay is defective. Evidence: `bridge-no-observer-evidence.json`.
+
+However, DLSS SR failed with raw backend result-9 and pipeline result-10, then
+stopped evaluations after120 consecutive failures. The user reported upscaling
+unavailable. Stable presentation is not acceptance of combined SR/FG transfer.
+The direct camera-inclusive SR path still bypasses the dense motion/depth
+normalizer, while shared FG storage expects R32_FLOAT depth and render-pixel
+vectors. This is an input-contract lead, not an isolated runtime diagnosis of
+the failed call. Resource creation/copies and actual SDK evaluate need inspection
+before the bridge can be admitted. No claim of working generation is made.
+
+The failed DLLs/log were backed up in `20261115-190139-bridge-rollback` and both
+installed DLLs restored from the pre-bridge backup. Their SHA256 values are
+Runtime `8a485dafcdf55ede5c0bd4e157f00ddb21d7ab379c6be4e750909428da7f02bb`
+and Entry `2c2977b1f8a5d2581d568469353c29c28b27fbf04d0308acdf3a0e2c8c5486c0`.
+Restored PID10028 is responsive and has successful SR evaluations. Complete
+capture `scene-20261115-190209-167-27644843-10028-1` verifies source872,
+DLSS Quality1280x720 to1920x1080, result0 and actual final Present. The
+experiment-owned Custom INI was removed by exact-content check.
+
+The Skyrim source now leaves presentation_bridge=0 until combined SR transfer
+is corrected and verified. Generic ABI2 preparation and the native frame/world
+facts remain built work; the running game intentionally uses the restored
+working ABI1 pair. This is a failed experiment with a verified recovery, not
+FG or latency readiness. Next work must preserve working SR while fixing the
+shared input contract, retirement, screen admission and missing input pacing.

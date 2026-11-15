@@ -6,7 +6,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_D3D11_HOST_ABI_VERSION 1u
+#define RSF_D3D11_HOST_ABI_VERSION 2u
 typedef struct rsf_d3d11_host_setup {
     uint32_t struct_size, abi_version;
     const wchar_t* configuration_path;
@@ -22,6 +22,12 @@ typedef struct rsf_d3d11_host_setup {
     rsf_motion_decode_params motion;
     /* Adapter capability: bit n accepts quality n. Native-only adapters supply bit 0. */
     uint32_t quality_choices;
+    /* Optional cold presentation bridge. The adapter supplies native window
+       selection; runtime switching starts with plain presentation and FG Off.
+       Callback code/user remain valid for process lifetime. */
+    uint32_t presentation_bridge;
+    int (*accept_window)(void* user, void* window);
+    void* presentation_user;
 } rsf_d3d11_host_setup;
 /* Graphics-free setup, outside DllMain. Input services supply session/log/CPU only.
    Strings are copied; upstream callback code/user and returned services are process-lived.

@@ -2,6 +2,15 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+Cold FG presentation preparation is built behind the generic D3D11 host ABI2,
+with native FRAME/SUBMISSION facts and an adapter window filter. The experiment
+exposed duplicate Present interception, then failed combined DLSS SR transfer.
+The user-visible SR regression was rolled back: the working pre-bridge DLL pair
+is installed, PID10028 has successful DLSS Quality capture/result0, and the
+Skyrim source leaves the bridge disabled until verified. No FG readiness is
+claimed. See the
+[bridge experiment and recovery](research/skyrim-se-integration.md#cold-presentation-bridge-experiment-and-sr-rollback-15-november-2026).
+
 Native update identity now follows the synchronous render invocation into SR,
 final scene and a window lease spanning actual Present. The shared D3D11 host
 records these existing C ABI facts without enabling generation or pacing.
