@@ -14,6 +14,7 @@
 #include "render_inputs.h"
 #include "resolution.h"
 #include "auxiliary.h"
+#include "sampling.h"
 #include <rescaleframe/d3d11_host.h>
 #include <string>
 #if defined(_MSC_VER)
@@ -242,6 +243,7 @@ uintptr_t observe_end() noexcept {
             try { (void)bind_presentation(services.user, &binding); } catch (...) {}
         }
     }
+    rsf::skyrim::finish_sampling();
     const auto result = original_end();
     rsf::skyrim::finish_auxiliaries(services);
     calls.fetch_sub(1, std::memory_order_acq_rel);
@@ -294,7 +296,7 @@ bool match_target()
     constexpr unsigned char upload_expected[]{0x48,0x89,0x5c,0x24,0x08,0x55,0x48,0x8d,0xac,0x24,0xe0,0xfd,0xff,0xff,0x48,0x81,0xec,0x20,0x03,0x00,0x00};
     unsigned char upload_actual[sizeof(upload_expected)]{};
     upload_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x100ae80;
-    return copy(process_actual, process_target, sizeof(process_actual)) &&
+    return rsf::skyrim::sampling_guard() && copy(process_actual, process_target, sizeof(process_actual)) &&
         !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
         copy(call_actual, site, sizeof(call_actual)) &&
         !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
@@ -446,7 +448,13 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (!rsf::skyrim::sampling_start(services)) {
+        MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (!rsf::skyrim::cpu_start()) {
+        (void)rsf::skyrim::sampling_stop();
         MH_DisableHook(upload_target);
         MH_DisableHook(end_target);
         MH_DisableHook(resolution_target);
@@ -467,7 +475,8 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
     rsf::skyrim::cpu_quiesce();
-    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() ? RSF_ERROR_BUSY : RSF_OK;
+    rsf::skyrim::sampling_quiesce();
+    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() || rsf::skyrim::sampling_busy() ? RSF_ERROR_BUSY : RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -477,6 +486,7 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
     if (rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending()) return RSF_ERROR_BUSY;
+    if (!rsf::skyrim::sampling_stop()) return RSF_ERROR_BUSY;
     const bool cpu_stopped = rsf::skyrim::cpu_stop();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);

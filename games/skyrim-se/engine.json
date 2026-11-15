@@ -283,7 +283,7 @@
     "validation": "Focused Release camera projection check passed; settled FSR4 Ultra Performance, XeSS Quality/Ultra Performance and DLSS Quality captures reset0; static output inspected, moving quality unaccepted",
     "capture": "scene-20261115-171628-054-21303734-39896-3",
     "deployment_backup": "20261115-171418-sr-fallback; same binaries redeployed20261115-171949-sr-fallback for focused vendor checks",
-    "pending": "Material mip bias, corrected moving XeSS/DLSS quality and full native input coverage"
+    "pending": "Corrected moving XeSS/DLSS quality and full native input coverage; material mip correction now connected separately"
   },
   "skeletal_history_research": {
     "status": "Matched executable analysis, no runtime draw coverage or repair",
@@ -292,5 +292,22 @@
     "bindings": "VS b9 previous bones, b10 current bones, 3 float4 per matrix",
     "object_history_rva": "0xeebf40",
     "pending": "Partition/index ranges, buffer capacity, moving draws and missing shader writes"
+  },
+  "material_sampling": {
+    "status": "Experimental automatic material mip bias connected; settled DLSS Quality capture, broader coverage unaccepted",
+    "creator_rva": "0x102b910",
+    "flush_rva": "0x1010de0",
+    "flush_guard": "4c 8b dc 41 56 48 81 ec a0 00 00 00 8b 15 0e ee 0b 01",
+    "table_rva": "0x3331990",
+    "address_filter_cache_rvas": [
+      "0x20cfcbc",
+      "0x20cfcfc"
+    ],
+    "policy": "log2(renderWidth/outputWidth) for native filters2/3 only in colour1/depth0 unlocked primary reduced raster; other scopes restore baseline",
+    "ownership": "Adapter supplies native baseline and scope; runtime owns bounded cache and bound leases, preserving foreign samplers",
+    "validation": "Focused Release build and WARP sampler fixture passed; live bias -0.584962 at1280x720 to1920x1080; complete DLSS Quality reset0 capture",
+    "capture": "scene-20261115-172956-834-22112515-11404-1",
+    "deployment_backup": "20261115-172918-sr-fallback",
+    "pending": "Moving/all-material coverage, active shadow/water/refraction, CS/ENB and device recreation"
   }
 }

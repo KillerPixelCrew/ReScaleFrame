@@ -1269,3 +1269,63 @@ old 0x34-byte world transform at object+0xb0 before updating object+0x7c,
 with native counter/initialization/reset branches. These functions were named
 and saved in the matched IDA database. `native-bone-history-producer.json`
 retains the decompilation. No live bone capture or shader repair is claimed.
+
+### Native material sampler correction, 15 November 2026
+
+The remaining texture-detail question was whether native dynamic resolution
+already compensated material mip selection. Following the renderer's sampler
+table references gave a concrete answer: creator RVA `0x102b910` creates six
+address modes by five filter modes at global `0x3331990`, stride40 per address
+and stride8 per filter, with descriptor MipLODBias hardcoded to zero. Filters0/1
+have MaxLOD0; filter2 is mip-linear, filter3 anisotropic and filter4 comparison.
+The `fMipBias:Display` name remains only an unconnected lead and is not used.
+
+Native state flush RVA `0x1010de0` consumes PS sampler dirty mask `0x20cfc08`
+and indexes the table using address/filter arrays `0x20cfcbc`/`0x20cfcfc`.
+Its PSSetSamplers call is `0x10113ae`; the same routine flushes CS resources
+and other state. Its argument controls input-layout preservation, not compute
+ownership. Indexed/nonindexed native draw functions call this routine before
+issuing D3D draws. The adapter detours its guarded entry bytes:
+`4c 8b dc 41 56 48 81 ec a0 00 00 00 8b 15 0e ee 0b 01`.
+The matched functions are named and saved in the IDA database. Decompilation:
+`native-sampler-table-and-bindings.json` in ignored research material.
+
+The integration now supplies the table's native PS baseline samplers to a
+size/version-checked generic runtime service after native state flush. Only
+native cached colour1/depth0, unlocked primary reduced raster and its verified
+graphics owner request log2(renderWidth/outputWidth) bias for filters2/3.
+Output-size postprocessing, other colour/depth targets, comparison and no-mip
+filters request native bindings. RendererEnd also drains an owned replacement
+before Present, and quiesce waits for that retirement. This is an automatic
+resolution-derived correction; it adds no user setting or vendor-specific bias.
+Explicit shader SampleLevel operations remain unaffected by sampler LOD bias.
+
+The runtime owns a bounded32-entry cache and per-slot leases for currently
+installed replacements, including entries evicted while bound. It changes
+only MipLODBias and preserves every other descriptor field. A sampler foreign
+to both the supplied native baseline and the service's own last replacement
+is left untouched. No native sampler table or INI is overwritten. Device and
+immediate-context/thread mismatches refuse. Device recreation remains unsupported.
+
+Focused MSVC Release builds passed. The new WARP check passed additive bias,
+descriptor preservation, exact baseline restoration after80 cache changes,
+foreign-binding preservation, unselected comparison preservation and invalid
+mask/context refusal. It ran with the game closed, then the focused check ran
+again after making the deferred-context case independent of the invalid-mask
+case. No full gate was rerun. Logs: `build-sampler-bias.log`,
+`build-sampler-bias-focused.log`, `build-sampler-bias-final.log`.
+
+Deployment `20261115-172918-sr-fallback`, PID11404, logs actual native scene
+sampler replacement at1280x720 to1920x1080 with bias−0.584962 and mask0xffff.
+Complete capture `scene-20261115-172956-834-22112515-11404-1` has settled
+DLSS Quality reset0 and a full native final Present. Source/output inspection
+shows retained material detail. The attempted cross-session source comparison
+found a view-to-world delta0.05289, so its gradient increase is not an isolated
+quality measurement (`mip-bias-source-comparison.json`). The camera movement
+must not be omitted from interpreting that result. Active shadow/water/refraction,
+all material families, moving temporal quality and CS/ENB remain unaccepted.
+Off/on also restored four native ratios1, lock0 and TAA enabled/clearMask0.
+The final adapter skips runtime sampler calls when no slot needs replacement
+or draining; it was Release-built and redeployed at
+`20261115-173439-sr-fallback`, PID36664. The sampled capture above predates
+that no-op optimization; the correction and scope policy are unchanged.

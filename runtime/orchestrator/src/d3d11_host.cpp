@@ -12,6 +12,7 @@
 #include <rescaleframe/frame_generation.h>
 #include "render_settings_store.h"
 #include "auxiliary_sr.h"
+#include "sampler_bias.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -35,6 +36,7 @@ struct Host {
     std::mutex state;
     std::mutex presentation_guard;
     std::unique_ptr<AuxiliarySurfaces> auxiliaries;
+    SamplerBias sampler_bias;
     rsf_game_host_services upstream{};
     std::wstring ini, section;
     std::string root, identity, fingerprint, version, project;
@@ -412,6 +414,19 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* user
     if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
     if (!self->auxiliaries || !self->auxiliaries->matches(*scope)) return RSF_ERROR_NOT_READY;
     return self->auxiliaries->restore() ? RSF_OK : RSF_ERROR_NOT_READY;
+}
+catch (...) { return RSF_ERROR_NOT_READY; }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_sampler_bias(void* user, void* raw_context,
+    rsf_d3d11_sampler_bias* request) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !request || request->struct_size < sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
+    if (!self->scene_bound || self->execution_thread != GetCurrentThreadId() ||
+        request->session_id != self->upstream.session_id || (!self->active && request->slot_mask)) return RSF_ERROR_NOT_READY;
+    return self->sampler_bias.apply(static_cast<ID3D11DeviceContext*>(raw_context), *request) ? RSF_OK : RSF_ERROR_NOT_READY;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, void* raw_context,

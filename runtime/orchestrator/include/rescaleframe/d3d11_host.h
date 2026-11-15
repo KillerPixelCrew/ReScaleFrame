@@ -111,6 +111,22 @@ RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* services_user, 
 /* Restoration is permitted while the host is suspended so quiesce can drain. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* services_user,
     const rsf_d3d11_auxiliary_scope*);
+
+typedef struct rsf_d3d11_sampler_bias {
+    uint32_t struct_size, abi_version;
+    uint64_t session_id;
+    /* Native baseline PS samplers, borrowed for this call. Only selected slots
+       receive additive LOD bias. Unselected slots restore owned replacements.
+       A binding foreign to both baseline and this service is left untouched. */
+    void* samplers[16];
+    uint32_t slot_mask;
+    float bias;
+    uint32_t applied_mask; /* Output: slots still carrying an owned replacement. */
+} rsf_d3d11_sampler_bias;
+/* Admitted graphics owner only. Adapter supplies scene scope and sampling policy;
+   the runtime owns a bounded cache of immutable sampler objects. Zero mask drains. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_sampler_bias(void* services_user, void* immediate_context,
+    rsf_d3d11_sampler_bias*);
 #ifdef __cplusplus
 }
 #endif
