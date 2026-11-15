@@ -8,6 +8,8 @@ _Static_assert(offsetof(rsf_fsr4vk_handoff, struct_size) == 0, "size leads");
 _Static_assert(offsetof(rsf_fsr4vk_handoff, abi_version) == 4, "version follows");
 _Static_assert(sizeof(rsf_fsr4vk_handoff) == 32, "Windows x64 handoff layout");
 _Static_assert(RSF_SRVK_SPLIT_TRACKED_ABI_VERSION == 2, "tracked ABI keeps layout");
+_Static_assert(sizeof(rsf_srvk_fsr4_provider_info) == 32, "FSR4 info ABI 1 layout");
+_Static_assert(offsetof(rsf_srvk_fsr4_provider_info, adapter_luid) == 8, "FSR4 info facts offset");
 /* Real C declarations, including the callback and all DLL imports. */
 int32_t rsf_test_split_c_declarations(const rsf_srvk_setup* setup,
     const rsf_fsr4vk_handoff* handoff, const rsf_srvk_frame* frame) {
@@ -15,6 +17,8 @@ int32_t rsf_test_split_c_declarations(const rsf_srvk_setup* setup,
     uint32_t width = 0, height = 0;
     void* continuation = NULL;
     int32_t result = rsf_srvk_fsr4_create(setup, handoff, &owner);
+    rsf_srvk_fsr4_provider_info info = {sizeof(info), RSF_SRVK_FSR4_INFO_ABI_VERSION};
+    if (!result) result = rsf_srvk_fsr4_info(owner, &info);
     if (!result) result = rsf_srvk_fsr4_plan(owner, &width, &height);
     if (!result) result = rsf_srvk_fsr4_evaluate(owner, NULL, frame, &continuation);
     if (!result) result = rsf_srvk_fsr4_submitted(owner, continuation);

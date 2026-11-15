@@ -25,7 +25,7 @@ struct rsf_fsr4vk {};
 namespace {
 rsf_fsr4vk instance;
 int32_t provider_result = 0;
-bool throw_evaluate = false;
+bool throw_evaluate = false, throw_info = false;
 unsigned creates = 0, evaluations = 0;
 const rsf_srvk_setup* forwarded_setup = nullptr;
 const rsf_fsr4vk_handoff* forwarded_handoff = nullptr;
@@ -41,6 +41,14 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk*, void*, const rsf_srvk_frame*, void** co
     ++evaluations;
     *continuation = reinterpret_cast<void*>(2);
     if (throw_evaluate) throw std::runtime_error("provider exception");
+    return provider_result;
+}
+int32_t rsf_fsr4vk_info(const rsf_fsr4vk* owner, rsf_fsr4_bridge_info* info) {
+    check(owner == &instance && info->struct_size == sizeof(*info) && info->abi_version == RSF_FSR4_BRIDGE_ABI_VERSION,
+        "public info uses actual private query with bridge ABI");
+    if (throw_info) throw std::runtime_error("info exception");
+    info->adapter_luid = 0x123456789abcdef0ull; info->provider_version = 0x456789abcdef0123ull;
+    info->vendor_id = 0x10de; info->int8_compatibility = 1;
     return provider_result;
 }
 int32_t rsf_fsr4vk_destroy(rsf_fsr4vk*) { return provider_result; }
@@ -97,6 +105,15 @@ int main() {
     check(rsf_srvk_fsr4_create(&bad_setup, &handoff, &owner) == RSF_BACKEND_ERROR_NOT_SUPPORTED, "no provider substitution");
     bad_setup = setup; bad_setup.depth_inverted = 2;
     check(rsf_srvk_fsr4_create(&bad_setup, &handoff, &owner) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "boolean capability validation");
+    rsf_srvk_fsr4_provider_info info{sizeof(info), RSF_SRVK_FSR4_INFO_ABI_VERSION, 1, 2, 3, 4};
+    check(rsf_srvk_fsr4_info(nullptr, &info) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !info.provider_version && !info.vendor_id,
+        "null info owner clears known facts");
+    check(rsf_srvk_fsr4_info(fake, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "null info output");
+    info.struct_size--; info.adapter_luid = 7; info.abi_version = 99;
+    check(rsf_srvk_fsr4_info(fake, &info) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && info.adapter_luid == 7, "short info checked before version without writes");
+    info.struct_size++;
+    check(rsf_srvk_fsr4_info(fake, &info) == RSF_BACKEND_ERROR_ABI_MISMATCH && !info.adapter_luid, "info ABI mismatch clears facts");
+    info.abi_version = RSF_SRVK_FSR4_INFO_ABI_VERSION;
     uint32_t width = 9, height = 9;
     check(rsf_srvk_fsr4_plan(nullptr, &width, &height) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !width && !height, "invalid plan clears outputs");
     check(rsf_srvk_fsr4_destroy(nullptr) == 0, "null destroy");
@@ -127,6 +144,7 @@ int main() {
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == RSF_BACKEND_ERROR_NOT_COMPILED && !owner, "valid create explicitly not compiled");
     check(rsf_srvk_fsr4_plan(fake, &width, &height) == RSF_BACKEND_ERROR_NOT_COMPILED && !width && !height, "disabled plan");
     check(rsf_srvk_fsr4_evaluate(fake, commands, &frame, &continuation) == RSF_BACKEND_ERROR_NOT_COMPILED && continuation == commands, "disabled evaluation leaves original recording");
+    check(rsf_srvk_fsr4_info(fake, &info) == RSF_BACKEND_ERROR_NOT_COMPILED && !info.provider_version, "disabled info is unknown");
     check(rsf_srvk_fsr4_destroy(fake) == RSF_BACKEND_ERROR_NOT_COMPILED, "disabled checked destroy");
     check(rsf_srvk_fsr4_submitted(fake, commands) == RSF_BACKEND_ERROR_NOT_COMPILED, "disabled notification is honest");
 #elif defined(RSF_TEST_SPLIT_STUB)
@@ -139,10 +157,19 @@ int main() {
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0, "tracked ABI routes to actual provider");
     check(rsf_srvk_fsr4_submitted(owner, commands) == 0, "notification reaches provider");
     check(rsf_srvk_fsr4_plan(owner, &width, &height) == 0 && width == 320 && height == 180, "provider plan");
+    struct ExtendedInfo { rsf_srvk_fsr4_provider_info value; uint64_t tail; } extended{{sizeof(ExtendedInfo), 1}, 0xcafe};
+    check(rsf_srvk_fsr4_info(owner, &extended.value) == 0 && extended.tail == 0xcafe &&
+        extended.value.adapter_luid == 0x123456789abcdef0ull && extended.value.provider_version == 0x456789abcdef0123ull &&
+        extended.value.vendor_id == 0x10de && extended.value.int8_compatibility == 1, "effective provider fields and appended canary");
+    throw_info = true;
+    check(rsf_srvk_fsr4_info(owner, &info) == RSF_BACKEND_ERROR_FEATURE_FAILED && !info.provider_version, "info exception preserves unknown facts");
+    throw_info = false;
     frame.struct_size = uint32_t(offsetof(rsf_srvk_frame, bias_current_color));
     check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == 0, "old ABI 2 frame prefix remains accepted");
     frame.struct_size = sizeof(frame);
     provider_result = -71;
+    check(rsf_srvk_fsr4_info(owner, &info) == -71 && !info.adapter_luid && !info.provider_version && !info.vendor_id && !info.int8_compatibility,
+        "failed private query never reports fabricated facts");
     check(rsf_srvk_fsr4_submitted(owner, commands) == -71, "notification preserves native errors");
     check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == -71 && continuation == reinterpret_cast<void*>(2), "SDK failure preserves continuation and native error");
     check(rsf_srvk_fsr4_destroy(owner) == -71, "checked destroy failure preserves owner");

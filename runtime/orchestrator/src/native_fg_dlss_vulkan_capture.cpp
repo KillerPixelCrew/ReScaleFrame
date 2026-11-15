@@ -29,6 +29,17 @@ struct DlssPresentCapture::State {
     std::filesystem::path directory;
     uint64_t serial = 0;
     uint64_t observed_source = 0;
+    // A record/end/submit failure can leave a retained readback with no GPU
+    // submission. A later, unrelated fence cannot prove that readback complete.
+    bool unsubmitted_readbacks = false;
+    bool readbacks_completed() const {
+        if (unsubmitted_readbacks) return false;
+        for (const auto& [family, command] : command_families) {
+            (void)family;
+            if (command.pending) return false;
+        }
+        return true;
+    }
     PFN_vkCreateCommandPool create_pool = nullptr; PFN_vkDestroyCommandPool destroy_pool = nullptr;
     PFN_vkResetCommandPool reset_pool = nullptr; PFN_vkAllocateCommandBuffers allocate_commands = nullptr;
     PFN_vkBeginCommandBuffer begin = nullptr; PFN_vkEndCommandBuffer end = nullptr;
@@ -110,7 +121,7 @@ struct DlssPresentCapture::State {
                 << ",\"vsync_supported\":" << sdk.vsync_supported << ",\"dynamic_mfg_supported\":" << sdk.dynamic_mfg_supported
                 << ",\"state_sample\":\"previous_sdk_query\"}\n";
         }
-        if (!packet.boundary_valid || source == sources.end() || !capture.wants(source->second.record.frame_id)) return real_present(info);
+        if (!packet.boundary_valid || source == sources.end() || !capture.wants(source->second.record.frame_id) || unsubmitted_readbacks) return real_present(info);
         const auto& chain_info = *static_cast<const VkSwapchainCreateInfoKHR*>(packet.swapchain_info);
         if (!(chain_info.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || info.swapchainCount != 1 || !info.pSwapchains || !info.pImageIndices ||
             chain_info.imageArrayLayers != 1 || (chain_info.imageFormat != VK_FORMAT_B8G8R8A8_UNORM && chain_info.imageFormat != VK_FORMAT_R8G8B8A8_UNORM)) {
@@ -135,19 +146,35 @@ struct DlssPresentCapture::State {
         const auto role = packet.generated_index >= 0 ? "fg-generated-present-" + std::to_string(packet.generated_index) : "fg-real-present";
         const rsf_srvk_image image{packet.device, reinterpret_cast<uint64_t>(actual_images[info.pImageIndices[0]]), uint32_t(chain_info.imageFormat),
             chain_info.imageExtent.width, chain_info.imageExtent.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, 1};
+        const auto pending_before = capture.pending_count();
         const bool recorded = capture.record(work->commands, image, identity, role.c_str(), identity.flags & RSF_FRAME_FLAG_RESET, false);
         result = end(work->commands);
-        if (!recorded || result != VK_SUCCESS) { failure(packet.source_frame, "record", result); return real_present(info); }
+        if (!recorded || result != VK_SUCCESS) {
+            unsubmitted_readbacks = capture.pending_count() > pending_before;
+            failure(packet.source_frame, "record", result); return real_present(info);
+        }
         std::vector<VkPipelineStageFlags> stages(info.waitSemaphoreCount, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
         VkSubmitInfo submission{}; submission.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submission.waitSemaphoreCount = info.waitSemaphoreCount; submission.pWaitSemaphores = info.pWaitSemaphores;
         submission.pWaitDstStageMask = stages.data(); submission.commandBufferCount = 1; submission.pCommandBuffers = &work->commands;
         result = native_submit(queue, 1, &submission, work->fence);
-        if (result != VK_SUCCESS) { failure(packet.source_frame, "submit", result); return result; }
+        if (result != VK_SUCCESS) {
+            unsubmitted_readbacks = capture.pending_count() > pending_before;
+            failure(packet.source_frame, "submit", result); return result;
+        }
         work->pending = true;
         result = wait_fences(device, 1, &work->fence, VK_TRUE, 15000000000ull);
         if (result != VK_SUCCESS) { failure(packet.source_frame, "wait", result); return result > 0 ? VK_ERROR_INITIALIZATION_FAILED : result; }
         work->pending = false;
+        // guard serializes all dedicated capture recordings. Every earlier
+        // submitted copy must also have a successful own-fence wait, including
+        // other queue families after a previous timeout. No global idle or SDK
+        // lock is acquired here. Legacy readbacks have no core completion ticket,
+        // so flush(true) would deliberately leave their pixels unwritten.
+        const bool readbacks_ready = readbacks_completed();
+        const bool pixels_flushed = readbacks_ready && capture.flush(false);
+        if (readbacks_ready && !pixels_flushed)
+            failure(packet.source_frame, "completed-readback-flush", VK_ERROR_INITIALIZATION_FAILED);
         // Diagnostic readback is intentionally synchronous and bounded. Its GPU
         // fence completes the original binary waits before native Present, so
         // no replacement semaphore or image-index reuse assumption is needed.
@@ -160,6 +187,9 @@ struct DlssPresentCapture::State {
             << ",\"sdk_generated_index\":" << packet.generated_index << ",\"requested_generated_count\":" << source->second.generated_count
             << ",\"generated\":" << (packet.generated_index >= 0 ? "true" : "false") << ",\"real_image_index\":" << info.pImageIndices[0]
             << ",\"real_swapchain\":" << reinterpret_cast<uint64_t>(info.pSwapchains[0]) << ",\"present_result\":" << result
+            << ",\"legacy_flush_attempted\":" << (readbacks_ready ? "true" : "false")
+            << ",\"legacy_flush_succeeded\":" << (pixels_flushed ? "true" : "false")
+            << ",\"readback_completion_proof\":" << (readbacks_ready ? "\"dedicated-capture-fences\"" : "null")
             << ",\"role\":\"" << role << "\",\"fraction_established\":false}\n";
         return result;
     }
