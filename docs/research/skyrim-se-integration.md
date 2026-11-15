@@ -1811,3 +1811,56 @@ their own resource leases. This preserves declared facts for later FG admission;
 it does not invent a gameplay class or clear NO_FG. Focused MSVC Release adapter
 build passed. No fixtures were rerun for these scalar copies, and no deployment
 was made into the restored working session.
+
+### Shared SR transfer device regression, 15 November 2026
+
+Before another cold game deployment, the normalization correction was exercised
+through the production D3D11 host and its actual shared D3D12 DLSS route in an
+isolated process. The explicit `rsf_d3d11_host_shared_sr_device` target is excluded
+from default builds and CTest; it requires a scratch runtime root containing
+the matched Streamline files. It creates a hidden window, never requests
+foreground ownership and leaves FG/latency Off. No installed game files were
+changed. The scratch SDK files match the working deployment and are recorded
+in ignored `.local/shared-sr-device-20261115/sdk-sha256.json`.
+
+The synthetic pass supplies full-output-size R11G11B10 colour, R16G16 native
+motion, R24G8_TYPELESS depth, a640x360 active rectangle and960x540 output.
+Motion includes camera motion, has no sentinel and contains valid zeros.
+The actual pipeline therefore decodes to R32G32 and must normalize before
+sharing, just as in the failed game path. Eight sequential CPU sources and
+application Presents exercise the six-slot transfer ring across reuse.
+
+The RTX4070 Laptop run succeeded on all eight evaluates with no refused
+frames. D3D11 debug queue was available and reported no error/corruption
+messages. Output centre RGB was(0.249390,0.499268,0.749512) for constant input
+(0.25,0.5,0.75); the prefilled output marker was overwritten. Runtime status
+reported FG requested0/effective0/tagged0. This proves actual shared evaluate
+and output return for these inputs, not moving-image quality, generation,
+camera sampling order, UI extraction or game/mod compatibility.
+
+The identical executable and SDK root were then paired with the saved failing
+Runtime DLL from `20261115-190139-bridge-rollback`. It reproduced backend-9,
+pipeline-10 and zero successful evaluations on the first frame. Its SHA256 is
+`278a12ec30bb1a24d1348ba7d4cd700463ac64d387a464300446248f00ce87df`.
+The corrected positive run's Runtime SHA256 is
+`1402d169dd313875ccd298a7e2085b203d1c52a86a18288b2601694ac4acc6df`.
+Logs, executable/source hashes and the SDK receipt are retained under ignored
+`.local/shared-sr-device-20261115/`. This positive/negative comparison upgrades
+the normalization from WARP-only evidence to a reproduced device regression.
+It does not retroactively recover the old call's uncaptured HRESULT.
+
+An initial fixture check accidentally queried statically linked internal
+presentation helpers, which have different state from the Runtime DLL.
+The fixture now queries the public rsf_get_d3d11_present_api table and uses
+only that DLL's owner/host predicates. That harness correction is distinct
+from the game's transfer defect. Native startup's pre-scene Present is also
+represented. The working PID10028 remained responsive and its installed
+pre-bridge DLL pair was left unchanged. Skyrim's cold bridge remains disabled
+until an actual game run validates the corrected shared route.
+
+Reproduction uses the explicit target, not the routine gate:
+
+```powershell
+cmake --build build/windows-x64 --config Release --target rsf_d3d11_host_shared_sr_device
+./build/windows-x64/bin/Release/rsf_d3d11_host_shared_sr_device.exe .local/shared-sr-device-20261115
+```

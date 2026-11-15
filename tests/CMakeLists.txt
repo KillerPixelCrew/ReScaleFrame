@@ -1,4 +1,7 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+# Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
+add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
+target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE rsf_orchestrator rsf_build_options d3d11 dxgi)
 add_executable(rsf_native_vulkan_exports_test native_vulkan_exports.cpp)
 target_link_libraries(rsf_native_vulkan_exports_test PRIVATE rsf_build_options)
 add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
