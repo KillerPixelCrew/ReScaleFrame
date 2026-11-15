@@ -41,6 +41,10 @@ typedef struct rsf_srvk_frame {
     /* Optional diagnostic sink. User storage outlives the recording call. */
     void (*log)(void* user,const char* message);
     void* log_user;
+    /* Optional appended ABI 2 field. R8 current-colour history bias, independent
+       of material reactivity/transparency. Consumed by DLSS; other providers
+       retain their ordinary inputs. Older ABI 2 frame sizes imply no bias. */
+    rsf_srvk_image bias_current_color;
 } rsf_srvk_frame;
 
 typedef struct rsf_srvk_fallback {

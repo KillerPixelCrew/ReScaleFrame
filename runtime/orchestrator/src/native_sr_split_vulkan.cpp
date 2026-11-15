@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_split_vulkan.h>
+#include <cstddef>
+#include <cstring>
 #if defined(RSF_VULKAN_FSR4_ENABLED)
 #include "native_sr_fsr4_vulkan.h"
 #endif
@@ -51,9 +53,14 @@ extern "C" int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk* owner, void* commands,
     const rsf_srvk_frame* frame, void** continuation) try {
     if (!continuation) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *continuation = commands;
-    if (!owner || !commands || !frame || frame->struct_size < sizeof(*frame))
+    if (!owner || !commands || !frame || frame->struct_size < offsetof(rsf_srvk_frame, bias_current_color) ||
+        (frame->struct_size != offsetof(rsf_srvk_frame, bias_current_color) && frame->struct_size < sizeof(*frame)))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (frame->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    rsf_srvk_frame normalized{};
+    std::memcpy(&normalized, frame, frame->struct_size >= sizeof(normalized) ? sizeof(normalized) : offsetof(rsf_srvk_frame, bias_current_color));
+    normalized.struct_size = sizeof(normalized);
+    frame = &normalized;
     if (!frame->record || frame->record->struct_size < sizeof(*frame->record))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (frame->record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
