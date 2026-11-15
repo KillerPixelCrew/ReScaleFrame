@@ -6,6 +6,8 @@
 #include "../../backends/common/sharpening.h"
 #include <memory>
 #include <limits>
+#include <cstddef>
+#include <cstring>
 
 #if defined(RSF_HAVE_FFX_VK)
 #include <windows.h>
@@ -306,8 +308,14 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk* self
 }
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, void* commands, const rsf_srvk_frame* input) try {
-    if (!self || !commands || !input || input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!self || !commands || !input || input->struct_size < offsetof(rsf_srvk_frame, bias_current_color)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (input->struct_size != offsetof(rsf_srvk_frame, bias_current_color) && input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (input->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    rsf_srvk_frame normalized{};
+    const size_t input_size = input->struct_size >= sizeof(normalized) ? sizeof(normalized) : offsetof(rsf_srvk_frame, bias_current_color);
+    std::memcpy(&normalized, input, input_size);
+    normalized.struct_size = sizeof(normalized);
+    input = &normalized;
     if (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if defined(RSF_HAVE_FFX_VK)
     const auto* record = input->record;
@@ -331,13 +339,14 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
         !valid_image(*self, input->motion, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->motion.format != VK_FORMAT_R16G16_SFLOAT ||
         !valid_image(*self, input->output, self->setup.output_width, self->setup.output_height, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) || input->output.format != VK_FORMAT_R16G16B16A16_SFLOAT)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (const auto* mask : {&input->reactive, &input->composition}) if (mask->image &&
+    for (const auto* mask : {&input->reactive, &input->composition, &input->bias_current_color}) if (mask->image &&
         (!valid_image(*self, *mask, self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     (void)rsf_input_dump_begin_record(record, self->setup.backend);
     if (rsf_input_dump_wants(record)) {
         auto capture_list = static_cast<VkCommandBuffer>(commands);
         (void)self->capture.record(capture_list, input->color, *record, "sr-source-jittered", record->flags & RSF_FRAME_FLAG_RESET);
+        if (input->bias_current_color.image) (void)self->capture.record(capture_list, input->bias_current_color, *record, "sr-bias-mask", 0);
         if (input->reactive.image) (void)self->capture.record(capture_list, input->reactive, *record, "sr-reactive-mask", 0);
         if (input->composition.image) (void)self->capture.record(capture_list, input->composition, *record, "sr-transparency-mask", 0);
     }

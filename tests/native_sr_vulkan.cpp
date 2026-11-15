@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <cstddef>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -285,6 +286,7 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     auto depth = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     auto motion = gpu.image(width, height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     auto output = gpu.image(320, 180, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    auto bias = gpu.image(width, height, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = 43; record.view_id = 1; record.resource_generation = 1; record.frame_time_ms = 16.667f;
     record.render_width = record.camera.render_width = width; record.render_height = record.camera.render_height = height;
@@ -316,10 +318,24 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
         for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, index == 1 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         if (index == 1) gpu.transition(output, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         gpu.fill(color, value); gpu.fill(depth, {0.5f, 0, 0, 0}); gpu.fill(motion, {0, 0, 0, 0});
+        gpu.transition(bias, index == 1 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        gpu.fill(bias, {0.65f, 0, 0, 0});
+        gpu.transition(bias, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        frame.bias_current_color = index > 1 && index < 12 ? gpu.describe(bias, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) : rsf_srvk_image{};
+        // The pre-extension ABI 2 prefix must remain accepted. Later frames
+        // exercise adding and removing the optional hint on the same owner.
+        frame.struct_size = index == 1 ? uint32_t(offsetof(rsf_srvk_frame, bias_current_color)) : uint32_t(sizeof(frame));
         for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         record.frame_id = index; record.flags = index == 1 || index == 7 ? RSF_FRAME_FLAG_RESET : 0;
         auto invalid = frame; invalid.color.device = nullptr;
         require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "foreign device image refusal");
+        if (index > 1) {
+            invalid = frame; invalid.bias_current_color = frame.color;
+            require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "wrong bias format refusal");
+            invalid = frame; invalid.bias_current_color = gpu.describe(bias, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            invalid.bias_current_color.device = nullptr;
+            require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "foreign bias device refusal");
+        }
         result = rsf_srvk_evaluate(context, gpu.commands, &frame);
         std::printf("backend=%u frame=%u dispatch=%d reset=%u\n", backend, index, result, record.flags);
         require(result == RSF_BACKEND_OK, "Vulkan SR dispatch");

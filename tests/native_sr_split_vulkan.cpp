@@ -6,6 +6,7 @@
 #endif
 #include <rescaleframe/native_sr_split_vulkan.h>
 #include <cstdio>
+#include <cstddef>
 #include <stdexcept>
 
 namespace {
@@ -116,6 +117,9 @@ int main() {
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0 && owner == &instance &&
         forwarded_setup == &setup && forwarded_handoff == &handoff, "compiled route forwards the actual setup and callback lease");
     check(rsf_srvk_fsr4_plan(owner, &width, &height) == 0 && width == 320 && height == 180, "provider plan");
+    frame.struct_size = uint32_t(offsetof(rsf_srvk_frame, bias_current_color));
+    check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == 0, "old ABI 2 frame prefix remains accepted");
+    frame.struct_size = sizeof(frame);
     provider_result = -71;
     check(rsf_srvk_fsr4_evaluate(owner, commands, &frame, &continuation) == -71 && continuation == reinterpret_cast<void*>(2), "SDK failure preserves continuation and native error");
     check(rsf_srvk_fsr4_destroy(owner) == -71, "checked destroy failure preserves owner");

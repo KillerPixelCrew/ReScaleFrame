@@ -39,13 +39,14 @@ struct rsf_dlssvk {
     uint32_t width = 0, height = 0, preset = 0;
     uint64_t session = 0, frame = 0; uint32_t view = 0, generation = 0;
     bool claimed = false, resources = false;
-    Image color, depth, motion, output;
+    Image color, depth, motion, output, bias;
     VkPhysicalDeviceMemoryProperties memory{};
     PFN_vkCreateImage create_image = nullptr; PFN_vkDestroyImage destroy_image = nullptr;
     PFN_vkGetImageMemoryRequirements requirements = nullptr; PFN_vkAllocateMemory allocate = nullptr;
     PFN_vkFreeMemory free_memory = nullptr; PFN_vkBindImageMemory bind = nullptr;
     PFN_vkCreateImageView create_view = nullptr; PFN_vkDestroyImageView destroy_view = nullptr;
     PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
+    PFN_vkCmdBlitImage blit = nullptr;
     PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
     PFun_slEvaluateFeature* evaluate = nullptr; PFun_slFreeResources* release = nullptr;
     PFun_slDLSSGetOptimalSettings* optimal = nullptr; PFun_slDLSSSetOptions* options = nullptr;
@@ -53,7 +54,7 @@ struct rsf_dlssvk {
     ~rsf_dlssvk() {
         sharpen.clear();
         const auto device = static_cast<VkDevice>(setup.device);
-        for (Image* image : {&color, &depth, &motion, &output}) {
+        for (Image* image : {&color, &depth, &motion, &output, &bias}) {
             if (image->view) destroy_view(device, image->view, nullptr);
             if (image->image) destroy_image(device, image->image, nullptr);
             if (image->memory) free_memory(device, image->memory, nullptr);
@@ -100,6 +101,20 @@ void stage(rsf_dlssvk& self, VkCommandBuffer commands, const rsf_srvk_image& sou
     transition(self, commands, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     destination.initialized = true;
 }
+void stage_bias(rsf_dlssvk& self, VkCommandBuffer commands, const rsf_srvk_image& source) {
+    // Streamline's Vulkan getFormat omits R8_UNORM in the pinned SDK. Convert
+    // the public R8 mask to R16F rather than passing an internally invalid format.
+    auto& destination = self.bias;
+    const auto image = reinterpret_cast<VkImage>(source.image);
+    transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    transition(self, commands, destination.image, destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageBlit region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffsets[1] = region.dstOffsets[1] = {int32_t(source.width), int32_t(source.height), 1};
+    self.blit(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+    transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transition(self, commands, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    destination.initialized = true;
+}
 sl::Resource resource(const Image& image, uint32_t width, uint32_t height, VkFormat format, bool output = false) {
     sl::Resource result{sl::ResourceType::eTex2d, reinterpret_cast<void*>(image.image), nullptr,
         reinterpret_cast<void*>(image.view), uint32_t(output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)};
@@ -140,6 +155,7 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     const auto& record = *input.record; const auto& camera = record.camera;
     if (!token || !input.color.copy_source || !input.depth.copy_source || !input.motion.copy_source || input.depth.format != VK_FORMAT_R32_SFLOAT)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (input.bias_current_color.image && !input.bias_current_color.copy_source) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     for (const auto* values : {camera.view_to_clip, camera.clip_to_view, camera.clip_to_previous_clip, camera.view_to_world})
         for (uint32_t i = 0; i < 16; ++i) if (!std::isfinite(values[i])) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, camera.clip_to_previous_clip, sizeof(previous));
@@ -171,6 +187,9 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     options.dlaaPreset = options.qualityPreset = options.balancedPreset = options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
     if (self.options(viewport, options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     stage(self, call.commands, input.color, self.color); stage(self, call.commands, input.depth, self.depth); stage(self, call.commands, input.motion, self.motion);
+    if (input.bias_current_color.image) {
+        stage_bias(self, call.commands, input.bias_current_color);
+    }
     if (!self.output.initialized) {
         transition(self, call.commands, self.output.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); self.output.initialized = true;
     }
@@ -178,12 +197,16 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     sl::Resource depth = resource(self.depth, self.width, self.height, VK_FORMAT_R32_SFLOAT);
     sl::Resource motion = resource(self.motion, self.width, self.height, VK_FORMAT_R16G16_SFLOAT);
     sl::Resource output = resource(self.output, record.output_width, record.output_height, VK_FORMAT_R16G16B16A16_SFLOAT, true);
+    sl::Resource bias{};
+    if (input.bias_current_color.image) bias = resource(self.bias, self.width, self.height, VK_FORMAT_R16_SFLOAT);
     const sl::Extent render{0, 0, self.width, self.height}, presented{0, 0, record.output_width, record.output_height};
     sl::ResourceTag tags[] = {{&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
         {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
         {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
-        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &presented}};
-    if (self.tags(frame, viewport, tags, 4, reinterpret_cast<sl::CommandBuffer*>(call.commands)) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &presented},
+        // An explicit null tag clears a mask used on an earlier frame.
+        {input.bias_current_color.image ? &bias : nullptr, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilEvaluate, &render}};
+    if (self.tags(frame, viewport, tags, 5, reinterpret_cast<sl::CommandBuffer*>(call.commands)) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     const sl::BaseStructure* inputs[] = {&viewport}; self.resources = true;
     if (self.evaluate(sl::kFeatureDLSS, frame, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(call.commands)) != sl::Result::eOk) { self.frame = 0; return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     const rsf_srvk_image out{self.setup.device, reinterpret_cast<uint64_t>(self.output.image), VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -193,6 +216,7 @@ rsf_backend_result evaluate(void*, uintptr_t token, void* user) {
     (void)self.capture.record(call.commands, input.color, record, "sr-linear-color", reset);
     (void)self.capture.record(call.commands, input.depth, record, "sr-depth", reset);
     (void)self.capture.record(call.commands, input.motion, record, "sr-motion-uv", reset);
+    if (input.bias_current_color.image) (void)self.capture.record(call.commands, input.bias_current_color, record, "sr-bias-mask", reset);
     (void)self.capture.record(call.commands, out, record, "sr-output-linear", reset);
     (void)self.sharpen.run(self.setup,call.commands,input,self.output.image);
     transition(self, call.commands, self.output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -220,6 +244,7 @@ rsf_backend_result rsf_dlssvk_create(const rsf_srvk_setup* setup, rsf_dlssvk** o
     RSF_LOAD(create_image, vkCreateImage); RSF_LOAD(destroy_image, vkDestroyImage); RSF_LOAD(requirements, vkGetImageMemoryRequirements);
     RSF_LOAD(allocate, vkAllocateMemory); RSF_LOAD(free_memory, vkFreeMemory); RSF_LOAD(bind, vkBindImageMemory);
     RSF_LOAD(create_view, vkCreateImageView); RSF_LOAD(destroy_view, vkDestroyImageView); RSF_LOAD(barrier, vkCmdPipelineBarrier); RSF_LOAD(copy, vkCmdCopyImage);
+    RSF_LOAD(blit, vkCmdBlitImage);
 #undef RSF_LOAD
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
@@ -230,6 +255,7 @@ rsf_backend_result rsf_dlssvk_create(const rsf_srvk_setup* setup, rsf_dlssvk** o
     if (!allocate(*self, self->color, self->width, self->height, VK_FORMAT_R16G16B16A16_SFLOAT, usage) ||
         !allocate(*self, self->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT, usage) ||
         !allocate(*self, self->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT, usage) ||
+        !allocate(*self, self->bias, self->width, self->height, VK_FORMAT_R16_SFLOAT, usage) ||
         !allocate(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
