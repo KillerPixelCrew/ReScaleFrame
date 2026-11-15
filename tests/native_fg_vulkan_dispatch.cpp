@@ -3,6 +3,9 @@
 #include "../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp"
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
+#include <condition_variable>
+#include <chrono>
 
 struct rsf_ffxgvk {};
 struct rsf_dlssgvk {};
@@ -108,6 +111,7 @@ namespace {
 rsf_xessgvk xess;
 uint32_t xess_creates = 0;
 bool refuse_latency = false;
+std::mutex sleeper_guard;std::condition_variable sleeper_changed;bool block_sleep=false,entered_sleep=false,finish_sleep=false;
 rsf_fgvk_latency_status xell{sizeof(xell), RSF_FGVK_LATENCY_ABI_VERSION, 1, 1, 0, 0, 0};
 }
 int32_t rsf_xessgvk_create(const rsf_fgvk_setup* setup, const rsf_xessgvk_options* options, rsf_xessgvk** out, uint64_t* chain) {
@@ -139,7 +143,10 @@ int32_t rsf_xessgvk_latency_options(rsf_xessgvk*, uint32_t mode, uint32_t interv
 }
 int32_t rsf_xessgvk_sleep(rsf_xessgvk*, uint32_t frame) {
     require(frame == 42, "XeLL source frame forwarded"); xell.result = refuse_latency ? -77 : 0;
-    if (!xell.result) ++xell.sleep_calls; return xell.result;
+    if (!xell.result) ++xell.sleep_calls;
+    std::unique_lock lock(sleeper_guard);
+    if(block_sleep){entered_sleep=true;sleeper_changed.notify_all();sleeper_changed.wait(lock,[]{return finish_sleep;});}
+    return xell.result;
 }
 int32_t rsf_xessgvk_latency(rsf_xessgvk*, uint32_t frame, uint32_t marker) {
     require(frame == 42 && marker <= 6, "XeLL original marker identity forwarded"); xell.result = refuse_latency ? -77 : 0;
@@ -320,7 +327,16 @@ int main() {
     rsf_fgvk_latency_status latency{}; latency.struct_size = sizeof(latency); latency.abi_version = RSF_FGVK_LATENCY_ABI_VERSION;
     require(rsf_fgvk_latency_get_status(owner, &latency) == RSF_BACKEND_OK && latency.sleep_calls == 1 && latency.marker_calls == 1 &&
         latency.result == -77 && latency.mode == 0, "XeLL counts cover accepted calls and retain exact native error");
-    refuse_latency = false; refuse_destroy = true;
+    refuse_latency=false;block_sleep=true;
+    std::thread sleeping_cpu([&]{rsf::latency::PresentationLease lease;
+        require(lease.get()==owner,"successful provider creation automatically binds latency context");
+        require(rsf_fgvk_latency_sleep(lease.get(),42)==RSF_BACKEND_OK,"borrowed actual dispatch sleep completes");});
+    {std::unique_lock lock(sleeper_guard);require(sleeper_changed.wait_for(lock,std::chrono::seconds(2),[]{return entered_sleep;}),"actual dispatch sleep entered");}
+    require(rsf_fgvk_drain(owner)==RSF_BACKEND_ERROR_NOT_READY&&rsf_fgvk_destroy(owner)==RSF_BACKEND_ERROR_NOT_READY,
+        "actual drain and destroy return immediately while CPU lease may await host Present");
+    {rsf::latency::PresentationLease rejected;require(!rejected.get(),"destroying provider cannot acquire new CPU users");}
+    {std::lock_guard lock(sleeper_guard);finish_sleep=true;sleeper_changed.notify_all();}sleeping_cpu.join();block_sleep=false;
+    refuse_destroy = true;
     require(rsf_fgvk_drain(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED && rsf_fgvk_destroy(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED &&
         rsf_fgvk_create(&setup, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_READY, "XeSS failed retirement preserves process owner");
     refuse_destroy = false; require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "XeSS owner retry retires safely");
@@ -328,6 +344,15 @@ int main() {
     require(rsf_fgvk_create_for_backend(&setup, 5, 3, &owner, &chain) == RSF_BACKEND_ERROR_NOT_COMPILED && !owner && !chain,
         "XeSS missing SDK is explicit and does not allocate");
 #endif
+    auto* other_context=reinterpret_cast<rsf_fgvk*>(99);
+    require(rsf::latency::presentation_attach(other_context)==RSF_BACKEND_OK,"independent existing latency binding retained");
+    owner=nullptr;chain=0;
+    require(rsf_fgvk_create(&setup,&owner,&chain)==RSF_BACKEND_ERROR_NOT_READY&&!owner&&!chain,"attachment collision rolls provider creation back");
+    refuse_destroy=true;
+    require(rsf_fgvk_create(&setup,&owner,&chain)!=RSF_BACKEND_OK&&owner,"failed rollback retains partial provider owner");
+    refuse_destroy=false;require(rsf_fgvk_destroy(owner)==RSF_BACKEND_OK,"partial unattached owner cleanup retry");
+    {rsf::latency::PresentationLease retained;require(retained.get()==other_context,"partial-owner cleanup cannot release another active binding");}
+    require(rsf::latency::presentation_unbind()==RSF_BACKEND_OK,"independent binding released by its owner");
     require(rsf_fgvk_destroy(nullptr) == RSF_BACKEND_OK && rsf_fgvk_drain(nullptr) == RSF_BACKEND_OK, "null retirement remains idempotent");
     std::puts("Synthetic Vulkan FG provider dispatch and ownership checks passed");
 }

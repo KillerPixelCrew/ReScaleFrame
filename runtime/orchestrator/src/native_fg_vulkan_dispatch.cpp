@@ -3,6 +3,7 @@
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include "native_fg_ffx_vulkan.h"
 #include "native_fg_source.h"
+#include "native_latency_vulkan_presentation.h"
 #if defined(RSF_HAVE_FSR4_FG_VK)
 #include "native_fg_fsr4_vulkan.h"
 #endif
@@ -137,6 +138,12 @@ extern "C" rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup* se
         const auto retired = destroy_provider(*self);
         if (retired != RSF_BACKEND_OK) { *chain = owned_chain; *out = self.release(); return retired; }
         return configured;
+    }
+    const auto attached=rsf::latency::presentation_attach(self.get());
+    if(attached!=RSF_BACKEND_OK) {
+        const auto retired=destroy_provider(*self);
+        if(retired!=RSF_BACKEND_OK) {*chain=owned_chain;*out=self.release();return retired;}
+        return attached;
     }
     *chain = owned_chain; *out = self.release(); return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -305,17 +312,26 @@ extern "C" rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self, rsf_fgvk_statu
 }
 extern "C" rsf_backend_result rsf_fgvk_drain(rsf_fgvk* self) {
     if (!self) return RSF_BACKEND_OK;
+    const auto available=rsf::latency::presentation_drain_begin(self);
+    if(available!=RSF_BACKEND_OK) return available;
+    rsf_backend_result result;
 #if defined(RSF_HAVE_FSR4_FG_VK)
-    if (self->backend == fsr4_backend) return fsr4_result(rsf_fsr4gvk_drain(self->fsr4));
+    if (self->backend == fsr4_backend) result=fsr4_result(rsf_fsr4gvk_drain(self->fsr4));
+    else
 #endif
 #if defined(RSF_HAVE_XESS_FG_VK)
-    if (self->backend == xess_backend) return xess_result(rsf_xessgvk_drain(self->xess));
+    if (self->backend == xess_backend) result=xess_result(rsf_xessgvk_drain(self->xess));
+    else
 #endif
-    return self->backend == dlss_backend ? rsf_dlssgvk_drain(self->dlss) : rsf_ffxgvk_drain(self->ffx);
+    result=self->backend == dlss_backend ? rsf_dlssgvk_drain(self->dlss) : rsf_ffxgvk_drain(self->ffx);
+    rsf::latency::presentation_drain_end(self);
+    return result;
 }
 extern "C" rsf_backend_result rsf_fgvk_destroy(rsf_fgvk* self) try {
     if (!self) return RSF_BACKEND_OK;
+    const auto closing=rsf::latency::presentation_retire(self);
+    if(closing!=RSF_BACKEND_OK) return closing;
     const auto result = destroy_provider(*self);
-    if (result == RSF_BACKEND_OK) delete self;
+    if (result == RSF_BACKEND_OK) {rsf::latency::presentation_release(self);delete self;}
     return result;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
