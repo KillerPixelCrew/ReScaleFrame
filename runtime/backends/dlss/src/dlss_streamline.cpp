@@ -78,6 +78,8 @@ struct State {
     rsf_streamline_host* shared_host = nullptr;
     ID3D12Device* shared_device = nullptr;
     bool initialised = false;
+    HRESULT (*present)(IDXGISwapChain*, UINT, UINT, bool&){};
+    HRESULT (*after_present)(UINT){};
 
     // Kept alive for the process: Streamline is given pointers to these at init and the
     // documentation does not promise it copies them.
@@ -314,6 +316,25 @@ extern "C" rsf_dlss_result rsf_dlss_set_device(void* d3d11_device)
         return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
     }
     return RSF_DLSS_OK;
+}
+
+extern "C" rsf_dlss_result rsf_dlss_native_present(void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin)
+{
+    auto& self = state();
+    if (!swapchain || begin > 1) return RSF_DLSS_ERROR_INVALID_ARGUMENT;
+    if (self.shared_host) return RSF_DLSS_OK;
+    if (!self.initialised || !self.device) return RSF_DLSS_ERROR_NOT_READY;
+    if (!self.present || !self.after_present) {
+        void* before = nullptr; void* after = nullptr;
+        if (self.sl.get_feature_function(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
+            self.sl.get_feature_function(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
+            return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+        self.present = reinterpret_cast<decltype(self.present)>(before);
+        self.after_present = reinterpret_cast<decltype(self.after_present)>(after);
+    }
+    bool skip = false;
+    const auto result = begin ? self.present(static_cast<IDXGISwapChain*>(swapchain), interval, flags, skip) : self.after_present(flags);
+    return SUCCEEDED(result) && !skip ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
 }
 
 extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
@@ -631,6 +652,7 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
     }
     self.get_optimal_settings = nullptr;
     self.set_options = nullptr;
+    self.present = nullptr; self.after_present = nullptr;
     self.options_applied[0] = self.options_applied[1] = false;
     self.initialised = false;
     say("streamline shut down");
@@ -638,6 +660,8 @@ extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
 }
 
 #else // RSF_HAVE_STREAMLINE
+extern "C" rsf_dlss_result rsf_dlss_native_present(void* chain, uint32_t, uint32_t, uint32_t begin)
+{ return chain && begin <= 1 ? RSF_DLSS_ERROR_NOT_COMPILED : RSF_DLSS_ERROR_INVALID_ARGUMENT; }
 extern "C" rsf_dlss_result rsf_dlss_share_host(void*, rsf_dlss_log_fn, void*)
 { return RSF_DLSS_ERROR_NOT_COMPILED; }
 extern "C" rsf_dlss_result rsf_dlss_evaluate_shared(void*, const rsf_dlss_frame*, uint64_t)

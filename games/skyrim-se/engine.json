@@ -18,14 +18,14 @@
     "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
-    "status": "exact-build native jitter/pre-HDR observers and CPU facts; SR/FG/vendor pacing unimplemented",
+    "status": "experimental native-resolution pre-HDR SR and CPU facts; reduced-resolution SR, FG and vendor pacing incomplete",
     "rendering_ready": false,
     "built_windows_msvc": true,
     "contract_tested": true,
     "hooks_implemented": true,
     "game_tested": true,
-    "device_tested": false,
-    "game_test_scope": "Bounded vanilla startup and QASmoke runs: jitter, native post-processing and texture/camera descriptors, accepted CPU update/render facts and source-to-pre-HDR association; worker input ownership and pixels unverified",
+    "device_tested": true,
+    "game_test_scope": "Vanilla QASmoke: DLSS native-resolution evaluation and reinsertion, raw native/backend colour/depth/motion and matched actual Present capture. Stationary camera only; moving objects, reduced resolution, CS/ENB, FG and latency unverified",
     "automatic_loading_implemented": true,
     "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
   },
@@ -43,7 +43,7 @@
   },
   "research": "../../docs/research/skyrim-se-integration.md",
   "native_preflight": {
-    "status": "Jitter and main post-processing roots installed/game-observed; input statically matched; GPU pass leases unimplemented",
+    "status": "Guarded jitter/pre-HDR and CPU hooks; synchronous main-camera D3D11 leases evaluated at native resolution",
     "table_sha256": "a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce",
     "jitter_call_rva": "0x1009e63",
     "jitter_target_rva": "0x101e360",
@@ -53,7 +53,7 @@
     "unresolved": [
       "worker input job ownership and input-to-simulation association",
       "UI boundary",
-      "colour/depth/motion leases and contents",
+      "moving-camera/object motion coverage and reduced-resolution ownership",
       "shader replacement implementation and draw coverage",
       "CS ownership handover",
       "ENB path"
@@ -136,7 +136,7 @@
     "previous_vp_offset": "0x180",
     "current_origin_offset": "0x26c",
     "previous_origin_offset": "0x278",
-    "status": "Static producer/consumer match and four bounded live CPU-state/descriptor observations; no pixel validation or admitted GPU leases"
+    "status": "Native producer/consumer match, guarded synchronous leases, camera projection/history validation and bounded stationary raw-pixel capture"
   },
   "native_input_observation": {
     "near_game_units": 15,
@@ -184,7 +184,29 @@
   "sr_reinsertion": {
     "generic_runtime_format_conversion": true,
     "warp_device_tested": true,
-    "game_evaluation_tested": false,
-    "scope": "Floating colour conversion, linear HDR/alpha, offset rectangles, mirrors, inherited UAV restoration; no Skyrim SR evaluation"
+    "game_evaluation_tested": true,
+    "scope": "Generic WARP format/state/rectangle tests; actual DLSS native-resolution output reinserted into native R11G11B10 colour before HDR"
+  },
+  "native_sr": {
+    "quality_choices": ["native"],
+    "tested_backend": "DLSS",
+    "tested_dimensions": [1711, 1048],
+    "main_call_return_rva": "0x153adec",
+    "native_context_global": "0x3331f30",
+    "native_window_global": "0x3330198",
+    "swapchain_window_offset": "0x18",
+    "render_counter_rva": "0x33363f4",
+    "source_frame_id": 0,
+    "generation_allowed": false,
+    "taa_bypass": "Only around native processor after successful complete SR output; native enable byte restored after return",
+    "taa_history_reset_reader_rva": "0x1544df4",
+    "taa_history_reset_bytes": "44 39 71 30 74 09 e8 61 05 00 00 44 89 73 30",
+    "taa_history_reset": "Preserve mask at +0x30 and set bit 0 after SR success; live off/on run observed native consumption from 1 to 0",
+    "frame_time": "QPC interval between admitted native render callbacks, not an input or simulation delta",
+    "units_to_meters": 0.0142875,
+    "units_source": "Approximate Skyrim-to-Havok conversion in pinned CS CSEditor LightPicker; not a new native measurement",
+    "capture": "scene-20261115-134423-927-8579609-34676-1",
+    "capture_status": "complete, source identity null, native frame 1068, actual Present S_OK, settled DLSS reset 0",
+    "limitations": "Stationary scene only. Initial host startup still requires DLSS/Streamline; portable startup, device recreation and full host retirement remain pending"
   }
 }

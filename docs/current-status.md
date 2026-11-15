@@ -1,5 +1,14 @@
 # Current implementation and validation
 
+15 November 2026: Skyrim SE 1.7.104 has an experimental no-SKSE pre-HDR path.
+Bounded vanilla QASmoke runs evaluated DLSS at native 1711x1048, reinserted into
+native colour, captured actual backend inputs/output and matched native Present.
+Live SR off/on preserved native TAA and consumed its history reset. Camera and
+host ABI fixtures pass. Reduced-resolution SR, portable startup, shader repairs,
+moving-game quality, worker input ownership, FG, latency and CS/ENB handover are
+incomplete; CS currently refuses activation. Rendering readiness stays zero.
+See [research](research/skyrim-se-integration.md) for evidence and limitations.
+
 End-of-day checkpoint, 25 October 2026: work stopped at the user's request.
 The latest native Release gate passes 75 discovered tests, with 64 executed and
 11 opt-in skips, plus formatting and Clippy. Standard/.NET editors also build

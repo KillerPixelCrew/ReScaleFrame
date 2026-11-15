@@ -192,8 +192,9 @@ typedef void (*rsf_game_cpu_event_fn)(void* user, const rsf_game_cpu_event* even
 
 /* Synchronous replacement of an engine upscale. Zero accepts the replacement only after the
    host has recorded a complete output. Any other result leaves native evaluation enabled.
-   Inputs are NON_PIXEL_SHADER_RESOURCE and output is COPY_DEST during this callback. The
+   D3D12 inputs are NON_PIXEL_SHADER_RESOURCE and output is COPY_DEST during this callback. The
    plugin restores their engine states; the enclosing engine wrapper restores pipeline state.
+   D3D11 supplies its immediate context and leased textures; the host restores all bindings.
    Even a refused evaluation may record GPU work and therefore needs submission retirement. */
 typedef int32_t (*rsf_game_process_upscale_fn)(void* user, void* native_command_list,
                                               const rsf_game_render_pass* pass);

@@ -100,6 +100,11 @@ rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup);
 /* Hand over the game's `ID3D11Device*`. D3D11 has no device proxy in Streamline, so this is the
    native device and stays the one the game uses. */
 rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
+/* Graphics owner, paired around actual Present on an unwrapped native D3D11 chain.
+   Standalone SR needs common-plugin bookkeeping even when it does not replace Present.
+   Do not call for a Streamline proxy chain. Shared-host owners already provide this.
+   This SR-only notification refuses a request to skip the native call. */
+rsf_dlss_result rsf_dlss_native_present(void* swapchain, uint32_t sync_interval, uint32_t flags, uint32_t begin);
 /* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
 rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
 
