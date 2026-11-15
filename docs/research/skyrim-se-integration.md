@@ -383,3 +383,74 @@ current CS correction to CommonLib's erroneous dereferencing getter. Their
 producer/consumer chains still need full tracing and runtime capture before
 selecting SR or final HUD-less FG leases. Decompilation pages and constructor
 evidence are retained in local `ida-*.json` files.
+
+### Native main post-processing boundary, 15 November 2026
+
+Question: where can RSF access scene colour before Skyrim's own HDR chain,
+without removing native bloom, exposure or tonemapping? The independent ID table
+does not contain CS's post-processing ID 107148. Instead, traced the actual
+ImageSpaceManager global, its effect dispatcher and callers in IDA. This resolves
+the earlier missing-ID entry above by native instructions, not a neighboring ID.
+
+For the exact executable fingerprint recorded above:
+
+| RVA | Evidence and role |
+| --- | --- |
+| `0x33D40A0` | Pointer to ImageSpaceManager. Its effect-pointer array is at manager `+0x28`. |
+| `0x153AC00` | Main post-processing caller; references the manager and inline render-target manager. |
+| `0x153ADE7` | `E8 04 2E FB FF` calls `0x14EDBF0`. RCX is the manager, EDX is input target 1, R8D is the caller's output target, R9B is set to 1. The caller-relative displacement is `+0x1E7`, matching current CS dev's ID 107148 hook. |
+| `0x14EDBF0` | Main effect processing. Consumes manager, input target and output target; scans active effects 0..7, dispatches HDR/copy effect 30 or 34, then native temporal AA at manager `+0x1F0`, deferred effects and dynamic-resolution output. |
+| `0x14EE060` | Generic effect dispatcher. Constructs native input/output wrappers, binds them to the effect, calls its Render virtual and releases the wrappers. |
+| `0x10155FE` | Native CopyResource call in target binding. Texture and copy pointers are indexed from renderer `+0xA58/+0xA60 + index*0x30`; this supports direct native texture lookup independently of CommonLib's comments. |
+
+The manager processor's analyzed instructions consume three arguments. The
+observer forwards a fourth register argument unchanged because the caller sets
+R9B; CS's five-argument declaration alone does not establish this build's native
+ABI. The detour guards the processor's first 20 bytes and the caller's five-byte
+call in addition to the full executable hash. It preserves the original chain
+once. Named functions and comments were saved in the explicit IDA database copy.
+
+The new bounded observer records at most sixteen manager calls and reads texture
+descriptors only for researched main-colour slot 1 and motion-candidate slot 7.
+The pointers are borrowed synchronously at the consumer and never retained.
+GetDesc does not copy pixels, mutate the pipeline or establish a GPU-content
+lease. Neither slot identity nor format proves vector units, full object-motion
+coverage, HUD exclusion or a valid vendor input. Frame/view identity, depth,
+active rectangles, exposure and GPU lifetime still require separate evidence.
+
+Evidence: `ida-sr-native-seam.json`, `ida-native-effect-dispatch.json`,
+`ida-post-root-followup-0.json`, `ida-post-root-followup-1.json` and
+`ida-native-seam-detail-0.json` under ignored local research. The complete HDR
+function is retained across its original page and `ida-native-seam-detail-3.json`.
+
+The first bounded run with the new DLL prepared and started successfully and
+remained responsive at the main menu. It produced jitter samples but no manager
+observations. This negative result is retained in `post-process-menu-20261115.log`;
+it does not game-validate the new pass or texture lookup. Its deployment backup
+and receipt are in `deploy-backups/20261115-121924-post-process/`.
+
+A second bounded run temporarily supplied `sStartingCell=QASmoke` through a new
+SkyrimCustom.ini. The native setting's string, value references and cell resolver
+were traced first (`ida-starting-cell-setting.json` and `ida-start-depth-0.json`).
+This is an experiment launch aid, not an RSF setting or engine-control policy.
+No desktop input was used. The run remained responsive and produced sixteen
+post-processing calls, with input target 1 and output target 0. Both allocations
+were 1711x1048, single-sample, bind flags `0x28` (render target and shader resource).
+Main colour format was 26, R11G11B10_FLOAT; motion candidate was 34,
+R16G16_FLOAT. The pointers were readable at this native boundary. No pixels were
+captured, so this does not validate scene contents or motion encoding.
+
+The game was closed gracefully. The experiment-only custom INI was removed after
+checking that its contents still matched the file created by this experiment.
+The original INIs were unchanged. Logs and module inventory are
+`post-process-starting-cell-20261115.log` and
+`post-process-starting-cell-modules.json`; the config receipt is
+`starting-cell-experiment-receipt.json`. The installed DLL remains a development
+observer. Its later status-text edit changes no hook or rendering behavior.
+
+Release MSVC build and the 223-test verification run completed. The same two
+Anomaly FSR3 FG fixtures failed again; the remaining executed checks passed.
+The gate remains failed. Formatting and Clippy passed separately because CTest
+stops the verification script before those steps. Logs are
+`verify-post-process-full.log` and `clippy-post-process.log`. No Rust behavior
+changed. SR, FG, latency and CS/ENB coexistence remain unimplemented.

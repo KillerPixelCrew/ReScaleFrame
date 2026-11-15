@@ -13,6 +13,14 @@ original shader containers now have native family/stage/permutation identities.
 The saved research database retains named producer functions. Runtime vector
 coverage, source replacements and missing-motion corrections remain unimplemented.
 
+The native pre-HDR caller and manager processor are now matched in IDA at
+`0x153AC00` / `0x14EDBF0`, with the guarded call at `0x153ADE7`. A bounded
+starting-cell run without desktop input produced sixteen pass-through calls:
+native main colour is R11G11B10_FLOAT and motion candidate is R16G16_FLOAT,
+both 1711x1048. No pixels, vector units or GPU leases have been validated.
+The temporary starting-cell custom INI was removed and the game closed gracefully.
+HDR, bloom, exposure, native TAA and dynamic-resolution processing are preserved.
+
 [Research](research/skyrim-se-integration.md) records the exact executable,
 current references, original shader inventory, matching CS release/PDB, hook
 bytes, deployment and run. [Engine metadata](../games/skyrim-se/engine.json)
@@ -20,7 +28,7 @@ distinguishes observation from processing. The next implementation work is GPU
 pass ownership, complete temporal inputs, CS ownership handover and shader repair.
 
 Validation: Skyrim ABI and generic/existing Wingman XInput contracts passed.
-The Release VS2026 gate reached 222 tests but two Anomaly FSR3 FG device fixtures
+The latest Release VS2026 gate reached 223 tests but two Anomaly FSR3 FG device fixtures
 failed, and reproduced in isolation. Three carrier/Skyrim checks passed in the
 focused rerun. Formatting and Clippy passed separately. The full gate remains
 failed pending those device failures; no Rust behavior was changed.

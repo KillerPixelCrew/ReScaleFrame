@@ -18,14 +18,14 @@
     "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
-    "status": "exact-build pass-through native jitter observer; SR/FG/latency unimplemented",
+    "status": "exact-build pass-through native jitter and pre-HDR post-processing observer; SR/FG/latency unimplemented",
     "rendering_ready": false,
     "built_windows_msvc": true,
     "contract_tested": true,
     "hooks_implemented": true,
     "game_tested": true,
     "device_tested": false,
-    "game_test_scope": "Bounded vanilla startup: runtime session and sixteen readable native jitter samples only; no visual gameplay acceptance",
+    "game_test_scope": "Bounded vanilla startup and QASmoke starting-cell run: jitter and sixteen native post-processing calls with readable texture descriptors; no pixel capture or visual gameplay acceptance",
     "automatic_loading_implemented": true,
     "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
   },
@@ -43,7 +43,7 @@
   },
   "research": "../../docs/research/skyrim-se-integration.md",
   "native_preflight": {
-    "status": "Jitter root is installed/game-observed; input call statically matched; GPU pass leases unimplemented",
+    "status": "Jitter and main post-processing roots installed/game-observed; input statically matched; GPU pass leases unimplemented",
     "table_sha256": "a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce",
     "jitter_call_rva": "0x1009e63",
     "jitter_target_rva": "0x101e360",
@@ -51,13 +51,18 @@
     "input_dispatch_target_rva": "0xcfa650",
     "render_target_manager_candidate_rva": "0x3335600",
     "unresolved": [
-      "post-processing",
       "UI boundary",
-      "colour/depth/motion leases",
-      "shader replacement roots",
+      "colour/depth/motion leases and contents",
+      "shader replacement implementation and draw coverage",
       "CS ownership handover",
       "ENB path"
-    ]
+    ],
+    "post_processing_caller_rva": "0x153ac00",
+    "post_processing_call_rva": "0x153ade7",
+    "post_processing_call_bytes": "e8 04 2e fb ff",
+    "post_processing_target_rva": "0x14edbf0",
+    "effect_dispatch_rva": "0x14ee060",
+    "imagespace_manager_global_rva": "0x33d40a0"
   },
   "shader_corpus": {
     "bsa_sha256": "fd1ba630f443353ed21ed4ca0380968f9c7091c8434518ea3cc79bc6d38c18e7",
@@ -82,7 +87,7 @@
     "date": "2026-11-15",
     "msvc": "14.52.37025",
     "configuration": "Release",
-    "native_gate": "222 tests reached; two existing Anomaly FSR3 FG fixture failures reproduced; full gate not green",
+    "native_gate": "223 tests reached; same two Anomaly FSR3 FG fixture failures; full gate not green",
     "focused": "Skyrim ABI and both XInput carrier contracts passed",
     "rust": "formatting and Clippy passed; no Rust behavior changed",
     "readiness": false
@@ -93,5 +98,22 @@
     "compute_reader": "0x10102d0",
     "packed_family_loader": "0x1578f50",
     "package_initialization": "0x14ea2d0"
+  },
+  "post_processing_observation": {
+    "date": "2026-11-15",
+    "experiment": "temporary native sStartingCell=QASmoke; settings removed afterward",
+    "calls": 16,
+    "input_target": 1,
+    "output_target": 0,
+    "allocation": [
+      1711,
+      1048
+    ],
+    "colour_format": "R11G11B10_FLOAT",
+    "motion_candidate_format": "R16G16_FLOAT",
+    "sample_count": 1,
+    "bind_flags": "0x28",
+    "pixels_captured": false,
+    "motion_semantics_verified": false
   }
 }

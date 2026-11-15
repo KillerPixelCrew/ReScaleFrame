@@ -4,6 +4,7 @@
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/version.h>
 #include <MinHook.h>
+#include <d3d11.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -16,14 +17,18 @@ constexpr char fingerprint[] =
 using UpdateJitter = void (*)(void*);
 UpdateJitter original = nullptr;
 void* target = nullptr;
+using ProcessMain = uintptr_t (*)(void*, uint32_t, uint32_t, uintptr_t);
+ProcessMain original_process = nullptr;
+void* process_target = nullptr;
 std::mutex lifecycle;
 std::atomic<bool> accepting{false};
 std::atomic<uint32_t> calls{0};
 std::atomic<uint64_t> observations{0};
+std::atomic<uint64_t> pass_observations{0};
 rsf_game_host_services services{};
 bool prepared = false;
 bool enabled = false;
-const char* reason = "Native jitter observer not prepared; SR, FG and latency are unimplemented.";
+const char* reason = "Native observers not prepared; SR, FG and latency are unimplemented.";
 
 bool copy(void* output, const void* input, size_t size) noexcept
 {
@@ -39,6 +44,50 @@ bool copy(void* output, const void* input, size_t size) noexcept
     std::memcpy(output, input, size);
     return true;
 #endif
+}
+
+void describe_target(uint32_t index, char* message, size_t capacity) noexcept
+{
+    // Native CopyResource at RVA 0x10155FE uses renderer + index*0x30 + 0xA58.
+    // Read at the consuming pass only. No native pointer survives this callback.
+    ID3D11Texture2D* texture = nullptr;
+    const auto* renderer = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x3331f40;
+    D3D11_TEXTURE2D_DESC desc{};
+    // Only the researched main-colour and motion-candidate slots are probed.
+    if ((index != 1 && index != 7) ||
+        !copy(&texture, renderer + 0xa58 + size_t(index) * 0x30, sizeof(texture)) || !texture) {
+        std::snprintf(message, capacity, "target=%u unavailable", index);
+        return;
+    }
+    texture->GetDesc(&desc);
+    std::snprintf(message, capacity, "target=%u texture=%p size=%ux%u format=%u samples=%u bind=0x%x",
+        index, static_cast<void*>(texture), desc.Width, desc.Height, unsigned(desc.Format),
+        desc.SampleDesc.Count, desc.BindFlags);
+}
+
+uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4) noexcept
+{
+    calls.fetch_add(1, std::memory_order_acq_rel);
+    if (accepting.load(std::memory_order_acquire)) {
+        const auto number = pass_observations.fetch_add(1, std::memory_order_relaxed);
+        if (number < 16) {
+            char colour[160]{}, motion[160]{}, message[512]{};
+            describe_target(input, colour, sizeof(colour));
+            describe_target(7, motion, sizeof(motion));
+            std::snprintf(message, sizeof(message),
+                "Skyrim native post-process observation=%llu manager=%p input=%u output=%u; %s; motion candidate %s; no GPU processing",
+                static_cast<unsigned long long>(number), manager, input, output, colour, motion);
+            rsf_game_host_services host{};
+            {
+                std::lock_guard<std::mutex> lock(lifecycle);
+                if (accepting.load(std::memory_order_relaxed)) host = services;
+            }
+            if (host.log) { try { host.log(host.user, message); } catch (...) {} }
+        }
+    }
+    const auto result = original_process(manager, input, output, argument4);
+    calls.fetch_sub(1, std::memory_order_acq_rel);
+    return result;
 }
 
 void observe_jitter(void* state) noexcept
@@ -86,7 +135,19 @@ bool match_target()
         0x48,0x8b,0x90,0xf0,0x01,0x00,0x00,0x80,0x7a,0x18,0x00};
     target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x101e360;
     unsigned char actual[sizeof(expected)]{};
-    return copy(actual, target, sizeof(actual)) && !std::memcmp(actual, expected, sizeof(actual));
+    if (!copy(actual, target, sizeof(actual)) || std::memcmp(actual, expected, sizeof(actual))) return false;
+    constexpr unsigned char process_expected[] = {
+        0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,
+        0x48,0x89,0x74,0x24,0x20,0x44,0x89,0x44,0x24,0x18};
+    process_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x14edbf0;
+    unsigned char process_actual[sizeof(process_expected)]{};
+    constexpr unsigned char call_expected[] = {0xe8,0x04,0x2e,0xfb,0xff};
+    unsigned char call_actual[sizeof(call_expected)]{};
+    const auto* site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x153ade7;
+    return copy(process_actual, process_target, sizeof(process_actual)) &&
+        !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
+        copy(call_actual, site, sizeof(call_actual)) &&
+        !std::memcmp(call_actual, call_expected, sizeof(call_actual));
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -97,7 +158,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     std::lock_guard<std::mutex> lock(lifecycle);
     if (prepared || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
     if (!match_target()) {
-        reason = "Skyrim native observer refused: executable identity or jitter entry bytes differ.";
+        reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
         return RSF_ERROR_NATIVE_REFUSED;
     }
     if (GetModuleHandleW(L"CommunityShaders.dll")) {
@@ -109,17 +170,23 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
         if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return RSF_ERROR_NATIVE_REFUSED;
         if (MH_CreateHook(target, reinterpret_cast<void*>(&observe_jitter), reinterpret_cast<void**>(&original)) != MH_OK)
             return RSF_ERROR_NATIVE_REFUSED;
+        if (MH_CreateHook(process_target, reinterpret_cast<void*>(&observe_process), reinterpret_cast<void**>(&original_process)) != MH_OK) {
+            MH_RemoveHook(target); original = nullptr;
+            return RSF_ERROR_NATIVE_REFUSED;
+        }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                               reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned)) {
+            MH_RemoveHook(process_target); original_process = nullptr;
             MH_RemoveHook(target); original = nullptr;
             return RSF_ERROR_NATIVE_REFUSED;
         }
     }
     services = *args->host;
     observations.store(0, std::memory_order_relaxed);
+    pass_observations.store(0, std::memory_order_relaxed);
     prepared = true;
-    reason = "Native jitter observer prepared; no graphics processing or latency policy.";
+    reason = "Native jitter and pre-HDR observers prepared; no graphics processing or latency policy.";
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
@@ -132,9 +199,13 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     if (enabled) return RSF_OK;
     if (GetModuleHandleW(L"CommunityShaders.dll")) return RSF_ERROR_NATIVE_REFUSED;
     if (MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
+    if (MH_EnableHook(process_target) != MH_OK) {
+        MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     enabled = true;
     accepting.store(true, std::memory_order_release);
-    reason = "Pass-through native jitter observation active; SR, FG and latency remain unimplemented.";
+    reason = "Pass-through native jitter and pre-HDR observations active; SR, FG and latency remain unimplemented.";
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
@@ -152,7 +223,10 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     std::lock_guard<std::mutex> lock(lifecycle);
     accepting.store(false, std::memory_order_release);
     if (enabled) {
-        if (MH_DisableHook(target) != MH_OK) return RSF_ERROR_BUSY;
+        const auto jitter_result = MH_DisableHook(target);
+        const auto process_result = MH_DisableHook(process_target);
+        if ((jitter_result != MH_OK && jitter_result != MH_ERROR_DISABLED) ||
+            (process_result != MH_OK && process_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
         enabled = false;
     }
     if (calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
@@ -189,7 +263,7 @@ extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     if (requested_abi != RSF_GAME_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
     *api = {sizeof(*api), RSF_GAME_ABI_VERSION,
         {"skyrim-se", "Skyrim Special Edition", RSF_VERSION_STRING, 0,
-         "Native jitter observation only; SR, FG and latency are unimplemented."},
+         "Native jitter and pre-HDR observation only; SR, FG and latency are unimplemented."},
         detect, {prepare, start, quiesce, stop, status}};
     return RSF_OK;
 }
