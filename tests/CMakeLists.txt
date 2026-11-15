@@ -283,6 +283,11 @@ target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics r
 # functions plainly, and MSVC refuses a definition whose linkage differs from its declaration.
 set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_executable(rsf_overlay_host overlay_host.cpp ../loader/proxy/src/overlay_host.cpp)
+
+add_executable(rsf_overlay_hotkey overlay_hotkey.cpp)
+target_link_libraries(rsf_overlay_hotkey PRIVATE ReScaleFrame::Graphics minhook rsf_build_options)
+add_test(NAME overlay_hotkey COMMAND rsf_overlay_hotkey)
+set_tests_properties(overlay_hotkey PROPERTIES TIMEOUT 30)
 target_link_libraries(rsf_overlay_host PRIVATE ReScaleFrame::Graphics rsf_build_options)
 target_compile_definitions(rsf_overlay_host PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_dependencies(rsf_overlay_host rsf_overlay_panel_fixture)

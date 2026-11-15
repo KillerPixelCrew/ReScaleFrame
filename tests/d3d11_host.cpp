@@ -48,5 +48,26 @@ int main() {
         "Refused cold planning publishes no invented size");
     check(host.process_upscale(host.user, nullptr, nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null graphics lease refused");
     check(rsf_d3d11_host_request_capture(nullptr) == RSF_OK, "Any-thread capture request does no graphics work");
+    auto* fake = reinterpret_cast<void*>(uintptr_t(1));
+    rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, fake};
+    check(rsf_d3d11_host_bind_presentation(&cookie, &binding) == RSF_ERROR_INVALID_ARGUMENT, "Presentation owner checked");
+    --binding.struct_size;
+    check(rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_INVALID_ARGUMENT, "Presentation binding size checked");
+    ++binding.struct_size; ++binding.abi_version;
+    check(rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_ABI_MISMATCH, "Presentation binding ABI checked");
+    --binding.abi_version;
+    check(rsf_d3d11_host_set_active(host.user, 0) == RSF_OK &&
+        rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_NOT_READY,
+        "Suspended binding never dereferences graphics pointers");
+    check(rsf_d3d11_host_set_active(host.user, 1) == RSF_OK, "Restore active host");
+    rsf_d3d11_host_capture capture{sizeof(capture), RSF_D3D11_HOST_ABI_VERSION, 91, 1, 2, "aux", "Auxiliary", fake, 0, 1};
+    check(rsf_d3d11_host_capture_texture(&cookie, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT, "Capture owner checked");
+    --capture.struct_size;
+    check(rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT, "Capture size checked");
+    ++capture.struct_size; ++capture.abi_version;
+    check(rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_ABI_MISMATCH, "Capture ABI checked");
+    --capture.abi_version;
+    check(rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_NOT_READY,
+        "An armed request without a matching scene capture must not dereference graphics pointers");
     return errors ? 1 : 0;
 }

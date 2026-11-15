@@ -25,7 +25,7 @@
     "hooks_implemented": true,
     "game_tested": true,
     "device_tested": true,
-    "game_test_scope": "Vanilla QASmoke: native DLSS/reinsertion and Present captures; native raster reduced to 1141x699 inside 1711x1048 allocations, captured with native temporal fallback; full-resolution restoration and native DLSS resume. Reduced SR, moving objects, CS/ENB, FG and latency unverified",
+    "game_test_scope": "Vanilla QASmoke: native DLSS/reinsertion and Present captures; reduced raster1141x699 inside1711x1048 allocations through native fallback, native restoration/resume. Normal-menu startup/window binding, DPI-aware1920x1080 and clickable overlay accepted by user. Reduced SR, moving objects, CS/ENB, FG and latency unverified",
     "automatic_loading_implemented": true,
     "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
   },
@@ -88,9 +88,10 @@
     "date": "2026-11-15",
     "msvc": "14.52.37025",
     "configuration": "Release",
-    "native_gate": "224 tests reached; same two Anomaly FSR3 FG fixture failures; full gate not green",
+    "native_gate": "Last full-suite checkpoint229:213 passed,14 default skips,same two Anomaly FG failures, before final startup/owner/DPI/pointer fixes",
     "focused": "Skyrim ABI, generic/existing XInput carrier contracts, fullscreen pass and HDR reinsertion WARP fixture passed",
-    "rust": "formatting and Clippy passed; no Rust behavior changed",
+    "rust": "formatting and Clippy passed at prior checkpoints; no Rust behavior changed",
+    "latest": "Final startup/owner/DPI/pointer code Release-built with MSVC and directly game/user-accepted; no repeated full fixtures per user instruction",
     "readiness": false
   },
   "shader_producer_rvas": {
@@ -211,8 +212,20 @@
     "capture_status": "complete, source identity null, native frame 1068, actual Present S_OK, settled DLSS reset 0",
     "limitations": "Stationary scene only. Initial host startup still requires DLSS/Streamline; portable startup, device recreation and full host retirement remain pending"
   },
+  "overlay_input": {
+    "toggle": "Insert / VK0x2D, shared foreground polling edge plus window messages",
+    "polling_validation": "Mocked key/focus fixture: no-message open/close, hold, duplicate, repeat and focus transitions passed",
+    "game_validation": "User accepted DPI and mouse input. Actual foreground Insert transitions and panel backend2/1 settings changes observed at normal startup before scene admission",
+    "startup_hook_rva": "0x1009f70",
+    "startup_hook_guard": "48 83 ec 48 b9 01 00 00 00 e8 22 a9 58 00",
+    "presentation": "Adapter supplies native chain; generic host attaches UI independently of SR. Serialized owner transfers allowed before scene admission",
+    "dpi": "Per-monitor-v2 request succeeded at startup; HWND awareness2,DPI144, client/render1920x1080; outer1942x1136 within2560x1528 work area",
+    "pointer": "Foreground-polled mouse button levels merged with window/touch input; real panel changes applied and saved",
+    "deployment_backup": "20261115-161716-sr-fallback",
+    "pending": "Device/chain recreation, post-SR owner migration and full polled-device input isolation remain incomplete"
+  },
   "auxiliary_handoff": {
-    "status": "Static native consumer matching and WARP depth primitive; no game admission or deployment",
+    "status": "Vanilla native auxiliary descriptors and raw captures; WARP depth primitive remains unconnected; reduced SR not admitted",
     "post_zprepass_depth_copy": "RVA0x15399df copies main depth into slot7 at global0x3334380, not MAIN_COPY slot1",
     "refraction_render_rva": "0x1565920",
     "refraction_setup_rva": "0x15655b0",
@@ -220,9 +233,15 @@
     "depth_of_field_render_rva": "0x15509a0",
     "depth_of_field_setup_rva": "0x1551820",
     "depth_of_field_inputs": "Main depth0, colour49+selector(global0x3436358), conditional underwater12; effect3 before HDR or deferred after TAA",
+    "observed_sao_selector": 11,
+    "observed_sao_allocation": "Target49 R32_FLOAT 1711x1048, eleven mips",
+    "observed_dof_view": "Target60 has null texture pointer; RTV/SRV mip10 alias target49, effective1x1. Do not spatially rescale this scalar consumer",
+    "observed_auxiliary_allocations": "Underwater12 R8_UNORM 855x524; refraction13 RGBA8_UNORM 1711x1048; both single mip and entirely zero in dry QASmoke",
+    "camera_z_units": "Captured203.54524..3388.69287; projection-linearized main depth relative error median1.20e-6,p99=5.84e-6. Linear camera depth, not hardware device Z",
+    "capture": "scene-20261115-153111-244-14986921-39312-1",
     "mechanism": "Generic graphics depth_scale C ABI1: scratch preparation, nearest depth/all8 stencil bits, temporary commit and exact restore on one immediate context",
     "validation": "Release WARP: all256 stencil values, representative24-bit depths, offset rectangles, jitter, original contents and graphics state/counters restored",
-    "pending": "Live auxiliary descriptors/active rectangles and selectors, colour auxiliary preparation, native full-size constant/viewport transition, guarded final-consumer restoration and reduced SR game capture"
+    "pending": "Active water/refraction coverage and native fractional rectangles, other selectors, colour auxiliary preparation, native full-size constant/viewport transition, guarded final-consumer restoration and reduced SR game capture"
   },
   "resolution_control": {
     "updater_rva": "0x101e130",

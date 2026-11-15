@@ -4,6 +4,7 @@
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/overlay_api.h>
+#include <rescaleframe/overlay_input.h>
 #include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/d3d11_observer.h>
@@ -31,6 +32,7 @@ std::string utf8(const std::wstring& value) {
 }
 struct Host {
     std::mutex state;
+    std::mutex presentation_guard;
     rsf_game_host_services upstream{};
     std::wstring ini, section;
     std::string root, identity, fingerprint, version, project;
@@ -43,10 +45,11 @@ struct Host {
     ComPtr<IDXGISwapChain> chain;
     ComPtr<ID3D11Device> device;
     rsf_frame_record capture_record{};
+    uint64_t capture_view{};
     bool capture_pending{};
     uint32_t execution_thread{}, backend{}, quality{}, preset{};
     uint32_t output_width{}, output_height{};
-    bool configured{}, observer{}, attempted{}, running{}, reset{true};
+    bool configured{}, scene_bound{}, observer{}, attempted{}, running{}, reset{true};
     std::atomic<bool> capture{};
     std::atomic<bool> active{};
     std::atomic<bool> transport{true}, fidelity{false};
@@ -107,6 +110,8 @@ struct Host {
     }
     static void present(void* user, const rsf_observer_present_event* event) {
         auto& self = *static_cast<Host*>(user);
+        std::unique_lock presentation(self.presentation_guard, std::try_to_lock);
+        if (!presentation.owns_lock()) return;
         if (!self.active.load(std::memory_order_acquire) || !event || (event->flags & DXGI_PRESENT_TEST) ||
             GetCurrentThreadId() != self.execution_thread || event->swapchain != self.chain.Get()) return;
         if (self.running) {
@@ -131,6 +136,7 @@ struct Host {
             }
         }
         if (event->completed) return;
+        rsf_overlay_input_poll_toggle();
         (void)self.overlay.present(event->swapchain, nullptr);
     }
     bool initialize(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
@@ -162,6 +168,7 @@ struct Host {
         observer = rsf_observer_install(&observe) == RSF_OBSERVER_OK;
         if (!observer) log(this, "D3D11 callback host: Present observation refused; SR activation suspended.");
         rsf_input_dump_configure(captures.c_str(), identity.c_str(), fingerprint.c_str(), log, this);
+        std::snprintf(report.reason, sizeof(report.reason), "Waiting for verified scene inputs");
         configured = true;
         log(this, "D3D11 callback host configured; generation/pacing disabled until engine ownership is established.");
         return observer;
@@ -227,13 +234,16 @@ struct Host {
             ready ? status.render_width : pass.camera.output_width, ready ? status.render_height : pass.camera.output_height};
     }
     int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass) {
+        std::unique_lock presentation(presentation_guard, std::try_to_lock);
+        if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
         if (!active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
         // Bind ownership from a verified scene lease, never from an early loading callback.
-        if ((pass.flags & RSF_GAME_RENDER_RECONFIGURE) && !configured) return RSF_ERROR_NOT_READY;
+        if ((pass.flags & RSF_GAME_RENDER_RECONFIGURE) && !scene_bound) return RSF_ERROR_NOT_READY;
         if (!initialize(context, pass) || !observer || execution_thread != GetCurrentThreadId()) return RSF_ERROR_NOT_READY;
         ComPtr<ID3D11Device> current; context->GetDevice(&current);
         if (current.Get() != device.Get() || pass.swapchain != chain.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
             return RSF_ERROR_NOT_READY;
+        scene_bound = true;
         rsf_render_settings settings{}; { std::lock_guard lock(state); settings = desired; }
         const auto generation = requested_generation.load();
         if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
@@ -256,7 +266,7 @@ struct Host {
             if (!result) (void)rsf_input_dump_texture_record(context, &record, "sr_reinserted", "Reconstructed linear colour before native HDR", pass.color_output, RSF_DUMP_VIEW_HDR, 1);
             rsf_input_dump_result(&record, "sr", backend, result);
             rsf_input_dump_pass(context, &pass, 0);
-            capture_record = record; capture_pending = true;
+            capture_record = record; capture_view = pass.view_key; capture_pending = true;
         }
         {
             std::lock_guard lock(state); report = {sizeof(report)};
@@ -323,3 +333,63 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* user, uint32_
     if (self->active.exchange(active != 0, std::memory_order_acq_rel) != (active != 0)) ++self->requested_generation;
     return RSF_OK;
 }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* user,
+    const rsf_d3d11_presentation_binding* binding) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !binding || binding->struct_size < sizeof(*binding) || !binding->swapchain)
+        return RSF_ERROR_INVALID_ARGUMENT;
+    if (binding->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (!self->active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
+    if (self->configured) {
+        if (!self->observer || self->chain.Get() != binding->swapchain) return RSF_ERROR_NOT_READY;
+        const auto thread = GetCurrentThreadId();
+        if (self->execution_thread != thread) {
+            // Startup presentation can transfer from a loading worker to the main
+            // renderer. Serialize UI work and admit that transfer before SR owns it.
+            if (self->running || self->scene_bound) return RSF_ERROR_NOT_READY;
+            char message[180]{}; std::snprintf(message, sizeof(message),
+                "D3D11 host presentation owner transferred %u -> %lu on the same native chain before scene admission.",
+                self->execution_thread, static_cast<unsigned long>(thread));
+            Host::log(self, message); self->execution_thread = thread;
+        }
+        return RSF_OK;
+    }
+    auto* chain = static_cast<IDXGISwapChain*>(binding->swapchain);
+    ComPtr<ID3D11Device> device;
+    if (FAILED(chain->GetDevice(IID_PPV_ARGS(&device)))) return RSF_ERROR_INVALID_ARGUMENT;
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (FAILED(chain->GetDesc(&desc)) || !desc.OutputWindow) return RSF_ERROR_INVALID_ARGUMENT;
+    ComPtr<ID3D11DeviceContext> context; device->GetImmediateContext(&context);
+    rsf_game_render_pass lease{}; lease.swapchain = chain;
+    if (!self->initialize(context.Get(), lease)) return RSF_ERROR_NOT_READY;
+    Host::log(self, "D3D11 host presentation/window bound; overlay available before scene admission, SR SDK not started.");
+    return RSF_OK;
+}
+catch (...) { return RSF_ERROR_NOT_READY; }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, void* raw_context,
+    const rsf_d3d11_host_capture* request) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !raw_context || !request || request->struct_size < sizeof(*request))
+        return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (!request->texture || !request->name || !request->description || request->view > RSF_DUMP_VIEW_DENSE_MOTION ||
+        !std::isfinite(request->scale) || request->scale < 0) return RSF_ERROR_INVALID_ARGUMENT;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
+    // Do not touch borrowed graphics pointers before verifying this exact capture lease.
+    if (!self->active.load(std::memory_order_acquire) || !self->configured ||
+        self->execution_thread != GetCurrentThreadId() || !self->capture_pending ||
+        request->session_id != self->capture_record.session_id || request->native_frame != self->capture_record.frame_id ||
+        request->view_key != self->capture_view || !rsf_input_dump_wants(&self->capture_record)) return RSF_ERROR_NOT_READY;
+    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
+    ComPtr<ID3D11Device> device; context->GetDevice(&device);
+    if (device.Get() != self->device.Get()) return RSF_ERROR_INVALID_ARGUMENT;
+    return rsf_input_dump_texture_record(context, &self->capture_record, request->name, request->description,
+        request->texture, request->view, request->scale) ? RSF_OK : RSF_ERROR_NOT_READY;
+}
+catch (...) { return RSF_ERROR_NOT_READY; }

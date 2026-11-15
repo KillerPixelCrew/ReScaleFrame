@@ -28,7 +28,8 @@
    - Keyboard state is swallowed but not delivered. `rsf_overlay_input` in `overlay.h` carries mouse
      state only, so there is nowhere to put a key. Adding text entry to the overlay means adding
      fields there first, and filling them here.
-   - Input that never reaches the window procedure cannot be intercepted. DirectInput device polling
+   - Input that never reaches the window procedure cannot be intercepted. The toggle key has a
+     foreground polling fallback; DirectInput device polling
      and XInput read the device directly, so a gamepad still flies the aircraft while the overlay is
      open. Raw input is intercepted only in its `WM_INPUT` form.
    - Nothing here makes a cursor visible. See the note in `overlay_input.cpp`.
@@ -107,6 +108,12 @@ rsf_overlay_input_result rsf_overlay_input_uninstall(void);
 /* Whether the overlay is open. Nonzero if it is. Safe from any thread, and cheap enough to call per
    frame. */
 uint32_t rsf_overlay_input_visible(void);
+
+/* Present owner, before testing visibility or skipping a hidden panel. Polls the
+   configured toggle's high key-state bit while this window is foreground. This
+   also handles DirectInput paths that do not deliver WM_KEYDOWN. A held key is
+   shared with the message route; focus gain while held is not a new press. */
+void rsf_overlay_input_poll_toggle(void);
 
 /* Open or close the overlay from code rather than from the toggle key. A transition either way
    drops the accumulated buttons and wheel, so a click held while the overlay opens is not delivered

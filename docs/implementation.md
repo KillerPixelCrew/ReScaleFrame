@@ -2,15 +2,23 @@
 
 ## Skyrim SE experimental native-resolution SR, 15 November 2026
 
-The native auxiliary trace now identifies refraction target 13 and depth-of-field
-inputs from main depth, indexed SAO camera-Z and the conditional underwater mask
-after the SR handoff. A generic reversible depth/stencil transaction is built and
-WARP-tested, including all stencil values, jitter/rectangle mapping, state and
-original-content restoration. It is not connected to Skyrim or deployed. Reduced
-SR remains gated until the other buffers and their consumer lifetimes are ready.
-See [auxiliary research](research/skyrim-se-integration.md). Latest gate: 210
-passed, 15 skipped, the same two Anomaly FG failures, out of 227; formatting and
-Clippy passed separately. This is a failed full gate, with synthetic helper evidence.
+Native captures now establish the auxiliary allocations and show that the DOF
+average-depth input aliases a 1x1 mip of the eleven-mip SAO texture. Camera-Z
+matches projection-linearized depth, not hardware Z. Dry-room underwater and
+refraction buffers are zero; active coverage remains unverified. Generic capture
+readback has session/view/frame guards. The reversible depth/stencil primitive
+is built and WARP-tested but not connected. Reduced SR remains gated until the
+other buffers and their consumer lifetimes are ready. The shared overlay also
+has a foreground Insert polling fallback with a shared held-key edge, replacing
+the missing route in this host. Startup window/UI binding is independent of SR
+scene admission and follows the loading-to-main presentation owner. The adapter
+sets DPI awareness before window creation; pointer polling supplies missing mouse
+messages. The user confirmed DPI and mouse controls working at 1920x1080.
+See [research](research/skyrim-se-integration.md), including the motion/input
+coverage audit. The last full gate had 213 passes, 14 skips and the same two FG
+failures out of 229, before the final UI fixes. Final fixes were Release-built
+and directly game/user-tested; per-edit full fixtures were stopped at the user's
+request. The integration, SR at reduced size, FG and latency remain unfinished.
 
 Native resolution production is now controlled at the guarded State updater and
 jitter boundary. The runtime prepares a backend size plan on the verified scene
