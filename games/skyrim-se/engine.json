@@ -329,6 +329,19 @@
     ],
     "native_camera_check": "Right wall native vectors vs depth/camera reprojection p95 below0.009 input pixels; native check does not establish vendor conversion or deformation coverage"
   },
+  "source_present_association": {
+    "date": "2026-11-15",
+    "status": "Live native update/render/final-scene/window/actual Present association verified for sampled vanilla QASmoke; NO_FG retained",
+    "source": "Outer native update identity copied only inside its synchronous RenderEntry; distinct monotonic render scope, nested scope restoration",
+    "window_lease": "Paired FINAL_SCENE before native interface, WINDOW through RendererEnd and actual Present; explicit swapchain lease retired afterwards",
+    "capture": "scene-20261115-183956-518-26312203-37560-1",
+    "capture_identity": "session1, source541, submission/scope541, native711; record flags4, engine flags22",
+    "validation": "DLSS Quality1280x720 to1920x1080; after-interface buffer equals actual final Present, shared owner confirms completed scene/direct backbuffer/accepted Present",
+    "checks": "MSVC Release runtime/adapter, host and Skyrim contracts, focused WARP input_dump source/native separation and metadata rebind refusal passed",
+    "deployment_backup": "20261115-183933-sr-fallback; live capture predates final defensive metadata/scope cleanup changes",
+    "pending": "Worker input/consuming simulation, primary submission facts, retained normalized FG inputs, HUD-less GPU copy, compositable UI, screen transitions and provider presentation",
+    "evidence": "docs/research/skyrim-se-integration.md#native-update-final-scene-and-present-association-15-november-2026"
+  },
   "delivered_input_research": {
     "date": "2026-11-15",
     "status": "Release-built, focused input and Skyrim plugin contracts passed; deployed startup accepted, positive delivered-kind emission unverified",

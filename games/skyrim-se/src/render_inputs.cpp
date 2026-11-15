@@ -4,6 +4,7 @@
 #include "resolution.h"
 #include "auxiliary.h"
 #include "presentation_inputs.h"
+#include "cpu_events.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -116,6 +117,8 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
     pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR; pass.session_id = host.session_id;
     pass.family_key = pass.view_key = pass.history_key = camera; pass.pass_key = 0x153ade7; pass.native_frame = frame;
     pass.flags |= RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG;
+    if (host.render_pass) (void)cpu_render_identity(pass);
+    pass.viewport_key = pass.window_key = pass.rhi_viewport_key = window;
     pass.render_rect[2] = int32_t(render_width); pass.render_rect[3] = int32_t(render_height);
     pass.output_rect[2] = int32_t(width); pass.output_rect[3] = int32_t(height);
     pass.color_input = pass.color_output = color.Get(); pass.depth = depth.Get(); pass.motion = motion.Get();

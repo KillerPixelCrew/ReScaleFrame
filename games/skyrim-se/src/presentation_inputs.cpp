@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "presentation_inputs.h"
+#include "cpu_events.h"
 #include <rescaleframe/d3d11_host.h>
 #include <MinHook.h>
 #include <windows.h>
@@ -18,12 +19,16 @@ Capture capture{};
 rsf_game_host_services host{};
 std::atomic<bool> live{};
 std::atomic<unsigned> calls{};
+std::atomic<bool> pending{};
 struct Identity {
     uint64_t session{}, frame{}, view{};
     uintptr_t chain{};
     uint32_t width{}, height{};
 };
 thread_local Identity identity;
+thread_local rsf_game_render_pass scene_identity;
+thread_local rsf_game_render_pass window_pass;
+thread_local Microsoft::WRL::ComPtr<IDXGISwapChain> window_chain;
 void* target() { return reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x116ac80; }
 
 void snapshot(bool after) {
@@ -42,6 +47,18 @@ void snapshot(bool after) {
     if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return;
     D3D11_TEXTURE2D_DESC desc{}; buffer->GetDesc(&desc);
     if (desc.Width != identity.width || desc.Height != identity.height || desc.SampleDesc.Count != 1) return;
+    if (!after && host.render_pass && scene_identity.source_frame_id &&
+        cpu_source() == scene_identity.source_frame_id && !window_chain) {
+        auto final = scene_identity;
+        final.role = RSF_GAME_RENDER_FINAL_SCENE; final.scene_surface = buffer.Get();
+        host.render_pass(host.user, context, &final, 1);
+        host.render_pass(host.user, context, &final, 0);
+        window_chain = chain;
+        window_pass = scene_identity; window_pass.role = RSF_GAME_RENDER_WINDOW;
+        window_pass.swapchain = window_chain.Get();
+        pending.store(true, std::memory_order_release);
+        host.render_pass(host.user, context, &window_pass, 1);
+    }
     const rsf_d3d11_host_capture request{
         sizeof(request), RSF_D3D11_HOST_ABI_VERSION, identity.session, identity.frame, identity.view,
         after ? "native_after_interface" : "native_before_interface",
@@ -80,7 +97,7 @@ bool presentation_inputs_start(const rsf_game_host_services& services) {
     live.store(true, std::memory_order_release); return true;
 }
 void presentation_inputs_quiesce() { live.store(false, std::memory_order_release); }
-bool presentation_inputs_busy() { return calls.load(std::memory_order_acquire) != 0; }
+bool presentation_inputs_busy() { return pending.load(std::memory_order_acquire) || calls.load(std::memory_order_acquire) != 0; }
 bool presentation_inputs_stop() {
     presentation_inputs_quiesce();
     if (!original) return true;
@@ -90,5 +107,25 @@ bool presentation_inputs_stop() {
 void identify_presentation_inputs(const rsf_game_render_pass& pass) {
     identity = {pass.session_id, pass.native_frame, pass.view_key, uintptr_t(pass.swapchain),
         pass.camera.output_width, pass.camera.output_height};
+    // Copy scalar engine identity and camera only. No borrowed SR resources survive.
+    scene_identity = {};
+    scene_identity.struct_size = sizeof(scene_identity);
+    scene_identity.session_id = pass.session_id; scene_identity.source_frame_id = pass.source_frame_id;
+    scene_identity.submission_id = pass.submission_id; scene_identity.scope_id = pass.scope_id;
+    scene_identity.family_key = pass.family_key; scene_identity.view_key = pass.view_key;
+    scene_identity.history_key = pass.history_key; scene_identity.native_frame = pass.native_frame;
+    scene_identity.viewport_key = pass.viewport_key; scene_identity.window_key = pass.window_key;
+    scene_identity.rhi_viewport_key = pass.rhi_viewport_key; scene_identity.flags = pass.flags;
+    std::memcpy(scene_identity.output_rect, pass.output_rect, sizeof(pass.output_rect));
+}
+void finish_presentation_inputs() {
+    if (!window_chain) return;
+    if (host.render_pass) {
+        const auto base = uintptr_t(GetModuleHandleW(nullptr));
+        auto* context = *reinterpret_cast<void**>(base + 0x3331f30);
+        try { host.render_pass(host.user, context, &window_pass, 0); } catch (...) {}
+    }
+    window_pass = {}; window_chain.Reset();
+    pending.store(false, std::memory_order_release);
 }
 }

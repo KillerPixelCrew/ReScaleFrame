@@ -33,6 +33,8 @@ typedef struct rsf_d3d11_host_setup {
    The first verified scene lease separately admits SR preparation; earlier RECONFIGURE requests are refused.
    The host owns SDK selection/settings/overlay/capture. It does not infer engine inputs.
    This SR host does not authorize generation or pacing from render-only identities. */
+/* Returned render_pass records adapter-declared FINAL_SCENE and WINDOW ownership.
+   These synchronous native leases do not activate a generation provider. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 /* Any thread. Suspend callbacks during adapter quiescence; no graphics retirement occurs here.
    The returned host is process-lived and starts suspended. */

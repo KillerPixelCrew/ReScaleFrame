@@ -28,7 +28,7 @@ int main() {
     setup.quality_choices = 0; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Empty capabilities refused"); setup.quality_choices = 1;
     auto upstream = host;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_OK, "Graphics-free creation succeeds without SDK directories");
-    check(host.session_id == 91 && host.user != &cookie && host.process_upscale && host.render_config && host.render_feedback &&
+    check(host.session_id == 91 && host.user != &cookie && host.process_upscale && host.render_config && host.render_feedback && host.render_pass &&
         !host.present && !host.submit && !host.process_latency, "Only admitted host services published; no pacing or generation");
     check(rsf_d3d11_host_create(&setup, &upstream) == RSF_ERROR_BUSY, "Second process owner refused");
     check(rsf_d3d11_host_set_active(&cookie, 1) == RSF_ERROR_INVALID_ARGUMENT, "Only the returned owner controls activation");
@@ -48,6 +48,11 @@ int main() {
         "Refused cold planning publishes no invented size");
     check(host.process_upscale(host.user, nullptr, nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null graphics lease refused");
     check(rsf_d3d11_host_request_capture(nullptr) == RSF_OK, "Any-thread capture request does no graphics work");
+    early.role = RSF_GAME_RENDER_FINAL_SCENE; early.session_id = 91; early.scene_surface = reinterpret_cast<void*>(uintptr_t(1));
+    host.render_pass(host.user, reinterpret_cast<void*>(uintptr_t(1)), &early, 1);
+    host.render_pass(host.user, reinterpret_cast<void*>(uintptr_t(1)), &early, 0);
+    check(host.render_config(host.user, &config) == 1 && !config.enabled,
+        "Cold native pass facts do not touch graphics or activate generation");
     auto* fake = reinterpret_cast<void*>(uintptr_t(1));
     rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, fake};
     check(rsf_d3d11_host_bind_presentation(&cookie, &binding) == RSF_ERROR_INVALID_ARGUMENT, "Presentation owner checked");

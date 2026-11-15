@@ -2,6 +2,16 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+Native update identity now follows the synchronous render invocation into SR,
+final scene and a window lease spanning actual Present. The shared D3D11 host
+records these existing C ABI facts without enabling generation or pacing.
+Live source541/submission541/native711 capture matches the scene/window/Present
+path; after-interface bytes equal final Present. Focused Release builds, host
+and Skyrim contracts and the updated capture check passed. NO_FG and unknown
+screen remain. Worker input, primary submission markers, retained FG inputs and
+UI extraction still need implementation. See
+[source/Present research](research/skyrim-se-integration.md#native-update-final-scene-and-present-association-15-november-2026).
+
 Native input dispatch now reports delivered keyboard/mouse/controller kinds
 through the existing unframed CPU event API. It copies bounded native headers
 before dispatch and emits only the kind mask after the original returns.

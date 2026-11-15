@@ -12,10 +12,12 @@ namespace {
 struct Frame {
     rsf_game_host_services host{};
     uint64_t source{};
+    uint64_t render_scope{};
     bool sampled{}, render_entered{}, simulation_ended{};
 };
 thread_local Frame* current{};
 std::atomic<uint64_t> next_source{1};
+std::atomic<uint64_t> next_render_scope{1};
 std::atomic<uint32_t> entered{};
 std::atomic<bool> active{};
 std::atomic<uint64_t> observed_tick{};
@@ -164,14 +166,18 @@ uintptr_t poll(void* manager)
 uintptr_t render(void* main)
 {
     Entry lease;
+    const auto previous_scope = current ? current->render_scope : 0;
     if (current) {
+        current->render_scope = next_render_scope.fetch_add(1);
         current->render_entered = true;
         if (!current->simulation_ended) {
             current->simulation_ended = true;
             emit(*current, RSF_GAME_CPU_SIMULATION_END);
         }
     }
-    return reinterpret_cast<uintptr_t (*)(void*)>(hooks[2].original)(main);
+    const auto result = reinterpret_cast<uintptr_t (*)(void*)>(hooks[2].original)(main);
+    if (current) current->render_scope = previous_scope;
+    return result;
 }
 }
 
@@ -219,5 +225,12 @@ bool cpu_stop()
 }
 bool cpu_busy() { return entered.load(std::memory_order_acquire) != 0; }
 uint64_t cpu_source() { return current ? current->source : 0; }
+bool cpu_render_identity(rsf_game_render_pass& pass) {
+    if (!current || !current->render_scope || !current->simulation_ended) return false;
+    pass.source_frame_id = current->source;
+    pass.submission_id = pass.scope_id = current->render_scope;
+    pass.flags |= RSF_GAME_RENDER_AFTER_SIMULATION;
+    return true;
+}
 uint32_t cpu_input_kinds(const void* list) noexcept { return input_kinds(list); }
 }
