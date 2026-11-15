@@ -1763,3 +1763,51 @@ No full gate or broad fixture suite was run. The working PID10028 and installed
 ABI1 DLL pair were left untouched; this correction is built/synthetic-tested,
 not a new game-tested bridge deployment. Combined SR/FG remains disabled until
 an isolated shared evaluate and retirement experiment succeeds.
+
+### Input consumers and final-scene metadata, 15 November 2026
+
+The latency question is which rendered source consumes a worker poll, rather
+than which update happens to be current when polling runs. A bounded Frida
+observation attached to existing PID10028, without replacing the installed
+DLLs, invoking input or changing engine/GPU state. The native input manager's
+four registered sinks resolved through their actual vtables to ConsoleHotkeyManager,
+MenuControls, PlayerControls and BGSMoviePlayer. PlayerControls vtable
+RVA0x1935070 slot1 resolves to0x7ad900. Constructor0x7ad450 independently
+stores that vtable and singleton0x31a5698.
+
+Matched executable decompilation shows0x7ad900 resetting movement/look vectors
+at object+0x24/+0x2c, dispatching handlers through0x7b0130 and filtering look
+through0x7aeba0. It returns early for UI pause count+0x160. It copies current
+movement/look into previous vectors at+0x34 at instruction0x7ade56. This
+establishes a producer and actual consumers, not the consuming source-frame ID.
+No event values, keys, text or movement deltas were captured.
+
+A bounded scan of152 singleton references found16 nearby vector-use matches,
+not an exhaustive data-flow analysis. The candidate camera update0x8fd590
+reads the look vector and calls its virtual HandleLookInput slot+0x78. PE RTTI
+and vtable slot3 identify it as ThirdPersonState::Update, also shared by
+DragonCameraState and HorseCameraState. This is a concrete camera consumption
+site for a future ordering experiment, not a generic simulation-begin hook.
+Free-camera candidate0x8f62c0 also reads movement/look; its camera mode and
+consuming-frame association still need independent verification.
+
+The five-second job probe armed submit0x60eaf0, join0x60eb80, Poll controls
+0x6e6030 and selected callbacks, bounded to32 generations/2400 records. It
+observed zero submissions in that window and detached its hooks automatically.
+REA then detached the session. Zero records establish neither gameplay order
+nor the reason execution was absent. The process remained responsive. Evidence
+is retained in ignored `native-input-camera-consumers-20261115.json`, including
+REA observation `ev_8b178e0dd8f72d7dfe4d5a49cc51c5001f4f9481ab6a92598a24aed00f6f0b41`,
+the exact probe source/digest and decompilations. IDA names/comments were saved
+in the existing matching database. Pacing and input-source association remain open.
+
+Source review also found that identify_presentation_inputs claimed to copy
+camera metadata but omitted it and screen classification. The adapter now
+copies the captured camera, validity, clip transform, render rectangle,
+motion convention, pass/resource generation and screen along with identity.
+The destination still starts zeroed and receives no borrowed SR texture,
+context or frame-context pointers. Native final-scene/window callbacks supply
+their own resource leases. This preserves declared facts for later FG admission;
+it does not invent a gameplay class or clear NO_FG. Focused MSVC Release adapter
+build passed. No fixtures were rerun for these scalar copies, and no deployment
+was made into the restored working session.
