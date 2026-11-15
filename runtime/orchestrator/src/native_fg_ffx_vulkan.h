@@ -12,6 +12,7 @@ rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk*, void* commands, const rsf_fgv
 rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk*, void* commands, const rsf_fgvk_frame*);
 void rsf_ffxgvk_submitted(rsf_ffxgvk*, void* const* commands, uint32_t count);
 int32_t rsf_ffxgvk_present(rsf_ffxgvk*, const void* present_info);
+int32_t rsf_ffxgvk_present_source(rsf_ffxgvk*, const void* present_info, const rsf_frame_record*);
 rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk*, rsf_fgvk_status*);
 rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk*);
 rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);

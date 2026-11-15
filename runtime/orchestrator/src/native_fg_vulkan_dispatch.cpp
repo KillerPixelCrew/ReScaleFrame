@@ -2,6 +2,7 @@
 #include <rescaleframe/native_fg_vulkan.h>
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include "native_fg_ffx_vulkan.h"
+#include "native_fg_source.h"
 #if defined(RSF_HAVE_FSR4_FG_VK)
 #include "native_fg_fsr4_vulkan.h"
 #endif
@@ -275,6 +276,18 @@ extern "C" int32_t rsf_fgvk_present(rsf_fgvk* self, const void* info) {
 #endif
     return self->backend == dlss_backend ? rsf_dlssgvk_present(self->dlss, info) : rsf_ffxgvk_present(self->ffx, info);
 }
+extern "C" int32_t rsf_fgvk_present_source(rsf_fgvk* self, const void* info, const rsf_frame_record* source) try {
+    if (!self || !info || !rsf::fg_present_identity_valid(source)) return wsi_initialization_failed;
+#if defined(RSF_HAVE_FSR4_FG_VK)
+    if (self->backend == fsr4_backend) return rsf_fsr4gvk_present_source(self->fsr4, info, source);
+#endif
+#if defined(RSF_HAVE_XESS_FG_VK)
+    if (self->backend == xess_backend) return rsf_xessgvk_present_source(self->xess, info, source);
+#endif
+    return self->backend == dlss_backend ? rsf_dlssgvk_present_source(self->dlss, info, source) :
+        rsf_ffxgvk_present_source(self->ffx, info, source);
+} catch (...) { return wsi_initialization_failed; }
+
 extern "C" rsf_backend_result rsf_fgvk_get_status(rsf_fgvk* self, rsf_fgvk_status* status) {
     if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (status->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;

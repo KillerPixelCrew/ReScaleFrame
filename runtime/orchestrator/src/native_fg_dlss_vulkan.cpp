@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
+#include "native_fg_source.h"
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 #define VK_NO_PROTOTYPES
@@ -537,13 +538,16 @@ extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* self, void* const* commands, 
     (void)self; (void)commands; (void)count;
 #endif
 }
-extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* self, const void* present_info) try {
+static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const rsf_frame_record* source, bool explicit_source) try {
+    if (explicit_source && !rsf::fg_present_identity_valid(source)) return -3;
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
+    const uint64_t source_frame = rsf::fg_present_frame(self->latest, source, explicit_source);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[self->latest % self->slots.size()];
-    const bool candidate = self->requested && slot.recording_sequence > self->presented_sequence && slot.record.frame_id == self->latest &&
+    auto& slot = self->slots[source_frame % self->slots.size()];
+    const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
+    const bool candidate = identity && source_frame && self->requested && slot.recording_sequence > self->presented_sequence && slot.record.frame_id == source_frame &&
         slot.prepared && slot.hudless && slot.submitted_prepare && slot.submitted_hudless && !slot.completion_unknown;
     struct Configure { rsf_dlssgvk& self; bool enabled; } call{*self, candidate};
     auto configured = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result {
@@ -576,8 +580,9 @@ extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* self, const void* present_in
     }
     if (configuration_result != RSF_BACKEND_OK) self->status.sdk_result = configuration_sdk_result;
     self->status.asynchronous_present_result = asynchronous_error.exchange(0);
-    self->presented = self->latest; self->presented_sequence = slot.recording_sequence;
-    self->status.presentation.source_frame = valid ? self->latest : 0;
+    self->presented = source_frame;
+    self->presented_sequence = explicit_source && !identity ? self->recording_sequence : slot.recording_sequence;
+    self->status.presentation.source_frame = valid ? source_frame : 0;
     self->status.presentation.enabled = valid && !self->status.sdk_status && !self->status.asynchronous_present_result;
     self->status.presentation.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ?
         (configuration_result != RSF_BACKEND_OK ? configuration_result : state) : RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -588,6 +593,10 @@ extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* self, const void* present_in
     (void)self; (void)present_info; return -3;
 #endif
 } catch (...) { return -3; }
+extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* self, const void* info) { return dlss_present(self, info, nullptr, false); }
+extern "C" int32_t rsf_dlssgvk_present_source(rsf_dlssgvk* self, const void* info, const rsf_frame_record* source) {
+    return dlss_present(self, info, source, true);
+}
 extern "C" rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk* self, rsf_dlssgvk_status* status) {
     if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (status->abi_version != RSF_DLSSGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
