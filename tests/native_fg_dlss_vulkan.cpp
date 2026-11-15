@@ -19,6 +19,12 @@ uint64_t expected_inputs_value = 9;
 void require(bool condition, const char* message) {
     if (!condition) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
 }
+VkResult VKAPI_PTR enumerate_images(VkDevice, VkSwapchainKHR, uint32_t* count, VkImage* images) {
+    if (!images) { *count = 3; return VK_SUCCESS; }
+    if (*count > 3) { *count = 3; return VK_INCOMPLETE; }
+    for (uint32_t i = 0; i < *count; ++i) images[i] = reinterpret_cast<VkImage>(uintptr_t(100 + i));
+    return *count < 3 ? VK_INCOMPLETE : VK_SUCCESS;
+}
 sl::Result options(const sl::ViewportHandle& view, const sl::DLSSGOptions& value) {
     require(static_cast<uint32_t>(view) == 0, "FG uses root viewport zero");
     require(value.queueParallelismMode == sl::DLSSGQueueParallelismMode::eBlockNoClientQueues,
@@ -83,6 +89,13 @@ int main() {
     self.setup.queues[0] = reinterpret_cast<void*>(2); self.setup.graphics_submit = submit;
     self.width = 1280; self.height = 720; self.backbuffers = 3;
     self.chain = reinterpret_cast<VkSwapchainKHR>(3); self.format = VK_FORMAT_B8G8R8A8_UNORM;
+    self.images = enumerate_images;
+    uint64_t image_handles[8]{}; uint32_t image_count = 8;
+    require(rsf_dlssgvk_images(&self, &image_count, image_handles) == VK_SUCCESS && image_count == 3 && image_handles[2] == 102,
+        "proxy image enumeration normalizes oversized capacities");
+    image_count = 2;
+    require(rsf_dlssgvk_images(&self, &image_count, image_handles) == VK_INCOMPLETE && image_count == 2,
+        "short proxy image enumeration remains incomplete");
     self.options = options; self.state = state; self.present = present;
     self.reset_fences = reset_fences; self.wait_fences = wait_fences; self.destroy_fence = destroy_fence;
     self.wait_semaphores = wait_semaphores;

@@ -399,7 +399,18 @@ extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rs
 extern "C" int32_t rsf_dlssgvk_images(rsf_dlssgvk* self, uint32_t* count, uint64_t* images) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!self || !count) return VK_ERROR_INITIALIZATION_FAILED;
-    return self->images(static_cast<VkDevice>(self->setup.graphics.device), self->chain, count, reinterpret_cast<VkImage*>(images));
+    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
+    if (!images) return self->images(device, self->chain, count, nullptr);
+    // The proxy can return INCOMPLETE for an oversized capacity instead of
+    // filling the available set. Use its queried count, preserving short buffers.
+    const uint32_t capacity = *count;
+    uint32_t available = 0;
+    const auto queried = self->images(device, self->chain, &available, nullptr);
+    if (queried != VK_SUCCESS) { *count = 0; return queried; }
+    *count = (std::min)(capacity, available);
+    const auto filled = self->images(device, self->chain, count, reinterpret_cast<VkImage*>(images));
+    if (*count > capacity || *count > available) { *count = 0; return VK_ERROR_INITIALIZATION_FAILED; }
+    return filled == VK_SUCCESS && capacity < available ? VK_INCOMPLETE : filled;
 #else
     (void)self; (void)count; (void)images; return -3;
 #endif

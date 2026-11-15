@@ -4,6 +4,7 @@
 #include <rescaleframe/native_streamline_vulkan.h>
 #include "native_vulkan_timing.h"
 #include <memory>
+#include <algorithm>
 #include <cmath>
 
 #if defined(RSF_HAVE_FFX_VK)
@@ -367,8 +368,21 @@ extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf
 
 extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk* self, uint32_t* count, uint64_t* images) {
 #if defined(RSF_HAVE_FFX_VK)
-    return self && count ? self->functions.pOutGetSwapchainImagesKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, count,
-        reinterpret_cast<VkImage*>(images)) : VK_ERROR_INITIALIZATION_FAILED;
+    if (!self || !count) return VK_ERROR_INITIALIZATION_FAILED;
+    const auto query = self->functions.pOutGetSwapchainImagesKHR;
+    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
+    if (!images) return query(device, self->chain, count, nullptr);
+    // FidelityFX FrameInterpolationSwapChainVK::getSwapchainImages leaves an
+    // oversized capacity unchanged after filling its smaller image set. Query
+    // the real count first so callers never consume uninitialized tail handles.
+    const uint32_t capacity = *count;
+    uint32_t available = 0;
+    const auto result = query(device, self->chain, &available, nullptr);
+    if (result != VK_SUCCESS) { *count = 0; return result; }
+    *count = (std::min)(capacity, available);
+    const auto filled = query(device, self->chain, count, reinterpret_cast<VkImage*>(images));
+    if (*count > capacity || *count > available) { *count = 0; return VK_ERROR_INITIALIZATION_FAILED; }
+    return filled == VK_SUCCESS && capacity < available ? VK_INCOMPLETE : filled;
 #else
     (void)self; (void)count; (void)images; return -3;
 #endif
