@@ -36,6 +36,12 @@ ffxReturnCode_t dispatch(ffxContext*, const ffxDispatchDescHeader* header) {
 }
 ffxReturnCode_t configure(ffxContext*, const ffxConfigureDescHeader*) { return FFX_API_RETURN_OK; }
 VkResult VKAPI_PTR present(VkQueue, const VkPresentInfoKHR*) { return VK_SUCCESS; }
+VkResult VKAPI_PTR swapchain_images(VkDevice, VkSwapchainKHR, uint32_t* count, VkImage* images) {
+    // Match the pinned SDK bug: the fill call does not update an oversized count.
+    if (!images) *count = 3;
+    else for (uint32_t i = 0; i < *count && i < 3; ++i) images[i] = reinterpret_cast<VkImage>(uintptr_t(1000 + i));
+    return *count < 3 ? VK_INCOMPLETE : VK_SUCCESS;
+}
 rsf_frame_record record(uint64_t session, uint64_t frame, uint32_t view = 0, uint32_t generation = 1) {
     rsf_frame_record result{}; result.struct_size = sizeof(result); result.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     result.session_id = session; result.frame_id = frame; result.view_id = view; result.resource_generation = generation;
@@ -73,6 +79,18 @@ int main() {
     self.free_memory = free_memory; self.bind = bind; self.barrier = barrier; self.copy = copy; self.dispatch = dispatch; self.configure = configure;
     self.memory_properties.memoryTypeCount = 1; self.memory_properties.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     self.chain = reinterpret_cast<VkSwapchainKHR>(3); self.functions.pOutQueuePresentKHR = present;
+    self.functions.pOutGetSwapchainImagesKHR = swapchain_images;
+    uint64_t image_handles[8] = {99, 99, 99, 99, 99, 99, 99, 99};
+    uint32_t image_count = 8;
+    require(rsf_ffxgvk_images(&self, &image_count, image_handles) == VK_SUCCESS && image_count == 3 &&
+        image_handles[0] == 1000 && image_handles[2] == 1002 && image_handles[3] == 99,
+        "oversized image capacity reports only initialized SDK handles");
+    image_count = 2;
+    require(rsf_ffxgvk_images(&self, &image_count, image_handles) == VK_INCOMPLETE && image_count == 2,
+        "short image capacity preserves Vulkan incomplete semantics");
+    image_count = 0;
+    require(rsf_ffxgvk_images(&self, &image_count, nullptr) == VK_SUCCESS && image_count == 3,
+        "count-only image enumeration preserved");
     VkPresentInfoKHR info{}; info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR; info.swapchainCount = 1; info.pSwapchains = &self.chain;
     void* a = reinterpret_cast<void*>(10); void* b = reinterpret_cast<void*>(11); void* c = reinterpret_cast<void*>(12);
     auto one = record(7, 1); complete(self, one, a, a);
