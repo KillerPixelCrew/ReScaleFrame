@@ -38,6 +38,12 @@ int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call, void*);
 namespace {
 std::mutex mutex;
 bool initialized = false, bound = false;
+DWORD pcl_thread = 0;
+// A core-owned posted queue fence separates registrations without relying on
+// coarse/wrapping MSG.time. Exact-ID posted messages ahead of this fence are stale.
+uintptr_t pcl_epoch_cookie = 0;
+char pcl_epoch_tag;
+bool pcl_epoch_ready = false;
 uint32_t mode = 0, interval = 0;
 std::atomic<rsf_fgvk*> presentation{};
 std::atomic<uint32_t> active_owner{0};
@@ -64,15 +70,32 @@ void marker(uint64_t frame, uint32_t kind) {
         slot.stages |= 1u << kind; ++status.marker_calls;
     }
 }
-bool bind() {
-    if (bound) return true;
+bool bind(bool input_thread = false) {
+    const DWORD thread = GetCurrentThreadId();
+    if (bound && (!input_thread || pcl_thread == thread)) return true;
+    // Ensure this thread has a queue before asking PCL to target it. No removal.
+    MSG ignored{};
+    (void)PeekMessageW(&ignored, reinterpret_cast<HWND>(-1), WM_USER, WM_USER, PM_NOREMOVE);
     if (!accepted(VulkanStorySlBindPcl())) return false;
     status.pcl_message = VulkanStorySlPclWindowMessage();
     rsf_native_cpu_ping_message(status.pcl_message);
+    if (status.pcl_message < 0xc000 || status.pcl_message > 0xffff) {
+        bound = false; pcl_thread = 0;
+        (void)accepted(RSF_BACKEND_ERROR_NOT_READY);
+        return false;
+    }
     status.low_latency_available=status.report_available=0;
     if (VulkanStorySlBindReflex()==0)
         (void)VulkanStorySlGetReflexState(&status.low_latency_available,&status.report_available);
-    bound = true;
+    ++pcl_epoch_cookie;
+    if (!pcl_epoch_cookie) ++pcl_epoch_cookie;
+    if (!PostThreadMessageW(thread,status.pcl_message,static_cast<WPARAM>(pcl_epoch_cookie),reinterpret_cast<LPARAM>(&pcl_epoch_tag))) {
+        bound=false; pcl_thread=0; pcl_epoch_ready=false;
+        (void)accepted(RSF_BACKEND_ERROR_FEATURE_FAILED);
+        return false;
+    }
+    pcl_epoch_ready=false;
+    bound = true; pcl_thread = thread;
     return true;
 }
 #endif
@@ -98,7 +121,7 @@ extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) t
     if (!accepted(VulkanStorySlInitializeFeatures(path.c_str(), setup->project_id, 1,
         (setup->features & RSF_SLVK_DLSS_FG) ? 1u : 0u,
         (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    bound = false; mode = interval = 0;
+    bound = false; pcl_thread = 0; pcl_epoch_ready=false; mode = interval = 0;
     tokens = {}; executions = {}; session = render_frame = present_frame = 0;
     status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
     initialized = true;
@@ -166,6 +189,15 @@ extern "C" rsf_backend_result rsf_latencyvk_options(uint32_t requested,uint32_t 
 static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     if (!event || event->struct_size<sizeof(*event) || !event->session_id || !event->source_frame_id) return;
     const auto id=event->source_frame_id;
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    // native_cpu invokes this sink only after validating/accepting the boundary.
+    // Register its actual thread before any pacing, token or SDK marker work.
+    if (event->event_version==RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_KEYED) &&
+        (event->stage==RSF_GAME_CPU_FRAME_BEGIN || event->stage==RSF_GAME_CPU_INPUT_SAMPLE)) {
+        std::lock_guard lock(mutex);
+        if (initialized && !bind(true)) return;
+    }
+#endif
     if (event->stage==RSF_GAME_CPU_INPUT_EVENT) {
         (void)rsf_latencyvk_input(id,event->input_kind,event->message_id);
         if (event->input_kind && active_owner.load()==RSF_PACING_XELL)
@@ -224,10 +256,55 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     else if (skipped) tokens[id%tokens.size()]={};
 #endif
 }
+// PCL targets its registered input thread, which need not own an engine window.
+// Only its exact registered thread-message ID is removed. Association and marker
+// deduplication remain in native_cpu; dequeue timestamps are never frame stamps.
+static void pump_pcl(const rsf_game_cpu_event* boundary) {
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    if (!boundary || boundary->struct_size < sizeof(*boundary) || !boundary->session_id || !boundary->source_frame_id ||
+        boundary->event_version != RSF_GAME_CPU_EVENT_VERSION || !(boundary->flags & RSF_GAME_CPU_INPUT_KEYED) ||
+        (boundary->stage != RSF_GAME_CPU_FRAME_BEGIN && boundary->stage != RSF_GAME_CPU_INPUT_SAMPLE)) return;
+    std::array<rsf_game_cpu_event,16> delivered{}; size_t count{};
+    {
+        std::lock_guard lock(mutex);
+        if (!initialized || !bound || pcl_thread != GetCurrentThreadId() || status.pcl_message < 0xc000 || status.pcl_message > 0xffff) return;
+        LARGE_INTEGER frequency{};
+        if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) return;
+        MSG message{};
+        for (size_t removed=0; removed<delivered.size(); ++removed) {
+            // WM_QUIT bypasses PeekMessage filters. Inspect before removing so
+            // an engine-owned quit remains in its queue for its real pump.
+            if (!PeekMessageW(&message, reinterpret_cast<HWND>(-1), status.pcl_message, status.pcl_message, PM_NOREMOVE) ||
+                message.hwnd || message.message != status.pcl_message) break;
+            if (!PeekMessageW(&message, reinterpret_cast<HWND>(-1), status.pcl_message, status.pcl_message, PM_REMOVE)) break;
+            if (message.message == WM_QUIT) { PostQuitMessage(static_cast<int>(message.wParam)); break; }
+            if (message.lParam==reinterpret_cast<LPARAM>(&pcl_epoch_tag)) {
+                if (message.wParam==static_cast<WPARAM>(pcl_epoch_cookie)) pcl_epoch_ready=true;
+                continue; // Our queue fence is not a received tool ping.
+            }
+            if (!pcl_epoch_ready) continue;
+            LARGE_INTEGER stamp{};
+            if (!QueryPerformanceCounter(&stamp) || stamp.QuadPart <= 0) continue;
+            auto& fact=delivered[count++];
+            fact.struct_size=sizeof(fact); fact.stage=RSF_GAME_CPU_INPUT_EVENT;
+            fact.session_id=boundary->session_id; fact.timestamp_qpc=static_cast<uint64_t>(stamp.QuadPart);
+            fact.qpc_frequency=static_cast<uint64_t>(frequency.QuadPart); fact.message_id=message.message;
+            fact.event_version=RSF_GAME_CPU_EVENT_VERSION;
+            fact.flags=RSF_GAME_CPU_WINDOW_MESSAGE|RSF_GAME_CPU_INPUT_UNFRAMED;
+        }
+    }
+    // The sink may reenter the SDK mutex. Queue source-zero facts only after
+    // the boundary dispatch, so its earlier timestamp cannot consume future facts.
+    for(size_t i=0;i<count;++i) (void)rsf_native_cpu_dispatch(&delivered[i],cpu_fact,nullptr);
+#else
+    (void)boundary;
+#endif
+}
 extern "C" void rsf_latencyvk_cpu(const rsf_game_cpu_event* event) {
     if (!event) return;
-    if (event->event_version==RSF_GAME_CPU_EVENT_VERSION) (void)rsf_native_cpu_dispatch(event,cpu_fact,nullptr);
-    else cpu_fact(nullptr,event); // legacy compatibility, pending source-version migration
+    if (event->event_version==RSF_GAME_CPU_EVENT_VERSION) {
+        if (rsf_native_cpu_dispatch(event,cpu_fact,nullptr)) pump_pcl(event);
+    } else cpu_fact(nullptr,event); // legacy compatibility, pending source-version migration
 }
 extern "C" rsf_backend_result rsf_latencyvk_presentation(void* context) {
     presentation.store(static_cast<rsf_fgvk*>(context)); return rsf_latencyvk_options(mode,interval);
@@ -379,6 +456,6 @@ extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     rsf_native_latency_release_claim(2);
     (void)rsf_native_cpu_release_session(facts_session.exchange(0));
     presentation.store(nullptr);
-    initialized = bound = false; tokens = {}; executions = {}; render_frame = present_frame = session = 0;
+    initialized = bound = false; pcl_thread = 0; pcl_epoch_ready=false; tokens = {}; executions = {}; render_frame = present_frame = session = 0;
     return RSF_BACKEND_OK;
 }
