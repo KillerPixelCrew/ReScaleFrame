@@ -211,6 +211,19 @@
     "capture_status": "complete, source identity null, native frame 1068, actual Present S_OK, settled DLSS reset 0",
     "limitations": "Stationary scene only. Initial host startup still requires DLSS/Streamline; portable startup, device recreation and full host retirement remain pending"
   },
+  "auxiliary_handoff": {
+    "status": "Static native consumer matching and WARP depth primitive; no game admission or deployment",
+    "post_zprepass_depth_copy": "RVA0x15399df copies main depth into slot7 at global0x3334380, not MAIN_COPY slot1",
+    "refraction_render_rva": "0x1565920",
+    "refraction_setup_rva": "0x15655b0",
+    "refraction_input": "Target13 at effect+0x90, bound as input2; native effect1 before HDR after RSF handoff",
+    "depth_of_field_render_rva": "0x15509a0",
+    "depth_of_field_setup_rva": "0x1551820",
+    "depth_of_field_inputs": "Main depth0, colour49+selector(global0x3436358), conditional underwater12; effect3 before HDR or deferred after TAA",
+    "mechanism": "Generic graphics depth_scale C ABI1: scratch preparation, nearest depth/all8 stencil bits, temporary commit and exact restore on one immediate context",
+    "validation": "Release WARP: all256 stencil values, representative24-bit depths, offset rectangles, jitter, original contents and graphics state/counters restored",
+    "pending": "Live auxiliary descriptors/active rectangles and selectors, colour auxiliary preparation, native full-size constant/viewport transition, guarded final-consumer restoration and reduced SR game capture"
+  },
   "resolution_control": {
     "updater_rva": "0x101e130",
     "updater_guard": "83 b9 28 01 00 00 00 48 8b d1 0f 85 7f 01 00 00",

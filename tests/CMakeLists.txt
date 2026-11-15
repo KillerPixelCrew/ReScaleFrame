@@ -226,6 +226,11 @@ target_link_libraries(rsf_native_reinsert PRIVATE ReScaleFrame::Graphics rsf_bui
 add_test(NAME native_reinsert_device COMMAND rsf_native_reinsert)
 set_tests_properties(native_reinsert_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
+add_executable(rsf_depth_scale depth_scale.cpp)
+target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
+set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
 add_executable(rsf_skyrim_camera skyrim_camera.cpp ../games/skyrim-se/src/camera.cpp)
 target_link_libraries(rsf_skyrim_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME skyrim_camera_contract COMMAND rsf_skyrim_camera)
