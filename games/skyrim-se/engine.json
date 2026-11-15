@@ -275,5 +275,22 @@
     "pending": "Active auxiliary and moving shader acceptance, other SR backends, device recreation; FG and latency remain incomplete",
     "per_frame_constants_guard": "48 89 5c 24 08 55 48 8d ac 24 e0 fd ff ff 48 81 ec 20 03 00 00",
     "depth_coverage_capture": "Historical native-only depth coverage metrics: scene-20261115-143322-259-11517937-2804-1, native2121"
+  },
+  "jitter_quality_correction": {
+    "status": "Deployed corrected geometry-displacement jitter sign; moving XeSS/DLSS quality unaccepted",
+    "native_projection_cache": "RVA0x101e4e0 postmultiplies cache+0x80 by NDC translation; cache+0x1c0 stays unjittered",
+    "pixel_jitter": "nativeX*renderWidth/2, -nativeY*renderHeight/2",
+    "validation": "Focused Release camera projection check passed; settled FSR4 Ultra Performance, XeSS Quality/Ultra Performance and DLSS Quality captures reset0; static output inspected, moving quality unaccepted",
+    "capture": "scene-20261115-171628-054-21303734-39896-3",
+    "deployment_backup": "20261115-171418-sr-fallback; same binaries redeployed20261115-171949-sr-fallback for focused vendor checks",
+    "pending": "Material mip bias, corrected moving XeSS/DLSS quality and full native input coverage"
+  },
+  "skeletal_history_research": {
+    "status": "Matched executable analysis, no runtime draw coverage or repair",
+    "producer_rva": "0x1015800",
+    "uploader_rva": "0x1578c80",
+    "bindings": "VS b9 previous bones, b10 current bones, 3 float4 per matrix",
+    "object_history_rva": "0xeebf40",
+    "pending": "Partition/index ranges, buffer capacity, moving draws and missing shader writes"
   }
 }
