@@ -102,6 +102,8 @@ RSF_RUNTIME_API int32_t rsf_fgvk_present(rsf_fgvk*, const void* present_info);
 RSF_RUNTIME_API int32_t rsf_fgvk_present_source(rsf_fgvk*, const void* present_info, const rsf_frame_record* identity);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_get_status(rsf_fgvk*, rsf_fgvk_status*);
 /* Drain deferred SDK presentation and engine work before retiring engine views.
+   Unsubmitted recorded SDK commands refuse drain/destroy; submit and notify
+   them before retrying, including commands from a failed prepare/tag operation.
    A failing destroy preserves the owner, module and resources for a retry. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_drain(rsf_fgvk*);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_destroy(rsf_fgvk*);

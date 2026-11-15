@@ -115,13 +115,19 @@ int main() {
     auto five = record(7, 5); input = frame(self, five); reject_prepare = true;
     require(rsf_ffxgvk_prepare(&self, c, &input) == RSF_BACKEND_ERROR_FEATURE_FAILED && self.slots[5].recorded_prepare && !self.slots[5].prepared,
         "SDK recording failure remains distinct from accepted FG preparation"); reject_prepare = false;
+    require(rsf_ffxgvk_drain(&self) == RSF_BACKEND_ERROR_NOT_READY &&
+        rsf_ffxgvk_destroy(&self) == RSF_BACKEND_ERROR_NOT_READY && self.chain && self.slots[5].recorded_prepare,
+        "failed SDK recording retains its owner until the host submits the partial work");
     auto before = submits; rsf_ffxgvk_submitted(&self, &c, 1);
     require(submits == before + 1 && self.slots[5].source_pending, "partially recorded SDK failure still gets submission completion");
     require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled, "failed prepare does not replay the previous source");
     auto six = record(7, 6); input = frame(self, six);
     require(rsf_ffxgvk_prepare(&self, a, &input) == RSF_BACKEND_OK, "split prepare accepted");
     rsf_ffxgvk_submitted(&self, &a, 1); before = submits; const auto earlier_waits = waits;
-    require(rsf_ffxgvk_hudless(&self, b, &input) == RSF_BACKEND_OK, "split HUD-less accepted"); rsf_ffxgvk_submitted(&self, &b, 1);
+    require(rsf_ffxgvk_hudless(&self, b, &input) == RSF_BACKEND_OK, "split HUD-less accepted");
+    require(rsf_ffxgvk_drain(&self) == RSF_BACKEND_ERROR_NOT_READY && self.slots[0].recorded_hudless,
+        "submitted guides do not permit retirement of a later unsubmitted HUD-less copy");
+    rsf_ffxgvk_submitted(&self, &b, 1);
     require(submits == before + 1 && waits == earlier_waits + 1, "later role waits prior fence before establishing a new completion point");
     rsf_ffxgvk_submitted(&self, &b, 1); require(submits == before + 1, "split duplicate submission is idempotent");
     require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled, "split submitted roles can generate");

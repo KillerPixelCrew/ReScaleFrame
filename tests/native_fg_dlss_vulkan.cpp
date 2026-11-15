@@ -193,10 +193,17 @@ int main() {
         "later successful proxy drain permits retirement without changing requested MFG");
     lease_frame = 2; submitted_slot(self, 2, prepare, hudless);
     auto& rejected = self.slots[2]; rejected.prepared = rejected.hudless = false;
+    const auto before_pending_off = off_calls;
+    require(rsf_dlssgvk_drain(&self) == RSF_BACKEND_ERROR_NOT_READY &&
+        rsf_dlssgvk_destroy(&self) == RSF_BACKEND_ERROR_NOT_READY && self.chain && off_calls == before_pending_off &&
+        rejected.recorded_prepare && rejected.recorded_hudless,
+        "unsubmitted rejected SDK copies preserve ownership before disable or resource release");
     const auto before_rejected = fence_submits;
     rsf_dlssgvk_submitted(&self, lists, 2);
     require(fence_submits == before_rejected + 1 && rejected.source_pending && rejected.submitted_prepare && rejected.submitted_hudless,
         "recorded copies are fenced even when subsequent SDK tagging rejects the frame");
+    require(rsf_dlssgvk_drain(&self) == RSF_BACKEND_OK,
+        "actual submission and observed completion permit retirement after a refused drain");
     info.pSwapchains = &self.chain;
     require(rsf_dlssgvk_present(&self, &info) == VK_SUCCESS && !self.status.presentation.enabled,
         "fenced rejected tags never become accepted interpolation inputs");

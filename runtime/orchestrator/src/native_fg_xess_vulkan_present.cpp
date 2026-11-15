@@ -495,6 +495,9 @@ int32_t rsf_xessgvk_status(rsf_xessgvk* self, rsf_fgvk_status* status) {
 }
 int32_t rsf_xessgvk_drain(rsf_xessgvk* self) {
     if (!self) return 0;
+    for (const auto& slot : self->slots)
+        if ((slot.prepared && !slot.prepare_submitted) || (slot.hudless_recorded && !slot.hudless_submitted))
+            return VK_NOT_READY;
     int result = wait_for(*self, self->last_done);
     if (result) return result;
     self->setup.lock_queues(self->setup.queue_user);
