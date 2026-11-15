@@ -2,6 +2,13 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The shared SR regression now has actual device evidence: the explicit hidden
+D3D11-host check passes eight shared DLSS evaluations and output readback on
+the RTX4070, with zero D3D11 debug errors and FG Off. The identical executable
+with the saved failing Runtime reproduces backend-9/pipeline-10. This check
+is excluded from routine builds/CTest. No game deployment was made. See
+[device regression evidence](research/skyrim-se-integration.md#shared-sr-transfer-device-regression-15-november-2026).
+
 Native input sinks and the actual third-person camera vector consumer are now
 mapped against the matching executable. A bounded live job-order probe captured
 zero generations and establishes no consuming-frame association. Final-scene
