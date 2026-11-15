@@ -1,3 +1,69 @@
+// CPU-only fixture builds the actual service into this executable with inert dispatch.
+#if defined(RSF_TEST_XESS_INPUT_RANGE)
+#include "../runtime/orchestrator/src/native_xess_vulkan.cpp"
+#include <cassert>
+namespace {
+unsigned executed{}, copied{};
+uint32_t expected_width{}, expected_height{}, expected_reset{};
+xess_result_t velocity(xess_context_handle_t, float x, float y) { assert(x == 1 && y == 1); return XESS_RESULT_SUCCESS; }
+xess_result_t execute(xess_context_handle_t, VkCommandBuffer, const xess_vk_execute_params_t* p) {
+    assert(p->inputWidth == expected_width && p->inputHeight == expected_height && p->resetHistory == expected_reset);
+    // Private allocations cover the SDK maximum. Active input is a genuine
+    // subrectangle, not a fabricated VkImage allocation extent.
+    assert(p->colorTexture.width == 1280 && p->colorTexture.height == 720);
+    assert(p->depthTexture.width == 1280 && p->velocityTexture.height == 720);
+    ++executed; return XESS_RESULT_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags,
+    uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {}
+VKAPI_ATTR void VKAPI_CALL copy(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageCopy* p) {
+    assert((p->extent.width == expected_width && p->extent.height == expected_height) ||
+        (p->extent.width == 1920 && p->extent.height == 1080)); ++copied;
+}
+}
+int main() {
+    rsf_xessvk self;
+    self.setup.device = reinterpret_cast<void*>(1); self.setup.output_width = 1920; self.setup.output_height = 1080;
+    self.width = 1130; self.height = 636; self.minimum_width = 1024; self.minimum_height = 576;
+    self.maximum_width = 1280; self.maximum_height = 720;
+    self.sdk = std::make_shared<Library>(); self.sdk->velocity = velocity; self.sdk->execute = execute;
+    self.barrier = barrier; self.copy = copy;
+    self.color.image = reinterpret_cast<VkImage>(10); self.depth.image = reinterpret_cast<VkImage>(11);
+    self.motion.image = reinterpret_cast<VkImage>(12); self.output.image = reinterpret_cast<VkImage>(13);
+    rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.session_id = record.view_id = record.resource_generation = 1;
+    record.output_width = record.camera.output_width = 1920; record.output_height = record.camera.output_height = 1080;
+    rsf_srvk_frame input{}; input.struct_size = sizeof(input); input.abi_version = RSF_SRVK_ABI_VERSION; input.record = &record;
+    input.pre_exposure = input.motion_scale_x = input.motion_scale_y = 1;
+    input.sharpening.struct_size = sizeof(input.sharpening); input.sharpening.abi_version = RSF_SHARPENING_ABI_VERSION;
+    input.sharpening.mode = RSF_SHARPENING_OFF;
+    auto dimensions = [&](uint32_t w, uint32_t h) {
+        record.render_width = record.camera.render_width = w; record.render_height = record.camera.render_height = h;
+        input.color = {self.setup.device, 20, VK_FORMAT_R16G16B16A16_SFLOAT, w, h, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
+        input.depth = {self.setup.device, 21, VK_FORMAT_R32_SFLOAT, w, h, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
+        input.motion = {self.setup.device, 22, VK_FORMAT_R16G16_SFLOAT, w, h, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
+        input.output = {self.setup.device, 23, VK_FORMAT_R16G16B16A16_SFLOAT, 1920, 1080, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1};
+        expected_width = w; expected_height = h;
+    };
+    uint32_t w{}, h{}; assert(rsf_xessvk_plan(&self, &w, &h) == 0 && w == 1130 && h == 636);
+    dimensions(1128, 632); record.frame_id = 1; expected_reset = 1;
+    assert(rsf_xessvk_evaluate(&self, reinterpret_cast<void*>(2), &input) == 0 && executed == 1 && copied == 4);
+    record.frame_id = 2; expected_reset = 0;
+    assert(rsf_xessvk_evaluate(&self, reinterpret_cast<void*>(2), &input) == 0 && executed == 2);
+    dimensions(1280, 720); record.frame_id = 3; expected_reset = 1;
+    assert(rsf_xessvk_evaluate(&self, reinterpret_cast<void*>(2), &input) == 0 && executed == 3);
+    auto reject = [&] { unsigned before = copied; assert(rsf_xessvk_evaluate(&self, reinterpret_cast<void*>(2), &input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && copied == before && executed == 3); };
+    dimensions(1023, 632); reject(); dimensions(1128, 575); reject();
+    dimensions(1281, 632); reject(); dimensions(1128, 721); reject();
+    dimensions(0, 632); reject(); dimensions(1128, 632); input.depth.width--; reject();
+    dimensions(1128, 632); input.motion.height--; reject();
+    dimensions(1128, 632); record.camera.render_width--; reject();
+    dimensions(1128, 632); record.camera.output_height--; reject();
+    self.color = {}; self.depth = {}; self.motion = {}; self.output = {};
+    return 0;
+}
+#else
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_xess_vulkan_requirements.h>
@@ -322,3 +388,5 @@ int main(int argc, char**) try {
     std::puts("SKIP: built without Vulkan SDK headers"); return 77;
 #endif
 } catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
+
+#endif // RSF_TEST_XESS_INPUT_RANGE

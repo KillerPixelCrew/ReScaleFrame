@@ -2,6 +2,7 @@
 #include "native_xess_vulkan.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 
@@ -55,7 +56,10 @@ struct rsf_xessvk {
     rsf_srvk_setup setup{};
     std::shared_ptr<Library> sdk;
     xess_context_handle_t context = nullptr;
-    uint32_t width = 0, height = 0;
+    uint32_t width = 0, height = 0; // SDK recommendation returned by plan
+    uint32_t minimum_width = 0, minimum_height = 0, maximum_width = 0, maximum_height = 0;
+    uint32_t active_width = 0, active_height = 0;
+    bool range_logged = false;
     uint64_t session = 0, frame = 0;
     uint32_t view = 0, generation = 0;
     Image color, depth, motion, output;
@@ -217,10 +221,12 @@ rsf_backend_result rsf_xessvk_create(const rsf_srvk_setup* setup, rsf_xessvk** o
     if (result != XESS_RESULT_SUCCESS) return sdk_result(result, RSF_BACKEND_ERROR_INIT_FAILED);
     xess_2d_t dimensions{}, minimum{}, maximum{};
     result = self->sdk->resolution(self->context, &init.outputResolution, init.qualitySetting, &dimensions, &minimum, &maximum);
-    if (result != XESS_RESULT_SUCCESS || !dimensions.x || !dimensions.y ||
+    if (result != XESS_RESULT_SUCCESS || !dimensions.x || !dimensions.y || !minimum.x || !minimum.y ||
         dimensions.x < minimum.x || dimensions.y < minimum.y || dimensions.x > maximum.x || dimensions.y > maximum.y)
         return RSF_BACKEND_ERROR_INIT_FAILED;
     self->width = dimensions.x; self->height = dimensions.y;
+    self->minimum_width = minimum.x; self->minimum_height = minimum.y;
+    self->maximum_width = maximum.x; self->maximum_height = maximum.y;
 #define RSF_XESS_VK_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(setup->device_proc(setup->device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_XESS_VK_LOAD(create_image, vkCreateImage); RSF_XESS_VK_LOAD(destroy_image, vkDestroyImage); RSF_XESS_VK_LOAD(requirements, vkGetImageMemoryRequirements);
     RSF_XESS_VK_LOAD(allocate, vkAllocateMemory); RSF_XESS_VK_LOAD(free_memory, vkFreeMemory); RSF_XESS_VK_LOAD(bind, vkBindImageMemory);
@@ -234,9 +240,9 @@ rsf_backend_result rsf_xessvk_create(const rsf_srvk_setup* setup, rsf_xessvk** o
         (uint64_t(version.patch) << 16) | version.reserved, RSF_SR_XESS);
     if (!self->capture.initialize(static_cast<VkDevice>(setup->device), setup->device_proc, self->memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
     constexpr auto usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (!allocate(*self, self->color, self->width, self->height, VK_FORMAT_R16G16B16A16_SFLOAT, usage) ||
-        !allocate(*self, self->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT, usage) ||
-        !allocate(*self, self->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT, usage) ||
+    if (!allocate(*self, self->color, self->maximum_width, self->maximum_height, VK_FORMAT_R16G16B16A16_SFLOAT, usage) ||
+        !allocate(*self, self->depth, self->maximum_width, self->maximum_height, VK_FORMAT_R32_SFLOAT, usage) ||
+        !allocate(*self, self->motion, self->maximum_width, self->maximum_height, VK_FORMAT_R16G16_SFLOAT, usage) ||
         !allocate(*self, self->output, setup->output_width, setup->output_height, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = self.release(); return RSF_BACKEND_OK;
@@ -263,7 +269,20 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION || record.camera.abi_version != RSF_GAME_FRAME_ABI_VERSION)
         return RSF_BACKEND_ERROR_ABI_MISMATCH;
     const auto& camera = record.camera;
-    if (!record.session_id || !record.frame_id || record.render_width != self->width || record.render_height != self->height ||
+    if (!self->range_logged && input->log) {
+        char message[256];
+        std::snprintf(message, sizeof(message), "XeSS input range recommended %ux%u minimum %ux%u maximum %ux%u actual %ux%u",
+            self->width, self->height, self->minimum_width, self->minimum_height,
+            self->maximum_width, self->maximum_height, record.render_width, record.render_height);
+        input->log(input->log_user, message);
+        self->range_logged = true;
+    }
+    if (!record.session_id || !record.frame_id ||
+        record.render_width < self->minimum_width || record.render_width > self->maximum_width ||
+        record.render_height < self->minimum_height || record.render_height > self->maximum_height ||
+        !record.render_width || !record.render_height ||
+        camera.render_width != record.render_width || camera.render_height != record.render_height ||
+        camera.output_width != record.output_width || camera.output_height != record.output_height ||
         record.output_width != self->setup.output_width || record.output_height != self->setup.output_height ||
         camera.depth_inverted != self->setup.depth_inverted || camera.motion_jittered != self->setup.motion_jittered ||
         !std::isfinite(input->motion_scale_x) || !std::isfinite(input->motion_scale_y) ||
@@ -273,9 +292,9 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     auto valid = [&](const rsf_srvk_image& image, uint32_t width, uint32_t height, uint32_t format, uint32_t layout) {
         return image.device == self->setup.device && image.image && image.width == width && image.height == height && image.format == format && image.layout == layout;
     };
-    if (!valid(input->color, self->width, self->height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
-        !valid(input->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
-        !valid(input->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
+    if (!valid(input->color, record.render_width, record.render_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
+        !valid(input->depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
+        !valid(input->motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) ||
         !valid(input->output, record.output_width, record.output_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) ||
         !input->color.copy_source || !input->depth.copy_source || !input->motion.copy_source ||
         input->output.image == input->color.image || input->output.image == input->depth.image || input->output.image == input->motion.image ||
@@ -287,14 +306,15 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     transition(*self, list, self->output.image, self->output.initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     self->output.initialized = true;
     xess_vk_execute_params_t data{};
-    data.colorTexture = resource(self->color, self->width, self->height, VK_FORMAT_R16G16B16A16_SFLOAT);
-    data.depthTexture = resource(self->depth, self->width, self->height, VK_FORMAT_R32_SFLOAT);
-    data.velocityTexture = resource(self->motion, self->width, self->height, VK_FORMAT_R16G16_SFLOAT);
+    data.colorTexture = resource(self->color, self->maximum_width, self->maximum_height, VK_FORMAT_R16G16B16A16_SFLOAT);
+    data.depthTexture = resource(self->depth, self->maximum_width, self->maximum_height, VK_FORMAT_R32_SFLOAT);
+    data.velocityTexture = resource(self->motion, self->maximum_width, self->maximum_height, VK_FORMAT_R16G16_SFLOAT);
     data.outputTexture = resource(self->output, record.output_width, record.output_height, VK_FORMAT_R16G16B16A16_SFLOAT);
     data.jitterOffsetX = camera.jitter_pixels[0]; data.jitterOffsetY = camera.jitter_pixels[1]; data.exposureScale = 1.f / input->pre_exposure;
-    data.inputWidth = self->width; data.inputHeight = self->height;
+    data.inputWidth = record.render_width; data.inputHeight = record.render_height;
     data.resetHistory = (record.flags & RSF_FRAME_FLAG_RESET) || self->frame + 1 != record.frame_id || self->session != record.session_id ||
-        self->view != record.view_id || self->generation != record.resource_generation;
+        self->view != record.view_id || self->generation != record.resource_generation ||
+        self->active_width != record.render_width || self->active_height != record.render_height;
     if (self->sdk->execute(self->context, list, &data) != XESS_RESULT_SUCCESS) { self->frame = 0; return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     const rsf_srvk_image output{self->setup.device, reinterpret_cast<uint64_t>(self->output.image), VK_FORMAT_R16G16B16A16_SFLOAT,
         record.output_width, record.output_height, VK_IMAGE_LAYOUT_GENERAL, 1};
@@ -309,6 +329,7 @@ rsf_backend_result rsf_xessvk_evaluate(rsf_xessvk* self, void* commands, const r
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {record.output_width, record.output_height, 1};
     self->copy(list, self->output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reinterpret_cast<VkImage>(input->output.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    self->active_width = record.render_width; self->active_height = record.render_height;
     self->frame = record.frame_id; self->session = record.session_id; self->view = record.view_id; self->generation = record.resource_generation;
     return RSF_BACKEND_OK;
 #else
