@@ -12,6 +12,7 @@
 #include <mutex>
 #include "cpu_events.h"
 #include "render_inputs.h"
+#include "resolution.h"
 #include <rescaleframe/d3d11_host.h>
 #include <string>
 #if defined(_MSC_VER)
@@ -27,6 +28,8 @@ void* target = nullptr;
 using ProcessMain = uintptr_t (*)(void*, uint32_t, uint32_t, uintptr_t);
 ProcessMain original_process = nullptr;
 void* process_target = nullptr;
+UpdateJitter original_resolution = nullptr;
+void* resolution_target = nullptr;
 std::mutex lifecycle;
 std::atomic<bool> accepting{false};
 std::atomic<uint32_t> calls{0};
@@ -184,6 +187,9 @@ void observe_jitter(void* state) noexcept
     calls.fetch_add(1, std::memory_order_acq_rel);
     // The trampoline is process-lived. Never hold lifecycle across native execution.
     original(state);
+    rsf_game_host_services resolution_host{};
+    { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) resolution_host = services; }
+    try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
     if (accepting.load(std::memory_order_acquire)) {
         const auto number = observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
@@ -207,6 +213,12 @@ void observe_jitter(void* state) noexcept
             }
         }
     }
+    calls.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void observe_resolution(void* state) noexcept {
+    calls.fetch_add(1, std::memory_order_acq_rel);
+    if (uintptr_t(state) != uintptr_t(GetModuleHandleW(nullptr)) + 0x33363a0 || !rsf::skyrim::resolution_owned()) original_resolution(state);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
@@ -236,11 +248,15 @@ bool match_target()
     constexpr unsigned char reset_expected[] = {0x44,0x39,0x71,0x30,0x74,0x09,0xe8,0x61,0x05,0x00,0x00,0x44,0x89,0x73,0x30};
     unsigned char reset_actual[sizeof(reset_expected)]{};
     const auto* reset_site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1544df4;
+    constexpr unsigned char resolution_expected[]{0x83,0xb9,0x28,0x01,0x00,0x00,0x00,0x48,0x8b,0xd1,0x0f,0x85,0x7f,0x01,0x00,0x00};
+    unsigned char resolution_actual[sizeof(resolution_expected)]{};
+    resolution_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x101e130;
     return copy(process_actual, process_target, sizeof(process_actual)) &&
         !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
         copy(call_actual, site, sizeof(call_actual)) &&
         !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
-        copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual));
+        copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)) &&
+        copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual));
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -267,9 +283,15 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             MH_RemoveHook(target); original = nullptr;
             return RSF_ERROR_NATIVE_REFUSED;
         }
+        if (MH_CreateHook(resolution_target, reinterpret_cast<void*>(&observe_resolution), reinterpret_cast<void**>(&original_resolution)) != MH_OK) {
+            MH_RemoveHook(process_target); original_process = nullptr;
+            MH_RemoveHook(target); original = nullptr;
+            return RSF_ERROR_NATIVE_REFUSED;
+        }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                               reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned)) {
+            MH_RemoveHook(resolution_target); original_resolution = nullptr;
             MH_RemoveHook(process_target); original_process = nullptr;
             MH_RemoveHook(target); original = nullptr;
             return RSF_ERROR_NATIVE_REFUSED;
@@ -296,7 +318,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     setup.runtime_directory = directory.c_str(); setup.identity_utf8 = "skyrim-se"; setup.executable_sha256 = fingerprint;
     setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
     setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
-    setup.units_to_meters = 0.0142875f; setup.quality_choices = 1;
+    setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
     if (bound_services.user) {
@@ -332,7 +354,12 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
+    if (MH_EnableHook(resolution_target) != MH_OK) {
+        MH_DisableHook(process_target); MH_DisableHook(target);
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
     if (!rsf::skyrim::cpu_start()) {
+        MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
@@ -350,7 +377,7 @@ rsf_result quiesce(const rsf_game_control_args* args) noexcept
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
     rsf::skyrim::cpu_quiesce();
-    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() ? RSF_ERROR_BUSY : RSF_OK;
+    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() ? RSF_ERROR_BUSY : RSF_OK;
 }
 
 rsf_result stop(const rsf_game_control_args* args) noexcept try
@@ -359,12 +386,15 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     std::lock_guard<std::mutex> lock(lifecycle);
     accepting.store(false, std::memory_order_release);
     if (host_active) (void)host_active(services.user, 0);
+    if (rsf::skyrim::resolution_owned()) return RSF_ERROR_BUSY;
     const bool cpu_stopped = rsf::skyrim::cpu_stop();
     if (enabled) {
         const auto jitter_result = MH_DisableHook(target);
         const auto process_result = MH_DisableHook(process_target);
+        const auto resolution_result = MH_DisableHook(resolution_target);
         if ((jitter_result != MH_OK && jitter_result != MH_ERROR_DISABLED) ||
-            (process_result != MH_OK && process_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
+            (process_result != MH_OK && process_result != MH_ERROR_DISABLED) ||
+            (resolution_result != MH_OK && resolution_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
         enabled = false;
     }
     if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;

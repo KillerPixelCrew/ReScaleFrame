@@ -27,6 +27,9 @@ typedef struct rsf_d3d11_host_setup {
    Strings are copied; upstream callback code/user and returned services are process-lived.
    The adapter selects and guards its native hooks before invoking this service.
    process_upscale borrows immediate-context textures synchronously and restores bindings.
+   RECONFIGURE on the graphics owner prepares dimensions without reconstruction; query render_config
+   afterwards. Output dimensions and swapchain are required; camera_valid may be zero for planning.
+   The first verified scene lease binds graphics ownership; cold RECONFIGURE requests are refused.
    The host owns SDK selection/settings/overlay/capture. It does not infer engine inputs.
    This SR host does not authorize generation or pacing from render-only identities. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup*, rsf_game_host_services*);

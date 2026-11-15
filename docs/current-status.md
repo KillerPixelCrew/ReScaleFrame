@@ -4,7 +4,10 @@
 Bounded vanilla QASmoke runs evaluated DLSS at native 1711x1048, reinserted into
 native colour, captured actual backend inputs/output and matched native Present.
 Live SR off/on preserved native TAA and consumed its history reset. Camera and
-host ABI fixtures pass. Reduced-resolution SR, portable startup, shader repairs,
+host ABI fixtures pass. A subsequent native raster probe produced 1141x699 inside
+1711x1048 allocations with clear depth outside the active rectangle, then restored
+full resolution and resumed native DLSS. Reduced modes still use native fallback
+until post-processing auxiliary repair is complete. Reduced-resolution SR, portable startup, shader repairs,
 moving-game quality, worker input ownership, FG, latency and CS/ENB handover are
 incomplete; CS currently refuses activation. Rendering readiness stays zero.
 See [research](research/skyrim-se-integration.md) for evidence and limitations.

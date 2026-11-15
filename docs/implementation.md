@@ -2,6 +2,31 @@
 
 ## Skyrim SE experimental native-resolution SR, 15 November 2026
 
+Native resolution production is now controlled at the guarded State updater and
+jitter boundary. The runtime prepares a backend size plan on the verified scene
+graphics owner before geometry; the adapter applies its ratios and jitter.
+A bounded Quality-mode probe rasterized 1141x699 into 1711x1048 allocations.
+Viewport observations and raw depth prove geometry fills that active rectangle
+and leaves clear depth outside. Reduced modes currently collect inputs through
+native fallback; vendor SR is still admitted only at native resolution until
+depth/stencil and post-processing auxiliaries are repaired. These modes are
+experimental, not completed reduced-resolution SR support.
+
+An early loading-thread startup attempt stalled and was terminated after a
+noninvasive stack snapshot. Cold preparation now refuses before binding graphics
+ownership, and planning waits for the main scene's identified execution thread.
+The first scale attempt also exposed that the native resolution lock is a
+nesting counter, not a boolean; lock=1 kept the primary scene full size. The
+corrected unlocked scope produced the verified reduced raster. Off restored
+current/previous ratios and native lock; native quality/on resumed DLSS with
+a complete actual-Present capture. The regression fixture covers cold planning
+refusal without touching a graphics context. See the research's resolution section.
+
+Latest resolution-owner gate: 209 passed, 15 skipped and the same two Anomaly
+FSR3 FG device failures, out of 226. The extra skip was a foreground-denied
+DLSS-G activity fixture; fourteen are default opt-ins. Formatting and Clippy
+passed separately. The full gate remains failed.
+
 The exact-build no-SKSE adapter now leases native scene colour, depth, motion,
 main camera and actual swapchain synchronously at the guarded pre-HDR call.
 The shared D3D11 host evaluates DLSS at native resolution and returns its output
@@ -33,7 +58,7 @@ HUD-less FG/UI, measured latency and CS/ENB coexistence remain incomplete.
 CS activation is still refused until ownership handover exists.
 See [research](research/skyrim-se-integration.md) for captures and validation.
 
-Final VS2026 Release gate: 210 passes, 14 opt-in skips and the same two Anomaly
+Earlier SR checkpoint gate: 210 passes, 14 opt-in skips and the same two Anomaly
 FSR3 FG device failures, out of 226 discovered checks. The full gate remains
 failed. Skyrim, camera, host, capture, overlay and reinsertion checks passed;
 formatting and Clippy passed separately. No Rust behavior was changed.

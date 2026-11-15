@@ -25,7 +25,7 @@
     "hooks_implemented": true,
     "game_tested": true,
     "device_tested": true,
-    "game_test_scope": "Vanilla QASmoke: DLSS native-resolution evaluation and reinsertion, raw native/backend colour/depth/motion and matched actual Present capture. Stationary camera only; moving objects, reduced resolution, CS/ENB, FG and latency unverified",
+    "game_test_scope": "Vanilla QASmoke: native DLSS/reinsertion and Present captures; native raster reduced to 1141x699 inside 1711x1048 allocations, captured with native temporal fallback; full-resolution restoration and native DLSS resume. Reduced SR, moving objects, CS/ENB, FG and latency unverified",
     "automatic_loading_implemented": true,
     "carrier": "generic XInput carrier; ReScaleFrame.Entry.dll packaging alias"
   },
@@ -188,7 +188,9 @@
     "scope": "Generic WARP format/state/rectangle tests; actual DLSS native-resolution output reinserted into native R11G11B10 colour before HDR"
   },
   "native_sr": {
-    "quality_choices": ["native"],
+    "quality_choices": ["native", "quality", "balanced", "performance", "ultra-performance"],
+    "admitted_sr_qualities": ["native"],
+    "reduced_quality_status": "Experimental native raster/input collection only; auxiliary repair is required before SR admission",
     "tested_backend": "DLSS",
     "tested_dimensions": [1711, 1048],
     "main_call_return_rva": "0x153adec",
@@ -208,5 +210,32 @@
     "capture": "scene-20261115-134423-927-8579609-34676-1",
     "capture_status": "complete, source identity null, native frame 1068, actual Present S_OK, settled DLSS reset 0",
     "limitations": "Stationary scene only. Initial host startup still requires DLSS/Streamline; portable startup, device recreation and full host retirement remain pending"
+  },
+  "resolution_control": {
+    "updater_rva": "0x101e130",
+    "updater_guard": "83 b9 28 01 00 00 00 48 8b d1 0f 85 7f 01 00 00",
+    "main_call_rva": "0x6565dd",
+    "main_call_bytes": "e8 4e 7b 9c 00",
+    "viewport_rva": "0x1009960",
+    "per_frame_constants_rva": "0x100ae80",
+    "lock_function_rva": "0x101e2d0",
+    "lock_semantics": "State +0x128 nesting counter: false increments, true decrements when nonzero; primary raster requires unlocked state",
+    "current_ratios_offset": "0x114",
+    "previous_ratios_offset": "0x11c",
+    "constant_buffer_layout": "Native uploader writes current/previous ratios at c43, reciprocals/clamps at c44; static match, no new raw constant-buffer capture",
+    "control": "Backend plans sizes on scene graphics owner before geometry; adapter supplies ratios and pixel jitter. Native updater bypasses only while owned. Quiesce drains restoration on a native graphics callback.",
+    "jitter": "Halton(2,3), phase count floor(8*(outputWidth/renderWidth)^2), bounded 8..256, mapped into both native jitter pairs",
+    "tested_render": [1141, 699],
+    "tested_allocation": [1711, 1048],
+    "tested_phase_count": 17,
+    "capture": "scene-20261115-143322-259-11517937-2804-1",
+    "capture_status": "partial: native inputs and final Present captured; reduced SR intentionally not evaluated",
+    "native_frame": 2121,
+    "depth_geometry_inside_fraction": 1,
+    "depth_geometry_outside_fraction": 0,
+    "reduced_sr_evaluated": false,
+    "restoration_tested": "Off restored current/previous ratios to 1 and lock to 0; native quality/on resumed DLSS with complete Present capture at render11357",
+    "failed_attempts": "Early loading-thread startup stalled in native SetWindowPos; cold preparation is now refused and scene-thread identity required. Lock=1 kept geometry full resolution; lock=0 produced verified reduced raster.",
+    "pending": "Full-resolution depth/stencil and other post-processing auxiliaries, complete auxiliary-view exceptions, lower-resolution SR evaluation and moving-scene acceptance"
   }
 }
