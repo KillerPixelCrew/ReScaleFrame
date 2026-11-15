@@ -38,19 +38,7 @@ int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call, void*);
 #endif
 namespace {
 std::mutex mutex;
-bool initialized = false, bound = false, started = false;
-std::atomic<bool> sdk_live{false}, sdk_resolver{false}, rollback_failed{false};
-// System loader dispatch may outlive runtime shutdown while the host destroys
-// Vulkan devices/instances. Retain the loader module until process exit.
-using NativeInstanceProc = rsf_vk_function (WINAPI*)(void*,const char*);
-HMODULE native_vulkan{};
-NativeInstanceProc native_instance_proc{};
-bool native_loader() {
-    if(native_instance_proc) return true;
-    if(!native_vulkan) native_vulkan=LoadLibraryExW(L"vulkan-1.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if(native_vulkan) native_instance_proc=reinterpret_cast<NativeInstanceProc>(GetProcAddress(native_vulkan,"vkGetInstanceProcAddr"));
-    return native_instance_proc!=nullptr;
-}
+bool initialized = false, bound = false;
 DWORD pcl_thread = 0;
 // A core-owned posted queue fence separates registrations without relying on
 // coarse/wrapping MSG.time. Exact-ID posted messages ahead of this fence are stale.
@@ -78,7 +66,7 @@ bool accepted(int result) {
 }
 void marker(uint64_t frame, uint32_t kind) {
     auto& slot = tokens[frame % tokens.size()];
-    if (!initialized || !sdk_live.load() || !bound || !frame || slot.frame != frame || !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(frame)) || (slot.stages & (1u << kind))) return;
+    if (!bound || !frame || slot.frame != frame || !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(frame)) || (slot.stages & (1u << kind))) return;
     if (accepted(VulkanStorySlMarkerForToken(slot.token, kind))) {
         slot.stages |= 1u << kind; ++status.marker_calls;
     }
@@ -123,60 +111,32 @@ extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) t
     if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (setup->abi_version != RSF_SLVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (setup->features & ~(RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!setup->project_id || (setup->features && (!setup->runtime_directory_utf8 || !setup->runtime_directory_utf8[0]))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!setup->runtime_directory_utf8 || !setup->project_id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(mutex);
-    if (started || rollback_failed.load()) return RSF_BACKEND_ERROR_NOT_READY;
-    status={sizeof(status),RSF_LATENCYVK_ABI_VERSION};
-    bool loaded=false;
+    if (initialized) return RSF_BACKEND_ERROR_NOT_READY;
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if(setup->runtime_directory_utf8 && setup->runtime_directory_utf8[0]) {
-        const int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,setup->runtime_directory_utf8,-1,nullptr,0);
-        if(!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        std::wstring path(static_cast<size_t>(count),0);
-        if(!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,setup->runtime_directory_utf8,-1,path.data(),count)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        loaded=accepted(VulkanStorySlInitializeFeatures(path.c_str(),setup->project_id,1,
-            (setup->features&RSF_SLVK_DLSS_FG)?1u:0u,(setup->features&RSF_SLVK_DLSS_SR)?1u:0u));
-        if(!loaded) {
-            // The bridge can free a module loaded by a failed attempt and clear
-            // feature functions. Checked cleanup also detects retained poison
-            // from an earlier unsuccessful SDK shutdown; never hide that state.
-            const int rollback=VulkanStorySlShutdownChecked();
-            if(rollback) {
-                rollback_failed=true;sdk_live=false;(void)accepted(rollback);
-                return RSF_BACKEND_ERROR_FEATURE_FAILED;
-            }
-        }
-    } else (void)accepted(RSF_BACKEND_ERROR_NOT_SUPPORTED);
-#else
-    status.last_result=RSF_BACKEND_ERROR_NOT_SUPPORTED;
-#endif
-    if(!loaded && setup->features) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-        return RSF_BACKEND_ERROR_LOAD_FAILED;
-#else
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-#endif
-    }
-    if(!loaded && !native_loader()) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    sdk_resolver=loaded; sdk_live=loaded;
-    bound=false;pcl_thread=0;pcl_epoch_ready=false;mode=interval=0;
-    tokens={};executions={};session=render_frame=present_frame=0;
-    initialized=loaded;started=true;
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, nullptr, 0);
+    if (!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    std::wstring path(static_cast<size_t>(count), 0);
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, path.data(), count)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (!accepted(VulkanStorySlInitializeFeatures(path.c_str(), setup->project_id, 1,
+        (setup->features & RSF_SLVK_DLSS_FG) ? 1u : 0u,
+        (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
+    bound = false; pcl_thread = 0; pcl_epoch_ready=false; mode = interval = 0;
+    tokens = {}; executions = {}; session = render_frame = present_frame = 0;
+    status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
+    initialized = true;
     return RSF_BACKEND_OK;
-} catch (...) {
-    std::lock_guard lock(mutex);
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if(VulkanStorySlShutdownChecked()!=0) rollback_failed=true;
+#else
+    return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #endif
-    sdk_live=false;
-    return RSF_BACKEND_ERROR_FEATURE_FAILED;
-}
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) try {
     if (!call || call->struct_size < sizeof(*call)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (call->abi_version != RSF_SLVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     if (!call->callback || ((call->session_id == 0) != (call->frame_id == 0))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     std::lock_guard lock(mutex);
-    if (!initialized || rollback_failed.load()) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!initialized) return RSF_BACKEND_ERROR_NOT_READY;
 #if defined(RSF_HAVE_STREAMLINE_VK)
     uintptr_t token = 0;
     if (call->frame_id) {
@@ -194,20 +154,18 @@ extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) try {
 extern "C" int32_t rsf_slvk_without_dlssg(int32_t (*callback)(void*), void* user) {
     if (!callback) return -3;
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if(rollback_failed.load()) return -3;
-    if(sdk_live.load()) return VulkanStorySlWithoutDlssG(callback,user);
-    return callback(user);
+    return VulkanStorySlWithoutDlssG(callback, user);
 #else
     return callback(user);
 #endif
 }
 extern "C" rsf_vk_function rsf_latencyvk_instance_proc(void* instance, const char* name) {
-    if(!name) return nullptr;
-    std::lock_guard lock(mutex);
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if(sdk_resolver.load()) return VulkanStorySlGetInstanceProcAddr(instance,name);
+    // Resolver remains usable after slShutdown for Vulkan object destruction.
+    return name ? VulkanStorySlGetInstanceProcAddr(instance, name) : nullptr;
+#else
+    (void)instance; (void)name; return nullptr;
 #endif
-    return native_instance_proc ? native_instance_proc(instance,name) : nullptr;
 }
 static uint32_t choose_owner(const rsf::latency::PresentationLease& presentation_lease) {
     if(presentation_lease.closing()) {active_owner.store(RSF_PACING_NONE);return RSF_PACING_NONE;}
@@ -470,7 +428,7 @@ extern "C" rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status* out
     if (output->abi_version != RSF_LATENCYVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
     {
         std::lock_guard lock(mutex); *output=status;
-        if (!started && !initialized && !xell_owner(presentation_lease) && !rsf::latency::amd_vk_capable()) return RSF_BACKEND_ERROR_NOT_READY;
+        if (!initialized && !xell_owner(presentation_lease) && !rsf::latency::amd_vk_capable()) return RSF_BACKEND_ERROR_NOT_READY;
         output->owner=active_owner.load();
         if (!output->owner) output->low_latency_available=output->mode=0;
     }
@@ -491,10 +449,7 @@ extern "C" rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status* out
 extern "C" int32_t rsf_latencyvk_queue_present(rsf_vk_function callback, void* queue, const void* info) {
     if (!callback || !queue || !info) return -3;
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if(rollback_failed.load()) return -3;
-    if(sdk_live.load()) return VulkanStorySlQueuePresentSynchronized(reinterpret_cast<uintptr_t>(callback),queue,info);
-    using Present = int32_t (*)(void*,const void*);
-    return reinterpret_cast<Present>(callback)(queue,info);
+    return VulkanStorySlQueuePresentSynchronized(reinterpret_cast<uintptr_t>(callback), queue, info);
 #else
     using Present = int32_t (*)(void*, const void*);
     return reinterpret_cast<Present>(callback)(queue, info);
@@ -503,8 +458,7 @@ extern "C" int32_t rsf_latencyvk_queue_present(rsf_vk_function callback, void* q
 extern "C" int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call callback, void* user) {
     if (!callback || !user) return -3;
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if(rollback_failed.load()) return -3;
-    return sdk_live.load() ? VulkanStorySlVulkanWsiCall(callback,user) : callback(user);
+    return VulkanStorySlVulkanWsiCall(callback, user);
 #else
     return callback(user);
 #endif
@@ -514,16 +468,13 @@ extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     if(!presentation_shutdown) return RSF_BACKEND_ERROR_NOT_READY;
     std::lock_guard lock(mutex);
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if ((initialized || rollback_failed.load()) && !accepted(VulkanStorySlShutdownChecked())) {
-        rollback_failed=true;sdk_live=false;initialized=false;
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
+    if (initialized && !accepted(VulkanStorySlShutdownChecked())) return RSF_BACKEND_ERROR_FEATURE_FAILED;
 #endif
     presentation_shutdown.commit();
     rsf::latency::amd_vk_shutdown();active_owner=0;
     rsf_native_latency_release_claim(2);
     (void)rsf_native_cpu_release_session(facts_session.exchange(0));
 
-    initialized = bound = started = false;sdk_live=false;rollback_failed=false; pcl_thread = 0; pcl_epoch_ready=false; tokens = {}; executions = {}; render_frame = present_frame = session = 0;
+    initialized = bound = false; pcl_thread = 0; pcl_epoch_ready=false; tokens = {}; executions = {}; render_frame = present_frame = session = 0;
     return RSF_BACKEND_OK;
 }
