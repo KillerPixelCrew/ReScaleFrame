@@ -95,6 +95,9 @@ bool decode(DXGI_FORMAT format, const uint8_t* pixel, Sample& out)
     switch (format) {
     case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_TYPELESS:
         out.x = out.y = out.z = pixel[0] / 255.0f; out.written = true; return true;
+    case DXGI_FORMAT_R8G8_UNORM:
+        out.x = pixel[0] / 255.0f; out.y = pixel[1] / 255.0f;
+        out.z = 0; out.written = true; return true;
     case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_TYPELESS: {
         uint16_t raw = 0; std::memcpy(&raw, pixel, sizeof(raw));
         out.x = out.y = out.z = format == DXGI_FORMAT_R16_FLOAT ? half_to_float(raw) : raw / 65535.0f;

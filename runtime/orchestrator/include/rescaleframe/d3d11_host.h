@@ -6,7 +6,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_D3D11_HOST_ABI_VERSION 4u
+#define RSF_D3D11_HOST_ABI_VERSION 5u
 /* Implemented fact producers, not backend availability or per-frame acceptance. */
 #define RSF_D3D11_HOST_CAP_FG_INPUTS 1u
 #define RSF_D3D11_HOST_CAP_INPUT_TIMELINE 2u
@@ -37,6 +37,9 @@ typedef struct rsf_d3d11_host_setup {
        INPUT_TIMELINE: actual input consumption associated with source CPU facts.
        A declaration never bypasses native ownership, input or screen admission. */
     uint32_t capabilities;
+    /* 0 preserves the enabled legacy default; 1 selects native colour (transport
+       Off). An existing saved ColourTransport value always takes precedence. */
+    uint32_t colour_transport_default;
 } rsf_d3d11_host_setup;
 /* Graphics-free setup, outside DllMain. Input services supply session/log/CPU only.
    Strings are copied; upstream callback code/user and returned services are process-lived.

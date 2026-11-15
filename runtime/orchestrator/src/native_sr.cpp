@@ -171,6 +171,14 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         frame.reactive_mask = masks.reactive; frame.transparency_mask = masks.coverage; frame.bias_mask = masks.bias;
         frame.motion_depth_layer = masks.motion_depth;
     }
+    if (pass->temporal_mask) {
+        ID3D11Texture2D *reactive = nullptr, *bias = nullptr;
+        if (!rsf_native_regions_temporal_mask(static_cast<ID3D11DeviceContext*>(context),
+                static_cast<ID3D11Texture2D*>(pass->temporal_mask), pass->render_rect, pass->temporal_mask_weights,
+                static_cast<ID3D11Texture2D*>(frame.reactive_mask), static_cast<ID3D11Texture2D*>(frame.bias_mask),
+                &reactive, &bias)) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+        frame.reactive_mask = reactive; frame.bias_mask = bias;
+    }
     rsf_native_fg_scene(pass);
     const auto result = rsf_dlss_pipeline_on_frame(context, &frame);
     rsf_native_fg_scene(nullptr);

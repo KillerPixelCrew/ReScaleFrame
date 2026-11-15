@@ -288,7 +288,7 @@ struct Host {
         else if (!timeline) log(this, "D3D11 host refuses FG/latency controls: native input timeline capability unavailable.");
         else if (!generation) log(this, "D3D11 host refuses FG controls: native FG input lease capability unavailable.");
         panel.dlss_preset_available = 1; panel.log = log; panel.sr_report = sr_report; panel.settings_changed = changed; panel.user = this;
-        transport.store(GetPrivateProfileIntW(section.c_str(), L"ColourTransport", 1, ini.c_str()) != 0);
+        transport.store(GetPrivateProfileIntW(section.c_str(), L"ColourTransport", setup.colour_transport_default ? 0 : 1, ini.c_str()) != 0);
         fidelity.store(GetPrivateProfileIntW(section.c_str(), L"ColourCorrection", 0, ini.c_str()) != 0);
         const rsf_overlay_service_option advanced[]{
             {"Capture next SR inputs", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 0, 0, 1, 1, 1, 0},
@@ -326,6 +326,9 @@ struct Host {
         rsf_input_dump_pass_metadata(&pass);
         rsf_input_dump_pass(context, &pass, 1);
         (void)rsf_input_dump_texture_record(context, &record, "native_color", "Native pre-tonemap scene colour", pass.color_input, RSF_DUMP_VIEW_HDR, 1);
+        if (pass.temporal_mask)
+            (void)rsf_input_dump_texture_record(context, &record, "native_temporal_mask",
+                "Native numeric temporal rejection mask before weighted normalization", pass.temporal_mask, RSF_DUMP_VIEW_RAW, 1);
         (void)rsf_input_dump_texture_record(context, &record, "native_depth", "Native scene device depth", pass.depth, RSF_DUMP_VIEW_DEPTH, 1);
         (void)rsf_input_dump_texture_record(context, &record, "native_motion", "Native motion in adapter-declared encoding", pass.motion, RSF_DUMP_VIEW_DENSE_MOTION, 8);
     }
@@ -464,7 +467,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
         !std::isfinite(setup->units_to_meters) || setup->units_to_meters <= 0 || !setup->quality_choices || (setup->quality_choices & ~0x1fu) ||
         setup->motion.struct_size < sizeof(setup->motion) || !setup->motion.scale_x || !setup->motion.scale_y ||
         !std::isfinite(setup->motion.scale_x) || !std::isfinite(setup->motion.scale_y) ||
-        setup->presentation_bridge > 2 || (setup->presentation_bridge && !setup->accept_window) ||
+        setup->colour_transport_default > 1 || setup->presentation_bridge > 2 || (setup->presentation_bridge && !setup->accept_window) ||
         (setup->capabilities & ~(RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE | RSF_D3D11_HOST_CAP_RENDERED_SOURCE)) ||
         (setup->capabilities && !setup->presentation_bridge) ||
         ((setup->capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE) &&

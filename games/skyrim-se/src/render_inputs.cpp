@@ -42,6 +42,18 @@ bool same_matrix(const float* a, const float* b) {
     for (unsigned i = 0; i < 16; ++i) if (!std::isfinite(a[i]) || !std::isfinite(b[i]) || std::abs(a[i] - b[i]) > 0.001f) return false;
     return true;
 }
+bool temporal_mask_format(DXGI_FORMAT format) {
+    // TAA consumes numeric X/Y rejection channels, never colour or integer data.
+    switch (format) {
+    case DXGI_FORMAT_R8G8_UNORM: case DXGI_FORMAT_R8G8_SNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_SNORM:
+    case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16_SNORM:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_UNORM: case DXGI_FORMAT_R16G16B16A16_SNORM:
+    case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32B32A32_FLOAT:
+        return true;
+    default: return false;
+    }
+}
 }
 uint32_t renderer_thread() { return scene_thread.load(std::memory_order_acquire); }
 bool reconstruct(void* manager, const rsf_game_host_services& host) {
@@ -86,13 +98,14 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
         !std::memcmp(native.previous_origin, previous.native.origin, sizeof(native.origin));
     if (continuous) std::memcpy(pass.camera.previous_jitter_pixels, previous.jitter, sizeof(previous.jitter));
     else pass.flags |= RSF_GAME_RENDER_RESET;
-    ID3D11DeviceContext* raw_context{}; ID3D11Texture2D *raw_color{}, *raw_depth{}, *raw_motion{}; IDXGISwapChain* raw_chain{};
+    ID3D11DeviceContext* raw_context{}; ID3D11Texture2D *raw_color{}, *raw_depth{}, *raw_motion{}, *raw_mask{}; IDXGISwapChain* raw_chain{};
     if (!read(raw_context, base + 0x3331f30) || !raw_context ||
         !read(raw_color, base + 0x3331f40 + 0xa58 + 0x30) || !raw_color ||
         !read(raw_motion, base + 0x3331f40 + 0xa58 + 7 * 0x30) || !raw_motion ||
         !read(raw_depth, base + 0x3333f58) || !raw_depth || !read(raw_chain, window + 0x18) || !raw_chain) return false;
     ComPtr<ID3D11DeviceContext> context = raw_context;
-    ComPtr<ID3D11Texture2D> color = raw_color, depth = raw_depth, motion = raw_motion;
+    ComPtr<ID3D11Texture2D> color = raw_color, depth = raw_depth, motion = raw_motion, mask;
+    if (read(raw_mask, base + 0x3331f40 + 0xa58 + 85 * 0x30) && raw_mask) mask = raw_mask;
     ComPtr<IDXGISwapChain> chain = raw_chain;
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
     static uint32_t logged_width = 0, logged_height = 0;
@@ -112,16 +125,26 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
     }
     if (FAILED(chain->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get() != device.Get()) return false;
     D3D11_TEXTURE2D_DESC c{}, d{}, m{}; color->GetDesc(&c); depth->GetDesc(&d); motion->GetDesc(&m);
-    if (c.Format != DXGI_FORMAT_R11G11B10_FLOAT || d.Format != DXGI_FORMAT_R24G8_TYPELESS || m.Format != DXGI_FORMAT_R16G16_FLOAT) return false;
+    if ((c.Format != DXGI_FORMAT_R11G11B10_FLOAT && c.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) ||
+        d.Format != DXGI_FORMAT_R24G8_TYPELESS || m.Format != DXGI_FORMAT_R16G16_FLOAT) return false;
+    if (mask) {
+        D3D11_TEXTURE2D_DESC t{}; mask->GetDesc(&t); mask->GetDevice(&owner);
+        if (owner.Get() != device.Get() || t.Width != width || t.Height != height ||
+            t.SampleDesc.Count != 1 || t.ArraySize != 1 || t.MipLevels != 1 || !temporal_mask_format(t.Format)) mask.Reset();
+    }
     scene_thread.store(GetCurrentThreadId(), std::memory_order_release);
     pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR; pass.session_id = host.session_id;
     pass.family_key = pass.view_key = pass.history_key = camera; pass.pass_key = 0x153ade7; pass.native_frame = frame;
     pass.flags |= RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG;
     if (host.render_pass) (void)cpu_render_identity(pass);
+    pass.flags |= RSF_GAME_RENDER_NO_FG; // SR metadata alone does not lease FG inputs.
     pass.viewport_key = pass.window_key = pass.rhi_viewport_key = window;
     pass.render_rect[2] = int32_t(render_width); pass.render_rect[3] = int32_t(render_height);
     pass.output_rect[2] = int32_t(width); pass.output_rect[3] = int32_t(height);
     pass.color_input = pass.color_output = color.Get(); pass.depth = depth.Get(); pass.motion = motion.Get();
+    // Snapshot during this synchronous lease, before native postprocessing can reuse target85.
+    pass.temporal_mask = mask.Get();
+    if (mask) { pass.temporal_mask_weights[0] = 0.1f; pass.temporal_mask_weights[1] = 1; }
     pass.swapchain = chain.Get(); pass.camera_valid = 1;
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1; pass.motion_camera_included = 1;
     const bool reduced = render_width != width || render_height != height;

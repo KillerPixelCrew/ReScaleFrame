@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "../runtime/orchestrator/src/auxiliary_sr.h"
+#include "../runtime/orchestrator/src/native_regions.h"
 #include <wrl/client.h>
 #include <array>
 #include <vector>
@@ -99,5 +100,86 @@ int main() {
     const float cleared[]{0,0,0,0}; context->ClearRenderTargetView(aux_target.Get(), cleared);
     check(transaction.restore() && read(device.Get(), context.Get(), aux.Get(), 4) == std::vector<unsigned char>(192),
         "later native consumer clear survives auxiliary retirement");
+    // A non-origin rectangle in a two-channel UNORM mask must become local R32,
+    // with adapter weights and existing independent reactive/bias hints preserved.
+    std::array<uint8_t, 96> mask_values{};
+    for (size_t i = 0; i < 48; ++i) {
+        mask_values[i*2] = uint8_t((i*19)%256);
+        mask_values[i*2+1] = uint8_t((i*7)%256);
+    }
+    auto temporal = texture(device.Get(), DXGI_FORMAT_R8G8_UNORM, mask_values.data(), 2, 0);
+    if (!temporal) return 1;
+    const int32_t mask_rect[]{2,1,6,4}; const float mask_weights[]{.1f,1,0,0};
+    ID3D11Texture2D *reactive = nullptr, *bias = nullptr;
+    const bool normalized = rsf_native_regions_temporal_mask(context.Get(), temporal.Get(), mask_rect, mask_weights,
+        nullptr, nullptr, &reactive, &bias);
+    check(normalized, "normalize native temporal mask");
+    if (normalized) {
+        D3D11_TEXTURE2D_DESC d{}; reactive->GetDesc(&d);
+        check(d.Width == 4 && d.Height == 3 && d.Format == DXGI_FORMAT_R32_FLOAT, "mask render-local R32 format and size");
+        auto values = read(device.Get(), context.Get(), reactive, 4);
+        check(values == read(device.Get(), context.Get(), bias, 4) && values.size() == 48, "same explicit hint feeds reactive and bias");
+        for (size_t y = 0; y < 3; ++y) for (size_t x = 0; x < 4; ++x) {
+            const auto native = ((y+1)*8+x+2)*2;
+            const float expected = std::min(1.f, .1f*float(mask_values[native])/255.f+float(mask_values[native+1])/255.f);
+            float value{};
+            if (values.size() == 48) std::memcpy(&value, values.data()+(y*4+x)*4, 4);
+            check(std::abs(value-expected) < 1e-5f, "mask channels and crop origin have native numeric semantics");
+        }
+        // Independent hints must not disappear when an explicit mask is added.
+        D3D11_TEXTURE2D_DESC scalar{}; scalar.Width = 4; scalar.Height = 3;
+        scalar.MipLevels = scalar.ArraySize = scalar.SampleDesc.Count = 1;
+        scalar.Format = DXGI_FORMAT_R32_FLOAT; scalar.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::array<float,12> previous_reactive{}, previous_bias{}; previous_reactive.fill(.8f); previous_bias.fill(.6f);
+        const D3D11_SUBRESOURCE_DATA rdata{previous_reactive.data(),16,0}, bdata{previous_bias.data(),16,0};
+        ComPtr<ID3D11Texture2D> existing_reactive, existing_bias;
+        check(SUCCEEDED(device->CreateTexture2D(&scalar,&rdata,&existing_reactive)) &&
+            SUCCEEDED(device->CreateTexture2D(&scalar,&bdata,&existing_bias)), "existing temporal hint fixtures");
+        const bool combined = rsf_native_regions_temporal_mask(context.Get(), temporal.Get(), mask_rect, mask_weights,
+            existing_reactive.Get(),existing_bias.Get(), &reactive,&bias);
+        check(combined, "compose explicit and existing temporal hints");
+        if (combined) {
+            const auto combined_reactive = read(device.Get(),context.Get(),reactive,4);
+            const auto combined_bias = read(device.Get(),context.Get(),bias,4);
+            check(combined_reactive.size() == 48 && combined_bias.size() == 48, "combined hints readable");
+            for (size_t i = 0; i < 12; ++i) if (values.size() == 48 && combined_reactive.size() == 48 && combined_bias.size() == 48) {
+                float original{}, rvalue{}, bvalue{};
+                std::memcpy(&original,values.data()+i*4,4); std::memcpy(&rvalue,combined_reactive.data()+i*4,4);
+                std::memcpy(&bvalue,combined_bias.data()+i*4,4);
+                check(std::abs(rvalue-std::max(original,.8f)) < 1e-5f && std::abs(bvalue-std::max(original,.6f)) < 1e-5f,
+                    "existing reactive and bias compose independently by maximum");
+            }
+        }
+    }
+    const int32_t outside[]{2,1,9,4};
+    check(!rsf_native_regions_temporal_mask(context.Get(),temporal.Get(),outside,mask_weights,nullptr,nullptr,&reactive,&bias),
+        "out-of-resource temporal mask rectangle refused");
+    ComPtr<ID3D11Device> other_device;
+    const bool second_device = SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+        &level, 1, D3D11_SDK_VERSION, &other_device, nullptr, nullptr));
+    check(second_device, "second device for foreign temporal resource checks");
+    if (second_device) {
+        auto foreign_mask = texture(other_device.Get(), DXGI_FORMAT_R8G8_UNORM, mask_values.data(), 2, 0);
+        D3D11_TEXTURE2D_DESC scalar{}; scalar.Width = 4; scalar.Height = 3;
+        scalar.MipLevels = scalar.ArraySize = scalar.SampleDesc.Count = 1;
+        scalar.Format = DXGI_FORMAT_R32_FLOAT; scalar.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> foreign_hint;
+        check(SUCCEEDED(other_device->CreateTexture2D(&scalar,nullptr,&foreign_hint)), "foreign scalar hint fixture");
+        auto* bound = aux_target.Get(); context->OMSetRenderTargets(1,&bound,nullptr);
+        auto* saved_reactive = reactive; auto* saved_bias = bias;
+        if (foreign_mask && foreign_hint) {
+            check(!rsf_native_regions_temporal_mask(context.Get(),foreign_mask.Get(),mask_rect,mask_weights,
+                nullptr,nullptr,&reactive,&bias), "foreign non-SRV mask refused before copy");
+            check(!rsf_native_regions_temporal_mask(context.Get(),temporal.Get(),mask_rect,mask_weights,
+                foreign_hint.Get(),nullptr,&reactive,&bias), "foreign reactive hint refused");
+            check(!rsf_native_regions_temporal_mask(context.Get(),temporal.Get(),mask_rect,mask_weights,
+                nullptr,foreign_hint.Get(),&reactive,&bias), "foreign bias hint refused");
+        }
+        ComPtr<ID3D11RenderTargetView> retained; context->OMGetRenderTargets(1,&retained,nullptr);
+        check(retained.Get() == bound && reactive == saved_reactive && bias == saved_bias,
+            "foreign resources leave bindings and output pointers unchanged");
+        context->OMSetRenderTargets(0,nullptr,nullptr);
+    }
+    rsf_native_regions_release();
     return failures ? 1 : 0;
 }

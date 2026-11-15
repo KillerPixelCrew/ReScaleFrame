@@ -12,6 +12,7 @@ void check(bool ok, int line) { if (!ok) { std::fprintf(stderr, "FG contract fai
 struct Context { bool physical; };
 bool fail_probe = false, fail_chain = false, fail_retire = false, quiescent = false;
 uint32_t physical = 0, destroyed = 0, restored = 0, mock_pacing = RSF_PACING_REFLEX, begins = 0, markers = 0;
+uint32_t preparations = 0;
 rsf_fg_session* live_session = nullptr;
 rsf_backend_result create(const rsf_generation_setup* setup, void** context, void** chain)
 {
@@ -26,7 +27,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** context, voi
 rsf_backend_result configure(void*, const rsf_fg_options*) { CHECK(quiescent); return RSF_BACKEND_OK; }
 rsf_backend_result begin(void*, uint64_t) { ++begins; return RSF_BACKEND_OK; }
 rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { ++markers; return RSF_BACKEND_OK; }
-rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { return RSF_BACKEND_OK; }
+rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { ++preparations; return RSF_BACKEND_OK; }
 rsf_backend_result after(void*) { return RSF_BACKEND_OK; }
 rsf_backend_result status(void*, rsf_fg_status* out)
 {
@@ -91,6 +92,12 @@ int main()
     CHECK(rsf_fg_session_begin(live_session, 2) == 0);
     CHECK(rsf_fg_session_marker(live_session, 2, RSF_LATENCY_SIMULATION_START, 20, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
     CHECK(rsf_fg_session_abort(live_session, 2) == 0);
+    const auto after_abort_markers = markers, after_abort_preparations = preparations;
+    record.frame_id = 2; record.input_qpc = 0;
+    CHECK(rsf_fg_session_prepare(live_session,nullptr,&frame) == RSF_BACKEND_ERROR_NOT_READY);
+    CHECK(rsf_fg_session_marker(live_session,2,RSF_LATENCY_SIMULATION_START,21,0) != RSF_BACKEND_OK);
+    CHECK(markers == after_abort_markers && preparations == after_abort_preparations);
+    record.frame_id = 1; record.input_qpc = 10;
     fail_retire = true;
     CHECK(rsf_fg_session_destroy(live_session) == RSF_BACKEND_ERROR_NOT_READY);
     CHECK(physical == 1 && destroyed == 0); fail_retire = false;

@@ -6,14 +6,20 @@
 
 namespace rsf::skyrim {
 // Scalar observations only. A job's submitting source is not the source that
-// will consume its late input poll. State 1 publishes; state 3 refuses until reset.
+// will consume its late input poll. State 1 publishes; state 3 refuses until verified native idle or reset.
 class NativeJobOwnership {
 public:
     struct Ticket { uint64_t generation{}, source{}, session{}; uintptr_t manager{}; };
-    Ticket publish(uintptr_t manager, uint64_t source, uint64_t session) noexcept {
+    Ticket publish(uintptr_t manager, uint64_t source, uint64_t session, bool native_idle = false) noexcept {
         if (!manager || !source || !session) return {};
         uint64_t empty{};
-        if (!state_.compare_exchange_strong(empty, 1)) { invalidate(); return {}; }
+        if (!state_.compare_exchange_strong(empty, 1)) {
+            // Recovery requires the caller to have verified requested=running=0.
+            // Never replace a live or publishing generation, even with idle evidence.
+            if (!native_idle || empty != 3 || !state_.compare_exchange_strong(empty, 1)) {
+                invalidate(); return {};
+            }
+        }
         const auto generation = next_.fetch_add(1) * 4;
         manager_.store(manager); source_.store(source); session_.store(session);
         uint64_t publishing = 1;

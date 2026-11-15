@@ -81,6 +81,15 @@ typedef struct rsf_game_render_pass {
     /* Adapter-selected material texture sampling bias. The runtime applies
        this value; engine-specific derivation and clamps belong to the adapter. */
     float material_texture_mip_bias;
+    /* ABI 22: optional D3D11 ID3D11Texture2D temporal rejection mask, leased with
+       the SR inputs and stable until synchronous process_upscale returns.
+       Numeric float/UNORM/SNORM channels, without colour conversion. The runtime crops
+       render_rect and computes saturate(dot(channels, temporal_mask_weights)). The
+       result combines with existing reactive/bias hints by maximum; coverage stays
+       independent. Null preserves the existing mask path. Weights must be finite
+       and are adapter facts. A nonfinite weighted sample rejects history fully. */
+    void* temporal_mask;
+    float temporal_mask_weights[4];
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u

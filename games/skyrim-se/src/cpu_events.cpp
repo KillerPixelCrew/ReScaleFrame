@@ -173,9 +173,11 @@ uint32_t jobs_submit()
             before.requested == 0 && before.running == 0) {
             // Main reaches this call only on its normal-simulation branch (0x658aed..0x658b0f),
             // after the pause/freeze decision and before any worker of this generation runs.
-            // Bind the adopted poll here only while its completed control state is unchanged.
-            // This is ownership of that poll, not evidence that earlier main-thread work
-            // (0x743090 at 0x6588de) or later worker consumers were covered.
+            // Bind the adopted poll here only while its completed control state is unchanged and
+            // no consumer ran earlier in the tick: the pre-submit callees read no controls
+            // (prospective-source note), 0x743090 is refused through its queued-move gates, and
+            // hooked player/movement/camera consumers before this point refuse the bind. Later
+            // consumers are observed by the stamp counters, not assumed.
             if (current->reservation.source) {
                 // 0x659ea0 runs next, at 0x658b17: free camera there bypasses the 0x745200 envelope.
                 uintptr_t camera{}, state{}, free_state{};
@@ -189,7 +191,6 @@ uint32_t jobs_submit()
                 const auto stamp = input_ownership.snapshot();
                 if (current->refusal != BindRefusal::none) {
                     if (prospective.release(current->source).source) {
-                        current->reservation.phase = ProspectiveSources::none;
                         abort_source(current->host, current->source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
                     }
                 } else if (prospective.bind(current->source, stamp.generation)) {
@@ -197,18 +198,23 @@ uint32_t jobs_submit()
                     worker_consumption.movement.store(0); worker_consumption.player_update.store(0);
                     worker_consumption.camera.store(0); worker_consumption.mismatched.store(0);
                     worker_consumption.source.store(current->source);
-                    current->reservation.phase = ProspectiveSources::bound;
                     emit_source(current->host, RSF_GAME_CPU_SOURCE_BIND, current->source, 0, 0, 0, 0, 0);
                 } else if (prospective.release(current->source).source) {
-                    current->reservation.phase = ProspectiveSources::none;
                     abort_source(current->host, current->source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
                 }
             }
+            // This verified normal-simulation branch starts actor/player work even when
+            // prospective input ownership was refused. Report the engine fact independently.
+            emit(*current, RSF_GAME_CPU_SIMULATION_BEGIN);
             // Original wakes the manager only after setting both native mode1 fields.
             // Publish immutable scalars first so a newly awakened worker sees them.
-            ticket = job_ownership.publish(before.manager, current->source, current->host.session_id);
+            ticket = job_ownership.publish(before.manager, current->source, current->host.session_id, true);
             current->jobs = ticket;
-        } else job_ownership.invalidate();
+        } else if (current || job_ownership.snapshot().generation) {
+            // Mid-tick activation has no owned source. Only a real outstanding ticket
+            // or a refused owned submit invalidates provenance.
+            job_ownership.invalidate();
+        }
     }
     const auto result = reinterpret_cast<uint32_t (*)()>(hooks[7].original)();
     ManagerState after{};
@@ -412,9 +418,10 @@ bool disable_hooks()
 }
 short tick(void* main)
 {
-    Entry lease;
     const auto original = reinterpret_cast<short (*)(void*)>(hooks[0].original);
     if (!active.load(std::memory_order_acquire) || current) return original(main);
+    Entry lease;
+    if (!active.load(std::memory_order_acquire)) return original(main);
     Frame frame{}; frame.host = services; frame.main = main;
     // The previous generation's late poll becomes this tick's identity only when it was
     // sampled with exclusive control state and its native job generation joined normally.
@@ -445,13 +452,13 @@ short tick(void* main)
         // An adopted, unbound reservation (paused/frozen tick) closes unbound with FRAME_END.
         const auto owned = prospective.release(frame.source);
         if (owned.phase == ProspectiveSources::bound) worker_consumption.source.store(0);
-        const auto& facts = owned.source ? owned : frame.reservation; // a refused bind released it early
+        const auto& facts = frame.reservation; // immutable adoption facts, including a refused bind
         if (services.log && prospective_reports.fetch_add(1) < 16) {
             // PlayerCharacter update 0x745200 runs on this thread at 0x659f4d (via 0x659ea0, after
             // the submit) and drives PlayerCamera/camera-state updates; movement runs on workers.
             char message[560]{};
             std::snprintf(message, sizeof(message),
-                "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d refusal=%u kinds=0x%x main_player_update=%u main_camera=%u main_player_camera=%u main_movement=%u main_generation_match=%d main_ambiguous=%d worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; diagnostic facts, no input timeline",
+                "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d refusal=%u kinds=0x%x main_player_update=%u main_camera=%u main_player_camera=%u main_movement=%u main_generation_match=%d main_ambiguous=%d worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; input timeline ownership diagnostics",
                 static_cast<unsigned long long>(frame.source), static_cast<unsigned long long>(facts.predecessor),
                 static_cast<unsigned long long>(facts.poll_generation), static_cast<unsigned long long>(facts.job_generation),
                 owned.phase == ProspectiveSources::bound, static_cast<unsigned>(frame.refusal), facts.kinds,
@@ -503,6 +510,12 @@ uintptr_t poll(void* manager, float timestep)
                 reserved = source;
                 emit_source(host, RSF_GAME_CPU_SOURCE_RESERVE, source, provenance.submitting_source_frame_id,
                     provenance.poll_generation, RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR, 0, 0);
+                // Withdrawal can win between local reservation and the host callback.
+                // Repeat its terminal fact after RESERVE so the host cannot retain it open.
+                if (!prospective.still_reserved(source)) {
+                    abort_source(host, source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                    reserved = 0;
+                }
             }
         } else {
             // Mode2, paused main-thread, nested or unverified polls keep native behavior and
@@ -688,6 +701,17 @@ bool cpu_prepare(const rsf_game_host_services& host)
 bool cpu_start()
 {
     if (active.load(std::memory_order_acquire) || entered.load(std::memory_order_acquire)) return false;
+    // Only disabled targets contain the original guard bytes. Never compare our
+    // own enabled MinHook jump against the original prologue on a failed rollback.
+    for (const auto& hook : hooks) if (!hook.created || hook.enabled) return false;
+    const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    uintptr_t named_callback{};
+    if (!copy_input(&named_callback, base + 0x20b5130, sizeof(named_callback)) ||
+        named_callback != uintptr_t(base + 0x6e6030)) return false;
+    for (const auto& query : screen_query_guards)
+        if (std::memcmp(base + query.rva, query.bytes.data(), query.bytes.size())) return false;
+    for (const auto& hook : hooks)
+        if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return false;
     job_ownership.reset();
     input_ownership.invalidate();
     prospective.reset();
@@ -709,11 +733,16 @@ void cpu_quiesce() {
     prospective.reset();
     worker_consumption.source.store(0);
 }
-bool cpu_stop()
+bool cpu_disable()
 {
     cpu_quiesce();
     const bool disabled = disable_hooks();
     if (!disabled || entered.load(std::memory_order_acquire)) return false;
+    return true;
+}
+bool cpu_stop()
+{
+    if (!cpu_disable()) return false;
     services = {}; return true;
 }
 bool cpu_busy() { return entered.load(std::memory_order_acquire) != 0; }

@@ -25,7 +25,11 @@ int main() {
     const auto next_job = jobs.publish(0x1234, 12, 22);
     check(next_job.generation > first_job.generation && !jobs.retire(first_job), "stale join cannot retire next generation");
     check(!jobs.publish(0x1234, 13, 22).generation && !jobs.snapshot().generation, "overlapping submission poisons provenance");
-    check(!jobs.publish(0x1234, 14, 22).generation, "poisoned submission refuses reuse until quiescent reset");
+    check(!jobs.publish(0x1234, 14, 22).generation, "poisoned submission refuses reuse without verified native idle");
+    const auto recovered_job = jobs.publish(0x1234, 14, 22, true);
+    check(jobs.matches(recovered_job), "verified idle recovers poisoned submission");
+    check(!jobs.publish(0x1234, 15, 22, true).generation && !jobs.matches(recovered_job),
+        "idle assertion never replaces a live ticket and overlap remains refused");
     jobs.reset();
     const auto restarted_job = jobs.publish(0x1234, 15, 23);
     check(jobs.matches(restarted_job), "quiescent restart establishes a fresh session ticket");

@@ -301,7 +301,28 @@ int main() {
     CHECK(send(fact(4, RSF_GAME_CPU_FRAME_BEGIN, 110)));
     CHECK(abort_source(4, 111, RSF_GAME_CPU_ABORT_NOT_CONSUMED) && !bind(4, 112));
     CHECK(rsf_native_cpu_read(session, 4, &frame) && frame.stage_mask == 1u && !frame.timestamps_qpc[1]);
-    CHECK(send(fact(4, RSF_GAME_CPU_FRAME_END, 113)));
+    const auto before_refused_simulation = delivered.size();
+    CHECK(send(fact(4, RSF_GAME_CPU_SIMULATION_BEGIN, 113)));
+    CHECK(send(fact(4, RSF_GAME_CPU_SIMULATION_END, 114)));
+    CHECK(delivered.size() == before_refused_simulation); // facts retained, no latency callback
+    CHECK(rsf_native_cpu_read(session, 4, &frame) && frame.stage_mask == 13u && !frame.timestamps_qpc[1] &&
+        frame.timestamps_qpc[2] == 113 && frame.timestamps_qpc[3] == 114 && !frame.pacing_qpc && !frame.marker_mask);
+    CHECK(send(fact(4, RSF_GAME_CPU_FRAME_END, 115)));
+    CHECK(rsf_native_cpu_read(session, 4, &frame) && frame.ended && !frame.failed && frame.stage_mask == 29u);
+    CHECK(rsf_native_cpu_marker(4,0) == -1);
+    CHECK(rsf_native_cpu_counters_get(&measured) && !measured.order_violations);
+    // A refused bind can also leave an adopted reservation, without an ABORT.
+    CHECK(reserve(5, 120, 4) && sampled(5, 122, false));
+    CHECK(send(fact(5, RSF_GAME_CPU_FRAME_BEGIN, 130)) && !bind(5, 131));
+    const auto before_unbound_simulation = delivered.size();
+    CHECK(send(fact(5, RSF_GAME_CPU_SIMULATION_BEGIN, 132)));
+    CHECK(send(fact(5, RSF_GAME_CPU_SIMULATION_END, 140)));
+    CHECK(delivered.size() == before_unbound_simulation);
+    CHECK(send(fact(5, RSF_GAME_CPU_FRAME_END, 150)));
+    CHECK(read(5).state == RSF_NATIVE_CPU_RESERVATION_UNBOUND);
+    CHECK(rsf_native_cpu_marker(5,0) == -1);
+    CHECK(rsf_native_cpu_read(session, 5, &frame) && frame.stage_mask == 29u && !frame.failed &&
+        !frame.timestamps_qpc[1] && !frame.pacing_qpc && !frame.marker_mask);
     rsf_native_cpu_release();
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

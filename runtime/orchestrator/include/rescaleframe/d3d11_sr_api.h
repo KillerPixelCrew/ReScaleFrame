@@ -11,7 +11,8 @@
 extern "C" {
 #endif
 
-#define RSF_D3D11_SR_API_VERSION 2u
+/* Version 3 accepts Game ABI 22 native temporal mask leases. */
+#define RSF_D3D11_SR_API_VERSION 3u
 #define RSF_D3D11_SR_API_ENTRY_POINT "rsf_get_d3d11_sr_api"
 
 /* DLL access to the Runtime's one D3D11 super-resolution pipeline (dlss_pipeline.h) and its

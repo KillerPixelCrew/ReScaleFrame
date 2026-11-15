@@ -63,14 +63,12 @@ void* target() { return reinterpret_cast<unsigned char*>(GetModuleHandleW(nullpt
 void snapshot(bool after) {
     if (!live.load(std::memory_order_acquire) || !identity.session) return;
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    if (identity.frame != *reinterpret_cast<const uint32_t*>(base + 0x33363f4) ||
+    uint32_t frame{}; uintptr_t window{}; IDXGISwapChain* raw_chain{}; ID3D11DeviceContext* context{};
+    if (!read(frame, base + 0x33363f4) || identity.frame != frame ||
         identity.session != host.session_id) return;
-    const auto window = *reinterpret_cast<const uintptr_t*>(base + 0x3330198);
-    if (!window) return;
-    auto* raw_chain = *reinterpret_cast<IDXGISwapChain**>(window + 0x18);
-    if (!raw_chain || uintptr_t(raw_chain) != identity.chain) return;
-    auto* context = *reinterpret_cast<ID3D11DeviceContext**>(base + 0x3331f30);
-    if (!context) return;
+    if (!read(window, base + 0x3330198) || !window ||
+        !read(raw_chain, window + 0x18) || !raw_chain || uintptr_t(raw_chain) != identity.chain ||
+        !read(context, base + 0x3331f30) || !context) return;
     Microsoft::WRL::ComPtr<IDXGISwapChain> chain = raw_chain;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> buffer;
     if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return;
@@ -112,7 +110,8 @@ void snapshot(bool after) {
 uintptr_t observe(void* ui) noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    const bool primary = uintptr_t(ui) == *reinterpret_cast<const uintptr_t*>(base + 0x219e5c0);
+    uintptr_t primary_ui{};
+    const bool primary = read(primary_ui, base + 0x219e5c0) && uintptr_t(ui) == primary_ui;
     if (primary) { try { snapshot(false); } catch (...) {} }
     const auto result = original(ui);
     if (primary) { try { snapshot(true); } catch (...) {} }
@@ -212,12 +211,14 @@ bool prepare_presentation_inputs(void* manager, const rsf_game_host_services& se
 }
 bool presentation_inputs_guard() {
     constexpr unsigned char expected[]{0x4c,0x8b,0xdc,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x57,0x48,0x83,0xec,0x50};
-    return std::memcmp(target(), expected, sizeof(expected)) == 0;
+    unsigned char actual[sizeof(expected)]{};
+    return read(actual, uintptr_t(target())) && std::memcmp(actual, expected, sizeof(expected)) == 0;
 }
 bool presentation_inputs_start(const rsf_game_host_services& services) {
     if (calls.load(std::memory_order_acquire)) return false;
     if (!original && (!presentation_inputs_guard() ||
         MH_CreateHook(target(), reinterpret_cast<void*>(&observe), reinterpret_cast<void**>(&original)) != MH_OK)) return false;
+    if (!live.load(std::memory_order_acquire) && !presentation_inputs_guard()) return false;
     capture = reinterpret_cast<Capture>(reinterpret_cast<void*>(GetProcAddress(
         GetModuleHandleW(L"ReScaleFrame.Runtime.dll"), "rsf_d3d11_host_capture_texture")));
     host = services;
@@ -263,6 +264,7 @@ void identify_presentation_inputs(const rsf_game_render_pass& pass) {
     scene_identity.pass_key = pass.pass_key; scene_identity.resource_generation = pass.resource_generation;
     scene_identity.viewport_key = pass.viewport_key; scene_identity.window_key = pass.window_key;
     scene_identity.rhi_viewport_key = pass.rhi_viewport_key; scene_identity.flags = pass.flags;
+    if (pass.role != RSF_GAME_RENDER_FG_INPUTS) scene_identity.flags |= RSF_GAME_RENDER_NO_FG;
     scene_identity.screen = pass.screen;
     scene_identity.camera = pass.camera; scene_identity.camera_valid = pass.camera_valid;
     scene_identity.motion_camera_included = pass.motion_camera_included;

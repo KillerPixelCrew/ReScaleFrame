@@ -65,7 +65,9 @@ RSF_RUNTIME_API void rsf_native_cpu_paced(uint64_t source, uint64_t began, uint6
 /* Cold runtime setup: preserve only reported CPU stages; never infer input sampling. */
 RSF_RUNTIME_API void rsf_native_cpu_rendered_source_set(uint32_t enabled);
 RSF_RUNTIME_API int rsf_native_cpu_event(const rsf_game_cpu_event* event);
-/* Runtime hosts deliver accepted and normalized facts to their backend endpoint. No adapter supplies this sink. */
+/* Runtime hosts deliver accepted and normalized facts to their backend endpoint. No adapter supplies this sink.
+   Refused prospective consumption retains real simulation facts without synthesizing
+   input or forwarding their latency stages; frame open/close still reaches the sink. */
 RSF_RUNTIME_API int rsf_native_cpu_dispatch(const rsf_game_cpu_event* event, rsf_game_cpu_event_fn sink, void* user);
 RSF_RUNTIME_API int rsf_native_cpu_read(uint64_t session, uint64_t source, rsf_native_cpu_frame* frame);
 /* Set/change the sink only while game CPU producers are quiescent. User state must outlive
