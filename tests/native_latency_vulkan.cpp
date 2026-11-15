@@ -7,11 +7,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <windows.h>
+#include <thread>
 namespace {
 std::array<uint32_t, 6> sdk_tokens{};
 uint32_t cursor = 0, slept = 0, options = 0;
 uint32_t low_latency = 1;
-bool shutdown_allowed=true;
+bool shutdown_allowed=true, pcl_bind_fail=false;
+uint32_t pcl_binds=0; DWORD pcl_bound_thread=0;
+thread_local bool check_input_registration=false;
 uintptr_t current = 0;
 uint32_t requested_sr = 0, requested_fg = 0, leased_calls = 0;
 struct Marker { uint32_t frame, kind; };
@@ -46,7 +50,7 @@ void* VulkanStorySlModule() { return reinterpret_cast<void*>(1); }
 int VulkanStorySlShutdownChecked() { return shutdown_allowed ? 0 : -1; }
 rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*) { return nullptr; }
 int VulkanStorySlBindReflex() { return 0; }
-int VulkanStorySlBindPcl() { return 0; }
+int VulkanStorySlBindPcl() { ++pcl_binds; if(pcl_bind_fail) return -17; pcl_bound_thread=GetCurrentThreadId(); return 0; }
 uint32_t VulkanStorySlPclWindowMessage() { return 0xc123; }
 int VulkanStorySlGetReflexState(uint32_t* available, uint32_t* reports) { *available = low_latency; *reports = 1; return 0; }
 int VulkanStorySlSetReflexInterval(int mode, uint32_t interval) {
@@ -58,8 +62,8 @@ int VulkanStorySlBeginFrame(uint32_t frame) {
 }
 uintptr_t VulkanStorySlCurrentFrameToken() { return current; }
 int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) { return token && *reinterpret_cast<uint32_t*>(token) == index; }
-int VulkanStorySlReflexSleep() { ++slept; return 0; }
-int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t kind) { markers.push_back({*reinterpret_cast<uint32_t*>(token), kind}); return 0; }
+int VulkanStorySlReflexSleep() { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before sleep"); ++slept; return 0; }
+int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t kind) { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before SDK marker"); markers.push_back({*reinterpret_cast<uint32_t*>(token), kind}); return 0; }
 int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { return 0; }
 int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return callback(user); }
 int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call callback, void* user) { return callback(user); }
@@ -220,5 +224,80 @@ int main() {
     require(xell_markers.size()==denied_markers && xell_sleeps==2,"contending owner emits no XeLL marker or sleep");
     require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"contending session retired");
     rsf_native_latency_release_claim(1);
+    // Real Win32 thread queues, synthetic SDK only. No game, device or visible window.
+    require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"ping session initialized");
+    auto begin=[](uint64_t id) {
+        LARGE_INTEGER now{},hz{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&hz);
+        rsf_game_cpu_event e{sizeof(e),RSF_GAME_CPU_FRAME_BEGIN,909,id,
+            static_cast<uint64_t>(now.QuadPart),static_cast<uint64_t>(hz.QuadPart),1,0,0,
+            RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+        check_input_registration=true;rsf_latencyvk_cpu(&e);check_input_registration=false;
+    };
+    MSG queued{};(void)PeekMessageW(&queued,reinterpret_cast<HWND>(-1),WM_USER,WM_USER,PM_NOREMOVE);
+    while(PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc123,0xc123,PM_REMOVE)) {}
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"pre-registration ping queued");
+    const auto initial_binds=pcl_binds;begin(1);
+    require(pcl_binds==initial_binds+1&&pcl_bound_thread==GetCurrentThreadId(),"first CPU binding registers current thread");
+    require(!PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc123,0xc123,PM_NOREMOVE),"pre-epoch ping and queue fence removed");
+    const auto prior_markers=markers.size();begin(2);
+    require(markers.size()==prior_markers,"pre-registration ping cannot become a new-session marker");
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"fresh ping queued");begin(3);begin(4);
+    require(markers.size()==prior_markers+1&&markers.back().frame==4&&markers.back().kind==8,"fresh epoch ping associated at following boundary");
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc124,0,0)!=0,"unrelated registered ID queued");
+    // A message-only window has no UI/rendering. Its messages are not thread messages.
+    HWND window=CreateWindowExW(0,L"STATIC",L"",0,0,0,0,0,HWND_MESSAGE,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window&&PostMessageW(window,0xc123,0,0),"same-ID window message queued");
+    for(unsigned i=0;i<40;i++) require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"ping flood queued");
+    begin(5);
+    unsigned remaining=0;while(PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc123,0xc123,PM_REMOVE))++remaining;
+    require(remaining==24,"ping drain is bounded to sixteen removals");
+    require(PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc124,0xc124,PM_REMOVE)&&queued.message==0xc124,"unrelated same-range ID remains queued");
+    require(PeekMessageW(&queued,window,0xc123,0xc123,PM_REMOVE)&&queued.hwnd==window,"same-ID window message remains queued");
+    DestroyWindow(window);
+    const auto before_flood=markers.size();begin(6);
+    require(markers.size()==before_flood+1,"flood emits no duplicate input marker");
+    PostQuitMessage(37);begin(7);
+    require(PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0,0,PM_REMOVE)&&queued.message==WM_QUIT&&queued.wParam==37,"engine quit remains queued");
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"old ping queued before rebind away");
+    std::thread changed([&]{
+        (void)PeekMessageW(&queued,reinterpret_cast<HWND>(-1),WM_USER,WM_USER,PM_NOREMOVE);
+        require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"new-thread ping queued");
+        pcl_bind_fail=true;begin(8);
+        require(PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc123,0xc123,PM_NOREMOVE)!=0,"failed rebind cannot consume the new queue");
+        rsf_latencyvk_status refused{sizeof(refused),RSF_LATENCYVK_ABI_VERSION};
+        require(rsf_latencyvk_get_status(&refused)==RSF_BACKEND_OK&&refused.last_result==-17,"failed rebind is reported");
+        pcl_bind_fail=false;begin(9);
+        require(pcl_bound_thread==GetCurrentThreadId()&&!PeekMessageW(&queued,reinterpret_cast<HWND>(-1),0xc123,0xc123,PM_NOREMOVE),"successful thread change rebinds and pumps only its queue");
+    });changed.join();
+    begin(10);require(pcl_bound_thread==GetCurrentThreadId(),"returning input thread rebinds explicitly");
+    const auto before_return=markers.size();begin(11);
+    require(markers.size()==before_return,"old ping on returning thread is pre-epoch and cannot be associated");
+    require(rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"input sample pacing configured");
+    std::thread sample_thread([&]{
+        LARGE_INTEGER now{},hz{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&hz);
+        rsf_game_cpu_event e{sizeof(e),RSF_GAME_CPU_INPUT_SAMPLE,909,11,
+            static_cast<uint64_t>(now.QuadPart),static_cast<uint64_t>(hz.QuadPart),1,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
+        const auto binds_before=pcl_binds;
+        auto malformed_input=e;malformed_input.struct_size--;rsf_latencyvk_cpu(&malformed_input);
+        malformed_input=e;malformed_input.timestamp_qpc=0;rsf_latencyvk_cpu(&malformed_input);
+        malformed_input=e;malformed_input.flags|=0x80000000u;rsf_latencyvk_cpu(&malformed_input);
+        auto delivered=e;delivered.stage=RSF_GAME_CPU_INPUT_EVENT;delivered.source_frame_id=0;
+        delivered.flags=RSF_GAME_CPU_INPUT_UNFRAMED;delivered.input_kind=1;rsf_latencyvk_cpu(&delivered);
+        rsf_latencyvk_render(11);
+        require(pcl_binds==binds_before,"malformed, event-only and render calls cannot bind the calling thread");
+        check_input_registration=true;rsf_latencyvk_cpu(&e);check_input_registration=false;
+        require(pcl_bound_thread==GetCurrentThreadId(),"input sample rebind completed before pacing");
+    });sample_thread.join();
+    begin(12);
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"own ping queued before shutdown");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"ping session shutdown");
+    const auto retired_binds=pcl_binds;
+    require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"ping session reinitialized");begin(1);
+    require(pcl_binds==retired_binds+1,"reinitialization cannot retain a registration thread");
+    const auto after_restart=markers.size();begin(2);
+    require(markers.size()==after_restart,"pre-shutdown ping cannot be assigned a fresh dequeue time in new session");
+    require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"fresh post-restart ping queued");begin(3);begin(4);
+    require(markers.size()==after_restart+1&&markers.back().kind==8,"fresh post-restart ping accepted");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"ping reinitialized session retired");
     return 0;
 }
