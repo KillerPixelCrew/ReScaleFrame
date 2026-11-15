@@ -1724,3 +1724,42 @@ facts remain built work; the running game intentionally uses the restored
 working ABI1 pair. This is a failed experiment with a verified recovery, not
 FG or latency readiness. Next work must preserve working SR while fixing the
 shared input contract, retirement, screen admission and missing input pacing.
+
+### Shared DLSS input normalization correction, 15 November 2026
+
+The next question was why direct SR worked while the same camera-inclusive
+inputs failed through shared presentation. Inspection followed the resource
+creation and whole-resource copies, rather than changing vendor presets.
+The captured direct decode is R32G32_FLOAT (DXGI format16). The existing
+motion resolver records an RTX4070 Laptop experiment from4 October where
+creating that format as a shared D3D11 texture returned E_INVALIDARG.
+The transfer was trying to share the producer format unchanged. Native Skyrim
+depth is also R24G8_TYPELESS, incompatible with the transfer's R32_FLOAT depth
+destination. These are concrete contract defects; the failed November call's
+exact HRESULT was not captured, so this is not a new runtime attribution of
+every backend-9 failure.
+
+The shared DLSS route now runs the existing normalization pass even when
+camera motion is already included. It emits R16G16_FLOAT previous-minus-current
+pixel displacement and R32_FLOAT device depth in the active render rectangle.
+The adapter's canonical current-minus-previous UV scales are converted once;
+legacy unscaled NDC input follows the same half-range/Y conversion already
+used by the alternate-backend adapter. Resolved vectors keep positive inverse
+render-dimension DLSS scales, avoiding a second sign reversal.
+
+The resolver receives the actual sentinel-presence flag and current pixel
+jitter. Camera-inclusive inputs without a sentinel undergo format/unit
+conversion only: zero vectors remain valid, and camera motion is not added.
+The existing sparse path still reconstructs only explicitly unwritten samples.
+No new option, game switch or SDK ownership change was introduced.
+
+Release runtime, Skyrim adapter and focused test targets built with MSVC.
+The motion_resolve WARP check now includes R32G32 canonical motion and native
+R24G8_TYPELESS depth, a nonidentity camera matrix and a zero sentinel value
+with sentinel detection disabled. Readback verifies zero preservation,
+(-4,+4) pixel direction, R16G16/R32 output formats and depth within1e-6.
+The existing sparse/layer checks and frame_assembly contract also pass.
+No full gate or broad fixture suite was run. The working PID10028 and installed
+ABI1 DLL pair were left untouched; this correction is built/synthetic-tested,
+not a new game-tested bridge deployment. Combined SR/FG remains disabled until
+an isolated shared evaluate and retirement experiment succeeds.

@@ -2,6 +2,14 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The shared DLSS route now normalizes camera-inclusive motion/depth into
+R16G16 pixel displacement and R32 device depth before cross-API transfer.
+Actual sentinel presence preserves valid zero vectors. Focused MSVC Release
+builds and WARP numeric/format plus frame-assembly checks pass. This correction
+is not deployed: the restored working game remains untouched and cold FG
+presentation stays disabled. See the shared input correction in
+[research](research/skyrim-se-integration.md#shared-dlss-input-normalization-correction-15-november-2026).
+
 Cold FG presentation preparation is built behind the generic D3D11 host ABI2,
 with native FRAME/SUBMISSION facts and an adapter window filter. The experiment
 exposed duplicate Present interception, then failed combined DLSS SR transfer.

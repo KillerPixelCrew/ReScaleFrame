@@ -774,21 +774,26 @@ extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context_poi
 
     const BackendNeeds needs = needs_of(self.backend);
     bool resolved_motion = false;
-    if (needs.dense_motion && !camera.camera_motion_included && camera.has_motion_sentinel) {
+    // Shared D3D12 evaluation also needs copy-compatible R16G16 motion and R32 depth,
+    // even when the producer already includes camera motion in every sample.
+    const bool reconstruct_camera = !camera.camera_motion_included && camera.has_motion_sentinel;
+    if (needs.dense_motion && (reconstruct_camera || rsf_d3d11_present_host())) {
         bool rebuilt_resolve = false;
         if (!rsf::fit_motion_resolve(self.device, frame->render_width, frame->render_height, self.dense_motion,
                 self.dense_width, self.dense_height, &rebuilt_resolve))
             return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
         if (rebuilt_resolve)
-            say(self, "DLSS dense motion: explicit unwritten sentinel, preserving valid zero vectors at %ux%u",
+            say(self, "DLSS input normalization: R16G16 pixel motion and R32 depth, preserving valid zero vectors at %ux%u",
                 frame->render_width, frame->render_height);
         rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
         std::memcpy(resolve.clip_to_previous, dlss_frame.clip_to_prev_clip, sizeof(resolve.clip_to_previous));
-        // Canonical sparse inputs are current-minus-previous UV. Resolve emits previous-minus-current pixels.
-        resolve.decoded_to_pixels[0] = -float(frame->render_width) * dlss_frame.motion_scale_x;
-        resolve.decoded_to_pixels[1] = -float(frame->render_height) * dlss_frame.motion_scale_y;
-        resolve.sentinel = camera.motion_sentinel; resolve.has_sentinel = 1;
+        // Canonical inputs are current-minus-previous UV; legacy decode is NDC with Y up.
+        // Resolve emits previous-minus-current pixels, without adding camera motion to written samples.
+        resolve.decoded_to_pixels[0] = -float(frame->render_width) * dlss_frame.motion_scale_x * (motion_in_uv ? 1.0f : 0.5f);
+        resolve.decoded_to_pixels[1] = -float(frame->render_height) * dlss_frame.motion_scale_y * (motion_in_uv ? 1.0f : -0.5f);
+        resolve.sentinel = camera.motion_sentinel; resolve.has_sentinel = camera.has_motion_sentinel;
         resolve.depth_layer = frame->motion_depth_layer;
+        std::memcpy(resolve.jitter_pixels, camera.jitter_pixels, sizeof(resolve.jitter_pixels));
         if (!rsf_motion_resolve_run(self.dense_motion, context_pointer, dlss_frame.motion, dlss_frame.depth, &resolve))
             return finish(self, RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED);
         dlss_frame.motion = rsf_motion_resolve_motion(self.dense_motion);

@@ -340,7 +340,8 @@
     "second_failure": "Scene/presentation responsive, but shared-host DLSS SR backend-9/pipeline-10 and120-failure cutoff; user reported upscale unavailable",
     "recovery": "Restored pre-bridge Runtime/Entry, PID10028 successful SR; scene-20261115-190209-167-27644843-10028-1, source872, Quality1280x720 to1920x1080, result0",
     "rollback_backup": "20261115-190139-bridge-rollback",
-    "pending": "Shared SR transfer normalization, resource creation/copy/evaluate diagnosis, retained FG inputs, screen admission, missing input pacing; CS/ENB coexistence",
+    "shared_input_correction": "Built/synthetic-tested only: shared DLSS normalizes camera-inclusive vectors to R16G16 pixel displacement and R24G8 depth to R32; actual sentinel presence preserves valid zero motion; focused WARP readback and frame assembly passed; installed working pair unchanged",
+    "pending": "Shared SR game evaluation and retirement validation, retained FG inputs, screen admission, missing input pacing; CS/ENB coexistence",
     "evidence": "docs/research/skyrim-se-integration.md#cold-presentation-bridge-experiment-and-sr-rollback-15-november-2026"
   },
   "source_present_association": {
