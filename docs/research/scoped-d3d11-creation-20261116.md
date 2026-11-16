@@ -641,3 +641,34 @@ No further concrete shared repair is established by this review. The worker
 changed this research note only, with `git diff --check` passing and no build,
 device/game run, deployment or commit. Source remains frozen for coordinator
 selection of the bounded foreground/output acceptance condition.
+
+
+### Verified deployment and refused foreground validation, 16 November 2026
+
+The coherent production batch was committed and pushed as
+`06f92dc467d2a6944fd123016cfecc7389b2df4e`. The previously recorded Release
+219-pass/15-skipped gate, focused regressions and bounded ENB SR/tagging/normal
+close evidence apply within their stated limits; generated FG remains unaccepted.
+
+The optional controller foreground validation ran as PID44004 in
+`input-acceptance-20261116-023121`, with controller log
+`verified-foreground-game-20261116.log`. Direct OS samples remained WindowsTerminal
+PID35804, despite supported activation requests. The controller refused before
+FG apply: foreground_accepted=false and observation_completed=false. Game exit
+was zero and all four temporary replacements were restored. This is a correctly
+refused foreground experiment, not another background FG acceptance or new
+provider-inactivity result. No speculative focus workaround was added.
+
+The same verified build was then permanently deployed with backups and hash
+receipt `.local/skyrim-research/deploy-verified-20261116-023251/deploy.json`.
+Runtime SHA256 is
+`1b7ce92a78b863ad7d37112585d7ef9e0118e851809884ea8fd4eb242820c15b`;
+Entry SHA256 is
+`a2a3bc9b92138c0ec76d0d32e54539daf48241fba8d8927102e343f1954373be`.
+The carrier remains
+`8ac3813eb170570817011a3c4c949d841d223a1944450126a6267357f292b66d`;
+settings were unchanged. Deployment is distinct from foreground/output acceptance.
+The coordinator has requested user assistance for focus and human Nexus
+verification or the actual archives. Those requirements and actual generated
+output remain unresolved. This append is documentation only, checked with
+`git diff --check`; no worker source/test change, experiment or deployment occurred.
