@@ -1,6 +1,6 @@
 ---
 name: game-render-analysis
-description: Integrate or investigate ReScaleFrame rendering, auditing shader inputs, temporal coverage, render passes and engine hook sites. Use for SR/FG/latency integrations, executable analysis, bounded frame captures, upscaler defects and graphics interoperability. Route Unreal 4 and TrueSky details to their repository skills.
+description: Integrate or investigate ReScaleFrame rendering through complete reference inventories, shader and buffer audits, verified engine producers and bounded captures. Use for SR/FG/latency integrations, executable analysis, upscaler defects and graphics interoperability. Route Unreal 4 and TrueSky details to their repository skills.
 license: GPL-3.0-only
 ---
 
@@ -32,6 +32,22 @@ For the matched 4.18 branch and AC7 private implementation, use
 use [truesky-render-integration](../truesky-render-integration/SKILL.md).
 
 ## Work backward to the producer
+
+### Inventory the working implementation before adapting it
+
+For a new integration or a requested full audit, read
+[reference and shader audit](references/reference-and-shader-audit.md). Record the complete
+reference implementation and consumed dependencies at pinned revisions before choosing its
+integration architecture. Include engine preparation, shader changes, intermediate resources,
+post-processing, failure recovery, UI, input, lifecycle and presentation. Compare each mechanism
+with RSF and retain missing or unverified items as work, rather than treating a few matching
+hooks or a successful SDK dispatch as parity. Reuse this inventory until source changes or
+contradictory evidence require review.
+
+Verify executable-dependent claims against the matched binary and native shader bytecode.
+Use REA for native semantics and preserve its actual evidence or failure; independent
+disassembly is useful evidence but must not be described as successful REA decompilation.
+Related engines and anniversary updates supply search leads, not verified ABI or render order.
 
 ### Audit shader inputs as part of every integration
 
@@ -66,6 +82,11 @@ Before calling an integration complete, account for the audit's missing buffers,
 vectors and coverage gaps. Fix verified defects within the requested integration;
 unsupported paths need an explicit native path/refusal and a recorded limitation.
 Do not ask the user for a symptom as a prerequisite to this general audit.
+Cover all participating VS/HS/DS/GS/PS/CS stages and variants, including generated and
+compute-deformed inputs. A full bytecode inventory is not complete runtime coverage: resolve
+actual bindings, writes, history owners and late consumers. Required shader or buffer repairs
+remain completion blockers until implemented and validated; do not close them with zero
+vectors, current-as-previous data, or stationary-only captures.
 
 Use a draw, dispatch, shader or final image to find the affected data. Walk callers, dependencies
 and resource ownership back to the subsystem that creates the state. Determine where resolution,
@@ -109,6 +130,10 @@ module, announce success/refusal and document restoration/lifetime. Never bypass
 
 ## Capture the active path
 
+Capture the actual evaluation handoff. Preparation-only calls must not consume its request;
+check the saved source/view, render/output rectangles, resources and matched Present before
+relating a capture to a user image. A partial or different-frame capture is narrower evidence.
+
 Choose existing bounded instrumentation when an external debugger cannot capture the active
 upscaler. AC7 F9 already records raw colour/depth/motion, constants, shaders/bindings and native
 metadata. Check enabled settings, captured images and completeness before asking the user to
@@ -124,6 +149,11 @@ shader stages, SRV slots, deferred/RHI work, UAVs and constants. The XML parser 
 timeline, not a complete state model. Separate sessions and report drops, resets and effective settings.
 
 ## Preserve temporal, colour and execution contracts
+
+Preflight recovery before committing reduced native rendering. After commitment, a failed or
+skipped SR call cannot be assumed to produce a correct full-size native frame. Trace its
+reconstruction, geometry, viewport and downstream state through the last real consumer, then
+validate both success and failure paths. Report spatial recovery separately from vendor SR.
 
 Record motion bias/scale, direction, units, camera inclusion, jitter and unwritten encoding.
 Test validity before decoding; decoded zero can be valid motion. Depth/camera reprojection
