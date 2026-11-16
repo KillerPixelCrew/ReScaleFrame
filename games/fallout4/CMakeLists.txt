@@ -8,3 +8,8 @@ target_include_directories(rsf_game_fallout4 PRIVATE
 target_link_libraries(rsf_game_fallout4 PRIVATE ReScaleFrame::GameSDK
     ReScaleFrame::RuntimeCommon rsf_steam_d3d11_chain minhook rsf_build_options)
 set_target_properties(rsf_game_fallout4 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Fallout4")
+
+# Debug deployment set: the shared carrier embeds the game ABI too.
+if(MSVC)
+    add_custom_target(rsf_fallout4_trial DEPENDS rsf_game_fallout4 rsf_orchestrator rsf_proxy_plugin)
+endif()

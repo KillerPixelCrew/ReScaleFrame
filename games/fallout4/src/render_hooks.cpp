@@ -39,6 +39,9 @@ DynamicResolution dynamic_resolution{};
 decltype(&rsf_d3d11_host_upscale_auxiliaries) upscale_auxiliaries{};
 decltype(&rsf_d3d11_host_restore_auxiliaries) restore_auxiliaries{};
 decltype(&rsf_d3d11_host_reduced_frame) reduced_frame{};
+decltype(&rsf_d3d11_host_capture_texture) capture_texture{};
+using CaptureRequested = int (*)();
+CaptureRequested capture_requested{};
 rsf_game_host_services host{};
 std::atomic<bool> live{};
 std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{}, recoveries{};
@@ -80,7 +83,7 @@ struct Entry {
     ~Entry() { entered.fetch_sub(1, std::memory_order_acq_rel); }
 };
 bool same_source() {
-    return world.cpu.session == host.session_id && cpu_source_is_current(world.cpu);
+    return world.cpu.session == host.session_id && render_source_is_current(world.cpu);
 }
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
@@ -405,6 +408,7 @@ bool emit_sr() {
     auto fg = pass;
     screen_facts(fg,true);
     if (world.screen.refusals || world.screen.screen!=RSF_SCREEN_GAMEPLAY || !same_source()) return false;
+    pass.screen = fg.screen; // SR and diagnostic consumers receive the same verified screen fact.
     fg.role = RSF_GAME_RENDER_FG_INPUTS;
     notify(fg, inputs.context.Get(), 1);
     notify(fg, inputs.context.Get(), 0);
@@ -594,7 +598,7 @@ void observe_prepass() {
         (void)capture_native_raster(identity,world.raster_snapshot,report);
         NativeDepthSnapshot snapshot{};
         if (capture_native_depth_domains(identity, snapshot, report) &&
-            cpu_source_is_current(identity) && same_source()) {
+            render_source_is_current(identity) && same_source()) {
             world.depth_snapshot = snapshot;
         } else {
             world.refused = true;
@@ -662,8 +666,23 @@ bool observe_taa(void* effect) {
     Entry entry;
     const auto result = taa_active(effect);
     const auto error = GetLastError();
-    const bool excluded = world.in_imagespace && world.full_output_resolved &&
+    const bool owner_current = world.in_imagespace && world.full_output_resolved &&
         (world.raster_snapshot.raster_valid ? native_raster_snapshot_current(world.raster_snapshot) : same_source());
+    const bool excluded = owner_current;
+    // One receipt per observed gate combination, not an unbounded frame log.
+    const unsigned key=unsigned(result) | (unsigned(world.in_imagespace)<<1) |
+        (unsigned(world.full_output_resolved)<<2) | (unsigned(world.published)<<3) | (unsigned(excluded)<<4);
+    static std::atomic<uint32_t> receipts{};
+    if (!(receipts.fetch_or(uint32_t(1)<<key,std::memory_order_relaxed)&(uint32_t(1)<<key))) {
+        char text[400]{};
+        std::snprintf(text,sizeof(text),
+            "Fallout4 TAA gate source=%llu native=%llu original=%u imagespace=%u full_output=%u temporal=%u owner_current=%u native_taa_runs=%u recovery=%llu",
+            static_cast<unsigned long long>(world.cpu.source),
+            static_cast<unsigned long long>(world.frame_pass.native_frame),unsigned(result),unsigned(world.in_imagespace),
+            unsigned(world.full_output_resolved),unsigned(world.published),unsigned(owner_current),unsigned(result && !excluded),
+            static_cast<unsigned long long>(world.recovery_token));
+        report(text);
+    }
     SetLastError(error);
     return result && !excluded;
 }
@@ -685,6 +704,24 @@ void observe_native_present(void* renderer) {
             current.frame==world.frame_pass.native_frame &&
             current.view==world.frame_pass.view_key && current.window==world.frame_pass.window_key &&
             current.context==uintptr_t(world.context.Get()) && current.chain==uintptr_t(world.chain.Get());
+        // Preserve failed reduced-frame output for diagnostics independently of
+        // temporal/FG admission. The runtime rechecks the exact capture identity.
+        if (matched && world.recovery_committed && capture_texture && capture_requested &&
+            capture_requested() && native_raster_snapshot_current(world.raster_snapshot)) {
+            NativeFramebuffer observed;
+            if (read_native_framebuffer(observed,report) && observed.native_frame==world.frame_pass.native_frame &&
+                observed.window_key==world.frame_pass.window_key && observed.context.Get()==world.context.Get() &&
+                same_object(observed.chain.Get(),world.chain.Get())) {
+                rsf_d3d11_host_capture capture{};
+                capture.struct_size=sizeof(capture); capture.abi_version=RSF_D3D11_HOST_ABI_VERSION;
+                capture.session_id=world.cpu.session; capture.native_frame=world.frame_pass.native_frame;
+                capture.view_key=world.frame_pass.view_key; capture.texture=observed.texture.Get();
+                capture.name="recovery_native_output";
+                capture.description="Native framebuffer before Present after reduced rendering; no temporal or FG admission implied";
+                capture.view=0; capture.scale=1;
+                (void)capture_texture(host.user,observed.context.Get(),&capture);
+            }
+        }
         if (matched && same_source()) {
             // Earlier refusal stays sticky. No additional source is minted for retries.
             if (world.inputs) screen_facts(world.pass,false);
@@ -772,6 +809,8 @@ bool prepare_render_hooks(const rsf_game_host_services& services) {
     upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_upscale_auxiliaries"));
     restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_restore_auxiliaries"));
     reduced_frame=reinterpret_cast<decltype(reduced_frame)>(GetProcAddress(runtime,"rsf_d3d11_host_reduced_frame"));
+    capture_texture=reinterpret_cast<decltype(capture_texture)>(GetProcAddress(runtime,"rsf_d3d11_host_capture_texture"));
+    capture_requested=reinterpret_cast<CaptureRequested>(GetProcAddress(runtime,"rsf_input_dump_requested"));
     // Independent export negotiation. An older runtime retains native raster.
     if (!upscale_auxiliaries || !restore_auxiliaries || !services.render_config) return false;
     std::array<Hook*, sizeof(hooks) / sizeof(hooks[0])> created{};

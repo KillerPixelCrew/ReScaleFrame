@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Native-first validation active: reduced recovery built and generic-device-tested, undeployed at this freeze; PID56312 flicker/visual defects and three partial captures remain rejected. No moving/shader/TAA-history/stable-FG/end-to-end latency acceptance; compatibility deferred, readiness0",
+  "status": "Native-first validation active: provider-concurrency/reduced-recovery build deployed in PID47776; user rejects repeated SR dropout/jitter, temporal and spatial recovery alternate. Exit0/method unverified,21of21 restored. PID56312 FG flicker also remains rejected. No moving/shader/TAA-history/stable-FG/end-to-end latency acceptance; compatibility deferred, readiness0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -72,6 +72,19 @@
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
   "validation": {
+    "native_recovery_dropout_trial": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-202630-191",
+      "source_commit": "4b2fa3643617f5db996dc270c8381b50718b9d04",
+      "pid": 47776,
+      "runtime_sha256": "E2C4958ADA60BDC04ADA49A4AB1B9F268FC813F436B1ED420949A3154B9309D9",
+      "entry_sha256": "9B5C79DF0B2DD2E5036B5DF1CC71BBCFF8773B1A124030B8746B40849F8D4E1F",
+      "scope": "Direct native launch, module absence checks exclude F4SE/non-systemD3D11/launcher; Quality1 requested with FG and latency Off",
+      "observed": "Final3824 evaluated/778 refused;668 logged SR-10 transitions followed by0,575 on immediately next native frame. Bounded recovery rows21temporal/11spatial. Transition counts are not a per-frame failure rate",
+      "diagnostics": "Source1574 predecessorPresent pending20ms then shared token absent; five worker callback phases term14 mode0/copied joining0. Source proves possible stale join snapshot race, not every dropout cause",
+      "visual_result": "FAILED: user reports repeated SR dropout causing jitter; no complete matched final capture or moving input evidence",
+      "close": "Exit0 before world handoff completed, root sent no close action, method unverified. Controller restoredtrue, independent21of21 original hashes/absences verified, ENB restored, custom INI unchanged",
+      "research": "docs/research/fallout4-sr-dropout-20261116.md"
+    },
     "generic_provider_concurrency": "Copied status/lifetime and DLSS invalidation fixes passed Release225/14,239total112.89seconds,Rust clean, explicit concurrent snapshot/hidden SDK marker/shared-SR recovery fixtures. RuntimeE2C4958ADA60BDC04ADA49A4AB1B9F268FC813F436B1ED420949A3154B9309D9,Entry9B5C79DF...,fresh Rust panelEBEA30F0... built but undeployed; initial missing-panel failure retained and resolved with actual panel path. Equivalent FSR/XeSS mutation paths remain separate work; no flicker causation or native acceptance. See docs/research/provider-status-worker-lifetime-audit-20261116.md",
     "native_intention_fg_trial": {
       "receipt": ".local/fallout4-research/native-raster-20261116-192707-484",
@@ -948,5 +961,124 @@
     "evidence": "Source and bytecode inventory plus fresh matched-EXE REA/IDA triangle, UpdateDR, PreUI and composite evidence; no reference execution or new game acceptance",
     "remaining": "Same-source failed reduced evaluation and active bind/history census, necessary producer/shader/buffer and consumer repairs, moving/all-quality/failure validation, native FG/latency, then F4SE/ENB compatibility"
   },
-  "native_motion_history_research": "docs/research/fallout4-native-motion-history-producers-20261116.md"
+  "native_motion_history_research": "docs/research/fallout4-native-motion-history-producers-20261116.md",
+  "sr_join_snapshot_correction": {
+    "research": "docs/research/fallout4-sr-dropout-20261116.md",
+    "scope": "Exact selected worker/predecessor join revalidation after stale mode comparison",
+    "game_tested": true,
+    "visual_acceptance": false,
+    "trial": ".local/fallout4-research/native-raster-20261116-204917-056",
+    "result": "User rejected Quality1; dropout and consumer-begin mode0 refusal persist. Partial capture, C0000005 on agent-requested window close, controller restored deployment.",
+    "cancellation_followup": {
+      "built": true,
+      "synthetic_test": "Cross-thread QUIESCE abort visible before RESERVE callback return; reservation and worker contracts passed",
+      "deployed": true,
+      "deadline_removed": true,
+      "trial": ".local/fallout4-research/native-raster-20261116-210310-776",
+      "result": "User reports improved rendering then backend-switch hang; dump retained; exit0 and restoration reported, termination method unknown"
+    },
+    "latest_trial": {
+      "report": ".local/fallout4-research/native-raster-20261116-210904-445",
+      "backend_switch_user_accepted": true,
+      "reduced_sr_user_accepted": false,
+      "fg_validated": false,
+      "capture_complete": false
+    }
+  },
+  "sr_timing_reread_repair": {
+    "evidence": ".local/fallout4-research/native-raster-20261116-212821-694",
+    "native_frame": 2739,
+    "changed_mask": "0x200",
+    "field": "delta_seconds",
+    "before_ms": 18,
+    "after_ms": 34,
+    "built": true,
+    "synthetic_tested": true,
+    "deployed": true,
+    "trial": ".local/fallout4-research/native-raster-20261116-214152-765",
+    "remaining": "Depth-producer lease refusal; three automatic spatial-recovery bundles retained",
+    "visual_acceptance": false
+  },
+  "latest_sr_fg_trial": {
+    "report": ".local/fallout4-research/native-raster-20261116-222102-566",
+    "evaluated_presented_sources": [
+      743,
+      744,
+      745,
+      746
+    ],
+    "fg_active_samples": 32,
+    "total_pan_samples": 32,
+    "fg_motion_user_accepted": true,
+    "user_feedback": "No need getting caught up in tests. It works.",
+    "render": [
+      1707,
+      1067
+    ],
+    "output": [
+      2560,
+      1600
+    ],
+    "acceptance_scope": "Tested DLSS SR/FG moving scene; general shader and lifecycle coverage remains separately tracked"
+  },
+  "latest_xess_switch_trial": {
+    "report": ".local/fallout4-research/native-raster-20261116-233325-367",
+    "pid": 50264,
+    "repair": "Exact RSF facade dispatch before Steam global Present lock; physical receivers retain Steam handler",
+    "built": true,
+    "game_observed": true,
+    "tagged_frames": 784,
+    "output_presents": 1602,
+    "base_fps": 28,
+    "output_fps": 56,
+    "xell_sleep_calls": 950,
+    "off_and_back_observed": true,
+    "visual_acceptance": false,
+    "autocapture": false
+  },
+  "latest_xess_performance_trial": {
+    "report": ".local/fallout4-research/native-raster-20261116-233650-937",
+    "repair": "Normalize physical VSync interval3 to1 for active FG/XeLL",
+    "built": true,
+    "game_observed": true,
+    "base_fps": 82,
+    "output_fps": 164,
+    "fg_active": true,
+    "user_feedback": "Much better now.",
+    "controlled_benchmark": false,
+    "autocapture": false
+  },
+  "sr_fg_trial_history_before_motion_fix": {
+    "report": ".local/fallout4-research/native-raster-20261116-215357-561",
+    "consecutive_complete_sr_frames": [
+      1398,
+      1399,
+      1400,
+      1401
+    ],
+    "sr_history_resets": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "render": [
+      1707,
+      1067
+    ],
+    "output": [
+      2560,
+      1600
+    ],
+    "fg_static_active": true,
+    "fg_motion_user_accepted": false,
+    "pending_fix": "Post-consumption queue tail mistaken for consumed sample identity; built, undeployed"
+  },
+  "latest_user_acceptance": {
+    "trial": ".local/fallout4-research/native-raster-20261116-233650-937",
+    "pid": 15252,
+    "feedback": "Everything seems to work perfectly fine now.",
+    "scope": "Running SR/FG build with Steam Present lock and physical interval corrections",
+    "additional_xell_settings_guard_deployed": false
+  }
 }

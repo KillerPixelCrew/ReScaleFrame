@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <thread>
 namespace {
 int failures{};
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %d: %s\n", __LINE__, #x); ++failures; } } while (false)
@@ -361,11 +362,17 @@ int main() {
     CHECK(!send(backwards));
     auto crosses_end = actual_begin; crosses_end.timestamp_qpc = 181;
     CHECK(!send(crosses_end));
-    CHECK(send(actual_begin) && delivered.size() == derived_delivered);
+    CHECK(rsf_native_cpu_marker(6,0)==-1); // derived bookkeeping cannot authorize a marker
+    CHECK(send(actual_begin) && delivered.size() == derived_delivered+1);
+    CHECK(!(delivered.back().flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(rsf_native_cpu_marker(6,0)==1);
+    CHECK(rsf_native_cpu_marker(6,1)==-1);
     CHECK(rsf_native_cpu_read(session, 6, &frame) && frame.timestamps_qpc[2] == 172 &&
         (frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY)); // end remains derived
     auto actual_end = fact(6, RSF_GAME_CPU_SIMULATION_END, 181); actual_end.flags = 0;
-    CHECK(send(actual_end) && delivered.size() == derived_delivered);
+    CHECK(send(actual_end) && delivered.size() == derived_delivered+2);
+    CHECK(!(delivered.back().flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(rsf_native_cpu_marker(6,1)==1);
     CHECK(rsf_native_cpu_read(session, 6, &frame) && frame.timestamps_qpc[3] == 181 &&
         !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
     CHECK(send(fact(6, RSF_GAME_CPU_FRAME_END, 182)));
@@ -405,6 +412,40 @@ int main() {
     CHECK(rsf_native_cpu_read(session, 11, &frame) && frame.timestamps_qpc[2] == 282 &&
         !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
     CHECK(send(fact(11, RSF_GAME_CPU_FRAME_END, 292)));
+    rsf_native_cpu_release();
+    // Main must be able to cancel a reservation while its worker callback is
+    // still waiting. No ledger lock may be held across that callback.
+    rsf_native_cpu_rendered_source_set(0);
+    CHECK(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN, 10)));
+    struct Cancellation {
+        HANDLE entered=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+        HANDLE cancelled=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+        bool observed=false;
+        int accepted=0;
+    } cancellation;
+    CHECK(cancellation.entered && cancellation.cancelled);
+    if (cancellation.entered && cancellation.cancelled) {
+        std::thread waiting([&] {
+            auto event=source_fact(2,RSF_GAME_CPU_SOURCE_RESERVE,20,1);
+            event.header.flags=RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR;
+            cancellation.accepted=rsf_native_cpu_dispatch(&event.header,
+                [](void* context,const rsf_game_cpu_event*) {
+                    auto& value=*static_cast<Cancellation*>(context);
+                    SetEvent(value.entered);
+                    if (WaitForSingleObject(value.cancelled,2000)==WAIT_OBJECT_0)
+                        value.observed=read(2).state==RSF_NATIVE_CPU_RESERVATION_ABORTED;
+                },&cancellation);
+        });
+        CHECK(WaitForSingleObject(cancellation.entered,2000)==WAIT_OBJECT_0);
+        auto abort=source_fact(2,RSF_GAME_CPU_SOURCE_ABORT,21);
+        abort.reason=RSF_GAME_CPU_ABORT_QUIESCE;
+        CHECK(rsf_native_cpu_dispatch(&abort.header,[](void*,const rsf_game_cpu_event*) {},nullptr));
+        SetEvent(cancellation.cancelled);
+        waiting.join();
+        CHECK(cancellation.accepted && cancellation.observed);
+    }
+    if (cancellation.entered) CloseHandle(cancellation.entered);
+    if (cancellation.cancelled) CloseHandle(cancellation.cancelled);
     rsf_native_cpu_release();
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

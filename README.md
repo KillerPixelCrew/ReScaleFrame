@@ -159,5 +159,4 @@ instructions, controls, requirements and package-specific information.
 ## License
 
 First-party code is [GPL-3.0-only](LICENSE), except the [MIT Game SDK](sdk/game/LICENSE).
-The [managed Vulkan migration](runtime/managed/NOTICE.md) retains its original notices and
-license terms. Vendor runtimes and other dependencies retain their own licenses.
+Vendor runtimes and other dependencies retain their own licenses.

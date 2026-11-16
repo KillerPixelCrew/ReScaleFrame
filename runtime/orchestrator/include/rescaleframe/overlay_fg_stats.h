@@ -11,10 +11,21 @@
 #include <rescaleframe/overlay.h>
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/d3d11_present_bridge.h>
 
 static inline void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf_native_fg_status* fg)
 {
+    rsf_native_latency_status latency = {0}; latency.struct_size = sizeof(latency); latency.version = 1;
+    if (rsf_native_latency_status_get(&latency)) stats->pcl_available = latency.pcl_available;
+    rsf_native_input_receipts receipts = {0}; receipts.struct_size = sizeof(receipts); receipts.version = 1;
+    if (rsf_native_input_receipts_get(&receipts)) {
+        for (unsigned i = 0; i < 3; ++i) stats->input_receipts[i] = receipts.input_kinds[i];
+    }
+    rsf_native_input_routes routes = {0}; routes.struct_size = sizeof(routes); routes.version = 1;
+    if (rsf_native_input_routes_get(&routes)) {
+        stats->pcl_routed = routes.routed; stats->pcl_failed = routes.failed; stats->pcl_unmatched = routes.unmatched;
+    }
     const rsf_fg_choice choice = rsf_fg_choice_get();
     stats->fg_backend = rsf_d3d11_present_has_owner() ? rsf_d3d11_present_backend() : 0;
     stats->fg_requested_backend = choice.backend;

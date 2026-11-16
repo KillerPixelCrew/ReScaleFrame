@@ -644,6 +644,23 @@ public:
     // Physical Present and the provider callbacks around it, after the frame's list was submitted.
     HRESULT present_physical(rsf_observer_present_event& event, UINT sync, UINT physical_flags, std::array<uint64_t, 6>& ticks) {
         switch_receipt("physical-enter");
+        // Multi-refresh intervals throttle generated output as well as real frames.
+        // XeLL requires interval 1 when VSync is enabled; DLSS-G also clamps it.
+        // Preserve the application's VSync choice while normalizing its cadence
+        // at the owned physical chain, after current-frame provider preparation.
+        if (sync > 1 && provider) {
+            rsf_fg_status state{}; state.struct_size = sizeof(state);
+            if (backend_api(provider_backend)->status(provider, &state) == RSF_BACKEND_OK &&
+                (state.effective_mode != RSF_FG_OFF ||
+                 (state.pacing_owner == RSF_PACING_XELL && state.effective_reflex != RSF_REFLEX_OFF))) {
+                if (last_normalized_sync != sync) {
+                    char message[160];
+                    std::snprintf(message, sizeof(message), "Physical Present interval normalized: requested=%u effective=1 backend=%u for FG/latency pacing", sync, provider_backend);
+                    log(message); last_normalized_sync = sync;
+                }
+                sync = 1;
+            }
+        }
         const bool common = host && active_backend.load() != RSF_FG_BACKEND_DLSS;
         if (common && rsf_streamline_host_present_common(host, physical.Get(), sync, physical_flags, 1) != RSF_BACKEND_OK) {
             log("presentation bridge: shared Streamline common Present begin refused"); return E_FAIL;
@@ -665,6 +682,7 @@ public:
         switch_receipt("retire-done");
         return result;
     }
+    UINT last_normalized_sync = 0;
     void notify_presented(rsf_observer_present_event& event, HRESULT result) {
         event.completed = 1; event.result = result;
         rsf_observer_notify_application_present(&event);
@@ -1316,6 +1334,12 @@ extern "C" int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rs
 extern "C" int32_t rsf_d3d11_present_acquire(uint64_t id) {
     return with_provider([&](const rsf_generation_provider*, void*, rsf_streamline_host* host) -> int32_t {
         return host ? rsf_streamline_host_acquire(host, id) : RSF_BACKEND_OK;
+    });
+}
+extern "C" int32_t rsf_d3d11_present_receipt(uint64_t generation,uint64_t id,uint32_t kinds,uint32_t message) {
+    return with_provider([&](const rsf_generation_provider*,void*,rsf_streamline_host* host) -> int32_t {
+        if (generation!=chain_generation.load() || !host) return RSF_BACKEND_ERROR_NOT_READY;
+        return rsf_streamline_host_input(host,id,kinds,message);
     });
 }
 extern "C" int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message) {

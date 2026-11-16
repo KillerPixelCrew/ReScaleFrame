@@ -302,6 +302,17 @@ typedef struct rsf_game_cpu_source_event {
 /* Size of the first version of rsf_game_cpu_source_event, before poll_begin_qpc. */
 #define RSF_GAME_CPU_SOURCE_EVENT_SIZE_1 (sizeof(rsf_game_cpu_event) + 24u)
 
+/* Actual receipt only, never sampled frame input. Uses the existing INPUT_EVENT
+   callback with source_frame_id=0 and INPUT_UNFRAMED. Receipt IDs are nonzero
+   monotonically allocated within one session; duplicate reports keep their ID.
+   window_key is the actual message HWND, or zero when no target was observed. */
+#define RSF_GAME_CPU_EVENT_VERSION_RECEIPT 3u
+typedef struct rsf_game_cpu_receipt_event {
+    rsf_game_cpu_event header;
+    uint64_t receipt_id;
+    uint64_t window_key;
+} rsf_game_cpu_receipt_event;
+
 /* Synchronous replacement of an engine upscale. Zero accepts the replacement only after the
    host has recorded a complete output. Any other result leaves native evaluation enabled.
    D3D12 inputs are NON_PIXEL_SHADER_RESOURCE and output is COPY_DEST during this callback. The
