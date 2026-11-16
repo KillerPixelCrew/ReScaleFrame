@@ -1034,3 +1034,26 @@ Quality requests deferred at foreground0 are not acceptance; the later
 mirror/character scene retained native processing. Root Alt+F4 reproduced
 4CB273/null50/C0000005 with F4SE/ENB absent. The controller restored21/21 files,
 including the quarantined ENB proxy, with byte-identical custom INI.
+
+## Complete reference and shader inventory checkpoint
+
+The coordinator reconciled the complete pinned CS ownership inventory with an
+independent source-only Claude inventory. See the
+[root comparison](fallout4-community-shaders-inventory-root-20261116.md),
+[independent inventory](fallout4-community-shaders-inventory-claude-20261116.md)
+and [full shader/buffer audit](fallout4-full-shader-buffer-audit-20261116.md).
+All640 parent regular-file hashes and four initialized gitlink revisions were
+checked. The source/bytecode audit covers3939 native records and retains138
+unnamed HS/DS plus active binding/history gaps. Root also used fresh matched-EXE
+REA/IDA analysis to verify dynamic half-UV production, UpdateDR/PreUI ordering
+and composite branches. No reference code was executed or copied.
+
+This corrects the earlier narrow reference study: composite/SSLR scopes,
+lens-flare depth, unscaled offscreen/menu views, shader precision/mip bias,
+transform history and committed reduced-frame recovery must all be accounted
+for. The source differences are a repair/evidence queue, not proof that each
+reference mechanism must be copied. User-rejected native Quality1 remains a
+failed visual result. Pending generic capture/status correction and bounded
+CPU/reduced-scope diagnostics are not an SR image repair or new acceptance.
+Native-only integration and its required shader/buffer work remain first, with
+mod compatibility deferred until that phase passes.

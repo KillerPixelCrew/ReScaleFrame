@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <intrin.h>
+#include <d3d11.h>
+#include <cstdio>
 
 namespace rsf::fallout4 {
 namespace {
@@ -74,6 +76,56 @@ bool triangles_current() noexcept {
         !std::memcmp(triangles,state.triangles,sizeof(triangles));
 }
 }
+void report_resolution_state(ResolutionStage stage,const rsf_game_render_pass& pass,void* context,
+    bool published,int32_t result,void (*report)(const char*)) noexcept try {
+    if (!report || !pass.source_frame_id) return;
+    const auto saved_error=GetLastError();
+    struct LastError { DWORD value; ~LastError() { SetLastError(value); } } last_error{saved_error};
+    struct Receipt { uint64_t session{},source{}; uint32_t sources{},stages{}; bool ordinary{}; };
+    thread_local Receipt receipt;
+    const bool reduced=(state.input && (state.input_ratio[0]<1 || state.input_ratio[1]<1)) ||
+        (pass.camera.render_width && pass.camera.output_width && pass.camera.render_width<pass.camera.output_width) ||
+        (pass.camera.render_height && pass.camera.output_height && pass.camera.render_height<pass.camera.output_height) ||
+        (receipt.session==pass.session_id && receipt.source==pass.source_frame_id);
+    if (!reduced) return; // Native-quality startup cannot consume reduced-source receipts.
+    constexpr const char* names[]{"pre-sr","output-ready","evaluated","effects-return","hudless","ui-return","ui-restored","source-retired"};
+    const auto index=static_cast<unsigned>(stage);
+    if (index>=sizeof(names)/sizeof(names[0])) return;
+    if (receipt.session!=pass.session_id || receipt.source!=pass.source_frame_id) {
+        receipt.session=pass.session_id; receipt.source=pass.source_frame_id; receipt.stages=0; receipt.ordinary=receipt.sources++<4;
+    }
+    if ((!receipt.ordinary && pass.native_frame%128) || (receipt.stages&(1u<<index))) return;
+    static std::atomic<uint32_t> ordinary_rows{},sampled_rows{};
+    auto& budget=receipt.ordinary ? ordinary_rows : sampled_rows;
+    if (budget.fetch_add(1,std::memory_order_relaxed)>=32) return;
+    receipt.stages|=1u<<index;
+    const auto targets=image()+targets_rva;
+    float ratio[2]{},raster[6]{}; unsigned char viewport{},active{},partial{};
+    uint32_t frame{},dirty{}; uintptr_t manager{},geometry[3]{};
+    const bool scalars=read(targets+0xfb8,ratio) && read(targets+0xfe4,viewport) && read(targets+0xfe5,active) &&
+        read(image()+state_rva+0x98,frame) && read(image()+0x3e5e4b0,manager) && manager &&
+        read(manager+0x48,partial) && read(manager+0x28,geometry[0]) && read(manager+0x38,geometry[1]) && read(manager+0x40,geometry[2]);
+    const bool owner=current_owner(true) && context && uintptr_t(context)==state.device_context;
+    const bool shadow=owner && read(state.context+0x1b70+0x90,raster) && read(state.context+0x1b70,dirty);
+    UINT count{}; D3D11_VIEWPORT actual{}; bool rs{};
+    // No resource operation or off-thread query. Unknown owners remain unknown.
+    if (owner) {
+        auto* device_context=static_cast<ID3D11DeviceContext*>(context);
+        device_context->RSGetViewports(&count,nullptr);
+        if (count==1) { UINT capacity=1; device_context->RSGetViewports(&capacity,&actual); rs=capacity==1; }
+    }
+    char text[1700]{};
+    std::snprintf(text,sizeof(text),
+        "Fallout4 reduced-stage=%s session=%llu source=%llu native=%llu/%u result=%d result_is_evaluation=%u published=%u scope=%u/%u changed=%u scalar_read=%u owner=%u input_ratio=%g,%g current_ratio=%g,%g viewport=%u active=%u partial=%u geometry=%p,%p,%p shadow_read=%u shadow=%g,%g,%g,%g,%g,%g dirty=0x%x rs_count=%u rs_read=%u rs=%g,%g,%g,%g,%g,%g camera=%ux%u->%ux%u context=%p",
+        names[index],static_cast<unsigned long long>(pass.session_id),static_cast<unsigned long long>(pass.source_frame_id),static_cast<unsigned long long>(pass.native_frame),frame,
+        result,unsigned(stage==ResolutionStage::evaluated),unsigned(published),unsigned(state.input),unsigned(state.output),unsigned(state.changed),unsigned(scalars),unsigned(owner),
+        double(state.input_ratio[0]),double(state.input_ratio[1]),double(ratio[0]),double(ratio[1]),unsigned(viewport),unsigned(active),unsigned(partial),
+        reinterpret_cast<void*>(geometry[0]),reinterpret_cast<void*>(geometry[1]),reinterpret_cast<void*>(geometry[2]),unsigned(shadow),
+        double(raster[0]),double(raster[1]),double(raster[2]),double(raster[3]),double(raster[4]),double(raster[5]),dirty,count,unsigned(rs),
+        double(actual.TopLeftX),double(actual.TopLeftY),double(actual.Width),double(actual.Height),double(actual.MinDepth),double(actual.MaxDepth),
+        pass.camera.render_width,pass.camera.render_height,pass.camera.output_width,pass.camera.output_height,context);
+    report(text);
+} catch (...) {}
 bool verify_resolution() noexcept {
     constexpr unsigned char taa[]{0x83,0xb9,0xac,0,0,0,0};
     constexpr unsigned char jitter[]{0xf3,0x0f,0x11,0x7f,0x04,0xf3,0x0f,0x11,0x5f,0x08};

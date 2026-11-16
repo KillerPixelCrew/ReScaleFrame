@@ -7,6 +7,23 @@ explicit direct-executable/module-absence proof recorded for PID64940. Compatibi
 is deferred until native validation passes, not dropped. No further ENB trials
 are scheduled in the native phase.
 
+The complete Community Shaders ownership inventory and independent Claude
+inventory now cover pinned revision e0e7115 and all four consumed dependencies.
+The [reconciled inventory](research/fallout4-community-shaders-inventory-root-20261116.md)
+records supporting passes, shader changes and recovery beyond the SR call.
+The [shader/buffer audit](research/fallout4-full-shader-buffer-audit-20261116.md)
+accounts for3939 native records, including138 unnamed HS/DS, with explicit
+motion/history gaps and required producer/binding work. This is offline source
+and bytecode evidence, not moving-game or reduced-quality acceptance. Fresh
+REA/IDA checks verify triangle production, native order and composite branches.
+The shared skill and repository instructions now require this complete reference
+and shader coverage before integration completion. The new capture/status
+correction and bounded diagnostics passed the full
+Release VS2026 gate:224 passed,14 skipped,238 total in118.80seconds, Rust checks
+clean. The hidden shared-SR device fixture also passed request retention, actual
+result/raster capture, status preservation and the existing reset sequence.
+Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
+
 Native-only PID66836/report172137-067 deployed c32d8f7/Entry72B274B9...:
 module absence and corrected worker vtable/destructor/Run predicates passed.
 No RESERVE/BIND/pacing/markers were observed. The user rejected the Quality1
@@ -21,8 +38,8 @@ The native-only PID64940/report170725-854 predicate trace identified an exact
 ServingThread guard defect: vtable255E3B8 has destructorBD72E0 at slot0 and
 RunBD7430 at slot1. The adapter had mistaken slot1's address for the vtable.
 The correction passed full Release VS2026 verification:224 passed,14 skipped,
-238 total in117.36seconds, with clean Rust fmt/Clippy. Entry72B274B9... is built
-but not yet deployed; Runtime8570CCC2... is unchanged. Live binding, FG and
+238 total in117.36seconds, with clean Rust fmt/Clippy. Entry72B274B9... was then
+deployed to PID66836 above; Runtime8570CCC2... is unchanged. Live binding, FG and
 latency remain pending. Native module receipts prove F4SE/ENB absent. Closing
 reproduced native4CB273/C0000005; all21 staged entries restored and custom INI
 unchanged. Deferred foreground0 quality requests do not establish SR acceptance.

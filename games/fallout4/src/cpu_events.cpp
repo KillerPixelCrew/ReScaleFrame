@@ -86,6 +86,7 @@ struct Future {
 std::mutex worker_guard;
 RenderCycle current_render;
 Future future;
+std::array<std::atomic<uint64_t>,32> gate_receipts{};
 RenderCycle render_copy() { std::lock_guard lock(worker_guard); return current_render; }
 Future future_copy() { std::lock_guard lock(worker_guard); return future; }
 
@@ -572,14 +573,53 @@ void observe_idle(void* main) {
     --idle_depth;
     entered.fetch_sub(1, std::memory_order_acq_rel); SetLastError(native_error);
 }
+// First distinct scalar conjunctions, shared hard budget32. No event or core
+// acknowledgement is inferred; all logging runs outside worker_guard.
+void gate_receipt(uint32_t channel, uint32_t bits, uint32_t expected, const RenderCycle& c,
+    const WorkerCycle& proof, const CpuIdentity& requested) noexcept {
+    if (bits==expected || !host.log) return;
+    const auto key=(uint64_t(channel)<<32)|bits;
+    for (auto& slot : gate_receipts) {
+        auto previous=slot.load();
+        if (previous==key) return;
+        if (previous || !slot.compare_exchange_strong(previous,key)) {
+            if (previous==key) return;
+            continue;
+        }
+        unsigned first=0;
+        while (first<32 && (bits & (uint32_t(1)<<first))) ++first;
+        char text[768]{};
+        std::snprintf(text,sizeof(text),
+            "Fallout4 CPU native gate=%u first_missing=%u bits=0x%x expected=0x%x source=%llu requested=%llu identity=%llu submission=%llu/%llu native=%u/%u window=%p/%p idle=%llu depths=%u/%u/%u/%u selected=%u/%u rendered=%u claimed=%u invalid=%u pending=%llu tid=%u/%u cycle_flags=%u%u%u%u%u jobs=%u polls=%u raw_writers=%u.",
+            channel,first,bits,expected,static_cast<unsigned long long>(c.cpu.source),
+            static_cast<unsigned long long>(requested.source),static_cast<unsigned long long>(identity.source),
+            static_cast<unsigned long long>(requested.submission),static_cast<unsigned long long>(c.cpu.submission),
+            c.key.frame,proof.frame,reinterpret_cast<void*>(c.key.window),reinterpret_cast<void*>(proof.window),
+            static_cast<unsigned long long>(c.key.idle),idle_depth,swap_depth,job_depth,wrapper_depth,
+            unsigned(job_selected),unsigned(wrapper_selected),rendered,unsigned(future_claimed),unsigned(source_invalid),
+            static_cast<unsigned long long>(pending.source),c.tid,GetCurrentThreadId(),
+            unsigned(c.constructed),unsigned(c.sealed),unsigned(c.present),unsigned(c.closed),unsigned(c.invalid),
+            jobs.load(),polls.load(),raw_writers.load());
+        try { host.log(host.user,text); } catch (...) {}
+        return;
+    }
+}
+template<size_t N> uint32_t predicate_bits(const std::array<bool,N>& terms) {
+    static_assert(N<=32);
+    uint32_t bits{};
+    for (size_t i=0;i<N;++i) if (terms[i]) bits|=uint32_t(1)<<i;
+    return bits;
+}
 bool reserve_worker_poll(void* manager, uint64_t generation, uint32_t previous_polls) {
     const auto c=render_copy();
     auto proof=c.key; NativeState native{};
     const auto tid=GetCurrentThreadId();
-    if (!enabled.load(std::memory_order_acquire) || !job_selected || !wrapper_selected || job_depth!=1 || wrapper_depth!=1 ||
-        jobs.load()!=1 || previous_polls || raw_writers.load() || !c.constructed || !c.sealed || !c.present || c.closed || c.invalid ||
-        c.tid==tid || !native_cycle(proof,native,false) || proof!=c.key || !same_state(native,c.state) ||
-        native.manager!=uintptr_t(manager)) return false;
+    const bool native_valid_before=native_cycle(proof,native,false);
+    const auto bits=predicate_bits(std::array<bool,18>{enabled.load(std::memory_order_acquire),job_selected,wrapper_selected,
+        job_depth==1,wrapper_depth==1,jobs.load()==1,!previous_polls,!raw_writers.load(),
+        c.constructed,c.sealed,c.present,!c.closed,!c.invalid,c.tid!=tid,native_valid_before,proof==c.key,
+        same_state(native,c.state),native.manager==uintptr_t(manager)});
+    if (bits!=0x3ffffu) { gate_receipt(1,bits,0x3ffffu,c,proof,{}); return false; }
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
     Future copy{};
     {
@@ -1090,10 +1130,12 @@ bool begin_cpu_render() noexcept {
     return true;
 }
 bool begin_cpu_present_phase(const CpuIdentity& source, uint64_t native_frame, uint64_t window) noexcept {
-    if (!enabled.load() || !cpu_source_is_current(source)) return false;
+    const bool source_current=cpu_source_is_current(source);
     const auto c=render_copy(); auto proof=c.key; NativeState native{};
-    if (!c.constructed || c.closed || c.present || native_frame!=c.key.frame || window!=c.key.window ||
-        c.tid!=GetCurrentThreadId() || !native_cycle(proof,native,false) || proof!=c.key || !same_state(native,c.state)) return false;
+    const bool native_valid=native_cycle(proof,native,false);
+    const auto bits=predicate_bits(std::array<bool,11>{enabled.load(),source_current,c.constructed,!c.closed,!c.present,
+        native_frame==c.key.frame,window==c.key.window,c.tid==GetCurrentThreadId(),native_valid,proof==c.key,same_state(native,c.state)});
+    if (bits!=0x7ffu) { gate_receipt(2,bits,0x7ffu,c,proof,source); return false; }
     std::lock_guard lock(worker_guard);
     if (current_render.key!=c.key || current_render.invalid || current_render.closed) return false;
     current_render.sealed=current_render.present=true;

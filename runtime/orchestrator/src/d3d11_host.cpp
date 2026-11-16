@@ -434,13 +434,21 @@ struct Host {
         scene_bound = true;
         rsf_render_settings settings{}; { std::lock_guard lock(state); settings = desired; }
         const auto generation = requested_generation.load();
+        const bool unchanged_configuration = generation == applied_generation && running &&
+            settings.sr_enabled && backend == settings.sr_backend && quality == settings.sr_quality &&
+            preset == settings.dlss_preset && output_width == pass.camera.output_width &&
+            output_height == pass.camera.output_height;
         if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
         rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
         rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
         const bool pipeline_ready = prepare_pipeline(pass, settings);
         const bool configure_only = (pass.flags & RSF_GAME_RENDER_RECONFIGURE) != 0;
-        if (configure_only && !pass.camera_valid) return RSF_ERROR_NOT_READY;
-        rsf_frame_record record{}; capture_inputs(context, pass, record);
+        // Planning returns no output. An unchanged successful plan also has no new
+        // evaluation result to publish, including when the last evaluation failed.
+        if (configure_only && pipeline_ready && unchanged_configuration) return RSF_ERROR_NOT_READY;
+        rsf_frame_record record{};
+        // A capture request belongs to an actual render lease, never its size plan.
+        if (!configure_only) capture_inputs(context, pass, record);
         if (auxiliary && rsf_input_dump_wants(&record)) for (uint32_t i = 0; i < auxiliary->surface_count; ++i) {
             const auto& a = auxiliary->surfaces[i];
             if (a.source_name) (void)rsf_input_dump_texture_record(context, &record, a.source_name,

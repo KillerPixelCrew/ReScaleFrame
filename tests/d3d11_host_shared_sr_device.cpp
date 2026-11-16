@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
         std::vector<std::filesystem::path> found;
         if (std::filesystem::exists(capture_root)) for (const auto& entry : std::filesystem::directory_iterator(capture_root))
             if (entry.is_directory()) found.push_back(entry.path());
+        std::sort(found.begin(), found.end());
         return found;
     };
     rsf_overlay_api overlay{sizeof(overlay),RSF_OVERLAY_API_VERSION};
@@ -163,6 +164,11 @@ int main(int argc, char** argv) {
             settings.sr_quality = 0; // Real Quality -> native change through the public setting.
             if (overlay.settings_apply(&settings) != RSF_OK) return 1;
         }
+        const bool fail_evaluation = source == 6;
+        const auto before = bundles();
+        // Planning must leave a pending real-render capture untouched, even when
+        // the plan's input extent differs from the subsequently selected raster.
+        if (!fail_evaluation && rsf_d3d11_host_request_capture(host.user) != RSF_OK) return 1;
         auto planning = pass; planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
         if (host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY) return 1;
         // A second unchanged plan must neither manufacture nor clear a pending reset.
@@ -175,11 +181,9 @@ int main(int argc, char** argv) {
             pass.camera.render_width = config.render_width; pass.camera.render_height = config.render_height;
             pass.render_rect[2] = int32_t(config.render_width); pass.render_rect[3] = int32_t(config.render_height);
         }
-        const bool fail_evaluation = source == 6;
+        if (bundles() != before) { std::puts("FAIL: planning consumed the render capture request"); return 1; }
         if (fail_evaluation) pass.depth = nullptr; // Real SR refusal, never a fabricated provider result.
         if (source == 9) pass.flags |= RSF_GAME_RENDER_RESET;
-        const auto before = bundles();
-        if (!fail_evaluation && rsf_d3d11_host_request_capture(host.user) != RSF_OK) return 1;
         const auto result = host.process_upscale(host.user, context.Get(), &pass);
         std::printf("Shared SR source=%llu result=%d\n", static_cast<unsigned long long>(source), result);
         std::filesystem::path selected;
@@ -205,6 +209,19 @@ int main(int argc, char** argv) {
         } else {
             if (result != RSF_OK) return 1;
             if (selected.empty()) { std::puts("FAIL: assembled backend constants capture absent"); return 1; }
+            std::ifstream status_input(selected / "sr_status.json",std::ios::binary);
+            const std::string capture_status{std::istreambuf_iterator<char>(status_input),{}};
+            if (capture_status.find("\"source_frame_id\":" + std::to_string(source) + ",") == std::string::npos ||
+                capture_status.find("\"result\":0") == std::string::npos) {
+                std::puts("FAIL: captured SR evaluation did not match the requested source"); return 1;
+            }
+            std::ifstream frame_input(selected / "frame.json",std::ios::binary);
+            const std::string captured_frame{std::istreambuf_iterator<char>(frame_input),{}};
+            const auto raster = "\"render\":[" + std::to_string(pass.camera.render_width) + "," +
+                std::to_string(pass.camera.render_height) + "]";
+            if (captured_frame.find(raster) == std::string::npos) {
+                std::puts("FAIL: capture retained planning dimensions instead of the evaluated raster"); return 1;
+            }
             std::ifstream input(selected / "sr_constants.json",std::ios::binary);
             const std::string constants{std::istreambuf_iterator<char>(input),{}};
             const bool expected_reset = source == 2 || source == 4 || source == 7 || source == 9;
@@ -216,11 +233,36 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(source),unsigned(expected_reset));
             rsf_input_dump_cancel(host.session_id); // Read only this fixture's assembled constants, no Present/capture claim.
         }
+        // Present samples the public SR report. Plans after an actual success or
+        // refusal must preserve that result, not publish a fictitious evaluation.
+        if (source > 1) {
+            planning = pass; planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
+            if (host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY ||
+                host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY) return 1;
+        }
         const auto presented = chain->Present(0, 0);
         if (FAILED(presented)) return 1;
+        rsf_render_status published{sizeof(published),RSF_RENDER_FRONTEND_ABI_VERSION};
+        if (overlay.status(&published) != RSF_OK || published.sr_result != result ||
+            published.sr_effective_backend != (result == RSF_OK ? uint32_t(RSF_SR_DLSS) : 0u)) {
+            std::puts("FAIL: planning replaced the actual cold/success/refusal evaluation status"); return 1;
+        }
         if (source == 1) std::printf("PASS: cold source Present returned 0x%08lx; next source must own CPU/token\n",
             static_cast<unsigned long>(presented));
         cpu(host, source, RSF_GAME_CPU_FRAME_END);
+        if (source == 10) {
+            // A genuine new plan invalidates the old output report until evaluated.
+            rsf_render_settings changed{sizeof(changed),RSF_RENDER_FRONTEND_ABI_VERSION};
+            if (overlay.settings_get(&changed) != RSF_OK) return 1;
+            changed.sr_quality = 1;
+            if (overlay.settings_apply(&changed) != RSF_OK ||
+                host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY ||
+                host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY ||
+                FAILED(chain->Present(0, 0)) || overlay.status(&published) != RSF_OK ||
+                published.sr_result != RSF_ERROR_NOT_READY || published.sr_effective_backend) {
+                std::puts("FAIL: changed planning retained stale successful output status"); return 1;
+            }
+        }
     }
     rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
     if (rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || status.frames_evaluated != 8 || status.frames_refused != 1) return 1;
