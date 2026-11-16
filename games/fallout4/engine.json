@@ -1,0 +1,135 @@
+{
+  "game": "Fallout 4",
+  "status": "ABI23 Windows Release gate and generic device fixtures passed; bounded older-build main-menu startup only, live native depth/SR/FG/latency/quality acceptance pending, rendering_ready remains0",
+  "executable": {
+    "name": "Fallout4.exe",
+    "version": "1.11.240.0",
+    "size_bytes": 55343016,
+    "sha256": "fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8",
+    "graphics_api": "D3D11"
+  },
+  "source_reference": {
+    "community_shaders": "e0e711594291c1a8e447ac758099492514810fbb",
+    "commonlibf4": "7f8deca16dc7dd245c9c52151ec9ef27edd9ad60",
+    "commonlib_shared": "5408d22adf937cc00e0ccd4bdeef66021172884d",
+    "community_shaders_shared": "6e67083a54090d10806484549d07f75b7fbc8dc2",
+    "scope": "AE1.11.240 explicitly supported by reference source; hook and resource leads require matched binary/runtime verification"
+  },
+  "creation_instructions": {
+    "authority": "Coordinator independent objdump receipt, not complete ownership proof",
+    "function_rva": "0x1824930",
+    "call_rva": "0x1824d40",
+    "call_bytes": "e894ffa900",
+    "return_rva": "0x1824d45",
+    "import_thunk_rva": "0x22c4cd9",
+    "import_thunk_bytes": "ff2579ca1700",
+    "iat_rva": "0x2441758",
+    "owner_pointer_rva": "0x38e13a0",
+    "owner_fields": "Verified device+0x48/context+0x50/HWND+0x58/chain+0x70; scope admits only matching output addresses/window and caller1824d45",
+    "remaining": "Runtime canonical external wrapper admission and native render/resource parity validation pending"
+  },
+  "source_inputs": {
+    "sr": "Pre-tonemap Render_UI+AE0x83 before RenderEffectRange, Main logical1 R11G11B10_FLOAT reference contract",
+    "depth": "Native partitioned Main logical1 depth; copied same-source post-prepass domains required before generic ABI23 normalization, live native snapshot/normalization acceptance pending",
+    "motion": "GBufferMotionVectors logical32 R16G16_FLOAT, previous-minus-current UV source convention, valid zero; native coverage unverified",
+    "fg": "Freeze depth/motion before SR; HUD-less RT0 after imagespace before UI at Render_UI+AE0xc5 post-call; final WINDOW lease through actual outer Present",
+    "input_timeline": "Unresolved device poll/worker consumption/reservation ownership; message-loop reference markers alone are insufficient"
+  },
+  "coexistence_baseline": {
+    "f4se": "0.7.9",
+    "f4se_archive_sha256": "48677acc460d8dca0f2f6303b0ef7fe16bdb8a97bdc37c6ffb96ec604fec1a48",
+    "enb": "0.501",
+    "enb_archive_sha256": "c3418d1cc28ea2323c6b6b445508064692d401be2d2f4e6c34233c73bc18effc",
+    "receipt": ".local/fallout4-research/baseline-20261116-082614",
+    "observed": "Coordinator PID57896 initialized F4SE, local ENB/Steam/RTSS modules and game HWND, CloseMainWindow exit0; no RSF installed",
+    "limits": "Packaged ENB FPSLimit61 retained; no RSF SR/FG/latency/visual/coexistence acceptance"
+  },
+  "source_foundation": {
+    "abi": "Host8/Game23/Frame2/Camera1, input/rendered-source/complete-FG capabilities0",
+    "implementation": "Guarded cold creation and ordinary WorldBegin FRAME/SUBMISSION using CPU-owned source, pre-Present submission end, WINDOW/FRAME through outer Present and Swap; pre-imagespace mapped depth/FG-input capture and SR; native-only quality",
+    "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
+    "validation": "Coordinator Windows Release VS2026 ABI23 gate exit0:220passed15skipped,107.24s,fmt/Clippy clean; generic WARP auxiliary and scoped device fixtures passed, not live native acceptance"
+  },
+  "research": "docs/research/fallout4-render-integration-20261116.md",
+  "native_render_callbacks": {
+    "world": "WorldBegin21f0ac0 selected only by ordinary caller c382a0/returnc382a5, viewport21f0ae6->1839ec0; CPU owns sole source/submission and exact QPC identity",
+    "sr": "RenderUI21fa200, call21fa283->2185420 with native ImageSpaceManager/0/13/1/1 preserved; reader leases Main1/depth1/motion32 and explicit camera",
+    "taa": "Native RTTI vtable2915eb0 slot8->2214fc0, exact native conditions preserved; exclusion only after successful SR inside selected whole RenderUI",
+    "hudless": "Viewport call21fa2c5 returns21fa2ca after imagespace, logicalRT0 resolved independently of outer chain GetBuffer; same native frame/window/context/chain required",
+    "window": "Pinned lease from HUDless until CPU finish_render_scope after unchanged Swap including native Present, before clearing CPU identity",
+    "restoration": "Native jitter saved/zeroed only for output scope and conditionally restored at whole RenderUI exit; failed restoration retains busy ownership",
+    "refusals": "Early scopes UNKNOWN/NO_FG; GAMEPLAY only from positive same-source native screen/camera/resource conjunction; sticky refusal withholds pre-Present completion, capabilities0; no fake SIM event",
+    "reduced_quality": "Locked native-only; native dynamic-resolution publication, auxiliary reinsertion/consumers, resize/lensflare and output triangle restoration not yet active",
+    "checks": "Read-only PE7entry10call7Present-continuation guards plus module guards; ABI23 combined Release and generic device checks passed, live native source acceptance pending",
+    "frame_submission": "One admitted ordinary-world FRAME/SUBMISSION; guarded native1818550 entry fromC335EC ends valid submission before outer Present; invalid completion withheld until refused post-Swap cleanup",
+    "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
+  },
+  "validation": {
+    "native_raster_gate": ".local/fallout4-research/verify-native-raster-20261116.log",
+    "configuration": "Windows Release VS2026",
+    "result": "exit0,221passed14skipped,Cargo fmt and Clippy clean",
+    "live_acceptance": "Bounded main-menu startup only; no verified scene source or effective SR evaluation",
+    "limits": "Full reduced scales, live native depth/SR parity, generated FG, latency and shader/motion/visual-quality audit remain mandatory pending; generic fixture callbacks do not prove game acceptance",
+    "first_native_raster_trial": "native-raster-20261116-093321-487 PID48088 prepared/started and scoped-bound; physical chain INVALID_CALL twice, exitC0000005, observation incomplete,21/21restored; no SR acceptance",
+    "armed_startup_trial": "native-raster-20261116-095900-661 PID58104 exact-SHA armed; AVbc83c1 read98 withRCX0, absent BSBethesdaPlatform singleton30e7108, beforeSR; exitC0000005 and21files restored, causeunassigned",
+    "latest_generic_gate": {
+      "receipt": ".local/fallout4-research/verify-depth-domains-r2-20261116.log",
+      "configuration": "Windows Release VS2026",
+      "exit_code": 0,
+      "passed": 220,
+      "skipped": 15,
+      "seconds": 107.24,
+      "cargo_fmt_clippy": "clean",
+      "warp_auxiliary_sr_device_152": "passed",
+      "skip_limit": "anomaly_fg_dlss_sroff_device foreground-denied, not activity acceptance",
+      "prior_failure": "Previous gate failed Windows near macro collision in new auxiliary fixture; renamed locals and coherent r2 gate passed"
+    },
+    "main_menu_control": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-100638-894",
+      "pid": 60620,
+      "startup_seconds": 45,
+      "application_presents": 1806,
+      "foreground": 1,
+      "sr_effective_backend": 0,
+      "reason": "Waiting for verified scene inputs",
+      "exit_code": 0,
+      "restored_manifest_entries": 20,
+      "manifest_entries": 20,
+      "custom_ini_unchanged": true,
+      "controller_custom_ini_writes": 0,
+      "limits": "Startup-route sensitivity only; no unmodded QASmoke cause, SR/world/FG/latency/visual acceptance"
+    },
+    "depth_scoped_fixture": {
+      "receipt": ".local/fallout4-research/depth-scoped-fixture-20261116.log",
+      "exit_code": 0,
+      "sources": 55,
+      "captures": 41,
+      "sr_evaluations": 39,
+      "tags": 34,
+      "generated_callbacks": 34,
+      "limits": "Generic rebuilt device fixture, not live Fallout4 source validation, physical scanout or measured latency"
+    },
+    "abi23_built_artifacts": {
+      "runtime_sha256": "228191101080FDB81D2FAFD83B804F6D698AB6764524C80EC521671166A8C88C",
+      "entry_sha256": "022392700C3A0DBEE2B175A728546C5680A51B544A85CF1B0F25783C37DF15FD",
+      "carrier_sha256": "E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98",
+      "deployment": "Not deployed in current live trial: PID37012 remains on exact older ABI22 deployment"
+    },
+    "deferred_live_trial": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-112938-741",
+      "pid": 37012,
+      "start_utc": "2026-11-16T10:29:40.1829397Z",
+      "deployment_game_abi": 22,
+      "scene_timeout_seconds": 300,
+      "native_quit_timeout_seconds": 120,
+      "focus_denied": true,
+      "keys_sent": false,
+      "restored": false,
+      "recovery": "Exact-run guarded recovery source-frozen and unexecuted; requires no game/launcher and unchanged file hashes, with authorized sealed loader-log exception",
+      "limits": "No successful close, native depth snapshot/SR quality/FG/latency acceptance"
+    }
+  },
+  "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
+  "startup_research": "docs/research/fallout4-native-startup-av-20261116.md",
+  "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md"
+}

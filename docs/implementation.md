@@ -1,5 +1,47 @@
 # Implementation tracker
 
+## Fallout 4 AE native render callbacks, 16 November 2026
+
+The combined ABI23 batch passed Windows Release VS2026
+`verify-depth-domains-r2-20261116.log`: exit0,220 passed/15 skipped,107.24seconds
+and clean Cargo fmt/Clippy. WARP auxiliary_sr_device152 passed. The separately
+rebuilt scoped device fixture passed55 sources,41 captures,39 SR evaluations
+and34 tags/generated callbacks. These are generic device results, not live
+Fallout4 depth, generated presentation, physical scanout or latency acceptance.
+The previous gate failed a Windows near-macro collision in the new auxiliary
+fixture; renamed locals fixed compilation before the coherent r2 pass. The
+foreground-denied anomaly_fg_dlss_sroff_device skip is not an activity pass.
+
+The adapter now builds with the guarded post-prepass depth snapshot and ABI23
+mapping descriptor before planning, explicit FG_INPUTS and SR. One ordinary
+WorldBegin FRAME/SUBMISSION uses the existing CPU source; guarded1818550 closes
+valid submission before native outer Present, while WINDOW/FRAME survive
+Present and close after Swap. Native source depth stays intact. Seven hook
+entries,10 calls and7 Present continuation guards match the installed PE,
+with native module guards required at startup. Early unknown facts and later
+screen/source refusals stay honest. Capabilities remain0, quality bit0-only and
+rendering_ready0. Full reduced scales, FG, latency, shader/motion audit and
+visual/full-coexistence acceptance remain mandatory pending.
+
+Current PID37012 (`native-raster-20261116-112938-741`) still uses the older
+ABI22 deployment. The300-second scene and120-second native-Quit handoffs timed
+out after Windows denied focus; no keys were sent. Controller39768 exited with
+restored=false while the game remained open. Guarded deferred recovery is ready
+but unexecuted; no successful close or restoration is claimed. The ABI23 built
+Runtime/Entry/carrier hashes are recorded in
+[engine metadata](../games/fallout4/engine.json), not attributed to that old run.
+
+Earlier main-menu control PID60620 (`native-raster-20261116-100638-894`)
+completed45seconds with1,806 application Presents, foreground1, normal exit0
+and20/20 restorations, with unchanged custom INI. SR remained0, waiting for
+verified inputs. That proves startup-route sensitivity only. The same-save
+no-RSF F4SE/ENB baseline later reproduced native4CB273/null50 close AV and
+upper-left/black-margin scaling; neither is proven RSF-introduced. Subsequent
+DPI setup corrected measured client/chain fit, without world SR acceptance.
+See [native hook contract](research/fallout4-render-integration-20261116.md),
+[depth handoff](research/fallout4-depth-hook-integration-20261116.md) and
+[reduced consumers](research/fallout4-reduced-consumers-20261116.md).
+
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
 The Display creation repair passed the Windows Release VS2026 gate:220 passed,
