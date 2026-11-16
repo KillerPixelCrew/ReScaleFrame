@@ -24,6 +24,19 @@ clean. The hidden shared-SR device fixture also passed request retention, actual
 result/raster capture, status preservation and the existing reset sequence.
 Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 
+Native-only PID71716/report180644-293 deployed4657522/Runtime22830370... and
+EntryBE2E0BBF... . Quality1 actually evaluated1707x1067 to2560x1600 with SR0;
+stationary/menu/focus observations were clean, without reproducing or overturning
+the earlier user's visual rejection. Both captures contain25of40 products at
+actual evaluation sources6226/native6668 and23292/native23733, but remain partial:
+matched_present=true/present_result=-3 and no final colour. Scope receipts show
+unit/full-output state through Effects/UI for sampled successes. The first CPU
+refusal lacks sealed/Present; later five emitted bound-poll fact sequences abort,
+without proving runtime acceptance. Native World to MainMenu to QuitDesktop
+exited0. All21 staged entries and custom INI were verified restored. This route
+does not repair the earlier direct-world close AV. A narrow fallback-source
+invalidation correction is under review; SR visual, FG and latency remain open.
+
 Native-only PID66836/report172137-067 deployed c32d8f7/Entry72B274B9...:
 module absence and corrected worker vtable/destructor/Run predicates passed.
 No RESERVE/BIND/pacing/markers were observed. The user rejected the Quality1

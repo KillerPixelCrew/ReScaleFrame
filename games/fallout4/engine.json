@@ -583,6 +583,20 @@
         "build\\windows-x64\\bin\\Release\\ReScaleFrame.Game.Fallout4.dll": "be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b32d48034109f"
       },
       "game_tested": false
+    },
+    "native_capture_diagnostic_trial": {
+      "report": ".local/fallout4-research/native-raster-20261116-180644-293",
+      "pid": 71716,
+      "commit": "46575222a31e9618e004950d9646bc3c19b1907a",
+      "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
+      "entry_sha256": "be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b32d48034109f",
+      "native_module_absence": "direct executable; first/latest receipts F4SE0, non-systemD3D110, loader0",
+      "quality1": "1707x1067 to2560x1600 actual SR0; current stationary/menu/focus observations clean, earlier user duplication not reproduced or overturned",
+      "captures": "source6226/native6668 and23292/23733; both25of40 products, actual SR0 and matched_presenttrue but present_result-3/statuspartial; final colour unavailable",
+      "cpu": "selected poll first refused sealed/Present bits; later five emitted RESERVE/SAMPLED/BIND facts then abort, not core acceptance; fallback invalidation audit ongoing",
+      "close": "observed native World to MainMenu then native QuitDesktop confirm, exit0; distinct from prior direct-world C0000005",
+      "restoration": "verified21of21 destinations match originals, customINI unchanged, no forced kill",
+      "limits": "No complete final-image, moving/all-quality/near-depth, bound-owner/FG/latency or compatibility acceptance"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
