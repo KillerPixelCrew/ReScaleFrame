@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
             std::printf("borderless: %-18s rect %ld,%ld %ldx%ld\n", when, r.left, r.top, r.right - r.left, r.bottom - r.top);
             return r;
         };
-        // The engine creates its views (GetBuffer) right after the chain, which makes the bridge create its own.
+        // Application buffers are usable before the first physical Present owner is created.
         ComPtr<ID3D11Texture2D> buffer;
         if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return 1;
         buffer.Reset();
@@ -614,7 +614,11 @@ int main(int argc, char** argv) {
     if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&resized)))) return 1;
     D3D11_TEXTURE2D_DESC size{}; resized->GetDesc(&size);
     if (size.Width != 1024 || size.Height != 576 || FAILED(chain->Present(0, DXGI_PRESENT_TEST))) return 1;
-    resized.Reset(); returned_device.Reset(); modern_identity.Reset(); identity.Reset(); modern.Reset(); chain.Reset();
+    resized.Reset(); returned_device.Reset(); modern_identity.Reset(); identity.Reset(); modern.Reset();
+    rsf_d3d11_chain_dispatch final_release{}; final_release.method = RSF_D3D11_DISPATCH_RELEASE;
+    final_release.receiver = chain.Detach();
+    rsf_d3d11_chain_dispatch_owned(&final_release);
+    if (!final_release.handled || final_release.result.references || rsf_d3d11_present_has_owner()) return 1;
     DestroyWindow(window); UnregisterClassW(wc.lpszClassName, wc.hInstance);
     std::puts("PASS: shared D3D12 DLSS SR and CPU token; D3D11 COM identity/buffers, Off Present, retained-reference resize refusal, resize and retirement");
     return 0;

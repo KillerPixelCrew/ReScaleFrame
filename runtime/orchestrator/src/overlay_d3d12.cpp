@@ -7,8 +7,29 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <mutex>
+#include <string>
 namespace {
 using Microsoft::WRL::ComPtr;
+using CreateOn12 = decltype(&D3D11On12CreateDevice);
+CreateOn12 system_create_on12()
+{
+    // Resolve only when this optional overlay path is used. Local D3D11 wrappers
+    // may expose device creation without exposing the D3D11-on-12 entry point.
+    static const auto create = []() -> CreateOn12 {
+        wchar_t directory[MAX_PATH]{};
+        const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+        if (!length || length >= MAX_PATH) return nullptr;
+        const std::wstring path = std::wstring(directory, length) + L"\\d3d11.dll";
+        const auto module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!module) return nullptr;
+        const auto entry = reinterpret_cast<CreateOn12>(reinterpret_cast<void*>(GetProcAddress(module, "D3D11On12CreateDevice")));
+        if (!entry) { FreeLibrary(module); return nullptr; }
+        // Keep this one reference for the process lifetime: cached entry points,
+        // devices, wrapped resources and their vtables must remain callable.
+        return entry;
+    }();
+    return create;
+}
 ComPtr<ID3D11Device> device11;
 ComPtr<ID3D11DeviceContext> context11;
 ComPtr<ID3D11On12Device> interop;
@@ -36,8 +57,11 @@ static int draw(void* device, void* native_queue, void* native_chain, const rsf_
     if (failed || !device || !native_queue || !native_chain || !stats) return 0;
     auto* chain = static_cast<IDXGISwapChain*>(native_chain);
     if (!device11) {
+        const auto create_on12 = system_create_on12();
+        if (!create_on12)
+            return refuse(log, user, "Shared overlay unavailable: system D3D11-on-12 entry point not available.");
         IUnknown* queues[] = {static_cast<ID3D12CommandQueue*>(native_queue)};
-        if (FAILED(D3D11On12CreateDevice(static_cast<ID3D12Device*>(device), D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        if (FAILED(create_on12(static_cast<ID3D12Device*>(device), D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             nullptr, 0, queues, 1, 0, &device11, &context11, nullptr)) || FAILED(device11.As(&interop))) {
             interop.Reset(); context11.Reset(); device11.Reset();
             return refuse(log, user, "Shared overlay unavailable: the D3D11-on-12 device could not be created.");

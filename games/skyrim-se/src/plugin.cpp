@@ -430,8 +430,8 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     setup.colour_transport_default = 1; // Native colour by default; saved overlay choice wins.
     // The corrected shared SR transfer has device regression evidence. Runtime
     // capability and per-frame checks still gate generation and latency admission.
-    // Final facade is supplied at the adapter-owned native call return, after external wrappers.
-    setup.presentation_bridge = 2; setup.accept_window = accept_presentation_window;
+    // Scope inner creation before external wrappers capture the chain; retain their outer result.
+    setup.presentation_bridge = 3; setup.accept_window = accept_presentation_window;
     // Native prospective-poll ownership connects input and simulation reports;
     // the runtime owns pacing, marker mapping and provider admission policy.
     setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;

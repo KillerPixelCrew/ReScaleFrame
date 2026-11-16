@@ -521,6 +521,17 @@
     "history": "Previous PID44520 capture partial because native raw dump unsupported; earlier stale carrier trial refused before prepare. Both corrected; neither proves gameplay or pickup acceptance",
     "review_fixes": "Concrete repairs built/gate-tested and covered by bounded resource run, not every failure branch; optional architecture proposals intentionally out; docs/research/skyrim-review-fixes-20261115.md"
   },
+  "enb_chain_ownership": {
+    "version": "0.505",
+    "sha256": "bfb7ff22a962fff9a0faa6f07f5a43b96e4305cc5c9efb0eedcec8d218846677",
+    "evidence": "docs/research/skyrim-enb-chain-ownership-20261116.md",
+    "failure": "PID34956 late outer replacement followed by two E_ACCESSDENIED physical HWND chain refusals; exact outstanding native owner unproven",
+    "source_change": "Scoped bridge3 window/thread creation around guarded game thunk15b9412/caller1012325 preserves outer wrapper arguments/outputs/HRESULT/LastError; Host ABI8 routes seven Steam-intercepted methods through ten guarded load sites without installer/global modification or external reference release",
+    "validation": "Windows Release gate219passed15skipped fmt/Clippy clean; scoped fixture and plain bridge finalRelease passed; PID20280 input-acceptance-20261116-020919 completed bounded SR/provider switch and normal close exit0/no observed AV, clean observer detach and four hash-verified restorations; no generated FG, visual or full coexistence acceptance",
+    "routing_evidence": "docs/research/skyrim-close-chain-routing-20261116.md",
+    "provenance_validation": "verify-explicit-fg-provenance-20261116.log exit0:219passed15skipped fmt/Clippy clean; focused device regression53sources39captures37SR33tags/callbacks including genuine sticky refusal; PID52400 input-acceptance-20261116-021712 matching retainedflags6 continuous1 valid1 and317tags; PID47748 20261116-022508 records316tags; both exit0 and restore4files",
+    "remaining": "Historical retainedflags22 discrepancy corrected by explicit-provenance repair, but generated output remains inactive; no fullFG, visual, latency or full coexistence acceptance; PID47748 foreground experiment left WindowsTerminal35804 foreground and proves no focus conclusion; no general readiness change"
+  },
   "all_shader_audit": {
     "date": "2026-11-15",
     "containers": 16044,

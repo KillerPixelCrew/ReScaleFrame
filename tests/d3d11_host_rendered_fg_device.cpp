@@ -8,6 +8,7 @@
 #include <rescaleframe/d3d11_present_api.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/native_window.h>
 #include <rescaleframe/overlay_api.h>
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -19,9 +20,46 @@
 #include <cstdio>
 #include <filesystem>
 #include <vector>
+#include <cstring>
 
 using Microsoft::WRL::ComPtr;
 namespace {
+// A forwarding outer wrapper with native canonical QI and real pre/post Present
+// work. The engine retains this pointer; no test rewrites it to the inner owner.
+struct OuterChain final : IDXGISwapChain {
+    ComPtr<IDXGISwapChain> inner;
+    ULONG refs = 1;
+    uint32_t pre = 0, post = 0, dispatched = 0;
+    void* host_user;
+    OuterChain(IDXGISwapChain* value,void* user) : inner(value),host_user(user) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override { return inner->QueryInterface(iid,out); }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { const auto remaining = --refs; if (!remaining) delete this; return remaining; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key,UINT size,const void* data) override { return inner->SetPrivateData(key,size,data); }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID key,const IUnknown* value) override { return inner->SetPrivateDataInterface(key,value); }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key,UINT* size,void* data) override { return inner->GetPrivateData(key,size,data); }
+    HRESULT STDMETHODCALLTYPE GetParent(REFIID iid,void** out) override { return inner->GetParent(iid,out); }
+    HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid,void** out) override { return inner->GetDevice(iid,out); }
+    HRESULT STDMETHODCALLTYPE Present(UINT sync,UINT flags) override {
+        ++pre;
+        // Model a continuation reached after external pre-work, without reentering
+        // the facade's virtual slot. Never fall through after a service error.
+        rsf_d3d11_present_dispatch request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,inner.Get(),sync,flags,0,E_FAIL};
+        const auto status = rsf_d3d11_host_dispatch_present(host_user,&request);
+        const HRESULT result = status != RSF_OK ? E_FAIL : request.handled ? request.native_result : inner->Present(sync,flags);
+        if (status == RSF_OK && request.handled) ++dispatched;
+        ++post; return result;
+    }
+    HRESULT STDMETHODCALLTYPE GetBuffer(UINT index,REFIID iid,void** out) override { return inner->GetBuffer(index,iid,out); }
+    HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled,IDXGIOutput* output) override { return inner->SetFullscreenState(enabled,output); }
+    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* enabled,IDXGIOutput** output) override { return inner->GetFullscreenState(enabled,output); }
+    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { return inner->GetDesc(out); }
+    HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT n,UINT w,UINT h,DXGI_FORMAT format,UINT flags) override { return inner->ResizeBuffers(n,w,h,format,flags); }
+    HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override { return inner->ResizeTarget(desc); }
+    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return inner->GetContainingOutput(out); }
+    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override { return inner->GetFrameStatistics(out); }
+    HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override { return inner->GetLastPresentCount(out); }
+};
 HWND window{};
 struct TemporaryIni { std::wstring path; ~TemporaryIni() { DeleteFileW(path.c_str()); } };
 constexpr UINT width = 960, height = 540;
@@ -45,7 +83,8 @@ void cpu(const rsf_game_host_services& host, uint64_t source, uint32_t stage) {
 }
 }
 int main(int argc, char** argv) {
-    if (argc != 2) { std::puts("Usage: rsf_d3d11_host_rendered_fg_device <scratch runtime root>"); return 77; }
+    const bool scoped = argc == 3 && std::strcmp(argv[2],"--scoped") == 0;
+    if (argc != 2 && !scoped) { std::puts("Usage: rsf_d3d11_host_rendered_fg_device <scratch runtime root> [--scoped]"); return 77; }
     const std::filesystem::path root(argv[1]);
     if (!std::filesystem::exists(root / "streamline/sl.interposer.dll") ||
         !std::filesystem::is_directory(root / "fidelityfx")) return 77;
@@ -78,7 +117,7 @@ int main(int argc, char** argv) {
     setup.units_to_meters = 1; setup.quality_choices = 0x1f; setup.depth_inverted = 1;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
-    setup.presentation_bridge = 1; setup.accept_window = accept;
+    setup.presentation_bridge = scoped ? 3u : 1u; setup.accept_window = accept;
     setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
     rsf_game_host_services host{}; host.struct_size = sizeof(host); host.abi_version = RSF_GAME_ABI_VERSION;
     host.session_id = 91; host.log = log;
@@ -91,18 +130,121 @@ int main(int argc, char** argv) {
     chain_desc.OutputWindow = window; chain_desc.Windowed = TRUE;
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context; ComPtr<IDXGISwapChain> chain;
     const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_1;
+    rsf_d3d11_creation_scope scope{sizeof(scope),RSF_D3D11_HOST_ABI_VERSION,window,0};
+    if (scoped) {
+        if (rsf_d3d11_host_creation_begin(host.user,&scope) != RSF_OK || !scope.token) return fail("begin cancelled scope");
+        rsf_d3d11_creation_scope nested{sizeof(nested),RSF_D3D11_HOST_ABI_VERSION,window,0};
+        if (rsf_d3d11_host_creation_begin(host.user,&nested) == RSF_OK || nested.token) return fail("nested scope refused without changing output");
+        auto wrong_token = scope; ++wrong_token.token;
+        if (rsf_d3d11_host_creation_end(host.user,&wrong_token,nullptr) == RSF_OK)
+            return fail("wrong-token End cannot close the real owner scope");
+        if (rsf_d3d11_host_creation_end(host.user,&scope,nullptr) == RSF_OK || presentation.is_owner(nullptr)) return fail("empty scope cancels without admitting an owner");
+        scope.token = 0;
+        if (rsf_d3d11_host_creation_begin(host.user,&scope) != RSF_OK) return fail("begin malformed-result scope");
+        const rsf_d3d11_native_chain malformed{sizeof(malformed)-1,RSF_D3D11_HOST_ABI_VERSION,nullptr,nullptr,nullptr};
+        if (rsf_d3d11_host_creation_end(host.user,&scope,&malformed) != RSF_ERROR_INVALID_ARGUMENT)
+            return fail("malformed result closes a valid scope before pointer access");
+        scope.token = 0;
+        if (rsf_d3d11_host_creation_begin(host.user,&scope) != RSF_OK) return fail("begin native scope after cancellation");
+    }
     auto created = D3D11CreateDeviceAndSwapChain(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
         D3D11_CREATE_DEVICE_DEBUG, &level, 1, D3D11_SDK_VERSION, &chain_desc, &chain, &device, nullptr, &context);
     if (created == DXGI_ERROR_SDK_COMPONENT_MISSING)
         created = D3D11CreateDeviceAndSwapChain(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
             0, &level, 1, D3D11_SDK_VERSION, &chain_desc, &chain, &device, nullptr, &context);
     if (FAILED(created)) return fail("create hardware D3D11 device/swapchain");
+    OuterChain* outer = nullptr;
+    if (scoped) {
+        // Check emitted code, not just C++ call spelling: a hook installer that
+        // follows the first entry jump must not land on the private continuation.
+        auto** table = *reinterpret_cast<void***>(chain.Get());
+        for (const unsigned slot : {2u,8u,10u,13u,22u,38u,39u}) {
+            unsigned char entry[2]{}; SIZE_T copied = 0;
+            if (!ReadProcessMemory(GetCurrentProcess(),table[slot],entry,sizeof(entry),&copied) || copied != sizeof(entry) ||
+                entry[0] == 0xe9 || entry[0] == 0xeb || (entry[0] == 0xff && entry[1] == 0x25)) {
+                std::printf("FAIL: public slot%u exposes an entry jump\n",slot);
+                return fail("all external methods retain a call/return boundary");
+            }
+        }
+        // Constructor-time queries must not create a real HWND chain or need Present.
+        ComPtr<ID3D11Texture2D> buffer;
+        const GUID annotation{0xb6420ea1,0x5912,0x4d17,{0xb1,0x65,0x0b,0x5a,0x28,0x68,0x73,0x64}};
+        const unsigned char metadata[48]{};
+        if (FAILED(chain->GetBuffer(0,IID_PPV_ARGS(&buffer))) ||
+            FAILED(buffer->SetPrivateData(annotation,sizeof(metadata),metadata))) return fail("creation-time virtual buffer contract");
+        if (presentation.is_owner(chain.Get())) return fail("inner owner cannot be admitted before End");
+        rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+        typed.receiver = chain.Get(); typed.method = RSF_D3D11_DISPATCH_RELEASE;
+        const auto held_references = chain->AddRef();
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
+            typed.result.references != held_references-1) return fail("unadmitted Release consumes exactly one reference");
+        for (uint32_t method = RSF_D3D11_DISPATCH_PRESENT; method <= RSF_D3D11_DISPATCH_RESIZE_BUFFERS1; ++method) {
+            typed.method = method; typed.handled = 0;
+            if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
+                typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("known unadmitted method cannot fall through");
+        }
+        rsf_d3d11_present_dispatch refused{sizeof(refused),RSF_D3D11_HOST_ABI_VERSION,chain.Get(),0,0,0,S_OK};
+        if (rsf_d3d11_host_dispatch_present(host.user,&refused) != RSF_OK || !refused.handled ||
+            refused.native_result != DXGI_ERROR_INVALID_CALL) return fail("unadmitted facade remains handled with failure");
+        refused.flags = DXGI_PRESENT_TEST;
+        if (rsf_d3d11_host_dispatch_present(host.user,&refused) != RSF_OK || !refused.handled ||
+            refused.native_result != DXGI_ERROR_INVALID_CALL) return fail("unadmitted TEST cannot fall through to native code");
+        auto* inner = chain.Detach();
+        outer = new OuterChain(inner,host.user); inner->Release(); chain.Attach(outer);
+        void* original_output = chain.Get();
+        const rsf_d3d11_native_chain outputs{sizeof(outputs),RSF_D3D11_HOST_ABI_VERSION,device.Get(),context.Get(),&original_output};
+        if (rsf_d3d11_host_creation_end(host.user,&scope,&outputs) != RSF_OK || original_output != chain.Get() ||
+            !presentation.is_owner(chain.Get()) || !presentation.is_owner(outer->inner.Get())) return fail("canonical outer admission preserves output");
+        rsf_d3d11_present_dispatch alias{sizeof(alias),RSF_D3D11_HOST_ABI_VERSION,outer,0,0,1,123};
+        if (rsf_d3d11_host_dispatch_present(host.user,&alias) != RSF_OK || alias.handled || alias.native_result != 123)
+            return fail("canonical outer alias cannot bypass its own Present work");
+        alias.receiver = reinterpret_cast<void*>(uintptr_t(1)); alias.handled = 1;
+        if (rsf_d3d11_host_dispatch_present(host.user,&alias) != RSF_OK || alias.handled || alias.native_result != 123)
+            return fail("unknown receiver is not dereferenced with a live owner");
+        typed.receiver = outer;
+        const auto outer_refs = outer->refs;
+        for (uint32_t method = RSF_D3D11_DISPATCH_RELEASE; method <= RSF_D3D11_DISPATCH_RESIZE_BUFFERS1; ++method) {
+            typed.method = method; typed.result.references = 123;
+            if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || typed.handled ||
+                typed.result.references != 123 || outer->refs != outer_refs)
+                return fail("typed dispatch preserves every outer wrapper method and reference");
+        }
+    }
     // Native startup presents before the first scene. The bridge adopts its chain there.
     const auto first_present = chain->Present(0, 0);
+    if (outer && (outer->pre != 1 || outer->post != 1 || outer->dispatched != 1)) return fail("outer Present work and exact dispatch remain active");
     if (FAILED(first_present) || !presentation.is_owner(chain.Get()) || !presentation.host()) {
         std::printf("Shared presentation not established: 0x%08lx owner=%u host=%p\n",
             static_cast<unsigned long>(first_present), presentation.is_owner(chain.Get()),
             static_cast<void*>(presentation.host())); return fail("establish bridge-owned startup Present");
+    }
+    // Match the adapter's explicit native presentation binding before publishing
+    // source CPU/FRAME facts. Scope admission alone does not bind this host.
+    const rsf_d3d11_presentation_binding binding{sizeof(binding),RSF_D3D11_HOST_ABI_VERSION,chain.Get()};
+    if (rsf_d3d11_host_bind_presentation(host.user,&binding) != RSF_OK)
+        return fail("bind verified application presentation before source facts");
+    if (outer) {
+        rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+        typed.receiver = outer->inner.Get(); typed.method = RSF_D3D11_DISPATCH_PRESENT1;
+        DXGI_PRESENT_PARAMETERS dirty{}; dirty.DirtyRectsCount = 1;
+        typed.args.present1.parameters = &dirty;
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
+            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("Present1 preserves dirty-region refusal");
+        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS;
+        typed.args.resize_buffers.buffer_count = 99;
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
+            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("ResizeBuffers preserves invalid-count refusal");
+        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS1;
+        const uint32_t node_mask = 1; typed.args.resize_buffers1.node_masks = &node_mask;
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
+            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("ResizeBuffers1 preserves native-array refusal");
+        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE;
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled || FAILED(typed.result.hresult))
+            return fail("SetFullscreenState uses the actual physical owner");
+        typed.method = RSF_D3D11_DISPATCH_SET_COLOR_SPACE1;
+        typed.args.color_space.color_space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled || FAILED(typed.result.hresult))
+            return fail("SetColorSpace1 uses the actual physical owner");
     }
     auto color = texture(device.Get(), DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
     auto motion = texture(device.Get(), DXGI_FORMAT_R16G16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -130,6 +272,7 @@ int main(int argc, char** argv) {
     const auto verify = [&](bool condition, const char* label) {
         if (!condition) { std::printf("FAIL: %s\n", label); failed = true; }
     };
+    bool refuse_inputs_late = false;
     auto frame = [&](bool reconstruct, bool primary, bool reset, int expect_capture) {
         ++source;
         cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN);
@@ -176,10 +319,20 @@ int main(int argc, char** argv) {
         }
         if (expect_capture == 0 && held) { std::puts("FAIL: FG Off still retained pure FG inputs"); failed = true; }
         // Match the native adapter: retain inputs before SR can mutate them.
-        pass.role = RSF_GAME_RENDER_SR;
-        const auto sr_result = host.process_upscale(host.user, context.Get(), &pass);
+        auto sr_pass = pass; sr_pass.role = RSF_GAME_RENDER_SR;
+        sr_pass.flags |= RSF_GAME_RENDER_NO_FG; // SR metadata does not grant FG eligibility.
+        const auto sr_result = host.process_upscale(host.user, context.Get(), &sr_pass);
         if (reconstruct && sr_result == RSF_OK) ++sr_evaluated;
         if (reconstruct && native_reinsertion) verify(sr_result == RSF_OK, "warmed reduced SR must reinsert into native colour allocation");
+        if (refuse_inputs_late) {
+            auto refused = pass; refused.role = RSF_GAME_RENDER_FG_INPUTS; refused.flags |= RSF_GAME_RENDER_NO_FG;
+            host.render_pass(host.user,context.Get(),&refused,1);
+            host.render_pass(host.user,context.Get(),&refused,0);
+            // A subsequent duplicate eligible lease cannot undo the genuine refusal.
+            pass.role = RSF_GAME_RENDER_FG_INPUTS;
+            host.render_pass(host.user,context.Get(),&pass,1);
+            host.render_pass(host.user,context.Get(),&pass,0);
+        }
         ComPtr<ID3D11Texture2D> backbuffer;
         if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer)))) { verify(false, "GetBuffer for final scene"); return; }
         ComPtr<ID3D11RenderTargetView> backbuffer_view;
@@ -192,6 +345,13 @@ int main(int argc, char** argv) {
         pass.role = RSF_GAME_RENDER_WINDOW; pass.scene_surface = nullptr;
         host.render_pass(host.user, context.Get(), &pass, 1);
         const auto result = chain->Present(0, 0); ++app_presents;
+        if (outer) {
+            rsf_native_present_record observed{}; observed.struct_size = sizeof(observed);
+            verify(rsf_native_window_last_present(&observed) && observed.matched && observed.source_frame_id == source,
+                "actual inner Present matches the outer WINDOW canonical identity");
+            verify(outer->pre == app_presents + 1 && outer->post == outer->pre && outer->dispatched == outer->pre,
+                "outer pre/post work survives every source and generation switch");
+        }
         if (FAILED(result)) { std::printf("FAIL: Present HRESULT=0x%08lx\n", static_cast<unsigned long>(result)); failed = true; }
         occluded |= result == DXGI_STATUS_OCCLUDED;
         host.render_pass(host.user, context.Get(), &pass, 0);
@@ -235,11 +395,8 @@ int main(int argc, char** argv) {
         }
         MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
     };
-    // The production host admits its overlay/settings from a complete scene lease,
-    // not an unassociated dimensions-only packet. Bootstrap is a real bounded
-    // source with FG/SR Off; its attempted FRAME/SUBMISSION facts before first
-    // graphics admission cannot establish generation and are not counted as a
-    // warmup or successful SR source.
+    // Presentation was bound above without claiming scene/SR admission. Bootstrap
+    // is one complete source with FG/SR Off, not a hidden warmup or successful SR source.
     std::puts("Phase: one complete source-owned bootstrap scene, SR/FG Off");
     frame(false, true, true, 0);
     const uint64_t bootstrap_sources = source;
@@ -325,6 +482,16 @@ int main(int argc, char** argv) {
     std::printf("Reset tags: before=%llu after=%llu\n", static_cast<unsigned long long>(before_reset.tagged_frames), static_cast<unsigned long long>(after_reset.tagged_frames));
     verify(after_reset.tagged_frames == before_reset.tagged_frames, "explicit reset must not increment tag count");
     if (!failed) frame(true, true, false, true);
+    rsf_native_fg_status before_refusal{}; before_refusal.struct_size = sizeof(before_refusal);
+    if (!rsf_native_fg_status_get(&before_refusal)) return fail("query before-late-refusal FG status");
+    refuse_inputs_late = true;
+    if (!failed) frame(true,true,false,true);
+    refuse_inputs_late = false;
+    rsf_native_fg_status after_refusal{}; after_refusal.struct_size = sizeof(after_refusal);
+    verify(rsf_native_fg_status_get(&after_refusal) != 0, "after-late-refusal FG status query");
+    verify(after_refusal.tagged_frames == before_refusal.tagged_frames && after_refusal.reason == RSF_NATIVE_FG_REASON_RESET,
+        "genuine late FG refusal remains sticky despite eligible duplicate and WINDOW");
+    if (!failed) frame(true,true,false,true);
     rsf_native_fg_status before_invalid{}; before_invalid.struct_size = sizeof(before_invalid);
     if (!rsf_native_fg_status_get(&before_invalid)) return fail("query before-nonprimary FG status");
     if (!failed) frame(true, false, false, -1);

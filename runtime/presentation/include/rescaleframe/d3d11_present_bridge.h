@@ -3,6 +3,7 @@
 #define RSF_D3D11_PRESENT_BRIDGE_H
 #include <rescaleframe/streamline_host.h>
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/d3d11_chain_dispatch.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,6 +49,11 @@ typedef struct rsf_d3d11_present_setup {
 /* Cold startup only, before the game's main swapchain. Unsupported creation forwards unchanged.
    No game-specific sites or policies live in the bridge. Hooks remain for process lifetime. */
 int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup);
+/* Same factory hooks, forwarding unchanged outside an explicit thread/window
+   transaction. Tokens are process-unique; all graphics inputs remain borrowed. */
+int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* setup);
+int32_t rsf_d3d11_present_creation_begin(void* window, uint64_t* token);
+int32_t rsf_d3d11_present_creation_end(void* window, uint64_t token, void* device, void* context, void* outer_chain);
 /* Engine integrations own the creation call and need no DXGI detours. Prepare
    once before device/swapchain creation, then call create_for_hwnd at that site.
    All arguments are borrowed DXGI objects/descriptors; out owns one COM reference. */
@@ -74,6 +80,13 @@ void* rsf_d3d11_present_command_list(void* list);
    the fence is borrowed (AddRef to keep it). On failure nothing was signalled and both are zero. */
 int32_t rsf_d3d11_present_retire(void* provider_session, void* list, void** fence, uint64_t* value);
 int rsf_d3d11_present_is_owner(void* swapchain);
+/* Borrowed live COM receiver. Exact inner facade only, including a refused owner;
+   no alias QI or unowned dereference. Returns 1 and writes the native result when
+   handled, otherwise 0 with result unchanged. Does not reenter the virtual slot. */
+int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync_interval, uint32_t flags, int32_t* result);
+/* Host validates header/method. Writes handled before calling the typed body;
+   exact inner receiver only, including Release during refusal or cancellation. */
+void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request);
 int rsf_d3d11_present_has_owner(void);
 const rsf_generation_provider* rsf_d3d11_present_provider(void);
 void* rsf_d3d11_present_session(void);
