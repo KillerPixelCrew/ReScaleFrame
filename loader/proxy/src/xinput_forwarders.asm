@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-3.0-only
+; SPDX-License-Identifier: MIT
 EXTERN rsf_xinput_resolve:PROC
 .code
 dispatch PROC

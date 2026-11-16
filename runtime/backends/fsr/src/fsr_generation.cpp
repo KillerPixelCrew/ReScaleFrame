@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
 #include "../../common/frame_capture12.h"

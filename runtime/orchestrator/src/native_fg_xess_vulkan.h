@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_fg_vulkan.h>

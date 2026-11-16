@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Tree (FTreeVisual) and detail/grass (CDetailManager) previous-frame state for the foliage VS b13 buffer.
 // Pure CPU: no engine memory, no D3D. The motion stage reads each foliage draw's constants from the engine's staged VS

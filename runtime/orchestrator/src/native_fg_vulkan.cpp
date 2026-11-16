@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_fg_ffx_vulkan.h"
 #include "native_fg_source.h"
 #include <rescaleframe/native_latency_vulkan.h>

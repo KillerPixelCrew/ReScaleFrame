@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Read an `ID3D11Buffer` back into system memory, inside the frame that is using it.
 
    The camera data no backend can substitute for lives in one constant buffer the game fills per

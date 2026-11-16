@@ -60,7 +60,8 @@ def main(argv=None, *, release_revision=None, game_only=False):
         (release / "ReScaleFrame.Game.RDR2.dll", "ReScaleFrame/ReScaleFrame.Game.RDR2.dll"),
         (ROOT / "target/release/rescaleframe_overlay.dll", "ReScaleFrame/rescaleframe_overlay.dll"),
         (ROOT / "docs/releases/rdr2-install.md", "ReScaleFrame/README.md"),
-        (ROOT / "LICENSE", "ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt"),
+        (ROOT / "LICENSE", "ReScaleFrame/licenses/ReScaleFrame-MIT.txt"),
+        (ROOT / "runtime/graphics/src/sharpening/LICENSE-GPL-3.0.txt", "ReScaleFrame/licenses/Sharpening-GPL-3.0.txt"),
         (ROOT / "sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
         (ROOT / "runtime/orchestrator/ANTILAG2-LICENSE.txt", "ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt"),
         (ROOT / "runtime/backends/dlss/third_party/mfg_unlocker/LICENSE", "ReScaleFrame/licenses/MFG-Unlocker-MIT.txt"),
@@ -87,7 +88,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         copy(args.streamline_root / "bin/x64" / name, stage / "ReScaleFrame/streamline" / name)
     (stage / "ReScaleFrame.ini").write_text(CONFIG, encoding="utf-8")
     (stage / "ReScaleFrame/licenses/README.md").write_text(
-        "# Package notices\n\nFirst-party code is GPL-3.0-only; the public Game SDK is MIT.\n"
+        "# Package notices\n\nFirst-party code is MIT. The sharpening shaders are GPL-3.0-only ports of OptiScaler.\n"
         "Source identity is recorded in ../manifest.json and the corresponding-source archive.\n\n"
         "Streamline/DLSS/DLSS-G/Reflex, FidelityFX SR/FG and XeSS SR/FG/XeLL runtimes retain their\n"
         "own licenses. Their terms and third-party notices are included beside the runtimes\n"

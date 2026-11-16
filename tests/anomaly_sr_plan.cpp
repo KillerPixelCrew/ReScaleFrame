@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 2 render/output plan arithmetic (games/anomaly/src/sr_plan.h): scale clamping, per-axis rounding, odd and
 // tiny sizes, the minimum/maximum scale, and the half-size rule of rt_half_depth. No game, no device.
 #include "sr_plan.h"

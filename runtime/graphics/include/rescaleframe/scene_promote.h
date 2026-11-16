@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Promote the tail of the game's frame to output resolution, so the reconstruction is graded by the
    game's own tonemap and the interface is drawn sharp by the game's own composite.
 

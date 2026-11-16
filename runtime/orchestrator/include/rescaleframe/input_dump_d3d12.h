@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/input_dump.h>
 typedef struct rsf_input_dump12 rsf_input_dump12;

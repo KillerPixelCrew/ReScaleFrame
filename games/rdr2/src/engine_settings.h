@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_renderer.h>
 // Install after exact-image decryption, before native settings load. Diagnostics are

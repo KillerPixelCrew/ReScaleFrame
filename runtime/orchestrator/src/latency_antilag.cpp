@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "latency_antilag.h"
 #include <d3d11.h>
 #include <d3d12.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_api.h>
 rsf_result rsf_rdr2_renderer_prepare(const rsf_game_host_services&) noexcept;

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Read Ace Combat 7's view uniform buffer.
 
    The camera data a reconstruction backend cannot do without is not in a frame capture and not

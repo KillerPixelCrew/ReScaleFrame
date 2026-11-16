@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR Stages 4 and 5: what the adapter hands the shared RSF SR pipeline at the S-B seam
 // (docs/research/anomaly-sr-seam.md section 12). Pure rules, no engine memory and no D3D, so

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The research proxy's DLSS path, kept behind four functions so the proxy itself stays readable.
 
    This is not a public interface. It exists inside the loader because the loader is what gets into

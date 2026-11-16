@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Put the egui overlay on the screen inside the game, and give what it decides back to the bridge.
 
    The three pieces this joins already existed and had never been connected to anything: the panel

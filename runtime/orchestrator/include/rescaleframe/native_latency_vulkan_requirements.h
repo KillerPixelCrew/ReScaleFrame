@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
 #define RSF_LATENCYVK_DEVICE_ABI_VERSION 1u

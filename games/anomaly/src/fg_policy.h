@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Frame-generation policy for Anomaly: which engine frames are FG source frames, which of them may feed generation
 // history, and when history restarts. Pure logic, no engine or D3D access; fg_stage.cpp drives it from the native

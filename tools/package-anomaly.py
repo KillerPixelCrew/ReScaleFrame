@@ -151,7 +151,8 @@ def input_plan(args):
         'ReScaleFrame/ReScaleFrame.Game.Anomaly.dll': release / 'ReScaleFrame.Game.Anomaly.dll',
         'ReScaleFrame/rescaleframe_overlay.dll': ROOT / 'target/release/rescaleframe_overlay.dll',
         'ReScaleFrame/README.md': ROOT / 'docs/releases/anomaly-install.md',
-        'ReScaleFrame/licenses/ReScaleFrame-GPL-3.0.txt': ROOT / 'LICENSE',
+        'ReScaleFrame/licenses/ReScaleFrame-MIT.txt': ROOT / 'LICENSE',
+        'ReScaleFrame/licenses/Sharpening-GPL-3.0.txt': ROOT / 'runtime/graphics/src/sharpening/LICENSE-GPL-3.0.txt',
         'ReScaleFrame/licenses/GameSDK-MIT.txt': ROOT / 'sdk/game/LICENSE',
         'ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt': ROOT / 'runtime/orchestrator/ANTILAG2-LICENSE.txt',
         'ReScaleFrame/licenses/MFG-Unlocker-MIT.txt': ROOT / 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE',
@@ -252,7 +253,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         copy(source, stage / name)
     (stage / 'ReScaleFrame.ini').write_text(CONFIG, encoding='utf-8', newline='\n')
     for name, text in {'Anomaly-motion.md': MOTION_NOTICE,
-                       'README.md': '# Package notices\n\nRSF is GPL-3.0-only; GameSDK is MIT. Vendor binaries and the\n'
+                       'README.md': '# Package notices\n\nRSF is MIT; its sharpening shaders are GPL-3.0-only ports of OptiScaler. Vendor binaries and the\n'
                                     'Motion shader rules and additions are RSF-authored; game source is never packaged.\n'
                                     'See the per-family notices, Sharpening-THIRD_PARTY.md and RUST-DEPENDENCIES.md.\n'}.items():
         (stage / 'ReScaleFrame/licenses' / name).write_text(text, encoding='utf-8', newline='\n')

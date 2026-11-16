@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/unity_runtime_host.h>
 #include <rescaleframe/unity_runtime_config.h>
 #include <rescaleframe/callback_render_host.h>

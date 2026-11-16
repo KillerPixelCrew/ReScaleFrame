@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR Stage 3 jitter and mip bias arithmetic (docs/research/anomaly-sr-seam.md sections 4 and 11). Pure, no engine or
 // D3D dependency, so tests/anomaly_sr_jitter.cpp checks every rule without the game.

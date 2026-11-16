@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR stages behind [Anomaly] SRStage (docs/research/anomaly-sr-seam.md sections 9 to 11). Opt-in, Observe mode only.
 //   SRStage=1  generic0/generic_temp FP16 twins at output size, f^-1/f round trip at the seam.

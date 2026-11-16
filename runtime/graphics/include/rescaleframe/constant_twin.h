@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* A constant buffer of our own that stands in for one of the game's, with contents the caller
    chose, for binding in its place on particular draws.
 

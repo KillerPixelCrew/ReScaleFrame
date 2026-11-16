@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/orchestrator/src/auxiliary_sr.h"
 #include "../runtime/orchestrator/src/native_regions.h"
 #include <wrl/client.h>

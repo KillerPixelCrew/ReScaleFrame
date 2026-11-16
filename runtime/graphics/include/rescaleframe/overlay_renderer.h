@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Draw the overlay's triangles with D3D11, inside a frame the game owns.
 
    `rescaleframe/overlay.h` is the whole description of what to draw: vertices in physical pixels

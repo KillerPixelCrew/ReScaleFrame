@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The surface the game's interface is drawn into instead of into the scene.
 
    This is the thing that makes the interface sharp. AC7 rasterizes its front end at a fixed

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "runtime_control.h"
 #include "api.h"
 #include <rescaleframe/input_dump.h>

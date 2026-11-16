@@ -1,7 +1,7 @@
 ---
 name: ue418-render-integration
 description: Analyze shipped UE4.18 renderer behavior against the matched 4.18.3 source and AC7 evidence. Use for version-specific composition graph hooks, private view layouts, UI converters, jitter and queued RHI integration; general Unreal 4 concepts live in the Unreal 4 skill.
-license: GPL-3.0-only
+license: MIT
 ---
 
 # UE4.18 render integration

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 struct XessSession {
     HMODULE module = nullptr;
     xess_context_handle_t context = nullptr;

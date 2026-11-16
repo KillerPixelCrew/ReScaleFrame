@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Membership sets kept by address, and the eviction that makes that safe.
  *
  * No device. The module exists to hold answers that were decided elsewhere, so everything it does

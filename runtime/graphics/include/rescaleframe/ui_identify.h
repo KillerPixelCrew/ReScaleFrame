@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Sets of pipeline objects, kept by address, with the one rule that makes that safe.
 
    Identifying a draw cheaply means settling what each object is once, when the game creates it, and

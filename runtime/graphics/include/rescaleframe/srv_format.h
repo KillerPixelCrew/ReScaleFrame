@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* The format a shader-resource view of a texture has to be created with. Depth formats map to their
    readable plane (the typed D* aliases and the typeless R* resources alike); typeless colour maps to

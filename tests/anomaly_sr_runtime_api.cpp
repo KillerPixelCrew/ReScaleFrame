@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // rsf_get_d3d11_sr_api, the generic Runtime export the Anomaly SR Stage 5 adapter borrows, queried from a client that
 // imports ReScaleFrame.Runtime.dll the way a DLL-loaded adapter does (no OrchestratorCore, no RSF_RUNTIME_BUILD).
 // Checks the size/version refusals (nothing written on failure), the filled table, the idle pipeline's answers, the

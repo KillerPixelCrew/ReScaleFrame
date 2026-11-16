@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Vendor call census test.
 //
 // Fake vendor DLLs (tests/vendor_census_fixture.cpp) are called through a direct import, through

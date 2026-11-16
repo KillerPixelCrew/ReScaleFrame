@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Apply a ReScaleFrame module dump sidecar (schema 2) to an IDA 9.x database.
 
 Run inside IDA (File > Script file, or `ida -S"apply_ida.py sidecar.json [census-summary.json]"`).

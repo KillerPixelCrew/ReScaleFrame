@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "graph.h"
 #include "drivers/vulkan/rendering_device_driver_vulkan.h"
 

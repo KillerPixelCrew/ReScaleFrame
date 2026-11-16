@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include "native_profile.h"
 // Motion MRT sites (design notes in motion_stage.h). One table per exact executable (native_profile.h, build_profile.h).

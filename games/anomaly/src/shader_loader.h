@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // RSF motion shader variants for the engine's shader load path (create_shader, motion_profile.h).
 //

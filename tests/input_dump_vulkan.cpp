@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/input_dump_vulkan.h>
 #include "vulkan_interop_fixture.h"

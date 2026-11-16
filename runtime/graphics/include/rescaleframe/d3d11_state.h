@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Preserve immediate-context bindings around work inside a game's frame. Engines cache bindings
    and will not necessarily rebind them after a vendor call. All six shader stages, their complete
    resource ranges, shader linkage, constant-buffer ranges, IA, rasterizer, OM, UAV and predication

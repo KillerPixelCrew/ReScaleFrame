@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_renderer.h>
 bool rsf_rdr2_start_script_input(void* instance, void* runtime, const wchar_t* configuration,

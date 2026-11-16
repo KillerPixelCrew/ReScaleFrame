@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 1 D3D11 fixture. Runs the production round-trip pass (games/anomaly/src/sr_d3d11.cpp with the embedded
 // shaders/sr/rsf_sr_roundtrip.hlsl) on a real device and compares its UNORM8 output with what a stock UNORM8 target
 // stores for the same tonemapped value:

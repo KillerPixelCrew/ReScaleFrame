@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Exercise the actual owner with synthetic recording/submission functions.
 #include "../runtime/orchestrator/src/native_fg_vulkan.cpp"
 #include <cstdio>

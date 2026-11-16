@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/streamline_host.h>
 #include <windows.h>
 #include <d3d12.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "preview.h"
 #include <rescaleframe/native_fg_d3d12.h>
 #include <windows.h>

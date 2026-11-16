@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 1 hook contracts without the game:
 //  * the shared CRender::rmNear slot: the geometry producer's own detour (redirected onto a fixture function) calls the
 //    registered SR callback after the original, and only while one is registered;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #if ENABLE_UPSCALER_FRAMEWORK
 using System;
 using System.Collections.Generic;

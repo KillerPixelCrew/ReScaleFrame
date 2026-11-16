@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Backend switching through the shared D3D11 SR pipeline on real hardware (NVIDIA adapter, vendor runtimes).
 //
 //   sr_backend_switch_device <vendor root> baseline

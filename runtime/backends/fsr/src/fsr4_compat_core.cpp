@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "fsr4_compat_core.h"
 #include <rescaleframe/sha256_file.h>
 #include <bcrypt.h>

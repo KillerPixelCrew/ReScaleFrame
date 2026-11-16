@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #define RSF_STREAMLINE_HOST_BUILD
 #include "../games/minecraft/native/input_observer.h"
 #include <rescaleframe/gl_shared_surface.h>

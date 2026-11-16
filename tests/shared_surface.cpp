@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Can a D3D11 texture be opened by a D3D12 device here?
  *
  * The whole presentation bridge rests on yes. Every frame generation SDK this project targets is

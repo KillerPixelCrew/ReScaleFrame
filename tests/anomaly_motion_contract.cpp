@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Motion MRT contracts without the game or a GPU: b13 layouts against the shader READMEs and headers, the per-draw
 // history policy, the draw-time history, the RTV2 bind-preservation state machine on fake RCache memory, and the
 // shader-loader hook contract (caller frame, manifest, original-bytecode proof, reflection rules, disk cache) with

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "input_hooks.h"
 // Engine-fact sinks implemented in fg_stage.cpp; no graphics or vendor SDK dependency here.
 namespace rsf::anomaly::fg { void input_begin(uint32_t) noexcept; void input_received(uint32_t,uint32_t) noexcept; }

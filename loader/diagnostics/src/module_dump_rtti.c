@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* MSVC x64 RTTI recovery from a loaded image.
 
    Every polymorphic class has a vtable whose slot at index -1 points at an

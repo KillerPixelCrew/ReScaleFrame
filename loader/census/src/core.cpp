@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Census core: the record queue, the site and function statistics, the writer thread and the C API.
 #include <intrin.h>
 

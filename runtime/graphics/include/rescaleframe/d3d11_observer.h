@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Watch a process's D3D11 use without altering what it renders.
 
    The observer patches two shared vtable entries: texture creation, so render targets can be

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "build_profile.h"
 #include <algorithm>

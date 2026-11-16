@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Motion MRT device fixture. Uses the LOCAL deployment from tools/anomaly_motion_deploy.py (licensed shader bodies,
 // never tracked; RSF_ANOMALY_MOTION_DEPLOY or <repo>/.local/anomaly/motion-deploy). Without it the test exits 77.
 //

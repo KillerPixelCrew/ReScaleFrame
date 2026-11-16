@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Vulkan: instance and device creation, queues, submits, swapchain creation and presentation.
 //
 // A game reaches these through vkGetInstanceProcAddr and vkGetDeviceProcAddr as often as through

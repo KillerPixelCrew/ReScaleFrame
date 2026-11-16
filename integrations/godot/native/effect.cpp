@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "effect.h"
 #include <rescaleframe/version.h>
 #include <godot_cpp/classes/rd_texture_format.hpp>

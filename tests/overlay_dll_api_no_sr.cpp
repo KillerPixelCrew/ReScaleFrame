@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Contract for an adapter without super resolution (sr_backend_choices == 0): SR can only be Off, requests to
 // enable it or to change its backend/quality are refused without touching the INI, saved SR keys are replaced
 // by the defaults, and status says so. Separate executable because the service configures once per process.

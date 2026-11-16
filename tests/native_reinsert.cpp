@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/orchestrator/src/native_reinsert.h"
 #include <wrl/client.h>
 #include <array>

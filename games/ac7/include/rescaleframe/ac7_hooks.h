@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* All-or-nothing MinHook installation for the AC7 module. Internal. */
 #include <MinHook.h>

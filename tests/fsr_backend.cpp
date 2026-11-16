@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* A vendor that is not here still has to answer.
  *
  * The whole point of the contract is that the orchestrator asks all three vendors the same question

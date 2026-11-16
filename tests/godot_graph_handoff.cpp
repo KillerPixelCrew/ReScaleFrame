@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Compile the actual graph lease with a narrow engine seam. No GPU or queue calls.
 #include "../integrations/godot/modules/rescaleframe/graph.cpp"
 #include <cstdio>

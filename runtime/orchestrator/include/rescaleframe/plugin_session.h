@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_PLUGIN_SESSION_H
 #define RSF_PLUGIN_SESSION_H
 #include <rescaleframe/runtime.h>

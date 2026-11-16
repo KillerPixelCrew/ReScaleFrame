@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Prospective source reservation, delayed binding, explicit abort and predecessor
 // actual-Present outcome through the generic CPU event interface.
 #include <rescaleframe/native_cpu.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "patch.h"
 #include <windows.h>
 #include <bcrypt.h>

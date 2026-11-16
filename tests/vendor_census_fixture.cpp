@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Fake vendor DLLs for the census test. One source builds four modules, selected by definition,
 // each named like the vendor DLL the census hooks. Every function does a little real work, stores
 // what it received for the test to compare, and returns a value the test knows.

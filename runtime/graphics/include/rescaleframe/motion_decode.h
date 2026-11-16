@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Turn a game's stored motion vectors into what a reconstruction backend can read.
 
    Every backend takes a scale factor for motion and offers nothing to subtract a bias with.

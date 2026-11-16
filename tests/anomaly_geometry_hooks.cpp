@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "anomaly_build_select.h"
 #include "native_hooks.h"

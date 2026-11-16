@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # @category ReScaleFrame
 """Apply a ReScaleFrame module dump sidecar (schema 2) to a Ghidra 12 program.
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "steam_present.h"
 #include <rescaleframe/steam_d3d11_chain.h>
 #include <windows.h>

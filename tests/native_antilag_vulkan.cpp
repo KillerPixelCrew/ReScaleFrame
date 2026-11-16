@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Stubbed Vulkan function pointers. No Vulkan loader, device or AMD driver is used.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>

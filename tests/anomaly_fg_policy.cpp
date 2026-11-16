@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // games/anomaly/src/fg_policy.h without the engine: which frames feed generation history, which are held back, why,
 // and when history restarts. Every engine frame is counted under exactly one skip reason (None: fed).
 #include "fg_policy.h"

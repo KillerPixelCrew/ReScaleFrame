@@ -48,5 +48,5 @@ To uninstall, close Minecraft and remove the JAR. Extracted files under `rescale
 and `config/rescaleframecraft.json` may also be removed after closing the game.
 Include `logs/latest.log` and the active native payload's `minecraft-native.log` with bug reports.
 
-First-party code uses GPL-3.0-only; included third-party components retain their own notices.
+First-party code is MIT; included third-party components retain their own notices.
 The separate source archive contains the corresponding committed source and build scripts.

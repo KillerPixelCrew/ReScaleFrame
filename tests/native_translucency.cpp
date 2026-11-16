@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Translucency hints and cloud depth on WARP: an opaque snapshot at the first scene-colour pass,
 // masks from what that pass and the offscreen layer changed, and identity-keyed handover.
 #include <rescaleframe/native_translucency.h>

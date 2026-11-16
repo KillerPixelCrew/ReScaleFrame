@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // CPU reference of the Anomaly "low" tonemap curve and its exact inverse (docs/research/anomaly-sr-seam.md 2.2).
 // The GPU pass in shaders/sr/rsf_sr_roundtrip.hlsl implements the same formulas; the D3D11 fixture compares both.

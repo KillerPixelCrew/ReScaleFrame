@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Synthetic SDK/WSI boundary. No NVIDIA runtime or Vulkan device is exercised.
 #include "../runtime/orchestrator/src/native_fg_dlss_vulkan.cpp"
 #include "../runtime/orchestrator/src/native_fg_dlss_vulkan_capture.cpp"

@@ -1,7 +1,7 @@
 ---
 name: truesky-render-integration
 description: Investigate and repair TrueSky cloud rendering by tracing projection, cloud resolution, depth bounds, effect permutations, resource views and history owners. Use for cloud jitter/blockiness, missing volumetrics and sky bleeding through aircraft details, including AC7's mixed-resolution path.
-license: GPL-3.0-only
+license: MIT
 ---
 
 # TrueSky render integration

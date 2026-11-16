@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "overlay_service.h"
 #include "sr_overlay.h"
 #include "fg_overlay.h"

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/colour_fidelity.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>

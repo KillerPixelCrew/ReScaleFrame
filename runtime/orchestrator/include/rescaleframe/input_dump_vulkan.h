@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
 typedef struct rsf_input_dump_vk rsf_input_dump_vk;

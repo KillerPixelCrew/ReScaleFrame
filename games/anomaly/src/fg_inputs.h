@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // FG depth and motion when no SR evaluation produced them (SR off: SRStage 0 or 1, the world at output size).
 // One compute pass on the engine's immediate context at the HUD-less boundary:

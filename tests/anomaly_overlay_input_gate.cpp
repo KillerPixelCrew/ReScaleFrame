@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Contract for the Anomaly overlay input gate against a synthetic IDirectInputDevice8A. The stub
 // honours the DirectInput buffer, acquisition and flush rules the engine's xr_input.cpp relies on
 // (buffered GetDeviceData for both mouse and keyboard, Acquire on DIERR_NOTACQUIRED). No real

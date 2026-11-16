@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/orchestrator/src/render_settings_store.h"
 #include "../runtime/backends/common/sharpening.h"
 #include <rescaleframe/overlay.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 using System;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;

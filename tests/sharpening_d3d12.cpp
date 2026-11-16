@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/graphics/src/sharpening/d3d12.h"
 #include "../runtime/backends/common/d3d12_helpers.h"
 #include <dxgi1_4.h>

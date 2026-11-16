@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Bounded copies after actual swapchain draws, preserving the game's command list and state.
 #include "native_capture.h"
 #include "camera_probe.h"

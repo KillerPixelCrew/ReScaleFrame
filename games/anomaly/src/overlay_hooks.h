@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Guarded hooks that give the Anomaly overlay its two engine boundaries: the DXGI swap chain
 // Present/ResizeBuffers the engine calls (after its last UI draw) and the DirectInput mouse and
 // keyboard devices it polls. Both are installed from the dummy objects' vtables, so no engine RVA

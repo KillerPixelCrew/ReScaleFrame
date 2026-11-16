@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Compile and run as C11, with a dllimport reference to the actual Runtime DLL. */
 #include <rescaleframe/overlay_api.h>
 #include <stddef.h>

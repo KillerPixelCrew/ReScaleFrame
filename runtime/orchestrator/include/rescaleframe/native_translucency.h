@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_NATIVE_TRANSLUCENCY_H
 #define RSF_NATIVE_TRANSLUCENCY_H
 #include <rescaleframe/dlss_pipeline.h>

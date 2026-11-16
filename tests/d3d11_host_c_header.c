@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #include <rescaleframe/d3d11_host.h>
 #include <stddef.h>
 _Static_assert(sizeof(rsf_d3d11_reduced_frame) == 56, "Recovery request size");

@@ -5,7 +5,7 @@ ports of OptiScaler revision `2fff542e78e257a1e4ff5a1e21a69a166c78c335`
 (2026-11-12), `OptiScaler/shaders/rcas/precompile/rcas.hlsl`,
 `da_rcas_sharpen.hlsl` and `da_das_sharpen.hlsl`.
 OptiScaler is GPL-3.0; RSF distributes these modified sources under GPL-3.0-only.
-The complete GPL-3.0 license is in the repository root LICENSE.
+The complete GPL-3.0 license is in LICENSE-GPL-3.0.txt in this directory; the rest of ReScaleFrame is MIT.
 Generated SPIR-V has the same provenance and license as its HLSL source.
 
 RCAS credits RdenBlaauwen's RCAS-for-ReShade and AMD FidelityFX RCAS.

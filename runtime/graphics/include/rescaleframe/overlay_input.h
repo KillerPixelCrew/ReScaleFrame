@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Mouse and keyboard for the overlay, taken from the game's own window.
 
    The research carrier polls `GetAsyncKeyState` on a worker thread, and `loader/README.md` says

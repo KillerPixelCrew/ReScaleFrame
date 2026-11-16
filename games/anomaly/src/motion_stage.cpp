@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "motion_stage.h"
 #include "adapter_options.h"
 #include "geometry_feed.h"

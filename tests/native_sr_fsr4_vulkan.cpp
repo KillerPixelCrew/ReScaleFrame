@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "vulkan_interop_fixture.h"
 #include "../runtime/orchestrator/src/native_sr_fsr4_vulkan.h"
 #include <cstdio>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "reflex_audit.h"
 #if RSF_HAVE_NVAPI_DIAGNOSTICS
 #include <d3d12.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // A deterministic panel for the native host test. The real egui DLL can also run that test.
 #include <rescaleframe/overlay.h>
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "sr_d3d11.h"
 #include "sr_roundtrip_hlsl.h"   // generated from shaders/sr/rsf_sr_roundtrip.hlsl
 #include "sr_upscale_hlsl.h"     // generated from shaders/sr/rsf_sr_upscale.hlsl

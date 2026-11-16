@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Regression: an observer can select a helper device before the game's device exists.
 // Render in the real Present callback with no backend, then read pixels and resize the chain.
 #include "../loader/proxy/src/overlay_host.h"

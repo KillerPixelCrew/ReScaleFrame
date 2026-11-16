@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "register_types.h"
 #include "rsf_godot_engine.h"
 #include "core/config/engine.h"

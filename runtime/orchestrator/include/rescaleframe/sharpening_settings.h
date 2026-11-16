@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <stdint.h>
 #define RSF_SHARPENING_ABI_VERSION 1u

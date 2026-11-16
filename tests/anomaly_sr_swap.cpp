@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 1 and Stage 2 swap/restore state machine on fake CRenderTarget / CRT / CTexture / RCache memory laid out with
 // the offsets of games/anomaly/src/sr_profile.h, plus fake Device.dwWidth/dwHeight, HW.pBaseZB and the SSAO helper's
 // static viewport for Stage 2. Every exit path must leave the engine bytes exactly as they were.

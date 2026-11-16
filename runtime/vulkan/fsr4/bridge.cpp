@@ -96,7 +96,7 @@ extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4Probe(VkPhysicalDevice physica
     return IsCandidateVendor(info.vendorID) ? 0 : -3;
 }
 
-// Ported from ReScaleFrame runtime/backends/fsr/src/ffx_version.h (same author, GPL-3.0-only).
+// Ported from ReScaleFrame runtime/backends/fsr/src/ffx_version.h (same author, MIT).
 /// @brief Picks the newest provider of one FidelityFX major version out of an ffxQuery GetVersions answer.
 /// @details IDs are opaque; the family comes from the SDK's paired "major.minor.patch" display name, never from bit masks.
 /// @return False when nothing matches.

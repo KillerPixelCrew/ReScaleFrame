@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Static findings: vendor code that is linked into the game image and so never crosses an export.
 //
 // The scan looks for identifying strings in the main module (FSR2 resource names, NGX entry and

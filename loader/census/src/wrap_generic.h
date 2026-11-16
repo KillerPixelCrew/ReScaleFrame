@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Wrapper templates for exports whose argument counts are known only loosely. A generic wrapper
 // takes the eight integer argument registers and stack slots of the Windows x64 convention and
 // forwards all of them, so a callee of up to eight integer or pointer arguments sees exactly what

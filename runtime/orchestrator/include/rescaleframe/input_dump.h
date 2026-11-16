@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_INPUT_DUMP_H
 #define RSF_INPUT_DUMP_H
 #define RSF_INPUT_DUMP_ABI_VERSION 1u

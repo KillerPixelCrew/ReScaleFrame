@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "sr_reconstruction.h"
 #include "sr_jitter.h"
 #include <cstdio>

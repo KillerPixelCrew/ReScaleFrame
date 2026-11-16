@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/sharpening_settings.h>
 #define RSF_UNITY_SETTINGS_ABI_VERSION 2u

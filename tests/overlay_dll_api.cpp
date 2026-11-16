@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // DLL-import contract for rsf_get_overlay_api: table refusal, setup validation, settings
 // persistence through the adapter's INI section and FG forwarding. No graphics device.
 #include <rescaleframe/overlay_api.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Copy a D3D11 texture off the GPU and write it somewhere it can be looked at.
 
    Frame captures answer what a target is. This answers what it currently holds, from inside the

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The caller the overlay never had. See overlay_host.h for why it lives here.
 
    C++ rather than C, unlike the rest of the proxy, because this is the one part of the bridge that

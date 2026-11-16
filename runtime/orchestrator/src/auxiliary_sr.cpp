@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "auxiliary_sr.h"
 #include "../../graphics/src/depth_scale_private.h"
 #include <rescaleframe/depth_scale.h>

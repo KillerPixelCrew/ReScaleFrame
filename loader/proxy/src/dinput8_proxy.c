@@ -1,5 +1,5 @@
 #include <float.h>
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Research proxy: loads with the game, forwards DirectInput8Create to the real dinput8, and
    dumps the main module once its code section stops looking like ciphertext.
 

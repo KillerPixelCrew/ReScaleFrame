@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Vendor call census: records every call a game makes into vendor upscaler, frame generation,
    latency and presentation entry points, with the caller's module and RVA.
 

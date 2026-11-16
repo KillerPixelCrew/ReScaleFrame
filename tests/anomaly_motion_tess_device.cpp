@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Why the motion stage never swaps only its VS/PS variant pair while a hull/domain shader is bound (motion_stage.cpp
 // on_flush: a tessellated draw gets the whole VS+HS+DS+PS variant chain or nothing; the real chain is proven by
 // anomaly_motion_tess_chain_device). With r4_enable_tessellation on, X-Ray draws PN-tessellated materials, skinned

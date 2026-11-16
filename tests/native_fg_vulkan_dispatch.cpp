@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Synthetic concrete providers test dispatch/admission only, without GPU/SDKs.
 #include "../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp"
 #include <cstdio>

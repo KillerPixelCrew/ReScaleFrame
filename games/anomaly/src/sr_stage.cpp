@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "sr_stage.h"
 #include "adapter_options.h"
 #include "native_geometry.h"

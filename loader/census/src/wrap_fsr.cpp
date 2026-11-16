@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // AMD FSR 2.x (ffx_fsr2_api), the FidelityFX API (FSR 3.1 and later) and Intel XeSS, XeFG and XeLL.
 //
 // Structure layouts are replicated from the vendor headers and pinned with static_assert:

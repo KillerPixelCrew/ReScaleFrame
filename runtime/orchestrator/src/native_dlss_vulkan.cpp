@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_dlss_vulkan.h"
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <atomic>

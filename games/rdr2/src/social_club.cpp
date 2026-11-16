@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Social Club 2.4.0.240 selects the DXGI current backbuffer even when RAGE supplies a recording
 // list and its frame's buffer index. Queued frames can differ from the DXGI current index. Keep
 // that supplied index when recording into RAGE's list. Never change cache files or disable an

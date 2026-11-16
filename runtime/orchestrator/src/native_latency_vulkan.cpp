@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/native_latency_vulkan.h>
 #include "native_vulkan_timing.h"
 #include "latency_amd_vulkan.h"

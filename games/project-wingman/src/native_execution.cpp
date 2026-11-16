@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_execution.h"
 #include "native_camera.h"
 #include <rescaleframe/log.h>

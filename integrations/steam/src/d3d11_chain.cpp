@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/steam_d3d11_chain.h>
 #include <rescaleframe/d3d11_host.h>
 #include <rescaleframe/sha256_file.h>

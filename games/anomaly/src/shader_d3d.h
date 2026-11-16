@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // d3dcompiler implementations of shader_loader.h's Compiler and Reflector. Use the compiler the engine itself
 // imports (motion_profile.h engine_compiler_module, d3dcompiler_43.dll for 1.5.3): the loader proves its inputs by

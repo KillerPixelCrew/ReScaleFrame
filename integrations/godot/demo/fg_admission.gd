@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # Explicit negative admission fixture. Run only when device discovery lacks FG4.
 extends "res://scene.gd"
 

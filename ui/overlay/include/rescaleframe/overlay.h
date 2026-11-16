@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The in-game overlay: what it draws, what it was told, and what the user asked for.
 
    The split follows the same line as the rest of the project. egui owns the interface itself, in

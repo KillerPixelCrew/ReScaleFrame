@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // D3D11 pieces of the SR stages: twin creation, the Stage 1 f^-1/f round-trip pass and the Stage 2 seam upscale pass.
 // No engine memory is read here; the caller passes engine resources it has already validated.

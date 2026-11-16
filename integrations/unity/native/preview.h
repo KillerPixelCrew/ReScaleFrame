@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_renderer.h>
 bool rsf_unity_preview_region(int left, int top, int width, int height, bool visible);

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/vulkan/fsr4-fg/bridge_contract.h"
 #include <cstdio>
 #include <cstring>

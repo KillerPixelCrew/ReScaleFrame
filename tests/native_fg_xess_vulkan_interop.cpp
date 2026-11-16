@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Explicit device fixture. Build standalone with the bridge and importer; no
 // game, package or cached vendor DLL is modified. Caller owns the GPU lease.
 #define VK_USE_PLATFORM_WIN32_KHR

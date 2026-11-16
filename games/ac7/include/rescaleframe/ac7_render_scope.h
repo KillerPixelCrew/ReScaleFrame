@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_AC7_RENDER_SCOPE_H
 #define RSF_AC7_RENDER_SCOPE_H
 #include <stdint.h>

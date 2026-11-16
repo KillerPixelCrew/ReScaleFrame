@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "drivers/d3d12/rendering_device_driver_d3d12.h"
 
 void *RenderingDeviceDriverD3D12::rescaleframe_begin(CommandBufferID id) {

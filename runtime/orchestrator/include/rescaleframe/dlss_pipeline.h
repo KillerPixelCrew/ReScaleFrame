@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The sequence that puts DLSS on a frame, and the resources that outlive one.
 
    `rsf_dlss_load`, `rsf_motion_decode_run` and `rsf_assemble_dlss_frame` each do one part of the

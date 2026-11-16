@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../games/skyrim-se/src/cpu_events.h"
 #include "../games/skyrim-se/src/input_ownership.h"
 #include "../games/skyrim-se/src/screen_classification.h"

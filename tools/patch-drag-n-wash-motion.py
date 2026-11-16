@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # /// script
 # requires-python = ">=3.12"
 # dependencies = ["UnityPy==1.25.0"]

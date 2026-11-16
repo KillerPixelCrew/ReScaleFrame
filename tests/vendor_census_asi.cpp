@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // A stand-in for an ASI plugin: it installs the census from DllMain, which is how a game's ASI
 // loader would start it, so the test can check that install is safe under the loader lock.
 #include <windows.h>

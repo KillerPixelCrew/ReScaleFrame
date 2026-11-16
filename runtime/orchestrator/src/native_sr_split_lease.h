@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 namespace rsf::sr {
 // CPU admission only. Successful submission never substitutes for GPU completion.

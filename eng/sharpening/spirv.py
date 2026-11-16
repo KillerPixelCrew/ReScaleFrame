@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Regenerate embedded SPIR-V from the same raw-string HLSL D3D compiles."""
 from pathlib import Path
 import argparse

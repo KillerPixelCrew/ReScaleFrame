@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* One texture, visible to both a D3D11 device and a D3D12 one.
  *
  * Every frame generation SDK this project targets is D3D12 only. AC7 is D3D11. So the frame the

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* In-application RenderDoc capture, driven from inside the game process.
 
    RenderDoc's own launcher cannot easily reach a Steam- and Proton-started game, but any module

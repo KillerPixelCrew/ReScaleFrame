@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Shared persistence for rsf_render_settings in an adapter-supplied INI section. The keys are
 // the render frontend's; the file and section always come from the adapter.

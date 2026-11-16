@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // The shared render-frontend SR settings (INI keys SR, SRBackend, SRQuality, DLSSPreset) as the Anomaly SR stages apply
 // them. No dependencies, so the overlay service and its fixtures include it without the SR pipeline headers.

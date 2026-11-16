@@ -71,7 +71,7 @@ int main() {
     return 0;
 }
 #else
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 #include <cstdio>

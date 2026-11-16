@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # Explicit hardware experiment; never part of ALL or routine CTest.
 add_executable(rsf_d3d11_host_rendered_fg_device EXCLUDE_FROM_ALL
     "${CMAKE_CURRENT_LIST_DIR}/d3d11_host_rendered_fg_device.cpp")

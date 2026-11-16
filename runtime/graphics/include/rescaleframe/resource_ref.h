@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Hold on to a D3D11 resource from code that has no COM.
 
    The loader is C and the resources it is handed are borrowed for the duration of a callback. When
