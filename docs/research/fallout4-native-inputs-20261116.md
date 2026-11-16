@@ -499,3 +499,22 @@ user settings SHA13D80689... back after sealing the root test mutation; native
 prefs/custom were preserved. No full visual/motion/quality, captured HUDless,
 performance, FG, prospective input/pacing, latency or normal-close acceptance
 is claimed. This followup changes documentation only.
+## Current paired reduced-input evidence, 16 November 2026
+
+Commit07afb10's complete planning-history gate passed223/14 in128.36seconds,
+Rust clean; hidden actual reset constants1,0,1,0,1,0,1,0 passed separately.
+Unchanged Runtime8570CCC2.../Entry463B1EED... then captured ENB-on
+source5737/native6211 and wrapper-absent source19050/native19505, both complete,
+matched Present/SR0, reset0 and Quality1 1707x1067 to2560x1600. Native cropped
+colour equals SR source exactly in both; world-depth descriptor replay agrees
+within1e-7 and all five captured auxiliary nearest expansions are exact.
+ENB-on active Main already has nested rectangles; wrapper-absent active crop
+and final stationary shower view are clean. Different save labels/time and
+camera/history prevent a pixel-aligned or sole-cause comparison. See the
+[paired quality audit](fallout4-reduced-quality-audit-20261116.md) for full hashes
+and units. No near pixels or independently moving sample validates the wider
+shader/motion audit. CPU futurehandoff is separately in progress/unbuilt;
+FG/latency and reduced coexistence remain unaccepted. Both ordinary AltF4
+controls hit baseline4CB273/null50 C0000005 and restored20/20, with the extra
+quarantined ENB wrapper restored exactly per its separate control receipt.
+No normal/native-Quit exit or worker game/process/UI action is claimed.

@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Reader-padding full gate223/14 passed; PID70400 native SR capture complete/matched and framebuffer reader accepted, FG refused absent bound input owner; restored20/20 after baseline close AV, no FG/latency/full-quality acceptance, rendering_ready remains0",
+  "status": "Commit07afb10 planning-history full gate223/14 passed; ENB-on Quality1 capture has nested rectangles already in native Main, wrapper-absent stationary Quality1 control is clean; both matched captures restored20/20 after baseline close AV, ENB wrapper additionally restored, no reduced coexistence/FG/latency acceptance, rendering_ready remains0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -48,7 +48,7 @@
     "abi": "Host8/Game23/Frame2/Camera1; provisional FG_INPUTS|INPUT_TIMELINE declarations3 for cold validation, no RENDERED_SOURCE, readiness0",
     "implementation": "Core-planned native DR at guarded five-argument UpdateDynamicResolution, producer LTRB/canonical camera inputs, explicit pre-mutation FG capture and single auxiliary SR transaction; scoped unit selector/full viewport and source-end restoration",
     "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
-    "validation": "Complete reader-padding-r2 Release VS2026 gate exit0,223passed14skipped119.87seconds, fmt/Clippy clean; prior XeSS activity failure passed unchanged focused6.90s recheck before fullr2"
+    "validation": "Commit07afb10 complete Release VS2026 planning-history gate223passed14skipped128.36s Rustclean; hidden planning-history-device-r2 actual backend reset sequence1,0,1,0,1,0,1,0 passed; CPU futurehandoff in progress/unbuilt"
   },
   "research": "docs/research/fallout4-render-integration-20261116.md",
   "native_render_callbacks": {
@@ -68,7 +68,7 @@
     "native_raster_gate": ".local/fallout4-research/verify-native-raster-20261116.log",
     "configuration": "Windows Release VS2026",
     "result": "exit0,221passed14skipped,Cargo fmt and Clippy clean",
-    "live_acceptance": "PID70400 manifest complete/matchedPresent source4121/native4598 with16captured of30image entries and native framebuffer reader accepted; FG explicitly refused absent bound input owner despite resources/HUDless ready, no generated FG/latency/full-quality acceptance",
+    "live_acceptance": "Native-scale matched SR and limited clean stationary wrapper-absent Quality1 observed; ENB-on Quality1 visually corrupted before SR, full coexistence/quality/FG/latency unaccepted",
     "limits": "Complete native SR capture and sustained execution telemetry established; captured HUDless unavailable at FG Off, full motion/shader/depth visual quality, broad quality/performance, prospective input/pacing/FG/latency and normal coexistence close remain unaccepted",
     "first_native_raster_trial": "native-raster-20261116-093321-487 PID48088 prepared/started and scoped-bound; physical chain INVALID_CALL twice, exitC0000005, observation incomplete,21/21restored; no SR acceptance",
     "armed_startup_trial": "native-raster-20261116-095900-661 PID58104 exact-SHA armed; AVbc83c1 read98 withRCX0, absent BSBethesdaPlatform singleton30e7108, beforeSR; exitC0000005 and21files restored, causeunassigned",
@@ -388,7 +388,7 @@
       "limits": "Sustained SR execution telemetry only; no completed capture, physical/visual-quality, performance, FG, prospective-input, latency, normal/native-Quit or full integration acceptance"
     },
     "planning_history_followup": {
-      "scope": "Built and device-tested generic history/metadata correction; next live validation pending",
+      "scope": "Built/full-gate/device-tested and deployed in two matched Quality1 controls; stationary wrapper-absent clean output, ENB-on native Main corruption; no general quality/coexistence/FG/latency acceptance",
       "gate": {
         "log": "verify-planning-history-20261116.log",
         "configuration": "Windows Release VS2026",
@@ -432,14 +432,67 @@
       "retained_failures": [
         "build-planning-history-20261116.log included nonexistent rsf_input_dump target; corrected command used rsf_input_dump_test",
         "planning-history-device-20261116.log demanded cold bootstrap success without a source token; fixture corrected to require explicit cold refusal, without changing production readiness"
-      ]
+      ],
+      "commit": "07afb10"
+    },
+    "reduced_quality_controls": {
+      "research": "docs/research/fallout4-reduced-quality-audit-20261116.md",
+      "runtime_sha256": "8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3",
+      "entry_sha256": "463B1EED47090204DBB301B0332CA5CB9E5938907A67274994D59980E5AED0C7",
+      "quality": 1,
+      "render": [
+        1707,
+        1067
+      ],
+      "output": [
+        2560,
+        1600
+      ],
+      "enb_on": {
+        "report": ".local/fallout4-research/native-raster-20261116-155136-917",
+        "pid": 64716,
+        "capture": "scene-20261116-155347-123-102742796-64716-1",
+        "source": 5737,
+        "native_frame": 6211,
+        "scope": 3156,
+        "complete": true,
+        "matched_present": true,
+        "sr_result": 0,
+        "actual_reset": 0,
+        "visual": "Nested scaled rectangles already in pre-SR native Main crop; Quality1 visual rejection",
+        "close": "Root ordinary AltF4 within handoff, baseline4CB273/null50 C0000005, no normal/native-Quit claim",
+        "restored_rows": 20
+      },
+      "wrapper_absent": {
+        "report": ".local/fallout4-research/native-raster-20261116-161308-012",
+        "pid": 71412,
+        "capture": "scene-20261116-161912-234-104267921-71412-1",
+        "source": 19050,
+        "native_frame": 19505,
+        "scope": 13731,
+        "complete": true,
+        "matched_present": true,
+        "sr_result": 0,
+        "actual_reset": 0,
+        "visual": "Clean active source crop and backend/reinserted/final in observed stationary shower",
+        "close": "Ordinary AltF4 in handoff, traced4CB273/null50 C0000005, normal_exit=false",
+        "restored_rows": 20,
+        "authority": "post-close-disposition.json"
+      },
+      "numeric": "Both crop RGB exact, copied world-domain replay within1e-7, all five auxiliary nearest replays exact, R11 reinsertion unsigned floor quantization exact; no near pixels or moving sample",
+      "enb_restoration": {
+        "receipt": ".local/fallout4-research/enb-control-20261116-161307-318/enb-control.json",
+        "restored": true,
+        "sha256": "AC194BD525BB1C3CF363448F1D2B9F96DD859424E6FEAC00695B152B4B951388"
+      },
+      "limits": "Save Sanctuary Hills level1/8min versus prior ExitSave6min, camera orientation/jitter/history differ; ENB-presence association, not sole-cause proof; no reduced coexistence/FG/latency acceptance"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
   "startup_research": "docs/research/fallout4-native-startup-av-20261116.md",
   "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md",
   "reduced_source_phase": {
-    "baseline": "95ffa1e plus current working source",
+    "baseline": "Committed07afb10 plus separate CPU futurehandoff working source, unbuilt",
     "adapter_built": true,
     "quality_choices": 31,
     "capabilities": {
@@ -450,7 +503,7 @@
     },
     "generic_handoff": "Existing HostABI8 auxiliary transaction, shared numeric R11 support and idempotent empty cleanup acknowledgement",
     "native_restore": "Owned exact writes restore; superseded scalar values and borrowed triangle changes are preserved and refused without false busy; failed actual retirement/unsafe owner association retains busy and pins",
-    "pending": "Prospective BIND/input owner and core pacing/FG/latency remain unaccepted despite complete native SR capture/resource admission; captured HUDless image, full visual/motion/quality/performance and normal close still outstanding",
+    "pending": "CPU futurehandoff in progress/unbuilt; ENB reduced-Main producer cause unresolved, moving temporal/near/active-effect audits and full coexistence/FG/latency acceptance pending",
     "new_target_correction_built": true
   }
 }

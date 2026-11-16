@@ -47,8 +47,29 @@ A later shared-host correction preserves temporal history across unchanged
 planning calls and records copied depth domains in captures. Its complete
 Release gate passed223/14 in128.36seconds; the separate hidden device fixture
 verified stable backend reset0 and genuine-change/failure reset1. Runtime8570CCC2...
-is built and device-tested, with live validation pending. See
+was then deployed in the two limited Quality1 controls below. See
 [planning history](research/native-sr-planning-history-20261116.md).
+
+The committed07afb10 planning-history batch passed the complete Release gate
+223/14 in128.36seconds, Rust clean; hidden actual backend reset constants were
+1,0,1,0,1,0,1,0. Runtime8570CCC2.../Entry463B1EED... were unchanged between
+ENB-on PID64716 source5737/native6211 and wrapper-absent PID71412
+source19050/native19505. Both complete captures matched Present/SR0 with
+actual reset0 and Quality1 1707x1067 to2560x1600. The ENB-on image has nested
+rectangles already in native Main; the no-wrapper active source crop and
+final stationary shower image are clean. Crop/depth/auxiliary/reinsertion
+numeric audits agree in both. This associates wrapper presence with the
+observed defect, not ENB sole-cause proof: save labels/time, camera orientation,
+jitter and history differ. Reduced coexistence, moving quality, FG and latency
+remain unaccepted. CPU futurehandoff is separately in progress and unbuilt.
+
+Both root controls used ordinary AltF4 during the close handoff, hit the known
+4CB273/null50 C0000005 baseline fault and restored20/20 controller rows.
+No normal/native-Quit exit is claimed. The no-wrapper report's authoritative
+post-close disposition and separate ENB control receipt confirm restored=true
+and exact wrapper SHA AC194BD5... after the trial. See the
+[paired reduced-quality audit](research/fallout4-reduced-quality-audit-20261116.md)
+for full hashes, comparison limits and artifact identities.
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
