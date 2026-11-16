@@ -940,3 +940,27 @@ depth-fault attribution. Later exact recovery ending3103b81a21864e34ac33e15f1721
 verified20/20 restored, custom INI unchanged and user settings SHA13D80689...
 restored; native prefs/custom were preserved. This documentation update ran
 no new experiment and changed no production source.
+## Current reduced world-depth capture controls, 16 November 2026
+
+The committed07afb10 planning-history batch passed the complete Release gate
+223/14 in128.36seconds, Rust clean, and hidden actual reset sequence
+1,0,1,0,1,0,1,0. Both later Quality1 native captures serialize reset0 and exact
+ABI23 domains: ENB-on source5737/native6211 and wrapper-absent
+source19050/native19505, render1707x1067/output2560x1600. CPU pixel-center replay
+of their copied world matrices matches normalized R32 within7.31849e-8 and
+9.77319e-8 respectively, with1,821,369 world samples and no near or clear samples
+in either crop. Captured SR/FG depth agrees, and all auxiliary nearest expansion
+depth values match their original crop sampling. This validates those bounded
+world-depth arithmetic receipts, not the unexercised composed near convention,
+stencil ownership or full geometry/FG quality.
+
+The ENB-on Main crop is visibly corrupted before SR; the wrapper-absent active
+crop and final stationary view are clean, with unchanged RSF artifacts. Save
+labels/time, rotations and jitter/history differ, so no ENB sole-cause or full
+coexistence conclusion follows. Both root ordinary AltF4 closes reproduced
+baseline4CB273/null50 C0000005 and restored20/20 controller rows; the extra
+wrapper control restored exact AC194BD5... separately. No normal/native-Quit
+exit is claimed. Full hashes, source identities and the authoritative close/
+restoration receipts are in the [paired quality audit](fallout4-reduced-quality-audit-20261116.md).
+CPU futurehandoff is in progress/unbuilt; no FG/latency acceptance is added.
+This follow-up is documentation and ignored CPU/file analysis only.

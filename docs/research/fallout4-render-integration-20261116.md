@@ -963,3 +963,36 @@ were preserved. This is narrow native SR capture/reader acceptance; broad
 visual/motion/quality, captured HUDless coverage, performance, FG, prospective
 input/pacing, latency and full integration acceptance remain outstanding.
 Only documentation was changed for this reconciliation.
+## Current Quality1 paired control, 16 November 2026
+
+Commit07afb10 passed the complete Windows Release VS2026 planning-history gate,
+223 passed/14 skipped in128.36seconds with clean Rust fmt/Clippy. The hidden
+`planning-history-device-r2-20261116.log` verified actual backend reset constants
+1,0,1,0,1,0,1,0 across the stable/change/failure sequence. Those generic results
+are distinct from the two following native captures, whose actual reset is0.
+
+Unchanged Runtime8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3
+and Entry463B1EED47090204DBB301B0332CA5CB9E5938907A67274994D59980E5AED0C7
+ran Quality1 at1707x1067 to2560x1600. ENB-on PID64716/report155136-917 produced
+complete matched capture155347-123, source5737/native6211, with nested rectangles
+already in native pre-SR Main. PID71412/report161308-012 temporarily omitted
+only the game-local ENB wrapper and produced complete matched capture161912-234,
+source19050/native19505: its active Main crop, backend/reinserted and final
+stationary shower view are clean. Both report SR0/Present0, but the ENB-on
+Quality1 visual result is rejected. The [paired numeric audit](fallout4-reduced-quality-audit-20261116.md)
+records exact hashes, crop equality, descriptor replay and auxiliary checks.
+
+This is not a byte-identical save/view/history comparison: menu labels were
+Sanctuary Hills level1/8min versus prior ExitSave6min, and copied rotations and
+jitter differ. It associates wrapper presence with this defect without proving
+ENB is its sole cause or locating the offending draw. CPU futurehandoff work
+remains separately in progress/unbuilt; native FG/latency, reduced coexistence,
+moving/near/active-effect and broader visual acceptance are not established.
+
+Both root controls closed via ordinary AltF4 within the handoff and reproduced
+known4CB273/null50 C0000005, with20/20 controller restorations, not normal or
+native-Quit exit. The no-wrapper `post-close-disposition.json` is authoritative.
+Separate `enb-control-20261116-161307-318/enb-control.json` confirms restored=true
+and exact wrapper SHA AC194BD525BB1C3CF363448F1D2B9F96DD859424E6FEAC00695B152B4B951388.
+The documentation/audit worker performed no process, game/UI, build, GPU or
+target-write operation. Earlier failed trials remain historical evidence.
