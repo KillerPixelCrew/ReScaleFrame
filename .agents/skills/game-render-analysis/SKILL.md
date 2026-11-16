@@ -150,6 +150,10 @@ timeline, not a complete state model. Separate sessions and report drops, resets
 
 ## Preserve temporal, colour and execution contracts
 
+For latency pacing, XeLL/XeSS-FG switches, or a threaded render hang, read
+[latency sleep lock hazards](references/latency-sleep-locks.md) before changing code.
+This is a shared provider requirement for every integration, not a per-game fix.
+
 Preflight recovery before committing reduced native rendering. After commitment, a failed or
 skipped SR call cannot be assumed to produce a correct full-size native frame. Trace its
 reconstruction, geometry, viewport and downstream state through the last real consumer, then
@@ -192,5 +196,8 @@ fixtures do not prove moving-game quality, FPS gains or latency. FG/Reflex accep
 AC7 DLSS-G and final Unity FG corrections have recorded acceptance; higher MFG, new AC7 vendor FG,
 Claw and measured latency claims remain separate gaps. See [current status](../../../docs/current-status.md).
 
-Use focused checks for documentation. Native/SDK changes require `eng/verify.ps1`; Rust behavior
-also requires `cargo test --workspace --locked`. Verification must not alter a game installation.
+During development, use focused builds and non-disruptive checks relevant to the change.
+Run the full `eng/verify.ps1` suite only at the end of a work session before releasing.
+Do not run device, visible-window, or unrelated integration fixtures mid-session unless the user
+explicitly requests them. Rust behavior also requires `cargo test --workspace --locked` before
+release. Use focused checks for documentation. Verification must not alter a game installation.

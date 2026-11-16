@@ -41,6 +41,13 @@ HRESULT WINAPI forward_present(IDXGISwapChain*, UINT, UINT);
 HRESULT WINAPI forward_fullscreen(IDXGISwapChain*, BOOL, IDXGIOutput*);
 HRESULT WINAPI forward_resize(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 HRESULT WINAPI forward_present1(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
+decltype(&forward_present) original_present_entry{};
+decltype(&forward_present1) original_present1_entry{};
+constexpr uintptr_t present_entries[]{0x9c130, 0x9bf50};
+constexpr std::array<unsigned char, 16> present_entry_bytes[]{
+    {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x56,0x57,0x41,0x54,0x41,0x56},
+    {0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xec}
+};
 HRESULT WINAPI forward_color(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE);
 HRESULT WINAPI forward_resize1(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
 const void* handlers[]{reinterpret_cast<const void*>(&forward_release), reinterpret_cast<const void*>(&forward_present),
@@ -71,6 +78,21 @@ bool handled(rsf_d3d11_chain_dispatch& request) {
         return true;
     }
     return request.handled != 0;
+}
+// A facade must enter RSF before Steam acquires its global Present lock.
+// XeSS's physical presenter runs on another thread and needs that same lock.
+// Native receivers retain Steam's entire handler, including its overlay work.
+HRESULT WINAPI present_entry(IDXGISwapChain* receiver, UINT interval, UINT flags) {
+    auto request = request_for(RSF_D3D11_DISPATCH_PRESENT, receiver);
+    request.args.present = {interval, flags};
+    if (handled(request)) return request.result.hresult;
+    return original_present_entry ? original_present_entry(receiver, interval, flags) : E_FAIL;
+}
+HRESULT WINAPI present1_entry(IDXGISwapChain1* receiver, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters) {
+    auto request = request_for(RSF_D3D11_DISPATCH_PRESENT1, receiver);
+    request.args.present1 = {interval, flags, parameters};
+    if (handled(request)) return request.result.hresult;
+    return original_present1_entry ? original_present1_entry(receiver, interval, flags, parameters) : E_FAIL;
 }
 template<class Function> Function continuation(uint32_t method) {
     Function next{};
@@ -161,6 +183,11 @@ bool prepare_d3d11_chain(const rsf_game_host_services& host, bool (*cold_owner)(
         return fail(host, "Steam swapchain forwarding refused: unrecognized overlay fingerprint.");
     const auto base = uintptr_t(module);
     auto guarded = [&] {
+        for (size_t i = 0; i < std::size(present_entries); ++i) {
+            unsigned char bytes[16]{};
+            if (!read(base + present_entries[i], bytes, sizeof(bytes)) ||
+                std::memcmp(bytes, present_entry_bytes[i].data(), sizeof(bytes))) return false;
+        }
         for (const auto& site : sites) {
             unsigned char load[7]{}, following[16]{};
             if (!read(base + site.rva, load, sizeof(load)) || std::memcmp(load, site.load.data(), sizeof(load)) ||
@@ -180,7 +207,7 @@ bool prepare_d3d11_chain(const rsf_game_host_services& host, bool (*cold_owner)(
     // its original calls/tail jumps, stack arguments, register setup and flags.
     constexpr size_t cell_offset = 512;
     std::memcpy(page + cell_offset, handlers, sizeof(handlers));
-    void* targets[std::size(sites)]{};
+    void* targets[std::size(sites) + std::size(present_entries)]{};
     for (size_t i = 0; i < std::size(sites); ++i) {
         auto* stub = page + i * 32;
         targets[i] = reinterpret_cast<void*>(base + sites[i].rva);
@@ -209,7 +236,17 @@ bool prepare_d3d11_chain(const rsf_game_host_services& host, bool (*cold_owner)(
     size_t created = 0;
     for (; created < std::size(sites); ++created)
         if (MH_CreateHook(targets[created], page + created * 32, nullptr) != MH_OK) break;
-    bool queued = created == std::size(sites) && guarded();
+    if (created == std::size(sites)) {
+        targets[created] = reinterpret_cast<void*>(base + present_entries[0]);
+        if (MH_CreateHook(targets[created], reinterpret_cast<void*>(&present_entry),
+            reinterpret_cast<void**>(&original_present_entry)) == MH_OK) ++created;
+    }
+    if (created == std::size(sites) + 1) {
+        targets[created] = reinterpret_cast<void*>(base + present_entries[1]);
+        if (MH_CreateHook(targets[created], reinterpret_cast<void*>(&present1_entry),
+            reinterpret_cast<void**>(&original_present1_entry)) == MH_OK) ++created;
+    }
+    bool queued = created == std::size(targets) && guarded();
     if (queued) for (auto* target : targets) if (MH_QueueEnableHook(target) != MH_OK) queued = false;
     if (!queued || MH_ApplyQueued() != MH_OK) {
         // Queue removal too: a failed Apply may have enabled only the first site.
@@ -219,7 +256,7 @@ bool prepare_d3d11_chain(const rsf_game_host_services& host, bool (*cold_owner)(
         return fail(host, "Steam swapchain forwarding refused: complete hook set enable failed; no facade admitted.");
     }
     installed.store(true, std::memory_order_release);
-    if (host.log) try { host.log(host.user, "Steam swapchain forwarding installed at all seven methods/ten guarded loads via queued MinHook enable; original installer/global untouched; process-lived relays."); } catch (...) {}
+    if (host.log) try { host.log(host.user, "Steam swapchain forwarding installed at seven methods/ten guarded loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays."); } catch (...) {}
     return true;
 }
 catch (...) { return false; }

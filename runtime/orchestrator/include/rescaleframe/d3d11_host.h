@@ -128,6 +128,16 @@ RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* services_user,
     const rsf_d3d11_presentation_binding*);
 /* Any thread. Arms one bounded capture at the next eligible graphics callback. */
 RSF_RUNTIME_API uint32_t rsf_d3d11_host_request_capture(void* unused);
+#define RSF_D3D11_CAPTURE_CONTROL_VERSION 1u
+#define RSF_D3D11_CAPTURE_SEQUENCE 1u
+#define RSF_D3D11_CAPTURE_FAILURES 2u
+typedef struct rsf_d3d11_capture_control {
+    uint32_t struct_size, abi_version;
+    uint32_t operation, value; /* sequence requires 1; failures accepts 0 or 1 */
+} rsf_d3d11_capture_control;
+/* Any thread. Uses the same bounded controls as the shared overlay. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_control(const rsf_d3d11_capture_control*);
+
 
 typedef struct rsf_d3d11_host_capture {
     uint32_t struct_size, abi_version;

@@ -157,7 +157,7 @@ bool configure_native_resolution(const rsf_game_host_services& host,const rsf_ga
     bool (*reserve)(const rsf_game_render_pass&)) noexcept try {
     if (state.input || state.output || !context || !host.render_config || !host.process_upscale) return false;
     const auto cpu=current_cpu_identity();
-    if (cpu.session!=frame.session_id || cpu.source!=frame.source_frame_id || cpu.submission!=frame.submission_id || !cpu_source_is_current(cpu)) return false;
+    if (cpu.session!=frame.session_id || cpu.source!=frame.source_frame_id || cpu.submission!=frame.submission_id || !render_source_is_current(cpu)) return false;
     uint32_t width{},height{},disabled{},taa{},taa_disabled{}; unsigned char viewport{};
     const auto targets=image()+targets_rva;
     if (!read(image()+state_rva+0x78,width) || !read(image()+state_rva+0x7c,height) || !width || !height || width>16384 || height>16384 ||
@@ -171,7 +171,7 @@ bool configure_native_resolution(const rsf_game_host_services& host,const rsf_ga
     if (!host.render_config(host.user,&config) || !config.enabled || config.output_width!=width || config.output_height!=height ||
         !config.render_width || !config.render_height || config.render_width>width || config.render_height>height) return false;
     const rsf_game_render_pass candidate{};
-    if (!cpu_source_is_current(cpu) || classify_native_screen(cpu,candidate,true).refusals!=ScreenWorldLeaseInvalid) return false;
+    if (!render_source_is_current(cpu) || classify_native_screen(cpu,candidate,true).refusals!=ScreenWorldLeaseInvalid) return false;
     if (!read(targets+0xfe8,disabled) || disabled || !read(targets+0xfe4,viewport) || viewport!=1 ||
         !read(image()+state_rva+0xac,taa) || taa!=1 || !read(image()+state_rva+0xb0,taa_disabled) || taa_disabled) return false;
     state={}; state.native_frame=frame.native_frame; state.window=frame.window_key; state.width=width; state.height=height;

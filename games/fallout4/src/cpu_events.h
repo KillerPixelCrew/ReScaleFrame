@@ -29,6 +29,9 @@ bool begin_cpu_render() noexcept;
 // survives only its explicitly mapped successor; unmatched changes refuse.
 // A rendered fallback does not assert input ownership or classify gameplay.
 bool cpu_source_is_current(const CpuIdentity&) noexcept;
+// Existing render association only: later input receipts do not erase rendered
+// resources. This does not certify sampled input, latency markers or FG eligibility.
+bool render_source_is_current(const CpuIdentity&) noexcept;
 // Called only by the existing guarded native Present detour after verified
 // owner/screen checks and SUBMISSION completion. These are native phase facts.
 bool begin_cpu_present_phase(const CpuIdentity&, uint64_t native_frame, uint64_t window) noexcept;

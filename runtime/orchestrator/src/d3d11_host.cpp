@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "failure_capture_policy.h"
 #include <rescaleframe/d3d11_host.h>
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_cpu.h>
@@ -121,6 +122,10 @@ struct Host {
     bool bridge_installed{};
     std::atomic<bool> bridge_bound{};
     std::atomic<bool> capture{};
+    std::atomic<bool> capture_failures{};
+    std::atomic<bool> capture_sequence{};
+    rsf::diagnostics::SequenceCapturePolicy sequence_captures;
+    rsf::diagnostics::FailureCapturePolicy failure_captures;
     std::atomic<bool> active{};
     std::atomic<bool> transport{true}, fidelity{false};
     std::atomic<uint32_t> requested_generation{1};
@@ -281,11 +286,19 @@ struct Host {
         if (count) values[0] = 0;
         if (count > 1) values[1] = self.transport.load();
         if (count > 2) values[2] = self.fidelity.load();
+        if (count > 3) values[3] = self.capture_failures.load();
+        if (count > 4) values[4] = 0;
     }
     static int action(void* user, uint32_t index, int32_t value) {
         auto& self = *static_cast<Host*>(user);
-        if (index > 2 || value < 0 || value > 1) return 0;
+        if (index > 4 || value < 0 || value > 1) return 0;
         if (!index) { if (!value) return 0; self.capture.store(true, std::memory_order_release); return 1; }
+        if (index==4) { if (!value) return 0; self.capture_sequence.store(true,std::memory_order_release); return 1; }
+        if (index==3) {
+            if (!WritePrivateProfileStringW(self.section.c_str(),L"CaptureSRFailures",value ? L"1" : L"0",self.ini.c_str())) return 0;
+            self.capture_failures.store(value!=0,std::memory_order_release);
+            return 1;
+        }
         if (!WritePrivateProfileStringW(self.section.c_str(), index == 1 ? L"ColourTransport" : L"ColourCorrection",
                 value ? L"1" : L"0", self.ini.c_str())) return 0;
         (index == 1 ? self.transport : self.fidelity).store(value != 0, std::memory_order_release);
@@ -401,11 +414,14 @@ struct Host {
         panel.dlss_preset_available = 1; panel.log = log; panel.sr_report = sr_report; panel.settings_changed = changed; panel.user = this;
         transport.store(GetPrivateProfileIntW(section.c_str(), L"ColourTransport", setup.colour_transport_default ? 0 : 1, ini.c_str()) != 0);
         fidelity.store(GetPrivateProfileIntW(section.c_str(), L"ColourCorrection", 0, ini.c_str()) != 0);
+        capture_failures.store(GetPrivateProfileIntW(section.c_str(),L"CaptureSRFailures",0,ini.c_str())!=0);
         const rsf_overlay_service_option advanced[]{
             {"Capture next SR inputs", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 0, 0, 1, 1, 1, 0},
             {"DLSS colour transport", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, int32_t(transport.load()), 0, 1, 1, 1, 0},
-            {"SR colour correction", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, int32_t(fidelity.load()), 0, 1, 1, 1, 0}};
-        panel.option_count = 3; panel.options = advanced; panel.options_read = options; panel.option_changed = action;
+            {"SR colour correction", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, int32_t(fidelity.load()), 0, 1, 1, 1, 0},
+            {"Capture SR failures (max 3 per session)", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, int32_t(capture_failures.load()), 0, 1, 1, 1, 0},
+            {"Capture 4 ready SR frames", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 0, 0, 1, 1, 1, 0}};
+        panel.option_count = 5; panel.options = advanced; panel.options_read = options; panel.option_changed = action;
         if (overlay.configure(&panel) != RSF_OK || overlay.settings_get(&desired) != RSF_OK) return false;
         execution_thread = GetCurrentThreadId(); chain = static_cast<IDXGISwapChain*>(pass.swapchain);
         rsf_observer_options observe{}; observe.struct_size = sizeof(observe); observe.abi_version = RSF_OBSERVER_ABI_VERSION;
@@ -418,10 +434,23 @@ struct Host {
         if (!observer) log(this, "D3D11 callback host: Present observation refused; SR activation suspended.");
         rsf_input_dump_configure(captures.c_str(), identity.c_str(), fingerprint.c_str(), log, this);
         std::snprintf(report.reason, sizeof(report.reason), "Waiting for verified scene inputs");
+        DXGI_SWAP_CHAIN_DESC bound_window{};
+        if (SUCCEEDED(chain->GetDesc(&bound_window)) && bound_window.OutputWindow) {
+            const rsf_native_latency_window latency_window{sizeof(latency_window),1,upstream.session_id,
+                uint64_t(reinterpret_cast<uintptr_t>(bound_window.OutputWindow))};
+            (void)rsf_native_latency_window_bind(&latency_window);
+        }
         configured = true;
         if (observer && setup.presentation_bridge) bridge_bound.store(true, std::memory_order_release);
         log(this, "D3D11 callback host configured; FG/latency controls follow declared capabilities and native eligibility.");
         return observer;
+    }
+    bool arm_failure_capture(int32_t result) {
+        if (!failure_captures.claim(capture_failures.load(std::memory_order_acquire),
+                rsf_input_dump_requested()!=0,result)) return false;
+        rsf_input_dump_request();
+        log(this,"Automatic SR failure capture: failure-time resources, not a pre-evaluation snapshot.");
+        return true;
     }
     void capture_inputs(void* context, const rsf_game_render_pass& pass, rsf_frame_record& record, void* original_colour = nullptr) {
         record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
@@ -530,8 +559,15 @@ struct Host {
         // evaluation result to publish, including when the last evaluation failed.
         if (configure_only && pipeline_ready && unchanged_configuration) return RSF_ERROR_NOT_READY;
         rsf_frame_record record{};
-        // A capture request belongs to an actual render lease, never its size plan.
+        // A sequence waits for ready gameplay rather than consuming size plans.
+        if (capture_sequence.exchange(false,std::memory_order_acq_rel)) sequence_captures.request();
+        const bool sequence_frame=!configure_only && sequence_captures.claim(pass.session_id,pass.source_frame_id,
+            unchanged_configuration && pipeline_ready && pass.camera_valid && pass.screen==RSF_SCREEN_GAMEPLAY,
+            capture.load(std::memory_order_acquire) || rsf_input_dump_requested()!=0);
+        if (sequence_frame) rsf_input_dump_request();
         if (!configure_only) capture_inputs(context, pass, record);
+        if (sequence_frame && rsf_input_dump_wants(&record))
+            rsf_input_dump_result(&record,"sequence_capture",backend,RSF_OK);
         if (auxiliary && rsf_input_dump_wants(&record)) for (uint32_t i = 0; i < auxiliary->surface_count; ++i) {
             const auto& a = auxiliary->surfaces[i];
             if (a.source_name) (void)rsf_input_dump_texture_record(context, &record, a.source_name,
@@ -567,6 +603,10 @@ struct Host {
                 if (!configure_only || !pipeline_ready) reset = true;
             }
         } else reset = true;
+        if (!configure_only && settings.sr_enabled && arm_failure_capture(result)) {
+            capture_inputs(context,pass,record);
+            rsf_input_dump_result(&record,"automatic_sr_failure",backend,result);
+        }
         if (rsf_input_dump_wants(&record)) {
             if (!result) (void)rsf_input_dump_texture_record(context, &record, "sr_reinserted", "Reconstructed linear colour before native HDR", pass.color_output, RSF_DUMP_VIEW_HDR, 1);
             if (!result && auxiliary) for (uint32_t i = 0; i < auxiliary->surface_count; ++i) {
@@ -644,6 +684,17 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_se
 extern "C" RSF_RUNTIME_API uint32_t rsf_d3d11_host_request_capture(void*) {
     auto* self = owner.load(std::memory_order_acquire); if (!self) return uint32_t(RSF_ERROR_NOT_READY);
     self->capture.store(true, std::memory_order_release); return RSF_OK;
+}
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_control(const rsf_d3d11_capture_control* request) {
+    if (!request || request->struct_size<sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version!=RSF_D3D11_CAPTURE_CONTROL_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (request->value>1 || (request->operation!=RSF_D3D11_CAPTURE_SEQUENCE &&
+        request->operation!=RSF_D3D11_CAPTURE_FAILURES) ||
+        (request->operation==RSF_D3D11_CAPTURE_SEQUENCE && !request->value)) return RSF_ERROR_INVALID_ARGUMENT;
+    auto* self=owner.load(std::memory_order_acquire);
+    if (!self) return RSF_ERROR_NOT_READY;
+    return Host::action(self,request->operation==RSF_D3D11_CAPTURE_SEQUENCE ? 4u : 3u,int32_t(request->value)) ?
+        RSF_OK : RSF_ERROR_NOT_READY;
 }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* user, uint32_t active) {
     auto* self = owner.load(std::memory_order_acquire);
@@ -953,6 +1004,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_reduced_frame(void* user, void
                 ticket.temporal_result,unsigned(ticket.attempted));
         }
         if (!ticket.temporal) {
+            (void)self->arm_failure_capture(ticket.temporal_result);
             rsf_frame_record record{};
             if (self->capture_pending && self->capture_native_frame == pass.native_frame &&
                 self->capture_view == pass.view_key && self->capture_record.frame_id == pass.source_frame_id)
@@ -968,6 +1020,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_reduced_frame(void* user, void
             if (rsf_input_dump_wants(&record)) {
                 (void)rsf_input_dump_texture_record(context,&record,"spatial_recovered",
                     "Numeric-nearest recovery, not temporal SR acceptance",pass.color_output,RSF_DUMP_VIEW_HDR,1);
+                rsf_input_dump_result(&record,"sr",self->backend,ticket.temporal_result);
                 rsf_input_dump_result(&record,"spatial_recovery",0,RSF_OK);
                 self->capture_record = record; self->capture_native_frame = pass.native_frame;
                 self->capture_view = pass.view_key; self->capture_pending = true;

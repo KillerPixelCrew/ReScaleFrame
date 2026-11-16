@@ -41,14 +41,14 @@ enum class ReadStage : unsigned {
     viewport_read, viewport_bounds, ratio, colour_map, motion_map, depth_map,
     cache_read, cache_duplicate, cache_missing, camera_read, target_read, context,
     device, colour_srv, motion_srv, depth_srv, swap, colour_rtv, extent_format,
-    camera_math, state_changed, camera_changed, history_changed, accepted, exception, count
+    camera_math, state_changed, camera_changed, history_changed, accepted, exception, producer_changed, count
 };
 constexpr const char* stage_names[]{
     "unverified","owner","dimensions","delta","camera-owner","cache","temporal-flags",
     "viewport-read","viewport-bounds","ratio","colour-map","motion-map","depth-map",
     "cache-read","cache-duplicate","cache-missing","camera-read","target-read","context",
     "device","colour-srv","motion-srv","depth-srv","swap","colour-rtv","extent-format",
-    "camera-math","state-changed","camera-changed","history-changed","accepted","exception"
+    "camera-math","state-changed","camera-changed","history-changed","accepted","exception","producer-changed"
 };
 static_assert(std::size(stage_names)==unsigned(ReadStage::count) && unsigned(ReadStage::count)<=64);
 std::atomic<uint64_t> reader_reported{};
@@ -316,10 +316,38 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
     if (history.seen && history.frame!=before.frame) previous_raster=&history.raster;
     else if (history.previous_raster_valid) previous_raster=&history.previous_raster;
     if (!camera_frame(native,width,height,pass.camera,pass.previous_clip_to_clip,valid_history,&raster,previous_raster)) return refuse(ReadStage::camera_math);
-    if (!state(after) || !detail::same_native_state(before,after)) return refuse(ReadStage::state_changed);
+    ReadStage reread_failure=ReadStage::state_changed;
+    if (!state(after,&reread_failure)) return refuse(reread_failure);
+    if (!detail::same_native_state(before,after)) {
+        const std::array<bool,10> changed{!detail::same_native_owner(before,after),before.camera!=after.camera,
+            before.cache!=after.cache || before.count!=after.count,before.taa!=after.taa || before.disable!=after.disable,
+            before.colour!=after.colour || before.motion!=after.motion || before.depth!=after.depth,
+            before.default_viewport!=after.default_viewport,before.dynamic_viewport!=after.dynamic_viewport,
+            std::memcmp(before.ratio,after.ratio,sizeof(before.ratio))!=0,
+            std::memcmp(before.viewport,after.viewport,sizeof(before.viewport))!=0,
+            std::bit_cast<uint32_t>(before.delta_seconds)!=std::bit_cast<uint32_t>(after.delta_seconds)};
+        unsigned mask=0;
+        for (unsigned i=0;i<changed.size();++i) if (changed[i]) mask|=1u<<i;
+        static std::array<std::atomic<bool>,1024> seen_changes{};
+        static std::atomic<unsigned> change_budget{};
+        if (report && !seen_changes[mask].exchange(true,std::memory_order_relaxed) &&
+            change_budget.fetch_add(1,std::memory_order_relaxed)<16) {
+            char text[750]{};
+            std::snprintf(text,sizeof(text),
+                "Fallout4 state reread mismatch native=%u/%u mask=0x%x dt=%.9g/%.9g cache_count=%u/%u taa=%u/%u disable=%u/%u default=%u/%u dynamic=%u/%u ratio=%.9g,%.9g/%.9g,%.9g viewport=%.9g,%.9g,%.9g,%.9g/%.9g,%.9g,%.9g,%.9g maps=%u,%u,%u/%u,%u,%u",
+                before.frame,after.frame,mask,double(before.delta_seconds),double(after.delta_seconds),before.count,after.count,
+                before.taa,after.taa,before.disable,after.disable,unsigned(before.default_viewport),unsigned(after.default_viewport),
+                unsigned(before.dynamic_viewport),unsigned(after.dynamic_viewport),double(before.ratio[0]),double(before.ratio[1]),
+                double(after.ratio[0]),double(after.ratio[1]),double(before.viewport[0]),double(before.viewport[1]),
+                double(before.viewport[2]),double(before.viewport[3]),double(after.viewport[0]),double(after.viewport[1]),
+                double(after.viewport[2]),double(after.viewport[3]),before.colour,before.motion,before.depth,after.colour,after.motion,after.depth);
+            report(text);
+        }
+        return refuse(ReadStage::state_changed);
+    }
     if (!active_full_viewport(result.context.Get(),before.width,before.height,confirmed_viewport_count,confirmed_viewport,!producer) ||
         std::memcmp(&active_viewport,&confirmed_viewport,sizeof(active_viewport))) return refuse(ReadStage::viewport_bounds);
-    if (producer && !native_depth_snapshot_current(*producer)) return refuse(ReadStage::state_changed);
+    if (producer && !native_depth_snapshot_current(*producer,report)) return refuse(ReadStage::producer_changed);
     if (!camera(selected,confirmed) || std::memcmp(&native,&confirmed,sizeof(native))) return refuse(ReadStage::camera_changed);
     if (!history.seen || history.frame!=before.frame) {
         const auto previous=history;
@@ -327,10 +355,26 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
         history.width=width; history.height=height; history.native=native;
         history.raster=raster; history.previous_raster=previous.raster; history.previous_raster_valid=previous.seen;
         std::memcpy(history.jitter,pass.camera.jitter_pixels,sizeof(history.jitter));
-        history.reset=!previous.seen || !valid_history || previous.camera!=before.camera || before.frame!=uint32_t(previous.frame+1) ||
-            previous.width!=width || previous.height!=height || std::memcmp(&previous.raster,&raster,sizeof(raster)) ||
-            !close_matrix(native.previous_view_projection_unjittered,previous.native.view_projection_unjittered) ||
-            std::memcmp(native.previous_position_adjust,previous.native.position_adjust,sizeof(native.position_adjust));
+        const std::array<bool,8> reset_terms{!previous.seen,!valid_history,previous.camera!=before.camera,
+            before.frame!=uint32_t(previous.frame+1),previous.width!=width || previous.height!=height,
+            std::memcmp(&previous.raster,&raster,sizeof(raster))!=0,
+            !close_matrix(native.previous_view_projection_unjittered,previous.native.view_projection_unjittered),
+            std::memcmp(native.previous_position_adjust,previous.native.position_adjust,sizeof(native.position_adjust))!=0};
+        unsigned reset_reasons=0;
+        for (unsigned i=0;i<reset_terms.size();++i) if (reset_terms[i]) reset_reasons|=1u<<i;
+        history.reset=reset_reasons!=0;
+        static std::array<std::atomic<bool>,256> seen_reasons{};
+        static std::atomic<unsigned> reason_budget{};
+        if (report && !seen_reasons[reset_reasons].exchange(true,std::memory_order_relaxed) &&
+            reason_budget.fetch_add(1,std::memory_order_relaxed)<32) {
+            char text[350]{};
+            std::snprintf(text,sizeof(text),
+                "Fallout4 camera history native=%u previous_native=%u reset=%u reasons=0x%x render=%ux%u previous_render=%ux%u raster=%g,%g,%g,%g previous_raster=%g,%g,%g,%g",
+                before.frame,previous.frame,unsigned(history.reset),reset_reasons,width,height,previous.width,previous.height,
+                double(raster.xywh[0]),double(raster.xywh[1]),double(raster.xywh[2]),double(raster.xywh[3]),
+                double(previous.raster.xywh[0]),double(previous.raster.xywh[1]),double(previous.raster.xywh[2]),double(previous.raster.xywh[3]));
+            report(text);
+        }
         if (!history.reset) std::memcpy(history.previous_jitter,previous.jitter,sizeof(history.previous_jitter));
     } else if (history.camera!=before.camera || history.width!=width || history.height!=height ||
         !close_matrix(native.view_projection_unjittered,history.native.view_projection_unjittered) ||

@@ -439,7 +439,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_latency(const rsf_game_la
     if (event->marker==RSF_GAME_LATENCY_SLEEP) {
         fact.stage=RSF_GAME_CPU_FRAME_BEGIN; rsf_fg12_cpu(&fact);
         // A native engine wait is a verified pre-input deadline. Keep that deadline while
-        // the later native input marker supplies the measured simulation-start boundary.
+        // later native input and simulation callbacks supply their own boundaries.
         auto deadline=fact;deadline.stage=RSF_GAME_CPU_PACING;deadline.event_version=deadline.flags=0;
         rsf_fg12_cpu(&deadline);
         std::lock_guard lock(guard); auto& timing=cpu[fact.source_frame_id%cpu.size()]; timing.native=true;
@@ -447,7 +447,6 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_latency(const rsf_game_la
     }
     if (event->marker==RSF_LATENCY_INPUT_SAMPLE) {
         fact.stage=RSF_GAME_CPU_INPUT_SAMPLE; rsf_fg12_cpu(&fact);
-        fact.stage=RSF_GAME_CPU_SIMULATION_BEGIN; rsf_fg12_cpu(&fact);
     } else if (event->marker==RSF_LATENCY_SIMULATION_START || event->marker==RSF_LATENCY_SIMULATION_END) {
         fact.stage=event->marker==RSF_LATENCY_SIMULATION_START ? RSF_GAME_CPU_SIMULATION_BEGIN : RSF_GAME_CPU_SIMULATION_END;
         rsf_fg12_cpu(&fact);

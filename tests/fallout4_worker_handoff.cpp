@@ -41,6 +41,36 @@ WorkerCycle next_swap() {
 }
 }
 int main() {
+    // Force the observed ordering: worker snapshots false, Main publishes the
+    // selected join, then worker sees native mode0 and revalidates the lease.
+    {
+        std::mutex join_guard;
+        std::latch copied(1), published(1);
+        bool joining=false;
+        auto current=predecessor();
+        std::thread reader([&] {
+            bool snapshot{};
+            { std::lock_guard lock(join_guard); snapshot=joining; }
+            copied.count_down(); published.wait();
+            std::lock_guard lock(join_guard);
+            check(!snapshot,"worker retains stale pre-join snapshot");
+            const auto admits=[&](const WorkerCycle& expected, uint64_t source, bool active, bool invalid) {
+                return rsf::fallout4::detail::active_join_matches(expected,current,
+                    predecessor(),source,41,active,true,true,invalid);
+            };
+            check(admits(predecessor(),41,joining,false),"exact published join survives stale snapshot");
+            auto other=predecessor(); ++other.frame;
+            check(!admits(other,41,joining,false),"different native frame cannot borrow join");
+            other=predecessor(); ++other.source;
+            check(!admits(other,41,joining,false),"different source cannot borrow join");
+            check(!admits(predecessor(),42,joining,false),"different worker cannot borrow join");
+            check(!admits(predecessor(),41,false,false),"mode0 without active join stays refused");
+            check(!admits(predecessor(),41,joining,true),"invalid cycle stays refused");
+        });
+        copied.wait();
+        { std::lock_guard lock(join_guard); joining=true; }
+        published.count_down(); reader.join();
+    }
     // The same unmatched generation refuses a future ticket in both cases;
     // only the current renderer's claim to sampled input changes the outcome.
     for (const uint64_t bound_source : {uint64_t(0),uint64_t(40)}) {
@@ -115,9 +145,9 @@ int main() {
     check(!intention.protects_bound(predecessor(),39,8,9,12,76,76,true),"wrong bound source cannot borrow intention");
     check(!intention.protects_bound(predecessor(),40,7,9,12,76,76,true),"wrong previous generation refuses");
     check(!intention.protects_bound(predecessor(),40,8,10,12,76,76,true),"intervening or nested Poll removes protection");
-    check(!intention.protects_bound(predecessor(),40,8,9,13,76,76,true),"raw change during intention refuses current bound source");
+    check(intention.protects_bound(predecessor(),40,8,9,13,76,76,true),"new raw arrival preserves already consumed predecessor");
     check(!intention.protects_bound(predecessor(),40,8,9,12,77,77,true),"consumed cursor advance refuses");
-    check(!intention.protects_bound(predecessor(),40,8,9,12,76,77,true),"queued mutation without consumption also refuses");
+    check(intention.protects_bound(predecessor(),40,8,9,12,76,77,true),"later queue tail preserves already consumed predecessor");
     changed=predecessor(); ++changed.main;
     check(!intention.protects_bound(changed,40,8,9,12,76,76,true),"changed native Main/owner refuses");
     check(!intention.protects_bound(predecessor(),40,8,9,12,76,76,false),"lifecycle/native/raw-writer proof failure refuses");

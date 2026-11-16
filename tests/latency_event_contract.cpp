@@ -37,9 +37,10 @@ int main() {
     CHECK(send(fact(2,RSF_GAME_CPU_SIMULATION_END,60)));
     CHECK(delivered.size()==4 && delivered[1].stage==RSF_GAME_CPU_INPUT_SAMPLE && delivered[2].stage==RSF_GAME_CPU_SIMULATION_BEGIN);
     CHECK((delivered[1].flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) && (delivered[2].flags & RSF_GAME_CPU_INPUT_SUBSTITUTE));
+    CHECK(rsf_native_cpu_marker(2,0)==-1);
     CHECK(rsf_native_cpu_marker(2,2)==-1);
     rsf_native_cpu_counters stats{}; stats.struct_size=sizeof(stats); CHECK(rsf_native_cpu_counters_get(&stats));
-    CHECK(stats.frames==2 && stats.pings==1 && stats.substitutes==1 && stats.order_violations==1);
+    CHECK(stats.frames==2 && stats.pings==1 && stats.substitutes==1 && stats.order_violations==0);
     CHECK(stats.input_events[0]==1 && stats.input_events[1]==1 && stats.input_events[2]==1 && stats.duplicates>=5);
     CHECK(send(fact(2,RSF_GAME_CPU_FRAME_END,70)));
     auto message=fact(0,RSF_GAME_CPU_INPUT_EVENT,75); message.message_id=0xc123;
@@ -56,17 +57,18 @@ int main() {
     CHECK(send(fact(5,RSF_GAME_CPU_SIMULATION_BEGIN,1110))); // real engine update can start before its poll
     CHECK(send(fact(5,RSF_GAME_CPU_INPUT_SAMPLE,1120)));
     CHECK(send(fact(5,RSF_GAME_CPU_SIMULATION_END,1130)));
-    CHECK(rsf_native_cpu_counters_get(&stats) && stats.order_violations==1 && stats.substitutes==1);
+    CHECK(rsf_native_cpu_counters_get(&stats) && stats.order_violations==0 && stats.substitutes==1);
     auto invalid=fact(6,RSF_GAME_CPU_FRAME_BEGIN,1200); invalid.event_version=99; CHECK(!send(invalid));
     invalid.event_version=1; invalid.flags=0x80000000; CHECK(!send(invalid));
     auto legacy=fact(6,RSF_GAME_CPU_FRAME_BEGIN,1300); legacy.event_version=legacy.flags=0;
     CHECK(send(legacy));
     CHECK(rsf_native_cpu_marker(6,4)==-1); // even a threaded Present needs a render submission
-    for (uint32_t marker : {0u,2u,4u,5u,1u,3u}) CHECK(rsf_native_cpu_marker(6,marker)==1);
-    CHECK(rsf_native_cpu_counters_get(&stats) && stats.order_violations==2);
+    CHECK(rsf_native_cpu_marker(6,0)==-1); // FRAME_BEGIN cannot fabricate simulation timing
+    CHECK(rsf_native_cpu_counters_get(&stats) && stats.order_violations==1);
     CHECK(send(fact(6,RSF_GAME_CPU_INPUT_SAMPLE,1310)));
     CHECK(send(fact(6,RSF_GAME_CPU_SIMULATION_BEGIN,1320)));
     CHECK(send(fact(6,RSF_GAME_CPU_SIMULATION_END,1330)));
+    for (uint32_t marker : {0u,2u,4u,5u,1u,3u}) CHECK(rsf_native_cpu_marker(6,marker)==1);
     auto outside=fact(0,RSF_GAME_CPU_INPUT_EVENT,1340); outside.flags|=RSF_GAME_CPU_INPUT_UNFRAMED;
     outside.input_kind=3; CHECK(send(outside));
     delivered.clear(); CHECK(send(fact(7,RSF_GAME_CPU_FRAME_BEGIN,1400)));

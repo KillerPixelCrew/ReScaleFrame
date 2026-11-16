@@ -38,7 +38,7 @@ DWORD peek_protection{};
 rsf_game_host_services host{};
 std::atomic<bool> enabled{};
 std::atomic<uint32_t> entered{};
-std::atomic<uint64_t> next_source{1}, next_submission{1};
+std::atomic<uint64_t> next_source{1}, next_submission{1}, next_receipt{1};
 std::atomic<uint64_t> poll_generation{}, raw_revision{};
 std::atomic<uint32_t> polls{}, raw_writers{};
 std::array<std::atomic<uint32_t>, 4> source_receipts{};
@@ -60,7 +60,7 @@ struct Pending {
     uint64_t source{}, generation{}, raw{}, sample_begin{}, frequency{};
     uint32_t queue_generation{};
     NativeState state{};
-    bool sampled{}, bound{};
+    bool sampled{}, bound{}, simulation_started{};
     uint64_t predecessor{};
 };
 thread_local Pending pending{};
@@ -81,7 +81,7 @@ struct RenderCycle {
 struct Future {
     WorkerTicket facts{};
     NativeState state{};
-    bool busy{}, retiring{}, abort_sent{}, reserve_announced{};
+    bool busy{}, retiring{}, abort_sent{}, reserve_announced{}, simulation_started{};
 };
 std::mutex worker_guard;
 RenderCycle current_render;
@@ -157,6 +157,21 @@ bool native_cycle(WorkerCycle& proof, NativeState& native, bool joining, CyclePh
         !test(15,read(worker+0x6e,running)) || !test(16,bool(running)) || !test(17,read(worker+0x6c,exiting)) || !test(18,!exiting) ||
         !test(19,read(native.main+0x30,window)) || !test(20,bool(window)) || !test(21,read(image()+0x38e13a0,renderer)) || !test(22,renderer==image()+0x3a25d10) ||
         !test(23,read(renderer+0x58,proof.window)) || !test(24,proof.window==window) || !test(25,read(image()+0x3d87238,proof.frame))) {
+        // Main publishes joining before native BD51D2 clears mode. A worker
+        // snapshot taken before that publication can observe mode0 afterwards.
+        // Retry the complete native proof only under the same active join lease.
+        if (first==14 && mode==0 && !joining && job_depth==1 && job_selected) {
+            std::unique_lock lock(worker_guard);
+            if (enabled.load() && detail::active_join_matches(expected,current_render.key,
+                future.facts.predecessor,worker_source,future.facts.cpu.source,current_render.joining,
+                current_render.swapped,current_render.closed,current_render.invalid)) {
+                // Native completion cannot signal until this worker callback returns.
+                lock.unlock();
+                proof=expected;
+                native={};
+                return native_cycle(proof,native,true,phase);
+            }
+        }
         // No new native reads. A failed read can leave an old/partial value;
         // reached/passed and known bits, never its scalar alone, establish it.
         static std::array<std::atomic<uint64_t>,15> stages{};
@@ -311,11 +326,14 @@ bool notification_guards() {
         read(image() + 0x2ed1d88, imported_name) && imported_name == 0x2ed35fe &&
         bytes(0x2ed3736, user32, sizeof(user32)) && bytes(0x2ed3600, peek, sizeof(peek));
 }
-void received(uint32_t kind, uint32_t message = 0, bool window_message = false) noexcept {
+void received(uint32_t kind, uint32_t message = 0, bool window_message = false, uint64_t window_key = 0) noexcept {
     LARGE_INTEGER now{}, frequency{};
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event event{};
-    event.struct_size = sizeof(event); event.event_version = RSF_GAME_CPU_EVENT_VERSION;
+    rsf_game_cpu_receipt_event receipt{};
+    receipt.receipt_id=next_receipt.fetch_add(1,std::memory_order_relaxed);
+    receipt.window_key=window_key;
+    auto& event=receipt.header;
+    event.struct_size = sizeof(receipt); event.event_version = RSF_GAME_CPU_EVENT_VERSION_RECEIPT;
     event.stage = RSF_GAME_CPU_INPUT_EVENT; event.session_id = host.session_id;
     event.timestamp_qpc = static_cast<uint64_t>(now.QuadPart);
     event.qpc_frequency = static_cast<uint64_t>(frequency.QuadPart);
@@ -347,8 +365,9 @@ BOOL WINAPI observe_peek(LPMSG message, HWND window, UINT minimum, UINT maximum,
     if (enabled.load(std::memory_order_acquire) && result && message && !window && !minimum && !maximum &&
         flags == PM_REMOVE && (caller == base + 0xc338ea || caller == base + 0xc3391e ||
         caller == base + 0xc3398b || caller == base + 0xc339c1)) {
-        UINT id{};
-        if (read(reinterpret_cast<uintptr_t>(message) + offsetof(MSG, message), id)) received(0, id, true);
+        MSG actual{};
+        if (read(reinterpret_cast<uintptr_t>(message),actual))
+            received(0,actual.message,true,uint64_t(reinterpret_cast<uintptr_t>(actual.hwnd)));
     }
     entered.fetch_sub(1, std::memory_order_acq_rel);
     SetLastError(native_error);
@@ -546,11 +565,14 @@ bool drain_future() noexcept {
     {
         std::lock_guard lock(worker_guard);
         if (!future.facts.active()) return true;
-        if (!future.facts.refusal || future.busy || future.retiring) return false;
+        if (!future.facts.refusal || future.retiring ||
+            (future.busy && !future.facts.callback_inflight)) return false;
         future.retiring=true; copy=future;
     }
     const bool aborted=!copy.reserve_announced || copy.abort_sent || source_fact(ticket_pending(copy),RSF_GAME_CPU_SOURCE_ABORT,copy.facts.refusal);
-    const bool ended=aborted && (!copy.facts.frame_begun || emit_identity(copy.facts.cpu,RSF_GAME_CPU_FRAME_END,0));
+    // Cancellation must reach a synchronous RESERVE callback even while it
+    // waits for Main. Keep the ticket until the worker has actually returned.
+    const bool ended=!copy.busy && aborted && (!copy.facts.frame_begun || emit_identity(copy.facts.cpu,RSF_GAME_CPU_FRAME_END,0));
     {
         std::lock_guard lock(worker_guard);
         if (future.facts.cpu.source==copy.facts.cpu.source) {
@@ -616,7 +638,17 @@ uint32_t invalid_pending() noexcept {
 void close_frame() noexcept {
     if (!identity.source) return;
     finish_render_scope(); (void)drain_current_abort(); emit(RSF_GAME_CPU_FRAME_END);
-    { std::lock_guard lock(worker_guard); if (current_render.cpu.source==identity.source) current_render.closed=true; }
+    {
+        std::lock_guard lock(worker_guard);
+        if (current_render.cpu.source==identity.source) {
+            current_render.closed=true;
+            // No verified Present phase was published for this source. The
+            // worker cannot await its receipt once Main closes and joins it.
+            if (!current_render.sealed && future.facts.predecessor==current_render.key)
+                future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+        }
+    }
+    (void)drain_future();
     identity = {}; rendered = 0; source_invalid = false;
 }
 void observe_idle(void* main) {
@@ -695,9 +727,8 @@ bool reserve_worker_poll(void* manager, uintptr_t caller, uint64_t& generation, 
     const bool native_valid_before=worker_call && native_cycle(proof,native,false,CyclePhase::reserve_entry);
     uint32_t queued{},consumed{};
     const bool binding_unchanged=!c.binding.source || (c.binding.bound && c.binding.source==c.cpu.source &&
-        same_state(c.binding.state,native) && raw_revision.load()==c.binding.raw &&
-        read(native.queue+0x1490,queued) && queued==c.binding.queue_generation &&
-        read(native.receiver+8,consumed) && consumed==queued);
+        same_state(c.binding.state,native) && read(native.queue+0x1490,queued) &&
+        read(native.receiver+8,consumed) && consumed==c.binding.queue_generation);
     LARGE_INTEGER frequency{};
     if (native_valid_before) QueryPerformanceFrequency(&frequency);
     Future copy{}; uint32_t bits{}; bool registered=false;
@@ -710,7 +741,7 @@ bool reserve_worker_poll(void* manager, uintptr_t caller, uint64_t& generation, 
         const bool source_exists=current_render.cpu.source && current_render.cpu.submission &&
             current_render.cpu.session==host.session_id && current_render.key.source==current_render.cpu.source;
         const bool binding_ready=binding_unchanged && (!c.binding.source ||
-            (generation>c.binding.generation && generation-c.binding.generation==1 && raw_revision.load()==c.binding.raw));
+            (generation>c.binding.generation && generation-c.binding.generation==1));
         bits=predicate_bits(std::array<bool,18>{enabled.load(),job_selected,wrapper_selected,
             job_depth==1,wrapper_depth==1,jobs.load()==1,!previous_polls,!raw_writers.load(),
             current_render.constructed,source_exists,binding_ready,!current_render.closed,!current_render.invalid,
@@ -835,8 +866,8 @@ bool worker_consumer_proof(const Future& f, WorkerCycle& proof, uint32_t& cursor
         trace.test(2,proof==f.facts.predecessor) && trace.test(3,same_state(native,f.state)) &&
         trace.test(4,!polls.load()) && trace.test(5,(trace.generation=poll_generation.load())==f.facts.generation) &&
         trace.test(6,(!before_bind || (!raw_writers.load() && raw_revision.load()==f.facts.raw))) &&
-        trace.test(7,read(native.queue+0x1490,trace.queue)) && trace.test(8,trace.queue==f.facts.cursor) &&
-        trace.test(9,read(native.receiver+8,cursor)) && trace.test(10,cursor==trace.queue);
+        trace.test(7,read(native.queue+0x1490,trace.queue)) && trace.test(8,!before_bind || trace.queue==f.facts.cursor) &&
+        trace.test(9,read(native.receiver+8,cursor)) && trace.test(10,cursor==f.facts.cursor);
 }
 bool begin_worker_consumer(void* receiver, uintptr_t caller) {
     const auto f=future_copy();
@@ -1045,6 +1076,20 @@ void observe_player_controls(void* receiver, void* events) {
             }
         }
     }
+    // The verified native PlayerControls callback begins consumption-driven
+    // simulation. Report this actual boundary, never the earlier BIND callback.
+    if (worker_consuming) {
+        const auto observed=future_copy();
+        if (observed.facts.valid() && observed.facts.phase==WorkerTicket::Phase::bound &&
+            observed.facts.cpu.source==worker_source) {
+            const bool sent=emit_identity(observed.facts.cpu,RSF_GAME_CPU_SIMULATION_BEGIN,0);
+            std::lock_guard lock(worker_guard);
+            if (future.facts.cpu.source==observed.facts.cpu.source) future.simulation_started=sent;
+        }
+    } else if (consumer_admitted && pending.bound && pending.source==identity.source &&
+        caller==image()+0x1673b74) {
+        pending.simulation_started=emit_identity(identity,RSF_GAME_CPU_SIMULATION_BEGIN,0);
+    }
     SetLastError(error);
     original_player_controls(receiver, events);
     const auto native_error = GetLastError();
@@ -1110,7 +1155,7 @@ void observe_swap(void* main) {
         PhaseChecks trace{};
         const bool valid=trace.test(0,f.facts.active()) && trace.test(1,enabled.load()) && trace.test(2,native_cycle(proof,native,false,CyclePhase::swap_claim)) &&
             trace.test(3,proof.main==uintptr_t(main)) && trace.test(4,same_state(native,f.state)) && trace.test(5,read(native.receiver+8,cursor)) &&
-            trace.test(6,read(native.queue+0x1490,sequence)) && trace.test(7,sequence==cursor) && trace.test(8,!polls.load());
+            trace.test(6,read(native.queue+0x1490,sequence)) && trace.test(7,cursor==f.facts.cursor) && trace.test(8,!polls.load());
         trace.queue=sequence;
         bool claimed=false,refused=false;
         if (f.facts.active()) {
@@ -1129,6 +1174,12 @@ void observe_swap(void* main) {
             qpc(), static_cast<uint64_t>(frequency.QuadPart)};
         rendered = 0; emit(RSF_GAME_CPU_FRAME_BEGIN);
     }
+    // This exact C346AC call leaves native update work and enters Swap's
+    // rendering path. Close only the sample actually consumed for this source.
+    const auto simulation=future_copy();
+    if ((future_claimed && simulation.facts.valid() && simulation.facts.cpu.source==identity.source &&
+         simulation.simulation_started) || (pending.bound && pending.source==identity.source && pending.simulation_started))
+        (void)emit_identity(identity,RSF_GAME_CPU_SIMULATION_END,0);
     SetLastError(error);
     original(main);
     const auto native_error = GetLastError();
@@ -1221,7 +1272,7 @@ uint32_t observe_worker_join() {
     const bool valid=trace.test(0,selected) && trace.test(1,enabled.load()) && trace.test(2,result==WAIT_OBJECT_0) &&
         trace.test(3,native_cycle(proof,native,true,CyclePhase::join_return)) && trace.test(4,proof==c.key) && trace.test(5,read(proof.worker+0x68,mode)) &&
         trace.test(6,mode==0) && trace.test(7,same_state(native,f.state)) && trace.test(8,read(native.receiver+8,cursor)) &&
-        trace.test(9,cursor==f.facts.cursor) && trace.test(10,read(native.queue+0x1490,sequence)) && trace.test(11,sequence==cursor) &&
+        trace.test(9,cursor==f.facts.cursor) && trace.test(10,read(native.queue+0x1490,sequence)) &&
         trace.test(12,(trace.generation=poll_generation.load())==f.facts.generation);
     trace.queue=sequence;
     trace.result_known=selected;
@@ -1309,6 +1360,18 @@ bool stop_cpu_events() {
 CpuIdentity current_cpu_identity() noexcept {
     return swap_admitted && swap_depth == 1 && idle_depth <= 1 ? identity : CpuIdentity{};
 }
+bool render_source_is_current(const CpuIdentity& expected) noexcept {
+    if (!enabled.load() || !swap_admitted || swap_depth!=1 || idle_depth>1 || future_claimed ||
+        rendered!=1 || !expected.source || !expected.submission || expected.session!=identity.session ||
+        expected.source!=identity.source || expected.submission!=identity.submission ||
+        expected.began_qpc!=identity.began_qpc || expected.frequency!=identity.frequency) return false;
+    const auto c=render_copy();
+    uint32_t native_frame{}; uintptr_t main{};
+    return c.constructed && !c.closed && c.tid==GetCurrentThreadId() &&
+        c.cpu.session==expected.session && c.cpu.source==expected.source && c.cpu.submission==expected.submission &&
+        read(image()+0x3d87238,native_frame) && native_frame==c.key.frame &&
+        read(image()+0x32dd130,main) && main==c.key.main;
+}
 bool cpu_source_is_current(const CpuIdentity& expected) noexcept {
     if (!enabled.load() || !swap_admitted || swap_depth!=1 || idle_depth>1 || source_invalid || future_claimed ||
         (pending.source && invalid_pending()) || rendered!=1 || !expected.source || !expected.submission ||
@@ -1327,8 +1390,10 @@ bool begin_cpu_render() noexcept {
     proof.session=identity.session; proof.source=identity.source; proof.idle=idle_serial; proof.main=uintptr_t(idle_main);
     const bool native_valid=native_cycle(proof,native,false,CyclePhase::world_adopt);
     PhaseChecks trace{};
+    // The queue tail may contain later input. Only a changed consumed cursor
+    // or poll generation invalidates this completed sample's handoff.
     const bool adoption_valid=trace.test(0,future_claimed) && trace.test(1,native_valid) && trace.test(2,same_state(native,f.state)) &&
-        trace.test(3,!polls.load()) && trace.test(4,read(native.receiver+8,cursor)) && trace.test(5,read(native.queue+0x1490,sequence)) && trace.test(6,sequence==cursor);
+        trace.test(3,!polls.load()) && trace.test(4,read(native.receiver+8,cursor)) && trace.test(5,read(native.queue+0x1490,sequence)) && trace.test(6,cursor==f.facts.cursor);
     trace.queue=sequence;
     const auto tid=GetCurrentThreadId();
     bool failed=false,refused=false;
