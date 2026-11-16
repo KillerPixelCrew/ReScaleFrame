@@ -24,6 +24,22 @@ clean. The hidden shared-SR device fixture also passed request retention, actual
 result/raster capture, status preservation and the existing reset sequence.
 Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 
+Native-only PID47344/e83bb70 completed matched SR0/Present0 captures at all
+five standard scale settings:1707x1067,1485x928,1280x800,853x533 and return
+2560x1600. Reduced captures retain26of40 products including final colour;
+native retains16of30. Root stationary observations and four numeric crop/depth/
+auxiliary replays pass for these sources, with no near-domain pixels. The
+earlier duplicated image remains unresolved; the attempted absolute mouse drag
+did not rotate the camera and supplies no moving validation. Foreground1 FG
+remains active0/tags0; provider snapshot owner1/paced3/markers9/derived6/order0
+is not rendered-source latency acceptance. World to MainMenu to QuitDesktop
+exit0 was creation-matched from a retained process object. The controller close
+deadline expired, then exact recovery verified21of21 entries/custom unchanged.
+See [native scale validation](research/fallout4-native-scale-capture-validation-20261116.md).
+The next bounded downstream-phase diagnostics passed the full224/14 Release
+gate in122.40seconds with Rust checks clean; EntryD0784E75... is built but
+undeployed, with no input/event policy change.
+
 The qualified unbound-renderer poll correction passed the next full Release
 VS2026 gate:224 passed,14 skipped,238 total in110.40seconds, Rust checks clean
 and extended handoff contract0.01seconds. Input-unbound render ownership can

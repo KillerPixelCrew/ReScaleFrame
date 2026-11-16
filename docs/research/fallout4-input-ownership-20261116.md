@@ -1671,3 +1671,62 @@ handoff contract passed0.01seconds. Runtime remains `22830370ac079440177912e1b77
 new Entry is `c5d02f9c350e9520d9564df50b6d06d847066ff93a7f486b55d56cfa67e1fb92`.
 This is built and contract-tested, not yet deployed. Core admission/adoption,
 final-image capture, native visual quality, FG and latency still need live proof.
+
+
+### Downstream reason4 phase attribution, source-only diagnostics
+
+Root committed e83bb70 after full Release224/14 in110.40seconds. Native-only
+PID47344/report182408-464 produced a complete source6352/native6812 Quality1
+capture,26 products, SR0/matchedPresent0 and a clean final image according to
+coordinator inspection. That bounds this capture's success; it does not close
+moving/all-quality/shader coverage. FGOn/latency1/foreground1 still had tags0/
+active0. The saved status has owner1, paced3, marker9, derived6 and order0 from
+aborted reservations, not end-to-end source/FG/latency acceptance.
+
+The copied native log shows sources6201/6283/6327 each emitting RESERVE/SAMPLED/
+BIND then ABORT reason4, with the logged poll generation one later at abort.
+That does not identify which downstream revalidation failed: post-BIND callback,
+native receiver return, JobListEnd completion, selected post-Swap join, next Swap
+claim and ordinary-world adoption can all refuse with that reason. No specific
+mode/cursor/generation semantic defect or repair is established by those rows.
+Void callback emission is not core acceptance.
+
+The next CPU-only source batch adds one shared hard32-row downstream receipt.
+It records the first still-unrefused ticket's failed phase, copied ticket phase/
+source/predecessor/native frame/complete native key/idle/generation/cursor, and
+reached/passed bitsets around the existing short-circuit predicates. Unselected
+join with a live ticket is a candidate receipt, not a newly issued refusal or
+proof that the early/no-op native return is a wait result. Its proof is copied
+immediately after entry selection, before the original call resets the working
+proof. Join return records the existing wait-result/mode scalars with separate
+known flags: unselected result and unread mode use UINT32_MAX/known0, while an
+actual selected WAIT_FAILED can still be UINT32_MAX/known1. No new read occurs.
+Masks describe terms
+actually evaluated; absent bits and zero unread values are unknown. Values come
+from the existing reads, with generation holding the latest reached load, not an
+atomic snapshot across callbacks. A failed native_cycle does not certify its
+partially populated proof as fresh native state. The ignored downstream-freeze
+receipt gives phase-specific bit legends.
+
+All existing conjunctions, helper transitions, native calls, event emissions,
+LastError forwarding and retirement behavior are retained. Logging occurs only
+after leaving worker_guard; no new native reads or off-thread observation was
+added. Static call/read counts and exact guard/reservation/Present-phase source
+spans match HEAD, and diff checks passed. This worker did not compile or run tests,
+query/attach/interact with a process, deploy or change the currently loaded game.
+Reason4 remains unlocalized until the coordinator observes the next built batch.
+
+Coordinator Release VS2026 verification of the downstream receipt batch passed:
+224 passed,14 skipped,238total in122.40seconds, Rust fmt/Clippy clean, handoff
+contract0.01seconds (`verify-downstream-source-phase-20261116.log`). Runtime
+remains22830370...; new Entry SHA256 `d0784e75cc475ca14629cf182da59158900056a64ef437f786e4930720366cb6`
+is built, not yet deployed. These receipts change no event/admission policy.
+
+The preceding e83bb70 trial PID47344 produced complete actual SR0/Present0
+captures at all five standard scale settings and return native, supporting the
+qualified unbound-renderer ownership correction. Saved foreground1 FG status
+remained active0/tags0; latency snapshot owner1/paced3/markers9/derived6/order0
+describes limited reservations, not rendered-source latency acceptance.
+[Native scale validation](fallout4-native-scale-capture-validation-20261116.md)
+records exact capture identities, numeric replay, exit0 proof and21-entry
+recovery while retaining the controller timeout and earlier visual rejection.
