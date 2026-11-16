@@ -153,3 +153,15 @@ and restoration receipts agree. All21 staged files restored, including the
 ENB proxy, and custom INI remained byte-identical. This extends the fault to
 the observed native Quit/Desktop path with RSF and no F4SE/ENB. It still does
 not prove an unmodified native-only baseline or justify a shared runtime fix.
+
+## Native main-menu exit route, PID71716
+
+The native-only coordinator trial at commit4657522/report180644-293 observed
+World -> native Save-and-Quit MainMenu -> actual main menu -> native Quit Desktop
+confirmation. Its authoritative exit.json records exit0 and controller cleanup
+restored21of21 entries, independently hash-checked by root with custom INI
+unchanged. No shutdown observer was attached for this route and no forced kill
+was used. This demonstrates this ordered exit route completed successfully on
+that trial. It does not repair or exonerate prior direct world-to-desktop and
+AltF4 failures, nor prove their cause. The trial's SR capture remained partial
+with actual SR0/present_result-3, so exit success supplies no rendering acceptance.

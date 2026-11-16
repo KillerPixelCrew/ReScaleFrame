@@ -94,3 +94,37 @@ and Fallout4 Entry SHA256 `be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b3
 identify this batch. CPU conjunction and reduced-scope receipts are built but
 not observed in a new game run; no image, source-binding, FG or latency repair
 is claimed from these diagnostics.
+
+## Native capture diagnostic trial, PID71716
+
+The coordinator deployed commit4657522, Runtime22830370.../EntryBE2E0BBF...,
+in native-only report `native-raster-20261116-180644-293`. First/latest module
+receipts prove F4SE0, non-system D3D110 and loader0. The retained ExitSave
+loaded the stationary first-person shower. Native scale and actual Quality1
+evaluations were visually clean in root observations, including menu and focus
+transitions. The earlier duplicated Quality1 rejection remains open: it was not
+reproduced here, not repaired or disproved. No reload occurred after Quality1
+was applied.
+
+The capture correction now reaches actual SR0 at1707x1067 to2560x1600. Sources
+6226/native6668 and23292/native23733 each retained25of40 products, including
+backend/reinserted and auxiliary outputs. Both remain partial, with
+matched_present=true but present_result=-3 and final colour unavailable. The
+controller correctly failed its complete-capture condition. Sampled scope rows
+show full output shadow/ratios and unit-selector state, actual full viewport by
+Effects return and through UI, then owned restoration. These are scalar facts
+for those successful sampled sources, not pixel coverage or a failed-image cause.
+
+The first selected worker poll lacks only sealed/Present in mask3f9ff; later
+five RESERVE/SAMPLED/BIND fact sequences appeared and then aborted. Emission is
+not core acceptance. Read-only source audit found unmatched future polls also
+invalidate input-unbound constructed render fallbacks; a narrow correction is
+separately owned and not deployed in this trial.
+
+Root observed native Save-and-Quit to MainMenu, the actual main menu, then
+Quit-to-Desktop confirmation. Exit code0 is recorded. This differs from direct
+world-to-desktop/AltF4 history and does not repair its native AV. Authoritative
+`post-close-disposition.json` verifies21of21 original destination states and
+unchanged custom INI, including exact ENB restoration. No forced kill occurred.
+No complete final-image, moving/all-quality, FG/latency or compatibility acceptance
+is added.
