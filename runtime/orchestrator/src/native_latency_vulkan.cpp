@@ -192,6 +192,9 @@ extern "C" rsf_backend_result rsf_latencyvk_options(uint32_t requested,uint32_t 
 }
 static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     if (!event || event->struct_size<sizeof(*event) || !event->session_id || !event->source_frame_id) return;
+    if ((event->flags&(RSF_GAME_CPU_INPUT_SUBSTITUTE|RSF_GAME_CPU_DERIVED_BOUNDARY)) &&
+        (event->stage==RSF_GAME_CPU_INPUT_SAMPLE || event->stage==RSF_GAME_CPU_SIMULATION_BEGIN ||
+         event->stage==RSF_GAME_CPU_SIMULATION_END)) return;
     rsf::latency::PresentationLease presentation_lease;
     const auto id=event->source_frame_id;
 #if defined(RSF_HAVE_STREAMLINE_VK)
@@ -205,8 +208,6 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
 #endif
     if (event->stage==RSF_GAME_CPU_INPUT_EVENT) {
         (void)rsf_latencyvk_input(id,event->input_kind,event->message_id);
-        if (event->input_kind && active_owner.load()==RSF_PACING_XELL && presentation_lease.get())
-            (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,6);
         return;
     }
     if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {facts_session.store(event->session_id);rsf::latency::amd_vk_begin(id);}
@@ -220,10 +221,13 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
         rsf::latency::amd_vk_options(owner==RSF_PACING_ANTILAG_VULKAN ? requested : 0,owner==RSF_PACING_ANTILAG_VULKAN ? limit : 0);
         if (owner==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_input(id);
         if (owner==RSF_PACING_XELL && presentation_lease.get() &&
-            rsf_fgvk_latency_options(presentation_lease.get(),1,limit)==RSF_BACKEND_OK &&
-            rsf_fgvk_latency_sleep(presentation_lease.get(),id)==RSF_BACKEND_OK)
-            (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,0);
+            rsf_fgvk_latency_options(presentation_lease.get(),1,limit)==RSF_BACKEND_OK)
+            (void)rsf_fgvk_latency_sleep(presentation_lease.get(),id);
     }
+    if (owner==RSF_PACING_XELL && presentation_lease.get() && event->stage==RSF_GAME_CPU_SIMULATION_BEGIN)
+        (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,0);
+    if (owner==RSF_PACING_XELL && presentation_lease.get() && event->stage==RSF_GAME_CPU_INPUT_SAMPLE)
+        (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,6);
     if (owner==RSF_PACING_XELL && presentation_lease.get() && event->stage==RSF_GAME_CPU_SIMULATION_END)
         (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,1);
     const bool skipped=event->stage==RSF_GAME_CPU_FRAME_END &&
@@ -258,7 +262,7 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
             if (owner==RSF_PACING_REFLEX) ++status.sleep_calls;
         }
     }
-    if (event->stage==(keyed ? RSF_GAME_CPU_INPUT_SAMPLE : RSF_GAME_CPU_SIMULATION_BEGIN)) marker(id,0);
+    if (event->stage==RSF_GAME_CPU_SIMULATION_BEGIN) marker(id,0);
     else if (event->stage==RSF_GAME_CPU_SIMULATION_END) marker(id,1);
     else if (skipped) tokens[id%tokens.size()]={};
 #endif
@@ -375,7 +379,7 @@ extern "C" void rsf_latencyvk_present(uint32_t begin) {
         std::lock_guard lock(mutex);
         if (begin) {present_frame=render_frame;frame=present_frame;} else frame=present_frame;
 #if defined(RSF_HAVE_STREAMLINE_VK)
-        if (begin) {marker(frame,3);marker(frame,4);} else marker(frame,5);
+        if (begin) marker(frame,4); else marker(frame,5);
 #endif
         if (!begin) present_frame=render_frame=0;
     }
@@ -399,9 +403,13 @@ extern "C" rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass
         if (pass->role == RSF_GAME_RENDER_SUBMISSION) {
             if (execution.stages & (1u << 4)) return RSF_BACKEND_ERROR_NOT_READY;
             if (begin) emit = 1u << 2;
+            else {
+                if (!(execution.stages & (1u << 2))) return RSF_BACKEND_ERROR_NOT_READY;
+                emit = 1u << 3;
+            }
         } else if (begin) {
-            if (!(execution.stages & (1u << 2))) return RSF_BACKEND_ERROR_NOT_READY;
-            emit = (1u << 3) | (1u << 4);
+            if (!(execution.stages & (1u << 3))) return RSF_BACKEND_ERROR_NOT_READY;
+            emit = 1u << 4;
         } else {
             if (!(execution.stages & (1u << 4))) return RSF_BACKEND_ERROR_NOT_READY;
             emit = 1u << 5;

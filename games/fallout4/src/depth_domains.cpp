@@ -453,11 +453,42 @@ bool native_raster_snapshot_current(const NativeDepthSnapshot& snapshot) noexcep
         same_raster_owner(snapshot,current);
 }
 
-bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
+bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot, void (*report)(const char*)) noexcept {
     Stage stage=Stage::source; NativeDepthSnapshot current{};
-    return verified.load(std::memory_order_acquire) && snapshot.valid &&
-        identity(snapshot.identity,current_cpu_identity()) && cpu_source_is_current(snapshot.identity) &&
-        sample(snapshot.identity,current,stage) && same(snapshot,current) && cpu_source_is_current(snapshot.identity);
+    unsigned reached=0,passed=0;
+    const auto check=[&](unsigned bit,bool value) { reached|=bit; if (value) passed|=bit; return value; };
+    const bool okay=check(1,verified.load(std::memory_order_acquire)) && check(2,snapshot.valid) &&
+        check(4,identity(snapshot.identity,current_cpu_identity())) && check(8,render_source_is_current(snapshot.identity)) &&
+        check(16,sample(snapshot.identity,current,stage)) && check(32,same(snapshot,current)) &&
+        check(64,render_source_is_current(snapshot.identity));
+    if (!okay && report) {
+        unsigned changed=0;
+        if (passed&16) {
+            if (snapshot.mode!=current.mode || snapshot.default_viewport!=current.default_viewport ||
+                snapshot.dynamic_viewport!=current.dynamic_viewport) changed|=1;
+            if (std::memcmp(snapshot.intervals,current.intervals,sizeof(snapshot.intervals))) changed|=2;
+            if (std::memcmp(snapshot.jitter,current.jitter,sizeof(snapshot.jitter))) changed|=4;
+            if (std::memcmp(snapshot.ratio,current.ratio,sizeof(snapshot.ratio))) changed|=8;
+            if (std::memcmp(snapshot.near_inverse_transposed,current.near_inverse_transposed,sizeof(snapshot.near_inverse_transposed))) changed|=16;
+            if (std::memcmp(&snapshot.near_camera,&current.near_camera,sizeof(snapshot.near_camera))) changed|=32;
+            if (std::memcmp(&snapshot.world_camera,&current.world_camera,sizeof(snapshot.world_camera))) changed|=64;
+            if (std::memcmp(&snapshot.world_unjittered_camera,&current.world_unjittered_camera,sizeof(snapshot.world_unjittered_camera))) changed|=128;
+        }
+        static std::atomic<unsigned> budget{};
+        if (budget.fetch_add(1,std::memory_order_relaxed)<16) {
+            char text[600]{};
+            std::snprintf(text,sizeof(text),
+                "Fallout4 depth lease source=%llu native=%llu/%llu reached=0x%x passed=0x%x sample_stage=%u changed=0x%x mode=%u/%u default=%u/%u dynamic=%u/%u jitter=%g,%g/%g,%g ratio=%g,%g/%g,%g",
+                static_cast<unsigned long long>(snapshot.identity.source),static_cast<unsigned long long>(snapshot.native_frame),
+                static_cast<unsigned long long>(current.native_frame),reached,passed,unsigned(stage),changed,
+                unsigned(snapshot.mode),unsigned(current.mode),unsigned(snapshot.default_viewport),unsigned(current.default_viewport),
+                unsigned(snapshot.dynamic_viewport),unsigned(current.dynamic_viewport),double(snapshot.jitter[0]),double(snapshot.jitter[1]),
+                double(current.jitter[0]),double(current.jitter[1]),double(snapshot.ratio[0]),double(snapshot.ratio[1]),
+                double(current.ratio[0]),double(current.ratio[1]));
+            report(text);
+        }
+    }
+    return okay;
 }
 
 bool verify_native_depth_domains() noexcept {
@@ -507,11 +538,11 @@ bool capture_native_depth_domains(const CpuIdentity& cpu, NativeDepthSnapshot& o
     MathFailure detail{};
     XMMATRIX near_map{},world_map{},projection{};
     if (!verified.load(std::memory_order_acquire)) return refuse(stage,before,report);
-    if (!identity(cpu,current_cpu_identity()) || !cpu_source_is_current(cpu)) return refuse(Stage::source,before,report);
+    if (!identity(cpu,current_cpu_identity()) || !render_source_is_current(cpu)) return refuse(Stage::source,before,report);
     if (!sample(cpu,before,stage) || !producer_raster(before,stage) || !math(before,near_map,world_map,projection,stage,detail)) return refuse(stage,before,report,&detail);
     if (!sample(cpu,after,stage) || !producer_raster(after,stage)) return refuse(stage,after,report);
     if (!same(before,after) || !same_raster(before,after)) return refuse(Stage::state_changed,after,report);
-    if (!identity(cpu,current_cpu_identity()) || !cpu_source_is_current(cpu)) return refuse(Stage::source,after,report);
+    if (!identity(cpu,current_cpu_identity()) || !render_source_is_current(cpu)) return refuse(Stage::source,after,report);
     before.valid=true; output=before; return true;
 }
 
@@ -520,7 +551,7 @@ bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIde
     output={};
     if (!verified.load(std::memory_order_acquire)) return refuse(Stage::unverified,snapshot,report);
     if (!snapshot.valid || !identity(snapshot.identity,cpu) || !identity(cpu,current_cpu_identity()) ||
-        !cpu_source_is_current(cpu)) return refuse(Stage::source,snapshot,report);
+        !render_source_is_current(cpu)) return refuse(Stage::source,snapshot,report);
     if (pass.struct_size<sizeof(pass) || pass.role!=RSF_GAME_RENDER_SR || !(pass.flags&RSF_GAME_RENDER_PRIMARY) ||
         pass.session_id!=cpu.session || pass.source_frame_id!=cpu.source || pass.submission_id!=cpu.submission ||
         pass.scope_id!=cpu.submission || pass.native_frame!=snapshot.native_frame ||
@@ -589,7 +620,7 @@ bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIde
     }
     if (!sample(cpu,confirmed,stage)) return refuse(stage,confirmed,report);
     if (!same(snapshot,confirmed)) return refuse(Stage::state_changed,confirmed,report);
-    if (!identity(cpu,current_cpu_identity()) || !cpu_source_is_current(cpu)) return refuse(Stage::source,confirmed,report);
+    if (!identity(cpu,current_cpu_identity()) || !render_source_is_current(cpu)) return refuse(Stage::source,confirmed,report);
     output=result; return true;
 }
 }

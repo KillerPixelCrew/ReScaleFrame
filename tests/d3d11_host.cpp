@@ -23,6 +23,18 @@ void cpu(void* user, const rsf_game_cpu_event* event) { check(user == &cookie &&
 void log(void* user, const char*) { check(user == &cookie, "Log upstream user preserved"); ++logs; }
 }
 int main() {
+    static_assert(sizeof(rsf_d3d11_capture_control)==16);
+    rsf_d3d11_capture_control capture_control{sizeof(capture_control),RSF_D3D11_CAPTURE_CONTROL_VERSION,RSF_D3D11_CAPTURE_SEQUENCE,1};
+    check(rsf_d3d11_host_capture_control(nullptr)==RSF_ERROR_INVALID_ARGUMENT,"null capture_control control refused");
+    --capture_control.struct_size;
+    check(rsf_d3d11_host_capture_control(&capture_control)==RSF_ERROR_INVALID_ARGUMENT,"short capture_control control refused");
+    ++capture_control.struct_size; ++capture_control.abi_version;
+    check(rsf_d3d11_host_capture_control(&capture_control)==RSF_ERROR_ABI_MISMATCH,"capture_control control version checked");
+    --capture_control.abi_version; capture_control.value=0;
+    check(rsf_d3d11_host_capture_control(&capture_control)==RSF_ERROR_INVALID_ARGUMENT,"empty sequence request refused");
+    capture_control.value=1;
+    check(rsf_d3d11_host_capture_control(&capture_control)==RSF_ERROR_NOT_READY,"capture_control requires live host");
+
     rsf_d3d11_host_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
     setup.configuration_path = L"unused.ini"; setup.configuration_section = L"Test"; setup.runtime_directory = L"unused";
     setup.identity_utf8 = "contract"; setup.executable_sha256 = "unused"; setup.engine_version_utf8 = "1";

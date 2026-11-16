@@ -47,16 +47,16 @@ int main() {
         check(!same_native_state(before,after) && same_native_owner(before,after),"each viewport element remains checked only by full state");
     }
     after=before; after.delta_seconds=1;
-    check(!same_native_state(before,after) && same_native_owner(before,after),"delta remains checked only by full state");
+    check(same_native_state(before,after) && same_native_owner(before,after),"timing updates do not invalidate unchanged render inputs");
     after=before; after.default_viewport=1;
     check(!same_native_state(before,after) && same_native_owner(before,after),"default selector remains checked only by full state");
     after=before; after.dynamic_viewport=1;
     check(!same_native_state(before,after) && same_native_owner(before,after),"dynamic selector remains checked only by full state");
-    after=before; after.delta_seconds=-0.0f;
+    after=before; after.ratio[0]=-0.0f;
     check(!same_native_state(before,after),"signed zero retains exact field-bit comparison");
-    before.delta_seconds=std::bit_cast<float>(uint32_t(0x7fc00123)); after=before;
+    before.ratio[0]=std::bit_cast<float>(uint32_t(0x7fc00123)); after=before;
     check(same_native_state(before,after),"identical NaN field bits retain prior comparison semantics");
-    after.delta_seconds=std::bit_cast<float>(uint32_t(0x7fc00124));
+    after.ratio[0]=std::bit_cast<float>(uint32_t(0x7fc00124));
     check(!same_native_state(before,after),"different float field bits refuse");
     if (!failures) std::puts("PASS Fallout4 snapshot padding and semantic-field comparisons");
     return failures ? 1 : 0;

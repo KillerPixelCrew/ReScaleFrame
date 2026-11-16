@@ -15,6 +15,13 @@ struct WorkerCycle {
     uint32_t frame{};
     bool operator==(const WorkerCycle&) const = default;
 };
+// Called with the current render owner locked after a worker saw mode0.
+inline bool active_join_matches(const WorkerCycle& expected, const WorkerCycle& current,
+    const WorkerCycle& predecessor, uint64_t worker_source, uint64_t successor_source,
+    bool joining, bool swapped, bool closed, bool invalid) noexcept {
+    return expected.source && worker_source && worker_source==successor_source &&
+        current==expected && predecessor==expected && joining && swapped && closed && !invalid;
+}
 inline bool same_worker_owner(const WorkerCycle& a, const WorkerCycle& b) {
     return a.session==b.session && a.main==b.main && a.worker==b.worker && a.window==b.window &&
         a.manager==b.manager && a.queue==b.queue && a.receiver==b.receiver &&
@@ -48,13 +55,14 @@ struct WorkerTicket {
     void end_callback() noexcept {
         callback_returned=callback_inflight; callback_inflight=false;
     }
+    // The predecessor's sample is already consumed. Raw arrivals and queue-tail
+    // writes belong to the future poll, which has not started during this lease.
     bool protects_bound(const WorkerCycle& owner, uint64_t source, uint64_t bound_generation,
-        uint64_t gen, uint64_t revision, uint32_t consumed, uint32_t queued, bool native_valid) const {
+        uint64_t gen, uint64_t /*revision*/, uint32_t consumed, uint32_t /*queued*/, bool native_valid) const {
         return valid() && phase==Phase::reserved && callback_inflight && !native_poll_started &&
             owner==predecessor && source==predecessor.source && predecessor_generation &&
             bound_generation==predecessor_generation && gen==generation && generation>bound_generation &&
-            generation-bound_generation==1 && revision==predecessor_raw &&
-            consumed==predecessor_cursor && queued==consumed && native_valid;
+            generation-bound_generation==1 && consumed==predecessor_cursor && native_valid;
     }
     static bool poll_safe(uint64_t bound_source, bool closed, bool sealed) noexcept {
         return !bound_source || closed || sealed;
@@ -89,6 +97,7 @@ struct WorkerTicket {
         if (!valid() || phase!=Phase::complete || owner!=predecessor || !completed_wait) return false;
         phase=Phase::joined; return true;
     }
+    // sequence is the receiver consumed cursor, never the live enqueue tail.
     bool successor(const WorkerCycle& owner, uint32_t sequence, uint64_t gen, bool world) const {
         return valid() && same_worker_owner(owner,predecessor) && owner.source==cpu.source &&
             owner.idle==predecessor.idle+1 && owner.frame==uint32_t(predecessor.frame+(world ? 1u : 0u)) &&

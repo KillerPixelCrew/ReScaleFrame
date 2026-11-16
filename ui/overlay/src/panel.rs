@@ -1168,18 +1168,29 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         );
     } else if generation.latency_owner == LATENCY_XELL {
         heading(ui, "Intel XeLL");
-        let status = if generation.latency_paced_frames == 0 {
-            "Intel XeLL: waiting for paced frames".to_owned()
-        } else {
-            format!(
-                "Intel XeLL active, {} frames paced",
-                generation.latency_paced_frames
-            )
-        };
+        let status = format!(
+            "Intel XeLL effective: {}, {} sleep calls",
+            if generation.effective_reflex == 0 {
+                "Off"
+            } else {
+                "On"
+            },
+            generation.latency_paced_frames
+        );
         note(ui, status, MUTED);
         latency_toggle(ui, &generation, intent, controls);
-        if generation.requested_reflex == 0 && generation.effective_mode != 0 {
-            note(ui, "XeSS FG requires On while generating frames.", AMBER);
+        if generation.requested_reflex == 0 && generation.effective_reflex != 0 {
+            note(
+                ui,
+                "Off requested; XeSS FG requires effective XeLL On.",
+                AMBER,
+            );
+        } else if generation.effective_reflex == 0 {
+            note(
+                ui,
+                "Sleep calls continue in Off mode for SDK tracking.",
+                MUTED,
+            );
         }
         note(ui, "Boost maps to On for XeLL.", MUTED);
     } else {
@@ -1220,7 +1231,12 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             note(
                 ui,
                 format!(
-                    "Reflex active, {} frames paced",
+                    "Reflex effective: {}, {} sleep calls",
+                    if generation.effective_reflex == 0 {
+                        "Off"
+                    } else {
+                        "On"
+                    },
                     generation.latency_paced_frames
                 ),
                 MUTED,
@@ -1228,6 +1244,32 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         }
     }
 
+    if generation.pcl_available {
+        heading(ui, "PCL input receipts");
+        note(
+            ui,
+            format!(
+                "Keyboard {} · Mouse {} · Controller {}",
+                generation.input_receipts[0],
+                generation.input_receipts[1],
+                generation.input_receipts[2]
+            ),
+            MUTED,
+        );
+        note(
+            ui,
+            format!(
+                "Notifications routed {} · Failed {} · Unmatched {}",
+                generation.pcl_routed, generation.pcl_failed, generation.pcl_unmatched
+            ),
+            MUTED,
+        );
+        note(
+            ui,
+            "Receipt and routing counts; SDK markers may be coalesced per frame.",
+            MUTED,
+        );
+    }
     frame_limit(ui, &generation, intent, controls);
 }
 
@@ -2452,6 +2494,27 @@ mod tests {
         selection.reconcile(stats);
         selection.apply(&intent);
         selection
+    }
+
+    #[test]
+    fn pcl_routes_are_distinguished_from_sdk_markers() {
+        let mut stats = Stats::default();
+        stats.generation.available = true;
+        stats.generation.pcl_available = true;
+        stats.generation.input_receipts = [11, 22, 33];
+        stats.generation.pcl_routed = 44;
+        stats.generation.pcl_failed = 5;
+        stats.generation.pcl_unmatched = 6;
+        let text = words(&Selection::default(), &stats, Tab::Frames);
+        assert!(
+            text.contains("Keyboard 11")
+                && text.contains("Mouse 22")
+                && text.contains("Controller 33")
+        );
+        assert!(
+            text.contains("routed 44") && text.contains("Failed 5") && text.contains("Unmatched 6")
+        );
+        assert!(text.contains("coalesced per frame"));
     }
 
     #[test]

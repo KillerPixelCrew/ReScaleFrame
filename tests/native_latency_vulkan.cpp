@@ -195,7 +195,7 @@ int main() {
     fact.stage=RSF_GAME_CPU_INPUT_EVENT;fact.timestamp_qpc=1012;fact.input_kind=7;rsf_latencyvk_cpu(&fact);rsf_latencyvk_cpu(&fact);
     fact.stage=RSF_GAME_CPU_SIMULATION_END;fact.timestamp_qpc=1020;fact.input_kind=0;rsf_latencyvk_cpu(&fact);
     require(xell_sleeps==1 && slept==reflex_sleeps,"exactly one selected pacer, no Reflex sleep stacked on XeLL");
-    require(xell_markers.size()==3 && xell_markers[0].kind==0 && xell_markers[1].kind==6 && xell_markers[2].kind==1,
+    require(xell_markers.size()==3 && xell_markers[0].kind==6 && xell_markers[1].kind==0 && xell_markers[2].kind==1,
         "shared accepted input facts reach XeLL once in order");
     rsf_game_render_pass execution{}; execution.struct_size=sizeof(execution);
     execution.session_id=77; execution.source_frame_id=100; execution.role=RSF_GAME_RENDER_PRESENT;
@@ -206,8 +206,8 @@ int main() {
     auto foreign_execution=execution;foreign_execution.session_id=76;
     require(rsf_latencyvk_execution(&foreign_execution,1)==RSF_BACKEND_ERROR_NOT_READY,"foreign execution session refused");
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK &&
-        rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK && xell_markers.size()==4,
-        "many submissions open one render marker without prematurely closing it");
+        rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK && xell_markers.size()==5,
+        "actual submission end closes its interval; duplicate begins emit once");
     fact={sizeof(fact),RSF_GAME_CPU_FRAME_BEGIN,77,101,2000,1000,1,0,0,1,RSF_GAME_CPU_INPUT_KEYED};
     rsf_latencyvk_cpu(&fact);
     fact.stage=RSF_GAME_CPU_INPUT_SAMPLE;fact.timestamp_qpc=2010;rsf_latencyvk_cpu(&fact);
@@ -215,13 +215,15 @@ int main() {
     fact.stage=RSF_GAME_CPU_SIMULATION_END;fact.timestamp_qpc=2020;rsf_latencyvk_cpu(&fact);
     execution.source_frame_id=101;
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK,"newer rendering may overlap previous presentation");
+    execution.role=RSF_GAME_RENDER_PRESENT;
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,
+        "newer Present cannot synthesize the missing actual submission end");
     execution.source_frame_id=100;execution.role=RSF_GAME_RENDER_PRESENT;
     require(rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_ERROR_NOT_READY,"unpaired explicit Present end refused");
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK,
         "previous output presents with its own source");
     const auto n=xell_markers.size();
-    require(n>=3 && xell_markers[n-3].frame==100 && xell_markers[n-3].kind==3 &&
-        xell_markers[n-2].frame==100 && xell_markers[n-2].kind==4 && xell_markers[n-1].frame==100 && xell_markers[n-1].kind==5,
+    require(n>=2 && xell_markers[n-2].frame==100 && xell_markers[n-2].kind==4 && xell_markers[n-1].frame==100 && xell_markers[n-1].kind==5,
         "Present never takes the newer render token");
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_OK && rsf_latencyvk_execution(&execution,0)==RSF_BACKEND_OK &&
         xell_markers.size()==n,"repeated explicit presentation is deduplicated");

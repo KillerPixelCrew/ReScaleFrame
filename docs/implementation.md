@@ -7,6 +7,18 @@ explicit direct-executable/module-absence proof recorded for PID64940. Compatibi
 is deferred until native validation passes, not dropped. No further ENB trials
 are scheduled in the native phase.
 
+The latest [native SR dropout trial](research/fallout4-sr-dropout-20261116.md)
+deployed commit4b2fa36 in PID47776 without F4SE/ENB. The user rejects repeated
+SR dropout and jitter. Final counters are3824 evaluated/778 refused;668 logged
+failure transitions return to success,575 on the next native frame. Bounded
+rows confirm temporal/spatial recovery switching. The first detailed failure
+is a predecessor-Present timeout followed by a missing shared token. Separate
+mode0/copied-joining0 refusals expose a possible same-cycle snapshot race;
+neither finding explains every failure yet. Exit0 occurred before handoff
+completion with no root close action, so method is unverified. All21 original
+destination states were independently restored, including ENB; custom INI is
+unchanged. No native SR/FG/latency or moving/shader acceptance follows.
+
 The complete Community Shaders ownership inventory and independent Claude
 inventory now cover pinned revision e0e7115 and all four consumed dependencies.
 The [reconciled inventory](research/fallout4-community-shaders-inventory-root-20261116.md)
@@ -3170,6 +3182,13 @@ RDR2 host backends 1/3/4/5 and both D3D11 bridge variants passed with the releas
 overlay. The bridge's foreground-game DLSS activity check was not run after
 foreground ownership was denied. These remain device/synthetic results.
 
+### Managed Vulkan notice cleanup (2026-11-15)
+
+Removed the managed Vulkan migration notice and its README license exception
+after the owner confirmed VulkanStory is their own source code. This is a
+documentation-only correction. Checked the diff and remaining notice references;
+no build, deployment or runtime validation was needed.
+
 ## Native Vulkan DLL exports for external engines, 15 November 2026
 
 The runtime DLL now retains the entire native Vulkan archive. Previously its link
@@ -3194,3 +3213,190 @@ workflow correction, not evidence that existing integrations' shader gaps are
 fixed. All three skill folders passed skill-creator quick_validate.py, the
 Claude reference resolves, and the focused diff check passes. No runtime changes
 or game deployment are included in this documentation commit.
+
+### Fallout 4 worker join snapshot correction, 16 November 2026
+
+Corrected the stale joining snapshot path described in
+[the dropout investigation](research/fallout4-sr-dropout-20261116.md).
+A selected worker revalidates its exact predecessor join before retrying the
+complete native proof. Moving-game dropout acceptance remains pending.
+
+Fallout4 join retry trial PID18964 failed user Quality1 acceptance; stale-mode
+refusal and temporal/spatial alternation persist. Partial capture and close AV
+are retained in the dropout investigation. The proposed unlimited predecessor
+wait was built but never deployed, then removed after finding deferred abort
+while the callback is busy. Runtime rebuilt with the original bounded behavior;
+source cancellation and token lifetime remain required repairs. NVIDIA's four
+skill junctions and both checklists for each were verified readable.
+
+Fallout4 cancellation delivery now reaches a busy synchronous RESERVE callback
+without retiring its ticket. Shared pacing defers cancellation-driven token
+retirement until callback return. Release build and focused reservation/worker
+contracts pass, including cross-thread cancellation during RESERVE. No new
+game trial;20ms dependency deadline and visual acceptance remain unresolved.
+
+Cancellable predecessor wait deployed in PID62468 after protecting in-flight
+pacing from capacity retirement/slot reuse and preserving concurrent cancellation
+across token acquisition. User reports improved rendering but backend-switch hang.
+Dump retained; process exited before agent kill attempt, controller exit0/restored.
+SR quality, switching stability and FG remain incomplete.
+
+Fallout4 closes an unsealed predecessor by cancelling its exact reserved
+successor before native worker join. This addresses the source-level wait cycle
+identified after PID62468. Matching Runtime REA/IDA evidence is retained in the
+trial report. Adapter built; existing focused contracts pass; switch retest pending.
+
+PID65288: user confirms backend switching works after exact-successor
+cancellation, but rejects SR below DLAA. No counted evaluation refusals in the
+retained transitions; reduced-path image quality remains failed. This narrows
+next work to skipped producer paths, temporal inputs/history and downstream
+consumers, with complete same-frame capture still missing. FG remains unvalidated.
+
+Reduced-only follow-up: bounded native TAA-gate receipts built into the Fallout4
+adapter to correlate actual TAA admission with reconstruction/source identity.
+No rendering behavior changed; capture and game validation still pending.
+
+PID50468 now supplies a complete reduced capture at source7833/native8145,
+1707x1067 to2560x1600, SR0 and matched Present0 with final image. Static output
+is populated; user still rejects temporal dropout. Reset1 in this focus-transition
+sample requires settled adjacent-frame history investigation, not acceptance.
+
+Fallout4 reset reasons and producer-snapshot refusal are now separately observable
+through bounded receipts. TAA receipts no longer share the16-message generic
+budget. Build and camera contract passed; rendering predicates unchanged.
+
+Confirmed reduced-SR refusal: PID8348 native2739 changed only timing18ms->34ms
+inside the same native frame. Input identity now excludes that mutable timing
+sample while retaining all render/input guards and first-snapshot frame delta.
+Shared D3D11 automatic failure capture added with saved overlay control, exact
+failure-source resources,3/session cap and explicit temporal failure on spatial
+recovery. Release builds and3 focused contracts pass. Neither change deployed;
+sequence capture and full capture-content/game validation remain required.
+
+Shared diagnostics now provide Capture4readySRframes through the overlay. It
+waits for ready unchanged gameplay configuration, preserves manual captures,
+and excludes duplicate source passes. Runtime build and capture-policy contract
+pass. tools/analyze-sr-captures.py distinguishes actual evaluated/Presented output
+from spatial recovery despite the old misleading SR0 metadata, checked on two
+retained real bundles. No new game/device trial; timing repair remains undeployed.
+
+Capture harness automation: independently versioned16-byte capture-control C ABI
+and maintained tools/runtime-action.py expose shared failure/sequence controls.
+tools/capture-sr-sequence.py waits for stable foreground SR, arms one sequence,
+collects exact-PID tagged bundles and writes success/failure/timeout reports.
+Runtime build, rebuilt host ABI and capture-policy contracts pass; Python fake-
+runtime completion/timeout/report/cleanup tests pass. First ABI test build failed
+on a local variable name collision and was corrected before the passing rebuild.
+No new game or device fixture was run. Timing-fix game acceptance remains pending.
+
+PID74532 exercised automatic SR-failure capture:3exact-source recovery bundles
+retained and cap enforced, now with truthful SR-3 metadata. The timing-only
+reread failure was not logged; remaining native1933 rejection is depth-producer
+lease validation. Sequence report retained process-exit failure; controller
+exit0/restored, no root close. Depth-lease branch/change receipts built for
+remaining diagnosis, guards unchanged. SR/FG acceptance remains incomplete.
+
+Capture follow-up: fixed input_dump_result silently rejecting the new sequence
+and failure marker names. A real filesystem-only capture_metadata_contract now
+verifies emitted marker files and SR-3 preservation, without creating a device.
+Runtime build and metadata/policy contracts pass. Fallout4 now offers exact-owner
+recovery_native_output before Present for active failed-reduced captures; no
+FG admission changed. Adapter builds; native content verification pending.
+
+PID55388 proves depth snapshot equality can pass while CPU input provenance
+fails. Added a separate existing-render lease with identity/thread/native-frame/
+lifecycle guards and retained independent camera/resource checks. CPU timing
+and FG admission remain strict. SR now propagates the already verified gameplay
+screen to unblock capture-sequence selection. Adapter builds; existing focused
+contracts pass. Undeployed corrections; live validation remains required.
+
+PID57728 automated four consecutive Quality frames complete with reset0. DLSS-G
+became active with valid2x output telemetry and repeated tagged sources, but user
+reports motion suspension. Exact swap-claim receipt rejects consumed2845 because
+new queue tail2846 arrived. Post-consumption handoff now checks the consumed
+cursor and existing generation/owner checks instead of requiring an empty queue.
+Adapter built and existing worker contract passed; moving FG retest pending.
+
+PID27512 with consumed-cursor correction supplies another four complete reset0
+SR frames; static FG remains active. Computer Use plugin was selected and its
+absolute drag/key actions exercised, but did not establish camera motion.
+Relative-input exception is pending user response; no synthetic motion acceptance.
+Added --require-fg to capture harness and fixed FG capture identity: populate FG
+view_id, join exact pass identity instead of comparing SR/FG pool generations.
+Runtime build and real file-output regression pass, including mismatched-view
+refusal. FG capture identity correction is not yet deployed.
+
+Explicitly authorized relative camera pan now automated in tools/pan-game-camera.py.
+PID27512 camera movement visually confirmed;6/32FG-active status samples, motion
+still fails. Removed old consumed-predecessor raw/tail comparisons from next-poll
+reservation/protection, retaining consumed-cursor/generation and fresh-poll guards.
+Build and updated regression pass; undeployed. Interrupted trial restored21entries
+with reusable hash-checked restore-capture-trial.ps1 after game exit. No new trial.
+
+User accepted the tested SR/FG path and directed work to Reflex/PCL/XeLL/Anti-Lag,
+without more exhaustive SR/FG tests. User then disabled automatic capture due to
+loading stalls. No Fallout4 or capture runner was active at the check; restored
+installation had no RSF INI enabling capture. Trial startup now explicitly writes
+CaptureSRFailures=0 and scripted capture is opt-in via CaptureScene. Future
+latency runs use lightweight logs/status. Synchronous capture can perturb loading
+and pacing, so prior capture-run FPS is not an unperturbed latency benchmark.
+
+Actual-only latency policy is now explicit in AGENTS. Shared D3D/Vulkan marker
+admission rejects synthetic/substitute timing; missing actual boundaries are not
+manufactured at render submit or input sample. Game ABI24 adds optional version3
+receipt provenance and core dedup/counts, not yet emitted/routed to vendors.
+Runtime build and three focused CPU contracts pass. See
+[actual latency boundary research](research/fallout4-actual-latency-boundaries-20261116.md).
+Address Library and Community Shaders identity reverified; matching EXE IDA query
+in flight, existing matched dossiers reused. No autocapture or live test.
+
+Fallout4 actual receipt producers now use optional eventv3: monotonic receipt IDs,
+observed MSG.hwnd or unknown0, source0 and real callback QPC. Core receipt counts
+are queryable through tools/runtime-action.py receipts-status, independent from
+sampled frame input. Adapter build and three focused contracts pass; no game
+run, no vendor notification association yet. Actual simulation-boundary analysis
+continues in the existing live REA/IDA request; no synthetic marker fallback.
+
+Actual-only latency follow-up: XeLL Vulkan markers now follow actual input/sample
+and simulation callbacks; sleep no longer implies simulation-start. Submission
+end requires its own callback instead of synthesis at Present. Required pacing
+ownership remains unchanged. Runtime build and four focused CPU/mock contracts
+pass, including Anti-Lag unsupported/failure and no-second-pacer cases. Native
+FO4 simulation boundaries, PCL routing and hardware verification remain open.
+
+Fresh matched-EXE REA/IDA confirms native input wrapper, worker update and main
+Swap rendering boundary. Fallout4 now reports actual PlayerControls-entry and
+pre-Swap simulation events for the exact consumed source. Core forwards observed
+replacements of derived bookkeeping; only observed timing authorizes markers.
+Runtime/adapter build and3focused CPU contracts pass. Live verification pending;
+autocapture remains disabled. Evidence: actual-simulation-boundaries-rea-20261116.json.
+
+Native actual-marker trial PID68740: Reflex On/Boost apply; Off with FG disabled
+reports mode0 and continued sleep calls. Gameplay/pan telemetry shows real marker
+calls, zero derived boundaries and zero order violations. Receipt counters now
+observe actual keyboard/mouse/dequeued messages separately; PCL SDK notification
+routing remains incomplete. Autocapture off. Prior stale-carrier ABI refusal was
+restored; rsf_fallout4_trial now builds coherent carrier/adapter/runtime artifacts.
+No end-to-end latency or XeLL/Anti-Lag hardware acceptance claimed.
+
+PCL receipt routing implemented centrally: verified bound window/thread, unique
+existing actual CPU-phase source, session/provider-generation/time checks, no
+new token or synthesized marker. Notification calls use a generation-pinned
+provider operation. Pure selection contract passes; core/host build corrected
+and passing. Live notification and UI telemetry verification remain pending.
+
+XeSS-FG switch (2026-11-16): user-reported hang remains failed acceptance. Shared XeLL sleep/marker lock split and bounded concurrency regression implemented; native retest pending. Recurrence prevention recorded in the rendering skill's latency-sleep-locks reference and linked Reflex/PCL skill. See docs/research/fallout4-actual-latency-boundaries-20261116.md.
+
+Fallout4 XeSS-FG 128-frame stall: CPU dump and REA confirmed a Steam Present lock cycle. Shared Steam facade dispatch now occurs before its lock; fixed live run passed 784 tagged frames, switched Off and back to XeSS, reported 28/56 FPS and 950 XeLL sleeps. Full visual/latency acceptance remains separate. Evidence: docs/research/fallout4-actual-latency-boundaries-20261116.md.
+
+Fallout4 XeSS-FG performance: physical Present interval3 violated XeLL's interval1 requirement. Runtime normalization built and game-observed in native-raster-20261116-233650-937:82 base/164 presented FPS, XeSS FG active2x, SDK results0. User: Much better now. This is sampled performance/user acceptance, not a controlled benchmark. Autocapture off.
+
+XeLL settings completion guard: actual sleep-parameter changes now require bounded completion on the supplied D3D12 queue before xellSetSleepMode. Busy sleep defers without blocking earlier-frame progress. Release build and focused CPU regression pass; new guard awaits game settings-switch verification. Current live game retains the accepted interval fix.
+
+User acceptance, deployed Fallout4 trial233650: Everything seems to work perfectly fine now. Recorded in engine.json and actual-latency research. Additional XeLL settings guard remains built-only and is excluded from this deployed acceptance.
+
+PCL telemetry: overlay ABI18 now carries actual keyboard/mouse/controller receipts and routed/failed/unmatched notification counts. Panel states SDK coalescing explicitly. Runtime/overlay Release builds and56 Rust tests passed; live UI verification pending. NVIDIA verification executable not found in searched local SDK and standard install directories; vendor/controller/lifecycle acceptance remains open.
+
+NVIDIA PCL tools located in official Reflex revision c2522cee75be7a952ab29281c4cf6d978c5e2e0e. PrintPCL failed FvSDK_CreateSession -1; full validation requires FrameView SDK setup/system restart per consumed NVIDIA guide. No installer, setup batch, reboot or vendor-tool acceptance performed.
+
+Session stopped at user request. User accepts the deployed SR/FG state as sufficient. PCL overlay ABI18 is built and CPU-tested; new overlay and XeLL settings guard were staged in trial235214, but gameplay/UI/settings verification was interrupted and remains incomplete. The stopped trial's21 manifest entries were restored and hash-verified by tools/restore-capture-trial.ps1 (resumed-restoration-20261116-235448-824.json). No FrameView installer, verification setup, reboot, full eng/verify.ps1 suite, release or readiness promotion performed. All current tracked changes and source diagnostics are checkpointed; licensed binaries, external references and captures remain ignored.

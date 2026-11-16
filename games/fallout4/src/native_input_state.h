@@ -25,6 +25,8 @@ inline bool same_native_state(const NativeState& a, const NativeState& b) noexce
         if (std::bit_cast<uint32_t>(a.ratio[i])!=std::bit_cast<uint32_t>(b.ratio[i])) return false;
     for (unsigned i=0;i<4;++i)
         if (std::bit_cast<uint32_t>(a.viewport[i])!=std::bit_cast<uint32_t>(b.viewport[i])) return false;
-    return std::bit_cast<uint32_t>(a.delta_seconds)==std::bit_cast<uint32_t>(b.delta_seconds);
+    // Frame timing is sampled in the first snapshot. The native timing global
+    // can advance during the same render frame without changing its inputs.
+    return true;
 }
 }

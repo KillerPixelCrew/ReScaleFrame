@@ -83,7 +83,7 @@ NativeScreen classify_native_screen(const CpuIdentity& source, const rsf_game_re
     const auto error=GetLastError();
     struct Restore { DWORD value; ~Restore() { SetLastError(value); } } restore{error};
     if (!verified.load(std::memory_order_acquire)) { result.refusals=ScreenQueryUnavailable; return result; }
-    if (!cpu_source_is_current(source)) { result.refusals=ScreenSourceChanged; return result; }
+    if (!render_source_is_current(source)) { result.refusals=ScreenSourceChanged; return result; }
     Observation before{},after{};
     if (!observe(before)) { result.refusals=ScreenQueryUnavailable; return result; }
     const auto base=image();
@@ -104,7 +104,7 @@ NativeScreen classify_native_screen(const CpuIdentity& source, const rsf_game_re
         if (matches!=1) result.camera_index=UINT32_MAX;
     }
     result.camera_state=before.camera_state;
-    if (!observe(after) || before!=after || !cpu_source_is_current(source)) {
+    if (!observe(after) || before!=after || !render_source_is_current(source)) {
         result.refusals=ScreenObservationChanged; return result;
     }
     if (bool(result.facts&ScreenFrozenBackground)!=(before.freeze_background!=0) ||
