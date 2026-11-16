@@ -12,7 +12,9 @@
 #include <rescaleframe/overlay_api.h>
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
+#include <d3d12.h>
 #include <dxgi1_6.h>
+#include <dxgidebug.h>
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
 #include <cmath>
@@ -63,6 +65,7 @@ struct OuterChain final : IDXGISwapChain {
 HWND window{};
 struct TemporaryIni { std::wstring path; ~TemporaryIni() { DeleteFileW(path.c_str()); } };
 constexpr UINT width = 960, height = 540;
+constexpr GUID diagnostic_all{0xe48ae283,0xda80,0x490b,{0x87,0xe6,0x43,0xe9,0xa9,0xcf,0xda,0x08}};
 void log(void*, const char* message) { std::printf("%s\n", message); }
 int accept(void*, void* candidate) { return candidate == window; }
 ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT bindings) {
@@ -73,6 +76,23 @@ ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT b
 }
 int fail(const char* label) { std::printf("FAIL: %s\n", label); return 1; }
 void identity(float* matrix) { matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1; }
+void dxgi_errors(IDXGIInfoQueue* queue) {
+    if (!queue) return;
+    const auto count=queue->GetNumStoredMessagesAllowedByRetrievalFilters(diagnostic_all);
+    std::printf("DXGI stored messages=%llu\n",static_cast<unsigned long long>(count));
+    unsigned printed=0;
+    for (UINT64 i=0;i<count && printed<16;++i) {
+        SIZE_T size{};
+        if (FAILED(queue->GetMessage(diagnostic_all,i,nullptr,&size)) || !size) continue;
+        std::vector<unsigned char> storage(size);
+        auto* message=reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(storage.data());
+        if (SUCCEEDED(queue->GetMessage(diagnostic_all,i,message,&size)) &&
+            message->Severity<=DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING) {
+            std::printf("DXGI message severity=%u id=%d: %s\n",unsigned(message->Severity),message->ID,message->pDescription);
+            ++printed;
+        }
+    }
+}
 void cpu(const rsf_game_host_services& host, uint64_t source, uint32_t stage) {
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.event_version = RSF_GAME_CPU_EVENT_VERSION;
@@ -88,6 +108,17 @@ int main(int argc, char** argv) {
     const std::filesystem::path root(argv[1]);
     if (!std::filesystem::exists(root / "streamline/sl.interposer.dll") ||
         !std::filesystem::is_directory(root / "fidelityfx")) return 77;
+    // Optional system diagnostic queue, before the exact production creation path.
+    // Do not change factory creation flags or substitute a different API for it.
+    ComPtr<IDXGIInfoQueue> dxgi_diagnostics;
+    const auto debug_module=LoadLibraryExW(L"dxgidebug.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (debug_module) {
+        using Query=HRESULT(WINAPI*)(UINT,REFIID,void**);
+        const auto query=reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(debug_module,"DXGIGetDebugInterface1")));
+        if (query) (void)query(0,IID_PPV_ARGS(&dxgi_diagnostics));
+    }
+    std::printf("DXGI info queue available=%u\n",dxgi_diagnostics ? 1u : 0u);
+    if (dxgi_diagnostics) dxgi_diagnostics->ClearStoredMessages(diagnostic_all);
     ComPtr<IDXGIFactory1> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 77;
     ComPtr<IDXGIAdapter1> adapter;
@@ -105,6 +136,41 @@ int main(int argc, char** argv) {
     window = CreateWindowW(wc.lpszClassName, L"RSF rendered FG device check", WS_OVERLAPPED,
         0, 0, int(width), int(height), nullptr, nullptr, module, nullptr);
     if (!window) return fail("create hidden fixture window"); // Deliberately never shown or made foreground.
+    if (scoped) {
+        // Before installing RSF interception, isolate the usage variable on the
+        // same native adapter/queue. Separate HWNDs avoid deferred chain lifetime
+        // becoming an alternative explanation for the second creation result.
+        ComPtr<ID3D12Device> native_device;
+        ComPtr<ID3D12CommandQueue> native_queue;
+        D3D12_COMMAND_QUEUE_DESC queue_description{};
+        queue_description.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&native_device))) ||
+            FAILED(native_device->CreateCommandQueue(&queue_description,IID_PPV_ARGS(&native_queue))))
+            return fail("native paired-usage device/queue");
+        const auto probe_usage=[&](UINT usage) {
+            const auto probe=CreateWindowW(wc.lpszClassName,L"RSF private usage probe",WS_OVERLAPPED,
+                0,0,int(width),int(height),nullptr,nullptr,module,nullptr);
+            if (!probe) return HRESULT(E_FAIL);
+            DXGI_SWAP_CHAIN_DESC descriptor{};
+            descriptor.BufferDesc.Width=width; descriptor.BufferDesc.Height=height;
+            descriptor.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
+            descriptor.SampleDesc.Count=1; descriptor.BufferUsage=usage;
+            descriptor.BufferCount=3; descriptor.OutputWindow=probe;
+            descriptor.Windowed=TRUE; descriptor.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            ComPtr<IDXGISwapChain> physical;
+            const auto result=factory->CreateSwapChain(native_queue.Get(),&descriptor,&physical);
+            std::printf("Native D3D12 paired creation usage=0x%x HRESULT=0x%08lx\n",usage,static_cast<unsigned long>(result));
+            physical.Reset(); DestroyWindow(probe); return result;
+        };
+        const auto unordered=probe_usage(DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT | DXGI_USAGE_UNORDERED_ACCESS);
+        const auto control=probe_usage(DXGI_USAGE_RENDER_TARGET_OUTPUT);
+        dxgi_errors(dxgi_diagnostics.Get());
+        if (FAILED(control)) return fail("native paired usage render-target control");
+        // Some runtimes may support the larger usage set. Preserve that result;
+        // attribution of an invalid call requires the actual paired receipt.
+        if (FAILED(unordered) && unordered!=DXGI_ERROR_INVALID_CALL) return fail("unexpected native unordered-usage refusal");
+        if (dxgi_diagnostics) dxgi_diagnostics->ClearStoredMessages(diagnostic_all);
+    }
     wchar_t temporary[MAX_PATH]{}, ini[MAX_PATH]{};
     if (!GetTempPathW(MAX_PATH, temporary) || !GetTempFileNameW(temporary, L"rsf", 0, ini)) return fail("create scratch INI path");
     const TemporaryIni remove_ini{ini};
@@ -127,6 +193,7 @@ int main(int argc, char** argv) {
     DXGI_SWAP_CHAIN_DESC chain_desc{}; chain_desc.BufferDesc.Width = width; chain_desc.BufferDesc.Height = height;
     chain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; chain_desc.SampleDesc.Count = 1;
     chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; chain_desc.BufferCount = 2;
+    if (scoped) chain_desc.BufferUsage |= DXGI_USAGE_SHADER_INPUT | DXGI_USAGE_UNORDERED_ACCESS;
     chain_desc.OutputWindow = window; chain_desc.Windowed = TRUE;
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context; ComPtr<IDXGISwapChain> chain;
     const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_1;
@@ -154,6 +221,7 @@ int main(int argc, char** argv) {
             0, &level, 1, D3D11_SDK_VERSION, &chain_desc, &chain, &device, nullptr, &context);
     if (FAILED(created)) return fail("create hardware D3D11 device/swapchain");
     OuterChain* outer = nullptr;
+    HRESULT application_uav=S_OK;
     if (scoped) {
         // Check emitted code, not just C++ call spelling: a hook installer that
         // follows the first entry jump must not land on the private continuation.
@@ -172,6 +240,16 @@ int main(int argc, char** argv) {
         const unsigned char metadata[48]{};
         if (FAILED(chain->GetBuffer(0,IID_PPV_ARGS(&buffer))) ||
             FAILED(buffer->SetPrivateData(annotation,sizeof(metadata),metadata))) return fail("creation-time virtual buffer contract");
+        D3D11_TEXTURE2D_DESC allocation{}; buffer->GetDesc(&allocation);
+        ComPtr<ID3D11UnorderedAccessView> unordered;
+        application_uav=device->CreateUnorderedAccessView(buffer.Get(),nullptr,&unordered);
+        std::printf("Application usage=0x%x GetBuffer bind=0x%x UAV HRESULT=0x%08lx\n",
+            chain_desc.BufferUsage,allocation.BindFlags,static_cast<unsigned long>(application_uav));
+        DXGI_SWAP_CHAIN_DESC reported{};
+        if (FAILED(chain->GetDesc(&reported)) || reported.BufferUsage!=chain_desc.BufferUsage)
+            return fail("virtual descriptor preserves requested application usage");
+        // Retain the failed contract result, but still exercise physical creation
+        // so the same run discriminates application binds from native DXGI usage.
         if (presentation.is_owner(chain.Get())) return fail("inner owner cannot be admitted before End");
         rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
         typed.receiver = chain.Get(); typed.method = RSF_D3D11_DISPATCH_RELEASE;
@@ -212,6 +290,10 @@ int main(int argc, char** argv) {
     }
     // Native startup presents before the first scene. The bridge adopts its chain there.
     const auto first_present = chain->Present(0, 0);
+    std::printf("Initial production Present HRESULT=0x%08lx\n",static_cast<unsigned long>(first_present));
+    dxgi_errors(dxgi_diagnostics.Get());
+    if (scoped && FAILED(first_present)) return fail("scoped physical creation/presentation");
+    if (scoped && FAILED(application_uav)) return fail("requested application buffer UAV contract");
     if (outer && (outer->pre != 1 || outer->post != 1 || outer->dispatched != 1)) return fail("outer Present work and exact dispatch remain active");
     if (FAILED(first_present) || !presentation.is_owner(chain.Get()) || !presentation.host()) {
         std::printf("Shared presentation not established: 0x%08lx owner=%u host=%p\n",

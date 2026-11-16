@@ -115,6 +115,9 @@ extern "C" rsf_shared_result rsf_shared_surface_create(void* d3d11_device_pointe
     if (setup->render_target) {
         description.BindFlags |= D3D11_BIND_RENDER_TARGET;
     }
+    if (setup->unordered_access) {
+        description.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+    }
     /* Both flags together. `SHARED_NTHANDLE` alone is not a thing D3D11 accepts, and `SHARED`
        alone produces a handle only another D3D11 device can open. */
     description.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;

@@ -65,3 +65,56 @@ Pacing owners are 0 none, 1 Reflex, 2 required XeLL, 3 D3D Anti-Lag 2, 4 Vulkan 
 A process-local named Windows event excludes a second native or managed orchestrator from pacing. The first active
 owner retains this lease through its session; a contender reports none/unavailable. The managed Vulkan SDK protocol
 is otherwise unchanged. This is session ownership arbitration, not another per-frame wait.
+
+## Bound consumer interval, 16 November 2026
+
+The generic CPU core now derives a missing SDK simulation begin after a valid
+prospective SOURCE_BIND with a real poll entry. The input timestamp stays at
+the poll; begin uses the accepted consumer-entry timestamp. It runs after the
+synchronous source sink, outside the CPU lock, and rechecks live binding so a
+reentrant withdrawal cannot acquire simulation ownership. It neither emits a
+second input sample nor acquires/paces another token. Binding establishes
+canonical keyed ordering even when FRAME_BEGIN carried flags0.
+
+The Direct3D owner derives a missing end only after the matching prospective
+source has a primary AFTER_SIMULATION submission association, current provider
+generation and real bound input. An arbitrary render/Present notification
+cannot supply that association for a prospective owner. Existing legacy
+non-prospective inference remains unchanged; this patch does not retroactively
+tighten that separate path. Rendered-only mode remains excluded. Failed
+admission marks the owner failed and leaves existing completion/abort/resource
+retirement gates in place. Existing pre-poll token, pacing and predecessor
+Present behavior is unchanged.
+
+Both inferred stages carry DERIVED_BOUNDARY, not INPUT_SUBSTITUTE. Private
+per-stage provenance lives in the existing CPU frame slot; public ABI and
+capabilities are unchanged. Valid later actual begin/end facts replace that
+stage's timestamp without replaying SDK markers or clearing unrelated derived
+provenance. Invalid frequency/time replacements refuse. These SDK boundaries
+describe a derived consumer-to-render interval, not measured whole-world
+physics; status counts inferred boundaries even if later actual facts improve
+the retained CPU metadata.
+
+An explicit skipped frame may close a partial mask7 CPU record while retaining
+its missing end. It remains incomplete and cannot become an FG frame. Without
+the explicit skip flag that partial closure still refuses. Unknown poll entry,
+unproduced or withdrawn samples, early simulation that violates the existing
+bind gate, missing owner, provider changes and real input substitutes keep
+their refusals. Vulkan's sink has no prospective owner contract and remains
+outside this admission.
+
+Focused contract sources cover bind derivation, flags0 adoption, reentrant
+withdrawal, duplicate/actual replacement and invalid clocks, skipped versus
+unflagged partial records, a real Runtime DLL without presentation ownership,
+and Vulkan's absent prospective token/pace/marker admission. This worker did
+not build or run tests or a game; the next coordinator gate must validate the
+change, and vendor/device timing acceptance remains separate. No Fallout 4
+capability or adapter simulation event was enabled by this change.
+
+The coordinator subsequently reported the combined Windows ReleaseVS2026 gate
+passed 221 tests with 14 skipped, with Cargo fmt/Clippy clean, in
+`verify-dpi-derived-interval-20261116.log`. It also reported the rebuilt scoped
+fixture passed with 53 sources, 39 captures, 37 SR operations, 33 tags and 33
+callbacks in `derived-rendered-fixture-20261116.log`. These are coordinator
+build/fixture results, not Fallout 4 input/latency or physical-latency
+acceptance. No Fallout 4 latency capability was enabled by these results.

@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define RSF_SHARED_SURFACE_ABI_VERSION 1u
+#define RSF_SHARED_SURFACE_ABI_VERSION 2u
 
 typedef int32_t rsf_shared_result;
 #define RSF_SHARED_OK ((rsf_shared_result)0)
@@ -54,6 +54,9 @@ typedef struct rsf_shared_surface_setup {
     uint32_t render_target;
     rsf_shared_log_fn log;
     void* log_user;
+    /* Non-zero to preserve an application's unordered-access binding on the
+       D3D11 texture. Independent of private D3D12 presentation-buffer usage. */
+    uint32_t unordered_access;
 } rsf_shared_surface_setup;
 
 typedef struct rsf_shared_surface rsf_shared_surface;

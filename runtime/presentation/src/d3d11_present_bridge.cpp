@@ -234,7 +234,8 @@ class Bridge final : public IDXGISwapChain4 {
     HRESULT make_surface(UINT width, UINT height, DXGI_FORMAT format) {
         if (!description.BufferCount || description.BufferCount > surfaces.size()) return E_INVALIDARG;
         rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION,
-            width, height, uint32_t(format), 1, settings.log, settings.user};
+            width, height, uint32_t(format), 1, settings.log, settings.user,
+            (description.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) != 0 ? 1u : 0u};
         for (UINT i = 0; i < description.BufferCount; ++i) {
             if (rsf_shared_surface_create(device.Get(), graphics.native_device, &setup, &surfaces[i]) != RSF_SHARED_OK) {
                 release_surfaces(); return E_FAIL;
@@ -282,16 +283,22 @@ class Bridge final : public IDXGISwapChain4 {
         if (!backend) {
             auto desc = description; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.BufferCount = native12 ? description.BufferCount : 3u;
             desc.Flags = tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+            // D3D11 application bindings belong to the shared virtual buffers.
+            // This private D3D12 chain receives copies and presents them.
+            if (!native12) desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
             ComPtr<IDXGISwapChain> plain;
             auto* owner_queue = native12 ? direct_queue.Get() : static_cast<ID3D12CommandQueue*>(graphics.native_queue);
             const HRESULT created = original_create ? original_create(parent.Get(), owner_queue, &desc, &plain) :
                 parent->CreateSwapChain(owner_queue, &desc, &plain);
             if (FAILED(created)) {
-                char text[320]{}; std::snprintf(text, sizeof(text),
-                    "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u",
+                char text[512]{}; std::snprintf(text, sizeof(text),
+                    "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u usage=0x%x sample=%u/%u refresh=%u/%u scanline=%u scaling=%u windowed=%u",
                     static_cast<unsigned long>(created), static_cast<void*>(this), static_cast<void*>(parent.Get()),
                     static_cast<void*>(owner_queue), static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
-                    uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(native12));
+                    uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(native12),
+                    desc.BufferUsage,desc.SampleDesc.Count,desc.SampleDesc.Quality,
+                    desc.BufferDesc.RefreshRate.Numerator,desc.BufferDesc.RefreshRate.Denominator,
+                    uint32_t(desc.BufferDesc.ScanlineOrdering),uint32_t(desc.BufferDesc.Scaling),uint32_t(desc.Windowed!=FALSE));
                 log(text); return RSF_BACKEND_ERROR_INIT_FAILED;
             }
             if (FAILED(plain.As(&replacement)))
